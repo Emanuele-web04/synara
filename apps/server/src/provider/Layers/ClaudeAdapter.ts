@@ -215,6 +215,10 @@ interface ClaudeSessionContext {
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
   stopped: boolean;
+  // Unrecognized SDK message kinds already surfaced as a runtime warning. Newer
+  // Claude SDKs stream high-frequency telemetry (e.g. `thinking_tokens`); de-duping
+  // here keeps a single unknown kind from flooding the conversation timeline.
+  readonly warnedUnhandledSdkKinds: Set<string>;
 }
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
@@ -1619,6 +1623,24 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
       });
 
+    // Surfaces each distinct unrecognized SDK message kind at most once per session.
+    // Without this, high-frequency telemetry the adapter doesn't model (notably the
+    // `thinking_tokens` system subtype streamed on every reasoning tick) turns into a
+    // "Runtime warning" timeline entry per message and floods the conversation.
+    const warnUnhandledSdkKind = (
+      context: ClaudeSessionContext,
+      kind: string,
+      message: string,
+      detail: unknown,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (context.warnedUnhandledSdkKinds.has(kind)) {
+          return;
+        }
+        context.warnedUnhandledSdkKinds.add(kind);
+        yield* emitRuntimeWarning(context, message, detail);
+      });
+
     const emitProposedPlanCompleted = (
       context: ClaudeSessionContext,
       input: {
@@ -2415,6 +2437,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           return;
         }
 
+        // Benign high-frequency telemetry we intentionally don't project. `thinking_tokens`
+        // streams on every reasoning tick while extended thinking is active; `task_updated`
+        // is an incremental task patch already covered by task_started/progress/completed.
+        // Short-circuit before allocating an event stamp so they can't flood the timeline
+        // (or churn allocations) with "Runtime warning" entries.
+        if (message.subtype === "thinking_tokens" || message.subtype === "task_updated") {
+          return;
+        }
+
         const stamp = yield* makeEventStamp();
         const base = {
           eventId: stamp.eventId,
@@ -2596,8 +2627,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             });
             return;
           default:
-            yield* emitRuntimeWarning(
+            yield* warnUnhandledSdkKind(
               context,
+              `system:${message.subtype}`,
               `Unhandled Claude system message subtype '${message.subtype}'.`,
               message,
             );
@@ -2710,8 +2742,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             yield* handleSdkTelemetryMessage(context, message);
             return;
           default:
-            yield* emitRuntimeWarning(
+            yield* warnUnhandledSdkKind(
               context,
+              `type:${message.type}`,
               `Unhandled Claude SDK message type '${message.type}'.`,
               message,
             );
@@ -3331,6 +3364,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           lastAssistantUuid: resumeState?.resumeSessionAt,
           lastThreadStartedId: undefined,
           stopped: false,
+          warnedUnhandledSdkKinds: new Set(),
         };
         yield* Ref.set(contextRef, context);
         sessions.set(threadId, context);

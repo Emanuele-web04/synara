@@ -1572,6 +1572,76 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("ignores thinking_tokens telemetry and de-dupes unknown Claude system subtypes", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "task.progress"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      // High-frequency reasoning telemetry — must never reach the timeline.
+      for (let i = 0; i < 3; i += 1) {
+        harness.query.emit({
+          type: "system",
+          subtype: "thinking_tokens",
+          estimated_tokens: 50 * (i + 1),
+          estimated_tokens_delta: 50,
+          session_id: "sdk-session-thinking",
+          uuid: `thinking-${i}`,
+        } as unknown as SDKMessage);
+      }
+
+      // Same unknown subtype emitted twice — must surface exactly one warning.
+      for (let i = 0; i < 2; i += 1) {
+        harness.query.emit({
+          type: "system",
+          subtype: "future_unknown_subtype",
+          session_id: "sdk-session-unknown",
+          uuid: `unknown-${i}`,
+        } as unknown as SDKMessage);
+      }
+
+      // Sentinel that produces a real event so the collector terminates.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-sentinel",
+        description: "sentinel",
+        usage: { total_tokens: 1, tool_uses: 0, duration_ms: 1 },
+        session_id: "sdk-session-sentinel",
+        uuid: "task-progress-sentinel",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const warnings = runtimeEvents.filter((event) => event.type === "runtime.warning");
+
+      assert.equal(warnings.length, 1);
+      assert.equal(
+        warnings.every(
+          (event) =>
+            event.type === "runtime.warning" && !event.payload.message.includes("thinking_tokens"),
+        ),
+        true,
+      );
+      if (warnings[0]?.type === "runtime.warning") {
+        assert.equal(warnings[0].payload.message.includes("future_unknown_subtype"), true);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("maps Claude TodoWrite tool input into shared turn plan updates", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
