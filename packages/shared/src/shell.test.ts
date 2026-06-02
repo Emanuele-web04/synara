@@ -4,9 +4,11 @@ import {
   extractPathFromShellOutput,
   listLoginShellCandidates,
   mergePathEntries,
+  mergeWindowsScopes,
   readEnvironmentFromLoginShell,
   readPathFromLaunchctl,
   readPathFromLoginShell,
+  readWindowsPersistentEnvironment,
   resolveLoginShell,
 } from "./shell";
 
@@ -193,5 +195,48 @@ describe("mergePathEntries", () => {
     expect(mergePathEntries("C:\\Tools;C:\\Windows", "C:\\Windows;C:\\Git", "win32")).toBe(
       "C:\\Tools;C:\\Windows;C:\\Git",
     );
+  });
+});
+
+describe("mergeWindowsScopes", () => {
+  it("composes PATH as machine then user and lets user variables win", () => {
+    const merged = mergeWindowsScopes(
+      { Path: "C:\\Windows\\system32", FOO: "machine" },
+      { Path: "C:\\Users\\ramar\\.local\\bin", FOO: "user", CLAUDE_CONFIG_DIR: "C:\\cfg" },
+    );
+
+    expect(merged.PATH).toBe("C:\\Windows\\system32;C:\\Users\\ramar\\.local\\bin");
+    expect(merged.FOO).toBe("user");
+    expect(merged.CLAUDE_CONFIG_DIR).toBe("C:\\cfg");
+  });
+
+  it("ignores empty values and a missing scope", () => {
+    const merged = mergeWindowsScopes({ Path: "C:\\Windows", EMPTY: "  " }, {});
+
+    expect(merged.PATH).toBe("C:\\Windows");
+    expect(merged.EMPTY).toBeUndefined();
+  });
+});
+
+describe("readWindowsPersistentEnvironment", () => {
+  it("parses the registry dump and merges machine + user scopes", () => {
+    const execFile = vi.fn(() =>
+      JSON.stringify({
+        machine: { Path: "C:\\Windows\\system32" },
+        user: { Path: "C:\\Users\\ramar\\.local\\bin", CLAUDE_CONFIG_DIR: "C:\\cfg" },
+      }),
+    );
+
+    const result = readWindowsPersistentEnvironment(execFile);
+
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(result.PATH).toBe("C:\\Windows\\system32;C:\\Users\\ramar\\.local\\bin");
+    expect(result.CLAUDE_CONFIG_DIR).toBe("C:\\cfg");
+  });
+
+  it("returns an empty object when the dump is not valid JSON", () => {
+    const execFile = vi.fn(() => "not json");
+
+    expect(readWindowsPersistentEnvironment(execFile)).toEqual({});
   });
 });

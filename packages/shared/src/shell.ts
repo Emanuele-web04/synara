@@ -189,3 +189,81 @@ export const readEnvironmentFromLoginShell: ShellEnvironmentReader = (
 
   return environment;
 };
+
+// Windows has no login-shell to probe; the user's persisted environment lives in the
+// registry (HKCU + HKLM). A GUI process launched from a stale Explorer inherits an
+// outdated environment block, so we read the registry directly to pick up current values.
+
+function isPathName(name: string): boolean {
+  return name.toUpperCase() === "PATH";
+}
+
+// Merge the Machine and User registry scopes the way Windows composes the environment:
+// User scope wins for ordinary variables, and PATH is Machine entries followed by User entries.
+export function mergeWindowsScopes(
+  machine: Partial<Record<string, string>>,
+  user: Partial<Record<string, string>>,
+): Partial<Record<string, string>> {
+  const merged: Partial<Record<string, string>> = {};
+
+  const assignNonPath = (source: Partial<Record<string, string>>): void => {
+    for (const [name, value] of Object.entries(source)) {
+      if (isPathName(name)) continue;
+      const trimmed = trimNonEmpty(value);
+      if (trimmed) {
+        merged[name] = trimmed;
+      }
+    }
+  };
+  assignNonPath(machine);
+  assignNonPath(user);
+
+  const scopePath = (source: Partial<Record<string, string>>): string | undefined => {
+    for (const [name, value] of Object.entries(source)) {
+      if (isPathName(name)) return trimNonEmpty(value);
+    }
+    return undefined;
+  };
+  const combinedPath = [scopePath(machine), scopePath(user)]
+    .filter((value): value is string => Boolean(value))
+    .join(";");
+  if (combinedPath) {
+    merged.PATH = combinedPath;
+  }
+
+  return merged;
+}
+
+export type WindowsEnvironmentReader = (
+  execFile?: ExecFileSyncLike,
+) => Partial<Record<string, string>>;
+
+const WINDOWS_ENVIRONMENT_SCRIPT = [
+  "$ErrorActionPreference='Stop';",
+  "function dump($s){$m=[ordered]@{};$v=[Environment]::GetEnvironmentVariables($s);",
+  "foreach($k in $v.Keys){$m[[string]$k]=[Environment]::ExpandEnvironmentVariables([string]$v[$k])};$m}",
+  "$o=[ordered]@{machine=(dump 'Machine');user=(dump 'User')};",
+  "[Console]::Out.Write(($o|ConvertTo-Json -Compress -Depth 3))",
+].join("");
+
+export const readWindowsPersistentEnvironment: WindowsEnvironmentReader = (
+  execFile = execFileSync,
+) => {
+  const output = execFile(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_ENVIRONMENT_SCRIPT],
+    { encoding: "utf8", timeout: 5000 },
+  );
+
+  let parsed: {
+    machine?: Partial<Record<string, string>>;
+    user?: Partial<Record<string, string>>;
+  };
+  try {
+    parsed = JSON.parse(output.trim());
+  } catch {
+    return {};
+  }
+
+  return mergeWindowsScopes(parsed.machine ?? {}, parsed.user ?? {});
+};
