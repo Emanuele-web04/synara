@@ -39,4 +39,16 @@ describe("sanitizeStringKeyedRecord", () => {
     expect(result).not.toBe(input);
     expect(result.a).toBe(input.a);
   });
+
+  it("ignores prototype-polluting keys from untrusted input", () => {
+    const malicious = JSON.parse('{"safe": 1, "__proto__": {"polluted": true}, "constructor": 2}');
+
+    const result = sanitizeStringKeyedRecord<unknown>(malicious, (raw) => raw);
+
+    expect(result).toEqual({ safe: 1 });
+    expect(Object.hasOwn(result, "__proto__")).toBe(false);
+    expect(Object.hasOwn(result, "constructor")).toBe(false);
+    // The global prototype must remain untouched.
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
 });

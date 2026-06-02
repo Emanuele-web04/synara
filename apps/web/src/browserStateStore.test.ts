@@ -97,6 +97,15 @@ describe("sanitizeRecentHistoryByThreadId", () => {
     });
   });
 
+  it("drops threads whose history fully fails validation", () => {
+    const result = sanitizeRecentHistoryByThreadId({
+      "thread-1": [null, { url: 5, title: "C", tabId: "t3" }],
+      "thread-2": [],
+    });
+
+    expect(result).toEqual({});
+  });
+
   it("caps each thread's history at the storage limit", () => {
     const entries = Array.from({ length: 30 }, (_, index) => ({
       url: `https://example.com/${index}`,

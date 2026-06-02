@@ -102,10 +102,13 @@ export function sanitizeRecentHistoryByThreadId(
     if (!Array.isArray(rawEntries)) {
       return null;
     }
-    return rawEntries
+    const entries = rawEntries
       .map(sanitizeBrowserHistoryEntry)
       .filter((entry): entry is BrowserHistoryEntry => entry !== null)
       .slice(0, BROWSER_HISTORY_LIMIT);
+    // Drop threads whose history fully fails validation so we don't retain
+    // empty placeholder keys in storage.
+    return entries.length > 0 ? entries : null;
   });
 }
 
