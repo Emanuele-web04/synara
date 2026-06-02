@@ -24,6 +24,7 @@ import {
   parseComposerSlashInvocationForCommands,
   parseFastSlashCommandAction,
   parseForkSlashCommandArgs,
+  parseGoalSlashCommand,
   type ForkSlashCommandTarget,
 } from "../composerSlashCommands";
 import { buildThreadHandoffImportedMessages } from "../lib/threadHandoff";
@@ -565,6 +566,97 @@ export function useComposerSlashCommands(input: {
     return false;
   }, [editorActions, providerCommandDiscoveryCwd, threadId]);
 
+  const handleGoalSlashCommand = useCallback(
+    async (args: string) => {
+      const api = readNativeApi();
+      if (!api || !activeThread || !isServerThread) {
+        toastManager.add({
+          type: "warning",
+          title: "Goals need a server-backed thread",
+          description: "Open a server-backed thread before setting a goal.",
+        });
+        return;
+      }
+
+      const parsed = parseGoalSlashCommand(args);
+      const threadId = activeThread.id;
+      const createdAt = new Date().toISOString();
+
+      if (parsed.kind === "create") {
+        if (!parsed.objective) {
+          toastManager.add({
+            type: "warning",
+            title: "Goal needs an objective",
+            description: "Use /goal followed by what the agent should achieve.",
+          });
+          return;
+        }
+        editorActions.clearComposerSlashDraft();
+        await api.orchestration.dispatchCommand({
+          type: "thread.goal.create",
+          commandId: newCommandId(),
+          threadId,
+          goalId: `goal-${crypto.randomUUID()}`,
+          objective: parsed.objective,
+          ...(parsed.tokenBudget !== null ? { tokenBudget: parsed.tokenBudget } : {}),
+          createdAt,
+        });
+        // Auto-start the first turn with the objective (pi-goal submits it immediately).
+        await api.orchestration.dispatchCommand({
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId,
+          message: {
+            messageId: newMessageId(),
+            role: "user",
+            text: parsed.objective,
+            attachments: [],
+          },
+          modelSelection: selectedModelSelection,
+          runtimeMode,
+          interactionMode,
+          createdAt,
+        });
+        return;
+      }
+
+      editorActions.clearComposerSlashDraft();
+
+      if (parsed.kind === "status") {
+        toastManager.add({
+          type: "info",
+          title: "Goal",
+          description: "The active goal is shown in the thread's goal indicator.",
+        });
+        return;
+      }
+
+      const commandType =
+        parsed.kind === "pause"
+          ? ("thread.goal.pause" as const)
+          : parsed.kind === "resume"
+            ? ("thread.goal.resume" as const)
+            : parsed.kind === "clear"
+              ? ("thread.goal.clear" as const)
+              : ("thread.goal.complete" as const);
+      await api.orchestration.dispatchCommand({
+        type: commandType,
+        commandId: newCommandId(),
+        threadId,
+        createdAt,
+      });
+    },
+    [
+      activeThread,
+      editorActions,
+      interactionMode,
+      isServerThread,
+      runtimeMode,
+      selectedModelSelection,
+      toastManager,
+    ],
+  );
+
   const handleStandaloneSlashCommand = useCallback(
     async (trimmed: string): Promise<boolean> => {
       const fastSlashAction = parseFastSlashCommandAction(trimmed);
@@ -692,10 +784,15 @@ export function useComposerSlashCommands(input: {
         }
         return true;
       }
+      if (slashInvocation.command === "goal") {
+        await handleGoalSlashCommand(slashInvocation.args);
+        return true;
+      }
       return false;
     },
     [
       availableBuiltInSlashCommands,
+      handleGoalSlashCommand,
       checkClaudeFastSlashCommandAvailability,
       compactProviderThread,
       createForkThreadFromSlashCommand,

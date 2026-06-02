@@ -19,7 +19,7 @@ model decides it is done after a baked-in completion audit, then signals complet
 
 ### Faithful adaptation for Synara
 
-Synara *drives* 8 provider runtimes; it does **not** own the model's tool surface
+Synara _drives_ 8 provider runtimes; it does **not** own the model's tool surface
 uniformly (there is no cross-provider tool injection — verified in
 `ProviderRuntimeIngestion`). So the `update_goal` tool call can't be the cross-provider
 completion signal. The faithful adaptation that preserves Design A (same model still
@@ -29,18 +29,18 @@ server-side reactor detects it. Same self-audit semantics; signal is text instea
 tool call because that is the only channel every provider exposes.
 
 (An optional future Design B — a separate fast-model evaluator — is a deliberate
-divergence from Codex canon and is intentionally *not* part of v1.)
+divergence from Codex canon and is intentionally _not_ part of v1.)
 
 ## Mapping onto Synara's event-sourced orchestration
 
-| pi-goal / Codex | Synara |
-| --- | --- |
-| `GoalState` custom session entry | `OrchestrationGoal` on `OrchestrationThread.goal` (one per thread) |
-| `/goal` command + `create_goal`/`update_goal` tools | `thread.goal.*` orchestration commands |
+| pi-goal / Codex                                              | Synara                                                                               |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `GoalState` custom session entry                             | `OrchestrationGoal` on `OrchestrationThread.goal` (one per thread)                   |
+| `/goal` command + `create_goal`/`update_goal` tools          | `thread.goal.*` orchestration commands                                               |
 | hidden `pi-goal-continuation` user message (`display:false`) | `thread.turn.start` with `inputSource: "goal-continuation"` (the new contract field) |
-| `turn_end` accounting | folded on `thread.turn-diff-completed` while a goal is active |
-| `scheduleContinuation` after `agent_end` | `GoalContinuationReactor` reacting to turn completion |
-| completion audit in `continuation.md` | ported verbatim into the continuation prompt; completion via sentinel |
+| `turn_end` accounting                                        | folded on `thread.turn-diff-completed` while a goal is active                        |
+| `scheduleContinuation` after `agent_end`                     | `GoalContinuationReactor` reacting to turn completion                                |
+| completion audit in `continuation.md`                        | ported verbatim into the continuation prompt; completion via sentinel                |
 
 ### The "small contract field"
 
@@ -57,8 +57,9 @@ dims messages with `source === "goal-continuation"`, mirroring pi's `display:fal
   available to the user (`/goal complete`). Per Codex/pi, `complete` is the only
   model-assertable transition; pause/resume/clear stay user-controlled.
 - State: `OrchestrationGoal { id, objective, status, tokenBudget, tokensUsed, usage,
-  turnCount, continuationCount, timeUsedSeconds, lastTurnHadActivity,
-  continuationSuppressed, createdAt, updatedAt }`.
+  turnCount, continuationCount, timeUsedSeconds, createdAt, updatedAt }`. The no-activity
+  suppression heuristic lives in the reactor (computed from thread activities), not as
+  persisted goal state.
 
 ## Continuation loop & guardrails (ported from pi-goal)
 
@@ -71,6 +72,7 @@ dims messages with `source === "goal-continuation"`, mirroring pi's `display:fal
    (`inputSource: "goal-continuation"`, the ported continuation/audit prompt as text).
 
 Guardrails (faithful to pi-goal):
+
 - only continue while status is `active`;
 - suppress continuation after a continuation turn that produced no tool/file activity,
   until fresh user input;

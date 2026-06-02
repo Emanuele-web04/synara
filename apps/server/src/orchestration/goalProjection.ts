@@ -26,9 +26,10 @@ function extractTurnUsageFromActivityPayload(payload: unknown): {
     return { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   }
   const nested = (payload as { usage?: unknown }).usage;
-  const source = (
-    typeof nested === "object" && nested !== null ? nested : payload
-  ) as Record<string, unknown>;
+  const source = (typeof nested === "object" && nested !== null ? nested : payload) as Record<
+    string,
+    unknown
+  >;
   const num = (...keys: ReadonlyArray<string>): number => {
     for (const key of keys) {
       const value = source[key];

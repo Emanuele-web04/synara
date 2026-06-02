@@ -80,7 +80,10 @@ async function seedReadModel(events: ReadonlyArray<OrchestrationEvent>) {
   return model;
 }
 
-function decide(command: OrchestrationCommand, readModel: Awaited<ReturnType<typeof seedReadModel>>) {
+function decide(
+  command: OrchestrationCommand,
+  readModel: Awaited<ReturnType<typeof seedReadModel>>,
+) {
   return decideOrchestrationCommand({ command, readModel });
 }
 
@@ -162,7 +165,11 @@ describe("orchestration decider — goals", () => {
     const pausedModel = await seedReadModel([
       threadCreatedEvent,
       goalCreatedEvent("active"),
-      makeEvent({ sequence: 3, type: "thread.goal-paused", payload: { threadId: "thread-1", updatedAt: NOW } }),
+      makeEvent({
+        sequence: 3,
+        type: "thread.goal-paused",
+        payload: { threadId: "thread-1", updatedAt: NOW },
+      }),
     ]);
     const event = await Effect.runPromise(decide(resumeCommand, pausedModel));
     expect((event as OrchestrationEvent).type).toBe("thread.goal-resumed");

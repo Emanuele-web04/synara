@@ -65,11 +65,7 @@ const seedProjectAndThread = (harness: OrchestrationIntegrationHarness) =>
     });
   });
 
-function turnResponse(input: {
-  prefix: string;
-  turnId: string;
-  text: string;
-}): TestTurnResponse {
+function turnResponse(input: { prefix: string; turnId: string; text: string }): TestTurnResponse {
   return {
     events: [
       {

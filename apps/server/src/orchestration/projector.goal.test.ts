@@ -120,29 +120,49 @@ describe("orchestration projector — goals", () => {
     const paused = await applyEvents([
       threadCreatedEvent,
       goalCreatedEvent(),
-      makeEvent({ sequence: 3, type: "thread.goal-paused", payload: { threadId: "thread-1", updatedAt: NOW } }),
+      makeEvent({
+        sequence: 3,
+        type: "thread.goal-paused",
+        payload: { threadId: "thread-1", updatedAt: NOW },
+      }),
     ]);
     expect(paused.threads[0]?.goal?.status).toBe("paused");
 
     const resumed = await applyEvents([
       threadCreatedEvent,
       goalCreatedEvent(),
-      makeEvent({ sequence: 3, type: "thread.goal-paused", payload: { threadId: "thread-1", updatedAt: NOW } }),
-      makeEvent({ sequence: 4, type: "thread.goal-resumed", payload: { threadId: "thread-1", updatedAt: NOW } }),
+      makeEvent({
+        sequence: 3,
+        type: "thread.goal-paused",
+        payload: { threadId: "thread-1", updatedAt: NOW },
+      }),
+      makeEvent({
+        sequence: 4,
+        type: "thread.goal-resumed",
+        payload: { threadId: "thread-1", updatedAt: NOW },
+      }),
     ]);
     expect(resumed.threads[0]?.goal?.status).toBe("active");
 
     const completed = await applyEvents([
       threadCreatedEvent,
       goalCreatedEvent(),
-      makeEvent({ sequence: 3, type: "thread.goal-completed", payload: { threadId: "thread-1", updatedAt: NOW } }),
+      makeEvent({
+        sequence: 3,
+        type: "thread.goal-completed",
+        payload: { threadId: "thread-1", updatedAt: NOW },
+      }),
     ]);
     expect(completed.threads[0]?.goal?.status).toBe("complete");
 
     const cleared = await applyEvents([
       threadCreatedEvent,
       goalCreatedEvent(),
-      makeEvent({ sequence: 3, type: "thread.goal-cleared", payload: { threadId: "thread-1", updatedAt: NOW } }),
+      makeEvent({
+        sequence: 3,
+        type: "thread.goal-cleared",
+        payload: { threadId: "thread-1", updatedAt: NOW },
+      }),
     ]);
     expect(cleared.threads[0]?.goal?.status).toBe("cleared");
   });
