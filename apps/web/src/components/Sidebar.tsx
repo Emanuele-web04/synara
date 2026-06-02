@@ -228,7 +228,7 @@ import {
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { parseDiffRouteSearch } from "../diffRouteSearch";
+import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { normalizeSettingsSection } from "../settingsNavigation";
 import {
   SIDEBAR_HEADER_LABEL_CLASS_NAME,
@@ -1141,10 +1141,7 @@ export default function Sidebar() {
     strict: false,
     select: (params) => (typeof params.workspaceId === "string" ? params.workspaceId : null),
   });
-  const routeSearch = useSearch({
-    strict: false,
-    select: (search) => parseDiffRouteSearch(search),
-  });
+  const routeSearch = useDiffRouteSearch();
   const settingsSectionSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSettingsSection = normalizeSettingsSection(settingsSectionSearch.section);
   const activeSplitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));

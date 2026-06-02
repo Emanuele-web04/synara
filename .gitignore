@@ -16,6 +16,7 @@ release/
 /.dpcode/electron-dev
 /.dpcode/backups
 /.dpcode-*/
+/.synara/
 .idea/
 apps/web/.playwright
 apps/web/playwright-report

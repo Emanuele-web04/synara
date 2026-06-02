@@ -32,7 +32,8 @@ export const useLatestProjectStore = create<LatestProjectStore>()(
       // Guard against a corrupt persisted value (non-string) reaching consumers
       // that treat it as a project id.
       merge: (persisted, current) => {
-        const persistedId = (persisted as { latestProjectId?: unknown } | undefined)?.latestProjectId;
+        const persistedId = (persisted as { latestProjectId?: unknown } | undefined)
+          ?.latestProjectId;
         return {
           ...current,
           latestProjectId: typeof persistedId === "string" ? (persistedId as ProjectId) : null,

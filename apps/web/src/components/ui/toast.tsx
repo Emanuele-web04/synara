@@ -2,7 +2,7 @@
 
 import { Toast, type ToastObject } from "@base-ui/react/toast";
 import { useEffect, useMemo, type CSSProperties } from "react";
-import { useParams, useSearch } from "@tanstack/react-router";
+import { useParams } from "@tanstack/react-router";
 import { ThreadId } from "@t3tools/contracts";
 import {
   CircleAlertIcon,
@@ -24,7 +24,7 @@ import {
   EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,
   NOTIFICATION_ICON_CLASS_NAME,
 } from "./notificationSurface";
-import { parseDiffRouteSearch } from "../../diffRouteSearch";
+import { useDiffRouteSearch } from "../../hooks/useDiffRouteSearch";
 import { selectSplitView, useSplitViewStore } from "../../splitViewStore";
 import {
   resolveVisibleToastThreadIds,
@@ -98,10 +98,7 @@ function useVisibleThreadIdsFromRoute(): ReadonlySet<ThreadId> {
     select: (params) =>
       typeof params.threadId === "string" ? ThreadId.makeUnsafe(params.threadId) : null,
   });
-  const routeSearch = useSearch({
-    strict: false,
-    select: (search) => parseDiffRouteSearch(search),
-  });
+  const routeSearch = useDiffRouteSearch();
   const splitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
 
   return useMemo(() => {

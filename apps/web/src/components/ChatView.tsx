@@ -59,7 +59,7 @@ import {
 import { GoTasklist } from "react-icons/go";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Debouncer, useDebouncedValue } from "@tanstack/react-pacer";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
@@ -93,7 +93,7 @@ import {
   providerUnavailableReason,
 } from "~/lib/providerAvailability";
 import { isElectron } from "../env";
-import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
+import { stripDiffSearchParams } from "../diffRouteSearch";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { isHomeChatContainerProject } from "../lib/chatProjects";
 import { resolveFirstSendTarget } from "../lib/chatFirstSend";
@@ -104,6 +104,7 @@ import {
 import { deriveComposerSuggestions, type ComposerSuggestion } from "../lib/composerSuggestions";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
+import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   buildThreadBreadcrumbs,
   enrichSubagentWorkEntries,
@@ -871,10 +872,7 @@ export default function ChatView({
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
   const { createThreadHandoff } = useThreadHandoff();
-  const rawSearch = useSearch({
-    strict: false,
-    select: (params) => parseDiffRouteSearch(params),
-  });
+  const rawSearch = useDiffRouteSearch();
   const activeSplitView = useSplitViewStore(selectSplitView(rawSearch.splitViewId ?? null));
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
   const { resolvedTheme } = useTheme();
@@ -7820,10 +7818,7 @@ export default function ChatView({
 
                     {!isVoiceRecording && !isVoiceTranscribing ? (
                       <>
-                        <RuntimeUsageControls
-                          {...runtimeUsageControlsProps}
-                          className="shrink-0"
-                        />
+                        <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
 
                         {interactionMode === "plan" ? (
                           <Button

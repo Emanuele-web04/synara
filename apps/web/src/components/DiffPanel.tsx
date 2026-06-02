@@ -4,7 +4,7 @@
 // specialized affordances that don't fit the shadcn Button taxonomy. The
 // generic close affordance is the IconButton variant chrome instance below.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import { ThreadId, type TurnId } from "@t3tools/contracts";
 import { FaPlusMinus } from "react-icons/fa6";
 import { LuWrapText } from "react-icons/lu";
@@ -39,8 +39,9 @@ import {
 } from "~/lib/gitReactQuery";
 import { checkpointDiffQueryOptions } from "~/lib/providerReactQuery";
 import { cn } from "~/lib/utils";
-import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
+import { stripDiffSearchParams } from "../diffRouteSearch";
 import { useTheme } from "../hooks/useTheme";
+import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   buildFileDiffRenderKey,
   buildPatchCacheKey,
@@ -130,7 +131,7 @@ export default function DiffPanel({
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
   });
-  const diffSearch = useSearch({ strict: false, select: (search) => parseDiffRouteSearch(search) });
+  const diffSearch = useDiffRouteSearch();
   const diffOpen = panelState ? panelState.panel === "diff" : diffSearch.diff === "1";
   const activeThreadId = controlledThreadId ?? routeThreadId;
   const serverThread = useStore(

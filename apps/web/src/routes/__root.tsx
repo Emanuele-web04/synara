@@ -16,7 +16,6 @@ import {
   useNavigate,
   useParams,
   useRouterState,
-  useSearch,
 } from "@tanstack/react-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -73,7 +72,7 @@ import { useUIFont } from "../hooks/useUIFont";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
 import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
-import { parseDiffRouteSearch } from "../diffRouteSearch";
+import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
 import {
@@ -686,10 +685,7 @@ function EventRouter() {
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
   });
-  const routeSearch = useSearch({
-    strict: false,
-    select: (search) => parseDiffRouteSearch(search),
-  });
+  const routeSearch = useDiffRouteSearch();
   const activeSplitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
   const visibleThreadIds = useMemo(() => {
     if (activeSplitView) {
