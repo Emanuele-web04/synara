@@ -155,7 +155,7 @@ export type TimelineEntry =
       entry: WorkLogEntry;
     };
 
-export function formatDuration(durationMs: number): string {
+function formatDuration(durationMs: number): string {
   if (!Number.isFinite(durationMs) || durationMs < 0) return "0ms";
   if (durationMs < 1_000) return `${Math.max(1, Math.round(durationMs))}ms`;
   if (durationMs < 10_000) return `${(durationMs / 1_000).toFixed(1)}s`;
@@ -1667,14 +1667,6 @@ function compareActivityLifecycleRank(kind: string): number {
     return 2;
   }
   return 1;
-}
-
-export function hasToolActivityForTurn(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
-  turnId: TurnId | null | undefined,
-): boolean {
-  if (!turnId) return false;
-  return activities.some((activity) => activity.turnId === turnId && activity.tone === "tool");
 }
 
 export function deriveTimelineEntries(

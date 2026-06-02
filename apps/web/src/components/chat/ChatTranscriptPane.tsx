@@ -29,8 +29,6 @@ interface ChatTranscriptPaneProps {
   activeTurnStartedAt: string | null;
   bottomContentInsetPx?: ComponentProps<typeof MessagesTimeline>["bottomContentInsetPx"];
   chatFontSizePx: number;
-  completionDividerBeforeEntryId: string | null;
-  completionSummary: string | null;
   emptyStateProjectName: string | undefined;
   expandedWorkGroups?: Record<string, boolean>;
   hasMessages: boolean;
@@ -74,8 +72,6 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   activeTurnStartedAt,
   bottomContentInsetPx,
   chatFontSizePx,
-  completionDividerBeforeEntryId,
-  completionSummary,
   emptyStateProjectName,
   expandedWorkGroups,
   hasMessages,
@@ -130,8 +126,6 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
           activeTurnStartedAt={activeTurnStartedAt}
           listRef={listRef}
           timelineEntries={timelineEntries}
-          completionDividerBeforeEntryId={completionDividerBeforeEntryId}
-          completionSummary={completionSummary}
           turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
           onOpenTurnDiff={onOpenTurnDiff}
           onOpenThread={onOpenThread}

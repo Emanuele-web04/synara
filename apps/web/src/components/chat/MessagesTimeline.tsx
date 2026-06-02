@@ -176,8 +176,6 @@ interface MessagesTimelineProps {
   emptyStateContent?: ReactNode;
   listRef?: RefObject<LegendListRef | null>;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
-  completionDividerBeforeEntryId: string | null;
-  completionSummary: string | null;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso?: string;
   expandedWorkGroups?: Record<string, boolean>;
@@ -217,8 +215,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   followLiveOutput = false,
   listRef,
   timelineEntries,
-  completionDividerBeforeEntryId,
-  completionSummary,
   turnDiffSummaryByAssistantMessageId,
   nowIso,
   expandedWorkGroups,
@@ -330,8 +326,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     () =>
       deriveMessagesTimelineRows({
         timelineEntries,
-        completionDividerBeforeEntryId,
-        completionSummary,
         isWorking,
         activeTurnInProgress,
         activeTurnId,
@@ -341,8 +335,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       }),
     [
       timelineEntries,
-      completionDividerBeforeEntryId,
-      completionSummary,
       isWorking,
       activeTurnInProgress,
       activeTurnId,
@@ -820,7 +812,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   >
                     <CollapsibleTrigger
                       data-scroll-anchor-ignore={isTailContentRow ? true : undefined}
-                      className="inline-flex items-center gap-1 pb-2 text-left text-muted-foreground/70 transition-colors duration-200 hover:text-muted-foreground/90"
+                      // -ml-0.5 optically aligns the leading "W" with the reply
+                      // text below: the box is already flush, but the W glyph
+                      // carries a left side-bearing that reads as an inset.
+                      className="-ml-0.5 inline-flex items-center gap-1 pb-2 text-left text-muted-foreground/70 transition-colors duration-200 hover:text-muted-foreground/90"
                       style={{ fontSize: chatTypographyStyle.fontSize }}
                     >
                       <span>
@@ -871,18 +866,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     </CollapsiblePanel>
                   </Collapsible>
                   <div className="h-px w-full bg-border" />
-                </div>
-              )}
-              {row.showCompletionDivider && (
-                <div className="my-3 flex items-center gap-3">
-                  <span className="h-px flex-1 bg-border" />
-                  <span
-                    className="text-muted-foreground/80"
-                    style={{ fontSize: chatTypographyStyle.fontSize }}
-                  >
-                    {row.completionSummary ? `Response • ${row.completionSummary}` : "Response"}
-                  </span>
-                  <span className="h-px flex-1 bg-border" />
                 </div>
               )}
               <div className="group min-w-0 py-0.5">

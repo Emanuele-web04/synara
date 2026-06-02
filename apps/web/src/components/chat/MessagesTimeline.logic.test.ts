@@ -253,8 +253,6 @@ describe("computeStableMessagesTimelineRows", () => {
         ],
         inlineWorkGroupId: "activity-command",
         durationStart: "2026-05-09T10:00:01.000Z",
-        showCompletionDivider: false,
-        completionSummary: null,
         showAssistantCopyButton: false,
         assistantCopyStreaming: true,
       },
@@ -526,7 +524,6 @@ describe("deriveMessagesTimelineRows", () => {
   type MessageTimelineRow = Extract<MessagesTimelineRow, { kind: "message" }>;
 
   const baseInput = {
-    completionDividerBeforeEntryId: null as string | null,
     isWorking: false,
     activeTurnStartedAt: null as string | null,
     turnDiffSummaryByAssistantMessageId: new Map(),

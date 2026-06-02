@@ -21,7 +21,6 @@ import {
   findLatestProposedPlan,
   findSidebarProposedPlan,
   hasActionableProposedPlan,
-  hasToolActivityForTurn,
   isLatestTurnSettled,
 } from "./session-logic";
 
@@ -2168,27 +2167,6 @@ describe("deriveWorkLogEntries context window handling", () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]?.label).toBe("Compacting context");
-  });
-});
-
-describe("hasToolActivityForTurn", () => {
-  it("returns false when turn id is missing", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({ id: "tool-1", turnId: "turn-1", kind: "tool.completed", tone: "tool" }),
-    ];
-
-    expect(hasToolActivityForTurn(activities, undefined)).toBe(false);
-    expect(hasToolActivityForTurn(activities, null)).toBe(false);
-  });
-
-  it("returns true only for matching tool activity in the target turn", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({ id: "tool-1", turnId: "turn-1", kind: "tool.completed", tone: "tool" }),
-      makeActivity({ id: "info-1", turnId: "turn-2", kind: "turn.completed", tone: "info" }),
-    ];
-
-    expect(hasToolActivityForTurn(activities, TurnId.makeUnsafe("turn-1"))).toBe(true);
-    expect(hasToolActivityForTurn(activities, TurnId.makeUnsafe("turn-2"))).toBe(false);
   });
 });
 

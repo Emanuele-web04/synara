@@ -48,8 +48,6 @@ export type MessagesTimelineRow =
       collapsedTurnItems?: CollapsedTurnItem[];
       collapsedWorkElapsed?: string | null;
       durationStart: string;
-      showCompletionDivider: boolean;
-      completionSummary: string | null;
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
@@ -197,8 +195,6 @@ export function deriveTerminalAssistantMessageIds(
 // t3code behavior of attaching trailing work groups to the adjacent assistant reply.
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
-  completionDividerBeforeEntryId: string | null;
-  completionSummary?: string | null;
   isWorking: boolean;
   activeTurnInProgress?: boolean;
   activeTurnId?: TurnId | null | undefined;
@@ -307,9 +303,6 @@ export function deriveMessagesTimelineRows(input: {
       input.activeTurnInProgress === true &&
       input.activeTurnId != null &&
       timelineEntry.message.turnId === input.activeTurnId;
-    const showCompletionDivider =
-      timelineEntry.message.role === "assistant" &&
-      input.completionDividerBeforeEntryId === timelineEntry.id;
 
     nextRows.push({
       kind: "message",
@@ -320,8 +313,6 @@ export function deriveMessagesTimelineRows(input: {
       ...(inlineWorkGroupId ? { inlineWorkGroupId } : {}),
       durationStart:
         durationStartByMessageId.get(timelineEntry.message.id) ?? timelineEntry.message.createdAt,
-      showCompletionDivider,
-      completionSummary: showCompletionDivider ? (input.completionSummary ?? null) : null,
       showAssistantCopyButton:
         timelineEntry.message.role === "assistant" &&
         terminalAssistantMessageIds.has(timelineEntry.message.id),
@@ -454,10 +445,6 @@ function collapseSettledTurns(
             folded.assistantTurnDiffSummary,
             row.assistantTurnDiffSummary ?? folded.assistantTurnDiffSummary,
           );
-        }
-        if (folded.showCompletionDivider && !row.showCompletionDivider) {
-          row.showCompletionDivider = true;
-          row.completionSummary = folded.completionSummary;
         }
         // Work that preceded a narration message was attached as its inline
         // entries; keep it ahead of the narration text in chronological order.
@@ -643,8 +630,6 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         collapsedTurnItemsEqual(a.collapsedTurnItems, bm.collapsedTurnItems) &&
         a.collapsedWorkElapsed === bm.collapsedWorkElapsed &&
         a.durationStart === bm.durationStart &&
-        a.showCompletionDivider === bm.showCompletionDivider &&
-        a.completionSummary === bm.completionSummary &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&

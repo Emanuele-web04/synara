@@ -200,19 +200,6 @@ describe("estimateTimelineMessageHeight", () => {
       ),
     );
   });
-
-  it("accounts for the completion divider in assistant message estimates", () => {
-    expect(
-      estimateTimelineMessageHeight(
-        {
-          role: "assistant",
-          text: "done",
-          showCompletionDivider: true,
-        },
-        { timelineWidthPx: 768 },
-      ),
-    ).toBe(138);
-  });
 });
 
 describe("estimateChangedFilesSummaryHeight", () => {
