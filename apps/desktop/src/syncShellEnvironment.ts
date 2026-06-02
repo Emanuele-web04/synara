@@ -3,6 +3,7 @@
 // Exports: syncShellEnvironment for desktop startup.
 
 import {
+  isPathName,
   listLoginShellCandidates,
   mergePathEntries,
   readPathFromLaunchctl,
@@ -43,7 +44,7 @@ function syncWindowsEnvironment(
     }
 
     for (const [name, value] of Object.entries(persisted)) {
-      if (name.toUpperCase() === "PATH") continue;
+      if (isPathName(name)) continue;
       if (value && env[name] === undefined) {
         env[name] = value;
       }

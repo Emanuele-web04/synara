@@ -214,6 +214,29 @@ describe("syncShellEnvironment", () => {
     expect(env.GEMINI_API_KEY).toBe("from-registry");
   });
 
+  it("logs a warning and leaves the environment intact when the Windows reader throws", () => {
+    const env: NodeJS.ProcessEnv = {
+      PATH: "C:\\Windows\\system32",
+    };
+    const readWindowsEnvironment = vi.fn(() => {
+      throw new Error("powershell.exe ENOENT");
+    });
+    const logWarning = vi.fn();
+
+    syncShellEnvironment(env, {
+      platform: "win32",
+      readWindowsEnvironment,
+      logWarning,
+    });
+
+    expect(readWindowsEnvironment).toHaveBeenCalledTimes(1);
+    expect(logWarning).toHaveBeenCalledWith(
+      "Failed to synchronize the desktop Windows environment.",
+      expect.any(Error),
+    );
+    expect(env.PATH).toBe("C:\\Windows\\system32");
+  });
+
   it("does nothing on unsupported platforms", () => {
     const env: NodeJS.ProcessEnv = {
       SHELL: "/bin/zsh",

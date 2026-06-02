@@ -23,7 +23,12 @@ import {
   shell,
   systemPreferences,
 } from "electron";
-import type { FileFilter, IpcMainEvent, MenuItemConstructorOptions } from "electron";
+import type {
+  BrowserWindowConstructorOptions,
+  FileFilter,
+  IpcMainEvent,
+  MenuItemConstructorOptions,
+} from "electron";
 import * as Effect from "effect/Effect";
 import type {
   DesktopTheme,
@@ -1979,6 +1984,27 @@ function getIconOption(): { icon: string } | Record<string, never> {
   return iconPath ? { icon: iconPath } : {};
 }
 
+// macOS backs the translucent shell with window vibrancy, so the window is created
+// transparent (`#00000000`) over the vibrancy material. Windows/Linux have no vibrancy:
+// a transparent window there leaves backdrop-filter surfaces bleeding through and, on
+// fractional DPI, rendering blurry. So off macOS we create an opaque window and skip the
+// macOS-only options. The background tracks the OS light/dark appearance purely to avoid
+// a bright flash before the renderer paints — the window is shown only after first paint
+// (`show: false`), so this color is not expected to match a custom in-app theme exactly.
+function getWindowMaterialOptions(): BrowserWindowConstructorOptions {
+  if (process.platform !== "darwin") {
+    return { backgroundColor: nativeTheme.shouldUseDarkColors ? "#181818" : "#ffffff" };
+  }
+  return {
+    vibrancy: "under-window",
+    // "followWindow" lets macOS drop vibrancy blending to inactive when the
+    // window is backgrounded, so WindowServer stops continuously recompositing
+    // it. "active" forced full-cost blending even when the app was unfocused.
+    visualEffectState: "followWindow",
+    backgroundColor: "#00000000",
+  };
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1100,
@@ -1991,12 +2017,7 @@ function createWindow(): BrowserWindow {
     title: APP_DISPLAY_NAME,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 18 },
-    vibrancy: "under-window",
-    // "followWindow" lets macOS drop vibrancy blending to inactive when the
-    // window is backgrounded, so WindowServer stops continuously recompositing
-    // it. "active" forced full-cost blending even when the app was unfocused.
-    visualEffectState: "followWindow",
-    backgroundColor: "#00000000",
+    ...getWindowMaterialOptions(),
     webPreferences: {
       preload: Path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -2062,6 +2083,9 @@ function createWindow(): BrowserWindow {
     emitUpdateState();
   });
   window.once("ready-to-show", () => {
+    // Launch filling the screen work area; the 1100x780 size above stays as the
+    // restore bounds when the user toggles the window back out of maximized.
+    window.maximize();
     window.show();
   });
 

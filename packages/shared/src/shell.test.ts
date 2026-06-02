@@ -196,6 +196,20 @@ describe("mergePathEntries", () => {
       "C:\\Tools;C:\\Windows;C:\\Git",
     );
   });
+
+  it("collapses case- and trailing-slash-different Windows duplicates", () => {
+    expect(
+      mergePathEntries(
+        "C:\\Windows\\System32;C:\\Tools",
+        "c:\\windows\\system32\\;C:\\Tools\\;C:\\Git",
+        "win32",
+      ),
+    ).toBe("C:\\Windows\\System32;C:\\Tools;C:\\Git");
+  });
+
+  it("keeps posix PATH entries case-sensitive", () => {
+    expect(mergePathEntries("/usr/Bin", "/usr/bin", "linux")).toBe("/usr/Bin:/usr/bin");
+  });
 });
 
 describe("mergeWindowsScopes", () => {
@@ -215,6 +229,14 @@ describe("mergeWindowsScopes", () => {
 
     expect(merged.PATH).toBe("C:\\Windows");
     expect(merged.EMPTY).toBeUndefined();
+  });
+
+  it("lets the user scope win even when its variable name uses different casing", () => {
+    const merged = mergeWindowsScopes({ Foo: "machine" }, { FOO: "user" });
+
+    expect(merged.FOO).toBe("user");
+    expect(merged.Foo).toBeUndefined();
+    expect(Object.keys(merged).filter((key) => key.toLowerCase() === "foo")).toEqual(["FOO"]);
   });
 });
 
