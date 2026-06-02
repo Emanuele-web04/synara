@@ -22,8 +22,8 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
-    version: "0.0.51",
-    date: "Jun 1",
+    version: "0.1.0",
+    date: "Jun 3",
     features: [
       {
         id: "synara-rebrand",
