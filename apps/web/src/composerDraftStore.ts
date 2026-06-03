@@ -675,6 +675,20 @@ function normalizeTerminalContextsForThread(
   return normalizedContexts;
 }
 
+function cloneTransferredComposerImage(image: ComposerImageAttachment): ComposerImageAttachment {
+  if (typeof URL === "undefined" || !image.previewUrl.startsWith("blob:")) {
+    return image;
+  }
+  try {
+    return {
+      ...image,
+      previewUrl: URL.createObjectURL(image.file),
+    };
+  } catch {
+    return image;
+  }
+}
+
 function buildTransferredComposerDraft(input: {
   sourceDraft: ComposerThreadDraftState;
   targetDraft: ComposerThreadDraftState | undefined;
@@ -682,9 +696,16 @@ function buildTransferredComposerDraft(input: {
 }): ComposerThreadDraftState {
   const { sourceDraft, targetDraft, targetThreadId } = input;
   const base = targetDraft ?? createEmptyThreadDraft();
+  const images = sourceDraft.images.map(cloneTransferredComposerImage);
+  const imageIds = new Set(images.map((image) => image.id));
   return {
     ...base,
     prompt: sourceDraft.prompt,
+    images,
+    persistedAttachments: sourceDraft.persistedAttachments.filter((attachment) =>
+      imageIds.has(attachment.id),
+    ),
+    nonPersistedImageIds: sourceDraft.nonPersistedImageIds.filter((id) => imageIds.has(id)),
     assistantSelections: normalizeAssistantSelections(sourceDraft.assistantSelections),
     terminalContexts: normalizeTerminalContextsForThread(
       targetThreadId,

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendVoiceTranscriptToPrompt,
+  buildProviderHandoffDraftTransferCopy,
   filterSidechatTranscriptMessages,
   type LocalDispatchSnapshot,
   deriveComposerSendState,
@@ -23,6 +24,30 @@ import {
 } from "./ChatView.logic";
 
 describe("voice helpers", () => {
+  it("describes V2 provider handoff draft copy for images and queued follow-ups", () => {
+    expect(
+      buildProviderHandoffDraftTransferCopy({
+        hasCurrentImages: true,
+        queuedTurnCount: 2,
+      }),
+    ).toEqual({
+      imageCopyNotice: "Current image attachments will be copied to the new draft.",
+      warnings: ["Queued follow-up messages stay on the original thread."],
+    });
+  });
+
+  it("omits provider handoff draft notices when there are no current images or queued turns", () => {
+    expect(
+      buildProviderHandoffDraftTransferCopy({
+        hasCurrentImages: false,
+        queuedTurnCount: 0,
+      }),
+    ).toEqual({
+      imageCopyNotice: null,
+      warnings: [],
+    });
+  });
+
   it("keeps manual titles visible for empty home chats", () => {
     expect(
       resolveActiveThreadTitle({

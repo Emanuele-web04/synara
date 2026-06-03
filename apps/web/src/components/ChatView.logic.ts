@@ -37,6 +37,10 @@ import type { ProviderModelOption } from "../providerModelOptions";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "synara:last-invoked-script-by-project";
 export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "synara:dismissed-provider-health-banners";
+export const PROVIDER_HANDOFF_IMAGE_COPY_NOTICE =
+  "Current image attachments will be copied to the new draft.";
+export const PROVIDER_HANDOFF_QUEUED_TURNS_STAY_WARNING =
+  "Queued follow-up messages stay on the original thread.";
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 export const DismissedProviderHealthBannersSchema = Schema.Array(Schema.String);
@@ -58,6 +62,20 @@ export function resolveRuntimeModeAfterApprovalDecision(
     return ALWAYS_ALLOW_RUNTIME_MODE;
   }
   return null;
+}
+
+export function buildProviderHandoffDraftTransferCopy(input: {
+  hasCurrentImages: boolean;
+  queuedTurnCount: number;
+}): {
+  imageCopyNotice: string | null;
+  warnings: string[];
+} {
+  return {
+    imageCopyNotice: input.hasCurrentImages ? PROVIDER_HANDOFF_IMAGE_COPY_NOTICE : null,
+    warnings:
+      input.queuedTurnCount > 0 ? [PROVIDER_HANDOFF_QUEUED_TURNS_STAY_WARNING] : [],
+  };
 }
 
 export function buildLocalDraftThread(

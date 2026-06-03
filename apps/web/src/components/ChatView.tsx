@@ -17,6 +17,7 @@ import {
   type ProviderSkillReference,
   type ProviderStartOptions,
   type ProviderUserInputAnswers,
+  PROVIDER_DISPLAY_NAMES,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ResolvedKeybindingsConfig,
@@ -106,6 +107,7 @@ import { dispatchThreadRename } from "../lib/threadRename";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
+  buildProviderHandoffDraftTransferCopy,
   buildThreadBreadcrumbs,
   enrichSubagentWorkEntries,
   resolveActiveThreadTitle,
@@ -133,6 +135,7 @@ import {
 import {
   createAllThreadsSelector,
   createProjectSelector,
+  createSidebarThreadSummariesSelector,
   createThreadSelector,
 } from "../storeSelectors";
 import {
@@ -301,6 +304,7 @@ import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimelin
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { AVAILABLE_PROVIDER_OPTIONS } from "./chat/ProviderModelPicker";
+import { ProviderHandoffDialog } from "./chat/ProviderHandoffDialog";
 import { ComposerModelEffortPicker } from "./chat/ComposerModelEffortPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
 import {
@@ -376,11 +380,14 @@ import {
   revokeUserMessagePreviewUrls,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
 import { useFeatureFlags } from "../featureFlags";
 import { collapseCursorModelVariants } from "../cursorModelVariants";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
+  buildOutgoingThreadHandoffLinks,
+  buildThreadHandoffContextPreview,
   canCreateThreadHandoff,
   resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffBadgeLabel,
@@ -1243,8 +1250,15 @@ export default function ChatView({
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
+  const handoffLinkThreads = useStore(useMemo(() => createSidebarThreadSummariesSelector(), []));
   const homeDir = useWorkspaceStore((state) => state.homeDir);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [providerHandoffTarget, setProviderHandoffTarget] = useState<ProviderKind | null>(null);
+  const [providerHandoffPreviewOpen, setProviderHandoffPreviewOpen] = useState(false);
+  const {
+    copyToClipboard: copyProviderHandoffPreview,
+    isCopied: isProviderHandoffPreviewCopied,
+  } = useCopyToClipboard();
   const isHomeChatContainer = isHomeChatContainerProject(activeProject, homeDir);
   const activeProjectDisplayName = isHomeChatContainer
     ? activeProject?.folderName
@@ -2703,9 +2717,20 @@ export default function ChatView({
     [activeThread],
   );
   const handoffBadgeSourceProvider = activeThread?.handoff?.sourceProvider ?? null;
+  const handoffBadgeSourceThreadId = activeThread?.handoff?.sourceThreadId ?? null;
   const handoffBadgeTargetProvider = activeThread?.handoff
     ? activeThread.modelSelection.provider
     : null;
+  const outgoingHandoffLinks = useMemo(
+    () =>
+      activeThread
+        ? buildOutgoingThreadHandoffLinks({
+            sourceThread: activeThread,
+            threads: handoffLinkThreads,
+          })
+        : [],
+    [activeThread, handoffLinkThreads],
+  );
   const handoffTargetProviders = useMemo(
     () =>
       activeThread
@@ -2718,6 +2743,74 @@ export default function ChatView({
         : [],
     [activeThread, providerStatuses],
   );
+  const providerHandoffBlockedReason = useMemo(() => {
+    if (!activeThread || !isServerThread) {
+      return "Saved threads only";
+    }
+    if (!activeProject) {
+      return "Project unavailable";
+    }
+    if (isWorking) {
+      return "Turn running";
+    }
+    if (pendingApprovals.length > 0) {
+      return "Approval pending";
+    }
+    if (pendingUserInputs.length > 0) {
+      return "Input pending";
+    }
+    if (
+      !canCreateThreadHandoff({
+        thread: activeThread,
+        isBusy: isWorking,
+        hasPendingApprovals: pendingApprovals.length > 0,
+        hasPendingUserInput: pendingUserInputs.length > 0,
+      })
+    ) {
+      return activeThread.handoff !== null ? "Send a reply first" : "No messages yet";
+    }
+    return null;
+  }, [
+    activeProject,
+    activeThread,
+    isServerThread,
+    isWorking,
+    pendingApprovals.length,
+    pendingUserInputs.length,
+  ]);
+  const providerPickerHandoffTargets = useMemo(() => {
+    if (!activeThread || lockedProvider === null) {
+      return [];
+    }
+    const hiddenProviders = new Set(settings.hiddenProviders);
+    return resolveAvailableHandoffTargetProviders(activeThread.modelSelection.provider)
+      .filter((provider) => !hiddenProviders.has(provider))
+      .sort((left, right) => compareProvidersByOrder(settings.providerOrder ?? [], left, right))
+      .map((provider) => {
+        const targetStatus =
+          providerStatuses.find((status) => status.provider === provider) ?? null;
+        const providerDisabledReason = !targetStatus
+          ? "Checking"
+          : targetStatus.authStatus === "unauthenticated"
+            ? "Sign in"
+            : !targetStatus.available
+              ? "Unavailable"
+              : !isProviderUsable(targetStatus)
+                ? "Unavailable"
+                : null;
+        return {
+          provider,
+          disabledReason: providerHandoffBlockedReason ?? providerDisabledReason,
+        };
+      });
+  }, [
+    activeThread,
+    lockedProvider,
+    providerHandoffBlockedReason,
+    providerStatuses,
+    settings.hiddenProviders,
+    settings.providerOrder,
+  ]);
   const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
   const activeProviderStatus = useMemo(
     () => providerStatuses.find((status) => status.provider === selectedProvider) ?? null,
@@ -4116,6 +4209,8 @@ export default function ChatView({
   useEffect(() => {
     setPullRequestDialogState(null);
     setRenameDialogOpen(false);
+    setProviderHandoffTarget(null);
+    setProviderHandoffPreviewOpen(false);
     isAtEndRef.current = true;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
@@ -5127,6 +5222,42 @@ export default function ChatView({
       }
     },
     [activeThread, createThreadHandoff, handoffDisabled, providerStatuses],
+  );
+  const onProviderHandoffRequest = useCallback((targetProvider: ProviderKind) => {
+    setProviderHandoffPreviewOpen(false);
+    setProviderHandoffTarget(targetProvider);
+  }, []);
+  const closeProviderHandoffDialog = useCallback(() => {
+    setProviderHandoffTarget(null);
+    setProviderHandoffPreviewOpen(false);
+  }, []);
+  const confirmProviderHandoff = useCallback(async () => {
+    if (!providerHandoffTarget) {
+      return;
+    }
+    const targetProvider = providerHandoffTarget;
+    setProviderHandoffTarget(null);
+    setProviderHandoffPreviewOpen(false);
+    await onCreateHandoffThread(targetProvider);
+  }, [onCreateHandoffThread, providerHandoffTarget]);
+  const providerHandoffDraftCopy = useMemo(
+    () =>
+      buildProviderHandoffDraftTransferCopy({
+        hasCurrentImages:
+          composerImages.length > 0 || composerDraft.persistedAttachments.length > 0,
+        queuedTurnCount: queuedComposerTurns.length,
+      }),
+    [composerDraft.persistedAttachments.length, composerImages.length, queuedComposerTurns.length],
+  );
+  const providerHandoffContextPreview = useMemo(
+    () =>
+      providerHandoffTarget && activeThread
+        ? buildThreadHandoffContextPreview({
+            thread: activeThread,
+            latestUserMessageText: prompt,
+          })
+        : null,
+    [activeThread, prompt, providerHandoffTarget],
   );
 
   const clearComposerInput = useCallback(
@@ -6633,6 +6764,7 @@ export default function ChatView({
       }}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
+      handoffTargets={providerPickerHandoffTargets}
       threadId={threadId}
       runtimeModel={selectedRuntimeModel}
       runtimeModels={runtimeModelsByProvider[selectedProvider]}
@@ -6641,6 +6773,7 @@ export default function ChatView({
       prompt={prompt}
       onPromptChange={setPromptFromTraits}
       onProviderModelChange={onProviderModelSelect}
+      onProviderHandoffRequest={onProviderHandoffRequest}
       onSelectionCommitted={scheduleComposerFocus}
       open={isComposerModelEffortPickerOpen}
       onOpenChange={handleComposerModelEffortPickerOpenChange}
@@ -8090,6 +8223,8 @@ export default function ChatView({
           handoffActionTargetProviders={handoffTargetProviders}
           handoffBadgeSourceProvider={handoffBadgeSourceProvider}
           handoffBadgeTargetProvider={handoffBadgeTargetProvider}
+          handoffBadgeSourceThreadId={handoffBadgeSourceThreadId}
+          outgoingHandoffLinks={outgoingHandoffLinks}
           gitCwd={threadWorkspaceCwd}
           diffBadgeRefreshIntervalMs={repoDiffBadgeRefreshIntervalMs}
           showGitActions={showGitActions}
@@ -8138,6 +8273,21 @@ export default function ChatView({
         currentTitle={activeThread.title}
         onOpenChange={setRenameDialogOpen}
         onSave={handleRenameActiveThread}
+      />
+
+      <ProviderHandoffDialog
+        open={providerHandoffTarget !== null}
+        sourceProvider={lockedProvider}
+        targetProvider={providerHandoffTarget}
+        imageCopyNotice={providerHandoffDraftCopy.imageCopyNotice}
+        warnings={providerHandoffDraftCopy.warnings}
+        contextPreview={providerHandoffContextPreview}
+        contextPreviewOpen={providerHandoffPreviewOpen}
+        isContextPreviewCopied={isProviderHandoffPreviewCopied}
+        onContextPreviewOpenChange={setProviderHandoffPreviewOpen}
+        onCopyContextPreview={(preview) => copyProviderHandoffPreview(preview, undefined)}
+        onCancel={closeProviderHandoffDialog}
+        onConfirm={() => void confirmProviderHandoff()}
       />
 
       {/* Error banner */}

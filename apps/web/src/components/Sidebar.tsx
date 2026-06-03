@@ -224,9 +224,11 @@ import {
 } from "~/lib/disclosureMotion";
 import { getInitialBrowseQuery } from "~/lib/projectPaths";
 import {
+  buildOutgoingThreadHandoffLinks,
   canCreateThreadHandoff,
   resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffBadgeLabel,
+  resolveThreadOutgoingHandoffTooltip,
 } from "../lib/threadHandoff";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
@@ -425,9 +427,10 @@ function resolveWorktreeBadgeLabel(
 }
 
 type ThreadMetaChip = {
-  id: "handoff" | "fork" | "sidechat" | "worktree";
+  id: "handoff-in" | "handoff-out" | "fork" | "sidechat" | "worktree";
   tooltip: string;
   icon: ReactNode;
+  onClick?: (event: MouseEvent<HTMLElement>) => void;
 };
 
 /**
@@ -439,7 +442,13 @@ function resolveThreadRowMetaChips(input: {
     Thread,
     "forkSourceThreadId" | "sidechatSourceThreadId" | "envMode" | "worktreePath" | "handoff"
   >;
+  outgoingHandoffLink?: {
+    readonly threadId: ThreadId;
+    readonly provider: ProviderKind;
+  } | null;
+  outgoingHandoffOverflowCount?: number;
   includeHandoffBadge: boolean;
+  onNavigateToThread?: (threadId: ThreadId) => void;
   /**
    * When the leading provider avatar already renders the source → target handoff
    * pair, the trailing handoff chip is a redundant double icon and is dropped.
@@ -451,9 +460,33 @@ function resolveThreadRowMetaChips(input: {
   const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(input.thread);
   if (input.includeHandoffBadge && !input.handoffShownInAvatar && handoffBadgeLabel) {
     chips.push({
-      id: "handoff",
+      id: "handoff-in",
       tooltip: handoffBadgeLabel,
       icon: <SidebarGlyph icon={FiGitBranch} variant="meta" className="text-muted-foreground/55" />,
+      ...(input.thread.handoff && input.onNavigateToThread
+        ? {
+            onClick: () => input.onNavigateToThread?.(input.thread.handoff!.sourceThreadId),
+          }
+        : {}),
+    });
+  }
+
+  if (input.includeHandoffBadge && input.outgoingHandoffLink) {
+    chips.push({
+      id: "handoff-out",
+      tooltip: resolveThreadOutgoingHandoffTooltip(
+        input.outgoingHandoffLink,
+        input.outgoingHandoffOverflowCount ?? 0,
+      ),
+      icon: <SidebarGlyph icon={HandoffIcon} variant="meta" className="text-muted-foreground/55" />,
+      ...(input.onNavigateToThread
+        ? {
+            onClick: () =>
+              input.outgoingHandoffLink
+                ? input.onNavigateToThread?.(input.outgoingHandoffLink.threadId)
+                : undefined,
+          }
+        : {}),
     });
   }
 
@@ -4028,9 +4061,17 @@ export default function Sidebar() {
     const isPendingArchiveConfirmation = pendingArchiveConfirmationThreadId === thread.id;
     const isActive = visualActiveSidebarThreadId === thread.id;
     const projectLabel = resolvePinnedThreadProjectLabel(thread.projectId);
+    const outgoingHandoffLinks = buildOutgoingThreadHandoffLinks({
+      sourceThread: thread,
+      threads: sidebarThreads,
+    });
+    const outgoingHandoffLink = outgoingHandoffLinks[0];
     const rightMetaChips = resolveThreadRowMetaChips({
       thread,
+      outgoingHandoffLink,
+      outgoingHandoffOverflowCount: Math.max(0, outgoingHandoffLinks.length - 1),
       includeHandoffBadge: true,
+      onNavigateToThread: activateThreadFromSidebarIntent,
       handoffShownInAvatar:
         threadEntryPoint !== "terminal" &&
         !isGenericChatThreadTitle(thread.title) &&
@@ -4220,9 +4261,17 @@ export default function Sidebar() {
     const secondaryMetaClass = isHighlighted
       ? "text-foreground/54 dark:text-foreground/64"
       : "text-muted-foreground/34";
+    const outgoingHandoffLinks = buildOutgoingThreadHandoffLinks({
+      sourceThread: thread,
+      threads: sidebarThreads,
+    });
+    const outgoingHandoffLink = outgoingHandoffLinks[0];
     const rightMetaChips = resolveThreadRowMetaChips({
       thread,
+      outgoingHandoffLink,
+      outgoingHandoffOverflowCount: Math.max(0, outgoingHandoffLinks.length - 1),
       includeHandoffBadge: !isDisposableThread,
+      onNavigateToThread: activateThreadFromSidebarIntent,
       handoffShownInAvatar:
         threadEntryPoint !== "terminal" &&
         !isGenericChatThreadTitle(thread.title) &&

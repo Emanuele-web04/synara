@@ -42,6 +42,11 @@ import { ProviderIcon } from "../ProviderIcon";
 import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
 import { summarizePatchStats } from "~/lib/diffRendering";
 import { useRepoDiffScopeStore } from "~/repoDiffScopeStore";
+import {
+  resolveThreadOutgoingHandoffLabel,
+  resolveThreadOutgoingHandoffTooltip,
+  type ThreadHandoffLink,
+} from "~/lib/threadHandoff";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -74,6 +79,8 @@ interface ChatHeaderProps {
   handoffActionTargetProviders: ReadonlyArray<ProviderKind>;
   handoffBadgeSourceProvider: ProviderKind | null;
   handoffBadgeTargetProvider: ProviderKind | null;
+  handoffBadgeSourceThreadId: ThreadId | null;
+  outgoingHandoffLinks: ReadonlyArray<ThreadHandoffLink>;
   gitCwd: string | null;
   diffBadgeRefreshIntervalMs?: number | false;
   showGitActions?: boolean;
@@ -114,6 +121,28 @@ export function resolveChatHeaderThreadIconKind(
   return entryPoint === "terminal" ? "terminal" : "provider";
 }
 
+export function resolveChatHeaderContinuationSummary(
+  links: ReadonlyArray<Pick<ThreadHandoffLink, "provider" | "threadId">>,
+): {
+  readonly primary: Pick<ThreadHandoffLink, "provider" | "threadId"> | null;
+  readonly overflowCount: number;
+} {
+  return {
+    primary: links[0] ?? null,
+    overflowCount: Math.max(0, links.length - 1),
+  };
+}
+
+export function resolveChatHeaderContinuationTooltip(input: {
+  primary: Pick<ThreadHandoffLink, "provider"> | null;
+  overflowCount: number;
+}): string | null {
+  if (!input.primary) {
+    return null;
+  }
+  return resolveThreadOutgoingHandoffTooltip(input.primary, input.overflowCount);
+}
+
 export const ChatHeader = memo(function ChatHeader({
   activeThreadId,
   activeThreadTitle,
@@ -135,6 +164,8 @@ export const ChatHeader = memo(function ChatHeader({
   handoffActionTargetProviders,
   handoffBadgeSourceProvider,
   handoffBadgeTargetProvider,
+  handoffBadgeSourceThreadId,
+  outgoingHandoffLinks,
   gitCwd,
   diffBadgeRefreshIntervalMs = false,
   showGitActions = true,
@@ -178,6 +209,12 @@ export const ChatHeader = memo(function ChatHeader({
   const inlineChatLayoutAction = chatLayoutAction?.kind === "maximize" ? chatLayoutAction : null;
   const threadIconKind = resolveChatHeaderThreadIconKind(activeThreadEntryPoint, activeThreadTitle);
   const showSidechatTitleChip = isSidechat && compact;
+  const outgoingHandoffSummary = resolveChatHeaderContinuationSummary(outgoingHandoffLinks);
+  const outgoingHandoffPrimary = outgoingHandoffSummary.primary;
+  const outgoingHandoffLabel = outgoingHandoffPrimary
+    ? resolveThreadOutgoingHandoffLabel(outgoingHandoffPrimary)
+    : null;
+  const outgoingHandoffTooltip = resolveChatHeaderContinuationTooltip(outgoingHandoffSummary);
 
   useEffect(() => {
     const el = headerRef.current;
@@ -277,6 +314,71 @@ export const ChatHeader = memo(function ChatHeader({
                     <XIcon />
                   </IconButton>
                 ) : null}
+                {!hideHandoffControls && outgoingHandoffPrimary && outgoingHandoffLabel ? (
+                  outgoingHandoffLinks.length > 1 ? (
+                    <Menu modal={false}>
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <MenuTrigger
+                              render={
+                                <Badge
+                                  variant="outline"
+                                  className="hidden !h-6 max-w-[14rem] shrink-0 cursor-pointer items-center justify-center gap-1 rounded-md px-1.5 text-[10px] sm:inline-flex"
+                                  aria-label={outgoingHandoffTooltip ?? outgoingHandoffLabel}
+                                />
+                              }
+                            >
+                              <HandoffIcon className="size-3 shrink-0 opacity-70" />
+                              <span className="truncate">{outgoingHandoffLabel}</span>
+                              <span className="shrink-0 text-muted-foreground">
+                                +{outgoingHandoffSummary.overflowCount}
+                              </span>
+                            </MenuTrigger>
+                          }
+                        />
+                        <TooltipPopup side="bottom">
+                          {outgoingHandoffTooltip ?? outgoingHandoffLabel}
+                        </TooltipPopup>
+                      </Tooltip>
+                      <ComposerPickerMenuPopup align="start" side="bottom" className="w-64 min-w-64">
+                        {outgoingHandoffLinks.map((link) => (
+                          <MenuItem
+                            key={link.threadId}
+                            onClick={() => onNavigateToThread(link.threadId)}
+                          >
+                            {renderProviderIcon(link.provider, "size-3.5 shrink-0")}
+                            <span className="min-w-0 truncate">{link.title}</span>
+                          </MenuItem>
+                        ))}
+                      </ComposerPickerMenuPopup>
+                    </Menu>
+                  ) : (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Badge
+                            variant="outline"
+                            render={
+                              <button
+                                type="button"
+                                className="hidden !h-6 max-w-[14rem] shrink-0 cursor-pointer items-center justify-center gap-1 rounded-md px-1.5 text-[10px] sm:inline-flex"
+                                aria-label={outgoingHandoffTooltip ?? outgoingHandoffLabel}
+                                onClick={() => onNavigateToThread(outgoingHandoffPrimary.threadId)}
+                              />
+                            }
+                          >
+                            <HandoffIcon className="size-3 shrink-0 opacity-70" />
+                            <span className="truncate">{outgoingHandoffLabel}</span>
+                          </Badge>
+                        }
+                      />
+                      <TooltipPopup side="bottom">
+                        {outgoingHandoffTooltip ?? outgoingHandoffLabel}
+                      </TooltipPopup>
+                    </Tooltip>
+                  )
+                ) : null}
               </div>
               {!hideHandoffControls && handoffBadgeLabel ? (
                 <Tooltip>
@@ -284,7 +386,18 @@ export const ChatHeader = memo(function ChatHeader({
                     render={
                       <Badge
                         variant="outline"
-                        className="hidden !h-6 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-[10px] sm:inline-flex"
+                        render={
+                          <button
+                            type="button"
+                            className="hidden !h-6 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-[10px] sm:inline-flex"
+                            aria-label={handoffBadgeLabel}
+                            onClick={() => {
+                              if (handoffBadgeSourceThreadId) {
+                                onNavigateToThread(handoffBadgeSourceThreadId);
+                              }
+                            }}
+                          />
+                        }
                       >
                         <span className="inline-flex size-4 shrink-0 items-center justify-center">
                           {renderProviderIcon(handoffBadgeSourceProvider, "size-3")}

@@ -10,12 +10,26 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ModelSelection,
   type ProviderKind,
+  type ThreadId,
   type ThreadHandoffImportedMessage,
 } from "@t3tools/contracts";
+import {
+  buildHandoffBootstrapTextFromImportedMessages,
+  calculateAvailableHandoffBootstrapChars,
+} from "@t3tools/shared/handoffContext";
 import { getDefaultModel } from "@t3tools/shared/model";
 import { type Thread } from "../types";
 import { stripEmbeddedAssistantSelections } from "./assistantSelections";
 import { randomUUID } from "./utils";
+
+export interface ThreadHandoffLink {
+  readonly threadId: ThreadId;
+  readonly title: string;
+  readonly provider: ProviderKind;
+  readonly sourceThreadId: ThreadId;
+  readonly sourceProvider: ProviderKind;
+  readonly importedAt: string;
+}
 
 const HANDOFF_PROVIDER_ORDER: ReadonlyArray<ProviderKind> = [
   "codex",
@@ -58,7 +72,63 @@ export function resolveThreadHandoffBadgeLabel(thread: Pick<Thread, "handoff">):
   if (!thread.handoff) {
     return null;
   }
-  return `Handoff from ${PROVIDER_DISPLAY_NAMES[thread.handoff.sourceProvider]}`;
+  return `Continued from ${PROVIDER_DISPLAY_NAMES[thread.handoff.sourceProvider]}`;
+}
+
+export function resolveThreadOutgoingHandoffLabel(
+  link: Pick<ThreadHandoffLink, "provider">,
+): string {
+  return `Continued with ${PROVIDER_DISPLAY_NAMES[link.provider]}`;
+}
+
+export function resolveThreadOutgoingHandoffTooltip(
+  link: Pick<ThreadHandoffLink, "provider">,
+  additionalCount = 0,
+): string {
+  const label = resolveThreadOutgoingHandoffLabel(link);
+  if (additionalCount <= 0) {
+    return label;
+  }
+  return `${label}; ${additionalCount} more continuation${additionalCount === 1 ? "" : "s"}`;
+}
+
+export function buildOutgoingThreadHandoffLinks<
+  T extends Pick<Thread, "id" | "projectId" | "title" | "modelSelection" | "handoff"> & {
+    readonly archivedAt?: string | null;
+  },
+>(input: {
+  readonly sourceThread: Pick<Thread, "id" | "projectId">;
+  readonly threads: readonly T[];
+}): readonly ThreadHandoffLink[] {
+  return input.threads
+    .flatMap((thread): ThreadHandoffLink[] => {
+      if (
+        thread.id === input.sourceThread.id ||
+        thread.projectId !== input.sourceThread.projectId ||
+        thread.archivedAt ||
+        !thread.handoff ||
+        thread.handoff.sourceThreadId !== input.sourceThread.id
+      ) {
+        return [];
+      }
+      return [
+        {
+          threadId: thread.id,
+          title: thread.title,
+          provider: thread.modelSelection.provider,
+          sourceThreadId: thread.handoff.sourceThreadId,
+          sourceProvider: thread.handoff.sourceProvider,
+          importedAt: thread.handoff.importedAt,
+        },
+      ];
+    })
+    .sort((left, right) => right.importedAt.localeCompare(left.importedAt));
+}
+
+export function resolvePrimaryOutgoingThreadHandoffLink(
+  links: readonly ThreadHandoffLink[],
+): ThreadHandoffLink | null {
+  return links[0] ?? null;
 }
 
 // Preserve the visible source thread name when creating the destination thread.
@@ -100,6 +170,29 @@ export function buildThreadHandoffImportedMessages(
           )
         : null;
     return attachments ? Object.assign(importedMessage, { attachments }) : importedMessage;
+  });
+}
+
+export function buildThreadHandoffContextPreview(input: {
+  readonly thread: Pick<
+    Thread,
+    "branch" | "messages" | "modelSelection" | "title" | "worktreePath"
+  >;
+  readonly latestUserMessageText: string;
+}): string | null {
+  const maxChars = calculateAvailableHandoffBootstrapChars(input.latestUserMessageText);
+  if (maxChars <= 0) {
+    return null;
+  }
+  const importedMessages = buildThreadHandoffImportedMessages(input.thread);
+  if (importedMessages.length === 0) {
+    return null;
+  }
+  return buildHandoffBootstrapTextFromImportedMessages({
+    thread: input.thread,
+    importedMessages,
+    sourceProvider: input.thread.modelSelection.provider,
+    maxChars,
   });
 }
 

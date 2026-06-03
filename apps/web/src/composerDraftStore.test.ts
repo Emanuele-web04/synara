@@ -298,12 +298,18 @@ describe("composerDraftStore clearComposerContent", () => {
 describe("composerDraftStore copyTransferableComposerState", () => {
   const sourceThreadId = ThreadId.makeUnsafe("thread-source");
   const targetThreadId = ThreadId.makeUnsafe("thread-target");
+  let originalCreateObjectUrl: typeof URL.createObjectURL;
 
   beforeEach(() => {
     resetComposerDraftStore();
+    originalCreateObjectUrl = URL.createObjectURL;
   });
 
-  it("copies the prompt and terminal contexts to the target thread", () => {
+  afterEach(() => {
+    URL.createObjectURL = originalCreateObjectUrl;
+  });
+
+  it("copies prompt, assistant selections, terminal contexts, current images, and persisted image state", () => {
     const sourceContext = makeTerminalContext({
       id: "ctx-source",
       text: "pnpm lint",
@@ -312,17 +318,71 @@ describe("composerDraftStore copyTransferableComposerState", () => {
       "Please reuse this context",
       24,
     ).prompt;
+    const blobImage = makeImage({
+      id: "img-blob",
+      previewUrl: "blob:source-preview",
+      name: "source-blob.png",
+    });
+    const dataUrlImage = makeImage({
+      id: "img-data",
+      previewUrl: "data:image/png;base64,AAAA",
+      name: "source-data.png",
+      sizeBytes: 3,
+    });
+    const createObjectUrlSpy = vi.fn(() => "blob:target-clone");
+    URL.createObjectURL = createObjectUrlSpy;
 
     useComposerDraftStore.getState().setPrompt(sourceThreadId, copiedPrompt);
     useComposerDraftStore.getState().setTerminalContexts(sourceThreadId, [sourceContext]);
+    useComposerDraftStore.getState().addAssistantSelection(sourceThreadId, {
+      type: "assistant-selection",
+      id: "assistant-selection-1",
+      assistantMessageId: "msg-assistant-1",
+      text: "Selected assistant text",
+    });
+    useComposerDraftStore.getState().addImages(sourceThreadId, [blobImage, dataUrlImage]);
+    useComposerDraftStore.getState().syncPersistedAttachments(sourceThreadId, [
+      {
+        id: dataUrlImage.id,
+        name: dataUrlImage.name,
+        mimeType: dataUrlImage.mimeType,
+        sizeBytes: dataUrlImage.sizeBytes,
+        dataUrl: dataUrlImage.previewUrl,
+      },
+      {
+        id: "orphan-persisted",
+        name: "orphan.png",
+        mimeType: "image/png",
+        sizeBytes: 1,
+        dataUrl: "data:image/png;base64,ORPHAN",
+      },
+    ]);
+    useComposerDraftStore.setState((state) => ({
+      draftsByThreadId: {
+        ...state.draftsByThreadId,
+        [sourceThreadId]: {
+          ...state.draftsByThreadId[sourceThreadId]!,
+          nonPersistedImageIds: [blobImage.id, "orphan-non-persisted"],
+        },
+      },
+    }));
 
     useComposerDraftStore.getState().copyTransferableComposerState(sourceThreadId, targetThreadId);
 
     const sourceDraft = useComposerDraftStore.getState().draftsByThreadId[sourceThreadId];
     const targetDraft = useComposerDraftStore.getState().draftsByThreadId[targetThreadId];
 
+    expect(createObjectUrlSpy).toHaveBeenCalledWith(blobImage.file);
     expect(targetDraft).toMatchObject({
       prompt: sourceDraft?.prompt,
+      assistantSelections: [
+        {
+          type: "assistant-selection",
+          id: "assistant-selection-1",
+          assistantMessageId: "msg-assistant-1",
+          text: "Selected assistant text",
+        },
+      ],
       terminalContexts: [
         expect.objectContaining({
           id: sourceContext.id,
@@ -332,11 +392,74 @@ describe("composerDraftStore copyTransferableComposerState", () => {
           text: sourceContext.text,
         }),
       ],
+      images: [
+        expect.objectContaining({
+          id: blobImage.id,
+          name: blobImage.name,
+          previewUrl: "blob:target-clone",
+          file: blobImage.file,
+        }),
+        expect.objectContaining({
+          id: dataUrlImage.id,
+          name: dataUrlImage.name,
+          previewUrl: dataUrlImage.previewUrl,
+          file: dataUrlImage.file,
+        }),
+      ],
+      persistedAttachments: [
+        {
+          id: dataUrlImage.id,
+          name: dataUrlImage.name,
+          mimeType: dataUrlImage.mimeType,
+          sizeBytes: dataUrlImage.sizeBytes,
+          dataUrl: dataUrlImage.previewUrl,
+        },
+      ],
+      nonPersistedImageIds: [blobImage.id],
     });
+    expect(sourceDraft?.images.map((image) => image.previewUrl)).toEqual([
+      "blob:source-preview",
+      "data:image/png;base64,AAAA",
+    ]);
   });
 
-  it("preserves unrelated target draft state while replacing transferred composer content", () => {
+  it("leaves source draft unchanged and keeps queued turns on the source thread", () => {
+    const sourceImage = makeImage({
+      id: "source-image",
+      previewUrl: "data:image/png;base64,SOURCE",
+    });
+
+    useComposerDraftStore.getState().setPrompt(sourceThreadId, "source prompt");
+    useComposerDraftStore.getState().addImage(sourceThreadId, sourceImage);
+    useComposerDraftStore.getState().enqueueQueuedTurn(sourceThreadId, makeQueuedTurn("queued-1"));
+
+    const sourceBefore = useComposerDraftStore.getState().draftsByThreadId[sourceThreadId];
+
+    useComposerDraftStore.getState().copyTransferableComposerState(sourceThreadId, targetThreadId);
+
+    const sourceAfter = useComposerDraftStore.getState().draftsByThreadId[sourceThreadId];
+    const targetDraft = useComposerDraftStore.getState().draftsByThreadId[targetThreadId];
+
+    expect(sourceAfter).toEqual(sourceBefore);
+    expect(sourceAfter?.queuedTurns.map((turn) => turn.id)).toEqual(["queued-1"]);
+    expect(targetDraft?.queuedTurns).toEqual([]);
+    expect(targetDraft?.images.map((image) => image.id)).toEqual([sourceImage.id]);
+  });
+
+  it("preserves unrelated target model/provider state while replacing transferred composer content", () => {
+    const targetImage = makeImage({
+      id: "target-image",
+      previewUrl: "data:image/png;base64,TARGET",
+    });
+    const sourceImage = makeImage({
+      id: "source-image",
+      previewUrl: "data:image/png;base64,SOURCE",
+    });
+
     useComposerDraftStore.getState().setPrompt(sourceThreadId, "follow-up for the other provider");
+    useComposerDraftStore.getState().addImage(sourceThreadId, sourceImage);
+    useComposerDraftStore.getState().setPrompt(targetThreadId, "old target prompt");
+    useComposerDraftStore.getState().addImage(targetThreadId, targetImage);
     useComposerDraftStore.getState().setModelSelection(
       targetThreadId,
       modelSelection("claudeAgent", "claude-sonnet-4-6", {
@@ -358,6 +481,12 @@ describe("composerDraftStore copyTransferableComposerState", () => {
         },
       },
       activeProvider: "claudeAgent",
+      images: [
+        expect.objectContaining({
+          id: sourceImage.id,
+          previewUrl: sourceImage.previewUrl,
+        }),
+      ],
     });
   });
 });

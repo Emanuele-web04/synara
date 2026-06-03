@@ -46,6 +46,7 @@ import { COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME } from "./composerPicke
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
 import {
   getProviderIconClassName,
+  type ProviderHandoffTargetOption,
   ProviderModelMenuItems,
   resolveProviderModelLabel,
 } from "./ProviderModelPicker";
@@ -61,9 +62,11 @@ type ComposerModelEffortPickerProps = {
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
+  handoffTargets?: ReadonlyArray<ProviderHandoffTargetOption>;
   compact?: boolean;
   disabled?: boolean;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+  onProviderHandoffRequest?: (provider: ProviderKind) => void;
   onSelectionCommitted?: () => void;
 
   // Traits/effort/speed data.
@@ -291,8 +294,12 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
                 : {})}
               {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
               {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
+              {...(props.handoffTargets ? { handoffTargets: props.handoffTargets } : {})}
               {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
               onProviderModelChange={props.onProviderModelChange}
+              {...(props.onProviderHandoffRequest
+                ? { onProviderHandoffRequest: props.onProviderHandoffRequest }
+                : {})}
               onAfterSelection={handleAfterModelSelection}
             />
           </ComposerPickerMenuSubPopup>

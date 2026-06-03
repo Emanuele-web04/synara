@@ -3,7 +3,7 @@ import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
-import { ProviderModelPicker } from "./ProviderModelPicker";
+import { ProviderModelPicker, type ProviderHandoffTargetOption } from "./ProviderModelPicker";
 import type { ProviderModelOption } from "../../providerModelOptions";
 
 const MODEL_OPTIONS_BY_PROVIDER = {
@@ -125,7 +125,9 @@ async function mountPicker(props: {
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
+  handoffTargets?: ReadonlyArray<ProviderHandoffTargetOption>;
   onSelectionCommitted?: () => void;
+  onProviderHandoffRequest?: (provider: ProviderKind) => void;
   modelOptionsByProvider?: Record<
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>
@@ -134,6 +136,7 @@ async function mountPicker(props: {
   const host = document.createElement("div");
   document.body.append(host);
   const onProviderModelChange = vi.fn();
+  const onProviderHandoffRequest = props.onProviderHandoffRequest ?? vi.fn();
   const screen = await render(
     <ProviderModelPicker
       provider={props.provider}
@@ -144,14 +147,17 @@ async function mountPicker(props: {
         ? { loadingModelProviders: props.loadingModelProviders }
         : {})}
       {...(props.providers ? { providers: props.providers } : {})}
+      {...(props.handoffTargets ? { handoffTargets: props.handoffTargets } : {})}
       {...(props.onSelectionCommitted ? { onSelectionCommitted: props.onSelectionCommitted } : {})}
       onProviderModelChange={onProviderModelChange}
+      onProviderHandoffRequest={onProviderHandoffRequest}
     />,
     { container: host },
   );
 
   return {
     onProviderModelChange,
+    onProviderHandoffRequest,
     cleanup: async () => {
       await screen.unmount();
       host.remove();
@@ -207,6 +213,33 @@ describe("ProviderModelPicker", () => {
     }
   });
 
+  it("shows same-provider models plus continue targets when the provider is locked", async () => {
+    const mounted = await mountPicker({
+      provider: "claudeAgent",
+      model: "claude-opus-4-6",
+      lockedProvider: "claudeAgent",
+      handoffTargets: [
+        { provider: "codex", disabledReason: null },
+        { provider: "gemini", disabledReason: "Sign in" },
+      ],
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("Claude Sonnet 4.6");
+        expect(text).toContain("Continue with...");
+        expect(text).toContain("Continue with Codex");
+        expect(text).toContain("Continue with Gemini");
+        expect(text).toContain("Sign in");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("dispatches the canonical slug when a model is selected", async () => {
     const mounted = await mountPicker({
       provider: "claudeAgent",
@@ -222,6 +255,52 @@ describe("ProviderModelPicker", () => {
         "claudeAgent",
         "claude-sonnet-4-6",
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("requests provider handoff without changing the model when a continue target is selected", async () => {
+    const mounted = await mountPicker({
+      provider: "claudeAgent",
+      model: "claude-opus-4-6",
+      lockedProvider: "claudeAgent",
+      handoffTargets: [{ provider: "codex", disabledReason: null }],
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("menuitem", { name: "Continue with Codex" }).click();
+
+      expect(mounted.onProviderHandoffRequest).toHaveBeenCalledWith("codex");
+      expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps disabled continue targets from requesting provider handoff", async () => {
+    const mounted = await mountPicker({
+      provider: "claudeAgent",
+      model: "claude-opus-4-6",
+      lockedProvider: "claudeAgent",
+      handoffTargets: [{ provider: "gemini", disabledReason: "Sign in" }],
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        expect(document.body.textContent ?? "").toContain("Continue with Gemini");
+      });
+      const disabledTarget = Array.from(document.querySelectorAll('[role="menuitem"]')).find(
+        (element) => element.textContent?.includes("Continue with Gemini"),
+      );
+      expect(disabledTarget).toBeTruthy();
+      disabledTarget?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+      expect(mounted.onProviderHandoffRequest).not.toHaveBeenCalled();
+      expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
     } finally {
       await mounted.cleanup();
     }

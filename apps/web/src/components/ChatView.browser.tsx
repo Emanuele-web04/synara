@@ -923,7 +923,7 @@ async function waitForURL(
 
 async function waitForComposerEditor(): Promise<HTMLElement> {
   return waitForElement(
-    () => document.querySelector<HTMLElement>('[contenteditable="true"]'),
+    () => document.querySelector<HTMLElement>('[data-testid="composer-editor"]'),
     "Unable to find composer editor.",
   );
 }

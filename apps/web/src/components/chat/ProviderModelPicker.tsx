@@ -182,11 +182,18 @@ type ProviderModelMenuItemsProps = {
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
+  handoffTargets?: ReadonlyArray<ProviderHandoffTargetOption>;
   disabled?: boolean;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+  onProviderHandoffRequest?: (provider: ProviderKind) => void;
   // Invoked after a model selection commits so callers can close ancestor
   // menus and refocus the composer.
   onAfterSelection?: () => void;
+};
+
+export type ProviderHandoffTargetOption = {
+  provider: ProviderKind;
+  disabledReason: string | null;
 };
 
 // Renders only the popup body of the provider/model picker. Designed to be
@@ -294,6 +301,11 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
     );
     if (!resolvedModel) return;
     props.onProviderModelChange(provider, resolvedModel);
+    onAfterSelection?.();
+  };
+  const handleHandoffRequest = (provider: ProviderKind) => {
+    if (props.disabled) return;
+    props.onProviderHandoffRequest?.(provider);
     onAfterSelection?.();
   };
   const toggleFavoriteModel = useCallback(
@@ -413,7 +425,49 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
   };
 
   if (props.lockedProvider !== null) {
-    return <>{renderModelRadioGroup(props.lockedProvider)}</>;
+    const handoffTargets = props.handoffTargets ?? [];
+    return (
+      <>
+        {renderModelRadioGroup(props.lockedProvider)}
+        {handoffTargets.length > 0 ? (
+          <>
+            <MenuSeparator />
+            <div className="px-2 py-1 text-[11px] font-medium text-muted-foreground/80 uppercase tracking-[0.08em]">
+              Continue with...
+            </div>
+            {handoffTargets.map((target) => {
+              const option = AVAILABLE_PROVIDER_OPTIONS.find(
+                (entry) => entry.value === target.provider,
+              );
+              const OptionIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[target.provider];
+              const disabled = Boolean(target.disabledReason);
+              return (
+                <MenuItem
+                  key={target.provider}
+                  disabled={disabled}
+                  onClick={disabled ? undefined : () => handleHandoffRequest(target.provider)}
+                >
+                  <OptionIcon
+                    aria-hidden="true"
+                    className={cn(
+                      "size-3 shrink-0",
+                      providerIconClassName(target.provider, "text-muted-foreground/85"),
+                      disabled && "opacity-80",
+                    )}
+                  />
+                  <span>{option ? `Continue with ${option.label}` : "Continue"}</span>
+                  {target.disabledReason ? (
+                    <span className="ms-auto text-[11px] text-muted-foreground/80">
+                      {target.disabledReason}
+                    </span>
+                  ) : null}
+                </MenuItem>
+              );
+            })}
+          </>
+        ) : null}
+      </>
+    );
   }
 
   return (
@@ -511,6 +565,7 @@ type ProviderModelPickerProps = {
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
+  handoffTargets?: ReadonlyArray<ProviderHandoffTargetOption>;
   activeProviderIconClassName?: string;
   compact?: boolean;
   disabled?: boolean;
@@ -519,6 +574,7 @@ type ProviderModelPickerProps = {
   onSelectionCommitted?: () => void;
   shortcutLabel?: string | null;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+  onProviderHandoffRequest?: (provider: ProviderKind) => void;
 };
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(
@@ -633,8 +689,12 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
             : {})}
           {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
           {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
+          {...(props.handoffTargets ? { handoffTargets: props.handoffTargets } : {})}
           {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
           onProviderModelChange={props.onProviderModelChange}
+          {...(props.onProviderHandoffRequest
+            ? { onProviderHandoffRequest: props.onProviderHandoffRequest }
+            : {})}
           onAfterSelection={handleAfterSelection}
         />
       </ComposerPickerMenuPopup>
