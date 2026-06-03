@@ -45,9 +45,9 @@ export const ProviderHealthBanner = memo(function ProviderHealthBanner({
           variant={status.status === "error" ? "error" : "warning"}
         >
           <Icon className={NOTIFICATION_ICON_CLASS_NAME} />
-          <AlertTitle className="font-normal text-white">{title}</AlertTitle>
+          <AlertTitle className="font-normal text-[var(--notification-fg)]">{title}</AlertTitle>
           <AlertDescription
-            className="line-clamp-3 text-white/72"
+            className="line-clamp-3 text-[var(--notification-fg)]/72"
             title={status.message ?? defaultMessage}
           >
             {status.message ?? defaultMessage}
@@ -55,7 +55,7 @@ export const ProviderHealthBanner = memo(function ProviderHealthBanner({
           {onDismiss ? (
             <AlertAction className="absolute top-2 right-2">
               <IconButton
-                className="size-6 rounded-full text-white/65 hover:bg-white/10 hover:text-white focus-visible:ring-white/35 sm:size-6"
+                className="size-6 rounded-full text-[var(--notification-fg)]/65 hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:ring-[var(--notification-fg)]/35 sm:size-6"
                 label="Dismiss provider status"
                 title="Dismiss provider status"
                 onClick={onDismiss}

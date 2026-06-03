@@ -131,7 +131,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   }
 
   return (
-    <div className="px-4 py-3 sm:px-5">
+    <div className="px-5.5 pt-3.5 pb-4 sm:px-6.5">
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2">
           {prompt.questions.length > 1 ? (
@@ -159,7 +159,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
               disabled={isResponding}
               onClick={() => handleOptionSelection(activeQuestion.id, option.label)}
               className={cn(
-                "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-all duration-150",
+                "group flex w-full items-center gap-3 rounded-lg border px-3.5 py-2.5 text-left transition-all duration-150",
                 isSelected
                   ? "border-[color:var(--color-border)] bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
                   : "border-transparent bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]/80 hover:border-[color:var(--color-border-light)] hover:bg-[var(--color-background-button-secondary-hover)]",

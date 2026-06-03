@@ -16,6 +16,11 @@ export type LatestGitHubRelease = {
   readonly version: string;
 };
 
+export type ResolveLatestStableGitHubReleaseOptions = {
+  readonly fetchImpl?: typeof fetch;
+  readonly signal?: AbortSignal;
+};
+
 type ParsedVersion = {
   readonly major: number;
   readonly minor: number;
@@ -119,8 +124,10 @@ export function buildGitHubReleaseDownloadBaseUrl(source: GitHubUpdateSource, ta
 export async function resolveLatestStableGitHubRelease(
   source: GitHubUpdateSource,
   token?: string,
+  options: ResolveLatestStableGitHubReleaseOptions = {},
 ): Promise<LatestGitHubRelease | null> {
   const apiBaseUrl = getGitHubApiBaseUrl(source);
+  const fetchImpl = options.fetchImpl ?? fetch;
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
   };
@@ -134,7 +141,10 @@ export async function resolveLatestStableGitHubRelease(
       `/repos/${source.owner}/${source.repo}/releases?per_page=100&page=${page}`,
       apiBaseUrl,
     );
-    const response = await fetch(requestUrl, { headers });
+    const response = await fetchImpl(requestUrl, {
+      headers,
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
     if (!response.ok) {
       throw new Error(`GitHub releases request failed (${response.status} ${response.statusText})`);
     }

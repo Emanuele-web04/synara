@@ -7557,10 +7557,10 @@ export default function ChatView({
                   key={queuedTurn.id}
                   data-testid="queued-follow-up-row"
                   className={cn(
-                    "chat-composer-surface flex items-center gap-2 border border-b-0 px-2.5 py-2 text-[12px]",
+                    "chat-composer-surface flex items-center gap-2 border border-b-0 px-3.5 pt-2.5 pb-3 text-[12px]",
                     COMPOSER_SURFACE_BORDER_CLASS_NAME,
                     queuedTurnIndex === 0 && !taskListAboveComposer
-                      ? "rounded-t-[1.1rem]"
+                      ? "chat-composer-stacked-top"
                       : "rounded-none",
                   )}
                 >
@@ -7772,7 +7772,7 @@ export default function ChatView({
                         {interactionMode === "plan" ? (
                           <Button
                             variant="ghost"
-                            className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] sm:px-3"
+                            className="shrink-0 whitespace-nowrap px-2.5 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] sm:px-3.5"
                             size="sm"
                             type="button"
                             onClick={toggleInteractionMode}
@@ -7786,7 +7786,7 @@ export default function ChatView({
                         {activeTaskList || sidebarProposedPlan || planSidebarOpen ? (
                           <Button
                             variant="ghost"
-                            className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal sm:px-3"
+                            className="shrink-0 whitespace-nowrap px-2.5 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal sm:px-3.5"
                             size="sm"
                             type="button"
                             onClick={togglePlanSidebar}
@@ -7874,7 +7874,7 @@ export default function ChatView({
                         <Button
                           type="submit"
                           size="sm"
-                          className="rounded-full px-4"
+                          className="rounded-full px-4.5"
                           disabled={
                             activePendingIsResponding ||
                             (activePendingProgress.isLastQuestion
@@ -7912,7 +7912,7 @@ export default function ChatView({
                           <Button
                             type="submit"
                             size="sm"
-                            className="h-9 rounded-full px-4 sm:h-8"
+                            className="h-9 rounded-full px-4.5 sm:h-8"
                             disabled={isSendBusy || isConnecting}
                           >
                             {isConnecting || isSendBusy ? "Sending..." : "Refine"}
@@ -7922,7 +7922,7 @@ export default function ChatView({
                             <Button
                               type="submit"
                               size="sm"
-                              className="h-9 rounded-l-full rounded-r-none px-4 sm:h-8"
+                              className="h-9 rounded-l-full rounded-r-none px-4.5 sm:h-8"
                               disabled={isSendBusy || isConnecting}
                             >
                               {isConnecting || isSendBusy ? "Sending..." : "Implement"}
@@ -7933,7 +7933,7 @@ export default function ChatView({
                                   <Button
                                     size="sm"
                                     variant="default"
-                                    className="h-9 rounded-l-none rounded-r-full border-l-white/12 px-2 sm:h-8"
+                                    className="h-9 rounded-l-none rounded-r-full border-l-white/12 px-2.5 sm:h-8"
                                     aria-label="Implementation actions"
                                     disabled={isSendBusy || isConnecting}
                                   />
@@ -7967,7 +7967,7 @@ export default function ChatView({
                             type="submit"
                             variant="prominent"
                             size="icon-xs"
-                            className="size-8 rounded-full"
+                            className="size-7 rounded-full sm:size-7"
                             disabled={
                               isSendBusy ||
                               isConnecting ||
@@ -8008,7 +8008,7 @@ export default function ChatView({
                             ) : (
                               <ComposerSendArrowIcon
                                 aria-hidden="true"
-                                className="size-4 shrink-0"
+                                className="size-5 shrink-0"
                               />
                             )}
                           </Button>
@@ -8278,7 +8278,7 @@ export default function ChatView({
                   className={cn(
                     "chat-pane-enter relative z-10 -mt-5 shrink-0 overflow-visible w-full pt-0 sm:pt-0",
                     CHAT_COLUMN_GUTTER_CLASS_NAME,
-                    isGitRepo ? "pb-0.5" : "pb-2 sm:pb-2.5",
+                    isGitRepo ? "pb-1" : "pb-2.5 sm:pb-3",
                   )}
                 >
                   {composerSection}

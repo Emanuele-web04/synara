@@ -33,7 +33,7 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
     <div className={COMPOSER_ATTACHMENT_CHIP_CLASS_NAME}>
       <button
         type="button"
-        className="flex min-w-0 max-w-[232px] items-center gap-1.5 rounded-full py-0 pl-0 pr-0.5 text-left transition-colors hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className="flex min-w-0 max-w-[232px] items-center gap-1.5 rounded-full py-0 pl-0 pr-1 text-left transition-colors hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         aria-label={`Preview ${image.name}`}
         onClick={() => {
           const preview = buildExpandedImagePreview(images, image.id);
@@ -45,7 +45,7 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
           {image.previewUrl ? (
             <img src={image.previewUrl} alt={image.name} className="size-full object-cover" />
           ) : (
-            <span className="px-1 text-[9px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+            <span className="px-1.5 text-[9px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
               IMG
             </span>
           )}

@@ -186,7 +186,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
       variant="chrome"
       disabled={props.disabled ?? false}
       className={cn(
-        "min-w-0 shrink-0 justify-start gap-1.5 whitespace-nowrap px-2 sm:px-2.5 [&_svg]:mx-0",
+        "min-w-0 shrink-0 justify-start gap-1.5 whitespace-nowrap px-2.5 sm:px-3 [&_svg]:mx-0",
         COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
       )}
       aria-label="Change model and reasoning"

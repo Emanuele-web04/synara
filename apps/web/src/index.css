@@ -991,6 +991,29 @@ diffs-container {
   --runtime-full-access-accent: #fe8549;
 }
 
+/* Composer shell/surface corner geometry — single source of truth so radius
+   tweaks are not split across Tailwind utilities (and HMR cannot leave stale rules). */
+:root {
+  --composer-radius: 1.1rem;
+}
+
+.chat-composer-shell,
+.chat-composer-surface,
+.chat-composer-stacked-top,
+.chat-composer-surface-banner {
+  border-radius: var(--composer-radius);
+  corner-shape: squircle;
+  -electron-corner-smoothing: system-ui;
+}
+
+.chat-composer-surface-banner,
+.chat-composer-stacked-top {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-top-left-radius: calc(var(--composer-radius) - 1px);
+  border-top-right-radius: calc(var(--composer-radius) - 1px);
+}
+
 .chat-composer-surface {
   background: var(--composer-surface);
   backdrop-filter: var(--app-composer-backdrop-filter, none);

@@ -145,12 +145,13 @@ import {
 import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
+  getDesktopUpdateAlreadyCurrentNotice,
   getDesktopUpdateButtonPresentation,
   getDesktopUpdateButtonTooltip,
+  getDesktopUpdateButtonVariant,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
-  shouldHighlightDesktopUpdateError,
   shouldShowDesktopUpdateButton,
   shouldToastDesktopUpdateActionResult,
 } from "./desktopUpdate.logic";
@@ -5028,13 +5029,15 @@ export default function Sidebar() {
   const desktopUpdateButtonInteractivityClasses = desktopUpdateButtonDisabled
     ? "cursor-not-allowed opacity-60"
     : "hover:brightness-110";
-  const desktopUpdateButtonClasses = installingDesktopUpdate
-    ? "bg-sky-500 hover:bg-sky-600"
-    : desktopUpdateState?.status === "downloaded"
-      ? "bg-emerald-500 hover:bg-emerald-600"
-      : desktopUpdateState?.status === "downloading"
-        ? "bg-sky-500 hover:bg-sky-600"
-        : shouldHighlightDesktopUpdateError(desktopUpdateState)
+  const desktopUpdateButtonVariant = getDesktopUpdateButtonVariant(desktopUpdateState, {
+    installing: installingDesktopUpdate,
+  });
+  const desktopUpdateButtonClasses =
+    desktopUpdateButtonVariant === "installing" || desktopUpdateButtonVariant === "progress"
+      ? "bg-sky-500 hover:bg-sky-600"
+      : desktopUpdateButtonVariant === "ready"
+        ? "bg-emerald-500 hover:bg-emerald-600"
+        : desktopUpdateButtonVariant === "error"
           ? "bg-rose-500 hover:bg-rose-600"
           : "bg-[var(--info)] hover:brightness-110";
   const desktopUpdateButtonHasSecondaryLabel =
@@ -5190,6 +5193,15 @@ export default function Sidebar() {
               description: "Restart the app from the update button to install it.",
             });
           }
+          const alreadyCurrentNotice = getDesktopUpdateAlreadyCurrentNotice(result);
+          if (alreadyCurrentNotice) {
+            toastManager.add({
+              type: "info",
+              title: "Already up to date",
+              description: alreadyCurrentNotice,
+            });
+            return;
+          }
           if (!shouldToastDesktopUpdateActionResult(result)) return;
           const actionError = getDesktopUpdateActionError(result);
           if (!actionError) return;
@@ -5217,6 +5229,15 @@ export default function Sidebar() {
         .then((result) => {
           setDesktopUpdateState(result.state);
           setInstallingDesktopUpdate(false);
+          const alreadyCurrentNotice = getDesktopUpdateAlreadyCurrentNotice(result);
+          if (alreadyCurrentNotice) {
+            toastManager.add({
+              type: "info",
+              title: "Already up to date",
+              description: alreadyCurrentNotice,
+            });
+            return;
+          }
           if (!shouldToastDesktopUpdateActionResult(result)) return;
           const actionError = getDesktopUpdateActionError(result);
           if (!actionError) return;
