@@ -165,6 +165,7 @@ export interface OpenCodeRuntimeShape {
     readonly port?: number;
     readonly hostname?: string;
     readonly timeoutMs?: number;
+    readonly experimentalWebSockets?: boolean;
   }) => Effect.Effect<OpenCodeServerProcess, OpenCodeRuntimeError, Scope.Scope>;
   readonly connectToOpenCodeServer: (input: {
     readonly binaryPath: string;
@@ -173,6 +174,7 @@ export interface OpenCodeRuntimeShape {
     readonly port?: number;
     readonly hostname?: string;
     readonly timeoutMs?: number;
+    readonly experimentalWebSockets?: boolean;
   }) => Effect.Effect<OpenCodeServerConnection, OpenCodeRuntimeError, Scope.Scope>;
   readonly runOpenCodeCommand: (input: {
     readonly binaryPath: string;
@@ -651,6 +653,19 @@ export function buildOpenCodePermissionRules(runtimeMode: RuntimeMode): Permissi
   ];
 }
 
+export function buildOpenCodeServerProcessEnv(input: {
+  readonly cliSpec?: OpenCodeCompatibleCliSpec;
+  readonly experimentalWebSockets?: boolean;
+  readonly baseEnv?: NodeJS.ProcessEnv;
+}): NodeJS.ProcessEnv {
+  const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
+  return {
+    ...(input.baseEnv ?? process.env),
+    [cliSpec.configContentEnvVar]: JSON.stringify({}),
+    ...(input.experimentalWebSockets ? { OPENCODE_EXPERIMENTAL_WEBSOCKETS: "true" } : {}),
+  };
+}
+
 export function toOpenCodePermissionReply(
   decision: ProviderApprovalDecision,
 ): "once" | "always" | "reject" {
@@ -765,10 +780,10 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       const child = yield* spawner
         .spawn(
           ChildProcess.make(input.binaryPath, args, {
-            env: {
-              ...process.env,
-              [cliSpec.configContentEnvVar]: JSON.stringify({}),
-            },
+            env: buildOpenCodeServerProcessEnv({
+              cliSpec,
+              experimentalWebSockets: input.experimentalWebSockets,
+            }),
             detached: false,
             killSignal: "SIGKILL",
             forceKillAfter: "1500 millis",
@@ -894,6 +909,9 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       ...(input.port !== undefined ? { port: input.port } : {}),
       ...(input.hostname !== undefined ? { hostname: input.hostname } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+      ...(input.experimentalWebSockets !== undefined
+        ? { experimentalWebSockets: input.experimentalWebSockets }
+        : {}),
     }).pipe(
       Effect.map((server) => ({
         url: server.url,

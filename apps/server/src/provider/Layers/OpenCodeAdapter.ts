@@ -6,6 +6,7 @@ import {
   type ProviderKind,
   type ProviderComposerCapabilities,
   type ProviderListAgentsResult,
+  type ProviderListCommandsResult,
   type ProviderListModelsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
@@ -1594,6 +1595,24 @@ function flattenOpenCodeAgents(agents: ReadonlyArray<Agent>): ProviderListAgents
       };
     })
     .toSorted((left, right) => left.displayName.localeCompare(right.displayName));
+}
+
+type OpenCodeCommand = Awaited<ReturnType<OpencodeClient["command"]["list"]>>["data"] extends
+  | ReadonlyArray<infer TCommand>
+  | undefined
+  ? TCommand
+  : never;
+
+function flattenOpenCodeCommands(
+  commands: ReadonlyArray<OpenCodeCommand>,
+): ProviderListCommandsResult["commands"] {
+  return commands
+    .filter((command) => command.name.trim().length > 0)
+    .map((command) => ({
+      name: command.name.trim(),
+      ...(command.description?.trim() ? { description: command.description.trim() } : {}),
+    }))
+    .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
 function buildOpenCodeThreadSnapshot(input: {
@@ -3406,6 +3425,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   binaryPath,
                   cliSpec: adapterConfig.cliSpec,
                   ...(serverUrl ? { serverUrl } : {}),
+                  ...(provider === "opencode" && providerOptions?.experimentalWebSockets
+                    ? { experimentalWebSockets: true }
+                    : {}),
                 });
                 const client = openCodeRuntime.createOpenCodeSdkClient({
                   baseUrl: server.url,
@@ -3946,31 +3968,22 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           };
         });
 
-      const withDiscoveryInventory = <A>(
+      const withDiscoveryClient = <A>(
         input: {
           readonly binaryPath?: string | null;
+          readonly cwd?: string | null;
         },
         fn: (input: {
           readonly client: OpencodeClient;
-          readonly inventory: OpenCodeInventory;
-          readonly credentialProviderIDs: ReadonlyArray<string>;
+          readonly activeContext?: OpenCodeSessionContext;
         }) => Effect.Effect<A, ProviderAdapterRequestError>,
       ): Effect.Effect<A, ProviderAdapterRequestError> =>
         Effect.gen(function* () {
           const activeContext = [...sessions.values()][0];
           if (activeContext) {
-            const inventory = yield* openCodeRuntime
-              .loadOpenCodeInventory(activeContext.client)
-              .pipe(Effect.mapError(toAdapterRequestError));
-            replaceModelContextLimits(activeContext, buildOpenCodeModelContextLimitMap(inventory));
-            const credentialProviderIDs = yield* openCodeRuntime.loadOpenCodeCredentialProviderIDs(
-              activeContext.client,
-              adapterConfig.cliSpec,
-            );
             return yield* fn({
               client: activeContext.client,
-              inventory,
-              credentialProviderIDs,
+              activeContext,
             });
           }
 
@@ -3984,21 +3997,47 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 .pipe(Effect.mapError(toAdapterRequestError));
               const client = openCodeRuntime.createOpenCodeSdkClient({
                 baseUrl: server.url,
-                directory: serverConfig.cwd,
+                directory: input.cwd?.trim() || serverConfig.cwd,
                 cliSpec: adapterConfig.cliSpec,
               });
-              const inventory = yield* openCodeRuntime
-                .loadOpenCodeInventory(client)
-                .pipe(Effect.mapError(toAdapterRequestError));
-              const credentialProviderIDs =
-                yield* openCodeRuntime.loadOpenCodeCredentialProviderIDs(
-                  client,
-                  adapterConfig.cliSpec,
-                );
-              return yield* fn({ client, inventory, credentialProviderIDs });
+              return yield* fn({ client });
             }),
           );
         });
+
+      const withDiscoveryInventory = <A>(
+        input: {
+          readonly binaryPath?: string | null;
+          readonly cwd?: string | null;
+        },
+        fn: (input: {
+          readonly client: OpencodeClient;
+          readonly inventory: OpenCodeInventory;
+          readonly credentialProviderIDs: ReadonlyArray<string>;
+        }) => Effect.Effect<A, ProviderAdapterRequestError>,
+      ): Effect.Effect<A, ProviderAdapterRequestError> =>
+        withDiscoveryClient(input, ({ activeContext, client }) =>
+          Effect.gen(function* () {
+            const inventory = yield* openCodeRuntime.loadOpenCodeInventory(client).pipe(
+              Effect.mapError(toAdapterRequestError),
+            );
+            if (activeContext) {
+              replaceModelContextLimits(
+                activeContext,
+                buildOpenCodeModelContextLimitMap(inventory),
+              );
+            }
+            const credentialProviderIDs = yield* openCodeRuntime.loadOpenCodeCredentialProviderIDs(
+              client,
+              adapterConfig.cliSpec,
+            );
+            return yield* fn({
+              client,
+              inventory,
+              credentialProviderIDs,
+            });
+          }),
+        );
 
       const listModels: NonNullable<OpenCodeAdapterShape["listModels"]> = (input) => {
         const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
@@ -4069,6 +4108,21 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }),
         );
 
+      const listCommands: NonNullable<OpenCodeAdapterShape["listCommands"]> = (input) =>
+        withDiscoveryClient({ cwd: input.cwd }, ({ client }) =>
+          runOpenCodeSdk("command.list", () => client.command.list()).pipe(
+            Effect.mapError(toAdapterRequestError),
+            Effect.map(
+              (commands) =>
+                ({
+                  commands: flattenOpenCodeCommands(commands.data ?? []),
+                  source: adapterConfig.fallbackModelSource,
+                  cached: false,
+                }) satisfies ProviderListCommandsResult,
+            ),
+          ),
+        );
+
       const getComposerCapabilities: NonNullable<
         OpenCodeAdapterShape["getComposerCapabilities"]
       > = () =>
@@ -4076,7 +4130,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           provider,
           supportsSkillMentions: false,
           supportsSkillDiscovery: false,
-          supportsNativeSlashCommandDiscovery: false,
+          supportsNativeSlashCommandDiscovery: provider === "opencode",
           supportsPluginMentions: false,
           supportsPluginDiscovery: false,
           supportsRuntimeModelList: true,
@@ -4100,6 +4154,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         capabilities: {
           sessionModelSwitch: "in-session",
           supportsRuntimeModelList: true,
+          supportsNativeSlashCommandDiscovery: provider === "opencode",
         },
         startSession,
         sendTurn,
@@ -4117,6 +4172,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         stopAll,
         listModels,
         listAgents,
+        ...(provider === "opencode" ? { listCommands } : {}),
         getComposerCapabilities,
         get streamEvents() {
           return Stream.fromQueue(runtimeEvents);

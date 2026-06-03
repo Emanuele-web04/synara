@@ -115,6 +115,7 @@ export const AppSettingsSchema = Schema.Struct({
   openCodeServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     withDefaults(() => ""),
   ),
+  openCodeExperimentalWebSockets: Schema.Boolean.pipe(withDefaults(() => false)),
   defaultThreadEnvMode: EnvMode.pipe(withDefaults(() => "local" as const satisfies EnvMode)),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   confirmThreadArchive: Schema.Boolean.pipe(withDefaults(() => false)),
@@ -322,6 +323,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     kiloServerPassword: settings.providers.kilo.serverPassword,
     kiloServerUrl: settings.providers.kilo.serverUrl,
     openCodeBinaryPath: settings.providers.opencode.binaryPath,
+    openCodeExperimentalWebSockets: settings.providers.opencode.experimentalWebSockets,
     openCodeServerPassword: settings.providers.opencode.serverPassword,
     openCodeServerUrl: settings.providers.opencode.serverUrl,
     piAgentDir: settings.providers.pi.agentDir,
@@ -442,6 +444,7 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
   }
   if (
     hasOwn(patch, "openCodeBinaryPath") ||
+    hasOwn(patch, "openCodeExperimentalWebSockets") ||
     hasOwn(patch, "openCodeServerUrl") ||
     hasOwn(patch, "openCodeServerPassword") ||
     hasOwn(patch, "customOpenCodeModels")
@@ -449,6 +452,9 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
     providers.opencode = {
       ...(hasOwn(patch, "openCodeBinaryPath")
         ? { binaryPath: patch.openCodeBinaryPath ?? "" }
+        : {}),
+      ...(hasOwn(patch, "openCodeExperimentalWebSockets")
+        ? { experimentalWebSockets: Boolean(patch.openCodeExperimentalWebSockets) }
         : {}),
       ...(hasOwn(patch, "openCodeServerUrl") ? { serverUrl: patch.openCodeServerUrl ?? "" } : {}),
       ...(hasOwn(patch, "openCodeServerPassword")
@@ -704,12 +710,19 @@ export function getProviderStartOptions(
     | "kiloServerPassword"
     | "kiloServerUrl"
     | "openCodeBinaryPath"
+    | "openCodeExperimentalWebSockets"
     | "openCodeServerPassword"
     | "openCodeServerUrl"
     | "piAgentDir"
     | "piBinaryPath"
   >,
 ): ProviderStartOptions | undefined {
+  const hasOpenCodeStartOptions = Boolean(
+    settings.openCodeBinaryPath ||
+      settings.openCodeExperimentalWebSockets ||
+      settings.openCodeServerUrl ||
+      settings.openCodeServerPassword,
+  );
   const providerOptions: ProviderStartOptions = {
     ...(settings.codexBinaryPath || settings.codexHomePath
       ? {
@@ -757,10 +770,13 @@ export function getProviderStartOptions(
           },
         }
       : {}),
-    ...(settings.openCodeBinaryPath || settings.openCodeServerUrl || settings.openCodeServerPassword
+    ...(hasOpenCodeStartOptions
       ? {
           opencode: {
             ...(settings.openCodeBinaryPath ? { binaryPath: settings.openCodeBinaryPath } : {}),
+            ...(settings.openCodeExperimentalWebSockets
+              ? { experimentalWebSockets: true }
+              : {}),
             ...(settings.openCodeServerUrl ? { serverUrl: settings.openCodeServerUrl } : {}),
             ...(settings.openCodeServerPassword
               ? { serverPassword: settings.openCodeServerPassword }

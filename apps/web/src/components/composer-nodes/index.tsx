@@ -305,8 +305,8 @@ export class ComposerSkillNode extends TextNode {
     return false;
   }
 
-  override canInsertTextAfter(): false {
-    return false;
+  override canInsertTextAfter(): true {
+    return true;
   }
 
   override isTextEntity(): true {
