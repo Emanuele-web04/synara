@@ -14,6 +14,7 @@ import {
   parseComposerSlashInvocationForCommands,
   parseFastSlashCommandAction,
   parseForkSlashCommandArgs,
+  parseGoalSlashCommand,
   shouldHideProviderNativeCommandFromComposerMenu,
 } from "./composerSlashCommands";
 
@@ -27,6 +28,52 @@ describe("composerSlashCommands", () => {
   it("filters slash commands by query", () => {
     expect(filterComposerSlashCommands("rev").map((entry) => entry.command)).toEqual(["review"]);
     expect(filterComposerSlashCommands("fast").map((entry) => entry.command)).toEqual(["fast"]);
+  });
+
+  it("parses /goal subcommands and objectives", () => {
+    expect(parseGoalSlashCommand("")).toEqual({ kind: "status" });
+    expect(parseGoalSlashCommand("status")).toEqual({ kind: "status" });
+    expect(parseGoalSlashCommand("pause")).toEqual({ kind: "pause" });
+    expect(parseGoalSlashCommand("resume")).toEqual({ kind: "resume" });
+    expect(parseGoalSlashCommand("clear")).toEqual({ kind: "clear" });
+    expect(parseGoalSlashCommand("complete")).toEqual({ kind: "complete" });
+    expect(parseGoalSlashCommand("Migrate the auth module")).toEqual({
+      kind: "create",
+      objective: "Migrate the auth module",
+      tokenBudget: null,
+    });
+    expect(parseGoalSlashCommand("Migrate the auth module --budget 5000")).toEqual({
+      kind: "create",
+      objective: "Migrate the auth module",
+      tokenBudget: 5000,
+    });
+    expect(parseGoalSlashCommand("Ship it --budget=100")).toEqual({
+      kind: "create",
+      objective: "Ship it",
+      tokenBudget: 100,
+    });
+  });
+
+  it("offers /goal to non-Claude providers but not Claude (which has a native /goal)", () => {
+    const codexCommands = getAvailableComposerSlashCommands({
+      provider: "codex",
+      supportsFastSlashCommand: true,
+      canOfferCompactCommand: true,
+      canOfferReviewCommand: true,
+      canOfferForkCommand: true,
+      canOfferSideCommand: true,
+    });
+    expect(codexCommands).toContain("goal");
+
+    const claudeCommands = getAvailableComposerSlashCommands({
+      provider: "claudeAgent",
+      supportsFastSlashCommand: true,
+      canOfferCompactCommand: true,
+      canOfferReviewCommand: true,
+      canOfferForkCommand: true,
+      canOfferSideCommand: true,
+    });
+    expect(claudeCommands).not.toContain("goal");
   });
 
   it("parses slash invocations with optional arguments", () => {
@@ -266,6 +313,7 @@ describe("composerSlashCommands", () => {
       "side",
       "status",
       "subagents",
+      "goal",
     ]);
   });
 

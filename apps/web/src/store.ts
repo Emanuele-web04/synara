@@ -53,6 +53,7 @@ export interface AppState {
   activityByThreadId?: Record<ThreadId, Record<string, Thread["activities"][number]>>;
   proposedPlanIdsByThreadId?: Record<ThreadId, string[]>;
   proposedPlanByThreadId?: Record<ThreadId, Record<string, Thread["proposedPlans"][number]>>;
+  threadGoalById?: Record<ThreadId, Thread["goal"]>;
   turnDiffIdsByThreadId?: Record<ThreadId, TurnId[]>;
   turnDiffSummaryByThreadId?: Record<ThreadId, Record<TurnId, Thread["turnDiffSummaries"][number]>>;
 }
@@ -110,6 +111,7 @@ const EMPTY_PROPOSED_PLAN_BY_THREAD: Record<
   ThreadId,
   Record<string, Thread["proposedPlans"][number]>
 > = {};
+const EMPTY_THREAD_GOAL_BY_ID: Record<ThreadId, Thread["goal"]> = {};
 const EMPTY_TURN_DIFF_IDS_BY_THREAD: Record<ThreadId, TurnId[]> = {};
 const EMPTY_TURN_DIFF_BY_THREAD: Record<
   ThreadId,
@@ -1523,6 +1525,7 @@ function normalizeThreadFromReadModel(
   const session = normalizeThreadSession(incoming.session, previous?.session);
   const messages = normalizeChatMessages(incoming.messages, previous?.messages);
   const proposedPlans = normalizeProposedPlans(incoming.proposedPlans, previous?.proposedPlans);
+  const goal = incoming.goal ?? null;
   const latestTurn = normalizeLatestTurn(incoming.latestTurn, previous?.latestTurn);
   const handoff =
     previous?.handoff && incoming.handoff && deepEqualJson(previous.handoff, incoming.handoff)
@@ -1617,7 +1620,8 @@ function normalizeThreadFromReadModel(
     deepEqualJson(previous.lastKnownPr ?? null, lastKnownPr) &&
     (previous.handoff ?? null) === handoff &&
     previous.turnDiffSummaries === turnDiffSummaries &&
-    previous.activities === activities
+    previous.activities === activities &&
+    deepEqualJson(previous.goal ?? null, goal)
   ) {
     return previous;
   }
@@ -1633,6 +1637,7 @@ function normalizeThreadFromReadModel(
     session,
     messages,
     proposedPlans,
+    goal,
     error,
     createdAt: incoming.createdAt,
     archivedAt: incoming.archivedAt ?? null,
@@ -2252,6 +2257,16 @@ function writeThreadState(state: AppState, nextThread: Thread, previousThread?: 
       proposedPlanByThreadId: {
         ...(nextState.proposedPlanByThreadId ?? EMPTY_PROPOSED_PLAN_BY_THREAD),
         [nextThread.id]: nextProposedPlanSlice.byId,
+      },
+    };
+  }
+
+  if ((previousThread?.goal ?? null) !== (nextThread.goal ?? null)) {
+    nextState = {
+      ...nextState,
+      threadGoalById: {
+        ...(nextState.threadGoalById ?? EMPTY_THREAD_GOAL_BY_ID),
+        [nextThread.id]: nextThread.goal ?? null,
       },
     };
   }
@@ -3390,6 +3405,52 @@ function applyOrchestrationEvent(
         },
       );
 
+    case "thread.goal-created":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => ({
+          ...thread,
+          goal: event.payload.goal,
+          updatedAt:
+            (thread.updatedAt ?? thread.createdAt) > event.payload.goal.updatedAt
+              ? thread.updatedAt
+              : event.payload.goal.updatedAt,
+        }),
+        options,
+      );
+
+    case "thread.goal-paused":
+    case "thread.goal-resumed":
+    case "thread.goal-cleared":
+    case "thread.goal-completed": {
+      const nextGoalStatus =
+        event.type === "thread.goal-paused"
+          ? "paused"
+          : event.type === "thread.goal-resumed"
+            ? "active"
+            : event.type === "thread.goal-cleared"
+              ? "cleared"
+              : "complete";
+      const goalUpdatedAt = event.payload.updatedAt;
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) =>
+          thread.goal
+            ? {
+                ...thread,
+                goal: { ...thread.goal, status: nextGoalStatus, updatedAt: goalUpdatedAt },
+                updatedAt:
+                  (thread.updatedAt ?? thread.createdAt) > goalUpdatedAt
+                    ? thread.updatedAt
+                    : goalUpdatedAt,
+              }
+            : thread,
+        options,
+      );
+    }
+
     case "thread.turn-diff-completed":
       return applyThreadUpdate(
         state,
@@ -3629,6 +3690,7 @@ export function syncServerShellSnapshot(
       nextThreadIds,
     ),
     proposedPlanByThreadId: retainThreadScopedRecord(state.proposedPlanByThreadId, nextThreadIds),
+    threadGoalById: retainThreadScopedRecord(state.threadGoalById, nextThreadIds),
     turnDiffIdsByThreadId: retainThreadScopedRecord(state.turnDiffIdsByThreadId, nextThreadIds),
     turnDiffSummaryByThreadId: retainThreadScopedRecord(
       state.turnDiffSummaryByThreadId,
@@ -3753,6 +3815,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
       nextThreadIds,
     ),
     proposedPlanByThreadId: retainThreadScopedRecord(state.proposedPlanByThreadId, nextThreadIds),
+    threadGoalById: retainThreadScopedRecord(state.threadGoalById, nextThreadIds),
     turnDiffIdsByThreadId: retainThreadScopedRecord(state.turnDiffIdsByThreadId, nextThreadIds),
     turnDiffSummaryByThreadId: retainThreadScopedRecord(
       state.turnDiffSummaryByThreadId,

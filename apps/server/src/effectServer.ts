@@ -17,6 +17,7 @@ import { makeEffectHttpRouteLayer } from "./http";
 import { Keybindings } from "./keybindings";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
+import { GoalContinuationReactor } from "./orchestration/Services/GoalContinuationReactor";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
@@ -39,6 +40,7 @@ export interface ServerShape {
     | ServerRuntimeStartup
     | ServerSettingsService
     | ThreadDeletionReactor
+    | GoalContinuationReactor
   >;
   readonly stopSignal: Effect.Effect<void, never>;
 }
@@ -62,6 +64,7 @@ export const createEffectServer = Effect.fn(function* () {
   const runtimeStartup = yield* ServerRuntimeStartup;
   const serverSettings = yield* ServerSettingsService;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
+  const goalContinuationReactor = yield* GoalContinuationReactor;
   const readiness = yield* makeServerReadiness;
 
   yield* keybindings.syncDefaultKeybindingsOnStartup.pipe(
@@ -118,6 +121,7 @@ export const createEffectServer = Effect.fn(function* () {
   yield* Effect.addFinalizer(() => Scope.close(subscriptionsScope, Exit.void));
   yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
   yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);
+  yield* Scope.provide(goalContinuationReactor.start(), subscriptionsScope);
   yield* Scope.provide(providerSessionReaper.start(), subscriptionsScope);
   yield* readiness.markOrchestrationSubscriptionsReady;
   yield* readiness.markTerminalSubscriptionsReady;

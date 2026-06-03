@@ -292,6 +292,7 @@ import {
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
+import { GoalIndicator } from "./chat/GoalIndicator";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SidebarHeaderTrigger } from "./ui/sidebar";
@@ -7782,6 +7783,8 @@ export default function ChatView({
                             <span className="sr-only sm:not-sr-only">Plan</span>
                           </Button>
                         ) : null}
+
+                        <GoalIndicator goal={activeThread?.goal} />
 
                         {activeTaskList || sidebarProposedPlan || planSidebarOpen ? (
                           <Button

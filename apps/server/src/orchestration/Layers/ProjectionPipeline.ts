@@ -32,6 +32,7 @@ import {
   type ProjectionThreadProposedPlanRepositoryShape,
   ProjectionThreadProposedPlanRepository,
 } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
+import { ProjectionThreadGoalRepository } from "../../persistence/Services/ProjectionThreadGoal.ts";
 import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import {
   type ProjectionTurn,
@@ -50,6 +51,12 @@ import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/La
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
+import { ProjectionThreadGoalRepositoryLive } from "../../persistence/Layers/ProjectionThreadGoal.ts";
+import {
+  applyGoalTurnAccounting,
+  incrementGoalContinuation,
+  transitionGoalStatus,
+} from "../goalProjection.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   OrchestrationProjectionPipeline,
@@ -74,6 +81,7 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadShellSummaries: "projection.thread-shell-summaries",
   threadMessages: "projection.thread-messages",
   threadProposedPlans: "projection.thread-proposed-plans",
+  threadGoal: "projection.thread-goal",
   threadActivities: "projection.thread-activities",
   threadSessions: "projection.thread-sessions",
   threadTurns: "projection.thread-turns",
@@ -571,6 +579,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const projectionThreadRepository = yield* ProjectionThreadRepository;
   const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
   const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
+  const projectionThreadGoalRepository = yield* ProjectionThreadGoalRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
@@ -1082,6 +1091,84 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           yield* Effect.forEach(keptRows, projectionThreadProposedPlanRepository.upsert, {
             concurrency: 1,
           }).pipe(Effect.asVoid);
+          return;
+        }
+
+        default:
+          return;
+      }
+    });
+
+  const applyThreadGoalProjection: ProjectorDefinition["apply"] = (event, _attachmentSideEffects) =>
+    Effect.gen(function* () {
+      switch (event.type) {
+        case "thread.goal-created":
+          yield* projectionThreadGoalRepository.upsert({
+            threadId: event.payload.threadId,
+            goal: event.payload.goal,
+          });
+          return;
+
+        case "thread.goal-paused":
+        case "thread.goal-resumed":
+        case "thread.goal-cleared":
+        case "thread.goal-completed": {
+          const existing = yield* projectionThreadGoalRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existing)) {
+            return;
+          }
+          const status =
+            event.type === "thread.goal-paused"
+              ? "paused"
+              : event.type === "thread.goal-resumed"
+                ? "active"
+                : event.type === "thread.goal-cleared"
+                  ? "cleared"
+                  : "complete";
+          yield* projectionThreadGoalRepository.upsert({
+            threadId: event.payload.threadId,
+            goal: transitionGoalStatus(existing.value.goal, status, event.payload.updatedAt),
+          });
+          return;
+        }
+
+        case "thread.message-sent": {
+          if (event.payload.source !== "goal-continuation") {
+            return;
+          }
+          const existing = yield* projectionThreadGoalRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existing) || existing.value.goal.status !== "active") {
+            return;
+          }
+          yield* projectionThreadGoalRepository.upsert({
+            threadId: event.payload.threadId,
+            goal: incrementGoalContinuation(existing.value.goal, event.occurredAt),
+          });
+          return;
+        }
+
+        case "thread.activity-appended": {
+          if (event.payload.activity.kind !== "turn.completed") {
+            return;
+          }
+          const existing = yield* projectionThreadGoalRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existing) || existing.value.goal.status !== "active") {
+            return;
+          }
+          yield* projectionThreadGoalRepository.upsert({
+            threadId: event.payload.threadId,
+            goal: applyGoalTurnAccounting(
+              existing.value.goal,
+              event.payload.activity.payload,
+              event.occurredAt,
+            ),
+          });
           return;
         }
 
@@ -1632,6 +1719,11 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       apply: applyThreadProposedPlansProjection,
     },
     {
+      name: ORCHESTRATION_PROJECTOR_NAMES.threadGoal,
+      phase: "hot",
+      apply: applyThreadGoalProjection,
+    },
+    {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
       phase: "hot",
       apply: applyThreadActivitiesProjection,
@@ -1906,6 +1998,7 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionThreadRepositoryLive),
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),
+  Layer.provideMerge(ProjectionThreadGoalRepositoryLive),
   Layer.provideMerge(ProjectionThreadActivityRepositoryLive),
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),
   Layer.provideMerge(ProjectionTurnRepositoryLive),

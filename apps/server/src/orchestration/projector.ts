@@ -15,6 +15,8 @@ import {
   ProjectMetaUpdatedPayload,
   ThreadArchivedPayload,
   ThreadActivityAppendedPayload,
+  ThreadGoalCreatedPayload,
+  ThreadGoalLifecyclePayload,
   ThreadCreatedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
@@ -28,6 +30,11 @@ import {
   ThreadTurnDiffCompletedPayload,
   ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
+import {
+  applyGoalTurnAccounting,
+  incrementGoalContinuation,
+  transitionGoalStatus,
+} from "./goalProjection.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
@@ -544,10 +551,18 @@ export function projectEvent(
           : [...thread.messages, message];
         const cappedMessages = messages.slice(-MAX_THREAD_MESSAGES);
 
+        // Count hidden goal-continuation turns against the active goal.
+        const goal = thread.goal;
+        const goalContinuationPatch =
+          goal && goal.status === "active" && payload.source === "goal-continuation"
+            ? { goal: incrementGoalContinuation(goal, event.occurredAt) }
+            : {};
+
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             messages: cappedMessages,
+            ...goalContinuationPatch,
             updatedAt: event.occurredAt,
           }),
         };
@@ -850,15 +865,74 @@ export function projectEvent(
             .toSorted(compareThreadActivities)
             .slice(-MAX_THREAD_ACTIVITIES);
 
+          // Accumulate goal turn/usage accounting when a turn completes. Only for a
+          // genuinely new activity — a replayed/re-upserted turn.completed (same activity
+          // id already present) must not double-count turns or usage.
+          const goal = thread.goal;
+          const isNewTurnCompletion =
+            payload.activity.kind === "turn.completed" &&
+            !thread.activities.some((entry) => entry.id === payload.activity.id);
+          const goalAccountingPatch =
+            goal && goal.status === "active" && isNewTurnCompletion
+              ? { goal: applyGoalTurnAccounting(goal, payload.activity.payload, event.occurredAt) }
+              : {};
+
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               activities,
+              ...goalAccountingPatch,
               updatedAt: event.occurredAt,
             }),
           };
         }),
       );
+
+    case "thread.goal-created":
+      return decodeForEvent(ThreadGoalCreatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              goal: payload.goal,
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.goal-paused":
+    case "thread.goal-resumed":
+    case "thread.goal-cleared":
+    case "thread.goal-completed": {
+      const nextStatus =
+        event.type === "thread.goal-paused"
+          ? "paused"
+          : event.type === "thread.goal-resumed"
+            ? "active"
+            : event.type === "thread.goal-cleared"
+              ? "cleared"
+              : "complete";
+      return decodeForEvent(ThreadGoalLifecyclePayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread || !thread.goal) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              goal: transitionGoalStatus(thread.goal, nextStatus, payload.updatedAt),
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+    }
 
     default:
       return Effect.succeed(nextBase);

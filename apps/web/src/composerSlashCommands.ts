@@ -12,6 +12,7 @@ export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
   "status",
   "subagents",
   "fast",
+  "goal",
 ] as const;
 
 export type ComposerSlashCommand = (typeof BUILT_IN_COMPOSER_SLASH_COMMANDS)[number];
@@ -168,6 +169,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     command: "fast",
     label: "/fast",
     description: "Turn fast mode on or off for this thread",
+    source: "app",
+  },
+  goal: {
+    command: "goal",
+    label: "/goal",
+    description: "Set a persisted goal the agent keeps working toward until it's complete",
     source: "app",
   },
 };
@@ -373,6 +380,8 @@ export function getAvailableComposerSlashCommands(input: {
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           "status",
           "subagents",
+          // Claude ships a native /goal; other providers get Synara's agent-agnostic one.
+          "goal",
         ]
       : [
           // Claude owns most slash-command UX natively; sidechat remains app-level because it
@@ -407,6 +416,41 @@ export function buildSlashReviewComposerPrompt(args: string): string {
       : basePrompt;
   }
   return `${basePrompt}\nFocus especially on: ${trimmedArgs}`;
+}
+
+export type GoalSlashCommandAction =
+  | { kind: "status" }
+  | { kind: "pause" }
+  | { kind: "resume" }
+  | { kind: "clear" }
+  | { kind: "complete" }
+  | { kind: "create"; objective: string; tokenBudget: number | null };
+
+// Mirrors pi-goal's `parseGoalArgs`: `/goal` (status), `/goal pause|resume|clear|complete`,
+// or `/goal <objective>` optionally suffixed with `--budget <n>` / `--budget=<n>`.
+export function parseGoalSlashCommand(args: string): GoalSlashCommandAction {
+  const trimmed = args.trim();
+  if (!trimmed) {
+    return { kind: "status" };
+  }
+  // Lifecycle subcommands only match when the entire argument is exactly the keyword, so an
+  // objective like "clear flaky tests" is treated as a create, not as `/goal clear`.
+  const lifecycleKind = (["status", "pause", "resume", "clear", "complete"] as const).find(
+    (keyword) => keyword === trimmed.toLowerCase(),
+  );
+  if (lifecycleKind) {
+    return { kind: lifecycleKind };
+  }
+
+  let objective = trimmed;
+  let tokenBudget: number | null = null;
+  const budgetMatch = /\s--budget(?:=|\s+)(\d+)\s*$/.exec(objective);
+  if (budgetMatch && budgetMatch.index !== undefined) {
+    const parsed = Number(budgetMatch[1]);
+    tokenBudget = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+    objective = objective.slice(0, budgetMatch.index).trim();
+  }
+  return { kind: "create", objective, tokenBudget };
 }
 
 // `/fork` optionally accepts only an explicit target shorthand like `/fork local`.

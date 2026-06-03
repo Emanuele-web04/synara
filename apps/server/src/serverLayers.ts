@@ -9,6 +9,7 @@ import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderComma
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor";
+import { GoalContinuationReactorLive } from "./orchestration/Layers/GoalContinuationReactor";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer";
 
 import { KeybindingsLive } from "./keybindings";
@@ -65,6 +66,9 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(OrchestrationLayerLive),
     Layer.provideMerge(TerminalLayerLive),
   );
+  const goalContinuationReactorLayer = GoalContinuationReactorLive.pipe(
+    Layer.provideMerge(OrchestrationLayerLive),
+  );
   const sessionCredentialLayer = SessionCredentialServiceLive.pipe(
     Layer.provide(ServerSecretStoreLive),
   );
@@ -90,6 +94,7 @@ export function makeServerRuntimeServicesLayer() {
   return Layer.mergeAll(
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
+    goalContinuationReactorLayer,
     GitLayerLive,
     TerminalLayerLive,
     KeybindingsLive,
