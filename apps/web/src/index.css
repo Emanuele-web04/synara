@@ -183,9 +183,11 @@
      simply falls off-screen. */
   .chat-content-card {
     --seam-line: var(--app-surface-divider);
-    --seam-shadow-color: rgba(0, 0, 0, 0.1);
+    --seam-shadow-color: rgba(0, 0, 0, 0.08);
     --seam-shadow-x: 0px;
-    box-shadow: var(--seam-shadow-x) 0 16px -10px var(--seam-shadow-color);
+    /* Tight, low-spread depth: small blur + heavy negative spread so the shadow hugs the
+       seam edge instead of fanning out across the sidebar. */
+    box-shadow: var(--seam-shadow-x) 0 11px -12px var(--seam-shadow-color);
     /* Match the left sidebar shell's SIDEBAR_OFFCANVAS_MOTION_CLASS slide
        (`duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]`) so the seam corner
        rounds/squares and the depth shadow fades IN STEP with the offcanvas animation
@@ -196,11 +198,11 @@
   }
 
   .dark .chat-content-card {
-    --seam-shadow-color: rgba(0, 0, 0, 0.44);
+    --seam-shadow-color: rgba(0, 0, 0, 0.3);
   }
 
   [data-sidebar-side="left"] .chat-content-card {
-    --seam-shadow-x: -11px;
+    --seam-shadow-x: -8px;
     border-radius: var(--app-content-card-radius, 0.75rem) 0 0
       var(--app-content-card-radius, 0.75rem);
   }
