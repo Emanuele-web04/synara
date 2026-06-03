@@ -16,6 +16,7 @@ describe("ProviderIcon", () => {
 
     expect(markup).toContain("dark:hidden");
     expect(markup).toContain("hidden dark:inline-block");
+    expect(markup).toContain("dark:text-foreground/90");
     expect(markup).toContain("/central-icons-reversed/opencode.svg");
   });
 });

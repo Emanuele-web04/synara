@@ -53,7 +53,7 @@ const OpenCodeProviderIcon: Icon = ({
         name="opencode"
         label={centralIconLabel}
         title={title}
-        className={cn(className, "hidden dark:inline-block")}
+        className={cn(className, "hidden dark:inline-block dark:text-foreground/90")}
         style={style}
       />
     </>
