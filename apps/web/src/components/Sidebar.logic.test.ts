@@ -24,6 +24,7 @@ import {
   pruneExpandedProjectThreadListsForCollapsedProjects,
   recoverExistingAddProjectTarget,
   resolveProjectEmptyState,
+  resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
@@ -156,6 +157,51 @@ describe("resolveSidebarNewThreadEnvMode", () => {
         defaultEnvMode: "worktree",
       }),
     ).toBe("local");
+  });
+});
+
+describe("resolveSettingsBackTarget", () => {
+  it("returns the remembered live thread route", () => {
+    expect(
+      resolveSettingsBackTarget({
+        lastThreadRoute: {
+          threadId: "thread-remembered",
+          splitViewId: "split-live",
+        },
+        availableThreadIds: new Set(["thread-remembered", "thread-latest"]),
+        availableSplitViewIds: new Set(["split-live"]),
+        latestThreadId: "thread-latest",
+      }),
+    ).toEqual({
+      kind: "thread",
+      threadId: "thread-remembered",
+      splitViewId: "split-live",
+    });
+  });
+
+  it("falls back to the latest sidebar thread when the remembered route is stale", () => {
+    expect(
+      resolveSettingsBackTarget({
+        lastThreadRoute: {
+          threadId: "thread-missing",
+        },
+        availableThreadIds: new Set(["thread-latest"]),
+        latestThreadId: "thread-latest",
+      }),
+    ).toEqual({
+      kind: "thread",
+      threadId: "thread-latest",
+    });
+  });
+
+  it("falls back to home when no thread target is available", () => {
+    expect(
+      resolveSettingsBackTarget({
+        lastThreadRoute: null,
+        availableThreadIds: new Set(),
+        latestThreadId: null,
+      }),
+    ).toEqual({ kind: "home" });
   });
 });
 

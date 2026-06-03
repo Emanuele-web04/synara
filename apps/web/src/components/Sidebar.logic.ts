@@ -4,6 +4,7 @@
 
 import type { KeybindingCommand, ProjectId, ThreadId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
+import { resolveRestorableThreadRoute, type LastThreadRoute } from "../chatRouteRestore";
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
 import {
@@ -170,6 +171,48 @@ export function resolveSidebarNewThreadEnvMode(input: {
   defaultEnvMode: SidebarNewThreadEnvMode;
 }): SidebarNewThreadEnvMode {
   return input.requestedEnvMode ?? input.defaultEnvMode;
+}
+
+export type SettingsBackTarget =
+  | {
+      kind: "thread";
+      threadId: string;
+      splitViewId?: string | undefined;
+    }
+  | {
+      kind: "home";
+    };
+
+export function resolveSettingsBackTarget(input: {
+  lastThreadRoute: LastThreadRoute | null;
+  availableThreadIds: ReadonlySet<string>;
+  latestThreadId: string | null;
+  availableSplitViewIds?: ReadonlySet<string>;
+}): SettingsBackTarget {
+  const restorableRoute = resolveRestorableThreadRoute({
+    lastThreadRoute: input.lastThreadRoute,
+    availableThreadIds: input.availableThreadIds,
+    ...(input.availableSplitViewIds
+      ? { availableSplitViewIds: input.availableSplitViewIds }
+      : {}),
+  });
+
+  if (restorableRoute) {
+    return {
+      kind: "thread",
+      threadId: restorableRoute.threadId,
+      splitViewId: restorableRoute.splitViewId,
+    };
+  }
+
+  if (input.latestThreadId) {
+    return {
+      kind: "thread",
+      threadId: input.latestThreadId,
+    };
+  }
+
+  return { kind: "home" };
 }
 
 // Drops remembered "show more" state for projects that are currently collapsed.

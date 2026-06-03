@@ -50,6 +50,7 @@ import Migration0034 from "./Migrations/034_AuthAccessManagement.ts";
 import Migration0035 from "./Migrations/035_NormalizeLegacyModelSelectionOptions.ts";
 import Migration0036 from "./Migrations/036_ProjectionThreadsPinned.ts";
 import Migration0037 from "./Migrations/037_ProjectionSnapshotCapIndexes.ts";
+import Migration0038 from "./Migrations/038_ReconcileLegacySidechatSource.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -99,6 +100,7 @@ export const migrationEntries = [
   [35, "NormalizeLegacyModelSelectionOptions", Migration0035],
   [36, "ProjectionThreadsPinned", Migration0036],
   [37, "ProjectionSnapshotCapIndexes", Migration0037],
+  [38, "ReconcileLegacySidechatSource", Migration0038],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
