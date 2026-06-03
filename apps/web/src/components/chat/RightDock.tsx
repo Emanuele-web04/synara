@@ -22,7 +22,13 @@ import { resolveActivePane } from "~/rightDockStore.logic";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
-import { Sidebar, SidebarProvider, SidebarRail } from "../ui/sidebar";
+import {
+  Sidebar,
+  SIDEBAR_OFFCANVAS_MOTION_CLASS,
+  SIDEBAR_OFFCANVAS_MOTION_SUPPRESSED_CLASS,
+  SidebarProvider,
+  SidebarRail,
+} from "../ui/sidebar";
 import { CHAT_BACKGROUND_CLASS_NAME } from "./composerPickerStyles";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import {
@@ -155,8 +161,8 @@ export function RightDock(props: RightDockProps) {
   // loads motion and settles softly. Applied to both the width gap and the
   // sliding container so they stay in lockstep.
   const chromeMotionClass = shouldSuppressChromeMotion
-    ? "transition-none! duration-0!"
-    : "duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]";
+    ? SIDEBAR_OFFCANVAS_MOTION_SUPPRESSED_CLASS
+    : SIDEBAR_OFFCANVAS_MOTION_CLASS;
 
   return (
     <SidebarProvider
@@ -180,12 +186,7 @@ export function RightDock(props: RightDockProps) {
         }}
       >
         <div className="flex h-full min-h-0 w-full flex-col">
-          <div
-            className={cn(
-              CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
-              "gap-1 px-1.5",
-            )}
-          >
+          <div className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "gap-1 px-1.5")}>
             <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
               {props.state.panes.map((pane) => (
                 <RightDockTab

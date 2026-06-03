@@ -115,7 +115,7 @@ import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } fr
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { ProviderIcon } from "./ProviderIcon";
-import { AppNavigationButtons } from "./AppNavigationButtons";
+import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { SidebarIconButton } from "./SidebarIconButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
@@ -5295,29 +5295,17 @@ export default function Sidebar() {
   // in useDesktopTopBarTrafficLightGutterClassName used by the closed-state surfaces).
   const isMacDesktop = typeof navigator !== "undefined" ? isMacPlatform(navigator.platform) : false;
 
-  const titlebarControls = (
-    <div className="hidden shrink-0 items-center gap-0.5 md:flex">
-      <SidebarTrigger
-        className="size-7 shrink-0 text-muted-foreground/75 hover:text-foreground"
-        aria-label="Toggle thread sidebar"
-      />
-      <AppNavigationButtons className="ms-0" />
-    </div>
-  );
+  // Open-sidebar (in-sidebar) and non-electron wordmark clusters share the one
+  // SidebarLeadingControls primitive with the closed-state host headers, so the
+  // toggle + arrows look identical whether the sidebar is open or collapsed; only
+  // the wrapper layout differs per host.
+  const titlebarControls = <SidebarLeadingControls className="hidden md:flex" />;
 
-  const headerControls = (
-    <div className="ml-auto hidden shrink-0 items-center gap-0.5 md:flex">
-      <SidebarTrigger
-        className="size-7 shrink-0 text-muted-foreground/75 hover:text-foreground"
-        aria-label="Toggle thread sidebar"
-      />
-      <AppNavigationButtons className="ms-0" />
-    </div>
-  );
+  const headerControls = <SidebarLeadingControls className="ml-auto hidden md:flex" />;
 
   const wordmark = (
     <div className="flex w-full items-center gap-1.5">
-      <SidebarTrigger className="shrink-0 md:hidden" />
+      <SidebarTrigger className="shrink-0 text-muted-foreground/75 hover:text-foreground md:hidden" />
       {headerControls}
     </div>
   );

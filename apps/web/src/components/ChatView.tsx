@@ -7414,9 +7414,7 @@ export default function ChatView({
         )}
       >
         {!isElectron && (
-          <header
-            className={cn(CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, "px-3 py-2 md:hidden")}
-          >
+          <header className={cn(CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, "px-3 py-2 md:hidden")}>
             <div className="flex items-center gap-2">
               <SidebarHeaderTrigger className="size-7 shrink-0" />
               <span className="text-sm font-medium text-[var(--color-text-foreground)]">

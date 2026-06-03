@@ -77,8 +77,7 @@ export const CHAT_BACKGROUND_CLASS_NAME = "bg-[var(--color-background-surface)]"
  *  Apply this to the OPAQUE content surface (e.g. the chat wrapper, or a
  *  SidebarInset `surfaceClassName`) — never to a transparent, full-width
  *  `SidebarInset` shell, or its raised z-index would cover and block the sidebar. */
-export const CHAT_CONTENT_CARD_CLASS_NAME =
-  "chat-content-card relative z-[15] overflow-hidden";
+export const CHAT_CONTENT_CARD_CLASS_NAME = "chat-content-card relative z-[15] overflow-hidden";
 
 /** Opaque chat surface that floats as a card over the sidebar: column background + card chrome.
  *  Apply to the element that should read as the raised card (the chat content wrapper, or a

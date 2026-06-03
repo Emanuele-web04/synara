@@ -141,10 +141,14 @@
     z-index: 0;
     top: 0;
     bottom: 0;
-    /* Hidden unless the sidebar is open (see expanded rule below): when collapsed the
-       wrapper reaches the window edge, and a blurred strip there paints over the
-       macOS window's rounded corner. */
-    display: none;
+    /* Faded out unless the sidebar is open (see expanded rule below): when collapsed the
+       wrapper reaches the window edge, and a blurred strip there would paint over the
+       macOS window's rounded corner. Driven by opacity (not display) + a transition so
+       the wedge fades in step with the slide — at rest collapsed it is opacity:0, so it
+       still never paints over the window corner. */
+    display: block;
+    opacity: 0;
+    transition: opacity 300ms cubic-bezier(0.32, 0.72, 0, 1);
     width: var(--app-content-card-radius, 0.75rem);
     pointer-events: none;
     background-color: var(--app-sidebar-surface, var(--card));
@@ -156,16 +160,12 @@
     left: 0;
   }
 
-  [data-sidebar-side="right"] .chat-content-card-backing::after {
-    right: 0;
-  }
-
   /* Only when the chat layout's own sidebar is expanded is the seam (and its wedge) in the
      middle of the window, safely away from the window's corners — so only then paint the
      strip. Direct-child :has() so the nested right-dock sidebar-wrapper can't drive this. */
   [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="expanded"])
     .chat-content-card-backing::after {
-    display: block;
+    opacity: 1;
   }
 
   /* Seam tokens + soft depth, side-agnostic so each value lives in ONE place. The card
@@ -186,6 +186,13 @@
     --seam-shadow-color: rgba(0, 0, 0, 0.1);
     --seam-shadow-x: 0px;
     box-shadow: var(--seam-shadow-x) 0 16px -10px var(--seam-shadow-color);
+    /* Match the left sidebar shell's SIDEBAR_OFFCANVAS_MOTION_CLASS slide
+       (`duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]`) so the seam corner
+       rounds/squares and the depth shadow fades IN STEP with the offcanvas animation
+       instead of snapping at frame 0 (the collapsed rule below flips both). */
+    transition:
+      box-shadow 300ms cubic-bezier(0.32, 0.72, 0, 1),
+      border-radius 300ms cubic-bezier(0.32, 0.72, 0, 1);
   }
 
   .dark .chat-content-card {
@@ -198,12 +205,6 @@
       var(--app-content-card-radius, 0.75rem);
   }
 
-  [data-sidebar-side="right"] .chat-content-card {
-    --seam-shadow-x: 11px;
-    border-radius: 0 var(--app-content-card-radius, 0.75rem) var(--app-content-card-radius, 0.75rem)
-      0;
-  }
-
   .chat-content-card::before {
     content: "";
     position: absolute;
@@ -212,6 +213,9 @@
     pointer-events: none;
     border-radius: inherit;
     box-shadow: inset 0 0 0 1px var(--seam-line);
+    /* Fade the seam ring with the slide (collapsed rule sets opacity:0) — `display`
+       can't transition, so opacity is what keeps this in step with the animation. */
+    transition: opacity 300ms cubic-bezier(0.32, 0.72, 0, 1);
   }
 
   /* Keep only the seam-side radius strip: the vertical edge + both curves on that
@@ -220,12 +224,7 @@
     clip-path: inset(0 calc(100% - var(--app-content-card-radius, 0.75rem)) 0 0);
   }
 
-  [data-sidebar-side="right"] .chat-content-card::before {
-    clip-path: inset(0 0 0 calc(100% - var(--app-content-card-radius, 0.75rem)));
-  }
-
-  [data-sidebar-side="left"]:has([data-placement="content-seam"]:hover) .chat-content-card,
-  [data-sidebar-side="right"]:has([data-placement="content-seam"]:hover) .chat-content-card {
+  [data-sidebar-side="left"]:has([data-placement="content-seam"]:hover) .chat-content-card {
     --seam-line: color-mix(in srgb, var(--foreground) 30%, transparent);
   }
 
@@ -239,12 +238,15 @@
   [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="collapsed"])
     .chat-content-card {
     border-radius: 0;
-    box-shadow: none;
+    /* Fade the depth shadow via its color token rather than `box-shadow: none` —
+       Chromium snaps box-shadow to/from `none`, but keeping the geometry and only
+       driving the color to transparent interpolates cleanly with the slide. */
+    --seam-shadow-color: transparent;
   }
 
   [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="collapsed"])
     .chat-content-card::before {
-    display: none;
+    opacity: 0;
   }
 
   /* ─── Chat-surface header hairline (horizontal counterpart of the seam) ───────────
@@ -266,17 +268,9 @@
      read as a brighter dot, so pull the hairline 1px off the seam side: it butts against
      the seam stroke instead of crossing it. Anchor to the far edge and shrink the width so
      only the seam-side end retracts. */
-  [data-sidebar-side="left"] .chat-content-card .chat-surface-divider,
-  [data-sidebar-side="right"] .chat-content-card .chat-surface-divider {
-    background-size: calc(100% - 1px) 1px;
-  }
-
   [data-sidebar-side="left"] .chat-content-card .chat-surface-divider {
+    background-size: calc(100% - 1px) 1px;
     background-position: right bottom;
-  }
-
-  [data-sidebar-side="right"] .chat-content-card .chat-surface-divider {
-    background-position: left bottom;
   }
 
   /* Settings uses a route-level surface so the frosted window material is not

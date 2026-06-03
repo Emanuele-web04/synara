@@ -37,12 +37,14 @@ import {
 import { toastManager } from "~/components/ui/toast";
 import {
   Sidebar,
+  SIDEBAR_OFFCANVAS_MOTION_CLASS,
   SidebarInstanceProvider,
   SidebarProvider,
   SidebarRail,
   useSidebar,
 } from "~/components/ui/sidebar";
 import type { SidebarResizableOptions } from "~/components/ui/sidebar";
+import { cn } from "~/lib/utils";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
@@ -505,8 +507,10 @@ function ChatRouteLayout() {
     <Sidebar
       side="left"
       collapsible="offcanvas"
-      className="text-foreground"
-      gapClassName={SIDEBAR_GAP_CLASS}
+      // Match the right dock's soft drawer slide (shared token) instead of the
+      // shell's default `ease-linear`. Applied to the container + gap in lockstep.
+      className={cn("text-foreground", SIDEBAR_OFFCANVAS_MOTION_CLASS)}
+      gapClassName={cn(SIDEBAR_GAP_CLASS, SIDEBAR_OFFCANVAS_MOTION_CLASS)}
       innerClassName={SIDEBAR_INNER_CLASS}
       transparentSurface
       resizable={THREAD_SIDEBAR_RESIZABLE}

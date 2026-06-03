@@ -28,6 +28,21 @@ const SIDEBAR_WIDTH_MOBILE = "calc(100vw - var(--spacing(3)))";
 const SIDEBAR_WIDTH_ICON = "3rem";
 const SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH = 16 * 16;
 
+/**
+ * Soft "drawer" easing for the offcanvas open/close slide, overriding the shell's
+ * default `duration-200 ease-linear` (which reads as stepped on wide surfaces). It
+ * front-loads the motion and settles softly. Apply to BOTH the sliding container
+ * (Sidebar `className`) and the layout `gapClassName` so they animate in lockstep.
+ * Shared by the thread sidebar (left) and the right dock so the two slides match.
+ */
+const SIDEBAR_OFFCANVAS_MOTION_CLASS = "duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]";
+
+/**
+ * Suppresses the slide entirely — for first mount or a reposition/remount where
+ * animating from the old geometry would look wrong. `!` beats the base duration/ease.
+ */
+const SIDEBAR_OFFCANVAS_MOTION_SUPPRESSED_CLASS = "transition-none! duration-0!";
+
 type SidebarContextProps = {
   state: "expanded" | "collapsed";
   open: boolean;
@@ -1119,6 +1134,8 @@ export {
   SidebarRail,
   SidebarSeparator,
   SidebarTrigger,
+  SIDEBAR_OFFCANVAS_MOTION_CLASS,
+  SIDEBAR_OFFCANVAS_MOTION_SUPPRESSED_CLASS,
   useSidebar,
 };
 

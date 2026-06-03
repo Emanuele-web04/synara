@@ -2296,6 +2296,24 @@ function getWindowMaterialOptions(): BrowserWindowConstructorOptions {
   };
 }
 
+// macOS uses a frameless shell with the traffic lights inset into the renderer's
+// top chrome (see CHAT_SURFACE_HEADER_HEIGHT_CLASS in apps/web). Windows/Linux have
+// no inset-traffic-light concept and the renderer ships no custom window-control UI,
+// so a hidden title bar there would strip the min/max/close buttons. Keep the native
+// framed title bar off macOS so window controls always work.
+function getTitleBarOptions(): BrowserWindowConstructorOptions {
+  if (process.platform !== "darwin") {
+    return {};
+  }
+  return {
+    titleBarStyle: "hiddenInset",
+    // y is tuned to share the vertical center of the renderer's top chrome bar
+    // (CHAT_SURFACE_HEADER_HEIGHT_CLASS in apps/web) so the lights line up with the
+    // leading toggle/arrow controls. Keep the two in sync when either changes.
+    trafficLightPosition: { x: 16, y: 19 },
+  };
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1100,
@@ -2306,11 +2324,7 @@ function createWindow(): BrowserWindow {
     autoHideMenuBar: true,
     ...getIconOption(),
     title: APP_DISPLAY_NAME,
-    titleBarStyle: "hiddenInset",
-    // y is tuned to share the vertical center of the renderer's top chrome bar
-    // (CHAT_SURFACE_HEADER_HEIGHT_CLASS in apps/web) so the lights line up with the
-    // leading toggle/arrow controls. Keep the two in sync when either changes.
-    trafficLightPosition: { x: 16, y: 19 },
+    ...getTitleBarOptions(),
     ...getWindowMaterialOptions(),
     webPreferences: {
       preload: Path.join(__dirname, "preload.js"),
