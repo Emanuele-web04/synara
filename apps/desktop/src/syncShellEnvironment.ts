@@ -7,9 +7,7 @@ import {
   mergePathEntries,
   readPathFromLaunchctl,
   readEnvironmentFromLoginShell,
-  readWindowsPersistentEnvironment,
   type ShellEnvironmentReader,
-  type WindowsEnvironmentReader,
 } from "@t3tools/shared/shell";
 
 const LOGIN_SHELL_ENV_NAMES = [
@@ -26,58 +24,20 @@ function logShellEnvironmentWarning(message: string, error?: unknown): void {
   console.warn(`[desktop] ${message}`, error instanceof Error ? error.message : (error ?? ""));
 }
 
-// Windows GUI processes inherit a (possibly stale) environment block instead of a login
-// shell. Hydrate PATH and any missing variables from the persisted registry environment so
-// CLI providers resolve the same config the user's terminal sees (e.g. CLAUDE_CONFIG_DIR).
-function syncWindowsEnvironment(
-  env: NodeJS.ProcessEnv,
-  readWindowsEnvironment: WindowsEnvironmentReader,
-  logWarning: (message: string, error?: unknown) => void,
-): void {
-  try {
-    const persisted = readWindowsEnvironment();
-
-    const mergedPath = mergePathEntries(persisted.PATH, env.PATH, "win32");
-    if (mergedPath) {
-      env.PATH = mergedPath;
-    }
-
-    for (const [name, value] of Object.entries(persisted)) {
-      if (name.toUpperCase() === "PATH") continue;
-      if (value && env[name] === undefined) {
-        env[name] = value;
-      }
-    }
-  } catch (error) {
-    logWarning("Failed to synchronize the desktop Windows environment.", error);
-  }
-}
-
 export function syncShellEnvironment(
   env: NodeJS.ProcessEnv = process.env,
   options: {
     platform?: NodeJS.Platform;
     readEnvironment?: ShellEnvironmentReader;
     readLaunchctlPath?: typeof readPathFromLaunchctl;
-    readWindowsEnvironment?: WindowsEnvironmentReader;
     userShell?: string;
     logWarning?: (message: string, error?: unknown) => void;
   } = {},
 ): void {
   const platform = options.platform ?? process.platform;
-  const logWarning = options.logWarning ?? logShellEnvironmentWarning;
-
-  if (platform === "win32") {
-    syncWindowsEnvironment(
-      env,
-      options.readWindowsEnvironment ?? readWindowsPersistentEnvironment,
-      logWarning,
-    );
-    return;
-  }
-
   if (platform !== "darwin" && platform !== "linux") return;
 
+  const logWarning = options.logWarning ?? logShellEnvironmentWarning;
   const readEnvironment = options.readEnvironment ?? readEnvironmentFromLoginShell;
   const shellEnvironment: Partial<Record<string, string>> = {};
 

@@ -430,7 +430,7 @@
 
     "@effect/language-service": ["@effect/language-service@0.75.1", "", { "bin": { "effect-language-service": "cli.js" } }, "sha512-g9xD2tAQgRFpYC2YgpZq02VeSL5fBbFJ0B/g1o+14NuNmwtaYJc7SjiLWAA9eyhJHosNrn6h1Ye+Kx6j5mN0AA=="],
 
-    "@effect/openapi-generator": ["@effect/openapi-generator@https://pkg.pr.new/Effect-TS/effect-smol/@effect/openapi-generator@8881a9b", { "peerDependencies": { "@effect/platform-node": "^4.0.0-beta.25", "effect": "^4.0.0-beta.25" }, "bin": { "openapigen": "./dist/bin.js" } }],
+    "@effect/openapi-generator": ["@effect/openapi-generator@https://pkg.pr.new/Effect-TS/effect-smol/@effect/openapi-generator@8881a9b", { "peerDependencies": { "@effect/platform-node": "^4.0.0-beta.25", "effect": "^4.0.0-beta.25" }, "bin": { "openapigen": "./dist/bin.js" } }, "sha512-omxybvCIbJpO9MMp679OZNGfWlMpOBOaoTPxv4NXGZ/Tszc33M0Yd5Esg/FODn4Tpx4aQZk73M7uoJTrgAjS6A=="],
 
     "@effect/platform-node": ["@effect/platform-node@https://pkg.pr.new/Effect-TS/effect-smol/@effect/platform-node@8881a9b", { "dependencies": { "@effect/platform-node-shared": "https://pkg.pr.new/Effect-TS/effect-smol/@effect/platform-node-shared@8881a9b606d84a6f5eb6615279138322984f5368", "mime": "^4.1.0", "undici": "^7.20.0" }, "peerDependencies": { "effect": "^4.0.0-beta.25", "ioredis": "^5.7.0" } }],
 
