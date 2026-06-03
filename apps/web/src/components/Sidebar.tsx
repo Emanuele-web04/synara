@@ -115,7 +115,7 @@ import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } fr
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { ProviderIcon } from "./ProviderIcon";
-import { AppNavigationButtons } from "./AppNavigationButtons";
+import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { SidebarIconButton } from "./SidebarIconButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
@@ -145,12 +145,13 @@ import {
 import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
+  getDesktopUpdateAlreadyCurrentNotice,
   getDesktopUpdateButtonPresentation,
   getDesktopUpdateButtonTooltip,
+  getDesktopUpdateButtonVariant,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
-  shouldHighlightDesktopUpdateError,
   shouldShowDesktopUpdateButton,
   shouldToastDesktopUpdateActionResult,
 } from "./desktopUpdate.logic";
@@ -215,6 +216,7 @@ import {
 import { resolveRestorableThreadRoute, type LastThreadRoute } from "../chatRouteRestore";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS } from "~/hooks/useDesktopTopBarGutter";
 import { cn } from "~/lib/utils";
 import {
   disclosureContentClassName,
@@ -238,6 +240,7 @@ import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
   SIDEBAR_ROW_HOVER_CLASS_NAME,
   SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+  SIDEBAR_SECTION_LABEL_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
 import { SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME } from "./chat/composerPickerStyles";
@@ -5028,13 +5031,15 @@ export default function Sidebar() {
   const desktopUpdateButtonInteractivityClasses = desktopUpdateButtonDisabled
     ? "cursor-not-allowed opacity-60"
     : "hover:brightness-110";
-  const desktopUpdateButtonClasses = installingDesktopUpdate
-    ? "bg-sky-500 hover:bg-sky-600"
-    : desktopUpdateState?.status === "downloaded"
-      ? "bg-emerald-500 hover:bg-emerald-600"
-      : desktopUpdateState?.status === "downloading"
-        ? "bg-sky-500 hover:bg-sky-600"
-        : shouldHighlightDesktopUpdateError(desktopUpdateState)
+  const desktopUpdateButtonVariant = getDesktopUpdateButtonVariant(desktopUpdateState, {
+    installing: installingDesktopUpdate,
+  });
+  const desktopUpdateButtonClasses =
+    desktopUpdateButtonVariant === "installing" || desktopUpdateButtonVariant === "progress"
+      ? "bg-sky-500 hover:bg-sky-600"
+      : desktopUpdateButtonVariant === "ready"
+        ? "bg-emerald-500 hover:bg-emerald-600"
+        : desktopUpdateButtonVariant === "error"
           ? "bg-rose-500 hover:bg-rose-600"
           : "bg-[var(--info)] hover:brightness-110";
   const desktopUpdateButtonHasSecondaryLabel =
@@ -5190,6 +5195,15 @@ export default function Sidebar() {
               description: "Restart the app from the update button to install it.",
             });
           }
+          const alreadyCurrentNotice = getDesktopUpdateAlreadyCurrentNotice(result);
+          if (alreadyCurrentNotice) {
+            toastManager.add({
+              type: "info",
+              title: "Already up to date",
+              description: alreadyCurrentNotice,
+            });
+            return;
+          }
           if (!shouldToastDesktopUpdateActionResult(result)) return;
           const actionError = getDesktopUpdateActionError(result);
           if (!actionError) return;
@@ -5217,6 +5231,15 @@ export default function Sidebar() {
         .then((result) => {
           setDesktopUpdateState(result.state);
           setInstallingDesktopUpdate(false);
+          const alreadyCurrentNotice = getDesktopUpdateAlreadyCurrentNotice(result);
+          if (alreadyCurrentNotice) {
+            toastManager.add({
+              type: "info",
+              title: "Already up to date",
+              description: alreadyCurrentNotice,
+            });
+            return;
+          }
           if (!shouldToastDesktopUpdateActionResult(result)) return;
           const actionError = getDesktopUpdateActionError(result);
           if (!actionError) return;
@@ -5267,29 +5290,22 @@ export default function Sidebar() {
     setAllProjectsExpanded(true);
   }, [allProjectsExpanded, collapseProjectsExcept, focusedProjectId, setAllProjectsExpanded]);
 
-  const titlebarControls = (
-    <div className="hidden shrink-0 items-center gap-0.5 md:flex">
-      <AppNavigationButtons className="ms-0" />
-      <SidebarTrigger
-        className="size-7 shrink-0 text-muted-foreground/75 hover:text-foreground"
-        aria-label="Toggle thread sidebar"
-      />
-    </div>
-  );
+  // Only macOS draws the traffic lights in the renderer's top-left, so only there
+  // does the open-sidebar header need to reserve the gutter (mirrors the mac guard
+  // in useDesktopTopBarTrafficLightGutterClassName used by the closed-state surfaces).
+  const isMacDesktop = typeof navigator !== "undefined" ? isMacPlatform(navigator.platform) : false;
 
-  const headerControls = (
-    <div className="ml-auto hidden shrink-0 items-center gap-0.5 md:flex">
-      <AppNavigationButtons className="ms-0" />
-      <SidebarTrigger
-        className="size-7 shrink-0 text-muted-foreground/75 hover:text-foreground"
-        aria-label="Toggle thread sidebar"
-      />
-    </div>
-  );
+  // Open-sidebar (in-sidebar) and non-electron wordmark clusters share the one
+  // SidebarLeadingControls primitive with the closed-state host headers, so the
+  // toggle + arrows look identical whether the sidebar is open or collapsed; only
+  // the wrapper layout differs per host.
+  const titlebarControls = <SidebarLeadingControls className="hidden md:flex" />;
+
+  const headerControls = <SidebarLeadingControls className="ml-auto hidden md:flex" />;
 
   const wordmark = (
     <div className="flex w-full items-center gap-1.5">
-      <SidebarTrigger className="shrink-0 md:hidden" />
+      <SidebarTrigger className="shrink-0 text-muted-foreground/75 hover:text-foreground md:hidden" />
       {headerControls}
     </div>
   );
@@ -5302,7 +5318,7 @@ export default function Sidebar() {
             className={cn(
               "drag-region flex-row items-center gap-2 px-4 py-0 font-system-ui",
               CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-              appSettings.sidebarSide === "left" && "pl-[90px]",
+              isMacDesktop && DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS,
             )}
           >
             {titlebarControls}
@@ -5396,9 +5412,7 @@ export default function Sidebar() {
               <SidebarGroup className="px-1.5 pt-1 pb-1.5">
                 <div className="my-2 h-px w-full bg-border" />
                 <div className="mb-1.5 flex items-center px-2">
-                  <span className="text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/58">
-                    Workspace
-                  </span>
+                  <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Workspace</span>
                 </div>
 
                 <DndContext
@@ -5512,9 +5526,7 @@ export default function Sidebar() {
                 {pinnedThreads.length > 0 ? (
                   <>
                     <div className="my-1 flex items-center justify-between px-2 py-1">
-                      <span className="text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/58">
-                        Pinned
-                      </span>
+                      <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Pinned</span>
                     </div>
                     <div className="flex flex-col gap-0.5">
                       {pinnedThreads.map((thread) => renderPinnedThreadRow(thread))}
@@ -5523,9 +5535,7 @@ export default function Sidebar() {
                   </>
                 ) : null}
                 <div className="my-1 flex items-center justify-between px-2 py-1">
-                  <span className="text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/58">
-                    Threads
-                  </span>
+                  <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Threads</span>
                   <SidebarSectionToolbar>
                     {standardProjects.length > 0 ? (
                       <SidebarIconButton

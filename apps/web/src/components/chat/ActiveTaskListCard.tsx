@@ -46,11 +46,11 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
     <div
       data-testid="active-task-list-card"
       className={cn(
-        "overflow-hidden rounded-t-[1.1rem] border border-b-0 bg-[var(--composer-surface)]",
+        "chat-composer-stacked-top overflow-hidden border border-b-0 bg-[var(--composer-surface)]",
         COMPOSER_SURFACE_BORDER_CLASS_NAME,
       )}
     >
-      <div className="flex items-center justify-between gap-2 px-2.5 py-2">
+      <div className="flex items-center justify-between gap-2 px-3 pt-2.5 pb-2">
         <div className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground/80">
           {compact && hasInProgressTask ? (
             <LoaderIcon className="size-3.5 shrink-0 animate-spin" />
@@ -93,7 +93,7 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
 
       {compact ? null : (
         <>
-          <ol className="space-y-0 px-2.5 pb-2">
+          <ol className="space-y-0 px-3 pb-2.5">
             {activeTaskList.tasks.map((task, index) => {
               const occurrence = (taskOccurrenceCount.get(task.task) ?? 0) + 1;
               taskOccurrenceCount.set(task.task, occurrence);
@@ -129,7 +129,7 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
           </ol>
 
           {backgroundTaskCount > 0 ? (
-            <div className="flex items-center justify-between gap-2 border-t border-border/50 px-2.5 py-1.5 text-[11px] text-muted-foreground/70">
+            <div className="flex items-center justify-between gap-2 border-t border-border/50 px-3 pt-2 pb-2 text-[11px] text-muted-foreground/70">
               <div className="flex min-w-0 items-center gap-1.5">
                 <BotIcon className="size-3 shrink-0" />
                 <span className="truncate">

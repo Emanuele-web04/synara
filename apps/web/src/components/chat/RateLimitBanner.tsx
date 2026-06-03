@@ -8,11 +8,7 @@ import type { OrchestrationThreadActivity } from "@t3tools/contracts";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { IconButton } from "../ui/icon-button";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
-import { cn } from "~/lib/utils";
-import {
-  CHAT_COLUMN_FRAME_CLASS_NAME,
-  CHAT_COLUMN_GUTTER_CLASS_NAME,
-} from "./composerPickerStyles";
+import { ChatColumnBannerFrame } from "./ChatColumnBannerFrame";
 
 export type RateLimitStatus = {
   status: "rejected" | "allowed_warning";
@@ -75,24 +71,22 @@ export const RateLimitBanner = memo(function RateLimitBanner({
     : `Approaching rate limit${utilization !== undefined ? ` (${Math.round(utilization * 100)}% used)` : ""}.${resetsAt ? formatResetsAt(resetsAt) : ""}`;
 
   return (
-    <div className={cn("pt-3", CHAT_COLUMN_GUTTER_CLASS_NAME)}>
-      <div className={CHAT_COLUMN_FRAME_CLASS_NAME}>
-        <Alert variant={isRejected ? "error" : "warning"}>
-          <CircleAlertIcon />
-          <AlertDescription>{message}</AlertDescription>
-          {onDismiss ? (
-            <AlertAction>
-              <IconButton
-                label="Dismiss rate limit status"
-                title="Dismiss rate limit status"
-                onClick={onDismiss}
-              >
-                <XIcon className="size-3.5" />
-              </IconButton>
-            </AlertAction>
-          ) : null}
-        </Alert>
-      </div>
-    </div>
+    <ChatColumnBannerFrame>
+      <Alert variant={isRejected ? "error" : "warning"}>
+        <CircleAlertIcon />
+        <AlertDescription>{message}</AlertDescription>
+        {onDismiss ? (
+          <AlertAction>
+            <IconButton
+              label="Dismiss rate limit status"
+              title="Dismiss rate limit status"
+              onClick={onDismiss}
+            >
+              <XIcon className="size-3.5" />
+            </IconButton>
+          </AlertAction>
+        ) : null}
+      </Alert>
+    </ChatColumnBannerFrame>
   );
 });

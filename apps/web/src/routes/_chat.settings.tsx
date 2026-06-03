@@ -47,13 +47,13 @@ import { ProviderOptionLabel } from "../components/ProviderIcon";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
-import { InputGroup, InputGroupAddon, InputGroupInput } from "../components/ui/input-group";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "../components/ui/menu";
+  CODE_FONT_PRESETS,
+  SettingResetButton,
+  SettingsFontControl,
+  SettingsSelectControl,
+  UI_FONT_PRESETS,
+} from "../components/settings/SettingControls";
 import { Select, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
 import { toastManager } from "../components/ui/toast";
@@ -64,9 +64,13 @@ import {
   SettingsSection,
   SettingsSelectPopup,
 } from "../components/settings/SettingsPanelPrimitives";
+import {
+  CHAT_CONTENT_CARD_CLASS_NAME,
+  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
+} from "../components/chat/composerPickerStyles";
+import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "../components/chat/chatHeaderControls";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
 import { SidebarInset } from "../components/ui/sidebar";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
@@ -80,7 +84,6 @@ import {
   Loader2Icon,
   PlusIcon,
   RotateCcwIcon,
-  Undo2Icon,
   XIcon,
 } from "../lib/icons";
 import {
@@ -146,11 +149,6 @@ const TIMESTAMP_FORMAT_LABELS = {
   locale: "System default",
   "12-hour": "12-hour",
   "24-hour": "24-hour",
-} as const;
-
-const SIDEBAR_SIDE_LABELS = {
-  left: "Left",
-  right: "Right",
 } as const;
 
 const SIDEBAR_PROJECT_SORT_ORDER_LABELS = {
@@ -435,127 +433,8 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
 
 // ── Settings UI primitives ────────────────────────────────────────────────
 
-function SettingResetButton({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            aria-label={`Reset ${label} to default`}
-            className="size-5 rounded-xl p-0 text-muted-foreground hover:text-foreground"
-            onClick={(event) => {
-              event.stopPropagation();
-              onClick();
-            }}
-          >
-            <Undo2Icon className="size-3" />
-          </Button>
-        }
-      />
-      <TooltipPopup side="top">Reset to default</TooltipPopup>
-    </Tooltip>
-  );
-}
-
-function SettingsSelectControl({
-  value,
-  onValueChange,
-  ariaLabel,
-  triggerClassName = "w-full sm:w-44",
-  valueContent,
-  children,
-}: {
-  value: string;
-  onValueChange: (value: string) => void;
-  ariaLabel: string;
-  triggerClassName?: string;
-  valueContent: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <Select
-      value={value}
-      onValueChange={(next) => {
-        if (next !== null) onValueChange(next);
-      }}
-    >
-      <SelectTrigger className={triggerClassName} aria-label={ariaLabel}>
-        <SelectValue>{valueContent}</SelectValue>
-      </SelectTrigger>
-      <SettingsSelectPopup>{children}</SettingsSelectPopup>
-    </Select>
-  );
-}
-
-type FontPreset = { label: string; value: string };
-
-const UI_FONT_PRESETS: readonly FontPreset[] = [
-  { label: "System default", value: "" },
-  { label: "System UI", value: "system-ui" },
-  { label: "Inter", value: "Inter" },
-  { label: "Helvetica Neue", value: "Helvetica Neue" },
-  { label: "Arial", value: "Arial" },
-  { label: "Roboto", value: "Roboto" },
-  { label: "Segoe UI", value: "Segoe UI" },
-];
-
-const CODE_FONT_PRESETS: readonly FontPreset[] = [
-  { label: "System default", value: "" },
-  { label: "JetBrains Mono", value: "JetBrains Mono" },
-  { label: "Fira Code", value: "Fira Code" },
-  { label: "SF Mono", value: "SF Mono" },
-  { label: "Menlo", value: "Menlo" },
-  { label: "Monaco", value: "Monaco" },
-  { label: "Consolas", value: "Consolas" },
-  { label: "Source Code Pro", value: "Source Code Pro" },
-];
-
-/** Free-text font field with the standard input chrome plus a chevron menu of common
- *  presets, matching the other settings dropdowns while still allowing custom families. */
-function SettingsFontControl({
-  value,
-  onValueChange,
-  presets,
-  placeholder,
-  ariaLabel,
-}: {
-  value: string;
-  onValueChange: (value: string) => void;
-  presets: readonly FontPreset[];
-  placeholder: string;
-  ariaLabel: string;
-}) {
-  return (
-    <InputGroup className="w-full sm:w-48">
-      <InputGroupInput
-        value={value}
-        onChange={(event) => onValueChange(event.target.value)}
-        placeholder={placeholder}
-        spellCheck={false}
-        aria-label={ariaLabel}
-      />
-      <InputGroupAddon align="inline-end">
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            aria-label={`${ariaLabel} presets`}
-            className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground"
-          >
-            <ChevronDownIcon className="size-3.5" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-44">
-            {presets.map((preset) => (
-              <DropdownMenuItem key={preset.label} onClick={() => onValueChange(preset.value)}>
-                {preset.label}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </InputGroupAddon>
-    </InputGroup>
-  );
-}
+// SettingResetButton / SettingsSelectControl / SettingsFontControl and the font
+// preset lists live in ~/components/settings/SettingControls (imported above).
 
 function isProviderSelectOption(value: string): value is ProviderKind {
   return PROVIDER_SELECT_OPTIONS.includes(value as ProviderKind);
@@ -883,7 +762,6 @@ function SettingsRouteView() {
     ...(!isDefaultActiveTheme ? [`${resolvedTheme === "dark" ? "Dark" : "Light"} theme pack`] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
     ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? ["New thread mode"] : []),
-    ...(settings.sidebarSide !== defaults.sidebarSide ? ["Sidebar position"] : []),
     ...(settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder
       ? ["Project sort order"]
       : []),
@@ -1474,43 +1352,6 @@ function SettingsRouteView() {
       </SettingsSection>
 
       <SettingsSection title="Sidebar organization">
-        <SettingsRow
-          title="Position"
-          description="Choose which side of the screen the sidebar appears on."
-          resetAction={
-            settings.sidebarSide !== defaults.sidebarSide ? (
-              <SettingResetButton
-                label="sidebar position"
-                onClick={() =>
-                  updateSettings({
-                    sidebarSide: defaults.sidebarSide,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <SettingsSelectControl
-              value={settings.sidebarSide}
-              onValueChange={(value) => {
-                if (value !== "left" && value !== "right") {
-                  return;
-                }
-                updateSettings({ sidebarSide: value });
-              }}
-              ariaLabel="Sidebar position"
-              valueContent={SIDEBAR_SIDE_LABELS[settings.sidebarSide]}
-            >
-              <SelectItem hideIndicator value="left">
-                {SIDEBAR_SIDE_LABELS.left}
-              </SelectItem>
-              <SelectItem hideIndicator value="right">
-                {SIDEBAR_SIDE_LABELS.right}
-              </SelectItem>
-            </SettingsSelectControl>
-          }
-        />
-
         <SettingsRow
           title="Project order"
           description="Controls how projects are arranged in the main sidebar."
@@ -3155,42 +2996,50 @@ function SettingsRouteView() {
 
   return (
     <SidebarInset
-      className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground"
-      surfaceClassName={SETTINGS_PAGE_BACKGROUND_CLASS_NAME}
+      className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
+      surfaceClassName={cn(SETTINGS_PAGE_BACKGROUND_CLASS_NAME, CHAT_CONTENT_CARD_CLASS_NAME)}
     >
+      {/* Companion sidebar trigger so settings is reachable-and-exitable even when the
+          sidebar is collapsed (web/mobile have no global Back arrow). Pinned to the
+          card's top-left — at the same header height + traffic-light gutter as the
+          chat/workspace headers — so the collapsed-state toggle sits by the traffic
+          lights instead of floating in the centered settings body. It renders nothing
+          while the sidebar is open (SidebarHeaderNavigationControls returns null), so it
+          adds no chrome in the common (open) state and never shifts the centered content
+          (hence absolute, not a layout-occupying header row). */}
+      <div
+        className={cn(
+          "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center px-3 sm:px-5",
+          CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+          desktopTopBarTrafficLightGutterClassName,
+        )}
+      >
+        <div className="pointer-events-auto">
+          <SidebarHeaderNavigationControls />
+        </div>
+      </div>
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex-1 overflow-y-auto">
-          <div
-            className={cn(
-              "mx-auto w-full max-w-2xl px-6 py-8",
-              desktopTopBarTrafficLightGutterClassName,
-            )}
-          >
-            <div className="mb-8 flex items-start gap-3">
-              {/* Companion sidebar trigger so settings is reachable-and-exitable even when
-                  the sidebar is collapsed (web/mobile have no global Back arrow). Renders
-                  nothing while the sidebar is open, matching the other route headers. */}
-              <SidebarHeaderNavigationControls />
-              <div className="flex min-w-0 flex-1 items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <h1 className="text-[1.75rem] font-semibold tracking-tight text-foreground">
-                    {activeSectionItem.label}
-                  </h1>
-                  <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                    {activeSectionItem.description}
-                  </p>
-                </div>
-                <Button
-                  size="xs"
-                  variant="outline"
-                  className="shrink-0"
-                  disabled={changedSettingLabels.length === 0}
-                  onClick={() => void restoreDefaults()}
-                >
-                  <RotateCcwIcon className="size-3.5" />
-                  Restore defaults
-                </Button>
+          <div className="mx-auto w-full max-w-2xl px-6 py-8">
+            <div className="mb-8 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h1 className="text-[1.75rem] font-semibold tracking-tight text-foreground">
+                  {activeSectionItem.label}
+                </h1>
+                <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                  {activeSectionItem.description}
+                </p>
               </div>
+              <Button
+                size="xs"
+                variant="outline"
+                className="shrink-0"
+                disabled={changedSettingLabels.length === 0}
+                onClick={() => void restoreDefaults()}
+              >
+                <RotateCcwIcon className="size-3.5" />
+                Restore defaults
+              </Button>
             </div>
 
             {renderActivePanel()}

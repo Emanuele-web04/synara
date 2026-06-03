@@ -22,8 +22,41 @@ import { Button } from "../ui/button";
  * Fixed height of the top chrome bar shared by the chat header, the diff panel
  * header, and the right-dock tab strip. Keeping these on one token ensures their
  * bottom borders line up across the vertical pane divider.
+ *
+ * Tall enough that the vertically-centered controls clear the macOS title bar with
+ * breathing room below them rather than hugging the very top of the window. This
+ * pairs with `trafficLightPosition.y` in apps/desktop/src/main.ts — the two values
+ * are tuned together so the native traffic lights and the renderer's leading
+ * controls share the same vertical center.
  */
-export const CHAT_SURFACE_HEADER_HEIGHT_CLASS = "h-[46px]";
+export const CHAT_SURFACE_HEADER_HEIGHT_CLASS = "h-[50px]";
+
+/**
+ * Bottom hairline shared by every chat-surface chrome bar (chat header, workspace
+ * header, dock pane + tab strip headers, diff panel header, single-thread skeleton).
+ * Implemented as the `.chat-surface-divider` component class (a 1px background gradient,
+ * see index.css) rather than a CSS border: it reads from the SAME `--app-surface-divider`
+ * token as the vertical sidebar↔chat seam, and — because it's a gradient — the seam corner
+ * retracts it 1px so the horizontal hairline butts against the vertical seam instead of
+ * crossing it (overlapping 1px lines double their alpha into a brighter dot). Apply
+ * alongside {@link CHAT_SURFACE_HEADER_HEIGHT_CLASS} so heights and dividers line up.
+ */
+export const CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME = "chat-surface-divider";
+
+/**
+ * Standard chat-surface chrome-bar row: the shared flex baseline + fixed height + bottom
+ * hairline that the simple headers all repeat (empty-state chat header, dock pane header,
+ * right-dock tab strip, single-thread skeleton). Call sites add only their own gap/padding
+ * and extras (drag-region, traffic-light gutter). Headers with bespoke layout (the main
+ * chat header with its split toolbar, the diff panel header with `justify-between`) compose
+ * {@link CHAT_SURFACE_HEADER_HEIGHT_CLASS} + {@link CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME}
+ * directly instead of forcing this baseline.
+ */
+export const CHAT_SURFACE_HEADER_ROW_CLASS_NAME = cn(
+  "flex shrink-0 items-center",
+  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+  CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
+);
 
 /**
  * Force header control glyphs to full-strength foreground. The base Button caps

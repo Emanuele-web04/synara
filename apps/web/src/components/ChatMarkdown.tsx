@@ -12,6 +12,7 @@ import React, {
   isValidElement,
   use,
   useCallback,
+  useDeferredValue,
   memo,
   useEffect,
   useMemo,
@@ -674,6 +675,12 @@ function ChatMarkdown({
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const normalizedText = useMemo(() => protectLiteralMarkdownDollars(text), [text]);
+  // While streaming, let React deprioritize and coalesce the markdown re-parse so a
+  // fast token stream (one flush per ~100ms) doesn't re-render the full ReactMarkdown
+  // tree on every flush. The deferred value always converges to the latest text, and
+  // completed messages render the exact current text immediately (no visual change).
+  const deferredNormalizedText = useDeferredValue(normalizedText);
+  const renderedText = isStreaming ? deferredNormalizedText : normalizedText;
   const markdownUrlTransform = useCallback((href: string) => {
     const restoredHref = restoreLiteralDollarPlaceholders(href);
     return rewriteMarkdownFileUriHref(restoredHref) ?? defaultUrlTransform(restoredHref);
@@ -754,7 +761,7 @@ function ChatMarkdown({
         components={markdownComponents}
         urlTransform={markdownUrlTransform}
       >
-        {normalizedText}
+        {renderedText}
       </ReactMarkdown>
     </div>
   );

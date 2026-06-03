@@ -67,6 +67,17 @@
     @apply text-foreground relative;
     background: var(--app-shell-background, transparent);
   }
+  :root {
+    /* One token for every app-surface divider line: the vertical sidebar↔chat seam
+       AND the horizontal chrome-bar dividers (chat/workspace/dock/diff headers). Both
+       resolve through here so the two divider directions always read as the same line.
+       (Chat headers previously used the lighter --color-border-light and looked off.) */
+    --app-surface-divider: var(--color-border);
+    /* Rounded-corner radius of the chat card's seam side. Defined once here so the card
+       radius, the seam ring clip-path, the right-side border-radius, and the backing
+       strip width stay in lockstep. (All call sites still carry a 0.75rem fallback.) */
+    --app-content-card-radius: 0.9rem;
+  }
 }
 
 @layer components {
@@ -86,6 +97,180 @@
     box-shadow: var(--app-sidebar-shadow, none);
     backdrop-filter: var(--app-sidebar-backdrop-filter, none);
     -webkit-backdrop-filter: var(--app-sidebar-backdrop-filter, none);
+  }
+
+  /* ─── Chat card seam (sidebar ↔ chat divider) ─────────────────────────────────
+     ONE seam only. Do NOT add a border to the sidebar surface, and do NOT draw a
+     divider line on the SidebarRail — either one makes a SECOND vertical line.
+
+     The card is `overflow-hidden` + rounded on the seam side, so anything painted
+     INSIDE it is clipped to that rounded shape. That means:
+       • The corner WEDGE (the area outside the radius, between the curve and the
+         square outer corner) can never be filled from inside the card — it must be
+         backed by the PARENT. `.chat-content-card-backing` paints that parent with the
+         exact sidebar material (same color token AND same backdrop-filter), so the wedge
+         reads as the sidebar continuing under the card instead of a transparent
+         "triangle" (translucent shell) or a mismatched flat fill ("overlay").
+       • The DIVIDER is a 1px inset RING on ::before (`box-shadow: inset 0 0 0 1px`),
+         NOT a CSS border. The ring follows the inherited rounded corner; we then
+         clip-path it to just the seam-side radius strip so only the left/right curve
+         + vertical line show — never the straight top/bottom/opposite strokes (those
+         straight strokes were the "angle"/L the seam must not have). Color is
+         `--seam-line`; the content-seam SidebarRail intensifies it on hover. */
+  /* Inset routes (settings/workspace) start at x=0 and offset content via padding,
+     so clip the fill to the content box (backs only the chat area, never the sidebar
+     padding). Plain fill, NO backdrop-filter: a backdrop-filter escapes the macOS
+     window's rounded-corner clip and paints over the window edge. */
+  [data-slot="sidebar-inset"]:has(.chat-content-card) {
+    background-color: var(--app-sidebar-surface, var(--card));
+    background-clip: content-box;
+  }
+
+  /* Chat route: the backing wrapper starts AT the seam, so a narrow strip on the seam
+     side fills the card's rounded-corner wedge with the exact sidebar material
+     (color + blur). Width = corner radius keeps the (blurred) strip in the middle of
+     the window, so it never overlaps the macOS window's rounded corners the way a
+     full-bleed backdrop-filter did. */
+  .chat-content-card-backing {
+    position: relative;
+  }
+
+  .chat-content-card-backing::after {
+    content: "";
+    position: absolute;
+    z-index: 0;
+    top: 0;
+    bottom: 0;
+    /* Faded out unless the sidebar is open (see expanded rule below): when collapsed the
+       wrapper reaches the window edge, and a blurred strip there would paint over the
+       macOS window's rounded corner. Driven by opacity (not display) + a transition so
+       the wedge fades in step with the slide — at rest collapsed it is opacity:0, so it
+       still never paints over the window corner. */
+    display: block;
+    opacity: 0;
+    transition: opacity 300ms cubic-bezier(0.32, 0.72, 0, 1);
+    width: var(--app-content-card-radius, 0.75rem);
+    pointer-events: none;
+    background-color: var(--app-sidebar-surface, var(--card));
+    backdrop-filter: var(--app-sidebar-backdrop-filter, none);
+    -webkit-backdrop-filter: var(--app-sidebar-backdrop-filter, none);
+  }
+
+  [data-sidebar-side="left"] .chat-content-card-backing::after {
+    left: 0;
+  }
+
+  /* Only when the chat layout's own sidebar is expanded is the seam (and its wedge) in the
+     middle of the window, safely away from the window's corners — so only then paint the
+     strip. Direct-child :has() so the nested right-dock sidebar-wrapper can't drive this. */
+  [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="expanded"])
+    .chat-content-card-backing::after {
+    opacity: 1;
+  }
+
+  /* Seam tokens + soft depth, side-agnostic so each value lives in ONE place. The card
+     reads as a RAISED surface floating over the sidebar — a distinct material from the
+     flat macOS window border, not one more competing hairline next to it.
+       • --seam-line   : color of the ::before ring (the vertical divider + corner curve);
+                         the content-seam SidebarRail intensifies it on hover (rule below).
+       • --seam-shadow-*: the depth shadow. Geometry (blur/spread) is shared here; only the
+                         horizontal direction (--seam-shadow-x) and the alpha (light vs dark)
+                         change. The default x=0 is a harmless fallback if no sidebar side is
+                         resolved; real surfaces always set a side below.
+     Keep the shadow subtle: dark mode needs more alpha to register over the dark sidebar.
+     The card's own overflow:hidden never clips this outset shadow, so it lands on the
+     sidebar; when the sidebar is collapsed the seam sits at the window edge and the shadow
+     simply falls off-screen. */
+  .chat-content-card {
+    --seam-line: var(--app-surface-divider);
+    --seam-shadow-color: rgba(0, 0, 0, 0.1);
+    --seam-shadow-x: 0px;
+    box-shadow: var(--seam-shadow-x) 0 16px -10px var(--seam-shadow-color);
+    /* Match the left sidebar shell's SIDEBAR_OFFCANVAS_MOTION_CLASS slide
+       (`duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]`) so the seam corner
+       rounds/squares and the depth shadow fades IN STEP with the offcanvas animation
+       instead of snapping at frame 0 (the collapsed rule below flips both). */
+    transition:
+      box-shadow 300ms cubic-bezier(0.32, 0.72, 0, 1),
+      border-radius 300ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  .dark .chat-content-card {
+    --seam-shadow-color: rgba(0, 0, 0, 0.44);
+  }
+
+  [data-sidebar-side="left"] .chat-content-card {
+    --seam-shadow-x: -11px;
+    border-radius: var(--app-content-card-radius, 0.75rem) 0 0
+      var(--app-content-card-radius, 0.75rem);
+  }
+
+  .chat-content-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1px var(--seam-line);
+    /* Fade the seam ring with the slide (collapsed rule sets opacity:0) — `display`
+       can't transition, so opacity is what keeps this in step with the animation. */
+    transition: opacity 300ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  /* Keep only the seam-side radius strip: the vertical edge + both curves on that
+     side, clipping away the straight top/bottom strokes and the opposite edge. */
+  [data-sidebar-side="left"] .chat-content-card::before {
+    clip-path: inset(0 calc(100% - var(--app-content-card-radius, 0.75rem)) 0 0);
+  }
+
+  [data-sidebar-side="left"]:has([data-placement="content-seam"]:hover) .chat-content-card {
+    --seam-line: color-mix(in srgb, var(--foreground) 30%, transparent);
+  }
+
+  /* Sidebar collapsed (offcanvas): the card fills the window edge-to-edge, so its rounded
+     seam corner would sit ON TOP of the macOS window's OWN rounded corner — two mismatched
+     curves overlapping. Square the card and drop the seam ring + depth here; the window's
+     own corner is then the only one. (The backing strip is already expanded-only.)
+     Use the DIRECT-CHILD combinator: only the chat layout's own sidebar is a direct child of
+     this wrapper; the right dock nests its own sidebar-wrapper, so a plain descendant :has()
+     would also fire on the dock's (always-collapsed) sidebar. */
+  [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="collapsed"])
+    .chat-content-card {
+    border-radius: 0;
+    /* Fade the depth shadow via its color token rather than `box-shadow: none` —
+       Chromium snaps box-shadow to/from `none`, but keeping the geometry and only
+       driving the color to transparent interpolates cleanly with the slide. */
+    --seam-shadow-color: transparent;
+  }
+
+  [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="collapsed"])
+    .chat-content-card::before {
+    opacity: 0;
+  }
+
+  /* ─── Chat-surface header hairline (horizontal counterpart of the seam) ───────────
+     Bottom divider for every chat-surface chrome bar (chat/workspace/dock/diff headers),
+     same color as the vertical seam via --app-surface-divider. Painted as a 1px
+     background gradient, NOT a CSS border or a positioned pseudo-element: a border would
+     bleed into the seam corner, and an absolutely-positioned line would force the header
+     to become a containing block (header toolbars rely on their own stacking/portals).
+     A gradient is layout-neutral and can be shortened on one side (see the card rule). */
+  .chat-surface-divider {
+    background-image: linear-gradient(var(--app-surface-divider), var(--app-surface-divider));
+    background-repeat: no-repeat;
+    background-position: left bottom;
+    background-size: 100% 1px;
+  }
+
+  /* Inside the rounded card, the horizontal hairline and the vertical seam stroke meet at
+     the seam corner. Two 1px semi-transparent lines sharing a pixel double their alpha and
+     read as a brighter dot, so pull the hairline 1px off the seam side: it butts against
+     the seam stroke instead of crossing it. Anchor to the far edge and shrink the width so
+     only the seam-side end retracts. */
+  [data-sidebar-side="left"] .chat-content-card .chat-surface-divider {
+    background-size: calc(100% - 1px) 1px;
+    background-position: right bottom;
   }
 
   /* Settings uses a route-level surface so the frosted window material is not
@@ -991,6 +1176,45 @@ diffs-container {
   --runtime-full-access-accent: #fe8549;
 }
 
+/* Composer shell/surface corner geometry — single source of truth so radius
+   tweaks are not split across Tailwind utilities (and HMR cannot leave stale rules). */
+:root {
+  --composer-radius: 1.2rem;
+}
+
+.chat-composer-shell,
+.chat-composer-surface,
+.chat-composer-stacked-top,
+.chat-composer-surface-banner {
+  border-radius: var(--composer-radius);
+}
+
+/* Electron: continuous macOS-style corners (do not stack with corner-shape). */
+:root[data-runtime="electron"] .chat-composer-shell,
+:root[data-runtime="electron"] .chat-composer-surface,
+:root[data-runtime="electron"] .chat-composer-stacked-top,
+:root[data-runtime="electron"] .chat-composer-surface-banner {
+  -electron-corner-smoothing: system-ui;
+}
+
+/* Browser: squircle via corner-shape when supported. */
+@supports (corner-shape: round) {
+  :root:not([data-runtime="electron"]) .chat-composer-shell,
+  :root:not([data-runtime="electron"]) .chat-composer-surface,
+  :root:not([data-runtime="electron"]) .chat-composer-stacked-top,
+  :root:not([data-runtime="electron"]) .chat-composer-surface-banner {
+    corner-shape: squircle;
+  }
+}
+
+.chat-composer-surface-banner,
+.chat-composer-stacked-top {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-top-left-radius: calc(var(--composer-radius) - 1px);
+  border-top-right-radius: calc(var(--composer-radius) - 1px);
+}
+
 .chat-composer-surface {
   background: var(--composer-surface);
   backdrop-filter: var(--app-composer-backdrop-filter, none);
@@ -1207,8 +1431,8 @@ diffs-container {
 }
 
 .ultrathink-frame {
-  /* The composer shell no longer reserves a 1px ring; the rainbow border needs
-     it so the surface sits inset and the gradient shows around the edge. */
+  /* The composer shell no longer reserves a 1px border; the rainbow frame needs
+     padding so the surface sits inset and the gradient shows around the edge. */
   padding: 1px;
   --ultrathink-spectrum: linear-gradient(
     120deg,

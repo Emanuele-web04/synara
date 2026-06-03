@@ -131,7 +131,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   }
 
   return (
-    <div className="px-4 py-3 sm:px-5">
+    <div className="px-5 pt-3.5 pb-3.5 sm:px-6">
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2">
           {prompt.questions.length > 1 ? (

@@ -35,12 +35,31 @@ import {
   providerUnavailableReason,
 } from "~/lib/providerAvailability";
 import { toastManager } from "~/components/ui/toast";
-import { Sidebar, SidebarProvider, SidebarRail, useSidebar } from "~/components/ui/sidebar";
+import {
+  Sidebar,
+  SIDEBAR_OFFCANVAS_MOTION_CLASS,
+  SidebarInstanceProvider,
+  SidebarProvider,
+  SidebarRail,
+  useSidebar,
+} from "~/components/ui/sidebar";
+import type { SidebarResizableOptions } from "~/components/ui/sidebar";
+import { cn } from "~/lib/utils";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
 const THREAD_SIDEBAR_MIN_WIDTH = 13 * 16;
 const THREAD_MAIN_CONTENT_MIN_WIDTH = 40 * 16;
+
+// Single source of truth for the thread sidebar resize behavior. Shared by <Sidebar>
+// and the detached content-seam <SidebarRail> (via SidebarInstanceProvider) so the
+// drag handle keeps working even though the rail lives outside <Sidebar> (above the card).
+const THREAD_SIDEBAR_RESIZABLE: SidebarResizableOptions = {
+  minWidth: THREAD_SIDEBAR_MIN_WIDTH,
+  shouldAcceptWidth: ({ nextWidth, wrapper }) =>
+    wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
+  storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
+};
 const MAINTENANCE_EVENT_STALE_MS = 5 * 60 * 1000;
 
 type MaintenanceToastId = ReturnType<typeof toastManager.add>;
@@ -473,48 +492,58 @@ function ChatRouteGlobalShortcuts() {
   );
 }
 
-const SIDEBAR_GAP_CLASS = {
-  left: "overflow-hidden before:absolute before:inset-0 before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.06),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.008))] dark:before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.04),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.018),rgba(255,255,255,0.006))]",
-  right:
-    "overflow-hidden before:absolute before:inset-0 before:bg-[radial-gradient(90%_75%_at_100%_0%,rgba(255,255,255,0.06),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.008))] dark:before:bg-[radial-gradient(90%_75%_at_100%_0%,rgba(255,255,255,0.04),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.018),rgba(255,255,255,0.006))]",
-} as const;
+/** Subtle top-corner sheen on the sidebar gap. The sidebar always sits on the left, so
+ *  the radial highlight is anchored to the top-left corner. */
+const SIDEBAR_GAP_CLASS =
+  "overflow-hidden before:absolute before:inset-0 before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.06),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.008))] dark:before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.04),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.018),rgba(255,255,255,0.006))]";
 
-const SIDEBAR_INNER_CLASS = {
-  left: "app-sidebar-surface border-r border-[color:var(--color-border-light)]",
-  right: "app-sidebar-surface border-l border-[color:var(--color-border-light)]",
-} as const;
+/** No inline-start/end border: the chat content card provides the edge (rounded + overlap).
+ *  A sidebar border here draws a full-height vertical line through the titlebar seam. */
+const SIDEBAR_INNER_CLASS = "app-sidebar-surface";
 
 function ChatRouteLayout() {
-  const { settings } = useAppSettings();
-  const side = settings.sidebarSide;
-
+  // The thread sidebar always lives on the left; the right dock is a separate surface.
   const sidebarElement = (
     <Sidebar
-      side={side}
+      side="left"
       collapsible="offcanvas"
-      className="text-foreground"
-      gapClassName={SIDEBAR_GAP_CLASS[side]}
-      innerClassName={SIDEBAR_INNER_CLASS[side]}
+      // Match the right dock's soft drawer slide (shared token) instead of the
+      // shell's default `ease-linear`. Applied to the container + gap in lockstep.
+      className={cn("text-foreground", SIDEBAR_OFFCANVAS_MOTION_CLASS)}
+      gapClassName={cn(SIDEBAR_GAP_CLASS, SIDEBAR_OFFCANVAS_MOTION_CLASS)}
+      innerClassName={SIDEBAR_INNER_CLASS}
       transparentSurface
-      resizable={{
-        minWidth: THREAD_SIDEBAR_MIN_WIDTH,
-        shouldAcceptWidth: ({ nextWidth, wrapper }) =>
-          wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
-        storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
-      }}
+      resizable={THREAD_SIDEBAR_RESIZABLE}
     >
       <ThreadSidebar />
-      <SidebarRail />
     </Sidebar>
   );
 
+  // Chat column shell. The content-seam rail is the resize hit-area for the seam —
+  // the visible divider + depth shadow live on the chat card's inner edge (see
+  // `.chat-content-card` in index.css). It sits OUTSIDE <Sidebar> so it stacks above
+  // the card, so SidebarInstanceProvider re-supplies the same resize config/side it
+  // would have gotten inside <Sidebar> (otherwise dragging to resize stops working).
+  // `data-sidebar-side` on the provider selects the seam geometry.
+  const mainContentShell = (
+    <div className="chat-content-card-backing relative flex h-svh min-h-0 min-w-0 flex-1">
+      <SidebarInstanceProvider side="left" resizable={THREAD_SIDEBAR_RESIZABLE}>
+        <SidebarRail placement="content-seam" />
+      </SidebarInstanceProvider>
+      <Outlet />
+    </div>
+  );
+
   return (
-    <SidebarProvider defaultOpen>
+    <SidebarProvider
+      defaultOpen
+      className="bg-[var(--app-shell-background)]"
+      data-sidebar-side="left"
+    >
       <ThreadRetentionMaintenanceToast />
       <ChatRouteGlobalShortcuts />
-      {side === "left" ? sidebarElement : null}
-      <Outlet />
-      {side === "right" ? sidebarElement : null}
+      {sidebarElement}
+      {mainContentShell}
     </SidebarProvider>
   );
 }

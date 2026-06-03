@@ -71,7 +71,7 @@ import {
 } from "../rightDockStore.logic";
 import { RightDock } from "../components/chat/RightDock";
 import { DockTerminalPane } from "../components/chat/DockTerminalPane";
-import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "../components/chat/chatHeaderControls";
+import { CHAT_SURFACE_HEADER_ROW_CLASS_NAME } from "../components/chat/chatHeaderControls";
 import { GitPanel } from "../components/chat/GitPanel";
 import { PanelStateMessage } from "../components/chat/PanelStateMessage";
 import {
@@ -111,7 +111,12 @@ import {
   resolveToggledChatPanelPatch,
 } from "./-chatThreadRoute.logic";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
-import { CHAT_BACKGROUND_CLASS_NAME } from "../components/chat/composerPickerStyles";
+import {
+  CHAT_BACKGROUND_CLASS_NAME,
+  CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
+  CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
+  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
+} from "../components/chat/composerPickerStyles";
 import { cn } from "~/lib/utils";
 import { SidebarInset } from "~/components/ui/sidebar";
 
@@ -563,12 +568,7 @@ function ChatMountSkeleton() {
     >
       {/* Mirrors the real chat shell so route changes paint immediately while ChatView mounts
           on the next frames. */}
-      <div
-        className={cn(
-          "flex shrink-0 items-center gap-3 border-b border-[color:var(--color-border-light)] px-4",
-          CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-        )}
-      >
+      <div className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "gap-3 px-4")}>
         <div className="size-5 rounded-full bg-muted" />
         <div className="min-w-0 flex-1 space-y-1.5">
           <div className="h-3.5 w-44 max-w-[48%] rounded-full bg-muted" />
@@ -1239,10 +1239,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
   return (
     <>
       <div
-        className={cn(
-          "flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden",
-          CHAT_BACKGROUND_CLASS_NAME,
-        )}
+        className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}
       >
         <PaneRenderer
           pane={activeSplitView.root}
@@ -1680,12 +1677,7 @@ function SingleChatSurface(props: {
   );
 
   return (
-    <div
-      className={cn(
-        "flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden",
-        CHAT_BACKGROUND_CLASS_NAME,
-      )}
-    >
+    <div className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}>
       <ChatPaneDropOverlay
         canDropInDirection={allowAnySplitDirection}
         excludedThreadIds={excludedThreadIds}
@@ -1693,7 +1685,7 @@ function SingleChatSurface(props: {
         className="flex h-full min-h-0 min-w-0 flex-1"
       >
         <SidebarInset
-          className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground"
+          className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
           surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
         >
           <DeferredChatView

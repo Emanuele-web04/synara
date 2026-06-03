@@ -5,6 +5,7 @@
 
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
+import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import {
   SETTINGS_NAV_GROUPS,
   SETTINGS_NAV_ITEMS,
@@ -33,11 +34,13 @@ export function SettingsSidebarNav(props: {
         className={cn(SETTINGS_SIDEBAR_ITEM_CLASS_NAME, SETTINGS_SIDEBAR_ROW_FILL_HOVER_CLASS_NAME)}
         onClick={props.onBack}
       >
-        <CentralIcon name="arrow-left" className={SETTINGS_SIDEBAR_ICON_CLASS_NAME} />
+        <SidebarLeadingIcon size="sm">
+          <CentralIcon name="arrow-left" className={SETTINGS_SIDEBAR_ICON_CLASS_NAME} />
+        </SidebarLeadingIcon>
         <span className={SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME}>Back to app</span>
       </button>
 
-      <div className="-mx-1.5 my-2 h-px bg-border/70" />
+      <div className="-mx-1.5 my-1.5 h-px bg-border/70" />
 
       <nav aria-label="Settings sections" className="flex flex-col pt-1">
         {SETTINGS_NAV_GROUPS.map((group) => {
@@ -74,10 +77,12 @@ export function SettingsSidebarNav(props: {
                         )}
                         onClick={() => props.onSelectSection(item.id)}
                       >
-                        <CentralIcon
-                          name={item.icon}
-                          className={SETTINGS_SIDEBAR_ICON_CLASS_NAME}
-                        />
+                        <SidebarLeadingIcon size="sm">
+                          <CentralIcon
+                            name={item.icon}
+                            className={SETTINGS_SIDEBAR_ICON_CLASS_NAME}
+                          />
+                        </SidebarLeadingIcon>
                         <span className={SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME}>{item.label}</span>
                       </button>
                     </li>

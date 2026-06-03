@@ -292,7 +292,11 @@ import {
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
-import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
+import {
+  CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
+  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+  CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
+} from "./chat/chatHeaderControls";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SidebarHeaderTrigger } from "./ui/sidebar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
@@ -7432,7 +7436,7 @@ export default function ChatView({
         )}
       >
         {!isElectron && (
-          <header className="border-b border-[color:var(--color-border-light)] px-3 py-2 md:hidden">
+          <header className={cn(CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, "px-3 py-2 md:hidden")}>
             <div className="flex items-center gap-2">
               <SidebarHeaderTrigger className="size-7 shrink-0" />
               <span className="text-sm font-medium text-[var(--color-text-foreground)]">
@@ -7444,8 +7448,8 @@ export default function ChatView({
         {isElectron && (
           <div
             className={cn(
-              "drag-region flex shrink-0 items-center border-b border-[color:var(--color-border-light)] px-5",
-              CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+              CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
+              "drag-region px-5",
               desktopTopBarTrafficLightGutterClassName,
             )}
           >
@@ -7579,10 +7583,10 @@ export default function ChatView({
                   key={queuedTurn.id}
                   data-testid="queued-follow-up-row"
                   className={cn(
-                    "chat-composer-surface flex items-center gap-2 border border-b-0 px-2.5 py-2 text-[12px]",
+                    "chat-composer-surface flex items-center gap-2 border border-b-0 px-3 pt-2.5 pb-2.5 text-[12px]",
                     COMPOSER_SURFACE_BORDER_CLASS_NAME,
                     queuedTurnIndex === 0 && !taskListAboveComposer
-                      ? "rounded-t-[1.1rem]"
+                      ? "chat-composer-stacked-top"
                       : "rounded-none",
                   )}
                 >
@@ -7989,7 +7993,7 @@ export default function ChatView({
                             type="submit"
                             variant="prominent"
                             size="icon-xs"
-                            className="size-8 rounded-full"
+                            className="size-7 rounded-full sm:size-7"
                             disabled={
                               isSendBusy ||
                               isConnecting ||
@@ -8030,7 +8034,7 @@ export default function ChatView({
                             ) : (
                               <ComposerSendArrowIcon
                                 aria-hidden="true"
-                                className="size-4 shrink-0"
+                                className="size-5 shrink-0"
                               />
                             )}
                           </Button>
@@ -8081,7 +8085,8 @@ export default function ChatView({
       {/* Top bar */}
       <header
         className={cn(
-          "border-b border-[color:var(--color-border-light)] px-3 sm:px-5",
+          CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
+          "px-3 sm:px-5",
           "flex items-center",
           CHAT_SURFACE_HEADER_HEIGHT_CLASS,
           isElectron && "drag-region",

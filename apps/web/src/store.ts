@@ -35,6 +35,7 @@ import { hasLiveTurnTailWork } from "./session-logic";
 import { deriveThreadSummaryMetadata } from "@t3tools/shared/threadSummary";
 import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
 import { toAttachmentPreviewUrl } from "./lib/wsHttpUrl";
+import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -1304,20 +1305,6 @@ function activityRequestId(activity: Thread["activities"][number]): string | nul
   const payload = asActivityRecord(activity.payload);
   const requestId = payload?.requestId;
   return typeof requestId === "string" && requestId.trim().length > 0 ? requestId : null;
-}
-
-function isStalePendingRequestFailureDetail(detail: unknown): boolean {
-  if (typeof detail !== "string") {
-    return false;
-  }
-  const normalized = detail.toLowerCase();
-  return (
-    normalized.includes("stale pending approval request") ||
-    normalized.includes("stale pending user-input request") ||
-    normalized.includes("unknown pending approval request") ||
-    normalized.includes("unknown pending permission request") ||
-    normalized.includes("unknown pending user-input request")
-  );
 }
 
 // Keep old actionable prompts even when their timeline rows fall outside the cap.

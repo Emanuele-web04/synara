@@ -202,7 +202,7 @@ function ToastActions({
       {copyText && (
         <Button
           aria-label={isCopied ? "Copied error message" : "Copy error message"}
-          className="self-start border-white/20 bg-white/10 text-white hover:bg-white/20"
+          className="self-start rounded-md border-[var(--notification-fg)]/20 bg-[var(--notification-fg)]/10 text-[var(--notification-fg)] hover:bg-[var(--notification-fg)]/20"
           onClick={() => {
             copyToClipboard(copyText, undefined);
           }}
@@ -219,7 +219,7 @@ function ToastActions({
           {...actionProps}
           className={cn(
             buttonVariants({ size: "xs", variant: "outline" }),
-            "self-start border-white/20 bg-white/10 text-white hover:bg-white/20",
+            "self-start rounded-md border-[var(--notification-fg)]/20 bg-[var(--notification-fg)]/10 text-[var(--notification-fg)] hover:bg-[var(--notification-fg)]/20",
             actionProps.className,
           )}
           data-slot="toast-action"
@@ -231,7 +231,7 @@ function ToastActions({
         <Button
           {...secondaryActionProps}
           className={cn(
-            "self-start border-white/20 bg-white/10 text-white hover:bg-white/20",
+            "self-start rounded-md border-[var(--notification-fg)]/20 bg-[var(--notification-fg)]/10 text-[var(--notification-fg)] hover:bg-[var(--notification-fg)]/20",
             secondaryActionProps.className,
           )}
           size={secondaryActionProps.size ?? "xs"}
@@ -255,7 +255,7 @@ function ToastCloseButton({
       className={cn(
         // pointer-events-auto keeps the X clickable even when a stacked/collapsed
         // toast still gates its content with pointer-events-none.
-        "pointer-events-auto z-10 inline-flex shrink-0 items-center justify-center rounded-full text-white/65 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35",
+        "pointer-events-auto z-10 inline-flex shrink-0 items-center justify-center rounded-full text-[var(--notification-fg)]/65 transition-colors hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--notification-fg)]/35",
         compact ? "size-5" : "absolute top-2 right-2 size-6",
       )}
       data-slot="toast-close"
@@ -312,7 +312,7 @@ function ToastSurface({
         />
         {!compact ? (
           <Toast.Description
-            className="min-w-0 break-words text-white/72"
+            className="min-w-0 break-words text-[var(--notification-fg)]/72"
             data-slot="toast-description"
           />
         ) : null}
@@ -514,7 +514,7 @@ function AnchoredToasts() {
                   className={cn(
                     "relative text-balance transition-[scale,opacity] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0",
                     tooltipStyle
-                      ? "rounded-md border bg-popover text-popover-foreground text-xs shadow-md/5 before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-md)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]"
+                      ? "rounded-lg border bg-popover text-popover-foreground text-xs shadow-md/5 [-webkit-app-region:no-drag] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]"
                       : compact
                         ? COMPACT_NOTIFICATION_SURFACE_CLASS_NAME
                         : EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,

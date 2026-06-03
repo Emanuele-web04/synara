@@ -4,8 +4,6 @@ import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
 import { cn } from "~/lib/utils";
 import { CentralIcon } from "~/lib/central-icons";
-import { isElectron } from "~/env";
-import { useAppSettings } from "~/appSettings";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -29,6 +27,21 @@ const SIDEBAR_WIDTH = "16rem";
 const SIDEBAR_WIDTH_MOBILE = "calc(100vw - var(--spacing(3)))";
 const SIDEBAR_WIDTH_ICON = "3rem";
 const SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH = 16 * 16;
+
+/**
+ * Soft "drawer" easing for the offcanvas open/close slide, overriding the shell's
+ * default `duration-200 ease-linear` (which reads as stepped on wide surfaces). It
+ * front-loads the motion and settles softly. Apply to BOTH the sliding container
+ * (Sidebar `className`) and the layout `gapClassName` so they animate in lockstep.
+ * Shared by the thread sidebar (left) and the right dock so the two slides match.
+ */
+const SIDEBAR_OFFCANVAS_MOTION_CLASS = "duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]";
+
+/**
+ * Suppresses the slide entirely — for first mount or a reposition/remount where
+ * animating from the old geometry would look wrong. `!` beats the base duration/ease.
+ */
+const SIDEBAR_OFFCANVAS_MOTION_SUPPRESSED_CLASS = "transition-none! duration-0!";
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed";
@@ -172,6 +185,56 @@ function SidebarProvider({
   );
 }
 
+// Resolves user-facing resizable options into concrete bounds, or null when resizing
+// is unavailable (mobile / non-collapsible / disabled). Shared by Sidebar and the
+// detached content-seam rail so both agree on identical resize behavior.
+function resolveSidebarResizable(
+  resizable: boolean | SidebarResizableOptions,
+  { collapsible, isMobile }: { collapsible: "offcanvas" | "icon" | "none"; isMobile: boolean },
+): SidebarResolvedResizableOptions | null {
+  if (isMobile || collapsible === "none" || !resizable) {
+    return null;
+  }
+  const options = typeof resizable === "boolean" ? {} : resizable;
+  return {
+    maxWidth: options.maxWidth ?? Number.POSITIVE_INFINITY,
+    minWidth: options.minWidth ?? SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH,
+    storageKey: options.storageKey ?? null,
+    ...(options.onResize ? { onResize: options.onResize } : {}),
+    ...(options.shouldAcceptWidth ? { shouldAcceptWidth: options.shouldAcceptWidth } : {}),
+  };
+}
+
+// Supplies the per-instance sidebar context (side + resolved resize options) to a
+// SidebarRail rendered OUTSIDE its <Sidebar> — e.g. the content-seam rail, which must
+// stack above the chat card. Without this the detached rail has no resize config and
+// silently degrades to toggle-only (the "can't drag" regression). Provide the SAME
+// `resizable`/`side` here as on the matching <Sidebar>. Must be used inside a SidebarProvider.
+function SidebarInstanceProvider({
+  side,
+  resizable,
+  collapsible = "offcanvas",
+  children,
+}: {
+  side: "left" | "right";
+  resizable: boolean | SidebarResizableOptions;
+  collapsible?: "offcanvas" | "icon" | "none";
+  children: React.ReactNode;
+}) {
+  const { isMobile } = useSidebar();
+  const resolvedResizable = React.useMemo(
+    () => resolveSidebarResizable(resizable, { collapsible, isMobile }),
+    [collapsible, isMobile, resizable],
+  );
+  const value = React.useMemo<SidebarInstanceContextProps>(
+    () => ({ resizable: resolvedResizable, side }),
+    [resolvedResizable, side],
+  );
+  return (
+    <SidebarInstanceContext.Provider value={value}>{children}</SidebarInstanceContext.Provider>
+  );
+}
+
 function Sidebar({
   side = "left",
   variant = "sidebar",
@@ -193,20 +256,10 @@ function Sidebar({
   transparentSurface?: boolean;
 }) {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
-  const resolvedResizable = React.useMemo<SidebarResolvedResizableOptions | null>(() => {
-    if (isMobile || collapsible === "none" || !resizable) {
-      return null;
-    }
-
-    const options = typeof resizable === "boolean" ? {} : resizable;
-    return {
-      maxWidth: options.maxWidth ?? Number.POSITIVE_INFINITY,
-      minWidth: options.minWidth ?? SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH,
-      storageKey: options.storageKey ?? null,
-      ...(options.onResize ? { onResize: options.onResize } : {}),
-      ...(options.shouldAcceptWidth ? { shouldAcceptWidth: options.shouldAcceptWidth } : {}),
-    };
-  }, [collapsible, isMobile, resizable]);
+  const resolvedResizable = React.useMemo<SidebarResolvedResizableOptions | null>(
+    () => resolveSidebarResizable(resizable, { collapsible, isMobile }),
+    [collapsible, isMobile, resizable],
+  );
   const instanceContextValue = React.useMemo<SidebarInstanceContextProps>(
     () => ({ side, resizable: resolvedResizable }),
     [resolvedResizable, side],
@@ -286,7 +339,7 @@ function Sidebar({
         />
         <div
           className={cn(
-            "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:flex",
+            "fixed inset-y-0 z-0 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:flex",
             side === "left"
               ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
               : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
@@ -308,7 +361,7 @@ function Sidebar({
               fixed positioning, width transitions, and the resize rail hit area. */}
           <div
             className={cn(
-              "flex h-full w-full flex-col group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5",
+              "relative z-0 flex h-full w-full flex-col group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5",
               !transparentSurface && "bg-sidebar",
               innerClassName,
             )}
@@ -325,9 +378,6 @@ function Sidebar({
 
 function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
   const { toggleSidebar } = useSidebar();
-  const { settings } = useAppSettings();
-  const sidebarIconName =
-    settings.sidebarSide === "right" ? "sidebar-hidden-right-wide" : "sidebar-hidden-left-wide";
 
   return (
     <Button
@@ -342,7 +392,7 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       variant="ghost"
       {...props}
     >
-      <CentralIcon name={sidebarIconName} />
+      <CentralIcon name="sidebar-hidden-left-wide" />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
   );
@@ -350,28 +400,21 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
 
 // Desktop headers lose access to the in-sidebar trigger after an off-canvas close,
 // so this companion control reuses the same trigger and only appears when hidden.
+// Traffic-light clearance is owned solely by the host header's
+// DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS gutter — this control adds no offset of
+// its own, so the toggle sits at the same x whether the sidebar is open or closed.
 function SidebarHeaderTrigger({
   className,
   onClick,
   ...props
 }: React.ComponentProps<typeof Button>) {
-  const { isMobile, open, toggleSidebar } = useSidebar();
-  const { settings } = useAppSettings();
+  const { isMobile, open } = useSidebar();
 
   if (!isMobile && open) {
     return null;
   }
 
-  return (
-    <SidebarTrigger
-      className={cn(
-        isElectron && !isMobile && settings.sidebarSide === "left" && "ml-[76px]",
-        className,
-      )}
-      onClick={onClick}
-      {...props}
-    />
-  );
+  return <SidebarTrigger className={className} onClick={onClick} {...props} />;
 }
 
 function clampSidebarWidth(width: number, options: SidebarResolvedResizableOptions): number {
@@ -379,6 +422,7 @@ function clampSidebarWidth(width: number, options: SidebarResolvedResizableOptio
 }
 
 function SidebarRail({
+  placement = "sidebar-shell",
   className,
   onClick,
   onPointerCancel,
@@ -386,9 +430,14 @@ function SidebarRail({
   onPointerMove,
   onPointerUp,
   ...props
-}: React.ComponentProps<"button">) {
+}: React.ComponentProps<"button"> & {
+  /** `content-seam` sits on the chat column edge above the card; `sidebar-shell` stays on the sidebar container. */
+  placement?: "sidebar-shell" | "content-seam";
+}) {
   const { open, toggleSidebar } = useSidebar();
   const sidebarInstance = React.useContext(SidebarInstanceContext);
+  const side = sidebarInstance?.side ?? "left";
+  const isContentSeam = placement === "content-seam";
   const railRef = React.useRef<HTMLButtonElement | null>(null);
   const suppressClickRef = React.useRef(false);
   const resizeStateRef = React.useRef<{
@@ -443,7 +492,10 @@ function SidebarRail({
       if (!resolvedResizable || !open || event.button !== 0) return;
 
       const wrapper = event.currentTarget.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
-      const sidebarRoot = event.currentTarget.closest<HTMLElement>("[data-slot='sidebar']");
+      const sidebarRoot =
+        event.currentTarget.closest<HTMLElement>("[data-slot='sidebar']") ??
+        wrapper?.querySelector<HTMLElement>("[data-slot='sidebar']") ??
+        null;
       if (!wrapper || !sidebarRoot) {
         return;
       }
@@ -618,16 +670,32 @@ function SidebarRail({
     <button
       aria-label={railLabel}
       className={cn(
-        /* disable pointer events only when offcanvas sidebar is collapsed, that's when the rail sits over the native scrollbar on windows and linux. icon mode stays fully clickable. */
-        "-translate-x-1/2 group-data-[side=left]:-right-4 absolute inset-y-0 z-20 hidden w-4 transition-all ease-linear after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] hover:after:bg-sidebar-border group-data-[side=right]:left-0 sm:flex [[data-collapsible=offcanvas][data-state=collapsed]_&]:pointer-events-none",
-        "in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize",
-        "[[data-side=left][data-state=collapsed]_&]:cursor-e-resize [[data-side=right][data-state=collapsed]_&]:cursor-w-resize",
-        "group-data-[collapsible=offcanvas]:translate-x-0 hover:group-data-[collapsible=offcanvas]:bg-sidebar group-data-[collapsible=offcanvas]:after:left-full",
-        "[[data-side=left][data-collapsible=offcanvas]_&]:-right-2",
-        "[[data-side=right][data-collapsible=offcanvas]_&]:-left-2",
+        isContentSeam
+          ? [
+              /* Resize hit-area on the chat card seam. The visible divider is the card's
+                 border-inline edge (follows the rounded corner); hovering this rail
+                 intensifies that border via :has() in index.css — no overlay line here.
+                 This rail lives OUTSIDE <Sidebar>, so `in-data-[side]` cursor variants
+                 never match (no [data-side] ancestor). Set the cursor directly:
+                 `col-resize` (the ↔ handle) when resizing is available — matching the
+                 body cursor used during the drag — else `pointer` for the toggle. */
+              "absolute inset-y-0 z-[25] hidden w-4 sm:flex",
+              canResize ? "cursor-col-resize" : "cursor-pointer",
+              side === "left" ? "left-0 -translate-x-1/2" : "right-0 translate-x-1/2",
+            ]
+          : [
+              /* Legacy: rail anchored to the sidebar shell (right dock, etc.). */
+              "-translate-x-1/2 group-data-[side=left]:-right-4 absolute inset-y-0 z-20 hidden w-4 transition-all ease-linear after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] after:-translate-x-1/2 after:bg-transparent after:transition-colors hover:after:bg-sidebar-border group-data-[side=right]:left-0 sm:flex [[data-collapsible=offcanvas][data-state=collapsed]_&]:pointer-events-none",
+              "in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize",
+              "[[data-side=left][data-state=collapsed]_&]:cursor-e-resize [[data-side=right][data-state=collapsed]_&]:cursor-w-resize",
+              "group-data-[collapsible=offcanvas]:translate-x-0 group-data-[collapsible=offcanvas]:after:left-full",
+              "[[data-side=left][data-collapsible=offcanvas]_&]:-right-2",
+              "[[data-side=right][data-collapsible=offcanvas]_&]:-left-2",
+            ],
         className,
       )}
       data-sidebar="rail"
+      data-placement={placement}
       data-slot="sidebar-rail"
       onClick={handleClick}
       onPointerCancel={handlePointerCancel}
@@ -1051,6 +1119,7 @@ export {
   SidebarHeaderTrigger,
   SidebarHeader,
   SidebarInput,
+  SidebarInstanceProvider,
   SidebarInset,
   SidebarMenu,
   SidebarMenuAction,
@@ -1065,5 +1134,9 @@ export {
   SidebarRail,
   SidebarSeparator,
   SidebarTrigger,
+  SIDEBAR_OFFCANVAS_MOTION_CLASS,
+  SIDEBAR_OFFCANVAS_MOTION_SUPPRESSED_CLASS,
   useSidebar,
 };
+
+export type { SidebarResizableOptions };
