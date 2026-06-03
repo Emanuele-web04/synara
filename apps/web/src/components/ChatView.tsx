@@ -292,7 +292,11 @@ import {
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
-import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
+import {
+  CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
+  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+  CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
+} from "./chat/chatHeaderControls";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SidebarHeaderTrigger } from "./ui/sidebar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
@@ -7410,7 +7414,9 @@ export default function ChatView({
         )}
       >
         {!isElectron && (
-          <header className="border-b border-[color:var(--color-border-light)] px-3 py-2 md:hidden">
+          <header
+            className={cn(CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, "px-3 py-2 md:hidden")}
+          >
             <div className="flex items-center gap-2">
               <SidebarHeaderTrigger className="size-7 shrink-0" />
               <span className="text-sm font-medium text-[var(--color-text-foreground)]">
@@ -7422,8 +7428,8 @@ export default function ChatView({
         {isElectron && (
           <div
             className={cn(
-              "drag-region flex shrink-0 items-center border-b border-[color:var(--color-border-light)] px-5",
-              CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+              CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
+              "drag-region px-5",
               desktopTopBarTrafficLightGutterClassName,
             )}
           >
@@ -8059,7 +8065,8 @@ export default function ChatView({
       {/* Top bar */}
       <header
         className={cn(
-          "border-b border-[color:var(--color-border-light)] px-3 sm:px-5",
+          CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
+          "px-3 sm:px-5",
           "flex items-center",
           CHAT_SURFACE_HEADER_HEIGHT_CLASS,
           isElectron && "drag-region",

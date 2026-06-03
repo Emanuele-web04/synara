@@ -57,6 +57,42 @@ export const COMPOSER_MAX_WIDTH_CLASS_NAME = "max-w-[46rem]";
 /** Main chat column background — matches the theme Background setting exactly. */
 export const CHAT_BACKGROUND_CLASS_NAME = "bg-[var(--color-background-surface)]";
 
+/** Turns the main content column into a distinct, opaque card that floats over the
+ *  (optionally translucent) sidebar instead of sharing one continuous surface with it.
+ *  - `rounded-l-*` gives the rounded left edge against the sidebar.
+ *  - The single seam divider is a 1px inset ring on the card (see `index.css`), so it
+ *    follows the rounded corner. The `SidebarRail`
+ *    (`placement="content-seam"`, z-[25]) is just the resize hit-area and intensifies
+ *    that same border on hover via `:has()` — never put a seam border on the sidebar,
+ *    and never draw a second divider/shadow line on the rail.
+ *  - `data-sidebar-side` on `SidebarProvider` picks left vs right seam geometry.
+ *  - `relative z-[15]` stacks the card above the sidebar shell but below the content-seam
+ *    rail (`z-[25]`), so on collapse the sidebar slides *under* the card (the
+ *    movement goes "over") rather than the card shifting sideways with it.
+ *  - `overflow-hidden` clips children to the rounded edge.
+ *
+ *  Apply this to the OPAQUE content surface (e.g. the chat wrapper, or a
+ *  SidebarInset `surfaceClassName`) — never to a transparent, full-width
+ *  `SidebarInset` shell, or its raised z-index would cover and block the sidebar. */
+export const CHAT_CONTENT_CARD_CLASS_NAME =
+  "chat-content-card relative z-[15] overflow-hidden rounded-l-[var(--app-content-card-radius,0.75rem)]";
+
+/** Opaque chat surface that floats as a card over the sidebar: column background + card chrome.
+ *  Apply to the element that should read as the raised card (the chat content wrapper, or a
+ *  SidebarInset `surfaceClassName`). Routes with their own background (e.g. settings) combine
+ *  `CHAT_CONTENT_CARD_CLASS_NAME` with their own background token instead. */
+export const CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME = `${CHAT_BACKGROUND_CLASS_NAME} ${CHAT_CONTENT_CARD_CLASS_NAME}`;
+
+/** Full-height inset shell for chat-style routes (settings, workspace, single thread pane).
+ *  The opaque card lives on the SidebarInset `surfaceClassName`, never on this transparent
+ *  shell, so it never covers/blocks the sidebar. */
+export const CHAT_ROUTE_INSET_SHELL_CLASS_NAME =
+  "h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground";
+
+/** Outer viewport shell for the split/single thread content wrapper that carries the card. */
+export const CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME =
+  "flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden";
+
 /** Shared max width for the chat column (transcript + composer). */
 export const CHAT_COLUMN_MAX_WIDTH_CLASS_NAME = COMPOSER_MAX_WIDTH_CLASS_NAME;
 /** Horizontal padding shared by the transcript and composer columns. */
@@ -154,7 +190,7 @@ export const COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME = "[&_p]:m-0";
 /** Horizontal inset shared by the composer editor and bottom bar. */
 export const COMPOSER_HORIZONTAL_INSET_CLASS_NAME = "px-3";
 /** Shared padding around the composer prompt editor. */
-export const COMPOSER_EDITOR_PADDING_CLASS_NAME = `relative ${COMPOSER_HORIZONTAL_INSET_CLASS_NAME} pt-3.5 pb-4`;
+export const COMPOSER_EDITOR_PADDING_CLASS_NAME = `relative ${COMPOSER_HORIZONTAL_INSET_CLASS_NAME} pt-3 pb-4`;
 /** Bottom bar row — flush to the composer shell edges. */
 export const COMPOSER_FOOTER_ROW_CLASS_NAME = "flex items-center justify-between px-2 pb-1.5";
 export const COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME =

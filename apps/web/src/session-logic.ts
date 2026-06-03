@@ -18,6 +18,7 @@ import {
 } from "@t3tools/shared/subagents";
 import { summarizeToolRawOutput } from "@t3tools/shared/toolOutputSummary";
 import { deriveReadableToolTitle, normalizeCompactToolLabel } from "./lib/toolCallLabel";
+import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
 import { stripProposedPlanBlocksFromText } from "./proposedPlan";
 
 import type {
@@ -239,20 +240,6 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
     default:
       return null;
   }
-}
-
-function isStalePendingRequestFailureDetail(detail: string | undefined): boolean {
-  const normalized = detail?.toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  return (
-    normalized.includes("stale pending approval request") ||
-    normalized.includes("stale pending user-input request") ||
-    normalized.includes("unknown pending approval request") ||
-    normalized.includes("unknown pending permission request") ||
-    normalized.includes("unknown pending user-input request")
-  );
 }
 
 export function derivePendingApprovals(

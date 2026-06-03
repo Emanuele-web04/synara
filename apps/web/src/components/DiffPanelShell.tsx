@@ -3,7 +3,10 @@ import type { ReactNode } from "react";
 import { isElectron } from "~/env";
 import { cn } from "~/lib/utils";
 
-import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
+import {
+  CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
+  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+} from "./chat/chatHeaderControls";
 import { Skeleton } from "./ui/skeleton";
 
 export type DiffPanelMode = "inline" | "sheet" | "sidebar";
@@ -13,7 +16,7 @@ function getDiffPanelHeaderRowClassName(mode: DiffPanelMode) {
   return cn(
     "flex items-center justify-between gap-2 px-4",
     CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-    shouldUseDragRegion && "drag-region border-b border-border",
+    shouldUseDragRegion && cn("drag-region", CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME),
   );
 }
 
@@ -36,7 +39,7 @@ export function DiffPanelShell(props: {
       {shouldUseDragRegion ? (
         <div className={getDiffPanelHeaderRowClassName(props.mode)}>{props.header}</div>
       ) : (
-        <div className="border-b border-border">
+        <div className={CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME}>
           <div className={getDiffPanelHeaderRowClassName(props.mode)}>{props.header}</div>
         </div>
       )}

@@ -980,10 +980,13 @@ function buildLightDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
       theme.theme.accent,
       0.12 + theme.contrast * 0.045,
     ),
-    border: formatRgba(theme.ink, 0.06 + theme.contrast * 0.04),
+    // Light borders run slightly stronger than Codex's base derivation so the chat
+    // seam (--color-border) and chat/header dividers (--color-border-light) read
+    // clearly on white surfaces. Keep the bump small; don't exceed borderHeavy.
+    border: formatRgba(theme.ink, 0.09 + theme.contrast * 0.04),
     borderFocus: theme.theme.accent,
     borderHeavy: formatRgba(theme.ink, 0.09 + theme.contrast * 0.06),
-    borderLight: formatRgba(theme.ink, 0.04 + theme.contrast * 0.02),
+    borderLight: formatRgba(theme.ink, 0.07 + theme.contrast * 0.02),
     buttonPrimaryBackground: theme.theme.ink,
     buttonPrimaryBackgroundActive: formatRgba(theme.ink, 0.1 + theme.contrast * 0.12),
     buttonPrimaryBackgroundHover: formatRgba(theme.ink, 0.05 + theme.contrast * 0.06),

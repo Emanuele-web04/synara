@@ -11,15 +11,18 @@ import { isMacPlatform } from "~/lib/utils";
 
 /**
  * Tailwind padding that clears the macOS traffic light cluster
- * (positioned at x=16, y=18 in the Electron BrowserWindow).
+ * (positioned at x=16, y=18 in the Electron BrowserWindow, see apps/desktop main).
  *
- * Both the base and `sm:` variants are emitted so this gutter wins over any
- * responsive horizontal-padding class (e.g. `sm:px-5`) on the surrounding top
- * bar — `twMerge` only resolves conflicts within the same breakpoint.
+ * The 3-button cluster ends at roughly x=68 (16px inset + ~52px cluster); this
+ * gutter keeps the leading controls right next to the lights (~10px breathing
+ * room) instead of floating far to the right. Both the base and `sm:` variants
+ * are emitted so this gutter wins over any responsive horizontal-padding class
+ * (e.g. `sm:px-5`) — `twMerge` only resolves conflicts within the same breakpoint.
  *
- * Kept as a module-level constant so every top bar uses the same gutter width.
+ * Single source of truth: every top bar AND the open-sidebar header use this so
+ * the leading controls sit at the same x whether the sidebar is open or closed.
  */
-export const DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS = "pl-[90px] sm:pl-[90px]";
+export const DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS = "pl-[78px] sm:pl-[78px]";
 
 /**
  * Pure helper: should a top bar at the left edge of the desktop window reserve

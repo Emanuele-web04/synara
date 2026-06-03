@@ -26,6 +26,33 @@ import { Button } from "../ui/button";
 export const CHAT_SURFACE_HEADER_HEIGHT_CLASS = "h-[46px]";
 
 /**
+ * Bottom hairline shared by every chat-surface chrome bar (chat header, workspace
+ * header, dock pane + tab strip headers, diff panel header, single-thread skeleton).
+ * Implemented as the `.chat-surface-divider` component class (a 1px background gradient,
+ * see index.css) rather than a CSS border: it reads from the SAME `--app-surface-divider`
+ * token as the vertical sidebar↔chat seam, and — because it's a gradient — the seam corner
+ * retracts it 1px so the horizontal hairline butts against the vertical seam instead of
+ * crossing it (overlapping 1px lines double their alpha into a brighter dot). Apply
+ * alongside {@link CHAT_SURFACE_HEADER_HEIGHT_CLASS} so heights and dividers line up.
+ */
+export const CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME = "chat-surface-divider";
+
+/**
+ * Standard chat-surface chrome-bar row: the shared flex baseline + fixed height + bottom
+ * hairline that the simple headers all repeat (empty-state chat header, dock pane header,
+ * right-dock tab strip, single-thread skeleton). Call sites add only their own gap/padding
+ * and extras (drag-region, traffic-light gutter). Headers with bespoke layout (the main
+ * chat header with its split toolbar, the diff panel header with `justify-between`) compose
+ * {@link CHAT_SURFACE_HEADER_HEIGHT_CLASS} + {@link CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME}
+ * directly instead of forcing this baseline.
+ */
+export const CHAT_SURFACE_HEADER_ROW_CLASS_NAME = cn(
+  "flex shrink-0 items-center",
+  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+  CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
+);
+
+/**
  * Force header control glyphs to full-strength foreground. The base Button caps
  * SVGs at `opacity-80` and the `chrome` variant tints them with the muted
  * `foreground-secondary` color, which together read as washed-out gray icons in

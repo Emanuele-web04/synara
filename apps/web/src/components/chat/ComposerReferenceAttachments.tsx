@@ -30,7 +30,7 @@ export function ComposerReferenceAttachments({
   }
 
   return (
-    <div className="mb-2.5 flex flex-wrap gap-2">
+    <div className="mb-2 flex flex-wrap gap-2">
       <AssistantSelectionsSummaryChip
         selections={assistantSelections}
         onRemove={assistantSelections.length > 0 ? onRemoveAssistantSelections : undefined}

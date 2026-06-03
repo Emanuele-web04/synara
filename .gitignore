@@ -17,6 +17,7 @@ release/
 /.dpcode/backups
 /.dpcode-*/
 /.synara/
+/.synara-*/
 .idea/
 apps/web/.playwright
 apps/web/playwright-report

@@ -14,8 +14,15 @@ import { useTerminalSurfaceController } from "~/hooks/useTerminalSurfaceControll
 import { cn } from "~/lib/utils";
 import { resolveTerminalNewAction } from "~/lib/terminalNewAction";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
-import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
-import { CHAT_BACKGROUND_CLASS_NAME } from "./chat/composerPickerStyles";
+import {
+  CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
+  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+} from "./chat/chatHeaderControls";
+import {
+  CHAT_BACKGROUND_CLASS_NAME,
+  CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
+  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
+} from "./chat/composerPickerStyles";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import WorkspaceSettingsSheet from "./WorkspaceSettingsSheet";
 import { onServerWelcome } from "~/wsNativeApi";
@@ -286,8 +293,8 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
 
   return (
     <SidebarInset
-      className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground"
-      surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
+      className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
+      surfaceClassName={CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME}
     >
       <div
         className={cn(
@@ -297,7 +304,8 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
       >
         <header
           className={cn(
-            "border-b border-border px-3 sm:px-5",
+            CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
+            "px-3 sm:px-5",
             desktopTopBarTrafficLightGutterClassName,
           )}
         >

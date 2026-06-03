@@ -216,6 +216,7 @@ import {
 import { resolveRestorableThreadRoute, type LastThreadRoute } from "../chatRouteRestore";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS } from "~/hooks/useDesktopTopBarGutter";
 import { cn } from "~/lib/utils";
 import {
   disclosureContentClassName,
@@ -239,6 +240,7 @@ import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
   SIDEBAR_ROW_HOVER_CLASS_NAME,
   SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+  SIDEBAR_SECTION_LABEL_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
 import { SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME } from "./chat/composerPickerStyles";
@@ -5290,21 +5292,21 @@ export default function Sidebar() {
 
   const titlebarControls = (
     <div className="hidden shrink-0 items-center gap-0.5 md:flex">
-      <AppNavigationButtons className="ms-0" />
       <SidebarTrigger
         className="size-7 shrink-0 text-muted-foreground/75 hover:text-foreground"
         aria-label="Toggle thread sidebar"
       />
+      <AppNavigationButtons className="ms-0" />
     </div>
   );
 
   const headerControls = (
     <div className="ml-auto hidden shrink-0 items-center gap-0.5 md:flex">
-      <AppNavigationButtons className="ms-0" />
       <SidebarTrigger
         className="size-7 shrink-0 text-muted-foreground/75 hover:text-foreground"
         aria-label="Toggle thread sidebar"
       />
+      <AppNavigationButtons className="ms-0" />
     </div>
   );
 
@@ -5323,7 +5325,7 @@ export default function Sidebar() {
             className={cn(
               "drag-region flex-row items-center gap-2 px-4 py-0 font-system-ui",
               CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-              appSettings.sidebarSide === "left" && "pl-[90px]",
+              appSettings.sidebarSide === "left" && DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS,
             )}
           >
             {titlebarControls}
@@ -5417,7 +5419,7 @@ export default function Sidebar() {
               <SidebarGroup className="px-1.5 pt-1 pb-1.5">
                 <div className="my-2 h-px w-full bg-border" />
                 <div className="mb-1.5 flex items-center px-2">
-                  <span className="text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/58">
+                  <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>
                     Workspace
                   </span>
                 </div>
@@ -5533,7 +5535,7 @@ export default function Sidebar() {
                 {pinnedThreads.length > 0 ? (
                   <>
                     <div className="my-1 flex items-center justify-between px-2 py-1">
-                      <span className="text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/58">
+                      <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>
                         Pinned
                       </span>
                     </div>
@@ -5544,7 +5546,7 @@ export default function Sidebar() {
                   </>
                 ) : null}
                 <div className="my-1 flex items-center justify-between px-2 py-1">
-                  <span className="text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/58">
+                  <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>
                     Threads
                   </span>
                   <SidebarSectionToolbar>

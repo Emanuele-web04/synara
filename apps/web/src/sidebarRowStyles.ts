@@ -25,6 +25,13 @@ export const SIDEBAR_ROW_ACTIVE_CLASS_NAME =
 
 export const SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME = "text-foreground/89";
 
+/** Dimmer idle label color shared by project header rows, thread rows, and settings nav rows. */
+export const SIDEBAR_ROW_MUTED_TEXT_CLASS_NAME = "text-muted-foreground/79";
+
+/** Section label ("Threads"/"Pinned"/"Workspace" and settings "App"/"Synara"). */
+export const SIDEBAR_SECTION_LABEL_CLASS_NAME =
+  "text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/58";
+
 /** Project/chat/settings header rows and settings sidebar nav items. */
 export const SIDEBAR_HEADER_ROW_CLASS_NAME = [
   "flex w-full min-w-0 cursor-pointer items-center text-left select-none",
