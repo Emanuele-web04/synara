@@ -129,7 +129,7 @@ export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME = `relative overflow-hidde
 
 /** Anchors the command menu above the composer editor without shifting layout. */
 export const COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME =
-  "pointer-events-auto absolute inset-x-0 bottom-full z-20 mb-2 overflow-visible px-1.5 pt-2";
+  "pointer-events-auto absolute inset-x-0 bottom-full z-20 mb-2 overflow-visible px-1 pt-2";
 
 /** Default command menu row — transparent until hover or keyboard highlight. */
 export const COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME =
@@ -151,10 +151,10 @@ export const COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME = "min-h-[2lh]";
 /** Lexical wraps lines in `<p>` nodes; reset default margins so text sits flush above the footer. */
 export const COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME = "[&_p]:m-0";
 /** Horizontal inset shared by the composer editor and bottom bar. */
-export const COMPOSER_HORIZONTAL_INSET_CLASS_NAME = "px-3.5";
+export const COMPOSER_HORIZONTAL_INSET_CLASS_NAME = "px-3";
 /** Shared padding around the composer prompt editor. */
-export const COMPOSER_EDITOR_PADDING_CLASS_NAME = `relative ${COMPOSER_HORIZONTAL_INSET_CLASS_NAME} pt-3.5 pb-4.5`;
+export const COMPOSER_EDITOR_PADDING_CLASS_NAME = `relative ${COMPOSER_HORIZONTAL_INSET_CLASS_NAME} pt-3.5 pb-4`;
 /** Bottom bar row — flush to the composer shell edges. */
-export const COMPOSER_FOOTER_ROW_CLASS_NAME = "flex items-center justify-between px-2.5 pb-2";
+export const COMPOSER_FOOTER_ROW_CLASS_NAME = "flex items-center justify-between px-2 pb-1.5";
 export const COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME =
-  "flex items-center justify-end gap-2 px-2.5 pb-2";
+  "flex items-center justify-end gap-2 px-2 pb-1.5";
