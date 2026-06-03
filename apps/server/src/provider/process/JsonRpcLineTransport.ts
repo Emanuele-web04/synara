@@ -142,3 +142,106 @@ export const makeCodexProcessTransport = (
       close: closeScope,
     } satisfies JsonRpcLineTransport;
   });
+
+/**
+ * Drives an {@link InMemoryJsonRpcTransport} from outside the consumer: push
+ * scripted inbound/stderr lines, read the outbound frames the consumer wrote,
+ * and signal process exit. Backs both the process-free test fake (no real
+ * `codex app-server`) and, later, the remote runtime path where a runtime
+ * adapter forwards lines to and from a remote exec channel.
+ */
+export interface InMemoryTransportController {
+  /** Feed one already-line-framed inbound message to the consumer. */
+  readonly pushInbound: (line: string) => Effect.Effect<void>;
+  /** Feed an inbound message serialized as a single JSON line. */
+  readonly pushInboundMessage: (message: unknown) => Effect.Effect<void>;
+  /** Feed one stderr line to the consumer's side channel. */
+  readonly pushStderr: (line: string) => Effect.Effect<void>;
+  /**
+   * Take the next outbound frame the consumer wrote (suspends until available).
+   * Fails with `Cause.Done` once the transport closes and the queue drains, so
+   * a reader loop unblocks on teardown.
+   */
+  readonly takeOutbound: Effect.Effect<string, Cause.Done<void>>;
+  /** Take and JSON-parse the next outbound frame. */
+  readonly takeOutboundMessage: Effect.Effect<unknown, Cause.Done<void>>;
+  /** Resolve the consumer's `exit` deferred once, if not already done. */
+  readonly signalExit: (status: ProcessExit) => Effect.Effect<void>;
+}
+
+export interface InMemoryJsonRpcTransport {
+  readonly transport: JsonRpcLineTransport;
+  readonly controller: InMemoryTransportController;
+}
+
+/**
+ * In-memory {@link JsonRpcLineTransport}, mirroring `effect-acp`'s
+ * `makeInMemoryStdio`. Inbound/stderr are fed from queues the controller pushes
+ * into; `send` enqueues line-framed JSON the controller reads back. No process
+ * is spawned, so it runs without `ChildProcessSpawner` and proves the consumer
+ * is transport-agnostic.
+ */
+export const makeInMemoryJsonRpcTransport = (): Effect.Effect<InMemoryJsonRpcTransport> =>
+  Effect.gen(function* () {
+    const inboundQueue = yield* Queue.unbounded<string, Cause.Done<void>>();
+    const stderrQueue = yield* Queue.unbounded<string, Cause.Done<void>>();
+    const outboundQueue = yield* Queue.unbounded<string, Cause.Done<void>>();
+    const exit = yield* Deferred.make<ProcessExit>();
+    const alive = { value: true };
+
+    const send: JsonRpcLineTransport["send"] = (message) =>
+      Deferred.isDone(exit).pipe(
+        Effect.flatMap((done) =>
+          done
+            ? Effect.fail(
+                new TransportClosedError({ detail: "Cannot write to a closed transport." }),
+              )
+            : Queue.offer(outboundQueue, JSON.stringify(message)).pipe(Effect.asVoid),
+        ),
+      );
+
+    // `close` ends the outbound queue too so a reader suspended on the next
+    // frame (the test/runtime drain loop) unblocks instead of leaking.
+    const close = Effect.sync(() => {
+      alive.value = false;
+    }).pipe(
+      Effect.flatMap(() => Queue.end(inboundQueue)),
+      Effect.flatMap(() => Queue.end(stderrQueue)),
+      Effect.flatMap(() => Queue.end(outboundQueue)),
+      Effect.flatMap(() =>
+        Deferred.done(exit, Exit.succeed({ code: null, signal: null } satisfies ProcessExit)),
+      ),
+      Effect.asVoid,
+    );
+
+    const transport: JsonRpcLineTransport = {
+      send,
+      inbound: Stream.fromQueue(inboundQueue),
+      stderr: Stream.fromQueue(stderrQueue),
+      exit,
+      isAlive: Effect.sync(() => alive.value),
+      close,
+    };
+
+    const signalExit = (status: ProcessExit) =>
+      Effect.sync(() => {
+        alive.value = false;
+      }).pipe(
+        Effect.flatMap(() => Deferred.done(exit, Exit.succeed(status))),
+        Effect.asVoid,
+      );
+
+    const controller: InMemoryTransportController = {
+      pushInbound: (line) => Queue.offer(inboundQueue, line).pipe(Effect.asVoid),
+      pushInboundMessage: (message) =>
+        Queue.offer(inboundQueue, JSON.stringify(message)).pipe(Effect.asVoid),
+      pushStderr: (line) => Queue.offer(stderrQueue, line).pipe(Effect.asVoid),
+      takeOutbound: Queue.take(outboundQueue),
+      takeOutboundMessage: Queue.take(outboundQueue).pipe(
+        Effect.map((line) => JSON.parse(line) as unknown),
+      ),
+      signalExit,
+    };
+
+    return { transport, controller };
+  });

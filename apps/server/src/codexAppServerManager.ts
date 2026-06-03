@@ -656,6 +656,25 @@ export interface CodexAppServerManagerEvents {
   event: [event: ProviderEvent];
 }
 
+export interface CodexTransportFactoryInput {
+  readonly binaryPath: string;
+  readonly cwd: string;
+  readonly homePath?: string;
+}
+
+export type CodexTransportFactory = (
+  input: CodexTransportFactoryInput,
+) => Promise<JsonRpcLineTransport>;
+
+export interface CodexAppServerManagerOptions {
+  /**
+   * Overrides the process-spawning transport with a supplied
+   * `JsonRpcLineTransport`. Used by tests to drive the Codex protocol against a
+   * scripted in-memory transport, and reserved for the remote runtime path.
+   */
+  readonly createTransport?: CodexTransportFactory;
+}
+
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
   private readonly discoverySessions = new Map<string, CodexSessionContext>();
@@ -667,9 +686,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
   private readonly services: ServiceMap.ServiceMap<never> | undefined;
-  constructor(services?: ServiceMap.ServiceMap<never>) {
+  private readonly transportFactory: CodexTransportFactory | undefined;
+  constructor(services?: ServiceMap.ServiceMap<never>, options?: CodexAppServerManagerOptions) {
     super();
     this.services = services;
+    this.transportFactory = options?.createTransport;
     this.runPromise = services ? Effect.runPromiseWith(services) : Effect.runPromise;
   }
 
@@ -684,11 +705,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return (this.services ? Effect.runPromiseWith(this.services) : Effect.runPromise)(erased);
   }
 
-  private async createTransport(input: {
-    readonly binaryPath: string;
-    readonly cwd: string;
-    readonly homePath?: string;
-  }): Promise<JsonRpcLineTransport> {
+  private async createTransport(input: CodexTransportFactoryInput): Promise<JsonRpcLineTransport> {
+    if (this.transportFactory) {
+      return this.transportFactory(input);
+    }
     const env = buildCodexProcessEnv(input.homePath ? { homePath: input.homePath } : {});
     return this.runTransportEffect(
       makeCodexProcessTransport({
@@ -2563,6 +2583,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     readonly cwd: string;
     readonly homePath?: string;
   }): void {
+    // The CLI version gate runs `codex --version` against this host, so it only
+    // applies to the local-process transport. A supplied transport (in-memory
+    // test fake or, later, a remote runtime) has no local binary to probe.
+    if (this.transportFactory) {
+      return;
+    }
     assertSupportedCodexCliVersion(input);
   }
 

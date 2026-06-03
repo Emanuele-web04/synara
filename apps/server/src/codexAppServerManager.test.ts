@@ -11,7 +11,8 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ApprovalRequestId, ThreadId } from "@t3tools/contracts";
+import { Effect } from "effect";
+import { ApprovalRequestId, ThreadId, type ProviderEvent } from "@t3tools/contracts";
 
 import {
   buildCodexProcessEnv,
@@ -30,6 +31,11 @@ import {
   readCodexAccountSnapshot,
   resolveCodexModelForAccount,
 } from "./codexAppServerManager";
+import {
+  makeInMemoryJsonRpcTransport,
+  type InMemoryTransportController,
+  type ProcessExit,
+} from "./provider/process/JsonRpcLineTransport";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const fullAccessTurnOverrides = {
@@ -2608,6 +2614,338 @@ describe("handleServerNotification error normalization", () => {
     });
 
     expect(updateSession).not.toHaveBeenCalled();
+  });
+});
+
+interface OutboundFrame {
+  readonly method?: string;
+  readonly id?: string | number;
+  readonly params?: unknown;
+  readonly result?: unknown;
+  readonly error?: unknown;
+}
+
+/**
+ * Drives the Codex protocol against a scripted in-memory transport: no real
+ * `codex app-server` process is spawned. A background responder reads each
+ * outbound JSON-RPC request the manager writes and answers it from `responders`
+ * (keyed by method); client notifications and reply frames are recorded for
+ * assertions. This is the seam that replaces the old `vi.spyOn`-on-privates
+ * harnesses for end-to-end coverage.
+ */
+function createInMemoryCodexHarness(options?: {
+  readonly responders?: Record<string, (frame: OutboundFrame) => unknown>;
+}) {
+  const built = Effect.runSync(makeInMemoryJsonRpcTransport());
+  const controller: InMemoryTransportController = built.controller;
+  const transport = built.transport;
+
+  const outboundFrames: OutboundFrame[] = [];
+  const events: ProviderEvent[] = [];
+
+  const manager = new CodexAppServerManager(undefined, {
+    createTransport: async () => built.transport,
+  });
+  manager.on("event", (event) => {
+    events.push(event);
+  });
+
+  const defaultResponders: Record<string, (frame: OutboundFrame) => unknown> = {
+    initialize: () => ({ userAgent: "codex-test" }),
+    "model/list": () => ({ items: [] }),
+    "account/read": () => ({ account: { type: "apiKey" } }),
+    "thread/start": () => ({ thread: { id: "provider_thread_1" } }),
+  };
+  const responders = { ...defaultResponders, ...options?.responders };
+
+  // The loop terminates when `takeOutboundMessage` fails (the outbound queue is
+  // ended by `transport.close` on teardown), not via an external flag.
+  const pump = (async () => {
+    for (;;) {
+      let frame: OutboundFrame;
+      try {
+        frame = (await Effect.runPromise(controller.takeOutboundMessage)) as OutboundFrame;
+      } catch {
+        return;
+      }
+      outboundFrames.push(frame);
+      const isRequest = typeof frame.method === "string" && frame.id !== undefined;
+      if (!isRequest) {
+        continue;
+      }
+      const responder = responders[frame.method as string];
+      const result = responder ? responder(frame) : {};
+      await Effect.runPromise(controller.pushInboundMessage({ id: frame.id, result }));
+    }
+  })();
+
+  return {
+    manager,
+    controller,
+    events,
+    outboundFrames,
+    pushInbound: (message: unknown) => Effect.runPromise(controller.pushInboundMessage(message)),
+    pushStderr: (line: string) => Effect.runPromise(controller.pushStderr(line)),
+    signalExit: (status: ProcessExit) => Effect.runPromise(controller.signalExit(status)),
+    stop: async () => {
+      manager.stopAll();
+      // Ends the outbound queue so a suspended responder take unblocks even when
+      // the session was already torn down by an earlier transport exit.
+      await Effect.runPromise(transport.close).catch(() => {});
+      await pump.catch(() => {});
+    },
+  };
+}
+
+const waitFor = async (predicate: () => boolean, label: string): Promise<void> => {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${label}.`);
+};
+
+describe("Codex protocol over an in-memory transport", () => {
+  it("runs initialize, initialized, and thread/start end-to-end with no real process", async () => {
+    const harness = createInMemoryCodexHarness();
+    try {
+      const session = await harness.manager.startSession({
+        threadId: asThreadId("thread_mem_1"),
+        provider: "codex",
+        cwd: "/tmp/mem-workspace",
+        runtimeMode: "full-access",
+      });
+
+      expect(session.status).toBe("ready");
+      expect(session.resumeCursor).toEqual({ threadId: "provider_thread_1" });
+
+      const methods = harness.outboundFrames.map((frame) => frame.method);
+      expect(methods).toEqual([
+        "initialize",
+        "initialized",
+        "model/list",
+        "account/read",
+        "thread/start",
+      ]);
+
+      const initializeFrame = harness.outboundFrames.find((frame) => frame.method === "initialize");
+      expect(initializeFrame?.params).toEqual(buildCodexInitializeParams());
+
+      // `initialized` is a bare notification: a method, no id, no params.
+      const initializedFrame = harness.outboundFrames.find(
+        (frame) => frame.method === "initialized",
+      );
+      expect(initializedFrame).toEqual({ method: "initialized" });
+      expect(initializedFrame?.id).toBeUndefined();
+
+      const threadStartFrame = harness.outboundFrames.find(
+        (frame) => frame.method === "thread/start",
+      );
+      expect(threadStartFrame?.params).toMatchObject({
+        cwd: "/tmp/mem-workspace",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      });
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("starts a turn and streams a turn/completed notification back through the transport", async () => {
+    const harness = createInMemoryCodexHarness({
+      responders: {
+        "turn/start": () => ({ turn: { id: "turn_mem_1" } }),
+      },
+    });
+    try {
+      await harness.manager.startSession({
+        threadId: asThreadId("thread_mem_turn"),
+        provider: "codex",
+        cwd: "/tmp/mem-workspace",
+        runtimeMode: "full-access",
+      });
+
+      const turn = await harness.manager.sendTurn({
+        threadId: asThreadId("thread_mem_turn"),
+        input: "Summarize the repo",
+      });
+      expect(turn.turnId).toBe("turn_mem_1");
+
+      const turnStartFrame = harness.outboundFrames.find((frame) => frame.method === "turn/start");
+      expect(turnStartFrame?.params).toMatchObject({
+        threadId: "provider_thread_1",
+        approvalPolicy: "never",
+        input: [{ type: "text", text: "Summarize the repo", text_elements: [] }],
+      });
+
+      await harness.pushInbound({
+        method: "turn/completed",
+        params: {
+          threadId: "provider_thread_1",
+          turn: { id: "turn_mem_1", status: "completed" },
+        },
+      });
+
+      await waitFor(
+        () =>
+          harness.events.some(
+            (event) => event.kind === "notification" && event.method === "turn/completed",
+          ),
+        "turn/completed projection",
+      );
+      expect(harness.manager.listSessions()[0]?.status).toBe("ready");
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("replies to a server-initiated approval request over the reverse channel", async () => {
+    const harness = createInMemoryCodexHarness();
+    try {
+      await harness.manager.startSession({
+        threadId: asThreadId("thread_mem_approval"),
+        provider: "codex",
+        cwd: "/tmp/mem-workspace",
+        runtimeMode: "approval-required",
+      });
+
+      await harness.pushInbound({
+        jsonrpc: "2.0",
+        id: 4242,
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "provider_thread_1",
+          turnId: "turn_mem_1",
+          itemId: "call_mem_1",
+          command: "bun install",
+        },
+      });
+
+      await waitFor(
+        () =>
+          harness.events.some(
+            (event) =>
+              event.kind === "request" && event.method === "item/commandExecution/requestApproval",
+          ),
+        "approval request projection",
+      );
+
+      const approvalEvent = harness.events.find(
+        (event) =>
+          event.kind === "request" && event.method === "item/commandExecution/requestApproval",
+      );
+      const requestId = approvalEvent?.requestId;
+      expect(requestId).toBeDefined();
+
+      await harness.manager.respondToRequest(
+        asThreadId("thread_mem_approval"),
+        requestId as ApprovalRequestId,
+        "accept",
+      );
+
+      // `writeMessage` fires the reply through the transport asynchronously, so
+      // wait for the responder to drain it before asserting.
+      await waitFor(
+        () => harness.outboundFrames.some((frame) => frame.id === 4242),
+        "approval reply frame",
+      );
+      const approvalReply = harness.outboundFrames.find(
+        (frame) => frame.id === 4242 && frame.method === undefined,
+      );
+      expect(approvalReply).toEqual({ id: 4242, result: { decision: "accept" } });
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("replies to a server-initiated user-input request over the reverse channel", async () => {
+    const harness = createInMemoryCodexHarness();
+    try {
+      await harness.manager.startSession({
+        threadId: asThreadId("thread_mem_input"),
+        provider: "codex",
+        cwd: "/tmp/mem-workspace",
+        runtimeMode: "full-access",
+      });
+
+      await harness.pushInbound({
+        jsonrpc: "2.0",
+        id: 7,
+        method: "item/tool/requestUserInput",
+        params: {
+          threadId: "provider_thread_1",
+          turnId: "turn_mem_input",
+          itemId: "input_mem_1",
+        },
+      });
+
+      await waitFor(
+        () =>
+          harness.events.some(
+            (event) => event.kind === "request" && event.method === "item/tool/requestUserInput",
+          ),
+        "user-input request projection",
+      );
+
+      const inputEvent = harness.events.find(
+        (event) => event.kind === "request" && event.method === "item/tool/requestUserInput",
+      );
+      const requestId = inputEvent?.requestId;
+      expect(requestId).toBeDefined();
+
+      await harness.manager.respondToUserInput(
+        asThreadId("thread_mem_input"),
+        requestId as ApprovalRequestId,
+        { scope: "All request methods" },
+      );
+
+      await waitFor(
+        () => harness.outboundFrames.some((frame) => frame.id === 7),
+        "user-input reply frame",
+      );
+      const inputReply = harness.outboundFrames.find(
+        (frame) => frame.id === 7 && frame.method === undefined,
+      );
+      expect(inputReply).toEqual({
+        id: 7,
+        result: { answers: { scope: { answers: ["All request methods"] } } },
+      });
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("surfaces transport exit as a session/exited lifecycle event", async () => {
+    const harness = createInMemoryCodexHarness();
+    try {
+      await harness.manager.startSession({
+        threadId: asThreadId("thread_mem_exit"),
+        provider: "codex",
+        cwd: "/tmp/mem-workspace",
+        runtimeMode: "full-access",
+      });
+
+      await harness.signalExit({ code: 1, signal: null });
+
+      await waitFor(
+        () =>
+          harness.events.some(
+            (event) => event.kind === "session" && event.method === "session/exited",
+          ),
+        "session/exited projection",
+      );
+
+      const exitEvent = harness.events.find(
+        (event) => event.kind === "session" && event.method === "session/exited",
+      );
+      expect(exitEvent?.message).toContain("code=1");
+      expect(harness.manager.hasSession(asThreadId("thread_mem_exit"))).toBe(false);
+    } finally {
+      await harness.stop();
+    }
   });
 });
 
