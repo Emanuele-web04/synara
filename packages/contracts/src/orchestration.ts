@@ -169,6 +169,7 @@ export const OpenCodeProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   serverUrl: Schema.optional(TrimmedNonEmptyString),
   serverPassword: Schema.optional(TrimmedNonEmptyString),
+  experimentalWebSockets: Schema.optional(Schema.Boolean),
 });
 
 export const KiloProviderStartOptions = Schema.Struct({

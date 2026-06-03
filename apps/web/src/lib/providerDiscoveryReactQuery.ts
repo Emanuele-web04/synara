@@ -48,8 +48,12 @@ export const providerDiscoveryQueryKeys = {
   all: ["provider-discovery"] as const,
   composerCapabilities: (provider: ProviderKind) =>
     ["provider-discovery", "composer-capabilities", provider] as const,
-  commands: (provider: ProviderKind, cwd: string | null, query: string, agentDir: string | null) =>
-    ["provider-discovery", "commands", provider, cwd, query, agentDir] as const,
+  commands: (
+    provider: ProviderKind,
+    cwd: string | null,
+    agentDir: string | null,
+    connectionKey: string | null,
+  ) => ["provider-discovery", "commands", provider, cwd, agentDir, connectionKey] as const,
   skills: (provider: ProviderKind, cwd: string | null, query: string, agentDir: string | null) =>
     ["provider-discovery", "skills", provider, cwd, query, agentDir] as const,
   plugins: (provider: ProviderKind, cwd: string | null) =>
@@ -113,16 +117,25 @@ export function providerCommandsQueryOptions(input: {
   provider: ProviderKind;
   cwd: string | null;
   threadId?: string | null;
+  binaryPath?: string | null;
+  serverUrl?: string | null;
+  serverPassword?: string | null;
+  experimentalWebSockets?: boolean;
   agentDir?: string | null;
-  query: string;
   enabled?: boolean;
 }) {
+  const connectionKey = JSON.stringify({
+    binaryPath: input.binaryPath ?? null,
+    serverUrl: input.serverUrl ?? null,
+    hasServerPassword: Boolean(input.serverPassword),
+    experimentalWebSockets: input.experimentalWebSockets ?? null,
+  });
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.commands(
       input.provider,
       input.cwd,
-      input.query,
       input.agentDir ?? null,
+      connectionKey,
     ),
     queryFn: async () => {
       const api = ensureNativeApi();
@@ -133,6 +146,12 @@ export function providerCommandsQueryOptions(input: {
         provider: input.provider,
         cwd: input.cwd,
         ...(input.threadId ? { threadId: input.threadId } : {}),
+        ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+        ...(input.serverUrl ? { serverUrl: input.serverUrl } : {}),
+        ...(input.serverPassword ? { serverPassword: input.serverPassword } : {}),
+        ...(input.experimentalWebSockets !== undefined
+          ? { experimentalWebSockets: input.experimentalWebSockets }
+          : {}),
         ...(input.agentDir ? { agentDir: input.agentDir } : {}),
       });
     },

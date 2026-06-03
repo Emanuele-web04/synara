@@ -193,6 +193,8 @@ type InstallProviderSettings = {
   serverPasswordKey?: "kiloServerPassword" | "openCodeServerPassword";
   serverPasswordPlaceholder?: string;
   serverPasswordDescription?: ReactNode;
+  experimentalWebSocketsKey?: "openCodeExperimentalWebSockets";
+  experimentalWebSocketsDescription?: ReactNode;
   agentDirKey?: "piAgentDir";
   agentDirPlaceholder?: string;
   agentDirDescription?: ReactNode;
@@ -403,6 +405,9 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     serverPasswordKey: "openCodeServerPassword",
     serverPasswordPlaceholder: "OpenCode server password",
     serverPasswordDescription: "Optional password for an externally managed OpenCode server.",
+    experimentalWebSocketsKey: "openCodeExperimentalWebSockets",
+    experimentalWebSocketsDescription:
+      "Use Opencode's experimental OpenAI response WebSocket transport for managed local servers.",
   },
   {
     provider: "pi",
@@ -549,7 +554,10 @@ function SettingsRouteView() {
     grok: Boolean(settings.grokBinaryPath),
     kilo: Boolean(settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword),
     opencode: Boolean(
-      settings.openCodeBinaryPath || settings.openCodeServerUrl || settings.openCodeServerPassword,
+      settings.openCodeBinaryPath ||
+        settings.openCodeExperimentalWebSockets ||
+        settings.openCodeServerUrl ||
+        settings.openCodeServerPassword,
     ),
     pi: Boolean(settings.piBinaryPath || settings.piAgentDir),
   });
@@ -617,6 +625,7 @@ function SettingsRouteView() {
   const kiloServerUrl = settings.kiloServerUrl;
   const kiloServerPassword = settings.kiloServerPassword;
   const openCodeBinaryPath = settings.openCodeBinaryPath;
+  const openCodeExperimentalWebSockets = settings.openCodeExperimentalWebSockets;
   const openCodeServerUrl = settings.openCodeServerUrl;
   const openCodeServerPassword = settings.openCodeServerPassword;
   const piBinaryPath = settings.piBinaryPath;
@@ -742,6 +751,7 @@ function SettingsRouteView() {
     settings.codexBinaryPath !== defaults.codexBinaryPath ||
     settings.codexHomePath !== defaults.codexHomePath ||
     settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
+    settings.openCodeExperimentalWebSockets !== defaults.openCodeExperimentalWebSockets ||
     settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
     settings.openCodeServerPassword !== defaults.openCodeServerPassword ||
     settings.piBinaryPath !== defaults.piBinaryPath ||
@@ -2452,6 +2462,7 @@ function SettingsRouteView() {
                     kiloServerUrl: defaults.kiloServerUrl,
                     kiloServerPassword: defaults.kiloServerPassword,
                     openCodeBinaryPath: defaults.openCodeBinaryPath,
+                    openCodeExperimentalWebSockets: defaults.openCodeExperimentalWebSockets,
                     openCodeServerUrl: defaults.openCodeServerUrl,
                     openCodeServerPassword: defaults.openCodeServerPassword,
                     piAgentDir: defaults.piAgentDir,
@@ -2497,6 +2508,8 @@ function SettingsRouteView() {
                                 ? settings.piBinaryPath !== defaults.piBinaryPath ||
                                   settings.piAgentDir !== defaults.piAgentDir
                                 : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
+                                  settings.openCodeExperimentalWebSockets !==
+                                    defaults.openCodeExperimentalWebSockets ||
                                   settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
                                   settings.openCodeServerPassword !==
                                     defaults.openCodeServerPassword;
@@ -2814,6 +2827,33 @@ function SettingsRouteView() {
                                     {providerSettings.serverPasswordDescription}
                                   </span>
                                 ) : null}
+                              </label>
+                            ) : null}
+
+                            {providerSettings.experimentalWebSocketsKey ? (
+                              <label
+                                htmlFor={`provider-install-${providerSettings.experimentalWebSocketsKey}`}
+                                className="flex items-start justify-between gap-3 rounded-md border border-border/70 bg-background/60 px-3 py-2"
+                              >
+                                <span className="min-w-0">
+                                  <span className="block text-xs font-medium text-foreground">
+                                    OpenAI response WebSockets
+                                  </span>
+                                  {providerSettings.experimentalWebSocketsDescription ? (
+                                    <span className="mt-1 block text-xs text-muted-foreground">
+                                      {providerSettings.experimentalWebSocketsDescription}
+                                    </span>
+                                  ) : null}
+                                </span>
+                                <Switch
+                                  id={`provider-install-${providerSettings.experimentalWebSocketsKey}`}
+                                  checked={openCodeExperimentalWebSockets}
+                                  onCheckedChange={(checked) =>
+                                    updateSettings({
+                                      openCodeExperimentalWebSockets: Boolean(checked),
+                                    })
+                                  }
+                                />
                               </label>
                             ) : null}
                           </div>

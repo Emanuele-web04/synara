@@ -109,6 +109,10 @@ function createMockOpenCodeRuntime(options?: {
   readonly events?: AsyncIterable<unknown>;
   readonly prompt?: (input: Record<string, unknown>) => Promise<unknown>;
   readonly promptAsync?: (input: Record<string, unknown>) => Promise<unknown>;
+  readonly commandList?: () => Promise<{
+    data?: ReadonlyArray<{ name: string; description?: string }>;
+  }>;
+  readonly commandLists?: ReadonlyArray<ReadonlyArray<{ name: string; description?: string }>>;
   readonly messages?: () => Promise<{
     data: Array<{ info: Record<string, unknown>; parts: Part[] }>;
   }>;
@@ -161,7 +165,11 @@ function createMockOpenCodeRuntime(options?: {
     question: {
       reply: async () => ({ data: null }),
     },
+    command: {
+      list: options?.commandList ?? (async () => ({ data: [] })),
+    },
   };
+  let createClientCallCount = 0;
 
   const unexpectedOperation = (operation: string) =>
     Effect.fail(
@@ -170,6 +178,20 @@ function createMockOpenCodeRuntime(options?: {
         detail: `Unexpected runtime operation: ${operation}`,
       }),
     );
+
+  const createOpenCodeSdkClient: OpenCodeRuntimeShape["createOpenCodeSdkClient"] = () => {
+    const commandList = options?.commandLists?.[createClientCallCount];
+    createClientCallCount += 1;
+    if (!commandList) {
+      return client as unknown as OpencodeClient;
+    }
+    return {
+      ...client,
+      command: {
+        list: async () => ({ data: commandList }),
+      },
+    } as unknown as OpencodeClient;
+  };
 
   const runtime: OpenCodeRuntimeShape = {
     startOpenCodeServerProcess: () => unexpectedOperation("startOpenCodeServerProcess"),
@@ -180,7 +202,7 @@ function createMockOpenCodeRuntime(options?: {
         external: true,
       }),
     runOpenCodeCommand: () => unexpectedOperation("runOpenCodeCommand"),
-    createOpenCodeSdkClient: () => client as unknown as OpencodeClient,
+    createOpenCodeSdkClient,
     loadOpenCodeInventory: () =>
       Effect.succeed(
         options?.inventory ?? {
@@ -1056,6 +1078,126 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       "opencode/minimax-m2.5-free",
       "opencode-go/kimi-k2.6",
     ]);
+  });
+
+  it("does not reuse an unrelated active OpenCode session for command discovery", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      commandLists: [[{ name: "wrong-thread" }], [{ name: "review", description: "Review code" }]],
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const listCommands = adapter.listCommands;
+        if (!listCommands) {
+          throw new Error("Expected OpenCode adapter to support command listing.");
+        }
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-active"),
+          runtimeMode: "full-access",
+        });
+
+        return yield* listCommands({
+          provider: "opencode",
+          cwd: process.cwd(),
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result).toEqual({
+      commands: [{ name: "review", description: "Review code" }],
+      source: "opencode",
+      cached: false,
+    });
+  });
+
+  it("reuses the matching active OpenCode thread for command discovery", async () => {
+    const threadId = asThreadId("thread-command-discovery");
+    const runtime = createMockOpenCodeRuntime({
+      commandLists: [[{ name: "active-thread-command" }], [{ name: "scoped-client-command" }]],
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const listCommands = adapter.listCommands;
+        if (!listCommands) {
+          throw new Error("Expected OpenCode adapter to support command listing.");
+        }
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+
+        return yield* listCommands({
+          provider: "opencode",
+          threadId,
+          cwd: process.cwd(),
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.commands.map((command) => command.name)).toEqual(["active-thread-command"]);
+  });
+
+  it("returns no OpenCode commands when command discovery is unsupported", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      commandList: async () => {
+        throw new Error("status=404 body={}");
+      },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const listCommands = adapter.listCommands;
+        if (!listCommands) {
+          throw new Error("Expected OpenCode adapter to support command listing.");
+        }
+
+        return yield* listCommands({
+          provider: "opencode",
+          cwd: process.cwd(),
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result).toEqual({
+      commands: [],
+      source: "unsupported",
+      cached: false,
+    });
   });
 
   it("pins the initial model on new OpenCode sessions", async () => {
