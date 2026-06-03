@@ -71,7 +71,7 @@ const fakeCursorAdapter: CursorAdapterShape = {
 
 const fakeDevinAdapter: DevinAdapterShape = {
   provider: "devin",
-  capabilities: { sessionModelSwitch: "restart-session" },
+  capabilities: { sessionModelSwitch: "in-session" },
   startSession: vi.fn(),
   sendTurn: vi.fn(),
   interruptTurn: vi.fn(),

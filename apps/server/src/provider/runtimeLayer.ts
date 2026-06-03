@@ -71,7 +71,9 @@ export function makeServerProviderLayer(): Layer.Layer<
       {},
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
-    const devinAdapterLayer = makeDevinAdapterLive();
+    const devinAdapterLayer = makeDevinAdapterLive(
+      nativeEventLogger ? { nativeEventLogger } : undefined,
+    );
     const piAdapterLayer = makePiAdapterLive(nativeEventLogger ? { nativeEventLogger } : undefined);
     const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
       Layer.provide(codexAdapterLayer),

@@ -9,7 +9,7 @@ This project started as a clone of [T3Code](https://github.com/pingdotgg/t3code)
 ## How to use
 
 > [!WARNING]
-> Install and authenticate the CLI for the provider you want to use. Devin requires Devin CLI installed and authenticated with `devin auth login`; model availability depends on your Devin/Windsurf account/team settings.
+> Install and authenticate the CLI for the provider you want to use. Devin requires Devin CLI installed and authenticated with `devin auth login`; Synara runs it through `devin acp`, and model availability depends on your Devin/Windsurf account/team settings.
 
 You can also just install the desktop app. It's cooler.
 
