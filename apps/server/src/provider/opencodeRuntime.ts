@@ -775,7 +775,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
           ),
         ));
       const timeoutMs = input.timeoutMs ?? DEFAULT_OPENCODE_SERVER_TIMEOUT_MS;
-      const args = ["serve", `--hostname=${hostname}`, `--port=${port}`];
+      const args = ["serve", "--hostname", hostname, "--port", String(port)];
 
       const child = yield* spawner
         .spawn(

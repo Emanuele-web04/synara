@@ -25,6 +25,7 @@ import {
   normalizeProviderOrder,
 } from "./providerOrdering";
 import { ensureNativeApi } from "./nativeApi";
+import { providerDiscoveryQueryKeys } from "./lib/providerDiscoveryReactQuery";
 import { serverQueryKeys, serverSettingsQueryOptions } from "./lib/serverReactQuery";
 
 const APP_SETTINGS_STORAGE_KEY = "synara:app-settings:v1";
@@ -352,6 +353,19 @@ function hasOwn<Key extends keyof AppSettings>(patch: Partial<AppSettings>, key:
   return Object.prototype.hasOwnProperty.call(patch, key);
 }
 
+function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean {
+  return (
+    hasOwn(patch, "kiloBinaryPath") ||
+    hasOwn(patch, "kiloServerPassword") ||
+    hasOwn(patch, "kiloServerUrl") ||
+    hasOwn(patch, "openCodeBinaryPath") ||
+    hasOwn(patch, "openCodeExperimentalWebSockets") ||
+    hasOwn(patch, "openCodeServerPassword") ||
+    hasOwn(patch, "openCodeServerUrl") ||
+    hasOwn(patch, "piAgentDir")
+  );
+}
+
 function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): ServerSettingsPatch {
   const providers: MutableServerSettingsProvidersPatch = {};
   const serverPatch: MutableServerSettingsPatch = {};
@@ -501,6 +515,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "kiloServerPassword",
     "kiloServerUrl",
     "openCodeBinaryPath",
+    "openCodeExperimentalWebSockets",
     "openCodeServerPassword",
     "openCodeServerUrl",
     "piAgentDir",
@@ -896,6 +911,9 @@ export function useAppSettings() {
   const updateSettings = useCallback(
     (patch: Partial<AppSettings>) => {
       setSettings((prev) => normalizeAppSettings({ ...prev, ...patch }));
+      if (touchesProviderDiscoverySettings(patch)) {
+        void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
+      }
 
       const serverPatch = appSettingsPatchToServerSettingsPatch(patch);
       if (isServerSettingsPatchEmpty(serverPatch)) {
@@ -916,6 +934,7 @@ export function useAppSettings() {
 
   const resetSettings = useCallback(() => {
     setSettings(DEFAULT_APP_SETTINGS);
+    void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
     const serverPatch = appSettingsPatchToServerSettingsPatch(defaults);
     void ensureNativeApi()
       .server.updateSettings(serverPatch)

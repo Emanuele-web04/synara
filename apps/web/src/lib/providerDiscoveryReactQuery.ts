@@ -51,10 +51,9 @@ export const providerDiscoveryQueryKeys = {
   commands: (
     provider: ProviderKind,
     cwd: string | null,
-    query: string,
     agentDir: string | null,
     connectionKey: string | null,
-  ) => ["provider-discovery", "commands", provider, cwd, query, agentDir, connectionKey] as const,
+  ) => ["provider-discovery", "commands", provider, cwd, agentDir, connectionKey] as const,
   skills: (provider: ProviderKind, cwd: string | null, query: string, agentDir: string | null) =>
     ["provider-discovery", "skills", provider, cwd, query, agentDir] as const,
   plugins: (provider: ProviderKind, cwd: string | null) =>
@@ -123,20 +122,18 @@ export function providerCommandsQueryOptions(input: {
   serverPassword?: string | null;
   experimentalWebSockets?: boolean;
   agentDir?: string | null;
-  query: string;
   enabled?: boolean;
 }) {
   const connectionKey = JSON.stringify({
     binaryPath: input.binaryPath ?? null,
     serverUrl: input.serverUrl ?? null,
-    serverPassword: input.serverPassword ?? null,
+    hasServerPassword: Boolean(input.serverPassword),
     experimentalWebSockets: input.experimentalWebSockets ?? null,
   });
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.commands(
       input.provider,
       input.cwd,
-      input.query,
       input.agentDir ?? null,
       connectionKey,
     ),

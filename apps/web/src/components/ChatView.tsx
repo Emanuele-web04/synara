@@ -2404,10 +2404,6 @@ export default function ChatView({
           ? providerOptionsForDispatch?.opencode?.experimentalWebSockets
           : undefined,
       agentDir: selectedProvider === "pi" ? settings.piAgentDir || null : null,
-      query:
-        composerTriggerKind === "slash-command" || composerTriggerKind === "slash-model"
-          ? (composerTrigger?.query ?? "")
-          : "",
       enabled:
         (composerTriggerKind === "slash-command" || composerTriggerKind === "slash-model") &&
         supportsNativeSlashCommandDiscovery(providerComposerCapabilitiesQuery.data) &&
