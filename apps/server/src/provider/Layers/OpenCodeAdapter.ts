@@ -3972,6 +3972,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         input: {
           readonly binaryPath?: string | null;
           readonly cwd?: string | null;
+          readonly serverUrl?: string | null;
+          readonly serverPassword?: string | null;
+          readonly experimentalWebSockets?: boolean;
         },
         fn: (input: {
           readonly client: OpencodeClient;
@@ -3989,16 +3992,23 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
           return yield* Effect.scoped(
             Effect.gen(function* () {
+              const serverUrl = input.serverUrl?.trim();
+              const serverPassword = input.serverPassword?.trim();
               const server = yield* openCodeRuntime
                 .connectToOpenCodeServer({
                   binaryPath: input.binaryPath?.trim() || adapterConfig.defaultBinaryPath,
                   cliSpec: adapterConfig.cliSpec,
+                  ...(serverUrl ? { serverUrl } : {}),
+                  ...(provider === "opencode" && input.experimentalWebSockets
+                    ? { experimentalWebSockets: true }
+                    : {}),
                 })
                 .pipe(Effect.mapError(toAdapterRequestError));
               const client = openCodeRuntime.createOpenCodeSdkClient({
                 baseUrl: server.url,
                 directory: input.cwd?.trim() || serverConfig.cwd,
                 cliSpec: adapterConfig.cliSpec,
+                ...(server.external && serverPassword ? { serverPassword } : {}),
               });
               return yield* fn({ client });
             }),
@@ -4109,18 +4119,26 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         );
 
       const listCommands: NonNullable<OpenCodeAdapterShape["listCommands"]> = (input) =>
-        withDiscoveryClient({ cwd: input.cwd }, ({ client }) =>
-          runOpenCodeSdk("command.list", () => client.command.list()).pipe(
-            Effect.mapError(toAdapterRequestError),
-            Effect.map(
-              (commands) =>
-                ({
-                  commands: flattenOpenCodeCommands(commands.data ?? []),
-                  source: adapterConfig.fallbackModelSource,
-                  cached: false,
-                }) satisfies ProviderListCommandsResult,
+        withDiscoveryClient(
+          {
+            binaryPath: input.binaryPath,
+            cwd: input.cwd,
+            serverUrl: input.serverUrl,
+            serverPassword: input.serverPassword,
+            experimentalWebSockets: input.experimentalWebSockets,
+          },
+          ({ client }) =>
+            runOpenCodeSdk("command.list", () => client.command.list()).pipe(
+              Effect.mapError(toAdapterRequestError),
+              Effect.map(
+                (commands) =>
+                  ({
+                    commands: flattenOpenCodeCommands(commands.data ?? []),
+                    source: adapterConfig.fallbackModelSource,
+                    cached: false,
+                  }) satisfies ProviderListCommandsResult,
+              ),
             ),
-          ),
         );
 
       const getComposerCapabilities: NonNullable<

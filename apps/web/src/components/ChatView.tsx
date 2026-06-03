@@ -2377,6 +2377,28 @@ export default function ChatView({
       provider: selectedProvider,
       cwd: composerSkillCwd,
       threadId,
+      binaryPath:
+        selectedProvider === "opencode"
+          ? providerOptionsForDispatch?.opencode?.binaryPath
+          : selectedProvider === "kilo"
+            ? providerOptionsForDispatch?.kilo?.binaryPath
+            : null,
+      serverUrl:
+        selectedProvider === "opencode"
+          ? providerOptionsForDispatch?.opencode?.serverUrl
+          : selectedProvider === "kilo"
+            ? providerOptionsForDispatch?.kilo?.serverUrl
+            : null,
+      serverPassword:
+        selectedProvider === "opencode"
+          ? providerOptionsForDispatch?.opencode?.serverPassword
+          : selectedProvider === "kilo"
+            ? providerOptionsForDispatch?.kilo?.serverPassword
+            : null,
+      experimentalWebSockets:
+        selectedProvider === "opencode"
+          ? providerOptionsForDispatch?.opencode?.experimentalWebSockets
+          : undefined,
       agentDir: selectedProvider === "pi" ? settings.piAgentDir || null : null,
       query:
         composerTriggerKind === "slash-command" || composerTriggerKind === "slash-model"
