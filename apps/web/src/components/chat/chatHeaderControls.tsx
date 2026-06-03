@@ -22,8 +22,14 @@ import { Button } from "../ui/button";
  * Fixed height of the top chrome bar shared by the chat header, the diff panel
  * header, and the right-dock tab strip. Keeping these on one token ensures their
  * bottom borders line up across the vertical pane divider.
+ *
+ * Tall enough that the vertically-centered controls clear the macOS title bar with
+ * breathing room below them rather than hugging the very top of the window. This
+ * pairs with `trafficLightPosition.y` in apps/desktop/src/main.ts — the two values
+ * are tuned together so the native traffic lights and the renderer's leading
+ * controls share the same vertical center.
  */
-export const CHAT_SURFACE_HEADER_HEIGHT_CLASS = "h-[46px]";
+export const CHAT_SURFACE_HEADER_HEIGHT_CLASS = "h-[50px]";
 
 /**
  * Bottom hairline shared by every chat-surface chrome bar (chat header, workspace

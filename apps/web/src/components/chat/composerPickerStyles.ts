@@ -59,7 +59,10 @@ export const CHAT_BACKGROUND_CLASS_NAME = "bg-[var(--color-background-surface)]"
 
 /** Turns the main content column into a distinct, opaque card that floats over the
  *  (optionally translucent) sidebar instead of sharing one continuous surface with it.
- *  - `rounded-l-*` gives the rounded left edge against the sidebar.
+ *  - The rounded seam edge, the 1px inset ring divider, and the depth shadow all live in
+ *    `index.css` and are applied per `data-sidebar-side` ONLY while the sidebar is expanded
+ *    — when it collapses (offcanvas) the card fills the window edge-to-edge and stays square
+ *    so its corner doesn't double up with the macOS window's own rounded corner.
  *  - The single seam divider is a 1px inset ring on the card (see `index.css`), so it
  *    follows the rounded corner. The `SidebarRail`
  *    (`placement="content-seam"`, z-[25]) is just the resize hit-area and intensifies
@@ -75,7 +78,7 @@ export const CHAT_BACKGROUND_CLASS_NAME = "bg-[var(--color-background-surface)]"
  *  SidebarInset `surfaceClassName`) — never to a transparent, full-width
  *  `SidebarInset` shell, or its raised z-index would cover and block the sidebar. */
 export const CHAT_CONTENT_CARD_CLASS_NAME =
-  "chat-content-card relative z-[15] overflow-hidden rounded-l-[var(--app-content-card-radius,0.75rem)]";
+  "chat-content-card relative z-[15] overflow-hidden";
 
 /** Opaque chat surface that floats as a card over the sidebar: column background + card chrome.
  *  Apply to the element that should read as the raised card (the chat content wrapper, or a
@@ -187,10 +190,8 @@ export const COMPOSER_EDITOR_TEXT_CLASS_NAME = "text-[length:var(--app-font-size
 export const COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME = "min-h-[2lh]";
 /** Lexical wraps lines in `<p>` nodes; reset default margins so text sits flush above the footer. */
 export const COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME = "[&_p]:m-0";
-/** Horizontal inset shared by the composer editor and bottom bar. */
-export const COMPOSER_HORIZONTAL_INSET_CLASS_NAME = "px-3";
 /** Shared padding around the composer prompt editor. */
-export const COMPOSER_EDITOR_PADDING_CLASS_NAME = `relative ${COMPOSER_HORIZONTAL_INSET_CLASS_NAME} pt-3 pb-4`;
+export const COMPOSER_EDITOR_PADDING_CLASS_NAME = "relative px-3.5 pt-3.5 pb-4";
 /** Bottom bar row — flush to the composer shell edges. */
 export const COMPOSER_FOOTER_ROW_CLASS_NAME = "flex items-center justify-between px-2 pb-1.5";
 export const COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME =

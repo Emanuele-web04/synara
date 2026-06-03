@@ -2307,7 +2307,10 @@ function createWindow(): BrowserWindow {
     ...getIconOption(),
     title: APP_DISPLAY_NAME,
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 16, y: 18 },
+    // y is tuned to share the vertical center of the renderer's top chrome bar
+    // (CHAT_SURFACE_HEADER_HEIGHT_CLASS in apps/web) so the lights line up with the
+    // leading toggle/arrow controls. Keep the two in sync when either changes.
+    trafficLightPosition: { x: 16, y: 19 },
     ...getWindowMaterialOptions(),
     webPreferences: {
       preload: Path.join(__dirname, "preload.js"),

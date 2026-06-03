@@ -4,8 +4,6 @@ import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
 import { cn } from "~/lib/utils";
 import { CentralIcon } from "~/lib/central-icons";
-import { isElectron } from "~/env";
-import { useAppSettings } from "~/appSettings";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -217,7 +215,9 @@ function SidebarInstanceProvider({
     () => ({ resizable: resolvedResizable, side }),
     [resolvedResizable, side],
   );
-  return <SidebarInstanceContext.Provider value={value}>{children}</SidebarInstanceContext.Provider>;
+  return (
+    <SidebarInstanceContext.Provider value={value}>{children}</SidebarInstanceContext.Provider>
+  );
 }
 
 function Sidebar({
@@ -363,9 +363,6 @@ function Sidebar({
 
 function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
   const { toggleSidebar } = useSidebar();
-  const { settings } = useAppSettings();
-  const sidebarIconName =
-    settings.sidebarSide === "right" ? "sidebar-hidden-right-wide" : "sidebar-hidden-left-wide";
 
   return (
     <Button
@@ -380,7 +377,7 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       variant="ghost"
       {...props}
     >
-      <CentralIcon name={sidebarIconName} />
+      <CentralIcon name="sidebar-hidden-left-wide" />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
   );
@@ -388,28 +385,21 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
 
 // Desktop headers lose access to the in-sidebar trigger after an off-canvas close,
 // so this companion control reuses the same trigger and only appears when hidden.
+// Traffic-light clearance is owned solely by the host header's
+// DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS gutter — this control adds no offset of
+// its own, so the toggle sits at the same x whether the sidebar is open or closed.
 function SidebarHeaderTrigger({
   className,
   onClick,
   ...props
 }: React.ComponentProps<typeof Button>) {
-  const { isMobile, open, toggleSidebar } = useSidebar();
-  const { settings } = useAppSettings();
+  const { isMobile, open } = useSidebar();
 
   if (!isMobile && open) {
     return null;
   }
 
-  return (
-    <SidebarTrigger
-      className={cn(
-        isElectron && !isMobile && settings.sidebarSide === "left" && "ml-[76px]",
-        className,
-      )}
-      onClick={onClick}
-      {...props}
-    />
-  );
+  return <SidebarTrigger className={className} onClick={onClick} {...props} />;
 }
 
 function clampSidebarWidth(width: number, options: SidebarResolvedResizableOptions): number {

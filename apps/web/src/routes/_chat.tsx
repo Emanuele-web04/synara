@@ -490,30 +490,24 @@ function ChatRouteGlobalShortcuts() {
   );
 }
 
-const SIDEBAR_GAP_CLASS = {
-  left: "overflow-hidden before:absolute before:inset-0 before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.06),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.008))] dark:before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.04),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.018),rgba(255,255,255,0.006))]",
-  right:
-    "overflow-hidden before:absolute before:inset-0 before:bg-[radial-gradient(90%_75%_at_100%_0%,rgba(255,255,255,0.06),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.008))] dark:before:bg-[radial-gradient(90%_75%_at_100%_0%,rgba(255,255,255,0.04),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.018),rgba(255,255,255,0.006))]",
-} as const;
+/** Subtle top-corner sheen on the sidebar gap. The sidebar always sits on the left, so
+ *  the radial highlight is anchored to the top-left corner. */
+const SIDEBAR_GAP_CLASS =
+  "overflow-hidden before:absolute before:inset-0 before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.06),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.008))] dark:before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.04),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.018),rgba(255,255,255,0.006))]";
 
 /** No inline-start/end border: the chat content card provides the edge (rounded + overlap).
  *  A sidebar border here draws a full-height vertical line through the titlebar seam. */
-const SIDEBAR_INNER_CLASS = {
-  left: "app-sidebar-surface",
-  right: "app-sidebar-surface",
-} as const;
+const SIDEBAR_INNER_CLASS = "app-sidebar-surface";
 
 function ChatRouteLayout() {
-  const { settings } = useAppSettings();
-  const side = settings.sidebarSide;
-
+  // The thread sidebar always lives on the left; the right dock is a separate surface.
   const sidebarElement = (
     <Sidebar
-      side={side}
+      side="left"
       collapsible="offcanvas"
       className="text-foreground"
-      gapClassName={SIDEBAR_GAP_CLASS[side]}
-      innerClassName={SIDEBAR_INNER_CLASS[side]}
+      gapClassName={SIDEBAR_GAP_CLASS}
+      innerClassName={SIDEBAR_INNER_CLASS}
       transparentSurface
       resizable={THREAD_SIDEBAR_RESIZABLE}
     >
@@ -526,10 +520,10 @@ function ChatRouteLayout() {
   // `.chat-content-card` in index.css). It sits OUTSIDE <Sidebar> so it stacks above
   // the card, so SidebarInstanceProvider re-supplies the same resize config/side it
   // would have gotten inside <Sidebar> (otherwise dragging to resize stops working).
-  // `data-sidebar-side` on the provider selects left/right geometry.
+  // `data-sidebar-side` on the provider selects the seam geometry.
   const mainContentShell = (
     <div className="chat-content-card-backing relative flex h-svh min-h-0 min-w-0 flex-1">
-      <SidebarInstanceProvider side={side} resizable={THREAD_SIDEBAR_RESIZABLE}>
+      <SidebarInstanceProvider side="left" resizable={THREAD_SIDEBAR_RESIZABLE}>
         <SidebarRail placement="content-seam" />
       </SidebarInstanceProvider>
       <Outlet />
@@ -540,13 +534,12 @@ function ChatRouteLayout() {
     <SidebarProvider
       defaultOpen
       className="bg-[var(--app-shell-background)]"
-      data-sidebar-side={side}
+      data-sidebar-side="left"
     >
       <ThreadRetentionMaintenanceToast />
       <ChatRouteGlobalShortcuts />
-      {side === "left" ? sidebarElement : null}
+      {sidebarElement}
       {mainContentShell}
-      {side === "right" ? sidebarElement : null}
     </SidebarProvider>
   );
 }

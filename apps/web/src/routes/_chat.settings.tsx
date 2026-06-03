@@ -151,11 +151,6 @@ const TIMESTAMP_FORMAT_LABELS = {
   "24-hour": "24-hour",
 } as const;
 
-const SIDEBAR_SIDE_LABELS = {
-  left: "Left",
-  right: "Right",
-} as const;
-
 const SIDEBAR_PROJECT_SORT_ORDER_LABELS = {
   updated_at: "Recently active",
   created_at: "Recently added",
@@ -757,7 +752,6 @@ function SettingsRouteView() {
     ...(!isDefaultActiveTheme ? [`${resolvedTheme === "dark" ? "Dark" : "Light"} theme pack`] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
     ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? ["New thread mode"] : []),
-    ...(settings.sidebarSide !== defaults.sidebarSide ? ["Sidebar position"] : []),
     ...(settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder
       ? ["Project sort order"]
       : []),
@@ -1348,43 +1342,6 @@ function SettingsRouteView() {
       </SettingsSection>
 
       <SettingsSection title="Sidebar organization">
-        <SettingsRow
-          title="Position"
-          description="Choose which side of the screen the sidebar appears on."
-          resetAction={
-            settings.sidebarSide !== defaults.sidebarSide ? (
-              <SettingResetButton
-                label="sidebar position"
-                onClick={() =>
-                  updateSettings({
-                    sidebarSide: defaults.sidebarSide,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <SettingsSelectControl
-              value={settings.sidebarSide}
-              onValueChange={(value) => {
-                if (value !== "left" && value !== "right") {
-                  return;
-                }
-                updateSettings({ sidebarSide: value });
-              }}
-              ariaLabel="Sidebar position"
-              valueContent={SIDEBAR_SIDE_LABELS[settings.sidebarSide]}
-            >
-              <SelectItem hideIndicator value="left">
-                {SIDEBAR_SIDE_LABELS.left}
-              </SelectItem>
-              <SelectItem hideIndicator value="right">
-                {SIDEBAR_SIDE_LABELS.right}
-              </SelectItem>
-            </SettingsSelectControl>
-          }
-        />
-
         <SettingsRow
           title="Project order"
           description="Controls how projects are arranged in the main sidebar."

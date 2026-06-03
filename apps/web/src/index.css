@@ -160,9 +160,10 @@
     right: 0;
   }
 
-  /* Only when a sidebar is expanded is the seam (and its wedge) in the middle of the
-     window, safely away from the window's corners — so only then paint the strip. */
-  [data-slot="sidebar-wrapper"]:has([data-slot="sidebar"][data-state="expanded"])
+  /* Only when the chat layout's own sidebar is expanded is the seam (and its wedge) in the
+     middle of the window, safely away from the window's corners — so only then paint the
+     strip. Direct-child :has() so the nested right-dock sidebar-wrapper can't drive this. */
+  [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="expanded"])
     .chat-content-card-backing::after {
     display: block;
   }
@@ -193,6 +194,8 @@
 
   [data-sidebar-side="left"] .chat-content-card {
     --seam-shadow-x: -11px;
+    border-radius: var(--app-content-card-radius, 0.75rem) 0 0
+      var(--app-content-card-radius, 0.75rem);
   }
 
   [data-sidebar-side="right"] .chat-content-card {
@@ -224,6 +227,24 @@
   [data-sidebar-side="left"]:has([data-placement="content-seam"]:hover) .chat-content-card,
   [data-sidebar-side="right"]:has([data-placement="content-seam"]:hover) .chat-content-card {
     --seam-line: color-mix(in srgb, var(--foreground) 30%, transparent);
+  }
+
+  /* Sidebar collapsed (offcanvas): the card fills the window edge-to-edge, so its rounded
+     seam corner would sit ON TOP of the macOS window's OWN rounded corner — two mismatched
+     curves overlapping. Square the card and drop the seam ring + depth here; the window's
+     own corner is then the only one. (The backing strip is already expanded-only.)
+     Use the DIRECT-CHILD combinator: only the chat layout's own sidebar is a direct child of
+     this wrapper; the right dock nests its own sidebar-wrapper, so a plain descendant :has()
+     would also fire on the dock's (always-collapsed) sidebar. */
+  [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="collapsed"])
+    .chat-content-card {
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="collapsed"])
+    .chat-content-card::before {
+    display: none;
   }
 
   /* ─── Chat-surface header hairline (horizontal counterpart of the seam) ───────────

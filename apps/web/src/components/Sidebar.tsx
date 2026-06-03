@@ -5290,6 +5290,11 @@ export default function Sidebar() {
     setAllProjectsExpanded(true);
   }, [allProjectsExpanded, collapseProjectsExcept, focusedProjectId, setAllProjectsExpanded]);
 
+  // Only macOS draws the traffic lights in the renderer's top-left, so only there
+  // does the open-sidebar header need to reserve the gutter (mirrors the mac guard
+  // in useDesktopTopBarTrafficLightGutterClassName used by the closed-state surfaces).
+  const isMacDesktop = typeof navigator !== "undefined" ? isMacPlatform(navigator.platform) : false;
+
   const titlebarControls = (
     <div className="hidden shrink-0 items-center gap-0.5 md:flex">
       <SidebarTrigger
@@ -5325,7 +5330,7 @@ export default function Sidebar() {
             className={cn(
               "drag-region flex-row items-center gap-2 px-4 py-0 font-system-ui",
               CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-              appSettings.sidebarSide === "left" && DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS,
+              isMacDesktop && DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS,
             )}
           >
             {titlebarControls}
@@ -5419,9 +5424,7 @@ export default function Sidebar() {
               <SidebarGroup className="px-1.5 pt-1 pb-1.5">
                 <div className="my-2 h-px w-full bg-border" />
                 <div className="mb-1.5 flex items-center px-2">
-                  <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>
-                    Workspace
-                  </span>
+                  <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Workspace</span>
                 </div>
 
                 <DndContext
@@ -5535,9 +5538,7 @@ export default function Sidebar() {
                 {pinnedThreads.length > 0 ? (
                   <>
                     <div className="my-1 flex items-center justify-between px-2 py-1">
-                      <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>
-                        Pinned
-                      </span>
+                      <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Pinned</span>
                     </div>
                     <div className="flex flex-col gap-0.5">
                       {pinnedThreads.map((thread) => renderPinnedThreadRow(thread))}
@@ -5546,9 +5547,7 @@ export default function Sidebar() {
                   </>
                 ) : null}
                 <div className="my-1 flex items-center justify-between px-2 py-1">
-                  <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>
-                    Threads
-                  </span>
+                  <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Threads</span>
                   <SidebarSectionToolbar>
                     {standardProjects.length > 0 ? (
                       <SidebarIconButton
