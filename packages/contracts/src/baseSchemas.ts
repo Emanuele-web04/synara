@@ -46,3 +46,14 @@ export const ApprovalRequestId = makeEntityId("ApprovalRequestId");
 export type ApprovalRequestId = typeof ApprovalRequestId.Type;
 export const CheckpointRef = makeEntityId("CheckpointRef");
 export type CheckpointRef = typeof CheckpointRef.Type;
+
+export const ExecutionInstanceId = makeEntityId("ExecutionInstanceId");
+export type ExecutionInstanceId = typeof ExecutionInstanceId.Type;
+export const RuntimeProcessId = makeEntityId("RuntimeProcessId");
+export type RuntimeProcessId = typeof RuntimeProcessId.Type;
+export const RuntimeRouteId = makeEntityId("RuntimeRouteId");
+export type RuntimeRouteId = typeof RuntimeRouteId.Type;
+export const RuntimeSnapshotId = makeEntityId("RuntimeSnapshotId");
+export type RuntimeSnapshotId = typeof RuntimeSnapshotId.Type;
+export const RuntimeActivityLeaseId = makeEntityId("RuntimeActivityLeaseId");
+export type RuntimeActivityLeaseId = typeof RuntimeActivityLeaseId.Type;
