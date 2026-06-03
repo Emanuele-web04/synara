@@ -1,10 +1,8 @@
-import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import readline from "node:readline";
 
 import {
   ApprovalRequestId,
@@ -41,15 +39,17 @@ import {
   type ServerVoiceTranscriptionResult,
 } from "@t3tools/contracts";
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@t3tools/shared/model";
-import { Effect, ServiceMap } from "effect";
+import { Deferred, Effect, ServiceMap, Stream } from "effect";
+import type { ChildProcessSpawner } from "effect/unstable/process";
 
-import {
-  formatCodexCliUpgradeMessage,
-  isCodexCliVersionSupported,
-  parseCodexCliVersion,
-} from "./provider/codexCliVersion";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
+import { assertSupportedCodexCliVersion } from "./provider/process/codexCliVersionGate.ts";
+import {
+  makeCodexProcessTransport,
+  type JsonRpcLineTransport,
+  type ProcessExit,
+} from "./provider/process/JsonRpcLineTransport.ts";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 
 type PendingRequestKey = string;
@@ -101,8 +101,7 @@ type CodexSessionApprovalOverride = {
 interface CodexSessionContext {
   session: ProviderSession;
   account: CodexAccountSnapshot;
-  child: ChildProcessWithoutNullStreams;
-  output: readline.Interface;
+  transport: JsonRpcLineTransport;
   pending: Map<PendingRequestKey, PendingRequest>;
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
@@ -217,8 +216,6 @@ export interface CodexThreadSnapshot {
   turns: CodexThreadTurnSnapshot[];
   cwd?: string | null;
 }
-
-const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
 
 const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
 const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
@@ -532,25 +529,6 @@ export function resolveCodexModelForAccount(
   return CODEX_DEFAULT_MODEL;
 }
 
-/**
- * On Windows with `shell: true`, `child.kill()` only terminates the `cmd.exe`
- * wrapper, leaving the actual command running. Use `taskkill /T` to kill the
- * entire process tree instead.
- */
-function killChildTree(child: ChildProcessWithoutNullStreams): void {
-  if (process.platform === "win32" && child.pid !== undefined) {
-    try {
-      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
-        stdio: "ignore",
-      });
-      return;
-    } catch {
-      // fallback to direct kill
-    }
-  }
-  child.kill();
-}
-
 export function normalizeCodexModelSlug(
   model: string | undefined | null,
   preferredId?: string,
@@ -688,9 +666,51 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly modelCache = new Map<string, ProviderListModelsResult>();
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
+  private readonly services: ServiceMap.ServiceMap<never> | undefined;
   constructor(services?: ServiceMap.ServiceMap<never>) {
     super();
+    this.services = services;
     this.runPromise = services ? Effect.runPromiseWith(services) : Effect.runPromise;
+  }
+
+  // The production services map carries `ChildProcessSpawner`; its type is erased
+  // to `never`, so transport effects are run through the same map with their
+  // requirement cast away. Tests that never spawn (the protocol-level harnesses)
+  // do not exercise this path.
+  private runTransportEffect<A>(
+    effect: Effect.Effect<A, never, ChildProcessSpawner.ChildProcessSpawner>,
+  ): Promise<A> {
+    const erased = effect as unknown as Effect.Effect<A, never>;
+    return (this.services ? Effect.runPromiseWith(this.services) : Effect.runPromise)(erased);
+  }
+
+  private async createTransport(input: {
+    readonly binaryPath: string;
+    readonly cwd: string;
+    readonly homePath?: string;
+  }): Promise<JsonRpcLineTransport> {
+    const env = buildCodexProcessEnv(input.homePath ? { homePath: input.homePath } : {});
+    return this.runTransportEffect(
+      makeCodexProcessTransport({
+        command: input.binaryPath,
+        args: ["app-server"],
+        cwd: input.cwd,
+        env,
+        shell: process.platform === "win32",
+      }),
+    );
+  }
+
+  private async isContextAlive(context: CodexSessionContext): Promise<boolean> {
+    return this.runTransportEffect(context.transport.isAlive);
+  }
+
+  // `stopSession`/`stopDiscoverySession` keep their synchronous signatures (the
+  // call sites and tests are sync), so transport teardown is fired and the
+  // promise is swallowed. `close` kills the process tree and interrupts the
+  // pump fibers via its scope finalizers.
+  private closeTransport(context: CodexSessionContext): void {
+    void this.runPromise(context.transport.close).catch(() => {});
   }
 
   async startSession(input: CodexAppServerStartSessionInput): Promise<ProviderSession> {
@@ -725,15 +745,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      const child = spawn(codexBinaryPath, ["app-server"], {
+      const transport = await this.createTransport({
+        binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: buildCodexProcessEnv({
-          ...(codexHomePath ? { homePath: codexHomePath } : {}),
-        }),
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: process.platform === "win32",
+        ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      const output = readline.createInterface({ input: child.stdout });
 
       context = {
         session,
@@ -742,8 +758,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           planType: null,
           sparkEnabled: true,
         },
-        child,
-        output,
+        transport,
         pending: new Map(),
         pendingApprovals: new Map(),
         pendingUserInputs: new Map(),
@@ -1343,15 +1358,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      const child = spawn(codexBinaryPath, ["app-server"], {
+      const transport = await this.createTransport({
+        binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: buildCodexProcessEnv({
-          ...(codexHomePath ? { homePath: codexHomePath } : {}),
-        }),
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: process.platform === "win32",
+        ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      const output = readline.createInterface({ input: child.stdout });
 
       context = {
         session,
@@ -1360,8 +1371,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           planType: null,
           sparkEnabled: true,
         },
-        child,
-        output,
+        transport,
         pending: new Map(),
         pendingApprovals: new Map(),
         pendingUserInputs: new Map(),
@@ -1637,11 +1647,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context.pendingApprovals.clear();
     context.pendingUserInputs.clear();
 
-    context.output.close();
-
-    if (!context.child.killed) {
-      killChildTree(context.child);
-    }
+    this.closeTransport(context);
 
     this.updateSession(context, {
       status: "closed",
@@ -1861,8 +1867,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       for (const activeSession of this.sessions.values()) {
         if (
           !activeSession.stopping &&
-          !activeSession.child.killed &&
-          activeSession.session.cwd === normalizedCwd
+          activeSession.session.cwd === normalizedCwd &&
+          (await this.isContextAlive(activeSession))
         ) {
           return activeSession;
         }
@@ -1917,7 +1923,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private async getOrCreateDiscoverySession(cwd: string): Promise<CodexSessionContext> {
     const normalizedCwd = cwd.trim() || process.cwd();
     const existing = this.discoverySessions.get(normalizedCwd);
-    if (existing && !existing.stopping && !existing.child.killed) {
+    if (existing && !existing.stopping && (await this.isContextAlive(existing))) {
       this.scheduleDiscoverySessionIdleStop(normalizedCwd);
       return existing;
     }
@@ -1927,13 +1933,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       binaryPath: "codex",
       cwd: normalizedCwd,
     });
-    const child = spawn("codex", ["app-server"], {
+    const transport = await this.createTransport({
+      binaryPath: "codex",
       cwd: normalizedCwd,
-      env: buildCodexProcessEnv(),
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: process.platform === "win32",
     });
-    const output = readline.createInterface({ input: child.stdout });
     const context: CodexSessionContext = {
       session: {
         provider: "codex",
@@ -1950,8 +1953,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         planType: null,
         sparkEnabled: true,
       },
-      child,
-      output,
+      transport,
       pending: new Map(),
       pendingApprovals: new Map(),
       pendingUserInputs: new Map(),
@@ -2028,51 +2030,31 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       pending.reject(new Error("Discovery session stopped before request completed."));
     }
     context.pending.clear();
-    context.output.close();
-
-    if (!context.child.killed) {
-      killChildTree(context.child);
-    }
+    this.closeTransport(context);
 
     this.discoverySessions.delete(discoveryKey);
   }
 
   private attachProcessListeners(context: CodexSessionContext): void {
-    context.output.on("line", (line) => {
+    const onInboundLine = (line: string) => {
       if (context.stopping || isIgnorableCodexProcessLine(line)) {
         return;
       }
       this.handleStdoutLine(context, line);
-    });
+    };
 
-    context.child.stderr.on("data", (chunk: Buffer) => {
+    const onStderrLine = (line: string) => {
       if (context.stopping) {
         return;
       }
-      const raw = chunk.toString();
-      const lines = raw.split(/\r?\n/g);
-      for (const rawLine of lines) {
-        const classified = classifyCodexStderrLine(rawLine);
-        if (!classified) {
-          continue;
-        }
-
-        this.emitErrorEvent(context, "process/stderr", classified.message);
+      const classified = classifyCodexStderrLine(line);
+      if (!classified) {
+        return;
       }
-    });
+      this.emitErrorEvent(context, "process/stderr", classified.message);
+    };
 
-    context.child.on("error", (error) => {
-      const message = normalizeCodexUserVisibleErrorMessage(
-        error.message || "codex app-server process errored.",
-      );
-      this.updateSession(context, {
-        status: "error",
-        lastError: message,
-      });
-      this.emitErrorEvent(context, "process/error", message);
-    });
-
-    context.child.on("exit", (code, signal) => {
+    const onExit = ({ code, signal }: ProcessExit) => {
       if (context.stopping) {
         return;
       }
@@ -2092,7 +2074,21 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       } else {
         this.sessions.delete(context.session.threadId);
       }
-    });
+    };
+
+    void this.runPromise(
+      Stream.runForEach(context.transport.inbound, (line) =>
+        Effect.sync(() => onInboundLine(line)),
+      ).pipe(Effect.ignore),
+    );
+    void this.runPromise(
+      Stream.runForEach(context.transport.stderr, (line) =>
+        Effect.sync(() => onStderrLine(line)),
+      ).pipe(Effect.ignore),
+    );
+    void this.runPromise(
+      Deferred.await(context.transport.exit).pipe(Effect.map((status) => onExit(status))),
+    );
   }
 
   private handleStdoutLine(context: CodexSessionContext, line: string): void {
@@ -2470,12 +2466,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private writeMessage(context: CodexSessionContext, message: unknown): void {
-    const encoded = JSON.stringify(message);
-    if (!context.child.stdin.writable) {
-      throw new Error("Cannot write to codex app-server stdin.");
-    }
-
-    context.child.stdin.write(`${encoded}\n`);
+    void this.runPromise(
+      context.transport.send(message).pipe(
+        Effect.catchTag("TransportClosedError", (error) =>
+          Effect.sync(() => {
+            if (!context.stopping) {
+              this.emitErrorEvent(context, "process/error", error.detail);
+            }
+          }),
+        ),
+      ),
+    );
   }
 
   private emitLifecycleEvent(context: CodexSessionContext, method: string, message: string): void {
@@ -3286,50 +3287,6 @@ function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
     ...(options.binaryPath ? { binaryPath: options.binaryPath } : {}),
     ...(options.homePath ? { homePath: options.homePath } : {}),
   };
-}
-
-function assertSupportedCodexCliVersion(input: {
-  readonly binaryPath: string;
-  readonly cwd: string;
-  readonly homePath?: string;
-}): void {
-  const result = spawnSync(input.binaryPath, ["--version"], {
-    cwd: input.cwd,
-    env: buildCodexProcessEnv({
-      ...(input.homePath ? { homePath: input.homePath } : {}),
-    }),
-    encoding: "utf8",
-    shell: process.platform === "win32",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
-    maxBuffer: 1024 * 1024,
-  });
-
-  if (result.error) {
-    const lower = result.error.message.toLowerCase();
-    if (
-      lower.includes("enoent") ||
-      lower.includes("command not found") ||
-      lower.includes("not found")
-    ) {
-      throw new Error(`Codex CLI (${input.binaryPath}) is not installed or not executable.`);
-    }
-    throw new Error(
-      `Failed to execute Codex CLI version check: ${result.error.message || String(result.error)}`,
-    );
-  }
-
-  const stdout = result.stdout ?? "";
-  const stderr = result.stderr ?? "";
-  if (result.status !== 0) {
-    const detail = stderr.trim() || stdout.trim() || `Command exited with code ${result.status}.`;
-    throw new Error(`Codex CLI version check failed. ${detail}`);
-  }
-
-  const parsedVersion = parseCodexCliVersion(`${stdout}\n${stderr}`);
-  if (parsedVersion && !isCodexCliVersionSupported(parsedVersion)) {
-    throw new Error(formatCodexCliUpgradeMessage(parsedVersion));
-  }
 }
 
 function readResumeCursorThreadId(resumeCursor: unknown): string | undefined {
