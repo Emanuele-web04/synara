@@ -1002,8 +1002,24 @@ diffs-container {
 .chat-composer-stacked-top,
 .chat-composer-surface-banner {
   border-radius: var(--composer-radius);
-  corner-shape: squircle;
+}
+
+/* Electron: continuous macOS-style corners (do not stack with corner-shape). */
+:root[data-runtime="electron"] .chat-composer-shell,
+:root[data-runtime="electron"] .chat-composer-surface,
+:root[data-runtime="electron"] .chat-composer-stacked-top,
+:root[data-runtime="electron"] .chat-composer-surface-banner {
   -electron-corner-smoothing: system-ui;
+}
+
+/* Browser: squircle via corner-shape when supported. */
+@supports (corner-shape: round) {
+  :root:not([data-runtime="electron"]) .chat-composer-shell,
+  :root:not([data-runtime="electron"]) .chat-composer-surface,
+  :root:not([data-runtime="electron"]) .chat-composer-stacked-top,
+  :root:not([data-runtime="electron"]) .chat-composer-surface-banner {
+    corner-shape: squircle;
+  }
 }
 
 .chat-composer-surface-banner,
@@ -1230,8 +1246,8 @@ diffs-container {
 }
 
 .ultrathink-frame {
-  /* The composer shell no longer reserves a 1px ring; the rainbow border needs
-     it so the surface sits inset and the gradient shows around the edge. */
+  /* The composer shell no longer reserves a 1px border; the rainbow frame needs
+     padding so the surface sits inset and the gradient shows around the edge. */
   padding: 1px;
   --ultrathink-spectrum: linear-gradient(
     120deg,

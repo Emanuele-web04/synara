@@ -77,9 +77,10 @@ export const COMPOSER_INPUT_SHELL_CLASS_NAME =
 export const COMPOSER_SURFACE_BORDER_CLASS_NAME =
   "border-[color:color-mix(in_srgb,var(--color-border-heavy)_95%,var(--foreground)_5%)]";
 
-/** Ring + shadow chrome for the composer shell: 1px ring in light mode only;
- *  dark mode drops the ring and leans on the shadow for separation. */
-export const COMPOSER_SURFACE_CHROME_CLASS_NAME = `ring-1 ring-[color:color-mix(in_srgb,var(--color-border-heavy)_95%,var(--foreground)_5%)] ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:ring-0`;
+/** Border + shadow chrome for the composer surface: a real border follows
+ *  squircle/corner-shape geometry more evenly than an outer ring (box-shadow).
+ *  Dark mode drops the border and leans on the shadow for separation. */
+export const COMPOSER_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:border-0`;
 
 export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface ${COMPOSER_SURFACE_CHROME_CLASS_NAME} transition-colors duration-200`;
 
