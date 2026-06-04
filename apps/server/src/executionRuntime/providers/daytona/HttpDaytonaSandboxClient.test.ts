@@ -180,8 +180,9 @@ describe("HttpDaytonaSandboxClient", () => {
     );
     expect(result.stdout).toBe("hello\n");
     expect(result.exitCode).toBe(0);
-    // The toolbox path must be a single `toolbox` segment, not doubled.
-    expect(recorded[0]?.url).toBe(`${API_URL}/toolbox/sb-1/process/execute`);
+    // Toolbox/process calls target the Daytona proxy host (proxy.<api-host>, no
+    // `/api`), with a single `toolbox` segment — verified against the live API.
+    expect(recorded[0]?.url).toBe("https://proxy.daytona.test/toolbox/sb-1/process/execute");
     expect(recorded[0]?.url).not.toContain("toolbox/sb-1/toolbox");
   });
 

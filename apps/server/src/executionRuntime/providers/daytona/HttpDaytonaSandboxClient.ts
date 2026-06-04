@@ -68,7 +68,7 @@ import {
   type DaytonaSessionProcess,
 } from "./DaytonaSandboxClient.ts";
 
-const SANDBOX_ROOT = "/home/daytona/workspace";
+const SANDBOX_ROOT = "/home/daytona";
 const SESSION_POLL_INTERVAL = Schedule.spaced("250 millis");
 
 // Response schemas mirror the documented Daytona REST shapes. They stay tolerant
@@ -177,13 +177,22 @@ const quoteArg = (value: string): string => `'${value.split("'").join("'\\''")}'
 
 /** Build a `cd && env VAR=... cmd args` shell string for toolbox exec. */
 const buildShellCommand = (input: DaytonaExecInput, root: string): string => {
-  const cwd = input.cwd === undefined || input.cwd.length === 0 ? root : `${root}/${input.cwd}`;
+  // No cwd -> run in the sandbox's default working dir (don't cd to a path that
+  // may not exist). A relative cwd resolves under `root`; an absolute cwd is used
+  // as-is (production passes the instance rootPath).
+  const target =
+    input.cwd === undefined || input.cwd.length === 0
+      ? undefined
+      : input.cwd.startsWith("/")
+        ? input.cwd
+        : `${root}/${input.cwd}`;
   const envAssignments = Object.entries(input.env ?? {})
     .filter((entry): entry is [string, string] => entry[1] !== undefined)
     .map(([key, value]) => `${key}=${quoteArg(value)}`);
   const parts = input.args.map(quoteArg);
   const envPrefix = envAssignments.length > 0 ? `env ${envAssignments.join(" ")} ` : "";
-  return `cd ${quoteArg(cwd)} && ${envPrefix}${quoteArg(input.command)} ${parts.join(" ")}`.trim();
+  const command = `${envPrefix}${quoteArg(input.command)} ${parts.join(" ")}`.trim();
+  return target === undefined ? command : `cd ${quoteArg(target)} && ${command}`;
 };
 
 export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
@@ -214,6 +223,18 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
     };
 
     const apiUrl = (path: string): string => `${credentials.apiUrl}${path}`;
+
+    // Toolbox/process endpoints are served by the Daytona proxy host
+    // (`proxy.<api-host>`, no `/api` prefix), not the management API base.
+    const toolboxBaseUrl = ((): string => {
+      try {
+        const parsed = new URL(credentials.apiUrl);
+        return `${parsed.protocol}//proxy.${parsed.host}`;
+      } catch {
+        return credentials.apiUrl;
+      }
+    })();
+    const toolboxUrl = (path: string): string => `${toolboxBaseUrl}${path}`;
 
     // Run an authed request, decode the JSON body with `schema`, and turn any
     // transport/non-2xx/decoding failure into a redacted DaytonaApiError that
@@ -324,7 +345,7 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
     const exec: DaytonaSandboxClientShape["exec"] = (sandboxId, input) =>
       Effect.gen(function* () {
         const request = yield* HttpClientRequest.bodyJson(
-          HttpClientRequest.post(apiUrl(`/toolbox/${sandboxId}/process/execute`)),
+          HttpClientRequest.post(toolboxUrl(`/toolbox/${sandboxId}/process/execute`)),
           { command: buildShellCommand(input, SANDBOX_ROOT) },
         ).pipe(
           Effect.mapError(
@@ -347,7 +368,7 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
     const startSession: DaytonaSandboxClientShape["startSession"] = (sandboxId, input) =>
       Effect.gen(function* () {
         const sessionId = `synara-${crypto.randomUUID()}`;
-        const sessionBase = apiUrl(`/toolbox/${sandboxId}/process/session`);
+        const sessionBase = toolboxUrl(`/toolbox/${sandboxId}/process/session`);
 
         const createSessionReq = yield* HttpClientRequest.bodyJson(
           HttpClientRequest.post(sessionBase),
