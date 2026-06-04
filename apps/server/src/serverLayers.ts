@@ -3,6 +3,8 @@ import { Layer } from "effect";
 
 import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQuery";
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore";
+import { ExecutionRuntimeServiceLive } from "./executionRuntime/Layers/ExecutionRuntimeService";
+import { FakeRuntimeProviderAdapterLive } from "./executionRuntime/Layers/FakeRuntimeProviderAdapter";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor";
@@ -47,7 +49,16 @@ export function makeServerRuntimeServicesLayer() {
   const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
+  // The execution-runtime service resolves/provisions where a thread runs before
+  // the provider session starts. Its fake adapter needs FileSystem; the service
+  // itself needs ChildProcessSpawner — both come from NodeServices below. Engine
+  // + snapshot query come from runtimeServicesLayer.
+  const executionRuntimeServiceLayer = ExecutionRuntimeServiceLive.pipe(
+    Layer.provide(FakeRuntimeProviderAdapterLive),
+    Layer.provideMerge(runtimeServicesLayer),
+  );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
+    Layer.provideMerge(executionRuntimeServiceLayer),
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(GitCoreLive),
     Layer.provideMerge(TextGenerationLayerLive),

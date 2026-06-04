@@ -28,6 +28,8 @@ import {
 } from "../../provider/Services/ProviderService.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
 import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
+import { ExecutionRuntimeServiceLive } from "../../executionRuntime/Layers/ExecutionRuntimeService.ts";
+import { FakeRuntimeProviderAdapterLive } from "../../executionRuntime/Layers/FakeRuntimeProviderAdapter.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
@@ -298,7 +300,14 @@ describe("ProviderCommandReactor", () => {
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
     );
+    const executionRuntimeLayer = ExecutionRuntimeServiceLive.pipe(
+      Layer.provide(FakeRuntimeProviderAdapterLive),
+      Layer.provideMerge(orchestrationLayer),
+      Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
+      Layer.provideMerge(NodeServices.layer),
+    );
     const layer = ProviderCommandReactorLive.pipe(
+      Layer.provideMerge(executionRuntimeLayer),
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),

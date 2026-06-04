@@ -28,10 +28,16 @@ import { ProviderKind } from "./providerKind";
 export const ExecutionTargetKind = Schema.Literals(["local", "worktree", "remote-runtime"]);
 export type ExecutionTargetKind = typeof ExecutionTargetKind.Type;
 
-/** Which infrastructure backs a remote runtime instance. */
+/**
+ * Which infrastructure backs a remote runtime instance. `fake` is the
+ * server-internal fake-remote family that exercises the remote provisioning
+ * mechanism locally (temp dirs + in-memory transport); the specific fake flavor
+ * stays server-internal. Real providers land with their adapters in later slices.
+ */
 export const ExecutionRuntimeProvider = Schema.Literals([
   "local",
   "worktree",
+  "fake",
   "daytona",
   "vercel-sandbox",
   "modal",

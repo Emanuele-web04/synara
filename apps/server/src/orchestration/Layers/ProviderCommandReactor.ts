@@ -46,6 +46,7 @@ import {
   type BranchNameGenerationInput,
   type ThreadTitleGenerationInput,
 } from "../../git/Services/TextGeneration.ts";
+import { ExecutionRuntimeService } from "../../executionRuntime/Services/ExecutionRuntimeService.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
@@ -248,6 +249,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const executionRuntimeService = yield* ExecutionRuntimeService;
   const checkpointStore = yield* CheckpointStore;
   const git = yield* GitCore;
   const textGeneration = yield* TextGeneration;
@@ -693,7 +695,25 @@ const make = Effect.gen(function* () {
     }
     const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
-    const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
+    // Provision (or resolve) the execution target before the provider session
+    // starts. For local/worktree threads this returns no cwd override and does
+    // nothing, preserving the existing local spawn path exactly. For a remote
+    // target it returns the provisioned root the session should run in. The
+    // reactor stays provider-agnostic: it reads only the resolved cwd, never any
+    // provider-specific instance ids, states, or routes.
+    const resolvedTarget = yield* executionRuntimeService.ensureTargetForThread(threadId).pipe(
+      Effect.catchTag("RuntimeProvisionFailedError", (error) =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: threadProvider,
+            method: "thread.turn.start",
+            detail: error.message,
+          }),
+        ),
+      ),
+    );
+    const projectedCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
+    const effectiveCwd = resolvedTarget.cwd ?? projectedCwd;
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
       worktreePath: thread.worktreePath,

@@ -44,6 +44,8 @@ import { CodexAdapter } from "../src/provider/Services/CodexAdapter.ts";
 import { ProviderService } from "../src/provider/Services/ProviderService.ts";
 import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
+import { ExecutionRuntimeServiceLive } from "../src/executionRuntime/Layers/ExecutionRuntimeService.ts";
+import { FakeRuntimeProviderAdapterLive } from "../src/executionRuntime/Layers/FakeRuntimeProviderAdapter.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../src/orchestration/Layers/ProjectionPipeline.ts";
@@ -308,7 +310,13 @@ export const makeOrchestrationIntegrationHarness = (
     const textGenerationLayer = Layer.succeed(TextGeneration, {
       generateBranchName: () => Effect.succeed({ branch: null }),
     } as unknown as TextGenerationShape);
+    const executionRuntimeServiceLayer = ExecutionRuntimeServiceLive.pipe(
+      Layer.provide(FakeRuntimeProviderAdapterLive),
+      Layer.provideMerge(runtimeServicesLayer),
+      Layer.provideMerge(NodeServices.layer),
+    );
     const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
+      Layer.provideMerge(executionRuntimeServiceLayer),
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(gitCoreLayer),
       Layer.provideMerge(textGenerationLayer),

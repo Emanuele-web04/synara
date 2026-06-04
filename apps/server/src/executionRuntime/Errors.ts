@@ -31,3 +31,20 @@ export class RuntimePlanRejectedError extends Schema.TaggedErrorClass<RuntimePla
     return `Execution-runtime plan rejected (${this.provider}/${this.targetKind}): ${this.reasons.join("; ")}`;
   }
 }
+
+/**
+ * RuntimeProvisionFailedError - Provisioning, exec, or recording a runtime
+ * instance failed. Provider-agnostic at the orchestration seam: the reactor sees
+ * only this tagged error, never a concrete provider's failure type.
+ */
+export class RuntimeProvisionFailedError extends Schema.TaggedErrorClass<RuntimeProvisionFailedError>()(
+  "RuntimeProvisionFailedError",
+  {
+    threadId: Schema.String,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Execution-runtime provisioning failed for thread ${this.threadId}: ${this.detail}`;
+  }
+}

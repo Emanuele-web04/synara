@@ -11,6 +11,7 @@
 import { Effect, Layer } from "effect";
 
 import { RuntimeProviderUnsupportedError } from "../Errors.ts";
+import type { FakeRuntimeFlavor } from "../Services/FakeRuntimeFlavor.ts";
 import type { RuntimeProviderDescriptor } from "../Services/RuntimeProviderDescriptor.ts";
 import {
   RuntimeProviderRegistry,
@@ -25,7 +26,21 @@ export interface RuntimeProviderRegistryLiveOptions {
 const makeRuntimeProviderRegistry = (options?: RuntimeProviderRegistryLiveOptions) =>
   Effect.sync(() => {
     const descriptors = options?.descriptors ?? BUILT_IN_RUNTIME_DESCRIPTORS;
-    const byProvider = new Map(descriptors.map((descriptor) => [descriptor.provider, descriptor]));
+    // Provider-keyed lookup ignores flavored `fake` descriptors so a plain
+    // `fake` provider resolution does not silently bind to one arbitrary flavor.
+    const byProvider = new Map(
+      descriptors
+        .filter((descriptor) => descriptor.flavor === undefined)
+        .map((descriptor) => [descriptor.provider, descriptor]),
+    );
+    const byFlavor = new Map<FakeRuntimeFlavor, RuntimeProviderDescriptor>(
+      descriptors
+        .filter(
+          (descriptor): descriptor is RuntimeProviderDescriptor & { flavor: FakeRuntimeFlavor } =>
+            descriptor.flavor !== undefined,
+        )
+        .map((descriptor) => [descriptor.flavor, descriptor]),
+    );
 
     const getDescriptor: RuntimeProviderRegistryShape["getDescriptor"] = (provider) => {
       const descriptor = byProvider.get(provider);
@@ -35,11 +50,22 @@ const makeRuntimeProviderRegistry = (options?: RuntimeProviderRegistryLiveOption
       return Effect.succeed(descriptor);
     };
 
+    const getDescriptorByFlavor: RuntimeProviderRegistryShape["getDescriptorByFlavor"] = (
+      flavor,
+    ) => {
+      const descriptor = byFlavor.get(flavor);
+      if (!descriptor) {
+        return Effect.fail(new RuntimeProviderUnsupportedError({ provider: flavor }));
+      }
+      return Effect.succeed(descriptor);
+    };
+
     const listProviders: RuntimeProviderRegistryShape["listProviders"] = () =>
       Effect.sync(() => Array.from(byProvider.keys()));
 
     return {
       getDescriptor,
+      getDescriptorByFlavor,
       listProviders,
     } satisfies RuntimeProviderRegistryShape;
   });

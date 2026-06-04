@@ -16,6 +16,8 @@ import type {
   RuntimeRole,
 } from "@t3tools/contracts";
 
+import type { FakeRuntimeFlavor } from "./FakeRuntimeFlavor.ts";
+
 /** Lifecycle operations a provider supports beyond create/destroy. */
 export interface RuntimeLifecycleCapabilities {
   readonly stop: boolean;
@@ -105,6 +107,12 @@ export interface RuntimeProviderCapabilities {
  */
 export interface RuntimeProviderDescriptor {
   readonly provider: ExecutionRuntimeProvider;
+  /**
+   * Server-internal sub-kind for the `fake` family. The registry keys lookups by
+   * flavor so each fake reports its own honest capabilities while persisting
+   * under the single public `fake` provider literal.
+   */
+  readonly flavor?: FakeRuntimeFlavor;
   /** Target kinds this provider can back (e.g. `local` backs only `local`). */
   readonly targetKinds: ReadonlyArray<ExecutionTargetKind>;
   readonly capabilities: RuntimeProviderCapabilities;
