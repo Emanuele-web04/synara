@@ -5694,9 +5694,16 @@ export default function Sidebar() {
                     </div>
                   </div>
                 ) : null}
-                <div className="my-1 flex items-center justify-between px-2 py-1">
-                  <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Threads</span>
-                  <SidebarSectionToolbar>
+                <div className="group/project-header relative my-1">
+                  <div
+                    className={cn(
+                      "flex h-7 w-full min-w-0 items-center px-2 py-0.5 pr-[4.75rem]",
+                      SIDEBAR_SECTION_LABEL_CLASS_NAME,
+                    )}
+                  >
+                    <span className="truncate">Projects</span>
+                  </div>
+                  <SidebarSectionToolbar placement="overlay" revealOnHover>
                     {standardProjects.length > 0 ? (
                       <SidebarIconButton
                         icon={allProjectsExpanded ? TbArrowsDiagonalMinimize2 : TbArrowsDiagonal}

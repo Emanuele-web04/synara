@@ -29,7 +29,7 @@ export function SettingsSidebarNav(props: {
 }) {
   return (
     <div className="px-1.5 py-1.5">
-      <div className="mb-3">
+      <div className="mb-4">
         <button
           type="button"
           className={cn(
