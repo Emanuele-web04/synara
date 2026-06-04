@@ -329,6 +329,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           forkSourceThreadId: null,
           sidechatSourceThreadId: null,
           lastKnownPr: null,
+          runtime: null,
           latestUserMessageAt: "2026-02-24T00:00:03.500Z",
           hasPendingApprovals: true,
           hasPendingUserInput: true,
@@ -1268,6 +1269,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           forkSourceThreadId: null,
           sidechatSourceThreadId: null,
           lastKnownPr: null,
+          runtime: null,
           latestTurn: {
             turnId: asTurnId("turn-shell"),
             state: "completed",
@@ -1492,6 +1494,99 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           latestCheckpointTurnCount: 2,
           toCheckpointRef: asCheckpointRef("checkpoint-b"),
         });
+      }
+    }),
+  );
+
+  it.effect("hydrates execution runtime from projection_thread_runtime in all read paths", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_thread_runtime`;
+      yield* sql`DELETE FROM projection_state`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, kind, title, workspace_root, default_model_selection_json, scripts_json,
+          created_at, updated_at, deleted_at
+        )
+        VALUES (
+          'project-runtime', 'project', 'Runtime Project', '/tmp/runtime-project',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-04-01T00:00:00.000Z', '2026-04-01T00:00:01.000Z', NULL
+        )
+      `;
+
+      // Thread with a runtime row, plus a second thread with none to prove the
+      // join is a left join (no row => runtime null).
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, created_at, updated_at, deleted_at
+        )
+        VALUES
+          ('thread-runtime', 'project-runtime', 'Runtime Thread',
+           '{"provider":"codex","model":"gpt-5-codex"}',
+           '2026-04-01T00:00:02.000Z', '2026-04-01T00:00:03.000Z', NULL),
+          ('thread-plain', 'project-runtime', 'Plain Thread',
+           '{"provider":"codex","model":"gpt-5-codex"}',
+           '2026-04-01T00:00:02.500Z', '2026-04-01T00:00:03.500Z', NULL)
+      `;
+
+      yield* sql`
+        INSERT INTO projection_thread_runtime (
+          thread_id, target_kind, provider, role, runtime_instance_id, status, root_path,
+          instance_json, processes_json, routes_json, snapshots_json, leases_json,
+          last_activity_at, updated_at
+        )
+        VALUES (
+          'thread-runtime', 'remote-runtime', 'daytona', 'agent', 'inst-1', 'running',
+          '/workspace',
+          '{"id":"inst-1","provider":"daytona","status":"running","rootPath":"/workspace","failureReason":null,"createdAt":"2026-04-01T00:00:04.000Z","updatedAt":"2026-04-01T00:00:05.000Z"}',
+          '[{"id":"proc-1","role":"agent","command":"codex app-server","status":"running","exitCode":null,"failureReason":null,"startedAt":"2026-04-01T00:00:05.000Z","exitedAt":null}]',
+          '[{"id":"route-1","port":3000,"url":"https://preview.example","label":"web","exposedAt":"2026-04-01T00:00:06.000Z"}]',
+          '[]',
+          '[]',
+          '2026-04-01T00:00:06.000Z',
+          '2026-04-01T00:00:06.000Z'
+        )
+      `;
+
+      const snapshot = yield* snapshotQuery.getSnapshot();
+      const runtimeThread = snapshot.threads.find((thread) => thread.id === "thread-runtime");
+      const plainThread = snapshot.threads.find((thread) => thread.id === "thread-plain");
+      assert.equal(runtimeThread?.runtime?.provider, "daytona");
+      assert.equal(runtimeThread?.runtime?.status, "running");
+      assert.equal(runtimeThread?.runtime?.instance?.id, "inst-1");
+      assert.equal(runtimeThread?.runtime?.processes.length, 1);
+      assert.equal(runtimeThread?.runtime?.routes[0]?.port, 3000);
+      assert.equal(plainThread?.runtime, null);
+
+      const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
+      const runtimeShell = shellSnapshot.threads.find((thread) => thread.id === "thread-runtime");
+      const plainShell = shellSnapshot.threads.find((thread) => thread.id === "thread-plain");
+      assert.equal(runtimeShell?.runtime?.status, "running");
+      assert.equal(plainShell?.runtime, null);
+
+      const detail = yield* snapshotQuery.getThreadDetailById(asThreadId("thread-runtime"));
+      assert.equal(Option.isSome(detail), true);
+      if (Option.isSome(detail)) {
+        assert.equal(detail.value.runtime?.provider, "daytona");
+        assert.equal(detail.value.runtime?.instance?.rootPath, "/workspace");
+      }
+
+      const shellById = yield* snapshotQuery.getThreadShellById(asThreadId("thread-runtime"));
+      assert.equal(Option.isSome(shellById), true);
+      if (Option.isSome(shellById)) {
+        assert.equal(shellById.value.runtime?.status, "running");
+      }
+
+      const plainDetail = yield* snapshotQuery.getThreadDetailById(asThreadId("thread-plain"));
+      assert.equal(Option.isSome(plainDetail), true);
+      if (Option.isSome(plainDetail)) {
+        assert.equal(plainDetail.value.runtime, null);
       }
     }),
   );

@@ -11,7 +11,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas";
-import { ProviderKind } from "./orchestration";
+import { ProviderKind } from "./providerKind";
 
 /**
  * Execution-runtime public read-model + plan-input contracts (schema-only).

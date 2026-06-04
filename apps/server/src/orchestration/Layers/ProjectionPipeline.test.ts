@@ -4,8 +4,10 @@ import {
   CommandId,
   CorrelationId,
   EventId,
+  ExecutionInstanceId,
   MessageId,
   ProjectId,
+  RuntimeProcessId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -273,6 +275,144 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       assert.equal(rows[0]!.runtimeMode, "approval-required");
       assert.equal(rows[0]!.interactionMode, "default");
       assert.equal(rows[0]!.updatedAt, turnRequestedAt);
+    }),
+  );
+
+  it.effect("projects runtime lifecycle events into projection_thread_runtime on replay", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-04-10T00:00:00.000Z";
+
+      yield* eventStore.append({
+        type: "thread.created",
+        eventId: EventId.makeUnsafe("rt-evt-thread"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-rt"),
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("rt-cmd-thread"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("rt-cmd-thread"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-rt"),
+          projectId: ProjectId.makeUnsafe("project-rt"),
+          title: "Runtime Thread",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      yield* eventStore.append({
+        type: "thread.runtime-provision-requested",
+        eventId: EventId.makeUnsafe("rt-evt-prov"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-rt"),
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("rt-cmd-prov"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("rt-cmd-prov"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-rt"),
+          targetKind: "remote-runtime",
+          provider: "daytona",
+          role: "agent",
+          requestedAt: now,
+        },
+      });
+
+      yield* eventStore.append({
+        type: "thread.runtime-instance-created",
+        eventId: EventId.makeUnsafe("rt-evt-inst"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-rt"),
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("rt-cmd-inst"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("rt-cmd-inst"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-rt"),
+          instanceId: ExecutionInstanceId.makeUnsafe("inst-rt"),
+          provider: "daytona",
+          status: "running",
+          rootPath: "/workspace",
+          createdAt: now,
+        },
+      });
+
+      yield* eventStore.append({
+        type: "thread.runtime-process-started",
+        eventId: EventId.makeUnsafe("rt-evt-proc"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-rt"),
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("rt-cmd-proc"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("rt-cmd-proc"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-rt"),
+          instanceId: ExecutionInstanceId.makeUnsafe("inst-rt"),
+          processId: RuntimeProcessId.makeUnsafe("proc-rt"),
+          role: "agent",
+          command: "codex app-server",
+          startedAt: now,
+        },
+      });
+
+      // Bootstrap replays the whole log — the reconnect/cold-start path.
+      yield* projectionPipeline.bootstrap;
+
+      const runtimeRows = yield* sql<{
+        readonly threadId: string;
+        readonly provider: string;
+        readonly status: string;
+        readonly runtimeInstanceId: string | null;
+        readonly processesJson: string;
+      }>`
+        SELECT
+          thread_id AS "threadId",
+          provider,
+          status,
+          runtime_instance_id AS "runtimeInstanceId",
+          processes_json AS "processesJson"
+        FROM projection_thread_runtime
+        WHERE thread_id = 'thread-rt'
+      `;
+      assert.equal(runtimeRows.length, 1);
+      assert.equal(runtimeRows[0]!.provider, "daytona");
+      assert.equal(runtimeRows[0]!.status, "running");
+      assert.equal(runtimeRows[0]!.runtimeInstanceId, "inst-rt");
+      const processes = JSON.parse(runtimeRows[0]!.processesJson) as ReadonlyArray<{
+        readonly id: string;
+        readonly status: string;
+      }>;
+      assert.equal(processes.length, 1);
+      assert.equal(processes[0]!.id, "proc-rt");
+      assert.equal(processes[0]!.status, "running");
+
+      const instanceRows = yield* sql<{ readonly instanceId: string; readonly status: string }>`
+        SELECT instance_id AS "instanceId", status
+        FROM execution_runtime_instances
+        WHERE thread_id = 'thread-rt'
+      `;
+      assert.equal(instanceRows.length, 1);
+      assert.equal(instanceRows[0]!.instanceId, "inst-rt");
+
+      const processRows = yield* sql<{ readonly processId: string }>`
+        SELECT process_id AS "processId"
+        FROM execution_runtime_processes
+        WHERE thread_id = 'thread-rt'
+      `;
+      assert.equal(processRows.length, 1);
+      assert.equal(processRows[0]!.processId, "proc-rt");
     }),
   );
 });
