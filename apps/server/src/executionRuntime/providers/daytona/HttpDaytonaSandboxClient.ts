@@ -2,31 +2,57 @@
  * HttpDaytonaSandboxClient - the real Daytona REST client (credential-gated).
  *
  * Selected only when `DAYTONA_API_KEY` is configured; otherwise the adapter uses
- * the fake client. Talks the documented Daytona API:
+ * the fake client. Endpoints map to the documented Daytona REST API (base
+ * `{api}` is `DAYTONA_API_URL`, default `https://app.daytona.io/api`):
  *
- *   - `POST   {api}/sandbox`                          create
+ *   - `POST   {api}/sandbox`                          create / resume
  *   - `GET    {api}/sandbox/{id}`                     status (reconnect)
+ *   - `POST   {api}/sandbox/{id}/start`               start / activity refresh
  *   - `POST   {api}/sandbox/{id}/stop`                stop (FS persists)
  *   - `POST   {api}/sandbox/{id}/archive`             archive before delete
  *   - `DELETE {api}/sandbox/{id}`                     destroy
  *   - `POST   {api}/sandbox/{id}/snapshot`            snapshot
- *   - `POST   {api}/toolbox/{id}/toolbox/process/execute`  fire-and-collect exec
- *   - toolbox session endpoints                       long-lived agent session
+ *   - `GET    {api}/sandbox/{id}/ports/{port}/preview-url`  preview URL
+ *   - `POST   {api}/toolbox/{id}/process/execute`     fire-and-collect exec
+ *   - `POST   {api}/toolbox/{id}/process/session`     create a session
+ *   - `POST   {api}/toolbox/{id}/process/session/{sid}/exec`  async session command
+ *   - `GET    {api}/toolbox/{id}/process/session/{sid}/command/{cid}`       command status (exit code)
+ *   - `GET    {api}/toolbox/{id}/process/session/{sid}/command/{cid}/logs`  command output
+ *   - `POST   {api}/toolbox/{id}/process/session/{sid}/command/{cid}/input` stdin
  *
- * Credential safety: the bearer token and any tokenized URL never reach a log or
- * an error detail — every failure runs through {@link redactSecrets} with the
- * token registered, and the adapter logs only sandbox ids and exit codes.
+ * Credential safety: the bearer token, any tokenized URL, and a preview-URL token
+ * never reach a log or an error detail — every failure runs through
+ * {@link redactSecrets} with those values registered, and the adapter logs only
+ * sandbox ids and exit codes.
  *
  * `startSession` (v1): Daytona has no duplex stdio socket over plain REST, so a
- * long-lived process runs as an async session command and its stdout is polled
- * from the session-command log endpoint, line-framed into the stream the runtime
- * forwards into the in-memory JSON-RPC transport. Stdin frames are delivered via
- * the session input endpoint. This is enough to run `codex app-server`; a richer
- * duplex transport (websocket toolbox) is a later refinement.
+ * long-lived process runs as an async session command. Its output is polled from
+ * the command-logs endpoint and line-framed into the stream the runtime forwards
+ * into the in-memory JSON-RPC transport; its exit code comes from the
+ * command-status endpoint (the logs endpoint streams output only). Stdin frames
+ * are delivered via the command-input endpoint. This is enough to run
+ * `codex app-server`; a richer duplex transport (websocket toolbox) is a later
+ * refinement.
+ *
+ * Every JSON response is decoded with effect/Schema; a body that does not match
+ * the documented shape fails as a `DaytonaApiError` rather than silently reading
+ * `undefined`, so a drift in the live API surfaces loudly.
  *
  * @module daytona/HttpDaytonaSandboxClient
  */
-import { Deferred, Effect, Exit, Layer, Queue, Ref, Schedule, Schema, Scope, Stream } from "effect";
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  Queue,
+  Ref,
+  Schedule,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
 import type { ProcessExit } from "../../../provider/process/JsonRpcLineTransport.ts";
@@ -45,12 +71,20 @@ import {
 const SANDBOX_ROOT = "/home/daytona/workspace";
 const SESSION_POLL_INTERVAL = Schedule.spaced("250 millis");
 
+// Response schemas mirror the documented Daytona REST shapes. They stay tolerant
+// where the API legitimately varies (id vs name fields, state vs status, camel
+// vs lower-snake state strings) but reject a body missing every expected field,
+// so a real shape drift fails loudly as a DaytonaApiError instead of decoding to
+// `undefined` and silently misbehaving downstream.
+
+/** `POST /sandbox`, `GET /sandbox/{id}` — the sandbox DTO (`state` is canonical). */
 const SandboxResponse = Schema.Struct({
   id: Schema.String,
   state: Schema.optional(Schema.String),
   status: Schema.optional(Schema.String),
 });
 
+/** `POST /toolbox/{id}/process/execute` — `result` is stdout, `exitCode` the code. */
 const ExecResponse = Schema.Struct({
   result: Schema.optional(Schema.String),
   stdout: Schema.optional(Schema.String),
@@ -58,44 +92,81 @@ const ExecResponse = Schema.Struct({
   exitCode: Schema.optional(Schema.NullOr(Schema.Number)),
 });
 
+/** `POST /sandbox/{id}/snapshot` — the created snapshot (id or name field). */
 const SnapshotResponse = Schema.Struct({
   id: Schema.optional(Schema.String),
   snapshotId: Schema.optional(Schema.String),
+  name: Schema.optional(Schema.String),
 });
 
+/**
+ * `GET /sandbox/{id}/ports/{port}/preview-url` — a PortPreviewUrl. `token` gates
+ * access to a private sandbox's URL, so it is treated as a secret and redacted
+ * from any error/log; only the `url` is surfaced.
+ */
 const PreviewResponse = Schema.Struct({
   url: Schema.String,
+  token: Schema.optional(Schema.String),
+  legacyProxyUrl: Schema.optional(Schema.String),
 });
 
+/** `POST /toolbox/{id}/process/session/{sid}/exec` — async command id (`cmdId`). */
 const SessionCommandResponse = Schema.Struct({
   commandId: Schema.optional(Schema.String),
   cmdId: Schema.optional(Schema.String),
 });
 
+/** `GET .../command/{cid}/logs` — cumulative output (stdout/stderr also seen). */
 const SessionLogResponse = Schema.Struct({
   output: Schema.optional(Schema.String),
+  stdout: Schema.optional(Schema.String),
+  stderr: Schema.optional(Schema.String),
+});
+
+/**
+ * `GET .../command/{cid}` — the session command DTO. `exitCode` is present only
+ * once the command has terminated; while it runs the field is absent/null. This
+ * is the authoritative exit-code source (the logs endpoint carries output only).
+ */
+const SessionCommandStatusResponse = Schema.Struct({
   exitCode: Schema.optional(Schema.NullOr(Schema.Number)),
 });
 
-/** Map Daytona's provider state strings onto the normalized status set. */
+/**
+ * Map a Daytona `SandboxState` wire string onto the normalized status set. The
+ * API emits lower-snake-case (`build_failed`, `pending_build`); the full enum is
+ * mapped so a transitional state (restoring, archiving, snapshotting, …) is not
+ * misread as `unknown`. Underscores and dashes are both tolerated.
+ */
 const normalizeStatus = (state: string | undefined): DaytonaSandboxStatus => {
-  switch ((state ?? "").toLowerCase()) {
+  switch ((state ?? "").toLowerCase().replace(/-/g, "_")) {
     case "started":
     case "running":
       return "running";
     case "starting":
     case "creating":
+    case "restoring":
     case "pending":
+    case "pending_build":
+    case "building_snapshot":
+    case "pulling_snapshot":
+    case "resizing":
+    case "forking":
       return "starting";
     case "stopped":
+    case "stopping":
+    case "snapshotting":
       return "stopped";
     case "archived":
+    case "archiving":
       return "archived";
     case "destroyed":
+    case "destroying":
     case "deleted":
       return "destroyed";
     case "error":
     case "failed":
+    case "build_failed":
       return "error";
     default:
       return "unknown";
@@ -118,9 +189,17 @@ const buildShellCommand = (input: DaytonaExecInput, root: string): string => {
 export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
   Effect.gen(function* () {
     const httpClient = yield* HttpClient.HttpClient;
-    const secrets = [credentials.apiKey];
+    // The API key is a static secret; preview-URL tokens are minted per call and
+    // registered here so a later failure that echoes one is still redacted.
+    const dynamicSecrets = new Set<string>();
+    const registerSecret = (secret: string): void => {
+      if (secret.trim().length > 0) {
+        dynamicSecrets.add(secret);
+      }
+    };
 
-    const redact = (value: string): string => redactSecrets(value, secrets);
+    const redact = (value: string): string =>
+      redactSecrets(value, [credentials.apiKey, ...dynamicSecrets]);
 
     const authed = (request: HttpClientRequest.HttpClientRequest) => {
       const withOrg =
@@ -245,7 +324,7 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
     const exec: DaytonaSandboxClientShape["exec"] = (sandboxId, input) =>
       Effect.gen(function* () {
         const request = yield* HttpClientRequest.bodyJson(
-          HttpClientRequest.post(apiUrl(`/toolbox/${sandboxId}/toolbox/process/execute`)),
+          HttpClientRequest.post(apiUrl(`/toolbox/${sandboxId}/process/execute`)),
           { command: buildShellCommand(input, SANDBOX_ROOT) },
         ).pipe(
           Effect.mapError(
@@ -268,7 +347,7 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
     const startSession: DaytonaSandboxClientShape["startSession"] = (sandboxId, input) =>
       Effect.gen(function* () {
         const sessionId = `synara-${crypto.randomUUID()}`;
-        const sessionBase = apiUrl(`/toolbox/${sandboxId}/toolbox/process/session`);
+        const sessionBase = apiUrl(`/toolbox/${sandboxId}/process/session`);
 
         const createSessionReq = yield* HttpClientRequest.bodyJson(
           HttpClientRequest.post(sessionBase),
@@ -311,21 +390,28 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
         }
 
         const sessionScope = yield* Scope.make();
-        const stdoutQueue = yield* Queue.unbounded<string>();
+        // `Cause.Done` in the error channel lets the poll loop `end` the queue so
+        // the consumer drains the final lines gracefully rather than being torn
+        // down mid-drain by a `shutdown`.
+        const stdoutQueue = yield* Queue.unbounded<string, Cause.Done>();
         const exitDeferred = yield* Deferred.make<ProcessExit>();
         const consumed = yield* Ref.make(0);
 
-        // Poll the session command log: each tick reads the cumulative output,
-        // line-frames the newly appended slice, and stops once an exit code
-        // appears. Cumulative-length tracking avoids re-emitting old lines.
+        // Poll the session command on each tick: read the cumulative log output
+        // and line-frame the newly appended slice (cumulative-length tracking
+        // avoids re-emitting old lines), then read the command status for an exit
+        // code. The exit code lives on the command-status endpoint, not the logs
+        // endpoint; a non-null code ends the loop.
         const pollOnce = Effect.gen(function* () {
           const logReq = HttpClientRequest.get(
             `${sessionBase}/${sessionId}/command/${commandId}/logs`,
           );
           const log = yield* requestJson("sessionLogs", logReq, SessionLogResponse).pipe(
-            Effect.orElseSucceed(() => ({ output: undefined, exitCode: undefined }) as const),
+            Effect.orElseSucceed(
+              () => ({ output: undefined, stdout: undefined, stderr: undefined }) as const,
+            ),
           );
-          const output = log.output ?? "";
+          const output = log.output ?? log.stdout ?? "";
           const seen = yield* Ref.get(consumed);
           if (output.length > seen) {
             const fresh = output.slice(seen);
@@ -336,7 +422,15 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
               }
             }
           }
-          return log.exitCode ?? null;
+          const statusReq = HttpClientRequest.get(
+            `${sessionBase}/${sessionId}/command/${commandId}`,
+          );
+          const status = yield* requestJson(
+            "sessionCommandStatus",
+            statusReq,
+            SessionCommandStatusResponse,
+          ).pipe(Effect.orElseSucceed(() => ({ exitCode: undefined }) as const));
+          return status.exitCode ?? null;
         });
 
         yield* pollOnce.pipe(
@@ -350,7 +444,10 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
           ),
           Effect.repeat(SESSION_POLL_INTERVAL),
           Effect.catchCause(() => Effect.void),
-          Effect.ensuring(Queue.shutdown(stdoutQueue)),
+          // `end` (not `shutdown`) so the stream consumer drains the lines already
+          // offered this final tick before completing — the agent's last output
+          // is not dropped on exit. `shutdown` would discard buffered items.
+          Effect.ensuring(Queue.end(stdoutQueue)),
           Effect.forkIn(sessionScope),
         );
 
@@ -378,7 +475,16 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
         "exposePort",
         HttpClientRequest.get(apiUrl(`/sandbox/${sandboxId}/ports/${port}/preview-url`)),
         PreviewResponse,
-      ).pipe(Effect.map((response) => ({ url: response.url })));
+      ).pipe(
+        Effect.map((response) => {
+          // The preview token gates access to a private sandbox's URL; register it
+          // so any later failure that echoes it is redacted. Only `url` surfaces.
+          if (response.token !== undefined) {
+            registerSecret(response.token);
+          }
+          return { url: response.url };
+        }),
+      );
 
     const snapshot: DaytonaSandboxClientShape["snapshot"] = (sandboxId, label) =>
       Effect.gen(function* () {
@@ -396,7 +502,7 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
           ),
         );
         const response = yield* requestJson("snapshot", request, SnapshotResponse);
-        const snapshotId = response.snapshotId ?? response.id;
+        const snapshotId = response.snapshotId ?? response.id ?? response.name;
         if (snapshotId === undefined) {
           return yield* Effect.fail(
             new DaytonaApiError({
