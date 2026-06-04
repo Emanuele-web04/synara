@@ -44,6 +44,7 @@ import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
+import { SandboxSecretWriter } from "./executionRuntime/Services/SandboxSecretWriter";
 import { TerminalManager } from "./terminal/Services/Manager";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
@@ -215,6 +216,7 @@ export const makeWsRpcLayer = () =>
       const runtimeStartup = yield* ServerRuntimeStartup;
       const serverEnvironment = yield* ServerEnvironment;
       const serverSettings = yield* ServerSettingsService;
+      const sandboxSecretWriter = yield* SandboxSecretWriter;
       const terminalManager = yield* TerminalManager;
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
@@ -607,7 +609,14 @@ export const makeWsRpcLayer = () =>
         [WS_METHODS.serverGetSettings]: () =>
           rpcEffect(serverSettings.getSettings, "Failed to load server settings"),
         [WS_METHODS.serverUpdateSettings]: (input) =>
-          rpcEffect(serverSettings.updateSettings(input), "Failed to update server settings"),
+          rpcEffect(
+            // Route secret-bearing sandbox fields into ServerSecretStore and strip
+            // them from the patch so the raw tokens never reach settings.json.
+            sandboxSecretWriter
+              .persistSecrets(input)
+              .pipe(Effect.flatMap((patch) => serverSettings.updateSettings(patch))),
+            "Failed to update server settings",
+          ),
         [WS_METHODS.serverRefreshProviders]: () =>
           rpcEffect(
             providerHealth.refresh.pipe(Effect.map((providers) => ({ providers }))),

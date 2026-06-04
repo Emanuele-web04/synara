@@ -15,6 +15,8 @@ import { Layer } from "effect";
 import type { FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 
+import { buildProviderLayerFromEnv } from "../../providerCredentialLayer.ts";
+import type { RuntimeProviderCredentials } from "../../Services/RuntimeProviderCredentials.ts";
 import { VercelSandboxAdapterLive } from "./Layers/VercelSandboxAdapter.ts";
 import { selectVercelSandboxClientLive } from "./Layers/VercelSandboxClientLive.ts";
 import { VercelSandboxAdapter } from "./Services/VercelSandboxAdapter.ts";
@@ -28,22 +30,56 @@ import { VercelSandboxClient } from "./Services/VercelSandboxClient.ts";
 type VercelSandboxClientServices = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
 
 export interface VercelSandboxRuntimeLayerOptions {
-  /** Override the environment used to resolve credentials (tests). */
+  /**
+   * Override the environment used to resolve credentials (tests). When set, the
+   * layer pins this env and does not consult {@link RuntimeProviderCredentials}.
+   */
   readonly env?: Record<string, string | undefined>;
 }
 
 /**
- * The Vercel Sandbox client layer for the resolved environment. Returns the real
- * (credentialed) client when the `VERCEL_*` credentials are present, else the
- * fake client. The fake's requirements are exposed as the layer's `RIn`.
+ * The Vercel Sandbox client layer. With an explicit `env` override it resolves
+ * synchronously from that env; otherwise it resolves the merged env (settings +
+ * secrets over `process.env`) from {@link RuntimeProviderCredentials}, so a key
+ * entered in Settings selects the real client without a server restart.
  */
-export const makeVercelSandboxClientLayer = (
+export function makeVercelSandboxClientLayer(options: {
+  readonly env: Record<string, string | undefined>;
+}): Layer.Layer<VercelSandboxClient, never, VercelSandboxClientServices>;
+export function makeVercelSandboxClientLayer(
   options?: VercelSandboxRuntimeLayerOptions,
-): Layer.Layer<VercelSandboxClient, never, VercelSandboxClientServices> =>
-  selectVercelSandboxClientLive(options?.env ?? process.env);
+): Layer.Layer<
+  VercelSandboxClient,
+  never,
+  VercelSandboxClientServices | RuntimeProviderCredentials
+>;
+export function makeVercelSandboxClientLayer(
+  options?: VercelSandboxRuntimeLayerOptions,
+): Layer.Layer<
+  VercelSandboxClient,
+  never,
+  VercelSandboxClientServices | RuntimeProviderCredentials
+> {
+  return buildProviderLayerFromEnv("vercel-sandbox", options, selectVercelSandboxClientLive);
+}
 
-/** The Vercel Sandbox adapter backed by the environment-selected client. */
-export const makeVercelSandboxRuntimeAdapterLayer = (
+/** The Vercel Sandbox adapter backed by the credential-selected client. */
+export function makeVercelSandboxRuntimeAdapterLayer(options: {
+  readonly env: Record<string, string | undefined>;
+}): Layer.Layer<VercelSandboxAdapter, never, VercelSandboxClientServices>;
+export function makeVercelSandboxRuntimeAdapterLayer(
   options?: VercelSandboxRuntimeLayerOptions,
-): Layer.Layer<VercelSandboxAdapter, never, VercelSandboxClientServices> =>
-  VercelSandboxAdapterLive.pipe(Layer.provide(makeVercelSandboxClientLayer(options)));
+): Layer.Layer<
+  VercelSandboxAdapter,
+  never,
+  VercelSandboxClientServices | RuntimeProviderCredentials
+>;
+export function makeVercelSandboxRuntimeAdapterLayer(
+  options?: VercelSandboxRuntimeLayerOptions,
+): Layer.Layer<
+  VercelSandboxAdapter,
+  never,
+  VercelSandboxClientServices | RuntimeProviderCredentials
+> {
+  return VercelSandboxAdapterLive.pipe(Layer.provide(makeVercelSandboxClientLayer(options)));
+}

@@ -21,6 +21,8 @@ import { CLOUDFLARE_RUNTIME_DESCRIPTOR } from "./executionRuntime/Layers/cloudfl
 import { makeCloudflareRuntimeAdapterLayer } from "./executionRuntime/Layers/CloudflareRuntimeProviderFacadeLayer";
 import { RuntimeActivityLeaseManagerLive } from "./executionRuntime/Layers/RuntimeActivityLeaseManager";
 import { RuntimeCredentialBrokerLive } from "./executionRuntime/Layers/RuntimeCredentialBroker";
+import { RuntimeProviderCredentialsLive } from "./executionRuntime/Layers/RuntimeProviderCredentials";
+import { SandboxSecretWriterLive } from "./executionRuntime/Layers/SandboxSecretWriter";
 import { RuntimeGitWorkspaceLive } from "./executionRuntime/Layers/RuntimeGitWorkspace";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor";
@@ -98,6 +100,15 @@ export function makeServerRuntimeServicesLayer() {
   // access. The adapter resolves by the `cloudflare` provider literal; the
   // registry binds the broadest `workspace`-shaped descriptor for `cloudflare`.
   const cloudflareRuntimeAdapterLayer = makeCloudflareRuntimeAdapterLayer();
+  // Each real adapter resolves its real-vs-fake client from the merged credential
+  // env (settings + stored secrets over `process.env`) read at layer build through
+  // this service, so a key entered in Settings selects the real client on the next
+  // server start without an env restart. The service reads ServerSettings live and
+  // pulls secret tokens from ServerSecretStore by name.
+  const runtimeProviderCredentialsLayer = RuntimeProviderCredentialsLive.pipe(
+    Layer.provide(ServerSettingsLive),
+    Layer.provide(ServerSecretStoreLive),
+  );
   const runtimeProviderRegistryLayer = makeRuntimeProviderRegistryWithAdaptersLive({
     descriptors: [
       ...BUILT_IN_RUNTIME_DESCRIPTORS,
@@ -113,6 +124,7 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provide(vercelSandboxRuntimeAdapterLayer),
     Layer.provide(modalRuntimeAdapterLayer),
     Layer.provide(cloudflareRuntimeAdapterLayer),
+    Layer.provide(runtimeProviderCredentialsLayer),
   );
   const executionRuntimePlannerLayer = ExecutionRuntimePlannerLive.pipe(
     Layer.provide(runtimeProviderRegistryLayer),
@@ -189,6 +201,7 @@ export function makeServerRuntimeServicesLayer() {
     KeybindingsLive,
     ServerSettingsLive,
     ServerEnvironmentLive,
+    SandboxSecretWriterLive.pipe(Layer.provide(ServerSecretStoreLive)),
     authServicesLayer,
     ServerLifecycleEventsLive,
     ServerRuntimeStartupLive,

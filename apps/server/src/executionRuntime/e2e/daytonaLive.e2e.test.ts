@@ -70,7 +70,9 @@ const makeLiveRuntime = () => {
   }).pipe(Layer.provide(NodeServices.layer));
 
   const providerDeps = Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer);
-  const daytonaAdapterLayer = makeDaytonaRuntimeAdapterLayer().pipe(Layer.provide(providerDeps));
+  const daytonaAdapterLayer = makeDaytonaRuntimeAdapterLayer({ env: process.env }).pipe(
+    Layer.provide(providerDeps),
+  );
 
   // The registry requires every provider adapter service to exist. Only Daytona
   // runs live; the others stay fake-backed with their creds stripped so a stray
