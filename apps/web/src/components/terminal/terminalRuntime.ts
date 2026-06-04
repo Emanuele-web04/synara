@@ -1214,7 +1214,9 @@ export function detachRuntimeFromContainer(entry: TerminalRuntimeEntry): void {
 export function disposeRuntimeEntry(entry: TerminalRuntimeEntry): void {
   detachRuntimeFromContainer(entry);
   entry.disposed = true;
-  flushPendingWrites(entry);
+  // Closing a terminal should not synchronously paint queued output into a buffer
+  // that is about to be destroyed; acknowledge and drop it to keep close latency low.
+  clearPendingWrites(entry);
   entry.unsubscribeTerminalEvents?.();
   entry.unsubscribeTerminalEvents = null;
   entry.querySuppressionDispose?.();
