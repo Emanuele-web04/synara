@@ -1,14 +1,8 @@
 /**
- * LIVE Daytona + real codex: provisions a sandbox from a codex-equipped snapshot,
- * injects the host's codex auth, and runs the REAL `codex app-server` inside the
- * sandbox — confirming it answers `initialize` with the injected auth recognized.
- *
- * codex runs via a one-shot pipe (`printf init | codex app-server`), the path the
- * runtime-neutral exec channel uses. Driving the long-lived app-server as a
- * streaming session over Daytona's async toolbox session has a remaining
- * stdin/stdout nuance (a Rust interactive server vs. the session's pipe) tracked
- * separately; the fire-and-collect proof here establishes codex executes in the
- * live sandbox with working auth.
+ * LIVE Daytona + real codex turn: provisions a sandbox from a codex-equipped
+ * snapshot, injects the host's codex auth, runs the REAL `codex app-server`
+ * inside the sandbox over the remote transport (a PTY-backed streaming session),
+ * and drives a real turn through `CodexAppServerManager` — the production path.
  *
  * Gated behind `RUN_DAYTONA_CODEX=1` + `DAYTONA_API_KEY` + a host codex login
  * (`~/.codex/auth.json`). Snapshot via `DAYTONA_CODEX_SNAPSHOT`.
@@ -28,11 +22,16 @@ import {
   ThreadId,
   type ExecutionInstanceId,
   type ModelSelection,
+  type ProviderEvent,
 } from "@t3tools/contracts";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  CodexAppServerManager,
+  type CodexTransportFactoryInput,
+} from "../../codexAppServerManager.ts";
 import { ServerConfig } from "../../config.ts";
 import { OrchestrationEngineLive } from "../../orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../../orchestration/Layers/ProjectionPipeline.ts";
@@ -177,7 +176,10 @@ const execIn = (
     }),
   );
 
-describeLive("LIVE Daytona + real codex: run codex inside a codex-equipped sandbox", () => {
+const isTurnResponseItem = (method: string): boolean =>
+  method.startsWith("item/") || method === "turn/completed";
+
+describeLive("LIVE Daytona + real codex: drive a turn inside a codex-equipped sandbox", () => {
   let runtime: LiveRuntime | undefined;
 
   afterEach(async () => {
@@ -187,7 +189,7 @@ describeLive("LIVE Daytona + real codex: run codex inside a codex-equipped sandb
     }
   });
 
-  it("provisions from a codex snapshot, injects auth, and codex answers initialize", async () => {
+  it("provisions from a codex snapshot, injects auth, and runs a real codex turn", async () => {
     runtime = makeLiveRuntime();
     const live = runtime;
     const threadId = ThreadId.makeUnsafe("thread-daytona-codex");
@@ -208,6 +210,7 @@ describeLive("LIVE Daytona + real codex: run codex inside a codex-equipped sandb
         });
       }),
     );
+    // provision waits for readiness and discovers the real working dir.
     const target = await live.runPromise(
       Effect.gen(function* () {
         const service = yield* ExecutionRuntimeService;
@@ -215,23 +218,10 @@ describeLive("LIVE Daytona + real codex: run codex inside a codex-equipped sandb
       }),
     );
     const instanceId = target.instanceId as ExecutionInstanceId;
-    console.log(`[daytonaCodexLive] provisioned ${instanceId} snapshot=${SNAPSHOT}`);
-
-    // Large snapshots take time to start; exec errors until then. Poll.
-    for (let i = 0; i < 60; i++) {
-      const ready = await execIn(live, instanceId, "true", []).catch(() => ({
-        code: -1,
-        stdout: "",
-        stderr: "",
-      }));
-      if (ready.code === 0) break;
-      await new Promise((res) => setTimeout(res, 3000));
-    }
-
-    const realRoot = (await execIn(live, instanceId, "pwd", [])).stdout.trim() || "/root";
-    const which = await execIn(live, instanceId, "which", ["codex"]);
-    console.log(`[daytonaCodexLive] root=${realRoot} which codex => ${which.stdout.trim()}`);
-    expect(which.code).toBe(0);
+    const workdir = target.cwd ?? "/root";
+    console.log(
+      `[daytonaCodexLive] provisioned ${instanceId} root=${workdir} snapshot=${SNAPSHOT}`,
+    );
 
     // Inject the host's codex auth ($HOME/.codex/auth.json). b64 is a positional
     // arg so its content cannot break the shell.
@@ -243,39 +233,71 @@ describeLive("LIVE Daytona + real codex: run codex inside a codex-equipped sandb
     ]);
     expect(inject.code).toBe(0);
 
-    // Run the REAL codex app-server in the sandbox and confirm it answers
-    // `initialize` with a result naming its codexHome — proof the agent runs
-    // with the injected auth inside the live cloud sandbox.
-    const init = JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        clientInfo: { name: "synara_desktop", version: "0.1.0" },
-        capabilities: { experimentalApi: true },
-      },
+    // Drive a real turn through CodexAppServerManager. Its createTransport
+    // factory returns the Daytona PTY-backed transport (the production seam);
+    // supplying a factory skips the local version gate, so no local codex spawns.
+    const events: ProviderEvent[] = [];
+    const manager = new CodexAppServerManager(undefined, {
+      createTransport: async (_input: CodexTransportFactoryInput) =>
+        live.runPromise(
+          Effect.gen(function* () {
+            const adapter = yield* DaytonaRuntimeAdapter;
+            const built = yield* adapter.createTransport(instanceId, {
+              command: "codex",
+              args: ["app-server"],
+              cwd: workdir,
+              env: {},
+            });
+            return built.transport;
+          }),
+        ),
     });
-    const codexRun = await execIn(live, instanceId, "bash", [
-      "-lc",
-      'cd "$0" && printf \'%s\\n\' "$1" | timeout 15 codex app-server 2>&1',
-      realRoot,
-      init,
-    ]);
-    const initLine = codexRun.stdout
-      .split("\n")
-      .map((l) => {
-        try {
-          return JSON.parse(l) as { id?: unknown; result?: { codexHome?: unknown } };
-        } catch {
-          return undefined;
-        }
-      })
-      .find((f) => f?.id === 1);
-    console.log(
-      `[daytonaCodexLive] codex initialize => ${JSON.stringify(initLine?.result ?? codexRun.stdout.trim().slice(0, 200))}`,
-    );
-    expect(initLine?.result).toBeTypeOf("object");
-    expect(typeof initLine?.result?.codexHome).toBe("string");
+
+    let resolveSeen: (() => void) | undefined;
+    const turnSeen = new Promise<void>((resolve) => {
+      resolveSeen = resolve;
+    });
+    manager.on("event", (event) => {
+      events.push(event);
+      if (isTurnResponseItem(event.method)) resolveSeen?.();
+    });
+
+    try {
+      const session = await manager.startSession({
+        threadId,
+        provider: "codex",
+        cwd: workdir,
+        runtimeMode: "full-access",
+      });
+      // A ready session means initialize/initialized/model.list/account.read all
+      // completed over the PTY transport — the real agent runs in the sandbox.
+      expect(session.status).toBe("ready");
+      console.log(`[daytonaCodexLive] session ready over PTY transport`);
+
+      await manager.sendTurn({
+        threadId,
+        input:
+          "Create a file named codex-live-proof.txt containing exactly 'daytona codex ok' in the current working directory. Do not ask for confirmation.",
+      });
+      const timedOut = await Promise.race([
+        turnSeen.then(() => false),
+        new Promise<boolean>((r) => setTimeout(() => r(true), 180_000)),
+      ]);
+      const responseItems = events.filter((e) => isTurnResponseItem(e.method));
+      expect(timedOut).toBe(false);
+      expect(responseItems.length).toBeGreaterThan(0);
+
+      const proof = await execIn(live, instanceId, "bash", [
+        "-lc",
+        'cat "$0/codex-live-proof.txt" 2>/dev/null || find / -name codex-live-proof.txt 2>/dev/null | head -1 | xargs -r cat 2>/dev/null',
+        workdir,
+      ]);
+      console.log(
+        `[daytonaCodexLive] full-turn: ${events.length} events, ${responseItems.length} items; proof => ${proof.stdout.trim()}`,
+      );
+    } finally {
+      manager.stopAll();
+    }
 
     await live.runPromise(
       Effect.gen(function* () {
@@ -284,5 +306,5 @@ describeLive("LIVE Daytona + real codex: run codex inside a codex-equipped sandb
       }),
     );
     console.log(`[daytonaCodexLive] destroyed ${instanceId}`);
-  }, 300_000);
+  }, 420_000);
 });

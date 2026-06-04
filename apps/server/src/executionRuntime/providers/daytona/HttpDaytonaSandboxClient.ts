@@ -188,6 +188,16 @@ const buildShellCommand = (input: DaytonaExecInput, root: string): string => {
   return target === undefined ? command : `cd ${quoteArg(target)} && ${command}`;
 };
 
+/**
+ * Run a command under a PTY so an interactive, line-buffered server (codex
+ * app-server) flushes through the captured session log — a plain pipe captured
+ * to a file is fully buffered and the server's responses never appear. A very
+ * wide terminal stops the PTY wrapping long JSON-RPC lines; `-echo` best-effort
+ * suppresses input echo (the consumer also drops echoed lines).
+ */
+const wrapInPty = (command: string): string =>
+  `script -qfec ${quoteArg(`stty -echo cols 100000 rows 100 2>/dev/null; ${command}`)} /dev/null`;
+
 export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
   Effect.gen(function* () {
     const httpClient = yield* HttpClient.HttpClient;
@@ -417,7 +427,7 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
 
         const execReq = yield* HttpClientRequest.bodyJson(
           HttpClientRequest.post(`${sessionBase}/${sessionId}/exec`),
-          { command: buildShellCommand(input, SANDBOX_ROOT), runAsync: true },
+          { command: wrapInPty(buildShellCommand(input, SANDBOX_ROOT)), runAsync: true },
         ).pipe(
           Effect.mapError(
             (cause) =>
@@ -447,6 +457,9 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
         const stdoutQueue = yield* Queue.unbounded<string, Cause.Done>();
         const exitDeferred = yield* Deferred.make<ProcessExit>();
         const consumed = yield* Ref.make(0);
+        // The PTY echoes stdin; track written lines to drop their echo so they do
+        // not enter the JSON-RPC stream as spurious requests.
+        const pendingEcho = new Set<string>();
 
         // Poll the session command on each tick: read the cumulative log output
         // and line-frame the newly appended slice, then read the command status
@@ -468,10 +481,16 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
             }
             const fresh = output.slice(seen, lastNewline + 1);
             yield* Ref.set(consumed, lastNewline + 1);
-            for (const line of fresh.split("\n")) {
-              if (line.length > 0) {
-                yield* Queue.offer(stdoutQueue, line);
+            for (const raw of fresh.split("\n")) {
+              const line = raw.replace(/\r$/, "");
+              if (line.length === 0) {
+                continue;
               }
+              if (pendingEcho.has(line)) {
+                pendingEcho.delete(line);
+                continue;
+              }
+              yield* Queue.offer(stdoutQueue, line);
             }
           });
 
@@ -529,14 +548,16 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
           Effect.forkIn(sessionScope),
         );
 
-        const writeStdin: DaytonaSessionProcess["writeStdin"] = (line) =>
-          HttpClientRequest.bodyJson(
+        const writeStdin: DaytonaSessionProcess["writeStdin"] = (line) => {
+          pendingEcho.add(line);
+          return HttpClientRequest.bodyJson(
             HttpClientRequest.post(`${sessionBase}/${sessionId}/command/${commandId}/input`),
             { data: `${line}\n` },
           ).pipe(
             Effect.flatMap((request) => requestVoid("sessionInput", request)),
             Effect.ignore,
           );
+        };
 
         const session: DaytonaSessionProcess = {
           stdoutLines: Stream.fromQueue(stdoutQueue),
