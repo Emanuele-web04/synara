@@ -138,9 +138,16 @@ interface StoredInstance {
   readonly expiresAt: string | null;
 }
 
+/** How many recent log lines the in-memory ring retains for replay. */
+const LOG_RING_CAPACITY = 1000;
+
 export class RuntimeInstanceDurableObject {
   private runtime: SandboxRuntime | undefined;
   private readonly watchers = new Set<NdjsonSink<BridgeFileWatchEventLike>>();
+  /** Bounded ring of recent log lines, replayed to each new log subscriber. */
+  private readonly logRing: BridgeLogLine[] = [];
+  /** Live log subscribers; each receives every new line until it disconnects. */
+  private readonly logSinks = new Set<NdjsonSink<BridgeLogLine>>();
 
   constructor(
     private readonly state: DurableObjectState,
@@ -149,6 +156,35 @@ export class RuntimeInstanceDurableObject {
     private readonly platform: DurableObjectPlatform,
   ) {
     void this.env;
+  }
+
+  /**
+   * Append a log line to the ring (trimming the oldest past capacity) and fan it
+   * out to every live subscriber. This is the single producer the `logs` route
+   * drains: exec collects into it after a command finishes, and the terminal
+   * feeds it each output chunk as it streams.
+   */
+  private recordLog(line: BridgeLogLine): void {
+    this.logRing.push(line);
+    if (this.logRing.length > LOG_RING_CAPACITY) {
+      this.logRing.shift();
+    }
+    for (const sink of this.logSinks) {
+      sink.write(line);
+    }
+  }
+
+  /** Split a collected stdout/stderr blob into per-line log records. */
+  private recordCollected(stream: "stdout" | "stderr", text: string, processId: string): void {
+    if (text.length === 0) {
+      return;
+    }
+    const at = this.platform.now();
+    for (const line of text.split(/\r?\n/)) {
+      if (line.length > 0) {
+        this.recordLog({ processId: processId as BridgeLogLine["processId"], stream, line, at });
+      }
+    }
   }
 
   private async load(): Promise<StoredInstance | undefined> {
@@ -302,8 +338,11 @@ export class RuntimeInstanceDurableObject {
       collectStream(handle.stderr),
       handle.exitCode,
     ]);
+    const processId = this.platform.randomId();
+    this.recordCollected("stdout", stdout, processId);
+    this.recordCollected("stderr", stderr, processId);
     return jsonResponse(200, {
-      processId: this.platform.randomId(),
+      processId,
       stdout,
       stderr,
       exitCode,
@@ -316,11 +355,16 @@ export class RuntimeInstanceDurableObject {
       return errorResponse(404, "instance_not_found");
     }
     return ndjsonStreamResponse<BridgeLogLine>((sink) => {
-      // The log stream stays open; a real runtime would push lines from the
-      // instance's stdout/stderr ring buffer. With no active process there is
-      // nothing to emit, so the stream simply idles until the client closes it.
-      void sink;
-      return () => {};
+      // Replay the retained ring first so a late subscriber sees recent history,
+      // then attach as a live subscriber for every subsequent line. Teardown
+      // detaches it when the client disconnects.
+      for (const line of this.logRing) {
+        sink.write(line);
+      }
+      this.logSinks.add(sink);
+      return () => {
+        this.logSinks.delete(sink);
+      };
     });
   }
 
@@ -361,10 +405,16 @@ export class RuntimeInstanceDurableObject {
   }
 
   private wireTerminal(socket: WorkerWebSocket, terminal: RuntimeTerminalHandle): void {
+    const processId = this.platform.randomId();
     const send = (frame: BridgeTerminalFrame) => {
       socket.send(JSON.stringify(frame));
     };
-    terminal.onData((chunk) => send({ _tag: "data", data: chunk }));
+    terminal.onData((chunk) => {
+      send({ _tag: "data", data: chunk });
+      // The terminal is also a log producer: mirror its output to the ring so the
+      // `logs` route surfaces interactive-session output, not just exec output.
+      this.recordCollected("stdout", chunk, processId);
+    });
     terminal.onExit((exitCode) => {
       send({ _tag: "exit", exitCode });
       socket.close(1000, "exit");
@@ -522,6 +572,11 @@ export class RuntimeInstanceDurableObject {
       watcher.close();
     }
     this.watchers.clear();
+    for (const sink of this.logSinks) {
+      sink.close();
+    }
+    this.logSinks.clear();
+    this.logRing.length = 0;
     await this.state.storage.delete("instance");
     return jsonResponse(200, { ok: true });
   }

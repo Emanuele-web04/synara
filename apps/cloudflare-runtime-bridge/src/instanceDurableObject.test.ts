@@ -2,6 +2,7 @@ import type {
   BridgeExecResult,
   BridgeFileReadResult,
   BridgeInstance,
+  BridgeLogLine,
   BridgeRenewActivityResult,
   BridgeRoute,
 } from "@t3tools/contracts";
@@ -54,6 +55,33 @@ const makeDo = (
 };
 
 const jsonOf = async <T>(response: Response): Promise<T> => (await response.json()) as T;
+
+/** Read at least `count` newline-delimited JSON records from a streaming body. */
+const readNdjson = async <T>(response: Response, count: number): Promise<ReadonlyArray<T>> => {
+  const reader = response.body?.getReader();
+  if (reader === undefined) {
+    throw new Error("response has no body");
+  }
+  const decoder = new TextDecoder();
+  const records: T[] = [];
+  let buffer = "";
+  while (records.length < count) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.length > 0) {
+        records.push(JSON.parse(line) as T);
+      }
+    }
+  }
+  await reader.cancel();
+  return records;
+};
 
 const createRequest = (instanceId: string, body: unknown): Request =>
   new Request(`https://bridge.example/instances/${instanceId}`, {
@@ -112,6 +140,58 @@ describe("RuntimeInstanceDurableObject", () => {
     const result = await jsonOf<BridgeExecResult>(exec);
     expect(result.stdout).toBe("hello\n");
     expect(result.exitCode).toBe(0);
+  });
+
+  it("replays exec output on the logs stream", async () => {
+    const runtime = makeFakeSandboxRuntime({
+      execScripts: { build: { stdout: "step one\nstep two\n", stderr: "warn\n", exitCode: 0 } },
+    });
+    const { object } = makeDo("inst-logs-1", { runtime });
+    await object.fetch(createRequest("inst-logs-1", { flavor: "workspace" }));
+
+    await object.fetch(
+      new Request("https://bridge.example/instances/inst-logs-1/exec", {
+        method: "POST",
+        body: JSON.stringify({ command: "build" }),
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    // A subscriber that connects after the command ran still sees its output,
+    // proving exec is a producer into the retained ring.
+    const logs = await object.fetch(
+      new Request("https://bridge.example/instances/inst-logs-1/logs"),
+    );
+    expect(logs.status).toBe(200);
+    const lines = await readNdjson<BridgeLogLine>(logs, 3);
+    expect(lines.map((line) => line.line)).toEqual(["step one", "step two", "warn"]);
+    expect(lines.map((line) => line.stream)).toEqual(["stdout", "stdout", "stderr"]);
+  });
+
+  it("streams terminal output to live log subscribers", async () => {
+    const runtime = makeFakeSandboxRuntime();
+    const { object } = makeDo("inst-logs-2", { runtime });
+    await object.fetch(createRequest("inst-logs-2", { flavor: "workspace" }));
+
+    const logs = await object.fetch(
+      new Request("https://bridge.example/instances/inst-logs-2/logs"),
+    );
+    const reader = logs.body?.getReader();
+    expect(reader).toBeDefined();
+
+    await object.fetch(
+      new Request("https://bridge.example/instances/inst-logs-2/terminal", {
+        headers: { upgrade: "websocket" },
+      }),
+    );
+    runtime.lastTerminal()?.emit("compiling\n");
+
+    const decoder = new TextDecoder();
+    const chunk = await reader!.read();
+    const line = JSON.parse(decoder.decode(chunk.value).trim()) as BridgeLogLine;
+    expect(line.line).toBe("compiling");
+    expect(line.stream).toBe("stdout");
+    await reader!.cancel();
   });
 
   it("writes and reads a file round-trip (base64)", async () => {

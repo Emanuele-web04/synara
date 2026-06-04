@@ -100,11 +100,29 @@ export interface SandboxRuntime {
   destroy(): Promise<void>;
 }
 
+/**
+ * The Cloudflare Sandbox SDK's Durable Object namespace, bound at deploy time.
+ *
+ * Kept `unknown` here on purpose: the bridge does not vendor
+ * `@cloudflare/workers-types` or the SDK's `DurableObjectNamespace<Sandbox>`
+ * type, so the binding is typed opaquely and narrowed where it is consumed
+ * (`cloudflareSandboxSdk.ts`). When the binding is configured, the deploy can run
+ * real workspaces; when it is absent, the factory throws a clear error rather
+ * than silently degrading.
+ */
+export type SandboxBinding = unknown;
+
 /** Bindings the Worker is configured with (wrangler `[[durable_objects]]`, etc). */
 export interface BridgeEnv {
   /** Shared bearer secret the Synara server authenticates with. */
   readonly BRIDGE_AUTH_TOKEN: string;
   readonly RUNTIME_INSTANCES: DurableObjectNamespace;
+  /**
+   * The Sandbox SDK Durable Object namespace (wrangler binding name `SANDBOX`).
+   * Optional so the package typechecks and tests run without it; the production
+   * factory requires it at runtime for the `workspace` flavor.
+   */
+  readonly SANDBOX?: SandboxBinding;
 }
 
 /** The runtime globals the production platform reads (the `WebSocketPair` ctor). */

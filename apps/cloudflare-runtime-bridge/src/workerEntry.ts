@@ -15,28 +15,53 @@ import type {
   BridgeEnv,
   DurableObjectPlatformGlobals,
   DurableObjectState,
-  SandboxRuntime,
   WorkerWebSocketPair,
 } from "./cloudflareRuntime.ts";
+import {
+  loadCloudflareSandboxSdk,
+  type CloudflareSandboxSdkLoader,
+} from "./cloudflareSandboxSdk.ts";
 import {
   RuntimeInstanceDurableObject,
   type DurableObjectPlatform,
   type SandboxRuntimeFactory,
 } from "./instanceDurableObject.ts";
+import { resolveRealSandboxRuntime } from "./realSandboxRuntime.ts";
 import { handleFetch } from "./worker.ts";
 
 /**
- * Resolve the lower-level Cloudflare runtime for an instance. The real binding
- * (Sandbox SDK for `workspace`, raw Containers for `container`) is wired here at
- * deploy time. Until that binding is configured this throws, so a misconfigured
- * deploy fails loudly rather than silently degrading.
+ * Build the production runtime factory bound to this instance's environment.
+ *
+ * The real `workspace` runtime is the `@cloudflare/sandbox` SDK resolved from the
+ * `SANDBOX` Durable Object binding. The factory constructs that runtime per
+ * instance id rather than throwing: a configured deploy gets a live workspace.
+ * It throws only on a genuine misconfiguration — the SANDBOX binding missing at
+ * runtime — so a broken deploy fails loudly instead of silently degrading. The
+ * `container` flavor (raw Containers) is intentionally not wired here: it stays a
+ * lower-level service runtime and rejects until a Containers binding is added.
+ *
+ * `loadSdk` is injected so a deploy can supply an already-imported SDK (or a
+ * stub) without this module statically importing the optional dependency.
  */
-const realSandboxRuntimeFactory: SandboxRuntimeFactory = () =>
-  Promise.reject(
-    new Error(
-      "Cloudflare sandbox/container runtime binding is not configured; wire it in workerEntry.ts before deploy.",
-    ) as never,
-  ) as Promise<SandboxRuntime>;
+export const makeRealSandboxRuntimeFactory = (
+  env: BridgeEnv,
+  loadSdk: CloudflareSandboxSdkLoader,
+): SandboxRuntimeFactory => {
+  return async (input) => {
+    if (input.flavor === "container") {
+      throw new Error(
+        "Cloudflare `container` flavor (raw Containers) is not wired in workerEntry.ts; add a Containers binding before using it.",
+      );
+    }
+    if (env.SANDBOX === undefined) {
+      throw new Error(
+        "Cloudflare `SANDBOX` binding is not configured; add a [[durable_objects]] binding named SANDBOX (the @cloudflare/sandbox DO) before deploy.",
+      );
+    }
+    const sdk = await loadSdk();
+    return resolveRealSandboxRuntime(sdk, env.SANDBOX, input.instanceId);
+  };
+};
 
 const realPlatform = (globals: DurableObjectPlatformGlobals): DurableObjectPlatform => ({
   makeWebSocketPair: () => new globals.WebSocketPair() as unknown as WorkerWebSocketPair,
@@ -46,12 +71,17 @@ const realPlatform = (globals: DurableObjectPlatformGlobals): DurableObjectPlatf
 
 /**
  * The Durable Object class wrangler binds. Cloudflare constructs it with
- * `(state, env)`; this subclass supplies the injected factory + platform the
- * core DO needs.
+ * `(state, env)`; this subclass supplies the injected factory (bound to `env`'s
+ * SANDBOX binding) + platform the core DO needs.
  */
 export class RuntimeInstanceDurableObjectBinding extends RuntimeInstanceDurableObject {
   constructor(state: DurableObjectState, env: BridgeEnv) {
-    super(state, env, realSandboxRuntimeFactory, realPlatform(globalThis as never));
+    super(
+      state,
+      env,
+      makeRealSandboxRuntimeFactory(env, loadCloudflareSandboxSdk),
+      realPlatform(globalThis as never),
+    );
   }
 }
 
