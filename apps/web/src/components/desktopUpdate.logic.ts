@@ -44,10 +44,10 @@ export function resolveDesktopUpdateButtonAction(
 export function shouldShowDesktopUpdateButton(state: DesktopUpdateState | null): boolean {
   if (!state?.enabled) return false;
   // Only show the button when there's actually something to do:
-  // a version being prepared, a downloaded update to install, or a retryable error
+  // a version being prepared, a downloaded update to install, or a retryable error.
+  // Update checks stay background-only so periodic polling never flashes sidebar UI.
   const action = resolveDesktopUpdateButtonAction(state);
   return (
-    state.status === "checking" ||
     state.status === "available" ||
     state.status === "downloading" ||
     state.status === "downloaded" ||

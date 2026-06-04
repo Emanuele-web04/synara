@@ -147,13 +147,13 @@ describe("desktop update button state", () => {
     expect(getDesktopUpdateButtonPresentation(state).progressPercent).toBe(42);
   });
 
-  it("disables the button while a check is in flight", () => {
+  it("keeps update checks hidden while a check is in flight", () => {
     const state: DesktopUpdateState = {
       ...baseState,
       status: "checking",
     };
 
-    expect(shouldShowDesktopUpdateButton(state)).toBe(true);
+    expect(shouldShowDesktopUpdateButton(state)).toBe(false);
     expect(resolveDesktopUpdateButtonAction(state)).toBe("check");
     expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
     expect(getDesktopUpdateButtonTooltip(state)).toContain("Checking for updates");
