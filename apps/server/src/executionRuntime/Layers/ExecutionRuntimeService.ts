@@ -316,6 +316,24 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
         })
         .pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          // Transport creation failed after the process-start was recorded; close
+          // the lifecycle so the row does not stay `running` forever.
+          Effect.tapError(() =>
+            dispatchRuntimeCommand(
+              input.threadId,
+              `process.complete.${processId}`,
+              (commandId, createdAt) => ({
+                type: "thread.runtime.process.complete",
+                commandId,
+                threadId: input.threadId,
+                instanceId: input.instanceId,
+                processId,
+                status: "failed",
+                exitCode: null,
+                createdAt,
+              }),
+            ).pipe(Effect.ignore),
+          ),
           Effect.mapError((cause) =>
             failProvision(input.threadId, `create transport failed: ${cause.message}`),
           ),
@@ -366,6 +384,7 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
       }
       instanceProviders.delete(instanceId);
       instanceFakeFlavors.delete(instanceId);
+      threadIntents.delete(threadId);
       yield* dispatchRuntimeCommand(threadId, `destroy.${instanceId}`, (commandId, createdAt) => ({
         type: "thread.runtime.destroy",
         commandId,
