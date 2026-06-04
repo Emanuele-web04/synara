@@ -1891,6 +1891,10 @@ export const ProviderHealthLive = Layer.effect(
       );
 
     const refreshNow = Effect.gen(function* () {
+      // Drop the cached Claude subscription probe so switching accounts (login
+      // / logout / add account outside the app) is reflected on the next
+      // refresh instead of being pinned to the old account for up to 5 minutes.
+      yield* Cache.invalidate(claudeSubscriptionCache, "claude");
       const nextStatuses = yield* loadProviderStatuses;
       const previousStatuses = yield* Ref.get(statusesRef);
       if (providerStatusesEqual(previousStatuses, nextStatuses)) {

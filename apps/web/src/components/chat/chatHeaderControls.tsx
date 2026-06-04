@@ -13,6 +13,8 @@
 
 import { forwardRef, type ComponentProps, type ReactNode } from "react";
 
+import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@t3tools/shared/desktopChrome";
+
 import type { LucideIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
@@ -24,12 +26,23 @@ import { Button } from "../ui/button";
  * bottom borders line up across the vertical pane divider.
  *
  * Tall enough that the vertically-centered controls clear the macOS title bar with
- * breathing room below them rather than hugging the very top of the window. This
- * pairs with `trafficLightPosition.y` in apps/desktop/src/main.ts — the two values
- * are tuned together so the native traffic lights and the renderer's leading
- * controls share the same vertical center.
+ * breathing room below them rather than hugging the very top of the window.
+ *
+ * The pixel height is owned by `CHAT_SURFACE_HEADER_HEIGHT_PX` in
+ * `@t3tools/shared/desktopChrome` (the single source of truth the Electron main
+ * process also reads to center the native traffic lights). Tailwind only emits CSS
+ * for class names it can scan literally, so the class stays a literal here — but its
+ * TYPE is derived from the shared number, so the build fails if the two ever drift.
  */
-export const CHAT_SURFACE_HEADER_HEIGHT_CLASS = "h-[50px]";
+export const CHAT_SURFACE_HEADER_HEIGHT_CLASS: `h-[${typeof CHAT_SURFACE_HEADER_HEIGHT_PX}px]` =
+  "h-[46px]";
+
+/**
+ * Standard horizontal inset for a chat-surface top bar (chat / workspace / settings
+ * headers all sit their content at this x). Kept as one token so the leading controls
+ * line up across surfaces and the inset is tuned in a single place.
+ */
+export const CHAT_SURFACE_HEADER_PADDING_X_CLASS = "px-3 sm:px-5";
 
 /**
  * Bottom hairline shared by every chat-surface chrome bar (chat header, workspace

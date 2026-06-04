@@ -52,6 +52,7 @@ import {
   CODE_FONT_PRESETS,
   SettingResetButton,
   SettingsFontControl,
+  SettingsSegmentedControl,
   SettingsSelectControl,
   UI_FONT_PRESETS,
 } from "../components/settings/SettingControls";
@@ -67,9 +68,13 @@ import {
 } from "../components/settings/SettingsPanelPrimitives";
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
+  CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
   CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
 } from "../components/chat/composerPickerStyles";
-import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "../components/chat/chatHeaderControls";
+import {
+  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+  CHAT_SURFACE_HEADER_PADDING_X_CLASS,
+} from "../components/chat/chatHeaderControls";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
 import { SidebarInset } from "../components/ui/sidebar";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
@@ -80,11 +85,14 @@ import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
 import {
   ArchiveIcon,
   ChevronDownIcon,
+  DeviceLaptopIcon,
   DownloadIcon,
   ExternalLinkIcon,
   Loader2Icon,
+  MoonIcon,
   PlusIcon,
   RotateCcwIcon,
+  SunIcon,
   XIcon,
 } from "../lib/icons";
 import {
@@ -119,19 +127,22 @@ import { sameProviderOrder } from "../providerOrdering";
 
 const THEME_OPTIONS = [
   {
-    value: "system",
-    label: "System",
-    description: "Match your OS appearance setting.",
-  },
-  {
     value: "light",
     label: "Light",
     description: "Always use the light theme.",
+    icon: <SunIcon />,
   },
   {
     value: "dark",
     label: "Dark",
     description: "Always use the dark theme.",
+    icon: <MoonIcon />,
+  },
+  {
+    value: "system",
+    label: "System",
+    description: "Match your OS appearance setting.",
+    icon: <DeviceLaptopIcon />,
   },
 ] as const;
 
@@ -946,10 +957,14 @@ function SettingsRouteView() {
         const refreshedProvider = result.providers.find((status) => status.provider === provider);
         const failureMessage = providerUpdateFailureMessage(refreshedProvider);
         if (failureMessage) {
+          const manualCommand = refreshedProvider?.versionAdvisory?.updateCommand?.trim();
           toastManager.add({
             type: "error",
             title: `Could not update ${PROVIDER_DISPLAY_NAMES[provider]}`,
-            description: failureMessage,
+            description: manualCommand
+              ? `${failureMessage}\n\nCopy the command below to update manually in a terminal.`
+              : failureMessage,
+            ...(manualCommand ? { data: { copyText: manualCommand } } : {}),
           });
           return;
         }
@@ -1517,24 +1532,15 @@ function SettingsRouteView() {
               ) : null
             }
             control={
-              <SettingsSelectControl
+              <SettingsSegmentedControl
                 value={theme}
                 onValueChange={(value) => {
                   if (value !== "system" && value !== "light" && value !== "dark") return;
                   setTheme(value);
                 }}
                 ariaLabel="Theme preference"
-                triggerClassName="w-full sm:w-40"
-                valueContent={
-                  THEME_OPTIONS.find((option) => option.value === theme)?.label ?? "System"
-                }
-              >
-                {THEME_OPTIONS.map((option) => (
-                  <SelectItem hideIndicator key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SettingsSelectControl>
+                options={THEME_OPTIONS}
+              />
             }
           />
         </SettingsCard>
@@ -2912,11 +2918,18 @@ function SettingsRouteView() {
   };
 
   return (
-    <SidebarInset
-      className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
-      surfaceClassName={cn(SETTINGS_PAGE_BACKGROUND_CLASS_NAME, CHAT_CONTENT_CARD_CLASS_NAME)}
+    <div
+      className={cn(
+        CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
+        SETTINGS_PAGE_BACKGROUND_CLASS_NAME,
+        CHAT_CONTENT_CARD_CLASS_NAME,
+      )}
     >
-      {/* Companion sidebar trigger so settings is reachable-and-exitable even when the
+      <SidebarInset
+        className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
+        surfaceClassName={SETTINGS_PAGE_BACKGROUND_CLASS_NAME}
+      >
+        {/* Companion sidebar trigger so settings is reachable-and-exitable even when the
           sidebar is collapsed (web/mobile have no global Back arrow). Pinned to the
           card's top-left — at the same header height + traffic-light gutter as the
           chat/workspace headers — so the collapsed-state toggle sits by the traffic
@@ -2924,54 +2937,56 @@ function SettingsRouteView() {
           while the sidebar is open (SidebarHeaderNavigationControls returns null), so it
           adds no chrome in the common (open) state and never shifts the centered content
           (hence absolute, not a layout-occupying header row). */}
-      <div
-        className={cn(
-          "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center px-3 sm:px-5",
-          CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-          desktopTopBarTrafficLightGutterClassName,
-        )}
-      >
-        <div className="pointer-events-auto">
-          <SidebarHeaderNavigationControls />
-        </div>
-      </div>
-      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-2xl px-6 py-8">
-            <div className="mb-8 flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <h1 className="text-[1.75rem] font-semibold tracking-tight text-foreground">
-                  {activeSectionItem.label}
-                </h1>
-                <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                  {activeSectionItem.description}
-                </p>
-              </div>
-              <Button
-                size="xs"
-                variant="outline"
-                className="shrink-0"
-                disabled={changedSettingLabels.length === 0}
-                onClick={() => void restoreDefaults()}
-              >
-                <RotateCcwIcon className="size-3.5" />
-                Restore defaults
-              </Button>
-            </div>
-
-            {renderActivePanel()}
+        <div
+          className={cn(
+            "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center",
+            CHAT_SURFACE_HEADER_PADDING_X_CLASS,
+            CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+            desktopTopBarTrafficLightGutterClassName,
+          )}
+        >
+          <div className="pointer-events-auto">
+            <SidebarHeaderNavigationControls />
           </div>
         </div>
-      </div>
-      {/* Mounted at the route level (outside the scrollable panel) so the
+        <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+          <div className="flex-1 overflow-y-auto">
+            <div className="mx-auto w-full max-w-2xl px-6 py-8">
+              <div className="mb-8 flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <h1 className="text-[1.75rem] font-semibold tracking-tight text-foreground">
+                    {activeSectionItem.label}
+                  </h1>
+                  <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                    {activeSectionItem.description}
+                  </p>
+                </div>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  className="shrink-0"
+                  disabled={changedSettingLabels.length === 0}
+                  onClick={() => void restoreDefaults()}
+                >
+                  <RotateCcwIcon className="size-3.5" />
+                  Restore defaults
+                </Button>
+              </div>
+
+              {renderActivePanel()}
+            </div>
+          </div>
+        </div>
+        {/* Mounted at the route level (outside the scrollable panel) so the
           dialog portal can overlay the entire settings view without being
           clipped by the content wrapper's overflow. */}
-      <ReleaseHistoryDialog
-        open={releaseHistoryOpen}
-        onOpenChange={setReleaseHistoryOpen}
-        defaultExpandedVersion={APP_VERSION}
-      />
-    </SidebarInset>
+        <ReleaseHistoryDialog
+          open={releaseHistoryOpen}
+          onOpenChange={setReleaseHistoryOpen}
+          defaultExpandedVersion={APP_VERSION}
+        />
+      </SidebarInset>
+    </div>
   );
 }
 

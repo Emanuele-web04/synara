@@ -249,6 +249,18 @@ export function shouldHighlightDesktopUpdateError(state: DesktopUpdateState | nu
   return state.errorContext === "download" || state.errorContext === "install";
 }
 
+// Stable identity for an in-app update failure, used to avoid toasting the same
+// download/install error twice (e.g. once from the click handler and again when
+// the install watchdog pushes the recovered state). Returns null for states that
+// have no actionable manual-download fallback (checks, successes, in-progress).
+export function getDesktopUpdateErrorSignature(state: DesktopUpdateState | null): string | null {
+  if (!state || (state.errorContext !== "download" && state.errorContext !== "install")) {
+    return null;
+  }
+  const version = state.downloadedVersion ?? state.availableVersion ?? "";
+  return `${state.errorContext}:${version}:${state.message ?? ""}`;
+}
+
 export type DesktopUpdateButtonVariant = "installing" | "ready" | "progress" | "error" | "info";
 
 /**

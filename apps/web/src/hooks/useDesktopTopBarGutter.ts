@@ -9,7 +9,7 @@ import { isMacPlatform } from "~/lib/utils";
 
 /**
  * Tailwind padding that clears the macOS traffic light cluster
- * (positioned at x=16, y=19 in the Electron BrowserWindow, see apps/desktop main).
+ * (positioned at x=16, y=16 in the Electron BrowserWindow, see apps/desktop main).
  *
  * The 3-button cluster ends at roughly x=68 (16px inset + ~52px cluster); this
  * gutter places the leading controls ~36px to the right of the lights so they
@@ -21,16 +21,18 @@ import { isMacPlatform } from "~/lib/utils";
  * BOTH survive a `cn()` call and the winner is left to CSS-cascade order — which
  * differs per header (`px-4` vs `px-3 sm:px-5`), making the leading controls land
  * at a DIFFERENT x when the sidebar is open vs closed. Marking the gutter
- * `!important` makes `padding-left: 104px` always beat the non-important base
+ * `!important` makes `padding-left` always beat the non-important base
  * `px-*`, so every surface resolves to the exact same x in both states. Both the
  * base and `sm:` variants are emitted so the override also wins at `sm:` (e.g.
  * over `sm:px-5`).
  *
  * Single source of truth: every top bar AND the open-sidebar header use this so
  * the leading controls sit at the same x whether the sidebar is open or closed.
- * This is the one knob to tune the lights→controls gap.
+ * This is the one knob to tune the lights→controls gap. The three macOS dots at
+ * `trafficLightPosition.x = 16` span to ~70px, so 84px leaves a tight ~14px gap
+ * before the toggle (was 104px / ~34px, which read as too far from the lights).
  */
-export const DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS = "pl-[104px]! sm:pl-[104px]!";
+export const DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS = "pl-[84px]! sm:pl-[84px]!";
 
 /**
  * Pure helper: should a top bar at the left edge of the desktop window reserve

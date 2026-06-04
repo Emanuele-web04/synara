@@ -121,6 +121,17 @@ export function buildGitHubReleaseDownloadBaseUrl(source: GitHubUpdateSource, ta
   ).toString();
 }
 
+// Human-facing releases page used as the manual-download fallback when the
+// in-app updater cannot apply an update. Points at the exact tag when known,
+// otherwise the "latest" redirect so the user always lands on a real release.
+export function buildGitHubReleasesPageUrl(source: GitHubUpdateSource, tag?: string): string {
+  const path =
+    tag && tag.trim().length > 0
+      ? `/${source.owner}/${source.repo}/releases/tag/${tag.trim()}`
+      : `/${source.owner}/${source.repo}/releases/latest`;
+  return new URL(path, `${source.protocol}://${source.host}`).toString();
+}
+
 export async function resolveLatestStableGitHubRelease(
   source: GitHubUpdateSource,
   token?: string,

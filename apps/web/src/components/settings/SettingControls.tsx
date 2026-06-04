@@ -1,9 +1,10 @@
 // FILE: SettingControls.tsx
-// Purpose: Reusable settings row controls (reset button, select, font field with presets).
+// Purpose: Reusable settings row controls (reset button, select, segmented control, font field).
 // Layer: Settings UI components
-// Exports: SettingResetButton, SettingsSelectControl, SettingsFontControl, font preset lists
+// Exports: SettingResetButton, SettingsSelectControl, SettingsSegmentedControl, SettingsFontControl, font preset lists
 
 import { type ReactNode } from "react";
+import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/input-group";
 import {
@@ -68,6 +69,53 @@ export function SettingsSelectControl({
       </SelectTrigger>
       <SettingsSelectPopup>{children}</SettingsSelectPopup>
     </Select>
+  );
+}
+
+export type SettingsSegmentedOption<T extends string> = {
+  value: T;
+  label: string;
+  icon?: ReactNode;
+};
+
+/** Inline row of toggle buttons used in place of a select when there are only a
+ *  handful of mutually exclusive options (e.g. theme: Light / Dark / System).
+ *  The active option reads as a filled pill; the rest stay quiet until hovered. */
+export function SettingsSegmentedControl<T extends string>({
+  value,
+  onValueChange,
+  options,
+  ariaLabel,
+}: {
+  value: T;
+  onValueChange: (value: T) => void;
+  options: readonly SettingsSegmentedOption<T>[];
+  ariaLabel: string;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      className="inline-flex w-full items-center gap-1 sm:w-auto"
+    >
+      {options.map((option) => {
+        const isActive = option.value === value;
+        return (
+          <Button
+            key={option.value}
+            role="radio"
+            aria-checked={isActive}
+            size="sm"
+            variant={isActive ? "secondary" : "ghost"}
+            className={cn("flex-1 sm:flex-none", !isActive && "text-muted-foreground")}
+            onClick={() => onValueChange(option.value)}
+          >
+            {option.icon}
+            {option.label}
+          </Button>
+        );
+      })}
+    </div>
   );
 }
 

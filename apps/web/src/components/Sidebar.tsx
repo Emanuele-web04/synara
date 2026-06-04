@@ -149,6 +149,7 @@ import {
   getDesktopUpdateButtonPresentation,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateButtonVariant,
+  getDesktopUpdateErrorSignature,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
@@ -1304,6 +1305,9 @@ export default function Sidebar() {
   const [renamingWorkspaceId, setRenamingWorkspaceId] = useState<string | null>(null);
   const [renamingWorkspaceTitle, setRenamingWorkspaceTitle] = useState("");
   const [installingDesktopUpdate, setInstallingDesktopUpdate] = useState(false);
+  // Dedupes the manual-download fallback toast so a single failure surfaced by
+  // both the click handler and the install-watchdog push only notifies once.
+  const lastDesktopUpdateErrorToastSignatureRef = useRef<string | null>(null);
   const selectedThreadIds = useThreadSelectionStore((s) => s.selectedThreadIds);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((s) => s.rangeSelectTo);
@@ -5048,6 +5052,64 @@ export default function Sidebar() {
     };
   }, []);
 
+  // Single entry point for update error toasts. Attaches the manual-download
+  // fallback (copy link + "Download manually") whenever a release URL is known,
+  // and dedupes by error signature so the same failure is not toasted twice.
+  const surfaceDesktopUpdateError = useCallback(
+    (input: { title: string; description: string; state: DesktopUpdateState | null }) => {
+      const signature = getDesktopUpdateErrorSignature(input.state) ?? `adhoc:${input.description}`;
+      if (lastDesktopUpdateErrorToastSignatureRef.current === signature) {
+        return;
+      }
+      lastDesktopUpdateErrorToastSignatureRef.current = signature;
+      const releaseUrl = input.state?.releaseUrl ?? null;
+      const fallbackProps = releaseUrl
+        ? {
+            data: { copyText: releaseUrl },
+            actionProps: {
+              children: "Download manually",
+              onClick: () => {
+                void window.desktopBridge?.openExternal(releaseUrl);
+              },
+            },
+          }
+        : {};
+      toastManager.add({
+        type: "error",
+        title: input.title,
+        description: input.description,
+        ...fallbackProps,
+      });
+    },
+    [],
+  );
+
+  // The install watchdog (and any background-pushed failure) flips the update
+  // state to a download/install error without going through a click handler, so
+  // the fallback must also be surfaced reactively here. Dedup keeps it from
+  // doubling up with the click-handler toast for user-initiated failures.
+  useEffect(() => {
+    if (!getDesktopUpdateErrorSignature(desktopUpdateState)) {
+      // Returning to any non-error state (new download, success, up-to-date)
+      // clears the dedup key so the next distinct failure notifies again.
+      lastDesktopUpdateErrorToastSignatureRef.current = null;
+      return;
+    }
+    if (!desktopUpdateState?.releaseUrl) {
+      return;
+    }
+    surfaceDesktopUpdateError({
+      title:
+        desktopUpdateState.errorContext === "install"
+          ? "Couldn’t finish updating"
+          : "Couldn’t download the update",
+      description:
+        desktopUpdateState.message ??
+        "The in-app update could not complete. You can download it manually.",
+      state: desktopUpdateState,
+    });
+  }, [desktopUpdateState, surfaceDesktopUpdateError]);
+
   const showDesktopUpdateButton = isElectron && shouldShowDesktopUpdateButton(desktopUpdateState);
 
   const desktopUpdateTooltip = desktopUpdateState
@@ -5207,18 +5269,18 @@ export default function Sidebar() {
           }
 
           if (nextState.status === "error") {
-            toastManager.add({
-              type: "error",
+            surfaceDesktopUpdateError({
               title: "Could not check for updates",
               description: nextState.message ?? "An unexpected error occurred.",
+              state: nextState,
             });
           }
         })
         .catch((error) => {
-          toastManager.add({
-            type: "error",
+          surfaceDesktopUpdateError({
             title: "Could not check for updates",
             description: error instanceof Error ? error.message : "An unexpected error occurred.",
+            state: desktopUpdateState,
           });
         });
       return;
@@ -5249,17 +5311,17 @@ export default function Sidebar() {
           if (!shouldToastDesktopUpdateActionResult(result)) return;
           const actionError = getDesktopUpdateActionError(result);
           if (!actionError) return;
-          toastManager.add({
-            type: "error",
+          surfaceDesktopUpdateError({
             title: "Could not download update",
             description: actionError,
+            state: result.state,
           });
         })
         .catch((error) => {
-          toastManager.add({
-            type: "error",
+          surfaceDesktopUpdateError({
             title: "Could not start update download",
             description: error instanceof Error ? error.message : "An unexpected error occurred.",
+            state: desktopUpdateState,
           });
         });
       return;
@@ -5285,22 +5347,27 @@ export default function Sidebar() {
           if (!shouldToastDesktopUpdateActionResult(result)) return;
           const actionError = getDesktopUpdateActionError(result);
           if (!actionError) return;
-          toastManager.add({
-            type: "error",
+          surfaceDesktopUpdateError({
             title: "Could not install update",
             description: actionError,
+            state: result.state,
           });
         })
         .catch((error) => {
           setInstallingDesktopUpdate(false);
-          toastManager.add({
-            type: "error",
+          surfaceDesktopUpdateError({
             title: "Could not install update",
             description: error instanceof Error ? error.message : "An unexpected error occurred.",
+            state: desktopUpdateState,
           });
         });
     }
-  }, [desktopUpdateButtonAction, desktopUpdateButtonDisabled, desktopUpdateState]);
+  }, [
+    desktopUpdateButtonAction,
+    desktopUpdateButtonDisabled,
+    desktopUpdateState,
+    surfaceDesktopUpdateError,
+  ]);
 
   const expandThreadListForProject = useCallback((projectCwd: string) => {
     const cwdKey = normalizeSidebarProjectThreadListCwd(projectCwd);

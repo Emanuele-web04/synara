@@ -669,7 +669,12 @@ export function buildThemeCssVariables(
       ? "translucent"
       : "opaque";
   const warningColor = variant === "dark" ? "#f5b44a" : "#d97706";
-  const sidebarSurfaceUnder = readCodexVariable("--color-background-surface-under");
+  // Codex paints the app sidebar with the PRIMARY surface (--color-background-surface,
+  // mapped through --color-token-side-bar-background), not the darker "under" surface.
+  // The under-surface is reserved for the window body behind the content (see
+  // --app-shell-background / --background). Sourcing the sidebar from the primary
+  // surface keeps its pure color matching Codex in both light and dark.
+  const sidebarSurface = readCodexVariable("--color-background-surface");
   const sidebarRaisedSurface = readCodexVariable("--color-background-elevated-primary");
   const settingsSurface = readCodexVariable("--color-background-surface");
   const composerSurface =
@@ -723,9 +728,9 @@ export function buildThemeCssVariables(
     "--app-sidebar-surface":
       material === "translucent"
         ? variant === "dark"
-          ? `color-mix(in srgb, ${sidebarSurfaceUnder} 72%, transparent)`
-          : `color-mix(in srgb, ${sidebarSurfaceUnder} 64%, transparent)`
-        : sidebarSurfaceUnder,
+          ? `color-mix(in srgb, ${sidebarSurface} 72%, transparent)`
+          : `color-mix(in srgb, ${sidebarSurface} 64%, transparent)`
+        : sidebarSurface,
     // Always opaque so the settings page background matches the chat surface exactly,
     // regardless of window material.
     "--app-settings-surface": settingsSurface,
@@ -751,7 +756,7 @@ export function buildThemeCssVariables(
     "--ring": readCodexVariable("--color-border-focus"),
     "--secondary": readCodexVariable("--color-background-button-secondary"),
     "--secondary-foreground": readCodexVariable("--color-text-button-secondary"),
-    "--sidebar": readCodexVariable("--color-background-surface-under"),
+    "--sidebar": readCodexVariable("--color-background-surface"),
     "--sidebar-accent": readCodexVariable("--color-background-button-secondary-hover"),
     "--sidebar-accent-active": readCodexVariable("--color-background-button-secondary-hover"),
     "--sidebar-accent-foreground": readCodexVariable("--color-text-foreground"),
@@ -937,7 +942,7 @@ function buildThemeTokenAliases(codexVariables: Record<string, string>): Record<
     "--color-token-scrollbar-slider-active-background": readCodexVariable("--color-border-heavy"),
     "--color-token-scrollbar-slider-background": readCodexVariable("--color-border-light"),
     "--color-token-scrollbar-slider-hover-background": readCodexVariable("--color-border"),
-    "--color-token-side-bar-background": readCodexVariable("--color-background-surface-under"),
+    "--color-token-side-bar-background": readCodexVariable("--color-background-surface"),
     "--color-token-text-code-block-background": readCodexVariable(
       "--color-background-elevated-secondary-opaque",
     ),

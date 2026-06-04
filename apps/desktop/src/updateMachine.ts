@@ -20,6 +20,7 @@ export function createInitialDesktopUpdateState(
     message: null,
     errorContext: null,
     canRetry: false,
+    releaseUrl: null,
   };
 }
 

@@ -17,6 +17,7 @@ import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+  CHAT_SURFACE_HEADER_PADDING_X_CLASS,
 } from "./chat/chatHeaderControls";
 import {
   CHAT_BACKGROUND_CLASS_NAME,
@@ -305,7 +306,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
         <header
           className={cn(
             CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-            "px-3 sm:px-5",
+            CHAT_SURFACE_HEADER_PADDING_X_CLASS,
             desktopTopBarTrafficLightGutterClassName,
           )}
         >

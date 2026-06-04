@@ -92,6 +92,10 @@ import {
   normalizeProviderStatusForLocalConfig,
   providerUnavailableReason,
 } from "~/lib/providerAvailability";
+import {
+  loadConfirmedCustomBinaryPaths,
+  saveConfirmedCustomBinaryPaths,
+} from "../confirmedCustomBinaryPathStore";
 import { isElectron } from "../env";
 import { stripDiffSearchParams } from "../diffRouteSearch";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
@@ -295,6 +299,7 @@ import { ChatHeader } from "./chat/ChatHeader";
 import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+  CHAT_SURFACE_HEADER_PADDING_X_CLASS,
   CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
 } from "./chat/chatHeaderControls";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
@@ -998,7 +1003,7 @@ export default function ChatView({
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [confirmedCustomBinaryPathsByProvider, setConfirmedCustomBinaryPathsByProvider] = useState<
     Partial<Record<ProviderKind, string>>
-  >({});
+  >(loadConfirmedCustomBinaryPaths);
   const confirmedCustomBinarySessionKeysRef = useRef<Set<string>>(new Set());
   const pendingCustomBinaryPathsByThreadProviderRef = useRef<Map<string, string>>(new Map());
   const [composerCommandPicker, setComposerCommandPicker] = useState<
@@ -2705,6 +2710,11 @@ export default function ChatView({
     activeThread?.session?.provider,
     activeThread?.session?.status,
   ]);
+  // Persist confirmations so a custom binary path that already started a session
+  // stays trusted across restarts, instead of re-showing the availability warning.
+  useEffect(() => {
+    saveConfirmedCustomBinaryPaths(confirmedCustomBinaryPathsByProvider);
+  }, [confirmedCustomBinaryPathsByProvider]);
   const providerStatuses = useMemo(
     () =>
       (serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES)
@@ -8082,7 +8092,7 @@ export default function ChatView({
       <header
         className={cn(
           CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-          "px-3 sm:px-5",
+          CHAT_SURFACE_HEADER_PADDING_X_CLASS,
           "flex items-center",
           CHAT_SURFACE_HEADER_HEIGHT_CLASS,
           isElectron && "drag-region",

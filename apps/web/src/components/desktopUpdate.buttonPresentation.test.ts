@@ -17,6 +17,7 @@ const baseState: DesktopUpdateState = {
   message: null,
   errorContext: null,
   canRetry: false,
+  releaseUrl: null,
 };
 
 describe("desktop update button presentation timeline", () => {

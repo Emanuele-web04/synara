@@ -24,6 +24,10 @@
       "types": "./src/codexConfig.ts",
       "import": "./src/codexConfig.ts"
     },
+    "./desktopChrome": {
+      "types": "./src/desktopChrome.ts",
+      "import": "./src/desktopChrome.ts"
+    },
     "./Net": {
       "types": "./src/Net.ts",
       "import": "./src/Net.ts"

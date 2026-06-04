@@ -73,6 +73,7 @@ import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
 import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
+import { useProviderAuthRefreshOnFocus } from "../hooks/useProviderAuthRefreshOnFocus";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
 import {
@@ -308,18 +309,36 @@ function ProviderUpdateNotifications() {
 
       if (failures.length > 0) {
         activeToastRef.current = null;
+        // Surface the exact manual commands so a user whose one-click update
+        // failed (EACCES on global npm, PATH/package-manager mismatch, etc.) can
+        // copy and run them in a terminal instead of being stuck.
+        const manualCommands = Array.from(
+          new Set(
+            failures
+              .map(({ provider }) => provider.versionAdvisory?.updateCommand)
+              .filter(
+                (command): command is string =>
+                  typeof command === "string" && command.trim().length > 0,
+              ),
+          ),
+        );
+        const failureLines = failures
+          .map(({ provider, reason }) => `${PROVIDER_DISPLAY_NAMES[provider.provider]}: ${reason}`)
+          .join("\n");
         toastManager.update(toastId, {
           type: "error",
           title:
             failures.length === providers.length
               ? "Provider updates failed"
               : "Some provider updates failed",
-          description: failures
-            .map(
-              ({ provider, reason }) => `${PROVIDER_DISPLAY_NAMES[provider.provider]}: ${reason}`,
-            )
-            .join("\n"),
-          data: { onClose: dismissProgressToast },
+          description:
+            manualCommands.length > 0
+              ? `${failureLines}\n\nCopy the command${manualCommands.length === 1 ? "" : "s"} below to update manually in a terminal.`
+              : failureLines,
+          data: {
+            onClose: dismissProgressToast,
+            ...(manualCommands.length > 0 ? { copyText: manualCommands.join("\n") } : {}),
+          },
           timeout: 0,
         });
         return;
@@ -1254,6 +1273,10 @@ function EventRouter() {
     }
     void reconcile(subscribedThreadIds);
   }, [subscribedThreadIds]);
+
+  // Account changes made outside the app reflect without a restart by
+  // re-probing provider auth when the window regains focus (see hook).
+  useProviderAuthRefreshOnFocus();
 
   return null;
 }

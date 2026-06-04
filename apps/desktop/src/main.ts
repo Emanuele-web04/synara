@@ -38,6 +38,7 @@ import type {
 import { autoUpdater, CancellationToken } from "electron-updater";
 
 import type { ContextMenuItem } from "@t3tools/contracts";
+import { getMacTrafficLightPosition } from "@t3tools/shared/desktopChrome";
 import { NetService } from "@t3tools/shared/Net";
 import { RotatingFileSink } from "@t3tools/shared/logging";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
@@ -82,6 +83,7 @@ import {
 } from "./updatePendingCache";
 import {
   buildGitHubReleaseDownloadBaseUrl,
+  buildGitHubReleasesPageUrl,
   type LatestGitHubRelease,
   resolveGitHubUpdateSource,
   resolveLatestStableGitHubRelease,
@@ -156,6 +158,10 @@ const AUTO_UPDATE_DOWNLOAD_SETTLE_TIMEOUT_MS = 30 * 1000;
 const AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS = 2 * 60 * 1000;
 const AUTO_UPDATE_FEED_CACHE_TTL_MS = 30 * 60 * 1000;
 const AUTO_UPDATE_FEED_REFRESH_TIMEOUT_MS = 10 * 1000;
+// How long we give quitAndInstall() to actually quit/relaunch the app before we
+// conclude the OS installer never started (unsigned/quarantined build, read-only
+// install dir, blocked NSIS run) and surface the manual-download fallback.
+const AUTO_UPDATE_INSTALL_WATCHDOG_MS = 15 * 1000;
 const BACKEND_FORCE_KILL_DELAY_MS = 8_000;
 const BACKEND_SHUTDOWN_TIMEOUT_MS = 10_000;
 const DESKTOP_UPDATE_CHANNEL = "latest";
@@ -557,6 +563,7 @@ let updateBackgroundedAtMs: number | null = null;
 let updateBackgroundBlurTimer: ReturnType<typeof setTimeout> | null = null;
 let updateCheckTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 let updateDownloadStallTimer: ReturnType<typeof setTimeout> | null = null;
+let updateInstallWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
 let updateDownloadCancellationToken: CancellationToken | null = null;
 let rejectUpdateDownloadStall: ((error: Error) => void) | null = null;
 let lastUpdateDownloadProgressSample: DownloadProgressSample | null = null;
@@ -578,6 +585,45 @@ function clearUpdaterInstallInFlightAfterError(): void {
   isUpdaterInstallPreparing = false;
   isUpdaterQuitAndInstallInFlight = false;
   isQuitting = false;
+}
+
+function clearUpdateInstallWatchdogTimer(): void {
+  if (updateInstallWatchdogTimer) {
+    clearTimeout(updateInstallWatchdogTimer);
+    updateInstallWatchdogTimer = null;
+  }
+}
+
+// quitAndInstall() is a fire-and-forget void call with no success signal: when
+// the OS installer silently fails the app never quits and the user is left with
+// no feedback (the "update doesn't work for some people" report). If the process
+// is still alive after the watchdog window, recover and surface an actionable
+// install failure so the UI can offer the manual-download fallback.
+function armInstallWatchdog(): void {
+  clearUpdateInstallWatchdogTimer();
+  updateInstallWatchdogTimer = setTimeout(() => {
+    updateInstallWatchdogTimer = null;
+    if (!isUpdaterQuitAndInstallInFlight) {
+      return;
+    }
+    clearUpdaterInstallInFlightAfterError();
+    // The backend was already stopped before quitAndInstall(); since the app is
+    // not actually quitting, bring it back so the recovered app is functional
+    // (renderer reconnects) instead of a zombie window with a dead backend.
+    startBackend();
+    // Polling was stopped before the install attempt; resume it so background
+    // update checks keep running after this recovery.
+    scheduleUpdatePoll();
+    setUpdateState(
+      reduceDesktopUpdateStateOnInstallFailure(
+        updateState,
+        "The update couldn’t be installed automatically.",
+      ),
+    );
+    console.error(
+      "[desktop-updater] quitAndInstall did not exit the app within the watchdog window; surfacing manual-download fallback.",
+    );
+  }, AUTO_UPDATE_INSTALL_WATCHDOG_MS);
 }
 
 protocol.registerSchemesAsPrivileged([
@@ -1211,6 +1257,19 @@ function clearUpdatePollTimer(): void {
   }
 }
 
+// Starts the periodic background update check. Used by configureAutoUpdater and
+// by the install watchdog recovery so polling resumes after a silent install
+// failure instead of staying off until the next app restart.
+function scheduleUpdatePoll(): void {
+  if (updatePollTimer) {
+    return;
+  }
+  updatePollTimer = setInterval(() => {
+    void checkForUpdates("poll");
+  }, AUTO_UPDATE_POLL_INTERVAL_MS);
+  updatePollTimer.unref();
+}
+
 function emitUpdateState(): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.isDestroyed()) continue;
@@ -1231,6 +1290,11 @@ function applyConfiguredGitHubUpdateFeed(latestRelease: LatestGitHubRelease): vo
   if (configuredGitHubUpdateSource === null) {
     return;
   }
+  // Keep the manual-download fallback pinned to the exact release we are about
+  // to offer, so a user whose in-app update fails lands on the matching assets.
+  setUpdateState({
+    releaseUrl: buildGitHubReleasesPageUrl(configuredGitHubUpdateSource, latestRelease.tag),
+  });
   autoUpdater.setFeedURL({
     provider: "generic",
     url: buildGitHubReleaseDownloadBaseUrl(configuredGitHubUpdateSource, latestRelease.tag),
@@ -1600,6 +1664,7 @@ async function installDownloadedUpdate(): Promise<{
     await stopBackendAndWaitForExit();
     isUpdaterQuitAndInstallInFlight = true;
     autoUpdater.quitAndInstall();
+    armInstallWatchdog();
     return { accepted: true, completed: true };
   } catch (error: unknown) {
     const message = formatErrorMessage(error);
@@ -1630,6 +1695,11 @@ function configureAutoUpdater(): void {
   }
   updaterConfigured = true;
   configuredGitHubUpdateSource = resolveGitHubUpdateSource(appUpdateYml);
+  if (configuredGitHubUpdateSource !== null) {
+    // Seed the manual-download fallback with the "latest" releases page until a
+    // specific release tag is resolved by the feed refresher.
+    setUpdateState({ releaseUrl: buildGitHubReleasesPageUrl(configuredGitHubUpdateSource) });
+  }
 
   const githubToken =
     process.env.T3CODE_DESKTOP_UPDATE_GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || "";
@@ -1762,10 +1832,7 @@ function configureAutoUpdater(): void {
   }, AUTO_UPDATE_STARTUP_DELAY_MS);
   updateStartupTimer.unref();
 
-  updatePollTimer = setInterval(() => {
-    void checkForUpdates("poll");
-  }, AUTO_UPDATE_POLL_INTERVAL_MS);
-  updatePollTimer.unref();
+  scheduleUpdatePoll();
 }
 function backendEnv(): NodeJS.ProcessEnv {
   return {
@@ -2307,10 +2374,10 @@ function getTitleBarOptions(): BrowserWindowConstructorOptions {
   }
   return {
     titleBarStyle: "hiddenInset",
-    // y is tuned to share the vertical center of the renderer's top chrome bar
-    // (CHAT_SURFACE_HEADER_HEIGHT_CLASS in apps/web) so the lights line up with the
-    // leading toggle/arrow controls. Keep the two in sync when either changes.
-    trafficLightPosition: { x: 16, y: 19 },
+    // Derived from the shared chat-surface header geometry (@t3tools/shared/desktopChrome)
+    // so the native lights and the renderer's leading toggle/arrow controls always share
+    // the same vertical center. Tune the height/radius there, never the raw px here.
+    trafficLightPosition: getMacTrafficLightPosition(),
   };
 }
 

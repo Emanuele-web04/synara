@@ -319,7 +319,9 @@ describe("buildThemeCssVariables", () => {
     // Dark primary button label is the surface color (dark) on the white (ink) button.
     expect(tokens.derived.textButtonPrimary).toBe("#0f0f11");
     expect(tokens.derived.buttonPrimaryBackground).toBe("#e3e4e6");
-    expect(tokens.aliases["--color-token-side-bar-background"]).toBe("#0d0d0f");
+    // Codex maps the sidebar token to the PRIMARY surface (same as main-surface-primary),
+    // not the darker under-surface; mirror that so the sidebar color matches Codex.
+    expect(tokens.aliases["--color-token-side-bar-background"]).toBe("#0f0f11");
     expect(tokens.aliases["--color-token-list-hover-background"]).toBe(
       tokens.derived.buttonSecondaryBackgroundHover,
     );
