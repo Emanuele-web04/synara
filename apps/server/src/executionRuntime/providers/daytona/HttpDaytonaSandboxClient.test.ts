@@ -195,7 +195,7 @@ describe("HttpDaytonaSandboxClient", () => {
         { method: "POST", path: "/exec", json: { cmdId: "cmd-9" } },
         { method: "POST", path: "/process/session", status: 201 },
         // Logs carry output only; the logs endpoint never reports an exit code.
-        { method: "GET", path: "/logs", json: { output: "line-a\nline-b\n" } },
+        { method: "GET", path: "/logs", text: "line-a\nline-b\n" },
         // The command-status endpoint is the authoritative exit-code source.
         { method: "GET", path: "/command/cmd-9", json: { exitCode: 0 } },
       ],
@@ -271,11 +271,12 @@ describe("HttpDaytonaSandboxClient", () => {
             return respond({});
           }
           if (request.method === "GET" && request.url.endsWith("/logs")) {
-            // The status endpoint only reports an exit once both ticks have run,
-            // so the loop polls logs at least twice (partial then complete).
+            // The logs endpoint returns cumulative output as raw text. The status
+            // endpoint only reports an exit once both ticks have run, so the loop
+            // polls logs at least twice (partial then complete).
             const output = cumulativeByLogCall[Math.min(logCall, cumulativeByLogCall.length - 1)];
             logCall += 1;
-            return respond({ output });
+            return HttpClientResponse.fromWeb(request, new Response(output, { status: 200 }));
           }
           if (request.method === "GET" && request.url.includes("/command/cmd-split")) {
             // Hold the exit until the completing log tick has been served so the

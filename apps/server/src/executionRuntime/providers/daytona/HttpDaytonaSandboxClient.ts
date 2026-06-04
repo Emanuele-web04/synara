@@ -116,13 +116,6 @@ const SessionCommandResponse = Schema.Struct({
   cmdId: Schema.optional(Schema.String),
 });
 
-/** `GET .../command/{cid}/logs` — cumulative output (stdout/stderr also seen). */
-const SessionLogResponse = Schema.Struct({
-  output: Schema.optional(Schema.String),
-  stdout: Schema.optional(Schema.String),
-  stderr: Schema.optional(Schema.String),
-});
-
 /**
  * `GET .../command/{cid}` — the session command DTO. `exitCode` is present only
  * once the command has terminated; while it runs the field is absent/null. This
@@ -283,6 +276,43 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
               }),
           ),
         );
+      });
+
+    // Like requestJson but returns the raw response body. The session logs
+    // endpoint streams cumulative command output as plain text, not JSON.
+    const requestText = (
+      operation: string,
+      request: HttpClientRequest.HttpClientRequest,
+    ): Effect.Effect<string, DaytonaApiError> =>
+      Effect.gen(function* () {
+        const response = yield* httpClient
+          .execute(authed(request))
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new DaytonaApiError({ operation, status: null, detail: redact(String(cause)) }),
+            ),
+          );
+        const body = yield* response.text.pipe(
+          Effect.mapError(
+            (cause) =>
+              new DaytonaApiError({
+                operation,
+                status: response.status,
+                detail: redact(String(cause)),
+              }),
+          ),
+        );
+        if (response.status >= 400) {
+          return yield* Effect.fail(
+            new DaytonaApiError({
+              operation,
+              status: response.status,
+              detail: redact(body.length === 0 ? `HTTP ${response.status}` : body),
+            }),
+          );
+        }
+        return body;
       });
 
     const requestVoid = (
@@ -462,12 +492,9 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
           const logReq = HttpClientRequest.get(
             `${sessionBase}/${sessionId}/command/${commandId}/logs`,
           );
-          const log = yield* requestJson("sessionLogs", logReq, SessionLogResponse).pipe(
-            Effect.orElseSucceed(
-              () => ({ output: undefined, stdout: undefined, stderr: undefined }) as const,
-            ),
+          const output = yield* requestText("sessionLogs", logReq).pipe(
+            Effect.orElseSucceed(() => ""),
           );
-          const output = log.output ?? log.stdout ?? "";
           yield* offerCompleteLines(output);
           const statusReq = HttpClientRequest.get(
             `${sessionBase}/${sessionId}/command/${commandId}`,
