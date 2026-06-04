@@ -894,10 +894,7 @@ function subscribedEventSessionId(event: OpenCodeSubscribedEvent): string | unde
 }
 
 function shouldHandleRelatedOpenCodeSessionEvent(event: OpenCodeSubscribedEvent): boolean {
-  if (
-    event.type.startsWith("session.next.tool.") ||
-    event.type.startsWith("session.next.shell.")
-  ) {
+  if (event.type.startsWith("session.next.tool.") || event.type.startsWith("session.next.shell.")) {
     return true;
   }
   if (event.type === "message.part.updated") {

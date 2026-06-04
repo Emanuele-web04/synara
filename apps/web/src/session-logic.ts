@@ -719,7 +719,10 @@ function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): bool
 }
 
 function normalizeWorkLogTextForComparison(value: string | undefined): string {
-  return normalizeCompactToolLabel(value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  return normalizeCompactToolLabel(value ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {

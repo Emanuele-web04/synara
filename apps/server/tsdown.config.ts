@@ -1,4 +1,12 @@
+// FILE: tsdown.config.ts
+// Purpose: Builds the Synara server CLI and controls diagnostic source maps.
+// Layer: Server build config
+// Depends on: tsdown.
+
 import { defineConfig } from "tsdown";
+
+const sourcemapEnv = process.env.SYNARA_SERVER_SOURCEMAP?.trim().toLowerCase();
+const buildSourcemap = sourcemapEnv === "1" || sourcemapEnv === "true";
 
 export default defineConfig({
   entry: ["src/index.ts"],
@@ -7,7 +15,7 @@ export default defineConfig({
     legacyCjs: false,
   },
   outDir: "dist",
-  sourcemap: true,
+  sourcemap: buildSourcemap,
   clean: true,
   noExternal: (id) => id.startsWith("@t3tools/"),
   inlineOnly: false,

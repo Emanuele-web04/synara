@@ -2339,11 +2339,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                       <span
                         className="mr-1 inline-flex align-[-0.125em] text-muted-foreground/38"
                         data-inline-tool-icon={
-                          showInlineGitHubIcon
-                            ? "github"
-                            : showInlineMcpIcon
-                              ? "mcp"
-                              : "web-search"
+                          showInlineGitHubIcon ? "github" : showInlineMcpIcon ? "mcp" : "web-search"
                         }
                       >
                         {showInlineGitHubIcon ? (

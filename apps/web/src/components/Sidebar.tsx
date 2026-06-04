@@ -194,6 +194,7 @@ import {
   describeAddProjectError,
   buildProjectThreadTree,
   deriveSidebarProjectData,
+  derivePinnedThreadIdsForSidebar,
   extractDuplicateProjectCreateProjectId,
   findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
@@ -202,6 +203,7 @@ import {
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarEntriesForPreview,
   groupSidebarThreadsByProjectId,
+  isLatestPinnedThreadMutation,
   pruneExpandedProjectThreadListsForCollapsedProjects,
   recoverExistingAddProjectTarget,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
@@ -1157,6 +1159,7 @@ export default function Sidebar() {
   const projects = useStore((store) => store.projects);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const sidebarThreadSummaryById = useStore((store) => store.sidebarThreadSummaryById);
+  const sidebarThreadSummaryByIdRef = useRef(sidebarThreadSummaryById);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const markThreadUnread = useStore((store) => store.markThreadUnread);
@@ -1357,10 +1360,16 @@ export default function Sidebar() {
   const intentThreadRetentionByIdRef = useRef(
     new Map<ThreadId, { release: () => void; timeoutId: number }>(),
   );
+  const legacyPinMigrationThreadIdsRef = useRef(new Set<ThreadId>());
+  const optimisticPinnedStateByThreadIdRef = useRef(new Map<ThreadId, boolean>());
+  const latestPinnedMutationVersionByThreadIdRef = useRef(new Map<ThreadId, number>());
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
   const [renamingWorkspaceId, setRenamingWorkspaceId] = useState<string | null>(null);
   const [renamingWorkspaceTitle, setRenamingWorkspaceTitle] = useState("");
   const [installingDesktopUpdate, setInstallingDesktopUpdate] = useState(false);
+  const [optimisticPinnedStateByThreadId, setOptimisticPinnedStateByThreadId] = useState<
+    ReadonlyMap<ThreadId, boolean>
+  >(() => new Map());
   // Dedupes the manual-download fallback toast so a single failure surfaced by
   // both the click handler and the install-watchdog push only notifies once.
   const lastDesktopUpdateErrorToastSignatureRef = useRef<string | null>(null);
@@ -1469,40 +1478,99 @@ export default function Sidebar() {
     presentationMode: routeTerminalState?.presentationMode ?? "drawer",
     terminalOpen,
   });
-  const pinnedThreadIds = useMemo(() => {
-    const next = new Set<ThreadId>();
-    for (const thread of sidebarDisplayThreads) {
-      if (thread.isPinned === true) {
-        next.add(thread.id);
-      }
-    }
-    for (const threadId of persistedPinnedThreadIds) {
-      next.add(threadId);
-    }
-    return [...next];
-  }, [persistedPinnedThreadIds, sidebarDisplayThreads]);
+  const pinnedThreadIds = useMemo(
+    () =>
+      derivePinnedThreadIdsForSidebar({
+        threads: sidebarDisplayThreads,
+        persistedPinnedThreadIds,
+        optimisticPinnedStateByThreadId,
+      }),
+    [optimisticPinnedStateByThreadId, persistedPinnedThreadIds, sidebarDisplayThreads],
+  );
   const pinnedThreadIdSet = useMemo(() => new Set(pinnedThreadIds), [pinnedThreadIds]);
   const pinnedThreads = useMemo(
     () => getPinnedThreadsForSidebar(sidebarDisplayThreads, pinnedThreadIds),
     [pinnedThreadIds, sidebarDisplayThreads],
   );
+  useEffect(() => {
+    sidebarThreadSummaryByIdRef.current = sidebarThreadSummaryById;
+  }, [sidebarThreadSummaryById]);
+  const setOptimisticThreadPinned = useCallback((threadId: ThreadId, isPinned: boolean) => {
+    optimisticPinnedStateByThreadIdRef.current.set(threadId, isPinned);
+    setOptimisticPinnedStateByThreadId((current) => {
+      if (current.get(threadId) === isPinned) {
+        return current;
+      }
+      const next = new Map(current);
+      next.set(threadId, isPinned);
+      return next;
+    });
+  }, []);
+  const clearOptimisticThreadPinned = useCallback((threadId: ThreadId) => {
+    optimisticPinnedStateByThreadIdRef.current.delete(threadId);
+    setOptimisticPinnedStateByThreadId((current) => {
+      if (!current.has(threadId)) {
+        return current;
+      }
+      const next = new Map(current);
+      next.delete(threadId);
+      return next;
+    });
+  }, []);
+  const dispatchThreadPinnedState = useCallback(async (threadId: ThreadId, isPinned: boolean) => {
+    const api = readNativeApi();
+    if (!api) return;
+    await api.orchestration.dispatchCommand({
+      type: "thread.meta.update",
+      commandId: newCommandId(),
+      threadId,
+      isPinned,
+    });
+  }, []);
   const setThreadPinned = useCallback(
     async (threadId: ThreadId, isPinned: boolean) => {
       const api = readNativeApi();
       if (!api) return;
-      await api.orchestration.dispatchCommand({
-        type: "thread.meta.update",
-        commandId: newCommandId(),
-        threadId,
-        isPinned,
-      });
+      const requestVersion =
+        (latestPinnedMutationVersionByThreadIdRef.current.get(threadId) ?? 0) + 1;
+      latestPinnedMutationVersionByThreadIdRef.current.set(threadId, requestVersion);
+
+      setOptimisticThreadPinned(threadId, isPinned);
       if (isPinned) {
         pinThreadLocally(threadId);
       } else {
         unpinThread(threadId);
       }
+
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.meta.update",
+          commandId: newCommandId(),
+          threadId,
+          isPinned,
+        });
+      } catch (error) {
+        if (
+          !isLatestPinnedThreadMutation({
+            threadId,
+            requestVersion,
+            latestMutationVersionByThreadId: latestPinnedMutationVersionByThreadIdRef.current,
+          })
+        ) {
+          return;
+        }
+
+        const confirmedPinned = sidebarThreadSummaryByIdRef.current[threadId]?.isPinned === true;
+        if (confirmedPinned) {
+          pinThreadLocally(threadId);
+        } else {
+          unpinThread(threadId);
+        }
+        clearOptimisticThreadPinned(threadId);
+        throw error;
+      }
     },
-    [pinThreadLocally, unpinThread],
+    [clearOptimisticThreadPinned, pinThreadLocally, setOptimisticThreadPinned, unpinThread],
   );
   const toggleThreadPinned = useCallback(
     (threadId: ThreadId) => {
@@ -1520,6 +1588,34 @@ export default function Sidebar() {
     },
     [pinnedThreadIdSet, setThreadPinned],
   );
+  useEffect(() => {
+    if (optimisticPinnedStateByThreadId.size === 0) {
+      return;
+    }
+
+    const serverPinnedStateByThreadId = new Map(
+      sidebarThreads.map((thread) => [thread.id, thread.isPinned === true] as const),
+    );
+    setOptimisticPinnedStateByThreadId((current) => {
+      let next: Map<ThreadId, boolean> | null = null;
+      const confirmedThreadIds: ThreadId[] = [];
+      for (const [threadId, desiredPinned] of current) {
+        const serverPinned = serverPinnedStateByThreadId.get(threadId);
+        if (serverPinned !== undefined && serverPinned !== desiredPinned) {
+          continue;
+        }
+        next ??= new Map(current);
+        next.delete(threadId);
+        confirmedThreadIds.push(threadId);
+      }
+      if (next) {
+        for (const threadId of confirmedThreadIds) {
+          optimisticPinnedStateByThreadIdRef.current.delete(threadId);
+        }
+      }
+      return next ?? current;
+    });
+  }, [optimisticPinnedStateByThreadId, sidebarThreads]);
   const openPrLink = useCallback((event: MouseEvent<HTMLElement>, prUrl: string) => {
     event.preventDefault();
     event.stopPropagation();
@@ -3601,17 +3697,27 @@ export default function Sidebar() {
     const threadsById = new Map(sidebarThreads.map((thread) => [thread.id, thread] as const));
     for (const threadId of persistedPinnedThreadIds) {
       const thread = threadsById.get(threadId);
-      if (!thread || thread.isPinned === true) {
+      if (
+        !thread ||
+        thread.isPinned === true ||
+        optimisticPinnedStateByThreadIdRef.current.has(threadId) ||
+        legacyPinMigrationThreadIdsRef.current.has(threadId)
+      ) {
         continue;
       }
-      void setThreadPinned(threadId, true).catch((error) => {
-        console.error("Failed to migrate pinned thread state", {
-          threadId,
-          error,
+      legacyPinMigrationThreadIdsRef.current.add(threadId);
+      void dispatchThreadPinnedState(threadId, true)
+        .catch((error) => {
+          console.error("Failed to migrate pinned thread state", {
+            threadId,
+            error,
+          });
+        })
+        .finally(() => {
+          legacyPinMigrationThreadIdsRef.current.delete(threadId);
         });
-      });
     }
-  }, [persistedPinnedThreadIds, setThreadPinned, sidebarThreads, threadsHydrated]);
+  }, [dispatchThreadPinnedState, persistedPinnedThreadIds, sidebarThreads, threadsHydrated]);
 
   useEffect(() => {
     const retainedThreadIds = new Set(sidebarThreads.map((thread) => thread.id));
@@ -5179,8 +5285,8 @@ export default function Sidebar() {
   const desktopUpdateButtonHasSecondaryLabel =
     desktopUpdateButtonPresentation.secondaryLabel !== null;
   const desktopUpdateRowButtonClasses = cn(
-    "inline-flex shrink-0 items-center justify-between gap-2 rounded-full px-2.5 text-center text-white transition-colors",
-    desktopUpdateButtonHasSecondaryLabel ? "min-h-6 py-1" : "h-6",
+    "inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md px-2 font-system-ui text-[length:var(--app-font-size-ui,12px)] font-medium leading-none text-white transition-colors",
+    desktopUpdateButtonHasSecondaryLabel && "min-h-7 py-1",
     desktopUpdateButtonInteractivityClasses,
     desktopUpdateButtonClasses,
   );
@@ -5282,9 +5388,27 @@ export default function Sidebar() {
           setDesktopUpdateState(nextState);
           if (nextState.status === "available") {
             toastManager.add({
+              type: "info",
+              title: "Preparing update",
+              description: `Synara is preparing version ${nextState.availableVersion ?? "available"} in the background.`,
+            });
+            return;
+          }
+
+          if (nextState.status === "downloading") {
+            toastManager.add({
+              type: "info",
+              title: "Preparing update",
+              description: "Synara is downloading the update in the background.",
+            });
+            return;
+          }
+
+          if (nextState.status === "downloaded") {
+            toastManager.add({
               type: "success",
-              title: "Update available",
-              description: `Version ${nextState.availableVersion ?? "available"} is ready to download.`,
+              title: "Update ready",
+              description: "Click Update when you’re ready to restart and install it.",
             });
             return;
           }
@@ -5325,8 +5449,8 @@ export default function Sidebar() {
           if (result.completed) {
             toastManager.add({
               type: "success",
-              title: "Update downloaded",
-              description: "Restart the app from the update button to install it.",
+              title: "Update ready",
+              description: "Click Update when you’re ready to restart and install it.",
             });
           }
           const alreadyCurrentNotice = getDesktopUpdateAlreadyCurrentNotice(result);
@@ -5506,9 +5630,9 @@ export default function Sidebar() {
                     onClick={handleDesktopUpdateButtonClick}
                   >
                     {desktopUpdateButtonAction === "download"
-                      ? "Download ARM build"
+                      ? "Preparing ARM build"
                       : desktopUpdateButtonAction === "install"
-                        ? "Install ARM build"
+                        ? "Update ARM build"
                         : "Check for ARM build update"}
                   </Button>
                 </AlertAction>
@@ -6012,11 +6136,11 @@ export default function Sidebar() {
                           onClick={handleDesktopUpdateButtonClick}
                         >
                           <span className="flex min-w-0 flex-1 items-center justify-between gap-1.5 leading-tight">
-                            <span className="min-w-0 truncate text-center text-[10px] font-semibold">
+                            <span className="min-w-0 truncate text-center">
                               {desktopUpdateButtonPresentation.label}
                             </span>
                             {desktopUpdateButtonPresentation.secondaryLabel ? (
-                              <span className="min-w-0 truncate text-center text-[9px] text-white/80">
+                              <span className="min-w-0 truncate text-center text-[length:var(--app-font-size-ui-xs,10px)] text-white/80">
                                 {desktopUpdateButtonPresentation.secondaryLabel}
                               </span>
                             ) : null}
@@ -6070,7 +6194,10 @@ export default function Sidebar() {
               <MenuItem
                 className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
                 onClick={() =>
-                  void handleProjectContextMenuAction(projectContextMenuState.projectId, "copy-path")
+                  void handleProjectContextMenuAction(
+                    projectContextMenuState.projectId,
+                    "copy-path",
+                  )
                 }
               >
                 <ProjectContextMenuIcon icon={CopyIcon} />
