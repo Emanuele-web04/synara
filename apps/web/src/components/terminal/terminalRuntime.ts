@@ -13,6 +13,7 @@ import {
   defaultTerminalTitleForCliKind,
   consumeTerminalIdentityInput,
   deriveTerminalOutputIdentity,
+  MOUSE_REPORTING_RESET_SEQUENCE,
 } from "@t3tools/shared/terminalThreads";
 import { Terminal } from "@xterm/xterm";
 
@@ -56,7 +57,11 @@ function resetForSnapshotReplay(entry: TerminalRuntimeEntry): void {
   entry.outputIdentityBuffer = "";
   clearPendingWrites(entry);
   clearDeferredWrites(entry);
-  entry.terminal.write("\u001bc");
+  // RIS (`\u001bc`) resets the emulator, but xterm.js does not reliably clear
+  // DEC private mouse-tracking modes on RIS. Explicitly disable mouse reporting
+  // so a re-attached terminal never starts in a state where mouse movement
+  // spews raw `CSI < … M/m` sequences into the shell.
+  entry.terminal.write(`\u001bc${MOUSE_REPORTING_RESET_SEQUENCE}`);
 }
 
 function replaySnapshotHistory(entry: TerminalRuntimeEntry, history: string): void {

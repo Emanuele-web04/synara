@@ -11,6 +11,21 @@ export type TerminalVisualState = "idle" | TerminalActivityState;
 export type TerminalAgentHookEventType = "Start" | "Stop" | "PermissionRequest";
 export const T3CODE_TERMINAL_CLI_KIND_ENV_KEY = "T3CODE_TERMINAL_CLI_KIND";
 export const T3CODE_TERMINAL_HOOK_OSC_PREFIX = "633;T3CODE_AGENT_EVENT=";
+
+/**
+ * Escape sequence that disables every xterm mouse-reporting mode.
+ *
+ * Covers X10/normal/button/any-event tracking plus the SGR and urxvt extended
+ * coordinate encodings. Replaying restored terminal history into a freshly
+ * attached xterm can leave it with mouse reporting enabled — the TUI that
+ * originally turned it on (e.g. `claude`) is no longer attached to consume the
+ * events, so raw `CSI < … M/m` sequences spill into the shell as garbage.
+ * Emitting this on the re-attach / snapshot-replay path guarantees the restored
+ * terminal starts with mouse reporting off.
+ */
+export const MOUSE_REPORTING_RESET_SEQUENCE =
+  "\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1015l";
+
 export const MANAGED_TERMINAL_COMMAND_NAME_BY_CLI_KIND: Record<TerminalCliKind, string> = {
   codex: "codex",
   claude: "claude",

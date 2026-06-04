@@ -8,6 +8,7 @@ import {
   type TerminalOpenInput,
   type TerminalRestartInput,
 } from "@t3tools/contracts";
+import { MOUSE_REPORTING_RESET_SEQUENCE } from "@t3tools/shared/terminalThreads";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -176,6 +177,16 @@ function multiTerminalHistoryLogPath(
   terminalId = "default",
 ): string {
   return path.join(logsDir, multiTerminalHistoryLogName(threadId, terminalId));
+}
+
+/**
+ * Snapshots returned for a restored / re-attached session append a mouse-mode
+ * reset to the replayed history so a freshly attached xterm never starts with
+ * mouse reporting enabled. Tests that assert on restored history use this to
+ * express the expected transcript without repeating the reset sequence.
+ */
+function withMouseReset(history: string): string {
+  return `${history}${MOUSE_REPORTING_RESET_SEQUENCE}`;
 }
 
 describe("TerminalManager", () => {
@@ -472,8 +483,7 @@ describe("TerminalManager", () => {
     await manager.close({ threadId: "thread-1" });
 
     const reopened = await manager.open(openInput());
-    const nonEmptyLines = reopened.history.split("\n").filter((line) => line.length > 0);
-    expect(nonEmptyLines).toEqual(["line2", "line3", "line4"]);
+    expect(reopened.history).toBe(withMouseReset("line2\nline3\nline4\n"));
 
     manager.dispose();
   });
@@ -494,7 +504,7 @@ describe("TerminalManager", () => {
     await manager.close({ threadId: "thread-1" });
 
     const reopened = await manager.open(openInput());
-    expect(reopened.history).toBe("prompt \u001b[32mok\u001b[0m done\n");
+    expect(reopened.history).toBe(withMouseReset("prompt \u001b[32mok\u001b[0m done\n"));
 
     manager.dispose();
   });
@@ -516,7 +526,7 @@ describe("TerminalManager", () => {
     await manager.close({ threadId: "thread-1" });
 
     const reopened = await manager.open(openInput());
-    expect(reopened.history).toBe("before clear\nprompt \u001b[36mdone\u001b[0m\n");
+    expect(reopened.history).toBe(withMouseReset("before clear\nprompt \u001b[36mdone\u001b[0m\n"));
 
     manager.dispose();
   });
@@ -536,7 +546,7 @@ describe("TerminalManager", () => {
 
     const reopened = await manager.open(openInput());
     expect(reopened.history).toBe(
-      "instant prompt\nwarning output\nfinal prompt \u001b[35m❯\u001b[0m ",
+      withMouseReset("instant prompt\nwarning output\nfinal prompt \u001b[35m❯\u001b[0m "),
     );
 
     manager.dispose();
@@ -556,7 +566,9 @@ describe("TerminalManager", () => {
     await manager.close({ threadId: "thread-1" });
 
     const reopened = await manager.open(openInput());
-    expect(reopened.history).toBe("first prompt\r\u001b[0m\u001b[38;5;175m❯\u001b[0m ");
+    expect(reopened.history).toBe(
+      withMouseReset("first prompt\r\u001b[0m\u001b[38;5;175m❯\u001b[0m "),
+    );
 
     manager.dispose();
   });
@@ -575,7 +587,7 @@ describe("TerminalManager", () => {
     await manager.close({ threadId: "thread-1" });
 
     const reopened = await manager.open(openInput());
-    expect(reopened.history).toBe("before \u001b(Bafter\n");
+    expect(reopened.history).toBe(withMouseReset("before \u001b(Bafter\n"));
 
     manager.dispose();
   });
@@ -594,7 +606,54 @@ describe("TerminalManager", () => {
     await manager.close({ threadId: "thread-1" });
 
     const reopened = await manager.open(openInput());
-    expect(reopened.history).toBe("before \u001b(Bafter\n");
+    expect(reopened.history).toBe(withMouseReset("before \u001b(Bafter\n"));
+
+    manager.dispose();
+  });
+
+  it("appends a mouse-mode reset when re-attaching to a surviving terminal session", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    // A TUI enabled mouse reporting; it is no longer attached to consume events.
+    process.emitData("mouse-tui prompt\n");
+
+    // Re-attaching to the still-running session must not spawn a new pty and
+    // must hand back history that disables mouse reporting in the fresh xterm.
+    const reattached = await manager.open(openInput());
+    expect(ptyAdapter.spawnInputs).toHaveLength(1);
+    expect(reattached.history).toBe(withMouseReset("mouse-tui prompt\n"));
+    expect(reattached.history.endsWith(MOUSE_REPORTING_RESET_SEQUENCE)).toBe(true);
+
+    manager.dispose();
+  });
+
+  it("appends a mouse-mode reset when restoring a terminal session from persisted history", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    process.emitData("restored prompt\n");
+    await manager.close({ threadId: "thread-1" });
+
+    // Restoring from disk spawns a fresh pty, but the replayed history must
+    // still leave the re-created xterm with mouse reporting disabled.
+    const restored = await manager.open(openInput());
+    expect(ptyAdapter.spawnInputs).toHaveLength(2);
+    expect(restored.history).toBe(withMouseReset("restored prompt\n"));
+
+    manager.dispose();
+  });
+
+  it("does not append a mouse-mode reset to an empty terminal history", async () => {
+    const { manager } = makeManager();
+    const snapshot = await manager.open(openInput());
+    expect(snapshot.history).toBe("");
 
     manager.dispose();
   });
@@ -708,7 +767,7 @@ describe("TerminalManager", () => {
 
     const snapshot = await manager.open(openInput());
 
-    expect(snapshot.history).toBe("legacy-line\n");
+    expect(snapshot.history).toBe(withMouseReset("legacy-line\n"));
     expect(fs.existsSync(nextPath)).toBe(true);
     expect(fs.readFileSync(nextPath, "utf8")).toBe("legacy-line\n");
     expect(fs.existsSync(legacyPath)).toBe(false);

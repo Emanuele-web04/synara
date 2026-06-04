@@ -21,6 +21,7 @@ import {
   deriveTerminalProcessIdentity,
   deriveTerminalTitleSignalIdentity,
   terminalCliKindFromValue,
+  MOUSE_REPORTING_RESET_SEQUENCE,
   T3CODE_TERMINAL_HOOK_OSC_PREFIX,
   T3CODE_TERMINAL_CLI_KIND_ENV_KEY,
   type TerminalActivityState,
@@ -901,6 +902,22 @@ function appendSessionHistory(
 function sanitizePersistedTerminalHistory(history: string): string {
   if (history.length === 0) return history;
   return sanitizeTerminalHistoryChunk("", history).visibleText;
+}
+
+/**
+ * Build the history payload returned in a session snapshot.
+ *
+ * Snapshots are replayed into a freshly attached xterm on open / re-attach /
+ * restore. Restored history can leave that xterm with mouse reporting enabled
+ * (the TUI that originally turned it on is no longer attached to consume the
+ * events), so raw `CSI < … M/m` mouse sequences spill into the shell as
+ * garbage. Appending a mouse-mode reset guarantees the re-attached terminal
+ * starts with mouse reporting off; it is a no-op for an empty history (a brand
+ * new session has nothing to replay).
+ */
+function snapshotHistory(history: string): string {
+  if (history.length === 0) return history;
+  return `${history}${MOUSE_REPORTING_RESET_SEQUENCE}`;
 }
 
 interface TerminalManagerEvents {
@@ -2005,7 +2022,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       cwd: session.cwd,
       status: session.status,
       pid: session.pid,
-      history: session.history,
+      history: snapshotHistory(session.history),
       exitCode: session.exitCode,
       exitSignal: session.exitSignal,
       updatedAt: session.updatedAt,
