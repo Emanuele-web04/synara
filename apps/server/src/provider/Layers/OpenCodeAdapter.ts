@@ -138,6 +138,7 @@ interface OpenCodeSessionContext {
   readonly partSnapshotKeyById: Map<string, string>;
   readonly emittedTextByPartId: Map<string, string>;
   readonly completedAssistantPartIds: Set<string>;
+  readonly relatedSessionIds: Set<string>;
   readonly turns: Array<OpenCodeTurnSnapshot>;
   readonly modelContextLimitBySlug: Map<string, number>;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
@@ -687,6 +688,7 @@ function clearActiveTurnState(context: OpenCodeSessionContext): void {
   context.activeAgent = undefined;
   context.activeVariant = undefined;
   context.latestTurnCostUsd = undefined;
+  context.relatedSessionIds.clear();
 }
 
 function markOpenCodeTurnProviderActivity(
@@ -857,6 +859,26 @@ function asFiniteNonNegativeNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function openCodeRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function rememberRelatedOpenCodeSession(
+  context: OpenCodeSessionContext,
+  part: Extract<Part, { type: "tool" }>,
+): void {
+  const state = openCodeRecord(part.state);
+  const metadata = openCodeRecord(state?.metadata) ?? openCodeRecord(part.metadata);
+  const childSessionId =
+    trimNonEmptyString(metadata?.sessionId) ?? trimNonEmptyString(metadata?.sessionID);
+  if (!childSessionId || childSessionId === context.openCodeSessionId) {
+    return;
+  }
+  context.relatedSessionIds.add(childSessionId);
+}
+
 function subscribedEventSessionId(event: OpenCodeSubscribedEvent): string | undefined {
   if (!("properties" in event)) {
     return undefined;
@@ -871,13 +893,36 @@ function subscribedEventSessionId(event: OpenCodeSubscribedEvent): string | unde
   return typeof sessionId === "string" ? sessionId : undefined;
 }
 
+function shouldHandleRelatedOpenCodeSessionEvent(event: OpenCodeSubscribedEvent): boolean {
+  if (
+    event.type.startsWith("session.next.tool.") ||
+    event.type.startsWith("session.next.shell.")
+  ) {
+    return true;
+  }
+  if (event.type === "message.part.updated") {
+    return event.properties.part.type === "tool";
+  }
+  return (
+    event.type === "permission.asked" ||
+    event.type === "permission.replied" ||
+    event.type === "question.asked" ||
+    event.type === "question.replied" ||
+    event.type === "question.rejected" ||
+    event.type === "session.error"
+  );
+}
+
 function shouldHandleSubscribedEvent(
   context: OpenCodeSessionContext,
   event: OpenCodeSubscribedEvent,
 ): boolean {
   const sessionId = subscribedEventSessionId(event);
   if (sessionId !== undefined) {
-    return sessionId === context.openCodeSessionId;
+    return (
+      sessionId === context.openCodeSessionId ||
+      (context.relatedSessionIds.has(sessionId) && shouldHandleRelatedOpenCodeSessionEvent(event))
+    );
   }
 
   return (
@@ -2617,6 +2662,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             }
 
             if (part.type === "tool") {
+              rememberRelatedOpenCodeSession(context, part);
               const itemType = toToolLifecycleItemType(part.tool);
               const title =
                 part.state.status === "running" ? (part.state.title ?? part.tool) : part.tool;
@@ -2959,6 +3005,68 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 status: "completed",
                 title: "Reasoning",
                 ...(event.properties.text ? { detail: event.properties.text } : {}),
+              },
+            });
+            break;
+          }
+
+          case "session.next.shell.started": {
+            if (!turnId) {
+              break;
+            }
+            yield* emit({
+              ...buildEventBase({
+                threadId: context.session.threadId,
+                turnId,
+                itemId: event.properties.callID,
+                createdAt: isoFromOpenCodeTimestamp(event.properties.timestamp),
+                raw: event,
+              }),
+              type: "item.started",
+              payload: {
+                itemType: "command_execution",
+                status: "inProgress",
+                title: "Ran command",
+                detail: event.properties.command,
+                data: {
+                  tool: "shell",
+                  toolName: "shell",
+                  toolCallId: event.properties.callID,
+                  callID: event.properties.callID,
+                  command: event.properties.command,
+                  sessionID: event.properties.sessionID,
+                },
+              },
+            });
+            break;
+          }
+
+          case "session.next.shell.ended": {
+            if (!turnId) {
+              break;
+            }
+            yield* emit({
+              ...buildEventBase({
+                threadId: context.session.threadId,
+                turnId,
+                itemId: event.properties.callID,
+                createdAt: isoFromOpenCodeTimestamp(event.properties.timestamp),
+                raw: event,
+              }),
+              type: "item.completed",
+              payload: {
+                itemType: "command_execution",
+                status: "completed",
+                title: "Ran command",
+                ...(event.properties.output ? { detail: event.properties.output } : {}),
+                data: {
+                  tool: "shell",
+                  toolName: "shell",
+                  toolCallId: event.properties.callID,
+                  callID: event.properties.callID,
+                  output: event.properties.output,
+                  sessionID: event.properties.sessionID,
+                },
               },
             });
             break;
@@ -3549,6 +3657,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             messageRoleById: new Map(),
             messageSnapshotKeyById: new Map(),
             completedAssistantPartIds: new Set(),
+            relatedSessionIds: new Set(),
             turns: [],
             modelContextLimitBySlug: started.modelContextLimitBySlug,
             lastKnownTokenUsage: undefined,

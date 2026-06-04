@@ -577,9 +577,14 @@ export function hasLiveTurnTailWork(input: {
   return false;
 }
 
-function isCollabAgentToolActivity(activity: OrchestrationThreadActivity): boolean {
+function shouldOmitRoutedCollabAgentToolActivity(activity: OrchestrationThreadActivity): boolean {
   const payload = asRecord(activity.payload);
-  return asTrimmedString(payload?.itemType) === "collab_agent_tool_call";
+  if (asTrimmedString(payload?.itemType) !== "collab_agent_tool_call") {
+    return false;
+  }
+  // Routed subagent activity is rendered through child-thread/subagent surfaces;
+  // generic OpenCode task calls have no receiver metadata and need a chat row.
+  return extractCollabSubagents(payload).length > 0;
 }
 
 export function findLatestProposedPlan(
@@ -654,7 +659,7 @@ export function deriveWorkLogEntries(
           (activity.kind === "context-compaction" && activity.turnId === null)
         : true,
     )
-    .filter((activity) => !isCollabAgentToolActivity(activity))
+    .filter((activity) => !shouldOmitRoutedCollabAgentToolActivity(activity))
     .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
     .filter((activity) => !isQuietTurnLifecycleActivity(activity))
     .filter((activity) => activity.kind !== "account.rate-limits.updated")
@@ -713,6 +718,10 @@ function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): bool
   return typeof payload?.detail === "string" && payload.detail.startsWith("ExitPlanMode:");
 }
 
+function normalizeWorkLogTextForComparison(value: string | undefined): string {
+  return normalizeCompactToolLabel(value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
   const payload =
     activity.payload && typeof activity.payload === "object"
@@ -744,6 +753,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const outputDetail = summarizeToolPayloadOutput(payload);
   if (!entry.detail && outputDetail) {
     entry.detail = outputDetail;
+  }
+  const collabTaskOutputDetail = extractCollabTaskOutputDetail(payload);
+  if (collabTaskOutputDetail) {
+    entry.detail = collabTaskOutputDetail;
   }
   if (commandPreview.command) {
     entry.command = commandPreview.command;
@@ -784,6 +797,13 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (readableTitle) {
     entry.toolTitle = readableTitle;
   }
+  if (
+    entry.detail &&
+    normalizeWorkLogTextForComparison(entry.detail) ===
+      normalizeWorkLogTextForComparison(entry.toolTitle ?? entry.label)
+  ) {
+    delete entry.detail;
+  }
   const collapseKey = deriveToolLifecycleCollapseKey(entry);
   if (collapseKey) {
     entry.collapseKey = collapseKey;
@@ -798,6 +818,69 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
 function summarizeToolPayloadOutput(payload: Record<string, unknown> | null): string | null {
   const data = asRecord(payload?.data);
   return summarizeToolRawOutput(data?.rawOutput) ?? null;
+}
+
+function extractCollabTaskOutputDetail(payload: Record<string, unknown> | null): string | null {
+  if (extractWorkLogItemType(payload) !== "collab_agent_tool_call") {
+    return null;
+  }
+  const data = asRecord(payload?.data);
+  const item = collabPayloadItem(payload);
+  const state = asRecord(data?.state) ?? asRecord(item?.state);
+  const candidates = [
+    state?.output,
+    data?.output,
+    item?.output,
+    data?.rawOutput,
+    data?.result,
+    item?.result,
+  ];
+  for (const candidate of candidates) {
+    const normalized = extractCollabTaskText(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
+function extractCollabTaskText(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((entry) => extractCollabTaskText(entry))
+      .filter((entry): entry is string => entry !== null);
+    return parts.length > 0 ? parts.join("\n") : null;
+  }
+  const direct = normalizeCollabTaskOutput(asTrimmedString(value));
+  if (direct) {
+    return direct;
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  return (
+    extractCollabTaskText(record.content) ??
+    extractCollabTaskText(record.text) ??
+    extractCollabTaskText(record.output) ??
+    extractCollabTaskText(record.result)
+  );
+}
+
+function normalizeCollabTaskOutput(value: string | null): string | null {
+  const output = value ? stripTrailingExitCode(value).output : null;
+  if (!output) {
+    return null;
+  }
+  const taskResultMatch = /<task_result>\s*([\s\S]*?)\s*<\/task_result>/i.exec(output);
+  if (taskResultMatch?.[1]) {
+    return taskResultMatch[1].trim() || null;
+  }
+  const unwrappedTask = output
+    .replace(/^<task\b[^>]*>\s*/i, "")
+    .replace(/\s*<\/task>\s*$/i, "")
+    .trim();
+  return (unwrappedTask || output).trim() || null;
 }
 
 function collapseDerivedWorkLogEntries(
@@ -1040,6 +1123,7 @@ function extractCollabAction(
   }
 
   const item = collabPayloadItem(payload);
+  const itemInput = asRecord(item?.input);
   const tool = inferSubagentActionTool(item);
   const status = asTrimmedString(item?.status ?? payload?.status) ?? "in_progress";
   const model = asTrimmedString(
@@ -1049,7 +1133,9 @@ function extractCollabAction(
       item?.requestedModel ??
       item?.requested_model,
   );
-  const prompt = asTrimmedString(item?.prompt ?? item?.task ?? item?.message);
+  const prompt = asTrimmedString(
+    item?.prompt ?? item?.task ?? item?.message ?? itemInput?.prompt ?? itemInput?.description,
+  );
   const agentStates = decodeSubagentAgentStates(item);
   const receiverThreadIds = decodeSubagentReceiverThreadIds(item);
   const count = Math.max(

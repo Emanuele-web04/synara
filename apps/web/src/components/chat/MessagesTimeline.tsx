@@ -1833,6 +1833,10 @@ function workEntryPreview(
     return labels.length === 1 ? labels[0]! : `${labels.length} subagents`;
   }
 
+  if (workEntry.itemType === "collab_agent_tool_call") {
+    return workEntry.detail ?? workEntry.subagentAction?.prompt ?? null;
+  }
+
   // For detail, try to extract a clean file path first
   if (workEntry.detail) {
     const filePath = extractFilePathFromDetail(workEntry.detail);
@@ -1913,6 +1917,19 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
     return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));
   }
   return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
+}
+
+function normalizeWorkDisplayText(value: string): string {
+  return normalizeCompactToolLabel(value).toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function combineWorkEntryDisplayText(heading: string, preview: string | null): string {
+  if (!preview) {
+    return heading;
+  }
+  return normalizeWorkDisplayText(heading) === normalizeWorkDisplayText(preview)
+    ? heading
+    : `${heading} ${preview}`;
 }
 
 // Splits compact work labels so the action verb can carry visual emphasis.
@@ -2045,15 +2062,19 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     compact && workEntry.itemType === "mcp_tool_call" && !showInlineGitHubIcon;
   const heading = toolWorkEntryHeading(workEntry);
   const preview = workEntryPreview(workEntry);
-  const displayText = preview ? `${heading} ${preview}` : heading;
+  const displayText = combineWorkEntryDisplayText(heading, preview);
   const displayTextParts = splitWorkEntryActionText(displayText);
+  const showInlineAgentTaskPreview =
+    workEntry.itemType === "collab_agent_tool_call" &&
+    (workEntry.subagents?.length ?? 0) === 0 &&
+    Boolean(preview) &&
+    normalizeWorkDisplayText(heading) !== normalizeWorkDisplayText(preview ?? "");
   const rawCommand = workEntry.rawCommand ?? workEntry.command;
   const hoverText = rawCommand ?? displayText;
   const changedFiles = workEntry.changedFiles ?? [];
   const showEditedRows = isFileChangeWorkEntry(workEntry) && changedFiles.length > 0;
   const showSubagentRows =
-    workEntry.itemType === "collab_agent_tool_call" &&
-    ((workEntry.subagents?.length ?? 0) > 0 || Boolean(workEntry.subagentAction));
+    workEntry.itemType === "collab_agent_tool_call" && (workEntry.subagents?.length ?? 0) > 0;
   const visibleSubagents = workEntry.subagents?.slice(0, 3) ?? [];
   const hiddenSubagentCount = Math.max(
     0,
@@ -2286,62 +2307,88 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 </span>
               )}
               <div className="min-w-0 flex-1 overflow-hidden">
-                <p
-                  className={cn(
-                    compact ? "truncate leading-5" : "truncate leading-6",
-                    "text-muted-foreground/50",
-                  )}
-                  style={{ fontSize: `${rowFontSizePx}px` }}
-                >
-                  {showInlineWebSearchIcon || showInlineGitHubIcon || showInlineMcpIcon ? (
-                    <span
-                      className="mr-1 inline-flex align-[-0.125em] text-muted-foreground/38"
-                      data-inline-tool-icon={
-                        showInlineGitHubIcon ? "github" : showInlineMcpIcon ? "mcp" : "web-search"
-                      }
+                {showInlineAgentTaskPreview ? (
+                  <div className={cn(compact ? "space-y-[1px]" : "space-y-0.5")}>
+                    <p
+                      className="truncate font-medium leading-5 text-muted-foreground/72"
+                      style={{ fontSize: `${rowFontSizePx}px` }}
                     >
-                      {showInlineGitHubIcon ? (
-                        <GitHubIcon
-                          style={{
-                            width: `${rowFontSizePx}px`,
-                            height: `${rowFontSizePx}px`,
-                          }}
-                        />
-                      ) : null}
-                      {showInlineMcpIcon ? (
-                        <McpIcon
-                          style={{
-                            width: `${rowFontSizePx}px`,
-                            height: `${rowFontSizePx}px`,
-                          }}
-                        />
-                      ) : null}
-                      {showInlineWebSearchIcon ? (
-                        <GlobeIcon
-                          style={{
-                            width: `${rowFontSizePx}px`,
-                            height: `${rowFontSizePx}px`,
-                          }}
-                        />
-                      ) : null}
-                    </span>
-                  ) : null}
-                  <span className="text-muted-foreground/48" data-work-entry-display-text="true">
-                    {displayTextParts ? (
-                      <>
-                        <span
-                          className="font-medium text-muted-foreground/72"
-                          data-work-entry-action-word="true"
-                        >
-                          {displayTextParts.action}
-                        </span>
-                        {displayTextParts.rest}
-                      </>
-                    ) : (
-                      displayText
+                      {heading}
+                    </p>
+                    <p
+                      className="text-muted-foreground/42"
+                      style={{
+                        fontSize: `${Math.max(11, rowFontSizePx - 1)}px`,
+                        lineHeight: compact ? "18px" : "19px",
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {preview}
+                    </p>
+                  </div>
+                ) : (
+                  <p
+                    className={cn(
+                      compact ? "truncate leading-5" : "truncate leading-6",
+                      "text-muted-foreground/50",
                     )}
-                  </span>
-                </p>
+                    style={{ fontSize: `${rowFontSizePx}px` }}
+                  >
+                    {showInlineWebSearchIcon || showInlineGitHubIcon || showInlineMcpIcon ? (
+                      <span
+                        className="mr-1 inline-flex align-[-0.125em] text-muted-foreground/38"
+                        data-inline-tool-icon={
+                          showInlineGitHubIcon
+                            ? "github"
+                            : showInlineMcpIcon
+                              ? "mcp"
+                              : "web-search"
+                        }
+                      >
+                        {showInlineGitHubIcon ? (
+                          <GitHubIcon
+                            style={{
+                              width: `${rowFontSizePx}px`,
+                              height: `${rowFontSizePx}px`,
+                            }}
+                          />
+                        ) : null}
+                        {showInlineMcpIcon ? (
+                          <McpIcon
+                            style={{
+                              width: `${rowFontSizePx}px`,
+                              height: `${rowFontSizePx}px`,
+                            }}
+                          />
+                        ) : null}
+                        {showInlineWebSearchIcon ? (
+                          <GlobeIcon
+                            style={{
+                              width: `${rowFontSizePx}px`,
+                              height: `${rowFontSizePx}px`,
+                            }}
+                          />
+                        ) : null}
+                      </span>
+                    ) : null}
+                    <span className="text-muted-foreground/48" data-work-entry-display-text="true">
+                      {displayTextParts ? (
+                        <>
+                          <span
+                            className="font-medium text-muted-foreground/72"
+                            data-work-entry-action-word="true"
+                          >
+                            {displayTextParts.action}
+                          </span>
+                          {displayTextParts.rest}
+                        </>
+                      ) : (
+                        displayText
+                      )}
+                    </span>
+                  </p>
+                )}
               </div>
               {showIconRight && (
                 <span
