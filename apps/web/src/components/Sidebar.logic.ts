@@ -248,18 +248,28 @@ export function pruneExpandedProjectThreadListsForCollapsedProjects<
 
 /**
  * Trailing padding that protects the title from the absolutely-positioned
- * meta-chip + timestamp / hover-action cluster. Sized to the actual number of
- * meta chips so rows without fork/worktree/handoff badges let the title use the
- * freed width instead of truncating against permanently-reserved empty space.
+ * trailing cluster. Split into two reserves so the title is only truncated by
+ * content that is actually on screen:
+ *
+ * - Idle rows reserve just enough for the timestamp/status glyph plus any
+ *   fork/worktree/handoff meta chips. A row with no badges therefore runs the
+ *   title nearly to the timestamp instead of truncating against permanently
+ *   reserved empty space.
+ * - The wider reserve that clears the hover pin/archive actions is only applied
+ *   on hover/focus (mirroring the project header row), so the title gives up that
+ *   width exactly when those actions appear and not a moment sooner.
  *
  * Literal class strings are required so Tailwind's JIT scanner emits them.
  */
 export function resolveThreadRowTrailingReserveClass(metaChipCount: number): string {
-  // Timestamp/status keeps a fixed column; meta chips + hover actions share a second column.
-  if (metaChipCount <= 0) return "pr-[4.75rem]";
-  if (metaChipCount === 1) return "pr-[5.75rem]";
-  if (metaChipCount === 2) return "pr-[6.25rem]";
-  return "pr-[6.75rem]";
+  // Hover/focus reveals the pin/archive actions; the meta chips + timestamp fade
+  // out at the same time, so this reserve is a constant regardless of chip count.
+  const hoverReserve =
+    "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]";
+  if (metaChipCount <= 0) return cn("pr-[2.25rem]", hoverReserve);
+  if (metaChipCount === 1) return cn("pr-[3.5rem]", hoverReserve);
+  if (metaChipCount === 2) return cn("pr-[4rem]", hoverReserve);
+  return cn("pr-[4.5rem]", hoverReserve);
 }
 
 export function resolveThreadRowClassName(input: {
@@ -659,6 +669,40 @@ export function getPinnedThreadsForSidebar<T extends Pick<Thread, "id">>(
   }
 
   return pinnedThreads;
+}
+
+// Resolve the visible pinned ids from server state, local legacy pins, and pending user clicks.
+export function derivePinnedThreadIdsForSidebar<T extends Pick<Thread, "id" | "isPinned">>(input: {
+  readonly threads: readonly T[];
+  readonly persistedPinnedThreadIds: readonly T["id"][];
+  readonly optimisticPinnedStateByThreadId: ReadonlyMap<T["id"], boolean>;
+}): T["id"][] {
+  const next = new Set<T["id"]>();
+
+  for (const thread of input.threads) {
+    const optimisticPinned = input.optimisticPinnedStateByThreadId.get(thread.id);
+    if (optimisticPinned ?? thread.isPinned === true) {
+      next.add(thread.id);
+    }
+  }
+
+  for (const threadId of input.persistedPinnedThreadIds) {
+    if (input.optimisticPinnedStateByThreadId.get(threadId) === false) {
+      continue;
+    }
+    next.add(threadId);
+  }
+
+  return [...next];
+}
+
+// Only the newest pin mutation may roll back optimistic state after rapid clicks.
+export function isLatestPinnedThreadMutation<T>(input: {
+  readonly threadId: T;
+  readonly requestVersion: number;
+  readonly latestMutationVersionByThreadId: ReadonlyMap<T, number>;
+}): boolean {
+  return input.latestMutationVersionByThreadId.get(input.threadId) === input.requestVersion;
 }
 
 // Hide globally pinned rows from the per-project lists so the sidebar doesn't duplicate chats.

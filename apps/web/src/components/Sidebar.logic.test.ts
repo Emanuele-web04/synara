@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildProjectThreadTree,
+  derivePinnedThreadIdsForSidebar,
   deriveSidebarProjectData,
   describeAddProjectError,
   extractDuplicateProjectCreateProjectId,
@@ -19,6 +20,7 @@ import {
   getVisibleThreadsForProject,
   getProjectSortTimestamp,
   hasUnseenCompletion,
+  isLatestPinnedThreadMutation,
   isLoopbackHostname,
   isDuplicateProjectCreateError,
   pruneExpandedProjectThreadListsForCollapsedProjects,
@@ -371,6 +373,55 @@ describe("pin helpers", () => {
     expect(
       getUnpinnedThreadsForSidebar(threads, ["thread-2" as ThreadId, "thread-3" as ThreadId]),
     ).toEqual([threads[0]]);
+  });
+
+  it("lets an optimistic unpin override server and persisted pinned state", () => {
+    const threads = [
+      {
+        ...makeThread("thread-1"),
+        isPinned: true,
+      },
+    ];
+
+    expect(
+      derivePinnedThreadIdsForSidebar({
+        threads,
+        persistedPinnedThreadIds: ["thread-1" as ThreadId],
+        optimisticPinnedStateByThreadId: new Map([["thread-1" as ThreadId, false]]),
+      }),
+    ).toEqual([]);
+  });
+
+  it("shows an optimistic pin before the server snapshot confirms it", () => {
+    const threads = [makeThread("thread-1")];
+
+    expect(
+      derivePinnedThreadIdsForSidebar({
+        threads,
+        persistedPinnedThreadIds: [],
+        optimisticPinnedStateByThreadId: new Map([["thread-1" as ThreadId, true]]),
+      }),
+    ).toEqual(["thread-1"]);
+  });
+
+  it("rejects stale pin mutation versions so old failures cannot roll back newer clicks", () => {
+    const threadId = "thread-1" as ThreadId;
+    const latestMutationVersionByThreadId = new Map<ThreadId, number>([[threadId, 2]]);
+
+    expect(
+      isLatestPinnedThreadMutation({
+        threadId,
+        requestVersion: 1,
+        latestMutationVersionByThreadId,
+      }),
+    ).toBe(false);
+    expect(
+      isLatestPinnedThreadMutation({
+        threadId,
+        requestVersion: 2,
+        latestMutationVersionByThreadId,
+      }),
+    ).toBe(true);
   });
 
   it("waits for thread hydration before pruning persisted pins", () => {

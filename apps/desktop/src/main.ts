@@ -944,6 +944,20 @@ async function checkForUpdatesFromMenu(): Promise<void> {
       message: `Synara ${updateState.currentVersion} is currently the newest version available.`,
       buttons: ["OK"],
     });
+  } else if (updateState.status === "downloading" || updateState.status === "available") {
+    void dialog.showMessageBox({
+      type: "info",
+      title: "Update found",
+      message: "Synara is preparing the update in the background.",
+      buttons: ["OK"],
+    });
+  } else if (updateState.status === "downloaded") {
+    void dialog.showMessageBox({
+      type: "info",
+      title: "Update ready",
+      message: "Click Update in the sidebar when you’re ready to restart and install it.",
+      buttons: ["OK"],
+    });
   } else if (updateState.status === "error") {
     void dialog.showMessageBox({
       type: "warning",
@@ -1591,7 +1605,6 @@ async function downloadAvailableUpdate(): Promise<{
   }
   updateDownloadInFlight = true;
   setUpdateState(reduceDesktopUpdateStateOnDownloadStart(updateState));
-  autoUpdater.disableDifferentialDownload = true;
   // Keep existing cancellation suppressions across immediate retries; the old
   // updater cancellation can arrive after a new download has already started.
   lastUpdateDownloadProgressSample = null;
@@ -1651,6 +1664,25 @@ async function downloadAvailableUpdate(): Promise<{
       await clearPendingUpdateCache(pendingCacheClearReason);
     }
   }
+}
+
+// Starts the automatic prepare step after a successful update check; install
+// stays user-controlled so active agent work is not interrupted by a restart.
+function prepareAvailableUpdateInBackground(reason: string): void {
+  if (updateDownloadInFlight || updateState.status !== "available") {
+    return;
+  }
+  void downloadAvailableUpdate()
+    .then((result) => {
+      if (result.accepted && result.completed) {
+        console.info(`[desktop-updater] Background update download completed (${reason}).`);
+      }
+    })
+    .catch((error) => {
+      console.error(
+        `[desktop-updater] Background update download crashed (${reason}): ${formatErrorMessage(error)}`,
+      );
+    });
 }
 
 async function installDownloadedUpdate(): Promise<{
@@ -1737,10 +1769,9 @@ function configureAutoUpdater(): void {
   autoUpdater.channel = DESKTOP_UPDATE_CHANNEL;
   autoUpdater.allowPrerelease = DESKTOP_UPDATE_ALLOW_PRERELEASE;
   autoUpdater.allowDowngrade = false;
-  // We resolve the exact latest stable release when the feed cache is cold/stale
-  // and point the updater at that tag directly, so full downloads are more reliable
-  // than blockmap-based patching against a moving "latest" target.
-  autoUpdater.disableDifferentialDownload = true;
+  // The feed is pinned to an exact release tag before each check, so blockmap
+  // differential downloads can be used without racing a moving "latest" target.
+  autoUpdater.disableDifferentialDownload = false;
   let lastLoggedDownloadMilestone = -1;
 
   if (isArm64HostRunningIntelBuild(desktopRuntimeInfo)) {
@@ -1772,6 +1803,7 @@ function configureAutoUpdater(): void {
     );
     lastLoggedDownloadMilestone = -1;
     console.info(`[desktop-updater] Update available: ${info.version}`);
+    prepareAvailableUpdateInBackground(`available ${info.version}`);
   });
   autoUpdater.on("update-not-available", () => {
     clearUpdateCheckTimeoutTimer();

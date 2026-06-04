@@ -2041,7 +2041,7 @@ describe("deriveWorkLogEntries", () => {
           itemType: "collab_agent_tool_call",
           status: "completed",
           title: "task",
-          detail: "<task id=\"task-call\" state=\"completed\">...",
+          detail: '<task id="task-call" state="completed">...',
           data: {
             tool: "task",
             toolName: "task",
@@ -2053,7 +2053,7 @@ describe("deriveWorkLogEntries", () => {
             state: {
               status: "completed",
               output:
-                "<task id=\"task-call\" state=\"completed\">\n<task_result>\nFull changelog report\nwith file references.\n</task_result>\n</task>",
+                '<task id="task-call" state="completed">\n<task_result>\nFull changelog report\nwith file references.\n</task_result>\n</task>',
             },
           },
         },
