@@ -97,6 +97,15 @@ export interface FakeRuntimeProviderAdapterShape {
     RuntimeInstanceUnknownError,
     ChildProcessSpawner.ChildProcessSpawner
   >;
+  /**
+   * Whether the adapter still recognizes a provisioned instance. The fake's only
+   * liveness signal is its in-process `roots` map, so this returns `false` for an
+   * instance it never provisioned or already destroyed — and for every instance
+   * after a server restart (the map is empty). The reconciler uses this as the
+   * provider-agnostic `getStatus` probe for `reconnect`-capable fakes: a DB row
+   * the provider no longer knows about is a lost instance.
+   */
+  readonly isAlive: (instanceId: ExecutionInstanceId) => Effect.Effect<boolean>;
   /** Remove the instance's temp dir and forget it. Idempotent. */
   readonly destroy: (instanceId: ExecutionInstanceId) => Effect.Effect<void>;
 }
@@ -272,6 +281,9 @@ const makeFakeRuntimeProviderAdapter = Effect.gen(function* () {
       } satisfies FakeRuntimeExecResult;
     }).pipe(Effect.scoped);
 
+  const isAlive: FakeRuntimeProviderAdapterShape["isAlive"] = (instanceId) =>
+    Effect.sync(() => roots.has(instanceId));
+
   const destroy: FakeRuntimeProviderAdapterShape["destroy"] = (instanceId) =>
     Effect.gen(function* () {
       const root = roots.get(instanceId);
@@ -286,6 +298,7 @@ const makeFakeRuntimeProviderAdapter = Effect.gen(function* () {
     provision,
     createTransport,
     execCollect,
+    isAlive,
     destroy,
   } satisfies FakeRuntimeProviderAdapterShape;
 });

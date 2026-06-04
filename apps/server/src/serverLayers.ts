@@ -4,6 +4,7 @@ import { Layer } from "effect";
 import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQuery";
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore";
 import { ExecutionRuntimePlannerLive } from "./executionRuntime/Layers/ExecutionRuntimePlanner";
+import { ExecutionRuntimeReconcilerLive } from "./executionRuntime/Layers/ExecutionRuntimeReconciler";
 import { ExecutionRuntimeServiceLive } from "./executionRuntime/Layers/ExecutionRuntimeService";
 import { FAKE_RUNTIME_DESCRIPTORS } from "./executionRuntime/Layers/fakeDescriptors";
 import { FakeRuntimeProviderAdapterLive } from "./executionRuntime/Layers/FakeRuntimeProviderAdapter";
@@ -89,6 +90,14 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(TextGenerationLayerLive),
     Layer.provideMerge(ServerSettingsLive),
   );
+  // The reconciler recovers remote runtimes from partial failure on startup and
+  // on a schedule. It needs the operational instance repository (from the runtime
+  // services layer) plus the provider-agnostic execution-runtime seam to probe
+  // and converge state.
+  const executionRuntimeReconcilerLayer = ExecutionRuntimeReconcilerLive.pipe(
+    Layer.provideMerge(executionRuntimeServiceLayer),
+    Layer.provideMerge(runtimeServicesLayer),
+  );
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
@@ -126,6 +135,7 @@ export function makeServerRuntimeServicesLayer() {
   return Layer.mergeAll(
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
+    executionRuntimeReconcilerLayer,
     runtimeRemoteConcernsLayer,
     GitLayerLive,
     TerminalLayerLive,

@@ -292,12 +292,69 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
       })).pipe(Effect.ignore);
     });
 
+  // Resolve the reconnect capability for a fake instance. A flavor recorded in
+  // the in-memory map (provisioned this process lifetime) gives the precise
+  // descriptor; otherwise the family default is reconnect-capable, and liveness
+  // (`isAlive`) decides the rest. Provider knowledge stays here, not the reactor.
+  const resolveFakeReconnect = (instanceId: ExecutionInstanceId) =>
+    Effect.gen(function* () {
+      const flavor = instanceFlavors.get(instanceId);
+      if (flavor === undefined) {
+        return true;
+      }
+      const descriptor = yield* registry
+        .getDescriptorByFlavor(flavor)
+        .pipe(Effect.catch(() => Effect.succeed(undefined)));
+      return descriptor?.capabilities.lifecycle.reconnect ?? true;
+    });
+
+  const probeInstance: ExecutionRuntimeServiceShape["probeInstance"] = (input) =>
+    Effect.gen(function* () {
+      // Only the fake provider family has a concrete adapter in this slice. Other
+      // providers resolve their reconnect capability from the registry; with no
+      // adapter to probe they report `absent`, so the reconciler marks them lost.
+      if (input.provider !== "fake") {
+        const descriptor = yield* registry
+          .getDescriptor(input.provider)
+          .pipe(Effect.catch(() => Effect.succeed(undefined)));
+        return {
+          supportsReconnect: descriptor?.capabilities.lifecycle.reconnect ?? false,
+          liveness: "absent" as const,
+        };
+      }
+      const supportsReconnect = yield* resolveFakeReconnect(input.instanceId);
+      const alive = yield* fakeAdapter
+        .isAlive(input.instanceId)
+        .pipe(Effect.orElseSucceed(() => false));
+      return {
+        supportsReconnect,
+        liveness: alive ? ("alive" as const) : ("absent" as const),
+      };
+    });
+
+  const recordInstanceState: ExecutionRuntimeServiceShape["recordInstanceState"] = (input) =>
+    dispatchRuntimeCommand(
+      input.threadId,
+      `state.${input.status}.${input.instanceId}`,
+      (commandId, createdAt) => ({
+        type: "thread.runtime.state.record",
+        commandId,
+        threadId: input.threadId,
+        instanceId: input.instanceId,
+        status: input.status,
+        ...(input.failureReason !== undefined ? { failureReason: input.failureReason } : {}),
+        createdAt,
+      }),
+    );
+
   return {
     markThreadRemote,
     applyRuntimePlan,
     ensureTargetForThread,
     exec,
     destroy,
+    probeInstance,
+    recordInstanceState,
   } satisfies ExecutionRuntimeServiceShape;
 });
 

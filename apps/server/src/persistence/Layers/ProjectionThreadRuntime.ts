@@ -166,6 +166,25 @@ const makeProjectionThreadRuntimeRepository = Effect.gen(function* () {
     `,
   });
 
+  const listActiveInstanceRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ExecutionRuntimeInstance,
+    execute: () => sql`
+      SELECT
+        instance_id AS "instanceId",
+        thread_id AS "threadId",
+        provider,
+        status,
+        root_path AS "rootPath",
+        failure_reason AS "failureReason",
+        created_at AS "createdAt",
+        updated_at AS "updatedAt"
+      FROM execution_runtime_instances
+      WHERE status NOT IN ('destroyed', 'failed', 'lost')
+      ORDER BY created_at ASC
+    `,
+  });
+
   const upsertProcessRow = SqlSchema.void({
     Request: ExecutionRuntimeProcess,
     execute: (row) => sql`
@@ -285,6 +304,13 @@ const makeProjectionThreadRuntimeRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionThreadRuntimeRepository.upsertInstance")),
     );
 
+  const listActiveInstances: ProjectionThreadRuntimeRepositoryShape["listActiveInstances"] = () =>
+    listActiveInstanceRows(undefined).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadRuntimeRepository.listActiveInstances"),
+      ),
+    );
+
   const upsertProcess: ProjectionThreadRuntimeRepositoryShape["upsertProcess"] = (row) =>
     upsertProcessRow(row).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionThreadRuntimeRepository.upsertProcess")),
@@ -311,6 +337,7 @@ const makeProjectionThreadRuntimeRepository = Effect.gen(function* () {
     listReadModels,
     deleteByThreadId,
     upsertInstance,
+    listActiveInstances,
     upsertProcess,
     upsertRoute,
     upsertSnapshot,

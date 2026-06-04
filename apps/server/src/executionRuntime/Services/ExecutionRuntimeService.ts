@@ -18,7 +18,9 @@
  */
 import type {
   ExecutionInstanceId,
+  ExecutionRuntimeProvider,
   ExecutionTargetKind,
+  RuntimeInstanceStatus,
   RuntimePlan,
   RuntimeRole,
   ThreadId,
@@ -58,6 +60,23 @@ export interface ExecutionRuntimeExecInput {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly env?: Record<string, string | undefined>;
+}
+
+/**
+ * Provider-agnostic liveness verdict for a persisted instance, the only fact the
+ * reconciler reads back from a provider. `supportsReconnect` mirrors the resolved
+ * descriptor's `lifecycle.reconnect` flag so the reconciler decides what to do
+ * without ever naming a provider:
+ *
+ * - `supportsReconnect: false` — the provider cannot re-attach after a restart,
+ *   so a persisted instance is unrecoverable and must be marked `lost`.
+ * - `supportsReconnect: true` + `liveness: "alive"` — re-attach succeeded.
+ * - `supportsReconnect: true` + `liveness: "absent"` — DB row exists but the
+ *   provider has no record of the instance; mark `lost`.
+ */
+export interface RuntimeInstanceProbe {
+  readonly supportsReconnect: boolean;
+  readonly liveness: "alive" | "absent";
 }
 
 export interface ExecutionRuntimeProcessHandle {
@@ -119,6 +138,28 @@ export interface ExecutionRuntimeServiceShape {
   ) => Effect.Effect<ExecutionRuntimeProcessHandle, RuntimeProvisionFailedError>;
   /** Tear an instance down and record the destroyed event. Idempotent. */
   readonly destroy: (threadId: ThreadId, instanceId: ExecutionInstanceId) => Effect.Effect<void>;
+  /**
+   * Probe a persisted instance against its provider for reconciliation. Resolves
+   * the provider's reconnect capability and (when supported) whether the instance
+   * is still recognized. Provider-specifics stay here; the reconciler reads only
+   * the {@link RuntimeInstanceProbe} verdict, keeping it provider-agnostic.
+   */
+  readonly probeInstance: (input: {
+    readonly provider: ExecutionRuntimeProvider;
+    readonly instanceId: ExecutionInstanceId;
+  }) => Effect.Effect<RuntimeInstanceProbe>;
+  /**
+   * Record a runtime instance state transition (e.g. `lost`/`failed`) as an
+   * orchestration event so the read-model and operational tables converge. Uses a
+   * stable per-instance/per-status commandId so a reconnect/crash retry dedupes on
+   * the receipt rather than re-appending.
+   */
+  readonly recordInstanceState: (input: {
+    readonly threadId: ThreadId;
+    readonly instanceId: ExecutionInstanceId;
+    readonly status: RuntimeInstanceStatus;
+    readonly failureReason?: string | null;
+  }) => Effect.Effect<void, RuntimeProvisionFailedError>;
 }
 
 export class ExecutionRuntimeService extends ServiceMap.Service<

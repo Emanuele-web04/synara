@@ -132,6 +132,16 @@ export interface ProjectionThreadRuntimeRepositoryShape {
   readonly upsertInstance: (
     row: ExecutionRuntimeInstance,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
+  /**
+   * List operational instance rows whose status is not terminal (anything other
+   * than `destroyed`/`failed`/`lost`). This is the reconciler's entry point: on
+   * startup these are the instances the DB still believes are live and that must
+   * be reconciled against the provider.
+   */
+  readonly listActiveInstances: () => Effect.Effect<
+    ReadonlyArray<ExecutionRuntimeInstance>,
+    ProjectionRepositoryError
+  >;
   readonly upsertProcess: (
     row: ExecutionRuntimeProcess,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
