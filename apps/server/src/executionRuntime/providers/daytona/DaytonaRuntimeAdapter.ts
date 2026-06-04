@@ -124,6 +124,34 @@ const makeDaytonaRuntimeAdapter = Effect.gen(function* () {
   // the same string, so reconnect after restart works off the persisted id alone.
   const sandboxRoots = new Map<string, string>();
 
+  // Discover the sandbox's real working dir by polling `pwd`. It is image-
+  // dependent (a snapshot may run as root at /root, the default image at
+  // /home/daytona, ...), so a hardcoded root breaks `cd` for the agent process.
+  // The retry doubles as the readiness wait: exec errors until the sandbox is
+  // running. Falls back to the client's rootPath if discovery never succeeds.
+  const discoverRoot = (sandboxId: string, fallback: string): Effect.Effect<string> => {
+    const attempt = (remaining: number): Effect.Effect<string> =>
+      client.exec(sandboxId, { command: "pwd", args: [] }).pipe(
+        Effect.flatMap((result) =>
+          result.exitCode === 0 && result.stdout.trim().startsWith("/")
+            ? Effect.succeed(result.stdout.trim())
+            : Effect.fail(
+                new DaytonaApiError({
+                  operation: "provision",
+                  status: null,
+                  detail: "sandbox not ready",
+                }),
+              ),
+        ),
+        Effect.catch(() =>
+          remaining <= 0
+            ? Effect.succeed(fallback)
+            : Effect.sleep("2 seconds").pipe(Effect.flatMap(() => attempt(remaining - 1))),
+        ),
+      );
+    return attempt(40);
+  };
+
   const provision: DaytonaRuntimeAdapterShape["provision"] = (input) =>
     Effect.gen(function* () {
       const sandbox = yield* client.create({
@@ -131,19 +159,20 @@ const makeDaytonaRuntimeAdapter = Effect.gen(function* () {
         ports: input.ports,
         snapshotId: input.snapshotId,
       });
-      sandboxRoots.set(sandbox.id, sandbox.rootPath);
+      const rootPath = yield* discoverRoot(sandbox.id, sandbox.rootPath);
+      sandboxRoots.set(sandbox.id, rootPath);
       const instanceId = ExecutionInstanceId.makeUnsafe(sandbox.id);
       const now = new Date().toISOString();
       const instance: RuntimeInstanceSummary = {
         id: instanceId,
         provider: "daytona",
         status: "running",
-        rootPath: sandbox.rootPath,
+        rootPath,
         failureReason: null,
         createdAt: now,
         updatedAt: now,
       };
-      return { instance, rootPath: sandbox.rootPath };
+      return { instance, rootPath };
     });
 
   const createTransport: DaytonaRuntimeAdapterShape["createTransport"] = (instanceId, spawn) =>
