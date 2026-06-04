@@ -15,6 +15,8 @@ import { DAYTONA_RUNTIME_DESCRIPTOR } from "./executionRuntime/providers/daytona
 import { makeDaytonaRuntimeAdapterLayer } from "./executionRuntime/providers/daytona/runtimeLayer";
 import { VERCEL_SANDBOX_DESCRIPTOR } from "./executionRuntime/providers/vercelSandbox/descriptor";
 import { makeVercelSandboxRuntimeAdapterLayer } from "./executionRuntime/providers/vercelSandbox/runtimeLayer";
+import { MODAL_PROVIDER_DESCRIPTOR } from "./executionRuntime/providers/modal/modalDescriptors";
+import { makeModalRuntimeAdapterLayer } from "./executionRuntime/providers/modal/runtimeLayer";
 import { RuntimeActivityLeaseManagerLive } from "./executionRuntime/Layers/RuntimeActivityLeaseManager";
 import { RuntimeCredentialBrokerLive } from "./executionRuntime/Layers/RuntimeCredentialBroker";
 import { RuntimeGitWorkspaceLive } from "./executionRuntime/Layers/RuntimeGitWorkspace";
@@ -80,17 +82,26 @@ export function makeServerRuntimeServicesLayer() {
   // the real client is used, else the fake, so the server boots without provider
   // access. The adapter resolves by the `vercel-sandbox` provider literal.
   const vercelSandboxRuntimeAdapterLayer = makeVercelSandboxRuntimeAdapterLayer();
+  // The Modal adapter env-selects the real Modal CLI backend vs the in-repo fake
+  // backend (temp dirs + local processes): with `MODAL_TOKEN_ID`/
+  // `MODAL_TOKEN_SECRET` present the real backend is used, else the fake, so the
+  // server boots without provider access. The facade derives the Modal role from
+  // the plan, and the adapter resolves by the `modal` provider literal. The
+  // registry binds the broadest `service`-shaped descriptor for `modal`.
+  const modalRuntimeAdapterLayer = makeModalRuntimeAdapterLayer();
   const runtimeProviderRegistryLayer = makeRuntimeProviderRegistryWithAdaptersLive({
     descriptors: [
       ...BUILT_IN_RUNTIME_DESCRIPTORS,
       ...FAKE_RUNTIME_DESCRIPTORS,
       DAYTONA_RUNTIME_DESCRIPTOR,
       VERCEL_SANDBOX_DESCRIPTOR,
+      MODAL_PROVIDER_DESCRIPTOR,
     ],
   }).pipe(
     Layer.provide(FakeRuntimeProviderAdapterLive),
     Layer.provide(daytonaRuntimeAdapterLayer),
     Layer.provide(vercelSandboxRuntimeAdapterLayer),
+    Layer.provide(modalRuntimeAdapterLayer),
   );
   const executionRuntimePlannerLayer = ExecutionRuntimePlannerLive.pipe(
     Layer.provide(runtimeProviderRegistryLayer),

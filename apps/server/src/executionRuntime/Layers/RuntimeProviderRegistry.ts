@@ -29,6 +29,8 @@ import { DaytonaRuntimeAdapter } from "../providers/daytona/DaytonaRuntimeAdapte
 import { makeDaytonaRuntimeProviderFacade } from "./DaytonaRuntimeProviderFacade.ts";
 import { VercelSandboxAdapter } from "../providers/vercelSandbox/Services/VercelSandboxAdapter.ts";
 import { makeVercelSandboxRuntimeProviderFacade } from "./VercelSandboxRuntimeProviderFacade.ts";
+import { ModalRuntimeProviderAdapter } from "../providers/modal/ModalRuntimeProviderAdapter.ts";
+import { makeModalRuntimeProviderFacade } from "./ModalRuntimeProviderFacade.ts";
 
 export interface RuntimeProviderAdapterBinding {
   readonly provider: ExecutionRuntimeProvider;
@@ -146,6 +148,7 @@ export const makeRuntimeProviderRegistryWithAdaptersLive = (
       const fake = yield* FakeRuntimeProviderAdapter;
       const daytona = yield* DaytonaRuntimeAdapter;
       const vercel = yield* VercelSandboxAdapter;
+      const modal = yield* ModalRuntimeProviderAdapter;
       return yield* makeRuntimeProviderRegistry({
         ...options,
         adapters: [
@@ -153,6 +156,7 @@ export const makeRuntimeProviderRegistryWithAdaptersLive = (
           { provider: "fake", adapter: makeFakeRuntimeProviderFacade(fake) },
           { provider: "daytona", adapter: makeDaytonaRuntimeProviderFacade(daytona) },
           { provider: "vercel-sandbox", adapter: makeVercelSandboxRuntimeProviderFacade(vercel) },
+          { provider: "modal", adapter: makeModalRuntimeProviderFacade(modal) },
         ],
       });
     }),
