@@ -11,8 +11,10 @@
  * a network call so the Phase-17 baseline runs with no credentials.
  *
  * Modal exposes no PTY and no addressable per-exec process id, so the transport
- * never claims one. `exposePort` returns a synthetic loopback URL standing in
- * for a Modal tunnel; the real backend returns the tunnel's public URL.
+ * never claims one. `exposePort` returns a deterministic synthetic tunnel URL
+ * derived from the instance id and port (so the same instance/port always maps
+ * to the same route, like a real tunnel); the real backend resolves the live
+ * sandbox's public `*.modal.run` URL via the SDK.
  *
  * @module ModalFakeCommandBackend
  */
@@ -123,7 +125,6 @@ export const makeModalFakeCommandBackend: Effect.Effect<
 > = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const roots = new Map<ExecutionInstanceId, string>();
-  let nextPort = 49_000;
 
   const provision: ModalCommandTransportShape["provision"] = (input) =>
     Effect.gen(function* () {
@@ -201,10 +202,10 @@ export const makeModalFakeCommandBackend: Effect.Effect<
       if (!roots.has(instanceId)) {
         return { port, url: null };
       }
-      // Synthetic loopback URL standing in for a Modal tunnel. A real backend
-      // returns the tunnel's public `*.modal.run` URL.
-      nextPort += 1;
-      return { port, url: `http://127.0.0.1:${nextPort}` };
+      // Deterministic synthetic tunnel URL: the same instance/port always maps to
+      // the same route, standing in for a Modal tunnel. A real backend resolves
+      // the live sandbox's public `*.modal.run` URL via the SDK.
+      return { port, url: `https://${String(instanceId)}-${port}.fake.modal.local` };
     });
 
   const isAlive: ModalCommandTransportShape["isAlive"] = (instanceId) =>

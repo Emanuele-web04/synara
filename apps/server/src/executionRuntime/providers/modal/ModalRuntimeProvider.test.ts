@@ -225,19 +225,25 @@ describe("Modal runtime provider adapter (fake backend, no credentials)", () => 
     );
   });
 
-  it("exposes a tunnel route for a service instance", async () => {
+  it("exposes a deterministic tunnel route for a service instance", async () => {
     runtime = makeTestRuntime();
     const localRuntime = runtime;
     const context = await provisionInstance(localRuntime, "preview");
 
-    const route = await localRuntime.runPromise(
+    const exposeTwice = await localRuntime.runPromise(
       Effect.gen(function* () {
         const adapter = yield* ModalRuntimeProviderAdapter;
-        return yield* adapter.exposePort(context.instance.id, 3000);
+        const first = yield* adapter.exposePort(context.instance.id, 3000);
+        const second = yield* adapter.exposePort(context.instance.id, 3000);
+        return { first, second };
       }),
     );
-    expect(route.port).toBe(3000);
-    expect(route.url).not.toBeNull();
+    expect(exposeTwice.first.port).toBe(3000);
+    expect(exposeTwice.first.url).toBe(
+      `https://${String(context.instance.id)}-3000.fake.modal.local`,
+    );
+    // Deterministic: the same instance/port always maps to the same route.
+    expect(exposeTwice.second.url).toBe(exposeTwice.first.url);
 
     await localRuntime.runPromise(
       Effect.gen(function* () {

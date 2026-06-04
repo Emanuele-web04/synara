@@ -12,10 +12,20 @@
  * Modal exposes no PTY and no addressable per-exec process id, so this never
  * claims one.
  *
- * This backend has no automated coverage against a live Modal account (no creds
- * in CI); the contract suite exercises the fake backend. It exists so a
- * credentialed environment routes through the real path, and it shares the exact
- * provision/exec/transport shape the fake proves.
+ * Ingress is real where Modal supports it: when an instance carries a live Modal
+ * sandbox id, {@link exposePort} loads the `modal` JS SDK
+ * ({@link loadModalSdk}) and resolves the port's encrypted tunnel to its public
+ * `*.modal.run` URL via `sandbox.tunnels()`. The CLI exec/transport staging path
+ * does not yet mint a live sandbox id (the agent runs against a local checkout
+ * synced into the sandbox), so for those instances `exposePort` honestly reports
+ * a null url rather than synthesizing one that would not route. Associating a
+ * real sandbox id with a provisioned instance is the remaining live-Modal step;
+ * the SDK tunnel resolution beneath it is real.
+ *
+ * The exec/transport path has no automated coverage against a live Modal account
+ * (no creds in CI); the contract suite exercises the fake backend. The SDK tunnel
+ * resolution is unit-tested against a stub SDK so the real code path is covered
+ * without the network or the optional dependency installed.
  *
  * @module ModalRealCommandBackend
  */
@@ -32,12 +42,14 @@ import {
   type InMemoryTransportController,
   type JsonRpcLineTransport,
 } from "../../../provider/process/JsonRpcLineTransport.ts";
+import { redactSecrets } from "../../Layers/redactCredentials.ts";
 import type { ModalCredentials } from "./ModalCredentials.ts";
 import type {
   ModalCommandTransportShape,
   ModalExecResult,
   ModalProcessSpawnInput,
 } from "./ModalCommandTransport.ts";
+import { loadModalSdk, type ModalSdkClient, type ModalSdkLoader } from "./modalSdk.ts";
 
 const encoder = new TextEncoder();
 
@@ -116,14 +128,68 @@ const forwardModalProcess = (
 
 export interface ModalRealCommandBackend extends ModalCommandTransportShape {
   readonly backendKind: "real";
+  /**
+   * Associate a live Modal sandbox id with a provisioned instance so ingress
+   * resolves its real tunnel. The CLI staging path does not mint a live sandbox;
+   * this is the seam the live-Modal provisioning step calls once it does. A no-op
+   * for an unknown instance.
+   */
+  readonly attachSandbox: (
+    instanceId: ExecutionInstanceId,
+    sandboxId: string,
+  ) => Effect.Effect<void>;
+}
+
+export interface ModalRealCommandBackendOptions {
+  /**
+   * Override the `modal` SDK loader (tests supply a stub so the real ingress
+   * path runs without the optional dependency installed or a network call).
+   */
+  readonly loadSdk?: ModalSdkLoader;
+}
+
+/** Per-instance state the real backend tracks. */
+interface ModalInstanceRecord {
+  /** Local staging dir holding the checkout the job runs against. */
+  readonly root: string;
+  /**
+   * The live Modal sandbox id backing this instance, when one exists. Null for
+   * the CLI staging path (which mints no live sandbox), so ingress honestly
+   * reports a null url rather than synthesizing one.
+   */
+  readonly sandboxId: string | null;
 }
 
 export const makeModalRealCommandBackend = (
   credentials: ModalCredentials,
+  options?: ModalRealCommandBackendOptions,
 ): Effect.Effect<ModalRealCommandBackend, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const roots = new Map<ExecutionInstanceId, string>();
+    const records = new Map<ExecutionInstanceId, ModalInstanceRecord>();
+    const loadSdk = options?.loadSdk ?? loadModalSdk;
+    const secrets = [credentials.tokenId, credentials.tokenSecret];
+    const redact = (value: string): string => redactSecrets(value, secrets);
+
+    // Load the optional SDK lazily and once. Deferring keeps the backend
+    // infallible to build (its error channel stays `never`, unifying with the
+    // fake); the ingress path fails loudly on first use if the package is
+    // missing rather than silently degrading.
+    const getClient = yield* Effect.cached(
+      Effect.tryPromise({
+        try: async (): Promise<ModalSdkClient> => {
+          const sdk = await loadSdk();
+          return sdk.makeClient({
+            tokenId: credentials.tokenId,
+            tokenSecret: credentials.tokenSecret,
+            ...(credentials.environment === undefined
+              ? {}
+              : { environment: credentials.environment }),
+          });
+        },
+        catch: (cause) => new Error(redact(cause instanceof Error ? cause.message : String(cause))),
+      }),
+    );
 
     const provision: ModalCommandTransportShape["provision"] = (input) =>
       Effect.gen(function* () {
@@ -132,7 +198,7 @@ export const makeModalRealCommandBackend = (
         // is synced into the Modal sandbox.
         const root = nodePath.join(tmpdir(), "synara-modal-stage", String(instanceId));
         yield* fs.makeDirectory(root, { recursive: true }).pipe(Effect.orDie);
-        roots.set(instanceId, root);
+        records.set(instanceId, { root, sandboxId: null });
         return { instanceId, rootPath: root, role: input.role };
       });
 
@@ -141,14 +207,15 @@ export const makeModalRealCommandBackend = (
 
     const execCollect: ModalCommandTransportShape["execCollect"] = (instanceId, input) =>
       Effect.gen(function* () {
-        const root = roots.get(instanceId);
-        if (root === undefined) {
+        const record = records.get(instanceId);
+        if (record === undefined) {
           return {
             stdout: "",
             stderr: `modal: no such instance ${String(instanceId)}`,
             code: 127,
           } satisfies ModalExecResult;
         }
+        const root = record.root;
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const spawned = yield* spawner
           .spawn(
@@ -197,28 +264,55 @@ export const makeModalRealCommandBackend = (
         return { transport: built.transport, controller: built.controller };
       });
 
+    // Resolve a live sandbox's encrypted tunnel for a port via the SDK. Modal
+    // keys tunnels by the container port they forward to; the URL is the public
+    // `https://<sandbox-id>.modal.run` endpoint. A lookup/tunnel failure yields a
+    // null url so the caller surfaces a pending route rather than an error.
+    const resolveTunnelUrl = (sandboxId: string, port: number): Effect.Effect<string | null> =>
+      getClient.pipe(
+        Effect.flatMap((client) =>
+          Effect.tryPromise(async () => {
+            const sandbox = await client.sandboxes.fromId(sandboxId);
+            const tunnels = await sandbox.tunnels();
+            const tunnel = tunnels[port];
+            return tunnel === undefined ? null : tunnel.url();
+          }),
+        ),
+        Effect.orElseSucceed(() => null),
+      );
+
     const exposePort: ModalCommandTransportShape["exposePort"] = (instanceId, port) =>
-      Effect.sync(() => {
-        // A real tunnel URL is resolved out-of-band from the Modal CLI's web
-        // endpoint output; without a live run we cannot synthesize it, so the
-        // route reports its port with a pending (null) url.
-        if (!roots.has(instanceId)) {
-          return { port, url: null };
+      Effect.suspend(() => {
+        const record = records.get(instanceId);
+        // No instance, or an instance with no live sandbox (the CLI staging
+        // path): honestly report a pending (null) url — synthesizing a
+        // `*.modal.run` URL that would not route would be a lie.
+        if (record === undefined || record.sandboxId === null) {
+          return Effect.succeed({ port, url: null });
         }
-        return { port, url: null };
+        return resolveTunnelUrl(record.sandboxId, port).pipe(Effect.map((url) => ({ port, url })));
+      });
+
+    const attachSandbox: ModalRealCommandBackend["attachSandbox"] = (instanceId, sandboxId) =>
+      Effect.sync(() => {
+        const record = records.get(instanceId);
+        if (record === undefined) {
+          return;
+        }
+        records.set(instanceId, { root: record.root, sandboxId });
       });
 
     const isAlive: ModalCommandTransportShape["isAlive"] = (instanceId) =>
-      Effect.sync(() => roots.has(instanceId));
+      Effect.sync(() => records.has(instanceId));
 
     const destroy: ModalCommandTransportShape["destroy"] = (instanceId) =>
       Effect.gen(function* () {
-        const root = roots.get(instanceId);
-        if (root === undefined) {
+        const record = records.get(instanceId);
+        if (record === undefined) {
           return;
         }
-        roots.delete(instanceId);
-        yield* fs.remove(root, { recursive: true }).pipe(Effect.ignore);
+        records.delete(instanceId);
+        yield* fs.remove(record.root, { recursive: true }).pipe(Effect.ignore);
       });
 
     return {
@@ -227,6 +321,7 @@ export const makeModalRealCommandBackend = (
       execCollect,
       createTransport,
       exposePort,
+      attachSandbox,
       isAlive,
       destroy,
     } satisfies ModalRealCommandBackend;
