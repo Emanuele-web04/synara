@@ -55,6 +55,7 @@ import {
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "./ui/input-group";
+import { DesktopWindowControls } from "./DesktopWindowControls";
 import { SidebarInset } from "./ui/sidebar";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
@@ -554,7 +555,7 @@ export function PluginLibrary() {
         {/* ── Top nav ───────────────────────────────────────────────────── */}
         <div
           className={cn(
-            "flex shrink-0 items-center gap-3 border-b border-border px-4 sm:px-6",
+            "drag-region flex shrink-0 items-center gap-3 border-b border-border px-4 sm:px-6",
             desktopTopBarTrafficLightGutterClassName,
           )}
         >
@@ -596,6 +597,7 @@ export function PluginLibrary() {
               );
             })}
           </div>
+          <DesktopWindowControls className="-me-4 ml-2" />
         </div>
 
         {/* ── Scrollable body ───────────────────────────────────────────── */}

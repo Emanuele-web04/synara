@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Button } from "~/components/ui/button";
+import { DesktopWindowControls } from "~/components/DesktopWindowControls";
 import { SidebarInset } from "~/components/ui/sidebar";
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
@@ -307,6 +308,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
           className={cn(
             CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
             CHAT_SURFACE_HEADER_PADDING_X_CLASS,
+            "drag-region",
             desktopTopBarTrafficLightGutterClassName,
           )}
         >
@@ -361,6 +363,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
                 <SettingsIcon className="size-3" />
               </Button>
             </div>
+            <DesktopWindowControls className="-me-2 ml-2" />
           </div>
         </header>
 
