@@ -1696,7 +1696,6 @@ function SettingsRouteView() {
                     autoComplete="off"
                     placeholder="Default (JetBrains Mono)"
                     className="w-full sm:w-56"
-                    inputClassName="w-full font-system-ui"
                     aria-label="Terminal font family"
                   />
                   <AutocompletePopup className="w-56 min-w-56 font-system-ui">
