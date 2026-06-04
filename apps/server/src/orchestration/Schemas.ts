@@ -23,6 +23,7 @@ import {
   ThreadConversationRollbackRequestedPayload as ContractsThreadConversationRollbackRequestedPayloadSchema,
   ThreadMessageEditResendRequestedPayload as ContractsThreadMessageEditResendRequestedPayloadSchema,
   ThreadSessionStopRequestedPayload as ContractsThreadSessionStopRequestedPayloadSchema,
+  ThreadRuntimeActionRequestedPayload as ContractsThreadRuntimeActionRequestedPayloadSchema,
   ThreadRuntimeProvisionRequestedPayload as ContractsThreadRuntimeProvisionRequestedPayloadSchema,
   ThreadRuntimeInstanceCreatedPayload as ContractsThreadRuntimeInstanceCreatedPayloadSchema,
   ThreadRuntimeInstanceStateChangedPayload as ContractsThreadRuntimeInstanceStateChangedPayloadSchema,
@@ -70,6 +71,8 @@ export const ThreadConversationRolledBackPayload =
 export const ThreadMessageEditResendRequestedPayload =
   ContractsThreadMessageEditResendRequestedPayloadSchema;
 export const ThreadSessionStopRequestedPayload = ContractsThreadSessionStopRequestedPayloadSchema;
+export const ThreadRuntimeActionRequestedPayload =
+  ContractsThreadRuntimeActionRequestedPayloadSchema;
 
 export const ThreadRuntimeProvisionRequestedPayload =
   ContractsThreadRuntimeProvisionRequestedPayloadSchema;

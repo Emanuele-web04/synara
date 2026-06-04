@@ -994,6 +994,15 @@ const ThreadSessionStopCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadRuntimeActionRequestCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.action"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  action: Schema.Literals(["stop", "destroy", "snapshot"]),
+  instanceId: ExecutionInstanceId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadActivityAppendCommand = Schema.Struct({
   type: Schema.Literal("thread.activity.append"),
   commandId: CommandId,
@@ -1023,6 +1032,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMessageEditAndResendCommand,
   ThreadActivityAppendCommand,
   ThreadSessionStopCommand,
+  ThreadRuntimeActionRequestCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -1048,6 +1058,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMessageEditAndResendCommand,
   ThreadActivityAppendCommand,
   ThreadSessionStopCommand,
+  ThreadRuntimeActionRequestCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
@@ -1331,6 +1342,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.conversation-rolled-back",
   "thread.message-edit-resend-requested",
   "thread.session-stop-requested",
+  "thread.runtime-action-requested",
   "thread.session-set",
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
@@ -1586,6 +1598,12 @@ export const ThreadMessageEditResendRequestedPayload = Schema.Struct({
 export const ThreadSessionStopRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   createdAt: IsoDateTime,
+});
+
+export const ThreadRuntimeActionRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  action: Schema.Literals(["stop", "destroy", "snapshot"]),
+  instanceId: ExecutionInstanceId,
 });
 
 export const ThreadSessionSetPayload = Schema.Struct({
@@ -1863,6 +1881,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.session-stop-requested"),
     payload: ThreadSessionStopRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-action-requested"),
+    payload: ThreadRuntimeActionRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

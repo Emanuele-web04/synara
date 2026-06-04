@@ -65,4 +65,14 @@ export const makeDaytonaRuntimeProviderFacade = (
       ),
   isAlive: daytona.isAlive,
   destroy: daytona.destroy,
+  // Surface Daytona's native stop/snapshot through the common surface. The
+  // service drives these from user-initiated runtime actions, so a provider
+  // outage degrades to a no-op (the service still records the requested state)
+  // rather than failing the action.
+  stop: (instanceId) => daytona.stop(instanceId).pipe(Effect.ignore),
+  snapshot: (instanceId, label) =>
+    daytona.snapshot(instanceId, label).pipe(
+      Effect.map((result) => result.snapshotId),
+      Effect.orElseSucceed(() => null),
+    ),
 });

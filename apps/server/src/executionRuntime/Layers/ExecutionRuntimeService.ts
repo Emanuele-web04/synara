@@ -24,6 +24,7 @@ import {
   CommandId,
   ExecutionInstanceId,
   RuntimeProcessId,
+  RuntimeSnapshotId,
   type ExecutionRuntimeProvider,
   type ExecutionTargetKind,
   type RuntimePlan,
@@ -394,6 +395,69 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
       })).pipe(Effect.ignore);
     });
 
+  // Resolve the adapter backing an instance, falling back to the caller-supplied
+  // provider when the in-memory map is cold (server restart). Returns undefined
+  // when neither source resolves a provider — the caller then records state only.
+  const resolveInstanceAdapter = (
+    instanceId: ExecutionInstanceId,
+    knownProvider: ExecutionRuntimeProvider | undefined,
+  ) =>
+    Effect.gen(function* () {
+      const provider = instanceProviders.get(instanceId) ?? knownProvider;
+      if (provider === undefined) {
+        return undefined;
+      }
+      return yield* registry.getAdapter(provider).pipe(Effect.orElseSucceed(() => undefined));
+    });
+
+  const stop: ExecutionRuntimeServiceShape["stop"] = (threadId, instanceId, knownProvider) =>
+    Effect.gen(function* () {
+      const adapter = yield* resolveInstanceAdapter(instanceId, knownProvider);
+      if (adapter?.stop !== undefined) {
+        yield* adapter.stop(instanceId).pipe(Effect.ignore);
+      }
+      // Record the stop regardless of provider support so the read-model converges
+      // to `stopping`; an unsupported provider simply records the requested state.
+      yield* dispatchRuntimeCommand(threadId, `stop.${instanceId}`, (commandId, createdAt) => ({
+        type: "thread.runtime.stop",
+        commandId,
+        threadId,
+        instanceId,
+        createdAt,
+      })).pipe(Effect.ignore);
+    });
+
+  const snapshot: ExecutionRuntimeServiceShape["snapshot"] = (
+    threadId,
+    instanceId,
+    knownProvider,
+  ) =>
+    Effect.gen(function* () {
+      const adapter = yield* resolveInstanceAdapter(instanceId, knownProvider);
+      if (adapter?.snapshot === undefined) {
+        // Unsupported provider: graceful no-op, no snapshot recorded.
+        return;
+      }
+      const snapshotId = yield* adapter
+        .snapshot(instanceId, null)
+        .pipe(Effect.orElseSucceed(() => null));
+      if (snapshotId === null) {
+        return;
+      }
+      yield* dispatchRuntimeCommand(
+        threadId,
+        `snapshot.${instanceId}.${snapshotId}`,
+        (commandId, createdAt) => ({
+          type: "thread.runtime.snapshot",
+          commandId,
+          threadId,
+          instanceId,
+          snapshotId: RuntimeSnapshotId.makeUnsafe(snapshotId),
+          createdAt,
+        }),
+      ).pipe(Effect.ignore);
+    });
+
   // Resolve the reconnect capability for a fake instance. A flavor recorded in
   // the in-memory map (provisioned this process lifetime) gives the precise
   // descriptor; otherwise the family default is reconnect-capable, and liveness
@@ -456,6 +520,8 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
     ensureTargetForThread,
     exec,
     destroy,
+    stop,
+    snapshot,
     probeInstance,
     recordInstanceState,
   } satisfies ExecutionRuntimeServiceShape;

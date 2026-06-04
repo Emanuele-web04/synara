@@ -29,7 +29,7 @@ import {
 
 interface RuntimePanelProps {
   runtime: OrchestrationThreadRuntime | null | undefined;
-  /** Invoked by an enabled action. Only `refresh` is wired today; others stay disabled. */
+  /** Invoked by an enabled action (stop/destroy/snapshot/refresh). */
   onRuntimeAction?: (kind: RuntimeActionKind) => void;
   className?: string;
 }

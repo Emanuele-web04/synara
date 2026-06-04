@@ -303,7 +303,11 @@ export const ChatHeader = memo(function ChatHeader({
                   <TooltipPopup side="bottom">{handoffBadgeLabel}</TooltipPopup>
                 </Tooltip>
               ) : null}
-              <RuntimeStatusChip runtime={activeThreadRuntime} className="hidden sm:inline-flex" />
+              <RuntimeStatusChip
+                runtime={activeThreadRuntime}
+                threadId={activeThreadId}
+                className="hidden sm:inline-flex"
+              />
             </div>
           </div>
         </div>

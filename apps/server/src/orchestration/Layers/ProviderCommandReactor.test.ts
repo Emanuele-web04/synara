@@ -3324,6 +3324,66 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.activeTurnId).toBeNull();
   });
 
+  it("drives ExecutionRuntimeService.destroy when a thread.runtime.action (destroy) is dispatched", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const instanceId = "inst-destroy-1" as never;
+
+    // Seed a provisioned remote instance directly through the engine's internal
+    // runtime commands so the read-model carries an instance for destroy to act
+    // on (mirrors what ExecutionRuntimeService records during provisioning).
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.runtime.provision",
+        commandId: CommandId.makeUnsafe("cmd-runtime-provision-destroy"),
+        threadId,
+        targetKind: "remote-runtime",
+        provider: "fake",
+        role: "agent",
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.runtime.instance.record",
+        commandId: CommandId.makeUnsafe("cmd-runtime-instance-destroy"),
+        threadId,
+        instanceId,
+        provider: "fake",
+        status: "running",
+        rootPath: "/tmp/fake-destroy",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const runtimeRow = await harness.getThreadRuntime(threadId);
+      return runtimeRow?.instance?.id === instanceId && runtimeRow.instance.status === "running";
+    });
+
+    // Dispatch the client runtime action. The reactor routes it to
+    // ExecutionRuntimeService.destroy, which records the destroyed event.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.runtime.action",
+        commandId: CommandId.makeUnsafe("cmd-runtime-action-destroy"),
+        threadId,
+        action: "destroy",
+        instanceId,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const runtimeRow = await harness.getThreadRuntime(threadId);
+      return runtimeRow?.instance?.status === "destroyed";
+    });
+    const runtimeRow = await harness.getThreadRuntime(threadId);
+    expect(runtimeRow?.instance?.status).toBe("destroyed");
+    expect(runtimeRow?.status).toBe("destroyed");
+  });
+
   it("interrupts active subagent sessions without stopping the parent provider session", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

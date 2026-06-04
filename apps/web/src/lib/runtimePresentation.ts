@@ -1,8 +1,9 @@
 // FILE: runtimePresentation.ts
 // Purpose: Pure presentation helpers for the execution-runtime UI — labels for
 // the header chip, runtime panel, and the environment picker's remote option,
-// plus action availability. Reads the public runtime read-model only; no client
-// runtime-lifecycle command exists yet, so action wiring stays explicit here.
+// plus action availability. Reads the public runtime read-model only; action
+// availability is computed here and dispatched via the `thread.runtime.action`
+// client command from the chip/panel.
 // Layer: Web UI logic (pure, unit-tested)
 
 import type {
@@ -126,13 +127,11 @@ export interface RuntimeActionAvailability {
   readonly disabledReason: string | null;
 }
 
-// Stop/destroy/snapshot are reactor-driven internal orchestration commands; no
-// client-dispatchable command is exposed by the contracts yet. Refresh re-pulls
-// the read-model snapshot the client already owns. Keeping the buttons visible
-// (and honestly disabled) lets the UI ship without pretending actions are wired.
-const ACTION_PENDING_BACKEND =
-  "Runtime lifecycle actions are not yet exposed to the client; this lands with the provider adapters.";
-
+// Stop/destroy/snapshot dispatch the `thread.runtime.action` client command,
+// which the reactor routes to ExecutionRuntimeService. Each action is enabled
+// only when a runtime instance is present (stop additionally requires a
+// non-terminal instance). Refresh re-pulls the read-model snapshot the client
+// already owns and is available whenever a runtime row exists.
 export function resolveRuntimeActions(
   runtime: OrchestrationThreadRuntime | null | undefined,
 ): ReadonlyArray<RuntimeActionAvailability> {
@@ -142,18 +141,22 @@ export function resolveRuntimeActions(
   return [
     {
       kind: "stop",
-      enabled: false,
-      disabledReason: stoppable ? ACTION_PENDING_BACKEND : "No active runtime instance to stop.",
+      enabled: stoppable,
+      disabledReason: stoppable
+        ? null
+        : hasInstance
+          ? "Runtime instance is already stopped."
+          : "No active runtime instance to stop.",
     },
     {
       kind: "destroy",
-      enabled: false,
-      disabledReason: hasInstance ? ACTION_PENDING_BACKEND : "No runtime instance to destroy.",
+      enabled: hasInstance,
+      disabledReason: hasInstance ? null : "No runtime instance to destroy.",
     },
     {
       kind: "snapshot",
-      enabled: false,
-      disabledReason: hasInstance ? ACTION_PENDING_BACKEND : "No runtime instance to snapshot.",
+      enabled: hasInstance,
+      disabledReason: hasInstance ? null : "No runtime instance to snapshot.",
     },
     // Refresh is always available: it re-reads the snapshot the client can pull.
     { kind: "refresh", enabled: Boolean(runtime), disabledReason: runtime ? null : "No runtime." },

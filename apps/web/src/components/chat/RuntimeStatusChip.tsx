@@ -4,6 +4,7 @@
 // routes, leases, snapshots, actions). Hidden for local/worktree threads.
 // Layer: Chat shell header control
 
+import type { ExecutionInstanceId, ThreadId } from "@t3tools/contracts";
 import type { OrchestrationThreadRuntime } from "@t3tools/contracts";
 import { useState } from "react";
 import { FiServer } from "react-icons/fi";
@@ -11,7 +12,7 @@ import { RuntimePanel } from "../RuntimePanel";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { readNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
-import { cn } from "~/lib/utils";
+import { cn, newCommandId } from "~/lib/utils";
 import {
   resolveRuntimeHeaderPresentation,
   type RuntimeActionKind,
@@ -20,6 +21,7 @@ import {
 
 interface RuntimeStatusChipProps {
   runtime: OrchestrationThreadRuntime | null | undefined;
+  threadId: ThreadId;
   className?: string;
 }
 
@@ -31,9 +33,9 @@ const TONE_DOT_CLASS: Record<RuntimeStatusTone, string> = {
   error: "bg-destructive",
 };
 
-// Refresh re-pulls the read-model the client already owns. The other lifecycle
-// actions (stop/destroy/snapshot) are reactor-driven internal commands with no
-// client-dispatchable surface yet; the panel keeps them visible but disabled.
+// Refresh re-pulls the read-model the client already owns. Stop/destroy/snapshot
+// dispatch the `thread.runtime.action` client command, which the reactor routes
+// to ExecutionRuntimeService for the runtime's recorded provider.
 async function refreshRuntimeSnapshot(): Promise<void> {
   const api = readNativeApi();
   if (!api) {
@@ -43,7 +45,26 @@ async function refreshRuntimeSnapshot(): Promise<void> {
   useStore.getState().syncServerReadModel(snapshot);
 }
 
-export function RuntimeStatusChip({ runtime, className }: RuntimeStatusChipProps) {
+async function dispatchRuntimeLifecycleAction(
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  action: "stop" | "destroy" | "snapshot",
+): Promise<void> {
+  const api = readNativeApi();
+  if (!api) {
+    return;
+  }
+  await api.orchestration.dispatchCommand({
+    type: "thread.runtime.action",
+    commandId: newCommandId(),
+    threadId,
+    action,
+    instanceId,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export function RuntimeStatusChip({ runtime, threadId, className }: RuntimeStatusChipProps) {
   const [open, setOpen] = useState(false);
   const presentation = resolveRuntimeHeaderPresentation(runtime);
   if (!presentation.show) {
@@ -52,7 +73,13 @@ export function RuntimeStatusChip({ runtime, className }: RuntimeStatusChipProps
   const onRuntimeAction = (kind: RuntimeActionKind) => {
     if (kind === "refresh") {
       void refreshRuntimeSnapshot();
+      return;
     }
+    const instanceId = runtime?.instance?.id;
+    if (instanceId === undefined) {
+      return;
+    }
+    void dispatchRuntimeLifecycleAction(threadId, instanceId, kind);
   };
   return (
     <Popover open={open} onOpenChange={setOpen}>

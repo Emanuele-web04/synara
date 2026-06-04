@@ -77,7 +77,8 @@ type ProviderIntentEvent = Extract<
       | "thread.user-input-response-requested"
       | "thread.conversation-rollback-requested"
       | "thread.message-edit-resend-requested"
-      | "thread.session-stop-requested";
+      | "thread.session-stop-requested"
+      | "thread.runtime-action-requested";
   }
 >;
 
@@ -1887,6 +1888,26 @@ const make = Effect.gen(function* () {
     });
   });
 
+  // Runtime lifecycle actions dispatched from the panel UI. The reactor stays
+  // provider-agnostic: it routes by the requested action to ExecutionRuntimeService,
+  // which resolves the adapter for the instance's recorded provider.
+  const processRuntimeActionRequested = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.runtime-action-requested" }>,
+  ) {
+    const { threadId, instanceId, action } = event.payload;
+    switch (action) {
+      case "stop":
+        yield* executionRuntimeService.stop(threadId, instanceId);
+        return;
+      case "destroy":
+        yield* executionRuntimeService.destroy(threadId, instanceId);
+        return;
+      case "snapshot":
+        yield* executionRuntimeService.snapshot(threadId, instanceId);
+        return;
+    }
+  });
+
   const processDomainEvent = (event: ProviderIntentEvent) =>
     Effect.gen(function* () {
       switch (event.type) {
@@ -1979,6 +2000,9 @@ const make = Effect.gen(function* () {
         case "thread.session-stop-requested":
           yield* processSessionStopRequested(event);
           return;
+        case "thread.runtime-action-requested":
+          yield* processRuntimeActionRequested(event);
+          return;
       }
     });
 
@@ -2024,7 +2048,8 @@ const make = Effect.gen(function* () {
         event.type !== "thread.user-input-response-requested" &&
         event.type !== "thread.conversation-rollback-requested" &&
         event.type !== "thread.message-edit-resend-requested" &&
-        event.type !== "thread.session-stop-requested"
+        event.type !== "thread.session-stop-requested" &&
+        event.type !== "thread.runtime-action-requested"
       ) {
         return Effect.void;
       }

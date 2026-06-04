@@ -162,6 +162,29 @@ export interface ExecutionRuntimeServiceShape {
     provider?: ExecutionRuntimeProvider,
   ) => Effect.Effect<void>;
   /**
+   * Stop a running instance without destroying it, recording the resulting state.
+   * Resolves the adapter for the instance's recorded provider (the `destroy`
+   * fallback to a caller-supplied provider applies here too, for a cold map after
+   * restart). When the resolved adapter does not support stop, the operation is a
+   * no-op beyond recording the requested state transition; it never throws.
+   */
+  readonly stop: (
+    threadId: ThreadId,
+    instanceId: ExecutionInstanceId,
+    provider?: ExecutionRuntimeProvider,
+  ) => Effect.Effect<void>;
+  /**
+   * Snapshot an instance for later resume, recording the created snapshot. Resolves
+   * the adapter for the instance's recorded provider (same cold-map fallback as
+   * `destroy`). When the resolved adapter does not support snapshots, the operation
+   * is a graceful no-op; it never throws.
+   */
+  readonly snapshot: (
+    threadId: ThreadId,
+    instanceId: ExecutionInstanceId,
+    provider?: ExecutionRuntimeProvider,
+  ) => Effect.Effect<void>;
+  /**
    * Probe a persisted instance against its provider for reconciliation. Resolves
    * the provider's reconnect capability and (when supported) whether the instance
    * is still recognized. Provider-specifics stay here; the reconciler reads only

@@ -74,20 +74,45 @@ describe("isTerminalRuntimeStatus", () => {
 });
 
 describe("resolveRuntimeActions", () => {
-  it("disables lifecycle actions with honest reasons and enables refresh when a runtime exists", () => {
+  it("enables stop/destroy/snapshot/refresh for a running instance", () => {
     const actions = resolveRuntimeActions(makeRuntime({}));
     const byKind = Object.fromEntries(actions.map((action) => [action.kind, action]));
-    expect(byKind.stop?.enabled).toBe(false);
-    expect(byKind.destroy?.enabled).toBe(false);
-    expect(byKind.snapshot?.enabled).toBe(false);
+    expect(byKind.stop?.enabled).toBe(true);
+    expect(byKind.destroy?.enabled).toBe(true);
+    expect(byKind.snapshot?.enabled).toBe(true);
     expect(byKind.refresh?.enabled).toBe(true);
-    expect(byKind.stop?.disabledReason).toContain("not yet exposed");
+    expect(byKind.stop?.disabledReason).toBeNull();
   });
 
-  it("reports no-instance reasons when there is no instance", () => {
+  it("disables stop for a terminal instance but keeps destroy/snapshot enabled", () => {
+    const actions = resolveRuntimeActions(
+      makeRuntime({
+        status: "stopped",
+        instance: {
+          id: "inst-1" as never,
+          provider: "fake",
+          status: "stopped",
+          rootPath: "/tmp/fake",
+          failureReason: null,
+          createdAt: "2026-01-01T00:00:00.000Z" as never,
+          updatedAt: "2026-01-01T00:00:00.000Z" as never,
+        },
+      }),
+    );
+    const byKind = Object.fromEntries(actions.map((action) => [action.kind, action]));
+    expect(byKind.stop?.enabled).toBe(false);
+    expect(byKind.stop?.disabledReason).toBe("Runtime instance is already stopped.");
+    expect(byKind.destroy?.enabled).toBe(true);
+    expect(byKind.snapshot?.enabled).toBe(true);
+  });
+
+  it("reports no-instance reasons and disables lifecycle actions when there is no instance", () => {
     const actions = resolveRuntimeActions(makeRuntime({ instance: null, status: "pending" }));
-    const stop = actions.find((action) => action.kind === "stop");
-    expect(stop?.disabledReason).toBe("No active runtime instance to stop.");
+    const byKind = Object.fromEntries(actions.map((action) => [action.kind, action]));
+    expect(byKind.stop?.enabled).toBe(false);
+    expect(byKind.stop?.disabledReason).toBe("No active runtime instance to stop.");
+    expect(byKind.destroy?.enabled).toBe(false);
+    expect(byKind.snapshot?.enabled).toBe(false);
   });
 
   it("disables refresh when there is no runtime at all", () => {

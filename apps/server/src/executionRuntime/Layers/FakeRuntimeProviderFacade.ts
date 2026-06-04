@@ -45,4 +45,11 @@ export const makeFakeRuntimeProviderFacade = (
   execCollect: fake.execCollect,
   isAlive: fake.isAlive,
   destroy: fake.destroy,
+  // The fake has no real stop/suspend; mark it handled so the service records the
+  // requested state transition without treating the provider as unsupported.
+  stop: () => Effect.void,
+  // Return a synthetic snapshot id so the snapshot action exercises end-to-end in
+  // tests and the fake-remote path without a real provider.
+  snapshot: (instanceId) =>
+    Effect.sync(() => `fake-snapshot-${String(instanceId)}-${crypto.randomUUID()}`),
 });

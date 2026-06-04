@@ -98,4 +98,20 @@ export interface ExecutionRuntimeProviderAdapterShape {
   readonly isAlive: (instanceId: ExecutionInstanceId) => Effect.Effect<boolean>;
   /** Tear the instance down and forget it. Idempotent. */
   readonly destroy: (instanceId: ExecutionInstanceId) => Effect.Effect<void>;
+  /**
+   * Stop the instance without destroying it (filesystem persists), when the
+   * provider supports a stop/suspend operation. Optional: a provider that cannot
+   * stop an instance leaves this undefined, and the service treats undefined as
+   * unsupported (no-op).
+   */
+  readonly stop?: (instanceId: ExecutionInstanceId) => Effect.Effect<void>;
+  /**
+   * Snapshot the instance for later resume, returning the snapshot id when the
+   * provider supports snapshots. Optional: a provider with no snapshot capability
+   * leaves this undefined, and the service treats undefined as unsupported (no-op).
+   */
+  readonly snapshot?: (
+    instanceId: ExecutionInstanceId,
+    label: string | null,
+  ) => Effect.Effect<string | null>;
 }
