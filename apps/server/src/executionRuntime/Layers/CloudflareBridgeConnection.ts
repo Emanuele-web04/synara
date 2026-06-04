@@ -41,6 +41,29 @@ const buildUrl = (
   return url.toString();
 };
 
+/**
+ * Build a WS URL, appending array query values as repeated params (e.g. one
+ * `arg` per terminal argument) so the bridge's `searchParams.getAll("arg")` sees
+ * them all.
+ */
+const buildWebSocketUrl = (
+  baseUrl: string,
+  path: string,
+  query: Readonly<Record<string, string | ReadonlyArray<string>>>,
+): string => {
+  const url = new URL(path, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
+  for (const [key, value] of Object.entries(query)) {
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        url.searchParams.append(key, entry);
+      }
+    } else {
+      url.searchParams.set(key, value as string);
+    }
+  }
+  return url.toString();
+};
+
 /** Rebuild an http(s) base URL as ws(s) for the WebSocket handshake. */
 const toWebSocketUrl = (httpUrl: string): string =>
   httpUrl.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
@@ -79,7 +102,7 @@ const makeCloudflareBridgeConnection = Effect.gen(function* () {
 
   const connectWebSocket: CloudflareBridgeConnectionShape["connectWebSocket"] = (input) =>
     Effect.callback<BridgeWebSocket, CloudflareBridgeError>((resume) => {
-      const httpUrl = buildUrl(baseUrl, input.path, { ...input.query, token });
+      const httpUrl = buildWebSocketUrl(baseUrl, input.path, { ...input.query, token });
       const socket = new NodeWS.WebSocket(toWebSocketUrl(httpUrl), {
         headers: { authorization: `Bearer ${token}` },
       });

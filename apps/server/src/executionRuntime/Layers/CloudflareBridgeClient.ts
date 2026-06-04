@@ -157,12 +157,16 @@ const makeCloudflareBridgeClient = Effect.gen(function* () {
       );
 
   const openTerminal: CloudflareBridgeClientShape["openTerminal"] = (input) => {
-    const query: Record<string, string> = {
+    const query: Record<string, string | ReadonlyArray<string>> = {
       cols: String(input.cols),
       rows: String(input.rows),
     };
     if (input.command !== null) {
       query.command = input.command;
+    }
+    // One `arg` query param per argument; the bridge reads them via `getAll`.
+    if (input.args.length > 0) {
+      query.arg = input.args;
     }
     if (input.cwd !== null) {
       query.cwd = input.cwd;

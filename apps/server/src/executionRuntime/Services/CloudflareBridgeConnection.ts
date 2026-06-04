@@ -43,11 +43,13 @@ export interface CloudflareBridgeConnectionShape {
   ) => Effect.Effect<CloudflareBridgeHttpResponse, CloudflareBridgeError>;
   /**
    * Open an authenticated WebSocket to a bridge path and return a connected
-   * duplex socket the terminal transport drives.
+   * duplex socket the terminal transport drives. A query value may be an array
+   * so repeated params (e.g. one `arg` per terminal argument, which the bridge
+   * reads via `searchParams.getAll("arg")`) survive the round-trip.
    */
   readonly connectWebSocket: (input: {
     readonly path: string;
-    readonly query?: Readonly<Record<string, string>>;
+    readonly query?: Readonly<Record<string, string | ReadonlyArray<string>>>;
   }) => Effect.Effect<BridgeWebSocket, CloudflareBridgeError>;
 }
 

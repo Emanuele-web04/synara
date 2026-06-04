@@ -48,7 +48,13 @@ export interface ContractExecResult {
 
 export interface ContractTransport {
   readonly transport: JsonRpcLineTransport;
-  readonly controller: InMemoryTransportController;
+  /**
+   * Optional: providers whose transport forwards a real channel (e.g.
+   * Cloudflare's terminal WebSocket) return a bare transport with no in-memory
+   * controller. The harness body only drives the transport, never the
+   * controller, so the carve-out matches the production shape's optional field.
+   */
+  readonly controller?: InMemoryTransportController;
 }
 
 /**

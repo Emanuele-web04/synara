@@ -11,6 +11,8 @@
  * @module CloudflareRuntimeProviderFacadeLayer
  */
 import { Layer } from "effect";
+import type { FileSystem } from "effect";
+import type { ChildProcessSpawner } from "effect/unstable/process";
 import type { HttpClient } from "effect/unstable/http";
 
 import { CloudflareBridgeClientLive } from "./CloudflareBridgeClient.ts";
@@ -24,6 +26,19 @@ export interface CloudflareRuntimeLayerOptions {
   /** Override the environment used to resolve credentials (tests). */
   readonly env?: Record<string, string | undefined>;
 }
+
+/**
+ * Dependencies either bridge-connection branch may require: the real HTTP/WS
+ * connection needs `HttpClient`; the in-process fake (real temp dirs + real local
+ * processes) needs `FileSystem` + `ChildProcessSpawner`. The layer's `RIn` is
+ * widened to the union so both branches unify under one type and the caller
+ * provides whichever services the resolved environment uses — all satisfied by
+ * `NodeServices.layer` + `FetchHttpClient.layer` at the server root.
+ */
+type CloudflareConnectionServices =
+  | HttpClient.HttpClient
+  | FileSystem.FileSystem
+  | ChildProcessSpawner.ChildProcessSpawner;
 
 const hasBridgeCredentials = (env: Record<string, string | undefined>): boolean =>
   typeof env.SYNARA_CLOUDFLARE_BRIDGE_URL === "string" &&
@@ -41,7 +56,7 @@ const hasBridgeCredentials = (env: Record<string, string | undefined>): boolean 
  */
 export const makeCloudflareBridgeConnectionLayer = (
   options?: CloudflareRuntimeLayerOptions,
-): Layer.Layer<CloudflareBridgeConnection, never, HttpClient.HttpClient> =>
+): Layer.Layer<CloudflareBridgeConnection, never, CloudflareConnectionServices> =>
   hasBridgeCredentials(options?.env ?? process.env)
     ? Layer.orDie(CloudflareBridgeConnectionLive)
     : makeFakeCloudflareBridge().layer;
@@ -49,7 +64,7 @@ export const makeCloudflareBridgeConnectionLayer = (
 /** The Cloudflare adapter backed by the environment-selected bridge connection. */
 export const makeCloudflareRuntimeAdapterLayer = (
   options?: CloudflareRuntimeLayerOptions,
-): Layer.Layer<CloudflareRuntimeProviderAdapter, never, HttpClient.HttpClient> =>
+): Layer.Layer<CloudflareRuntimeProviderAdapter, never, CloudflareConnectionServices> =>
   CloudflareRuntimeProviderAdapterLive.pipe(
     Layer.provide(CloudflareBridgeClientLive),
     Layer.provide(makeCloudflareBridgeConnectionLayer(options)),
