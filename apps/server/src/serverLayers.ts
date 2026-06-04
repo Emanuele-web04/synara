@@ -9,6 +9,9 @@ import { FAKE_RUNTIME_DESCRIPTORS } from "./executionRuntime/Layers/fakeDescript
 import { FakeRuntimeProviderAdapterLive } from "./executionRuntime/Layers/FakeRuntimeProviderAdapter";
 import { BUILT_IN_RUNTIME_DESCRIPTORS } from "./executionRuntime/Layers/descriptors";
 import { makeRuntimeProviderRegistryLive } from "./executionRuntime/Layers/RuntimeProviderRegistry";
+import { RuntimeActivityLeaseManagerLive } from "./executionRuntime/Layers/RuntimeActivityLeaseManager";
+import { RuntimeCredentialBrokerLive } from "./executionRuntime/Layers/RuntimeCredentialBroker";
+import { RuntimeGitWorkspaceLive } from "./executionRuntime/Layers/RuntimeGitWorkspace";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor";
@@ -71,6 +74,14 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provide(runtimeProviderRegistryLayer),
     Layer.provideMerge(runtimeServicesLayer),
   );
+  // Cross-cutting remote concerns: runtime-neutral git over the exec channel,
+  // activity leases, and the credential broker. Git rides the fake adapter's
+  // command-exec primitive; leases and the broker are in-memory v1 bookkeeping.
+  const runtimeRemoteConcernsLayer = Layer.mergeAll(
+    RuntimeGitWorkspaceLive.pipe(Layer.provide(FakeRuntimeProviderAdapterLive)),
+    RuntimeActivityLeaseManagerLive,
+    RuntimeCredentialBrokerLive,
+  );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
     Layer.provideMerge(executionRuntimeServiceLayer),
     Layer.provideMerge(runtimeServicesLayer),
@@ -115,6 +126,7 @@ export function makeServerRuntimeServicesLayer() {
   return Layer.mergeAll(
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
+    runtimeRemoteConcernsLayer,
     GitLayerLive,
     TerminalLayerLive,
     KeybindingsLive,

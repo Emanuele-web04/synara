@@ -23,11 +23,13 @@ import { ExecutionInstanceId, type RuntimeInstanceSummary } from "@t3tools/contr
 import { Deferred, Effect, Exit, FileSystem, Layer, Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
+import { collectUint8StreamText } from "../../stream/collectUint8StreamText.ts";
 import {
   makeInMemoryJsonRpcTransport,
   type JsonRpcLineTransport,
   type InMemoryTransportController,
 } from "../../provider/process/JsonRpcLineTransport.ts";
+import { RuntimeInstanceUnknownError } from "../Errors.ts";
 import type { RuntimeProcessSpawnInput } from "../Services/RuntimeProcessTransport.ts";
 import type { FakeRuntimeFlavor } from "../Services/FakeRuntimeFlavor.ts";
 import { FakeRuntimeProviderAdapter } from "../Services/FakeRuntimeProviderAdapter.ts";
@@ -44,6 +46,21 @@ export interface FakeRuntimeInstanceContext {
   readonly instance: RuntimeInstanceSummary;
   readonly rootPath: string;
   readonly flavor: FakeRuntimeFlavor;
+}
+
+/** Collected result of a fire-and-collect command run inside an instance. */
+export interface FakeRuntimeExecResult {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly code: number | null;
+}
+
+export interface FakeRuntimeExecInput {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  /** Resolved relative to the instance root; defaults to the root. */
+  readonly cwd?: string | undefined;
+  readonly env?: Record<string, string | undefined> | undefined;
 }
 
 export interface FakeRuntimeProviderAdapterShape {
@@ -63,6 +80,21 @@ export interface FakeRuntimeProviderAdapterShape {
   ) => Effect.Effect<
     { readonly transport: JsonRpcLineTransport; readonly controller: InMemoryTransportController },
     never,
+    ChildProcessSpawner.ChildProcessSpawner
+  >;
+  /**
+   * Fire-and-collect command exec inside an instance, the runtime-neutral
+   * primitive `RuntimeGitWorkspace` rides on. A real remote adapter forwards
+   * this to its provider's exec channel; the fake runs it locally rooted at the
+   * instance's temp dir. Unlike `createTransport` this collects full output
+   * rather than line-framing it for a JSON-RPC consumer.
+   */
+  readonly execCollect: (
+    instanceId: ExecutionInstanceId,
+    input: FakeRuntimeExecInput,
+  ) => Effect.Effect<
+    FakeRuntimeExecResult,
+    RuntimeInstanceUnknownError,
     ChildProcessSpawner.ChildProcessSpawner
   >;
   /** Remove the instance's temp dir and forget it. Idempotent. */
@@ -182,6 +214,64 @@ const makeFakeRuntimeProviderAdapter = Effect.gen(function* () {
       return { transport: built.transport, controller: built.controller };
     });
 
+  const execCollect: FakeRuntimeProviderAdapterShape["execCollect"] = (instanceId, input) =>
+    Effect.gen(function* () {
+      const root = roots.get(instanceId);
+      if (root === undefined) {
+        return yield* Effect.fail(
+          new RuntimeInstanceUnknownError({ instanceId: String(instanceId) }),
+        );
+      }
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const cwd =
+        input.cwd === undefined || input.cwd.length === 0
+          ? root
+          : nodePath.resolve(root, input.cwd);
+
+      // A spawn failure (e.g. missing binary) is a command-level result, not a
+      // provider fault: surface it as a 127 exit with the error on stderr so the
+      // git boundary classifies it like any other non-zero exit.
+      const spawned = yield* spawner
+        .spawn(
+          ChildProcess.make(input.command, [...input.args], {
+            cwd,
+            ...(input.env === undefined ? {} : { env: input.env }),
+          }),
+        )
+        .pipe(Effect.exit);
+
+      if (Exit.isFailure(spawned)) {
+        return {
+          stdout: "",
+          stderr: `failed to spawn ${input.command}`,
+          code: 127,
+        } satisfies FakeRuntimeExecResult;
+      }
+      const child = spawned.value;
+
+      const [stdout, stderr, code] = yield* Effect.all(
+        [
+          collectUint8StreamText({ stream: child.stdout }).pipe(
+            Effect.orElseSucceed(() => ({ text: "", truncated: false })),
+          ),
+          collectUint8StreamText({ stream: child.stderr }).pipe(
+            Effect.orElseSucceed(() => ({ text: "", truncated: false })),
+          ),
+          child.exitCode.pipe(
+            Effect.map((value): number | null => Number(value)),
+            Effect.orElseSucceed((): number | null => null),
+          ),
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      return {
+        stdout: stdout.text,
+        stderr: stderr.text,
+        code,
+      } satisfies FakeRuntimeExecResult;
+    }).pipe(Effect.scoped);
+
   const destroy: FakeRuntimeProviderAdapterShape["destroy"] = (instanceId) =>
     Effect.gen(function* () {
       const root = roots.get(instanceId);
@@ -192,7 +282,12 @@ const makeFakeRuntimeProviderAdapter = Effect.gen(function* () {
       yield* fs.remove(root, { recursive: true }).pipe(Effect.ignore);
     });
 
-  return { provision, createTransport, destroy } satisfies FakeRuntimeProviderAdapterShape;
+  return {
+    provision,
+    createTransport,
+    execCollect,
+    destroy,
+  } satisfies FakeRuntimeProviderAdapterShape;
 });
 
 export const makeFakeRuntimeProviderAdapterEffect = makeFakeRuntimeProviderAdapter;

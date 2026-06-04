@@ -33,6 +33,38 @@ export class RuntimePlanRejectedError extends Schema.TaggedErrorClass<RuntimePla
 }
 
 /**
+ * RuntimeInstanceUnknownError - An operation referenced an instance id the
+ * provider has no record of (never provisioned, or already destroyed).
+ */
+export class RuntimeInstanceUnknownError extends Schema.TaggedErrorClass<RuntimeInstanceUnknownError>()(
+  "RuntimeInstanceUnknownError",
+  {
+    instanceId: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `No execution-runtime instance: ${this.instanceId}`;
+  }
+}
+
+/**
+ * RuntimeGitFailedError - A git operation routed through a runtime's exec
+ * channel failed. Detail is redacted of credential material before it reaches a
+ * log or a caller (no tokenized remote URLs, no leaked secrets).
+ */
+export class RuntimeGitFailedError extends Schema.TaggedErrorClass<RuntimeGitFailedError>()(
+  "RuntimeGitFailedError",
+  {
+    operation: Schema.String,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Runtime git ${this.operation} failed: ${this.detail}`;
+  }
+}
+
+/**
  * RuntimeProvisionFailedError - Provisioning, exec, or recording a runtime
  * instance failed. Provider-agnostic at the orchestration seam: the reactor sees
  * only this tagged error, never a concrete provider's failure type.
