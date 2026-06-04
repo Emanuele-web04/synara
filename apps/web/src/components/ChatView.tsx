@@ -235,6 +235,8 @@ import {
   resolveTerminalCloseTitle,
 } from "~/lib/terminalCloseConfirmation";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
+import { buildRuntimePlanFromDraft } from "~/lib/runtimePresentation";
+import { clearRuntimePlanDraft, readRuntimePlanDraft } from "~/runtimePlanDraftStore";
 import {
   getAppModelOptions,
   getCustomBinaryPathForProvider,
@@ -5716,6 +5718,12 @@ export default function ChatView({
       );
 
       if (isLocalDraftThread) {
+        // Remote execution target is an explicit opt-in: a null plan keeps the
+        // create command identical to today's local/worktree behavior.
+        const runtimePlan = buildRuntimePlanFromDraft(
+          readRuntimePlanDraft(threadIdForSend),
+          selectedProviderForSend,
+        );
         await promoteThreadCreate(
           {
             type: "thread.create",
@@ -5730,10 +5738,12 @@ export default function ChatView({
             branch: nextThreadBranch,
             worktreePath: nextThreadWorktreePath,
             lastKnownPr: activeThread.lastKnownPr ?? null,
+            ...(runtimePlan ? { runtimePlan } : {}),
             createdAt: activeThread.createdAt,
           },
           api,
         );
+        clearRuntimePlanDraft(threadIdForSend);
         if (targetProjectKindForSend === "chat") {
           await api.orchestration.dispatchCommand({
             type: "project.meta.update",
@@ -7414,9 +7424,7 @@ export default function ChatView({
         )}
       >
         {!isElectron && (
-          <header
-            className={cn(CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, "px-3 py-2 md:hidden")}
-          >
+          <header className={cn(CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, "px-3 py-2 md:hidden")}>
             <div className="flex items-center gap-2">
               <SidebarHeaderTrigger className="size-7 shrink-0" />
               <span className="text-sm font-medium text-[var(--color-text-foreground)]">
@@ -8078,6 +8086,7 @@ export default function ChatView({
           activeThreadTitle={activeThreadDisplayTitle}
           activeThreadEntryPoint={terminalState.entryPoint}
           activeProvider={activeThread.session?.provider ?? activeThread.modelSelection.provider}
+          activeThreadRuntime={activeThread.runtime ?? null}
           activeProjectName={activeProjectDisplayName}
           threadBreadcrumbs={threadBreadcrumbs}
           isSidechat={Boolean(activeThread.sidechatSourceThreadId)}
