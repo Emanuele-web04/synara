@@ -200,6 +200,7 @@ import {
   recoverExistingAddProjectTarget,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveProjectEmptyState,
+  resolveSettingsBackTarget,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
   resolveThreadRowTrailingReserveClass,
@@ -213,7 +214,7 @@ import {
   sortProjectsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
-import { resolveRestorableThreadRoute, type LastThreadRoute } from "../chatRouteRestore";
+import type { LastThreadRoute } from "../chatRouteRestore";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS } from "~/hooks/useDesktopTopBarGutter";
@@ -1735,6 +1736,42 @@ export default function Sidebar() {
     [navigate],
   );
 
+  const resolveBackToThreadTarget = useCallback(() => {
+    const latestThread =
+      sortThreadsForSidebar(sidebarThreads, appSettings.sidebarThreadSortOrder)[0] ?? null;
+    return resolveSettingsBackTarget({
+      lastThreadRoute,
+      availableThreadIds: new Set(Object.keys(sidebarThreadSummaryById)),
+      availableSplitViewIds: new Set(
+        Object.keys(splitViewsById).filter((splitViewId) => splitViewsById[splitViewId]),
+      ),
+      latestThreadId: latestThread?.id ?? null,
+    });
+  }, [
+    appSettings.sidebarThreadSortOrder,
+    lastThreadRoute,
+    sidebarThreadSummaryById,
+    sidebarThreads,
+    splitViewsById,
+  ]);
+
+  const handleBackToAppFromSettings = useCallback(() => {
+    const target = resolveBackToThreadTarget();
+
+    if (target.kind === "thread") {
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: ThreadId.makeUnsafe(target.threadId) },
+        search: () => ({
+          splitViewId: target.splitViewId,
+        }),
+      });
+      return;
+    }
+
+    void navigate({ to: "/" });
+  }, [navigate, resolveBackToThreadTarget]);
+
   const handleSidebarViewChange = useCallback(
     (view: "threads" | "workspace") => {
       if (view === "workspace") {
@@ -1746,30 +1783,14 @@ export default function Sidebar() {
         return;
       }
 
-      const restorableRoute = resolveRestorableThreadRoute({
-        lastThreadRoute,
-        availableThreadIds: new Set(Object.keys(sidebarThreadSummaryById)),
-        availableSplitViewIds: new Set(Object.keys(splitViewsById)),
-      });
-      if (restorableRoute) {
+      const target = resolveBackToThreadTarget();
+      if (target.kind === "thread") {
         void navigate({
           to: "/$threadId",
-          params: { threadId: ThreadId.makeUnsafe(restorableRoute.threadId) },
+          params: { threadId: ThreadId.makeUnsafe(target.threadId) },
           search: () => ({
-            splitViewId: restorableRoute.splitViewId,
+            splitViewId: target.splitViewId,
           }),
-        });
-        return;
-      }
-
-      const latestThread = sortThreadsForSidebar(
-        sidebarThreads,
-        appSettings.sidebarThreadSortOrder,
-      )[0];
-      if (latestThread) {
-        void navigate({
-          to: "/$threadId",
-          params: { threadId: latestThread.id },
         });
         return;
       }
@@ -1777,15 +1798,11 @@ export default function Sidebar() {
       void handleNewChat({ fresh: true });
     },
     [
-      appSettings.sidebarThreadSortOrder,
       handleNewChat,
-      lastThreadRoute,
       navigate,
       navigateToWorkspace,
+      resolveBackToThreadTarget,
       routeWorkspaceId,
-      sidebarThreadSummaryById,
-      sidebarThreads,
-      splitViewsById,
       workspacePages,
     ],
   );
@@ -5385,7 +5402,7 @@ export default function Sidebar() {
           <SidebarGroup className="p-0">
             <SettingsSidebarNav
               activeSection={activeSettingsSection}
-              onBack={() => handleSidebarViewChange("threads")}
+              onBack={handleBackToAppFromSettings}
               onSelectSection={(section) => {
                 void navigate({
                   to: "/settings",
