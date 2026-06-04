@@ -182,6 +182,7 @@ export const SidebarHiddenRightWideIcon = centralIconWrapper("sidebar-hidden-rig
 export const PanelLeftCloseIcon = SidebarHiddenLeftWideIcon;
 export const PanelLeftIcon = centralIconWrapper("sidebar-simple-left-wide");
 export const PanelRightCloseIcon = SidebarHiddenRightWideIcon;
+export const PencilIcon: LucideIcon = centralIconWrapper("pencil");
 export const PinIcon: LucideIcon = centralIconWrapper("pin");
 export const PinnedFilledIcon = adaptIcon(IconPinnedFilled);
 export const PlayIcon = adaptIcon(IconPlayerPlay);

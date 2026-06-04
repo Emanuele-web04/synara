@@ -44,6 +44,26 @@ export const MIN_TERMINAL_FONT_SIZE_PX = 10;
 export const MAX_TERMINAL_FONT_SIZE_PX = 22;
 export const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
 
+// Terminal font is a free-form font-family value: the user can type any font
+// installed on their machine. An empty value keeps the bundled default stack
+// (defined in index.css). The list below is only autocomplete inspiration shown
+// in the settings input — it does NOT restrict what can be entered.
+export const DEFAULT_TERMINAL_FONT_FAMILY = "";
+
+export const TERMINAL_FONT_FAMILY_SUGGESTIONS: ReadonlyArray<string> = [
+  "JetBrains Mono",
+  "Fira Code",
+  "Cascadia Code",
+  "SF Mono",
+  "Menlo",
+  "Source Code Pro",
+  "IBM Plex Mono",
+  "Hack",
+  "Roboto Mono",
+  "Ubuntu Mono",
+  "Consolas",
+];
+
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
 export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
@@ -106,6 +126,9 @@ export const AppSettingsSchema = Schema.Struct({
   chatFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_CHAT_FONT_SIZE_PX)),
   chatCodeFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   terminalFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_TERMINAL_FONT_SIZE_PX)),
+  terminalFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(
+    withDefaults(() => DEFAULT_TERMINAL_FONT_FAMILY),
+  ),
   codexBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -316,6 +339,40 @@ export function normalizeTerminalFontSizePx(value: number | null | undefined): n
   );
 }
 
+export function normalizeTerminalFontFamily(value: string | null | undefined): string {
+  // Free-form font-family text. Only strip characters that can't legitimately
+  // appear in a CSS font-family value so the typed name can't break out of the
+  // custom property (`;`, `{}`, angle brackets, newlines) or smuggle in other
+  // declarations. Whitespace is intentionally preserved here so multi-word names
+  // ("Fira Code") remain typable in a controlled input; the CSS resolver trims.
+  return (value ?? "").replace(/[;{}<>\n\r]/g, "").slice(0, 256);
+}
+
+// Build the CSS font-family stack written to `--terminal-font-family`, or null
+// when the bundled default (defined in index.css) should stay in effect.
+//
+// Accepts either a single family name (`Fira Code`) or a full comma-separated
+// stack (`"Fira Code", Menlo, monospace`). Single names are quoted when needed,
+// and a `monospace` fallback is appended so an uninstalled font degrades.
+export function resolveTerminalFontFamilyStack(value: string | null | undefined): string | null {
+  const normalized = normalizeTerminalFontFamily(value).replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const hasGenericFallback = /\b(?:monospace|serif|sans-serif|system-ui|ui-monospace)\b/.test(
+    normalized,
+  );
+
+  if (normalized.includes(",")) {
+    return hasGenericFallback ? normalized : `${normalized}, monospace`;
+  }
+
+  const isQuoted = /^(["']).*\1$/.test(normalized);
+  const family = !isQuoted && /\s/.test(normalized) ? `"${normalized}"` : normalized;
+  return hasGenericFallback ? family : `${family}, monospace`;
+}
+
 function normalizeProviderBinaryPathOverride(
   provider: ProviderKind,
   value: string | null | undefined,
@@ -343,6 +400,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     piBinaryPath: normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath),
     chatFontSizePx: normalizeChatFontSizePx(settings.chatFontSizePx),
     terminalFontSizePx: normalizeTerminalFontSizePx(settings.terminalFontSizePx),
+    terminalFontFamily: normalizeTerminalFontFamily(settings.terminalFontFamily),
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
     customCursorModels: normalizeCustomModelSlugs(settings.customCursorModels, "cursor"),

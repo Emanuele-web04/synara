@@ -172,6 +172,7 @@ import {
   togglePendingUserInputOptionSelection,
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
+import { selectRightDockState, useRightDockStore } from "../rightDockStore";
 import { useStore } from "../store";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { getThreadFromState } from "../threadDerivation";
@@ -212,7 +213,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ComposerSendArrowIcon,
-  QueueArrow,
+  SteerIcon,
   RefreshCwIcon,
   XIcon,
 } from "~/lib/icons";
@@ -237,6 +238,7 @@ import { readNativeApi } from "~/nativeApi";
 import {
   confirmTerminalTabClose,
   resolveTerminalCloseTitle,
+  shouldPromptForTerminalClose,
 } from "~/lib/terminalCloseConfirmation";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
 import {
@@ -381,6 +383,7 @@ import {
   type LocalDispatchSnapshot,
   PullRequestDialogState,
   readFileAsDataUrl,
+  shouldRenderProviderHealthBanner,
   resolveRuntimeModeAfterApprovalDecision,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
@@ -2922,7 +2925,6 @@ export default function ChatView({
     (activeTerminalGroup ? collectTerminalIdsFromLayout(activeTerminalGroup.layout).length : 0) >=
     MAX_TERMINALS_PER_GROUP;
   const terminalWorkspaceOpen = shouldRenderTerminalWorkspace({
-    activeProjectExists: activeProject !== undefined,
     presentationMode: terminalState.presentationMode,
     terminalOpen: terminalState.terminalOpen,
   });
@@ -2930,6 +2932,10 @@ export default function ChatView({
     terminalWorkspaceOpen &&
     (terminalState.workspaceLayout === "terminal-only" ||
       terminalState.workspaceActiveTab === "terminal");
+  const shouldShowProviderHealthBanner = shouldRenderProviderHealthBanner({
+    threadEntryPoint: terminalState.entryPoint,
+    terminalWorkspaceTerminalTabActive,
+  });
   // Terminal-only threads should not pay to mount the hidden chat/composer pane.
   const shouldRenderChatPaneContent = !(
     terminalWorkspaceTerminalTabActive && terminalState.workspaceLayout === "terminal-only"
@@ -3323,7 +3329,12 @@ export default function ChatView({
       });
       const confirmed = await confirmTerminalTabClose({
         api,
-        enabled: settings.confirmTerminalTabClose,
+        enabled: shouldPromptForTerminalClose({
+          confirmationEnabled: settings.confirmTerminalTabClose,
+          runningTerminalIds: terminalState.runningTerminalIds,
+          terminalAttentionStatesById: terminalState.terminalAttentionStatesById,
+          terminalId,
+        }),
         terminalTitle: resolveTerminalCloseTitle({
           terminalId,
           terminalLabelsById: terminalState.terminalLabelsById,
@@ -3394,6 +3405,8 @@ export default function ChatView({
       syncServerShellSnapshot,
       settings.confirmTerminalTabClose,
       terminalState.entryPoint,
+      terminalState.runningTerminalIds,
+      terminalState.terminalAttentionStatesById,
       terminalState.terminalIds.length,
       terminalState.terminalLabelsById,
       terminalState.terminalTitleOverridesById,
@@ -3426,9 +3439,21 @@ export default function ChatView({
     terminalState.workspaceLayout,
     terminalWorkspaceOpen,
   ]);
+  // The terminal's panel toggle mirrors the right dock's collapse control: it shows
+  // or hides the side panel only when this thread already has a pane to show.
+  const rightDockOpen = useRightDockStore((store) => selectRightDockState(threadId)(store).open);
+  const hasRightDockPanes = useRightDockStore(
+    (store) => selectRightDockState(threadId)(store).panes.length > 0,
+  );
+  const setRightDockOpen = useRightDockStore((store) => store.setDockOpen);
+  const toggleRightDock = useCallback(() => {
+    setRightDockOpen(threadId, !rightDockOpen);
+  }, [rightDockOpen, setRightDockOpen, threadId]);
   const terminalDrawerProps = useMemo(
     () => ({
       threadId,
+      onTogglePanel: hasRightDockPanes ? toggleRightDock : undefined,
+      isPanelOpen: hasRightDockPanes ? rightDockOpen : undefined,
       cwd: gitCwd ?? activeProject?.cwd ?? "",
       runtimeEnv: threadTerminalRuntimeEnv,
       height: terminalState.terminalHeight,
@@ -3517,6 +3542,9 @@ export default function ChatView({
       terminalState.runningTerminalIds,
       threadId,
       threadTerminalRuntimeEnv,
+      toggleRightDock,
+      rightDockOpen,
+      hasRightDockPanes,
     ],
   );
   const runProjectScript = useCallback(
@@ -7610,7 +7638,7 @@ export default function ChatView({
                     )}
                   >
                     <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                      <QueueArrow className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)]" />
+                      <SteerIcon className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)]" />
                       <span className="truncate text-[12px] font-medium text-foreground/85">
                         {queuedTurn.previewText}
                       </span>
@@ -8196,7 +8224,7 @@ export default function ChatView({
 
       {/* Error banner */}
       <ProviderHealthBanner
-        status={visibleActiveProviderStatus}
+        status={shouldShowProviderHealthBanner ? visibleActiveProviderStatus : null}
         onDismiss={dismissActiveProviderHealthBanner}
       />
       <ThreadErrorBanner error={activeThread.error} onDismiss={dismissActiveThreadError} />
@@ -8411,7 +8439,7 @@ export default function ChatView({
       {/* end horizontal flex container */}
 
       {(() => {
-        if (!terminalState.terminalOpen || !activeProject || terminalWorkspaceOpen) {
+        if (!terminalState.terminalOpen || terminalWorkspaceOpen) {
           return null;
         }
         return (

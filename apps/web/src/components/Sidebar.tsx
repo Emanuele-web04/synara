@@ -3,25 +3,30 @@
 // Exports: Sidebar
 
 import {
+  ArchiveIcon,
   ArrowLeftIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  CopyIcon,
+  DisposableThreadIcon,
   FolderIcon,
+  FolderOpenIcon,
   GitMergedSimpleIcon,
   GitPullRequestIcon,
-  DisposableThreadIcon,
   type LucideIcon,
   NewThreadIcon,
+  PencilIcon,
   SearchIcon,
   SettingsIcon,
   TerminalIcon,
   Trash2,
   TriangleAlertIcon,
+  XIcon,
 } from "~/lib/icons";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch, FiPlus } from "react-icons/fi";
 import { GoRepoForked } from "react-icons/go";
-import { HiOutlineArchiveBox, HiOutlineCheckCircle, HiOutlineFolderOpen } from "react-icons/hi2";
+import { HiOutlineArchiveBox, HiOutlineCheckCircle } from "react-icons/hi2";
 import { BsChat } from "react-icons/bs";
 import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2, TbCursorText } from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
@@ -68,7 +73,6 @@ import { getDefaultModel } from "@t3tools/shared/model";
 import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { renderToStaticMarkup } from "react-dom/server";
 import {
   type SidebarProjectSortOrder,
   type SidebarThreadSortOrder,
@@ -166,6 +170,7 @@ import {
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
+  MenuSeparator,
   MenuTrigger,
 } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -246,6 +251,7 @@ import {
 } from "../sidebarRowStyles";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
 import { SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME } from "./chat/composerPickerStyles";
+import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import {
   resolveSplitViewFocusedThreadId,
   resolveSplitViewPaneIdForThread,
@@ -265,7 +271,6 @@ import type {
   SidebarSearchThread,
 } from "./SidebarSearchPalette.logic";
 import { useFocusedChatContext } from "../focusedChatContext";
-import { showContextMenuFallback } from "../contextMenuFallback";
 import {
   waitForRecoverableProjectForDuplicateCreate,
   waitForRecoverableProjectInReadModel,
@@ -300,15 +305,49 @@ const DebugFeatureFlagsMenu = import.meta.env.DEV
       })),
     )
   : null;
-const PROJECT_CONTEXT_MENU_FOLDER_ICON = renderToStaticMarkup(<HiOutlineFolderOpen />);
-const PROJECT_CONTEXT_MENU_EDIT_ICON =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>';
-const PROJECT_CONTEXT_MENU_REMOVE_ICON =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
-const PROJECT_CONTEXT_MENU_COPY_PATH_ICON =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
-const PROJECT_CONTEXT_MENU_ARCHIVE_ICON = renderToStaticMarkup(<HiOutlineArchiveBox />);
-const PROJECT_CONTEXT_MENU_DELETE_THREADS_ICON = renderToStaticMarkup(<Trash2 />);
+
+type ProjectContextMenuId =
+  | "open-in-finder"
+  | "copy-path"
+  | "rename"
+  | "archive-threads"
+  | "delete-threads"
+  | "delete";
+
+type ProjectContextMenuState = {
+  projectId: ProjectId;
+  position: { x: number; y: number };
+};
+
+const PROJECT_CONTEXT_MENU_PANEL_CLASS_NAME = "w-48 min-w-48";
+const PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME =
+  "text-[var(--color-text-foreground)] data-highlighted:text-[var(--color-text-foreground)]";
+const PROJECT_CONTEXT_MENU_ICON_CLASS_NAME =
+  "inline-flex size-3.5 shrink-0 items-center justify-center text-[var(--color-text-foreground-secondary)] [&>svg]:size-3.5 [&>[data-slot=central-icon]]:size-3.5";
+
+// Gives Base UI a zero-size virtual anchor exactly where the right-click happened.
+function createClientPointMenuAnchor(position: { x: number; y: number }) {
+  return {
+    getBoundingClientRect: () => ({
+      x: position.x,
+      y: position.y,
+      width: 0,
+      height: 0,
+      top: position.y,
+      right: position.x,
+      bottom: position.y,
+      left: position.x,
+    }),
+  };
+}
+
+function ProjectContextMenuIcon({ icon: Icon }: { icon: LucideIcon }) {
+  return (
+    <span className={PROJECT_CONTEXT_MENU_ICON_CLASS_NAME}>
+      <Icon aria-hidden="true" />
+    </span>
+  );
+}
 
 type DebugFeatureFlagsWindow = Window & {
   synaraShowFeatureFlags?: () => void;
@@ -421,9 +460,10 @@ function threadRowTimestampSlotClassName(
 ): string {
   return cn(
     "mr-1 flex shrink-0 items-center justify-end leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
-    isSubagentThread ? "w-[1.2rem] text-[10px]" : "w-[1.625rem] text-[length:var(--app-font-size-ui-meta,11px)]",
-    toneClassName ??
-      (isSubagentThread ? "text-muted-foreground/26" : "text-muted-foreground/38"),
+    isSubagentThread
+      ? "w-[1.2rem] text-[10px]"
+      : "w-[1.625rem] text-[length:var(--app-font-size-ui-meta,11px)]",
+    toneClassName ?? (isSubagentThread ? "text-muted-foreground/26" : "text-muted-foreground/38"),
   );
 }
 
@@ -964,15 +1004,21 @@ function SidebarPrimaryAction({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
-        size="default"
+        size="sm"
         data-active={active}
         aria-current={active ? "page" : undefined}
-        className="group/sidebar-primary-action h-8 gap-2.5 rounded-lg px-2 font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/89 transition-colors hover:bg-[var(--sidebar-accent)] data-[active=true]:bg-[var(--sidebar-accent-active)] data-[active=true]:text-[var(--sidebar-accent-foreground)]"
+        className={cn(
+          "group/sidebar-primary-action",
+          SIDEBAR_HEADER_ROW_CLASS_NAME,
+          active
+            ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
+            : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
+        )}
         aria-disabled={disabled || undefined}
         disabled={disabled}
         onClick={onClick}
       >
-        <SidebarLeadingIcon size="md">
+        <SidebarLeadingIcon size="sm">
           <SidebarGlyph icon={Icon} variant="leading" />
         </SidebarLeadingIcon>
         <span className="truncate">{label}</span>
@@ -1276,6 +1322,8 @@ export default function Sidebar() {
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
   const [renamingProjectId, setRenamingProjectId] = useState<ProjectId | null>(null);
   const [renamingProjectName, setRenamingProjectName] = useState("");
+  const [projectContextMenuState, setProjectContextMenuState] =
+    useState<ProjectContextMenuState | null>(null);
   const [expandedThreadListsByProject, setExpandedThreadListsByProject] = useState<
     ReadonlySet<string>
   >(() => new Set(readSidebarUiState().expandedProjectThreadListCwds));
@@ -1413,15 +1461,11 @@ export default function Sidebar() {
       sidebarThreadSummaryById,
     ],
   );
-  const routeThreadSummary = routeThreadId
-    ? (sidebarThreadSummaryById[routeThreadId] ?? null)
-    : null;
   const routeTerminalState = routeThreadId
     ? selectThreadTerminalState(terminalStateByThreadId, routeThreadId)
     : null;
   const terminalOpen = routeTerminalState?.terminalOpen ?? false;
   const terminalWorkspaceOpen = shouldRenderTerminalWorkspace({
-    activeProjectExists: routeThreadSummary !== null,
     presentationMode: routeTerminalState?.presentationMode ?? "drawer",
     terminalOpen,
   });
@@ -3206,76 +3250,13 @@ export default function Sidebar() {
     terminalStateByThreadId,
   });
 
-  const handleProjectContextMenu = useCallback(
-    async (projectId: ProjectId, position: { x: number; y: number }) => {
+  const handleProjectContextMenuAction = useCallback(
+    async (projectId: ProjectId, clicked: ProjectContextMenuId) => {
+      setProjectContextMenuState(null);
       const api = readNativeApi();
       if (!api) return;
-      const project = projects.find((entry) => entry.id === projectId);
+      const project = projectById.get(projectId);
       if (!project) return;
-
-      const projectThreadsForMenu = sidebarThreads.filter(
-        (thread) => thread.projectId === projectId,
-      );
-      const hasAnyThreads = projectThreadsForMenu.length > 0;
-      const hasArchivableThreads = projectThreadsForMenu.some(
-        (thread) => thread.archivedAt == null,
-      );
-
-      type ProjectContextMenuId =
-        | "open-in-finder"
-        | "copy-path"
-        | "rename"
-        | "archive-threads"
-        | "delete-threads"
-        | "delete";
-
-      const items: {
-        id: ProjectContextMenuId;
-        label: string;
-        icon: string;
-        destructive?: boolean;
-      }[] = [
-        {
-          id: "open-in-finder",
-          label: "Open in Finder",
-          icon: PROJECT_CONTEXT_MENU_FOLDER_ICON,
-        },
-        {
-          id: "copy-path",
-          label: "Copy Path",
-          icon: PROJECT_CONTEXT_MENU_COPY_PATH_ICON,
-        },
-        {
-          id: "rename",
-          label: "Edit name",
-          icon: PROJECT_CONTEXT_MENU_EDIT_ICON,
-        },
-      ];
-
-      if (hasArchivableThreads) {
-        items.push({
-          id: "archive-threads",
-          label: "Archive threads",
-          icon: PROJECT_CONTEXT_MENU_ARCHIVE_ICON,
-        });
-      }
-      if (hasAnyThreads) {
-        items.push({
-          id: "delete-threads",
-          label: "Delete threads",
-          icon: PROJECT_CONTEXT_MENU_DELETE_THREADS_ICON,
-          destructive: true,
-        });
-      }
-
-      items.push({
-        id: "delete",
-        label: "Remove",
-        destructive: true,
-        icon: PROJECT_CONTEXT_MENU_REMOVE_ICON,
-      });
-
-      const clicked = await showContextMenuFallback<ProjectContextMenuId>(items, position);
 
       if (clicked === "open-in-finder") {
         try {
@@ -3373,9 +3354,18 @@ export default function Sidebar() {
       copyPathToClipboard,
       deleteProjectThreads,
       deleteAllThreadsInProject,
-      projects,
+      projectById,
       sidebarThreads,
     ],
+  );
+
+  const handleProjectContextMenu = useCallback(
+    (projectId: ProjectId, position: { x: number; y: number }) => {
+      if (!readNativeApi()) return;
+      if (!projectById.has(projectId)) return;
+      setProjectContextMenuState({ projectId, position });
+    },
+    [projectById],
   );
 
   const projectDnDSensors = useSensors(
@@ -5458,6 +5448,27 @@ export default function Sidebar() {
       {headerControls}
     </div>
   );
+  const projectContextMenuProject = projectContextMenuState
+    ? (projectById.get(projectContextMenuState.projectId) ?? null)
+    : null;
+  const projectContextMenuThreads = useMemo(
+    () =>
+      projectContextMenuState
+        ? sidebarThreads.filter((thread) => thread.projectId === projectContextMenuState.projectId)
+        : [],
+    [projectContextMenuState, sidebarThreads],
+  );
+  const projectContextMenuAnchor = useMemo(
+    () =>
+      projectContextMenuState
+        ? createClientPointMenuAnchor(projectContextMenuState.position)
+        : null,
+    [projectContextMenuState],
+  );
+  const projectContextMenuHasAnyThreads = projectContextMenuThreads.length > 0;
+  const projectContextMenuHasArchivableThreads = projectContextMenuThreads.some(
+    (thread) => thread.archivedAt == null,
+  );
 
   return (
     <>
@@ -6019,6 +6030,99 @@ export default function Sidebar() {
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
+
+      {projectContextMenuState && projectContextMenuProject && projectContextMenuAnchor ? (
+        <Menu
+          open
+          onOpenChange={(open) => {
+            if (!open) {
+              setProjectContextMenuState(null);
+            }
+          }}
+        >
+          <ComposerPickerMenuPopup
+            anchor={projectContextMenuAnchor}
+            align="start"
+            side="bottom"
+            sideOffset={0}
+            className={PROJECT_CONTEXT_MENU_PANEL_CLASS_NAME}
+          >
+            <MenuGroup>
+              <MenuItem
+                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                onClick={() =>
+                  void handleProjectContextMenuAction(
+                    projectContextMenuState.projectId,
+                    "open-in-finder",
+                  )
+                }
+              >
+                <ProjectContextMenuIcon icon={FolderOpenIcon} />
+                <span>Open in Finder</span>
+              </MenuItem>
+              <MenuItem
+                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                onClick={() =>
+                  void handleProjectContextMenuAction(projectContextMenuState.projectId, "copy-path")
+                }
+              >
+                <ProjectContextMenuIcon icon={CopyIcon} />
+                <span>Copy Path</span>
+              </MenuItem>
+              <MenuItem
+                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                onClick={() =>
+                  void handleProjectContextMenuAction(projectContextMenuState.projectId, "rename")
+                }
+              >
+                <ProjectContextMenuIcon icon={PencilIcon} />
+                <span>Edit name</span>
+              </MenuItem>
+              {projectContextMenuHasArchivableThreads ? (
+                <MenuItem
+                  className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                  onClick={() =>
+                    void handleProjectContextMenuAction(
+                      projectContextMenuState.projectId,
+                      "archive-threads",
+                    )
+                  }
+                >
+                  <ProjectContextMenuIcon icon={ArchiveIcon} />
+                  <span>Archive threads</span>
+                </MenuItem>
+              ) : null}
+              {projectContextMenuHasAnyThreads ? (
+                <>
+                  <MenuSeparator />
+                  <MenuItem
+                    className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                    onClick={() =>
+                      void handleProjectContextMenuAction(
+                        projectContextMenuState.projectId,
+                        "delete-threads",
+                      )
+                    }
+                  >
+                    <ProjectContextMenuIcon icon={Trash2} />
+                    <span>Delete threads</span>
+                  </MenuItem>
+                </>
+              ) : null}
+              <MenuSeparator />
+              <MenuItem
+                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                onClick={() =>
+                  void handleProjectContextMenuAction(projectContextMenuState.projectId, "delete")
+                }
+              >
+                <ProjectContextMenuIcon icon={XIcon} />
+                <span>Remove</span>
+              </MenuItem>
+            </MenuGroup>
+          </ComposerPickerMenuPopup>
+        </Menu>
+      ) : null}
 
       <RenameThreadDialog
         open={renameDialogThreadId !== null}

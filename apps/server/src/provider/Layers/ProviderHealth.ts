@@ -76,6 +76,7 @@ import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
 
 const DEFAULT_TIMEOUT_MS = 4_000;
+const CLAUDE_HEALTH_TIMEOUT_MS = 20_000;
 const OPENCODE_HEALTH_TIMEOUT_MS = 20_000;
 const PROVIDER_COMMAND_TIMEOUT_DETAIL = "Timed out while running command.";
 const CODEX_PROVIDER = "codex" as const;
@@ -1080,7 +1081,7 @@ export const makeCheckClaudeProviderStatus = (
 
     // Probe 1: `claude --version` — is the CLI reachable?
     const versionProbe = yield* runClaudeCommand(["--version"], executable).pipe(
-      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.timeoutOption(CLAUDE_HEALTH_TIMEOUT_MS),
       Effect.result,
     );
 
@@ -1128,7 +1129,7 @@ export const makeCheckClaudeProviderStatus = (
 
     // Probe 2: `claude auth status` — is the user authenticated?
     const authProbe = yield* runClaudeCommand(["auth", "status"], executable).pipe(
-      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.timeoutOption(CLAUDE_HEALTH_TIMEOUT_MS),
       Effect.result,
     );
 
@@ -1645,11 +1646,14 @@ function providerStatusesEqual(left: ProviderStatuses, right: ProviderStatuses):
 
 function isTransientProviderCommandTimeout(status: ServerProviderStatus): boolean {
   return (
-    status.status === "error" &&
-    !status.available &&
+    status.status !== "ready" &&
     status.authStatus === "unknown" &&
     (status.message ?? "").includes(PROVIDER_COMMAND_TIMEOUT_DETAIL)
   );
+}
+
+function wasPreviouslyUsableProviderStatus(status: ServerProviderStatus): boolean {
+  return status.available && status.status === "ready";
 }
 
 export function stabilizeProviderStatusesAgainstTransientTimeouts(
@@ -1666,7 +1670,11 @@ export function stabilizeProviderStatusesAgainstTransientTimeouts(
 
   return nextStatuses.map((status) => {
     const previous = previousByProvider.get(status.provider);
-    if (!previous?.available || !isTransientProviderCommandTimeout(status)) {
+    if (
+      !previous ||
+      !wasPreviouslyUsableProviderStatus(previous) ||
+      !isTransientProviderCommandTimeout(status)
+    ) {
       return status;
     }
 

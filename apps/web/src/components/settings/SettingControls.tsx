@@ -9,6 +9,7 @@ import { Button } from "~/components/ui/button";
 import { Select, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { Undo2Icon } from "~/lib/icons";
+import { SETTINGS_CONTROL_RADIUS_CLASS_NAME } from "~/settingsPanelStyles";
 import { SettingsSelectPopup } from "./SettingsPanelPrimitives";
 
 export function SettingResetButton({ label, onClick }: { label: string; onClick: () => void }) {
@@ -20,7 +21,7 @@ export function SettingResetButton({ label, onClick }: { label: string; onClick:
             size="icon-xs"
             variant="ghost"
             aria-label={`Reset ${label} to default`}
-            className="size-5 rounded-xl p-0 text-muted-foreground hover:text-foreground"
+            className="size-5 rounded-lg p-0 text-muted-foreground hover:text-foreground"
             onClick={(event) => {
               event.stopPropagation();
               onClick();
@@ -57,7 +58,10 @@ export function SettingsSelectControl({
         if (next !== null) onValueChange(next);
       }}
     >
-      <SelectTrigger className={triggerClassName} aria-label={ariaLabel}>
+      <SelectTrigger
+        className={cn(SETTINGS_CONTROL_RADIUS_CLASS_NAME, triggerClassName)}
+        aria-label={ariaLabel}
+      >
         <SelectValue>{valueContent}</SelectValue>
       </SelectTrigger>
       <SettingsSelectPopup>{children}</SettingsSelectPopup>
@@ -100,7 +104,11 @@ export function SettingsSegmentedControl<T extends string>({
             aria-checked={isActive}
             size="sm"
             variant={isActive ? "secondary" : "ghost"}
-            className={cn("flex-1 sm:flex-none", !isActive && "text-muted-foreground")}
+            className={cn(
+              SETTINGS_CONTROL_RADIUS_CLASS_NAME,
+              "flex-1 sm:flex-none",
+              !isActive && "text-muted-foreground",
+            )}
             onClick={() => onValueChange(option.value)}
           >
             {option.icon}

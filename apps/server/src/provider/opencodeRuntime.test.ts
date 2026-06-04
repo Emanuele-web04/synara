@@ -206,10 +206,7 @@ describe("OpenCodeRuntime local server pool", () => {
             .connectToOpenCodeServer({ binaryPath: "opencode" })
             .pipe(Effect.provideService(Scope.Scope, thirdScope));
           expect(third.url).toBe("http://127.0.0.1:59001");
-          expect(state.spawnUrls).toEqual([
-            "http://127.0.0.1:59000",
-            "http://127.0.0.1:59001",
-          ]);
+          expect(state.spawnUrls).toEqual(["http://127.0.0.1:59000", "http://127.0.0.1:59001"]);
           yield* Scope.close(thirdScope, Exit.void);
         }),
       ).pipe(Effect.provide(openCodeRuntimePoolTestLayer(state))),
@@ -293,10 +290,7 @@ describe("OpenCodeRuntime local server pool", () => {
 
           expect(defaultServer.url).toBe("http://127.0.0.1:59000");
           expect(customServer.url).toBe("http://127.0.0.1:59001");
-          expect(state.spawnUrls).toEqual([
-            "http://127.0.0.1:59000",
-            "http://127.0.0.1:59001",
-          ]);
+          expect(state.spawnUrls).toEqual(["http://127.0.0.1:59000", "http://127.0.0.1:59001"]);
 
           yield* Scope.close(firstScope, Exit.void);
           yield* Scope.close(secondScope, Exit.void);

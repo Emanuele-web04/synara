@@ -17,6 +17,7 @@ import {
   buildExpiredTerminalContextToastCopy,
   shouldAutoDeleteTerminalThreadOnLastClose,
   shouldConsumePendingCustomBinaryConfirmation,
+  shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,
   shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
@@ -373,31 +374,57 @@ describe("buildExpiredTerminalContextToastCopy", () => {
 });
 
 describe("shouldRenderTerminalWorkspace", () => {
-  it("requires an active project to render workspace mode", () => {
+  it("renders the workspace shell before the active project has hydrated", () => {
     expect(
       shouldRenderTerminalWorkspace({
-        activeProjectExists: false,
         presentationMode: "workspace",
         terminalOpen: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("renders only for an open workspace terminal", () => {
     expect(
       shouldRenderTerminalWorkspace({
-        activeProjectExists: true,
         presentationMode: "workspace",
         terminalOpen: true,
       }),
     ).toBe(true);
     expect(
       shouldRenderTerminalWorkspace({
-        activeProjectExists: true,
         presentationMode: "drawer",
         terminalOpen: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("shouldRenderProviderHealthBanner", () => {
+  it("does not show chat provider health while a terminal thread is active", () => {
+    expect(
+      shouldRenderProviderHealthBanner({
+        threadEntryPoint: "terminal",
+        terminalWorkspaceTerminalTabActive: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not show chat provider health while the terminal workspace tab is active", () => {
+    expect(
+      shouldRenderProviderHealthBanner({
+        threadEntryPoint: "chat",
+        terminalWorkspaceTerminalTabActive: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("shows chat provider health only on the chat surface", () => {
+    expect(
+      shouldRenderProviderHealthBanner({
+        threadEntryPoint: "chat",
+        terminalWorkspaceTerminalTabActive: false,
+      }),
+    ).toBe(true);
   });
 });
 

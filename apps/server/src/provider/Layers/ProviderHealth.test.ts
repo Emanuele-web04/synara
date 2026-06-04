@@ -156,7 +156,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             available: false,
             authStatus: "unknown",
             checkedAt: "2026-06-04T17:01:00.000Z",
-            message: "OpenCode CLI is installed but failed to run. Timed out while running command.",
+            message:
+              "OpenCode CLI is installed but failed to run. Timed out while running command.",
           },
         ],
       );
@@ -185,6 +186,69 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           [unavailableStatus],
         ),
         [unavailableStatus],
+      );
+    });
+
+    it("keeps an already usable provider ready after a transient auth timeout warning", () => {
+      const previousReadyClaude = {
+        provider: "claudeAgent",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+        version: "2.1.162",
+        checkedAt: "2026-06-04T17:00:00.000Z",
+      } satisfies ServerProviderStatus;
+
+      const result = stabilizeProviderStatusesAgainstTransientTimeouts(
+        [previousReadyClaude],
+        [
+          {
+            provider: "claudeAgent",
+            status: "warning",
+            available: true,
+            authStatus: "unknown",
+            version: "2.1.162",
+            checkedAt: "2026-06-04T17:01:00.000Z",
+            message:
+              "Could not verify Claude authentication status. Timed out while running command.",
+          },
+        ],
+      );
+
+      assert.deepStrictEqual(result, [
+        {
+          ...previousReadyClaude,
+          checkedAt: "2026-06-04T17:01:00.000Z",
+        },
+      ]);
+    });
+
+    it("does not keep a stale Claude auth error after a transient auth timeout", () => {
+      const previousUnauthenticatedClaude = {
+        provider: "claudeAgent",
+        status: "error",
+        available: true,
+        authStatus: "unauthenticated",
+        version: "2.1.162",
+        checkedAt: "2026-06-04T17:00:00.000Z",
+        message: "Claude is not authenticated. Run `claude auth login` and try again.",
+      } satisfies ServerProviderStatus;
+      const authTimeoutWarning = {
+        provider: "claudeAgent",
+        status: "warning",
+        available: true,
+        authStatus: "unknown",
+        version: "2.1.162",
+        checkedAt: "2026-06-04T17:01:00.000Z",
+        message: "Could not verify Claude authentication status. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+
+      assert.deepStrictEqual(
+        stabilizeProviderStatusesAgainstTransientTimeouts(
+          [previousUnauthenticatedClaude],
+          [authTimeoutWarning],
+        ),
+        [authTimeoutWarning],
       );
     });
   });

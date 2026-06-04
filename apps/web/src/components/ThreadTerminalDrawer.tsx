@@ -5,7 +5,6 @@
 
 import { SearchAddon } from "@xterm/addon-search";
 import {
-  Loader2Icon,
   Plus,
   SquareSplitHorizontal,
   SquareSplitVertical,
@@ -90,24 +89,18 @@ function getTerminalSelectionRect(mountElement: HTMLElement): DOMRect | null {
   return boundingRect.width > 0 || boundingRect.height > 0 ? boundingRect : null;
 }
 
-function TerminalRuntimeStatusBadge({ status }: { status: TerminalRuntimeStatus }) {
-  if (status === "ready") return null;
-  const isError = status === "error";
-  const label =
-    status === "connecting" ? "Connecting" : status === "replaying" ? "Replaying" : "Error";
-  const Icon = isError ? TriangleAlertIcon : Loader2Icon;
+function TerminalRuntimeStatusOverlay({ status }: { status: TerminalRuntimeStatus }) {
+  if (status !== "error") return null;
 
   return (
     <div
       className={cn(
         "pointer-events-none absolute left-1 top-1 z-10 inline-flex h-6 max-w-[calc(100%-0.5rem)] items-center gap-1.5 rounded border px-2 text-[11px] leading-none shadow-sm backdrop-blur",
-        isError
-          ? "border-destructive/30 bg-destructive/10 text-destructive"
-          : "border-border/60 bg-background/80 text-muted-foreground",
+        "border-destructive/30 bg-destructive/10 text-destructive",
       )}
     >
-      <Icon className={cn("size-3", !isError ? "animate-spin" : "")} />
-      <span className="truncate">{label}</span>
+      <TriangleAlertIcon className="size-3" />
+      <span className="truncate">Error</span>
     </div>
   );
 }
@@ -163,6 +156,8 @@ function TerminalViewport({
   const [searchAddonInstance, setSearchAddonInstance] = useState<SearchAddon | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<TerminalRuntimeStatus>("connecting");
   const runtimeStatusMountedRef = useRef(false);
+  const trimmedCwd = useMemo(() => cwd.trim(), [cwd]);
+  const runtimeCwdReady = trimmedCwd.length > 0;
   const runtimeKey = useMemo(
     () => buildTerminalRuntimeKey(threadId, terminalId),
     [terminalId, threadId],
@@ -237,7 +232,13 @@ function TerminalViewport({
 
   useEffect(() => {
     const mount = containerRef.current;
-    if (!mount) return;
+    if (!mount || !runtimeCwdReady) {
+      terminalRef.current = null;
+      setTerminalInstance(null);
+      setSearchAddonInstance(null);
+      setRuntimeStatus("connecting");
+      return;
+    }
     const attachedRuntime = terminalRuntimeRegistry.attach(
       runtimeConfigRef.current,
       runtimeViewStateRef.current,
@@ -260,20 +261,22 @@ function TerminalViewport({
       setTerminalInstance(null);
       setSearchAddonInstance(null);
     };
-  }, [runtimeKey]);
+  }, [runtimeCwdReady, runtimeKey]);
 
   useEffect(() => {
+    if (!runtimeCwdReady) return;
     terminalRuntimeRegistry.syncConfig(runtimeKey, runtimeConfig);
-  }, [runtimeConfig, runtimeKey]);
+  }, [runtimeConfig, runtimeCwdReady, runtimeKey]);
 
   useEffect(() => {
+    if (!runtimeCwdReady) return;
     terminalRuntimeRegistry.setViewState(runtimeKey, runtimeViewState);
-  }, [runtimeKey, runtimeViewState]);
+  }, [runtimeCwdReady, runtimeKey, runtimeViewState]);
 
   useEffect(() => {
-    if (!autoFocus) return;
+    if (!autoFocus || !runtimeCwdReady) return;
     terminalRuntimeRegistry.focus(runtimeKey);
-  }, [autoFocus, focusRequestId, runtimeKey]);
+  }, [autoFocus, focusRequestId, runtimeCwdReady, runtimeKey]);
 
   useEffect(() => {
     const mount = containerRef.current;
@@ -433,7 +436,7 @@ function TerminalViewport({
             terminalRuntimeRegistry.focus(runtimeKey);
           }}
         />
-        <TerminalRuntimeStatusBadge status={runtimeStatus} />
+        <TerminalRuntimeStatusOverlay status={runtimeStatus} />
         <TerminalScrollToBottom terminal={terminalInstance} />
         <div ref={containerRef} className="h-full w-full" />
       </div>
@@ -483,6 +486,8 @@ interface ThreadTerminalDrawerProps {
   ) => void;
   onAddTerminalContext: (selection: TerminalContextSelection) => void;
   onTogglePresentationMode?: (() => void) | undefined;
+  onTogglePanel?: (() => void) | undefined;
+  isPanelOpen?: boolean | undefined;
 }
 
 export default function ThreadTerminalDrawer({
@@ -521,6 +526,8 @@ export default function ThreadTerminalDrawer({
   onTerminalActivityChange,
   onAddTerminalContext,
   onTogglePresentationMode,
+  onTogglePanel,
+  isPanelOpen,
 }: ThreadTerminalDrawerProps) {
   const isWorkspaceMode = presentationMode === "workspace";
   const previousRuntimeKeysRef = useRef<Set<string>>(new Set());
@@ -713,6 +720,8 @@ export default function ThreadTerminalDrawer({
               onCloseTerminal={onCloseTerminal}
               presentationMode={presentationMode}
               onTogglePresentationMode={onTogglePresentationMode}
+              onTogglePanel={onTogglePanel}
+              isPanelOpen={isPanelOpen}
               renderViewport={(terminalId, options) => (
                 <TerminalViewport
                   key={terminalId}

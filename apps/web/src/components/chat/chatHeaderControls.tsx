@@ -15,6 +15,7 @@ import { forwardRef, type ComponentProps, type ReactNode } from "react";
 
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@t3tools/shared/desktopChrome";
 
+import { CentralIcon } from "~/lib/central-icons";
 import type { LucideIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
@@ -156,6 +157,97 @@ export const DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME =
 /** Hover glyph: thicker X centered inside the disc. */
 export const DOCK_TAB_CLOSE_GLYPH_CLASS_NAME =
   "absolute size-3.5 shrink-0 opacity-0 transition-opacity group-hover/dock-tab:opacity-100 group-focus-within/dock-tab:opacity-100";
+
+/**
+ * Shared flat tab chip for every chat surface that renders a row of closable tabs —
+ * the right-dock tab strip and both terminal tab bars (pane-local tabs + workspace
+ * group tabs). At rest the chip shows {@link icon}; hovering or focusing within the
+ * chip fades that glyph out and reveals a circular close affordance, but only when
+ * an {@link onClose} handler is supplied (tabs that can't be closed render a static
+ * icon slot instead).
+ *
+ * The icon→close-X reveal is driven entirely by the `group/dock-tab` named group
+ * the chip declares here, so the hover wiring lives in exactly one place. Call
+ * sites that hand-rolled the chip previously drifted to a mismatched group name
+ * (`group/tab`), which silently broke the reveal — funneling them through this
+ * component makes that class of bug unrepresentable.
+ *
+ * `leading`/`trailing` flank the truncating label (e.g. an activity indicator or a
+ * tab count badge); `labelClassName` lets a call site cap the label width.
+ */
+export function SurfaceTabChip({
+  icon,
+  label,
+  active,
+  title,
+  leading,
+  trailing,
+  className,
+  labelClassName,
+  closeLabel,
+  onSelect,
+  onClose,
+}: {
+  icon: ReactNode;
+  label: ReactNode;
+  active?: boolean | undefined;
+  title?: string | undefined;
+  leading?: ReactNode;
+  trailing?: ReactNode;
+  className?: string | undefined;
+  labelClassName?: string | undefined;
+  closeLabel?: string | undefined;
+  onSelect?: (() => void) | undefined;
+  onClose?: (() => void) | undefined;
+}) {
+  return (
+    <div
+      className={cn(
+        "group/dock-tab",
+        DOCK_TAB_CHIP_CLASS_NAME,
+        active && CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
+        className,
+      )}
+    >
+      {onClose ? (
+        <button
+          type="button"
+          className={DOCK_TAB_ICON_SLOT_CLASS_NAME}
+          aria-label={closeLabel}
+          title={closeLabel}
+          onClick={(event) => {
+            event.stopPropagation();
+            onClose();
+          }}
+        >
+          <span
+            className={cn("flex items-center justify-center", DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME)}
+          >
+            {icon}
+          </span>
+          <CentralIcon name="cross-small" className={DOCK_TAB_CLOSE_GLYPH_CLASS_NAME} />
+        </button>
+      ) : (
+        <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>
+      )}
+      <button
+        type="button"
+        className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
+        title={title}
+        aria-pressed={active}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect?.();
+        }}
+      >
+        {leading}
+        <span className="truncate">{label}</span>
+        {trailing}
+      </button>
+    </div>
+  );
+}
+
 export const CHAT_HEADER_ICON_CONTROL_CLASS_NAME =
   "!size-7 shrink-0 rounded-lg [&_svg,&_[data-slot=central-icon]]:mx-0";
 

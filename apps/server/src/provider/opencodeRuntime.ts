@@ -1073,10 +1073,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       Effect.andThen(
         pooledServerMutex.withPermit(
           Effect.gen(function* () {
-            if (
-              pooledServers.get(pooledServer.key) !== pooledServer ||
-              pooledServer.refCount > 0
-            ) {
+            if (pooledServers.get(pooledServer.key) !== pooledServer || pooledServer.refCount > 0) {
               return;
             }
             pooledServer.idleCloseFiber = null;

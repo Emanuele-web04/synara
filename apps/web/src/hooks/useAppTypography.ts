@@ -1,6 +1,8 @@
 import { useEffect } from "react";
-import { useAppSettings } from "../appSettings";
+import { resolveTerminalFontFamilyStack, useAppSettings } from "../appSettings";
 import { getAppTypographyScale } from "../lib/appTypography";
+
+const TERMINAL_FONT_FAMILY_CSS_VARIABLE = "--terminal-font-family";
 
 const TYPOGRAPHY_CSS_VARIABLES = [
   "--app-font-size-base",
@@ -44,10 +46,21 @@ export function useAppTypography() {
       rootStyle.setProperty(cssVariable, variableValues[cssVariable]);
     }
 
+    // Terminal font family overrides the bundled default only when a non-default
+    // font is chosen; otherwise leave the index.css value in place. The terminal
+    // runtime observes inline `style` mutations and re-applies the font live.
+    const terminalFontFamilyStack = resolveTerminalFontFamilyStack(settings.terminalFontFamily);
+    if (terminalFontFamilyStack) {
+      rootStyle.setProperty(TERMINAL_FONT_FAMILY_CSS_VARIABLE, terminalFontFamilyStack);
+    } else {
+      rootStyle.removeProperty(TERMINAL_FONT_FAMILY_CSS_VARIABLE);
+    }
+
     return () => {
       for (const cssVariable of TYPOGRAPHY_CSS_VARIABLES) {
         rootStyle.removeProperty(cssVariable);
       }
+      rootStyle.removeProperty(TERMINAL_FONT_FAMILY_CSS_VARIABLE);
     };
-  }, [settings.chatFontSizePx, settings.terminalFontSizePx]);
+  }, [settings.chatFontSizePx, settings.terminalFontSizePx, settings.terminalFontFamily]);
 }

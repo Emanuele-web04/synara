@@ -22,6 +22,7 @@ import {
   ExternalLinkIcon,
   GlobeIcon,
   LoaderCircleIcon,
+  type LucideIcon,
   PlusIcon,
   RefreshCwIcon,
   XIcon,
@@ -53,8 +54,9 @@ import {
 } from "./BrowserPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { Button } from "./ui/button";
+import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { Input } from "./ui/input";
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "./ui/menu";
+import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "./ui/menu";
 import { Skeleton } from "./ui/skeleton";
 import { toastManager } from "./ui/toast";
 
@@ -73,6 +75,11 @@ const BROWSER_BLANK_URL = "about:blank";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const SYNARA_BROWSER_LABEL = "Synara browser";
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
+const BROWSER_ACTION_MENU_PANEL_CLASS_NAME = "w-52 min-w-52";
+const BROWSER_ACTION_MENU_ITEM_CLASS_NAME =
+  "text-[var(--color-text-foreground)] data-highlighted:text-[var(--color-text-foreground)]";
+const BROWSER_ACTION_MENU_ICON_CLASS_NAME =
+  "inline-flex size-3.5 shrink-0 items-center justify-center text-[var(--color-text-foreground-secondary)] [&>svg]:size-3.5 [&>[data-slot=central-icon]]:size-3.5";
 const NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR = [
   "[data-slot='dialog-backdrop']",
   "[data-slot='dialog-popup']",
@@ -86,6 +93,14 @@ const NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR = [
   "[data-slot='toast-popup']",
   "[role='dialog'][aria-modal='true']",
 ].join(", ");
+
+function BrowserActionMenuIcon({ icon: Icon }: { icon: LucideIcon }) {
+  return (
+    <span className={BROWSER_ACTION_MENU_ICON_CLASS_NAME}>
+      <Icon aria-hidden="true" />
+    </span>
+  );
+}
 
 // The browser itself lives inside a sheet, and toast portals/positioners are just
 // layout containers. Treating either as blockers hides the WebContentsView.
@@ -1121,24 +1136,33 @@ export function BrowserPanel({
           >
             <EllipsisIcon className="size-3.5" />
           </MenuTrigger>
-          <MenuPopup
+          <ComposerPickerMenuPopup
             align="end"
             side="bottom"
-            className="w-52 rounded-lg border-[color:var(--color-border)] bg-[var(--composer-surface)] shadow-lg"
+            className={BROWSER_ACTION_MENU_PANEL_CLASS_NAME}
           >
-            <MenuItem onClick={onCreateTab}>
-              <PlusIcon className="size-4" />
+            <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onCreateTab}>
+              <BrowserActionMenuIcon icon={PlusIcon} />
               <span>New tab</span>
             </MenuItem>
-            <MenuItem disabled={!activeTab} onClick={onCaptureScreenshot}>
-              <CameraIcon className="size-4" />
+            <MenuItem
+              className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+              disabled={!activeTab}
+              onClick={onCaptureScreenshot}
+            >
+              <BrowserActionMenuIcon icon={CameraIcon} />
               <span>Capture screenshot</span>
             </MenuItem>
-            <MenuItem disabled={!activeTab} onClick={onCopyScreenshotToClipboard}>
-              <CopyIcon className="size-4" />
+            <MenuItem
+              className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+              disabled={!activeTab}
+              onClick={onCopyScreenshotToClipboard}
+            >
+              <BrowserActionMenuIcon icon={CopyIcon} />
               <span>Copy screenshot</span>
             </MenuItem>
             <MenuItem
+              className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
               disabled={!activeTab}
               onClick={() => {
                 if (!ensureLiveRuntime()) return;
@@ -1146,15 +1170,15 @@ export function BrowserPanel({
                 void api.shell.openExternal(activeTab.url);
               }}
             >
-              <ExternalLinkIcon className="size-4" />
+              <BrowserActionMenuIcon icon={ExternalLinkIcon} />
               <span>Open externally</span>
             </MenuItem>
             <MenuSeparator />
-            <MenuItem onClick={onClosePanel}>
-              <XIcon className="size-4" />
+            <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onClosePanel}>
+              <BrowserActionMenuIcon icon={XIcon} />
               <span>Close browser panel</span>
             </MenuItem>
-          </MenuPopup>
+          </ComposerPickerMenuPopup>
         </Menu>
       </div>
     </div>

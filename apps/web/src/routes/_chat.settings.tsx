@@ -41,13 +41,23 @@ import {
   MIN_TERMINAL_FONT_SIZE_PX,
   MODEL_PROVIDER_SETTINGS,
   normalizeChatFontSizePx,
+  normalizeTerminalFontFamily,
   normalizeTerminalFontSizePx,
   patchCustomModels,
+  TERMINAL_FONT_FAMILY_SUGGESTIONS,
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
 import { ProviderOptionLabel } from "../components/ProviderIcon";
+import {
+  Autocomplete,
+  AutocompleteEmpty,
+  AutocompleteInput,
+  AutocompleteItem,
+  AutocompleteList,
+  AutocompletePopup,
+} from "../components/ui/autocomplete";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
@@ -114,6 +124,8 @@ import {
   SETTINGS_EMPTY_STATE_CLASS_NAME,
   SETTINGS_INSET_LIST_CLASS_NAME,
   SETTINGS_PAGE_BACKGROUND_CLASS_NAME,
+  SETTINGS_PANEL_SECTION_CLASS_NAME,
+  SETTINGS_RADIUS_CLASS_NAME,
   SETTINGS_SECTION_LABEL_CLASS_NAME,
 } from "../settingsPanelStyles";
 import { useStore } from "../store";
@@ -257,7 +269,7 @@ function SortableProviderVisibilityRow(props: {
         transition,
       }}
       className={cn(
-        "flex items-center justify-between gap-3 rounded-xl border border-[color:var(--color-border)] bg-transparent px-3 py-2.5",
+        `flex items-center justify-between gap-3 ${SETTINGS_RADIUS_CLASS_NAME} border border-[color:var(--color-border)] bg-transparent px-3 py-2.5`,
         isDragging && "z-10 opacity-80 shadow-lg",
       )}
     >
@@ -265,7 +277,10 @@ function SortableProviderVisibilityRow(props: {
         <button
           type="button"
           ref={setActivatorNodeRef}
-          className="inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground active:cursor-grabbing"
+          className={cn(
+            "inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground active:cursor-grabbing",
+            SETTINGS_RADIUS_CLASS_NAME,
+          )}
           aria-label={`Reorder ${props.option.title}`}
           {...attributes}
           {...listeners}
@@ -463,7 +478,10 @@ function ProviderDocsLinks({ docs }: { docs: InstallProviderSettings["docs"] }) 
               href={doc.href}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex h-7 items-center gap-1.5 rounded-xl border border-[color:var(--color-border)] bg-transparent px-2.5 text-xs text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground"
+              className={cn(
+                "inline-flex h-7 items-center gap-1.5 border border-[color:var(--color-border)] bg-transparent px-2.5 text-xs text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground",
+                SETTINGS_RADIUS_CLASS_NAME,
+              )}
             >
               <span>{doc.label}</span>
               <ExternalLinkIcon className="size-3" />
@@ -605,6 +623,13 @@ function SettingsRouteView() {
   const shouldShowFontSmoothing = isMacPlatform(
     typeof navigator === "undefined" ? "" : navigator.platform,
   );
+  const visibleTerminalFontFamilySuggestions = useMemo(() => {
+    const query = settings.terminalFontFamily.trim().toLowerCase();
+    if (!query) return TERMINAL_FONT_FAMILY_SUGGESTIONS;
+    return TERMINAL_FONT_FAMILY_SUGGESTIONS.filter((suggestion) =>
+      suggestion.toLowerCase().includes(query),
+    );
+  }, [settings.terminalFontFamily]);
 
   const hiddenProviderSet = useMemo(
     () => new Set<ProviderKind>(settings.hiddenProviders),
@@ -790,6 +815,7 @@ function SettingsRouteView() {
       : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
     ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx ? ["Terminal font size"] : []),
+    ...(settings.terminalFontFamily !== defaults.terminalFontFamily ? ["Terminal font"] : []),
     ...(shouldShowFontSmoothing &&
     settings.enableNativeFontSmoothing !== defaults.enableNativeFontSmoothing
       ? ["Font smoothing"]
@@ -1517,7 +1543,7 @@ function SettingsRouteView() {
 
   const renderAppearancePanel = () => (
     <div className="space-y-6">
-      <section className="space-y-2">
+      <section className={SETTINGS_PANEL_SECTION_CLASS_NAME}>
         <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>Theme and typography</h2>
         <SettingsCard>
           <SettingsRow
@@ -1631,6 +1657,69 @@ function SettingsRouteView() {
                   aria-label="Terminal font size in pixels"
                 />
                 <span className="text-xs text-muted-foreground">px</span>
+              </div>
+            }
+          />
+
+          <SettingsRow
+            title="Terminal font"
+            description="Type any monospace font installed on this device (e.g. Fira Code). Leave empty for the default. Fonts that aren't installed fall back to the system monospace."
+            resetAction={
+              settings.terminalFontFamily !== defaults.terminalFontFamily ? (
+                <SettingResetButton
+                  label="terminal font"
+                  onClick={() =>
+                    updateSettings({
+                      terminalFontFamily: defaults.terminalFontFamily,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <div className="flex w-full items-center justify-end sm:w-auto">
+                <Autocomplete
+                  items={visibleTerminalFontFamilySuggestions}
+                  mode="none"
+                  openOnInputClick
+                  value={settings.terminalFontFamily}
+                  onValueChange={(value) => {
+                    updateSettings({
+                      terminalFontFamily: normalizeTerminalFontFamily(value),
+                    });
+                  }}
+                >
+                  <AutocompleteInput
+                    showTrigger
+                    showClear={settings.terminalFontFamily.length > 0}
+                    spellCheck={false}
+                    autoComplete="off"
+                    placeholder="Default (JetBrains Mono)"
+                    className="w-full sm:w-56"
+                    inputClassName="w-full font-system-ui"
+                    aria-label="Terminal font family"
+                  />
+                  <AutocompletePopup className="w-56 min-w-56 font-system-ui">
+                    <AutocompleteList>
+                      {visibleTerminalFontFamilySuggestions.map((suggestion, index) => (
+                        <AutocompleteItem
+                          key={suggestion}
+                          index={index}
+                          value={suggestion}
+                          className="font-normal text-[var(--color-text-foreground)]"
+                          onClick={() => {
+                            updateSettings({
+                              terminalFontFamily: normalizeTerminalFontFamily(suggestion),
+                            });
+                          }}
+                        >
+                          {suggestion}
+                        </AutocompleteItem>
+                      ))}
+                      <AutocompleteEmpty>No matching suggested fonts.</AutocompleteEmpty>
+                    </AutocompleteList>
+                  </AutocompletePopup>
+                </Autocomplete>
               </div>
             }
           />
@@ -2944,7 +3033,7 @@ function SettingsRouteView() {
             <div className="mx-auto w-full max-w-2xl px-6 py-8">
               <div className="mb-8 flex items-start justify-between gap-4">
                 <div className="min-w-0">
-                  <h1 className="text-[1.75rem] font-semibold tracking-tight text-foreground">
+                  <h1 className="text-xl font-medium tracking-tight text-foreground">
                     {activeSectionItem.label}
                   </h1>
                   <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">

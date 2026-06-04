@@ -3474,7 +3474,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                         title: `Synara ${input.threadId}`,
                       };
                       return client.session.create(
-                        sessionCreateInput as unknown as Parameters<typeof client.session.create>[0],
+                        sessionCreateInput as unknown as Parameters<
+                          typeof client.session.create
+                        >[0],
                       );
                     }).pipe(
                       Effect.flatMap((sessionResult) =>

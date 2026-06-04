@@ -60,6 +60,13 @@ export function resolveRuntimeModeAfterApprovalDecision(
   return null;
 }
 
+export function shouldRenderProviderHealthBanner(input: {
+  threadEntryPoint: ThreadPrimarySurface;
+  terminalWorkspaceTerminalTabActive: boolean;
+}): boolean {
+  return input.threadEntryPoint === "chat" && !input.terminalWorkspaceTerminalTabActive;
+}
+
 export function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,
@@ -492,13 +499,12 @@ export function buildExpiredTerminalContextToastCopy(
 }
 
 export function shouldRenderTerminalWorkspace(options: {
-  activeProjectExists: boolean;
   presentationMode: "drawer" | "workspace";
   terminalOpen: boolean;
 }): boolean {
-  return (
-    options.terminalOpen && options.presentationMode === "workspace" && options.activeProjectExists
-  );
+  // The workspace shell should paint immediately; the terminal viewport gates the
+  // backend attach until a valid cwd is available.
+  return options.terminalOpen && options.presentationMode === "workspace";
 }
 
 export function shouldAutoDeleteTerminalThreadOnLastClose(options: {

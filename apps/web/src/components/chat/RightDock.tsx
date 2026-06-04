@@ -12,7 +12,6 @@ import {
   reconcileKeepMountedPaneIds,
 } from "~/lib/dockPaneActivation";
 import { PanelRightCloseIcon, PlusIcon } from "~/lib/icons";
-import { CentralIcon } from "~/lib/central-icons";
 import type {
   RightDockPane,
   RightDockPaneKind,
@@ -33,13 +32,9 @@ import { CHAT_BACKGROUND_CLASS_NAME } from "./composerPickerStyles";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import {
   CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
-  CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
   DOCK_HEADER_ICON_BUTTON_CLASS,
-  DOCK_TAB_CHIP_CLASS_NAME,
-  DOCK_TAB_CLOSE_GLYPH_CLASS_NAME,
-  DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME,
-  DOCK_TAB_ICON_SLOT_CLASS_NAME,
   SurfaceChipIcon,
+  SurfaceTabChip,
 } from "./chatHeaderControls";
 import { getRightDockPaneMeta, resolveRightDockPaneLabel } from "./rightDockPaneMeta";
 
@@ -73,36 +68,16 @@ function RightDockTab(props: {
 }) {
   const { Icon } = getRightDockPaneMeta(props.pane.kind);
   return (
-    <div
-      className={cn(
-        "group/dock-tab",
-        DOCK_TAB_CHIP_CLASS_NAME,
-        props.active && CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
-      )}
-    >
-      <button
-        type="button"
-        className={DOCK_TAB_ICON_SLOT_CLASS_NAME}
-        aria-label={`Close ${props.label}`}
-        title={`Close ${props.label}`}
-        onClick={(event) => {
-          event.stopPropagation();
-          props.onClose();
-        }}
-      >
-        <SurfaceChipIcon icon={Icon} className={DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME} />
-        <CentralIcon name="cross-small" className={DOCK_TAB_CLOSE_GLYPH_CLASS_NAME} />
-      </button>
-      <button
-        type="button"
-        className="min-w-0 max-w-[10rem] truncate"
-        title={props.label}
-        aria-pressed={props.active}
-        onClick={props.onSelect}
-      >
-        {props.label}
-      </button>
-    </div>
+    <SurfaceTabChip
+      active={props.active}
+      title={props.label}
+      label={props.label}
+      labelClassName="max-w-[10rem]"
+      icon={<SurfaceChipIcon icon={Icon} />}
+      closeLabel={`Close ${props.label}`}
+      onSelect={props.onSelect}
+      onClose={props.onClose}
+    />
   );
 }
 
