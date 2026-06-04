@@ -27,6 +27,7 @@ import {
   resolveEffectiveEnvMode,
 } from "./BranchToolbar.logic";
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
+import { RuntimeEnvironmentControl } from "./RuntimeEnvironmentControl";
 import {
   RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
@@ -297,7 +298,15 @@ export default function BranchToolbar({
       className={cn("mx-auto flex w-full items-center justify-between px-3 pb-1.5 pt-1", className)}
     >
       <div className="flex items-center gap-2">
-        {showEnvPicker ? (
+        {!hasServerThread ? (
+          <RuntimeEnvironmentControl
+            threadId={activeThreadId}
+            effectiveEnvMode={effectiveEnvMode}
+            canSelectWorktree={canSwitchToWorktree}
+            onSelectLocal={() => onEnvModeChange("local")}
+            onSelectWorktree={() => onEnvModeChange("worktree")}
+          />
+        ) : showEnvPicker ? (
           <Popover open={envPickerOpen} onOpenChange={setEnvPickerOpen}>
             <PopoverTrigger className="inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]">
               {environmentPresentation.mode === "local" ? (
