@@ -65,6 +65,26 @@ export class RuntimeGitFailedError extends Schema.TaggedErrorClass<RuntimeGitFai
 }
 
 /**
+ * RuntimeRemoteOperationFailedError - A remote provider's lifecycle, exec, file,
+ * port, snapshot, or timeout operation failed. Provider-neutral at the
+ * `ExecutionRuntimeService` seam: a concrete adapter (Vercel, Daytona, ...) maps
+ * its own SDK/HTTP failure into this tagged error. The detail is redacted of
+ * credential material before it is constructed.
+ */
+export class RuntimeRemoteOperationFailedError extends Schema.TaggedErrorClass<RuntimeRemoteOperationFailedError>()(
+  "RuntimeRemoteOperationFailedError",
+  {
+    provider: Schema.String,
+    operation: Schema.String,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Runtime ${this.provider} ${this.operation} failed: ${this.detail}`;
+  }
+}
+
+/**
  * RuntimeProvisionFailedError - Provisioning, exec, or recording a runtime
  * instance failed. Provider-agnostic at the orchestration seam: the reactor sees
  * only this tagged error, never a concrete provider's failure type.

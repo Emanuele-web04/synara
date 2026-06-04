@@ -13,6 +13,8 @@ import { BUILT_IN_RUNTIME_DESCRIPTORS } from "./executionRuntime/Layers/descript
 import { makeRuntimeProviderRegistryWithAdaptersLive } from "./executionRuntime/Layers/RuntimeProviderRegistry";
 import { DAYTONA_RUNTIME_DESCRIPTOR } from "./executionRuntime/providers/daytona/descriptor";
 import { makeDaytonaRuntimeAdapterLayer } from "./executionRuntime/providers/daytona/runtimeLayer";
+import { VERCEL_SANDBOX_DESCRIPTOR } from "./executionRuntime/providers/vercelSandbox/descriptor";
+import { makeVercelSandboxRuntimeAdapterLayer } from "./executionRuntime/providers/vercelSandbox/runtimeLayer";
 import { RuntimeActivityLeaseManagerLive } from "./executionRuntime/Layers/RuntimeActivityLeaseManager";
 import { RuntimeCredentialBrokerLive } from "./executionRuntime/Layers/RuntimeCredentialBroker";
 import { RuntimeGitWorkspaceLive } from "./executionRuntime/Layers/RuntimeGitWorkspace";
@@ -73,13 +75,23 @@ export function makeServerRuntimeServicesLayer() {
   // used, else the fake, so the server boots without provider access. The adapter
   // resolves through the registry by the `daytona` provider literal.
   const daytonaRuntimeAdapterLayer = makeDaytonaRuntimeAdapterLayer();
+  // The Vercel Sandbox adapter env-selects its real client vs the in-repo fake
+  // client (temp dirs + local processes): with the `VERCEL_*` credentials present
+  // the real client is used, else the fake, so the server boots without provider
+  // access. The adapter resolves by the `vercel-sandbox` provider literal.
+  const vercelSandboxRuntimeAdapterLayer = makeVercelSandboxRuntimeAdapterLayer();
   const runtimeProviderRegistryLayer = makeRuntimeProviderRegistryWithAdaptersLive({
     descriptors: [
       ...BUILT_IN_RUNTIME_DESCRIPTORS,
       ...FAKE_RUNTIME_DESCRIPTORS,
       DAYTONA_RUNTIME_DESCRIPTOR,
+      VERCEL_SANDBOX_DESCRIPTOR,
     ],
-  }).pipe(Layer.provide(FakeRuntimeProviderAdapterLive), Layer.provide(daytonaRuntimeAdapterLayer));
+  }).pipe(
+    Layer.provide(FakeRuntimeProviderAdapterLive),
+    Layer.provide(daytonaRuntimeAdapterLayer),
+    Layer.provide(vercelSandboxRuntimeAdapterLayer),
+  );
   const executionRuntimePlannerLayer = ExecutionRuntimePlannerLive.pipe(
     Layer.provide(runtimeProviderRegistryLayer),
   );
