@@ -5,27 +5,39 @@ import type { DesktopWindowState } from "@t3tools/contracts";
 import { isElectron } from "~/env";
 import { cn, isWindowsPlatform } from "~/lib/utils";
 
-import { ChatHeaderIconButton } from "./chat/chatHeaderControls";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
-
 const DEFAULT_WINDOW_STATE: DesktopWindowState = {
   isMaximized: false,
   isFullscreen: false,
 };
 
-const WINDOW_CAPTION_BUTTON_CLASS_NAME =
-  "!h-[46px] !w-[46px] rounded-none text-[10px] font-normal hover:bg-[var(--color-background-button-secondary-hover)]";
+// Native Windows caption glyphs. These code points resolve in "Segoe Fluent Icons"
+// (Windows 11) and fall back to "Segoe MDL2 Assets" (Windows 10): minimize, maximize,
+// restore (overlapping squares), and close.
+const GLYPH_MINIMIZE = "\uE921";
+const GLYPH_MAXIMIZE = "\uE922";
+const GLYPH_RESTORE = "\uE923";
+const GLYPH_CLOSE = "\uE8BB";
 
-function WindowsCaptionGlyph({ code }: { code: string }) {
+// Match the native Windows caption-button footprint: 46px wide, full title-bar
+// height, flat (no radius/border), glyph centered. These are deliberately plain
+// <button>s rather than the app's Button/Tooltip primitives — those inject a
+// rounded "chrome" variant, conflicting size overrides, and a base-ui trigger that
+// intercepts the click — so the chrome stays pixel-native and onClick routes
+// straight to the window-control IPC.
+const CAPTION_BUTTON_CLASS =
+  "flex h-full w-[46px] shrink-0 items-center justify-center text-foreground/90 outline-none transition-colors duration-75 select-none hover:bg-foreground/[0.09] active:bg-foreground/[0.05] [-webkit-app-region:no-drag]";
+
+// Windows close-button accent: red fill on hover with a white glyph.
+const CLOSE_BUTTON_CLASS = "hover:bg-[#c42b1c] hover:text-white active:bg-[#b9281b]";
+
+function CaptionGlyph({ glyph }: { glyph: string }) {
   return (
     <span
       aria-hidden="true"
-      className="leading-none"
-      style={{
-        fontFamily: '"Segoe Fluent Icons", "Segoe MDL2 Assets"',
-      }}
+      className="text-[10px] leading-none"
+      style={{ fontFamily: '"Segoe Fluent Icons", "Segoe MDL2 Assets"' }}
     >
-      {code}
+      {glyph}
     </span>
   );
 }
@@ -55,66 +67,43 @@ export function DesktopWindowControls({ className }: { className?: string }) {
     return null;
   }
 
-  const maximizeLabel = windowState.isMaximized ? "Restore window" : "Maximize window";
+  const { isMaximized } = windowState;
 
   return (
-    <div className={cn("flex shrink-0 items-stretch [-webkit-app-region:no-drag]", className)}>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <ChatHeaderIconButton
-              type="button"
-              label="Minimize window"
-              className={WINDOW_CAPTION_BUTTON_CLASS_NAME}
-              onClick={() => {
-                void controls.minimize();
-              }}
-            />
-          }
-        >
-          <WindowsCaptionGlyph code={"\uE921"} />
-        </TooltipTrigger>
-        <TooltipPopup side="bottom">Minimize</TooltipPopup>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <ChatHeaderIconButton
-              type="button"
-              label={maximizeLabel}
-              className={WINDOW_CAPTION_BUTTON_CLASS_NAME}
-              onClick={() => {
-                void controls.toggleMaximize().then(setWindowState);
-              }}
-            />
-          }
-        >
-          <WindowsCaptionGlyph code={windowState.isMaximized ? "\uE923" : "\uE922"} />
-        </TooltipTrigger>
-        <TooltipPopup side="bottom">
-          {windowState.isMaximized ? "Restore" : "Maximize"}
-        </TooltipPopup>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <ChatHeaderIconButton
-              type="button"
-              label="Close window"
-              className={cn(
-                WINDOW_CAPTION_BUTTON_CLASS_NAME,
-                "hover:bg-[#c42b1c] hover:text-white",
-              )}
-              onClick={() => {
-                void controls.close();
-              }}
-            />
-          }
-        >
-          <WindowsCaptionGlyph code={"\uE8BB"} />
-        </TooltipTrigger>
-        <TooltipPopup side="bottom">Close</TooltipPopup>
-      </Tooltip>
+    <div className={cn("flex h-[46px] items-stretch [-webkit-app-region:no-drag]", className)}>
+      <button
+        type="button"
+        aria-label="Minimize"
+        title="Minimize"
+        className={CAPTION_BUTTON_CLASS}
+        onClick={() => {
+          void controls.minimize();
+        }}
+      >
+        <CaptionGlyph glyph={GLYPH_MINIMIZE} />
+      </button>
+      <button
+        type="button"
+        aria-label={isMaximized ? "Restore" : "Maximize"}
+        title={isMaximized ? "Restore" : "Maximize"}
+        className={CAPTION_BUTTON_CLASS}
+        onClick={() => {
+          void controls.toggleMaximize().then(setWindowState);
+        }}
+      >
+        <CaptionGlyph glyph={isMaximized ? GLYPH_RESTORE : GLYPH_MAXIMIZE} />
+      </button>
+      <button
+        type="button"
+        aria-label="Close"
+        title="Close"
+        className={cn(CAPTION_BUTTON_CLASS, CLOSE_BUTTON_CLASS)}
+        onClick={() => {
+          void controls.close();
+        }}
+      >
+        <CaptionGlyph glyph={GLYPH_CLOSE} />
+      </button>
     </div>
   );
 }

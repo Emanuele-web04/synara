@@ -156,14 +156,20 @@ function RootRouteView() {
   // the pre-backend "connecting" screen, so the window stays closable before the
   // renderer connects. Top bars reserve space for it via
   // useDesktopTopBarWindowControlsGutterClassName().
-  // z above dialogs (z-50) and toasts (z-[200]) so the caption buttons stay
-  // reachable even while a modal is open, matching native title-bar behavior.
+  //
+  // MUST render LAST: Electron builds the OS drag region by walking elements with
+  // `-webkit-app-region` in DOM order, unioning `drag` rects and subtracting `no-drag`
+  // rects in sequence. The route headers are full-width `drag-region`s that extend under
+  // this cluster, so the cluster's `no-drag` rect has to be subtracted AFTER those drag
+  // rects are added — otherwise the OS reclaims the corner as title-bar caption and
+  // swallows the click as a window drag (the buttons render but do nothing). Rendering
+  // it last in document order guarantees that subtraction wins. (z above dialogs/toasts
+  // so it also stays clickable while a modal is open.)
   const desktopWindowControls = <DesktopWindowControls className="fixed top-0 right-0 z-[250]" />;
 
   if (!readNativeApi()) {
     return (
       <>
-        {desktopWindowControls}
         <div className="flex h-screen flex-col bg-background text-foreground">
           <div className="flex flex-1 items-center justify-center">
             <p className="text-sm text-muted-foreground">
@@ -171,13 +177,13 @@ function RootRouteView() {
             </p>
           </div>
         </div>
+        {desktopWindowControls}
       </>
     );
   }
 
   return (
     <>
-      {desktopWindowControls}
       <ToastProvider position="top-center">
         <AnchoredToastProvider>
           <GitProgressToastPreviewDev />
@@ -190,6 +196,7 @@ function RootRouteView() {
           <Outlet />
         </AnchoredToastProvider>
       </ToastProvider>
+      {desktopWindowControls}
     </>
   );
 }
