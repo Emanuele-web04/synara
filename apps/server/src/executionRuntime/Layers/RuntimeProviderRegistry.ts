@@ -1,16 +1,21 @@
 /**
- * RuntimeProviderRegistryLive - In-memory execution-runtime descriptor lookup.
+ * RuntimeProviderRegistryLive - In-memory execution-runtime descriptor + adapter
+ * lookup.
  *
- * Binds providers to their descriptors. Defaults to the built-in
- * `local`/`worktree` descriptors; callers may inject a custom set (tests,
- * fake-remote slices). It performs lookup only — no lifecycle, no provider
- * calls.
+ * Binds providers to their descriptors and (optionally) their lifecycle
+ * adapters. Defaults to the built-in `local`/`worktree` descriptors with no
+ * adapters; callers inject a custom descriptor set (planner validation) and/or
+ * the adapters the service routes through. It performs lookup only — no
+ * lifecycle, no provider calls.
  *
  * @module RuntimeProviderRegistryLive
  */
 import { Effect, Layer } from "effect";
 
+import type { ExecutionRuntimeProvider } from "@t3tools/contracts";
+
 import { RuntimeProviderUnsupportedError } from "../Errors.ts";
+import type { ExecutionRuntimeProviderAdapterShape } from "../Services/ExecutionRuntimeProviderAdapter.ts";
 import type { FakeRuntimeFlavor } from "../Services/FakeRuntimeFlavor.ts";
 import type { RuntimeProviderDescriptor } from "../Services/RuntimeProviderDescriptor.ts";
 import {
@@ -18,9 +23,17 @@ import {
   type RuntimeProviderRegistryShape,
 } from "../Services/RuntimeProviderRegistry.ts";
 import { BUILT_IN_RUNTIME_DESCRIPTORS } from "./descriptors.ts";
+import { FakeRuntimeProviderAdapter } from "../Services/FakeRuntimeProviderAdapter.ts";
+import { makeFakeRuntimeProviderFacade } from "./FakeRuntimeProviderFacade.ts";
+
+export interface RuntimeProviderAdapterBinding {
+  readonly provider: ExecutionRuntimeProvider;
+  readonly adapter: ExecutionRuntimeProviderAdapterShape;
+}
 
 export interface RuntimeProviderRegistryLiveOptions {
   readonly descriptors?: ReadonlyArray<RuntimeProviderDescriptor>;
+  readonly adapters?: ReadonlyArray<RuntimeProviderAdapterBinding>;
 }
 
 const makeRuntimeProviderRegistry = (options?: RuntimeProviderRegistryLiveOptions) =>
@@ -41,6 +54,10 @@ const makeRuntimeProviderRegistry = (options?: RuntimeProviderRegistryLiveOption
         )
         .map((descriptor) => [descriptor.flavor, descriptor]),
     );
+    const adapterByProvider = new Map<
+      ExecutionRuntimeProvider,
+      ExecutionRuntimeProviderAdapterShape
+    >((options?.adapters ?? []).map((binding) => [binding.provider, binding.adapter]));
 
     const getDescriptor: RuntimeProviderRegistryShape["getDescriptor"] = (provider) => {
       const descriptor = byProvider.get(provider);
@@ -48,6 +65,14 @@ const makeRuntimeProviderRegistry = (options?: RuntimeProviderRegistryLiveOption
         return Effect.fail(new RuntimeProviderUnsupportedError({ provider }));
       }
       return Effect.succeed(descriptor);
+    };
+
+    const getAdapter: RuntimeProviderRegistryShape["getAdapter"] = (provider) => {
+      const adapter = adapterByProvider.get(provider);
+      if (!adapter) {
+        return Effect.fail(new RuntimeProviderUnsupportedError({ provider }));
+      }
+      return Effect.succeed(adapter);
     };
 
     const getDescriptorByFlavor: RuntimeProviderRegistryShape["getDescriptorByFlavor"] = (
@@ -65,6 +90,7 @@ const makeRuntimeProviderRegistry = (options?: RuntimeProviderRegistryLiveOption
 
     return {
       getDescriptor,
+      getAdapter,
       getDescriptorByFlavor,
       listProviders,
     } satisfies RuntimeProviderRegistryShape;
@@ -74,3 +100,27 @@ export const makeRuntimeProviderRegistryLive = (options?: RuntimeProviderRegistr
   Layer.effect(RuntimeProviderRegistry, makeRuntimeProviderRegistry(options));
 
 export const RuntimeProviderRegistryLive = makeRuntimeProviderRegistryLive();
+
+/**
+ * Registry Live that also carries the `fake` provider's lifecycle adapter,
+ * resolved from `FakeRuntimeProviderAdapter` and wrapped in its facade. This is
+ * the variant `ExecutionRuntimeService` routes through; the descriptor-only Live
+ * above is enough for callers that only validate plans. Real provider adapters
+ * register here in later increments.
+ */
+export const makeRuntimeProviderRegistryWithFakeLive = (
+  options?: RuntimeProviderRegistryLiveOptions,
+) =>
+  Layer.effect(
+    RuntimeProviderRegistry,
+    Effect.gen(function* () {
+      const fake = yield* FakeRuntimeProviderAdapter;
+      return yield* makeRuntimeProviderRegistry({
+        ...options,
+        adapters: [
+          ...(options?.adapters ?? []),
+          { provider: "fake", adapter: makeFakeRuntimeProviderFacade(fake) },
+        ],
+      });
+    }),
+  );

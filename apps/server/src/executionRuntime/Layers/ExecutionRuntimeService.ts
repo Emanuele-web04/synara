@@ -3,15 +3,20 @@
  *
  * For `local`/`worktree` threads this resolves nothing and provisions nothing:
  * it returns a compat target with no cwd override, so the reactor keeps its
- * existing local spawn path unchanged. For `remote-runtime` threads it routes to
- * the fake adapter, provisions an instance rooted in a temp dir, and records the
- * resolved facts (instance create, process start/complete, destroy) through
- * internal orchestration commands so runtime state is event-sourced and survives
- * reconnect. Stable per-thread/per-instance command ids make reconnect/crash
- * retries dedupe on the receipt rather than re-appending.
+ * existing local spawn path unchanged. For `remote-runtime` threads it resolves
+ * a runtime adapter *by provider* through `RuntimeProviderRegistry`, provisions
+ * an instance, and records the resolved facts (instance create, process
+ * start/complete, destroy) through internal orchestration commands so runtime
+ * state is event-sourced and survives reconnect. Stable per-thread/per-instance
+ * command ids make reconnect/crash retries dedupe on the receipt rather than
+ * re-appending.
  *
- * Provider-specifics (the fake adapter, flavors, temp dirs) live entirely here.
- * The reactor sees only `ResolvedExecutionTarget` and a `JsonRpcLineTransport`.
+ * The service never names a concrete provider for its lifecycle calls: it routes
+ * through `registry.getAdapter(provider)`. The only `fake`-specific knowledge it
+ * still holds is the server-internal flavor bookkeeping standing in for a public
+ * `runtimePlan` (no public plan carries a flavor), which the fake facade's
+ * `deriveFakeFlavor` produces. The reactor sees only `ResolvedExecutionTarget`
+ * and a `JsonRpcLineTransport`.
  *
  * @module ExecutionRuntimeServiceLive
  */
@@ -19,6 +24,7 @@ import {
   CommandId,
   ExecutionInstanceId,
   RuntimeProcessId,
+  type ExecutionRuntimeProvider,
   type ExecutionTargetKind,
   type RuntimePlan,
   type RuntimeRole,
@@ -39,21 +45,7 @@ import {
   type ExecutionRuntimeServiceShape,
   type ResolvedExecutionTarget,
 } from "../Services/ExecutionRuntimeService.ts";
-import { FakeRuntimeProviderAdapter } from "../Services/FakeRuntimeProviderAdapter.ts";
-
-/**
- * Pick the server-internal fake flavor a public `RuntimePlan` maps to. The
- * public `fake` provider hides flavor; we choose by the plan's persistence
- * intent. A persistent (or snapshot-backed) plan lands on the pty-workspace
- * flavor, which backs every role, ports, persistence, and snapshots. A
- * non-persistent plan lands on the throwaway ephemeral flavor, which exposes no
- * ports and no snapshots — so a non-persistent plan that still asks for ports or
- * a snapshot is genuinely unsupported and the planner rejects it pre-provision.
- */
-const deriveFakeFlavor = (plan: RuntimePlan): FakeRuntimeFlavor =>
-  plan.persistent === true || plan.snapshotId != null
-    ? "fake-pty-workspace"
-    : "fake-ephemeral-runtime";
+import { deriveFakeFlavor } from "./FakeRuntimeProviderFacade.ts";
 
 const RUNNING_INSTANCE_STATUSES: ReadonlySet<string> = new Set(["starting", "running", "idle"]);
 
@@ -66,20 +58,44 @@ const DEFAULT_FAKE_FLAVOR: FakeRuntimeFlavor = "fake-pty-workspace";
 const runtimeCommandId = (threadId: ThreadId, suffix: string): CommandId =>
   CommandId.makeUnsafe(`runtime:${threadId}:${suffix}`);
 
+// `markThreadRemote` carries a flavor but no public plan; synthesize the minimal
+// plan the fake facade provisions from. The synthesized plan round-trips through
+// `deriveFakeFlavor`, but the exact requested flavor is preserved in the
+// per-thread/per-instance flavor maps so a non-pty/non-ephemeral flavor keeps
+// its precise reconnect capability.
+const planForFlavor = (flavor: FakeRuntimeFlavor): RuntimePlan => ({
+  targetKind: "remote-runtime",
+  provider: "fake",
+  ports: [],
+  persistent: flavor === "fake-pty-workspace" || flavor === "fake-command-workspace",
+  snapshotId: null,
+});
+
+interface ProvisionIntent {
+  readonly provider: ExecutionRuntimeProvider;
+  readonly plan: RuntimePlan;
+  /** Server-internal fake flavor, present only for the `fake` provider family. */
+  readonly fakeFlavor?: FakeRuntimeFlavor;
+}
+
 const makeExecutionRuntimeService = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
-  const fakeAdapter = yield* FakeRuntimeProviderAdapter;
   const planner = yield* ExecutionRuntimePlanner;
   const registry = yield* RuntimeProviderRegistry;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-  // Server-internal flavor registration standing in for a public `runtimePlan`.
-  // Provisioning reads this to pick the fake flavor before it routes to the
-  // adapter; the read-model only carries the public `fake` provider.
-  const threadFlavors = new Map<string, FakeRuntimeFlavor>();
-  // Maps a provisioned instance id back to its flavor for `createTransport`.
-  const instanceFlavors = new Map<string, FakeRuntimeFlavor>();
+  // Per-thread provisioning intent, stashed at plan/mark time and read at
+  // provision time (the wrinkle: plan derivation precedes provisioning). Stands
+  // in for a public `runtimePlan` until a later slice exposes one; the read-model
+  // only carries the public provider literal.
+  const threadIntents = new Map<string, ProvisionIntent>();
+  // Maps a provisioned instance id to the provider that backs it, so `exec`,
+  // `destroy`, and `probeInstance` resolve the right adapter.
+  const instanceProviders = new Map<string, ExecutionRuntimeProvider>();
+  // Fake-only: maps a provisioned instance id to its exact flavor for the
+  // flavor-specific reconnect-capability probe.
+  const instanceFakeFlavors = new Map<string, FakeRuntimeFlavor>();
 
   const failProvision = (threadId: ThreadId, detail: string) =>
     new RuntimeProvisionFailedError({ threadId, detail });
@@ -107,36 +123,58 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
       Effect.catchCause(() => Effect.succeed(undefined)),
     );
 
+  const recordProvisionRequest = (
+    threadId: ThreadId,
+    provider: ExecutionRuntimeProvider,
+    role: RuntimeRole,
+  ) =>
+    dispatchRuntimeCommand(threadId, "provision", (commandId, createdAt) => ({
+      type: "thread.runtime.provision",
+      commandId,
+      threadId,
+      targetKind: "remote-runtime",
+      provider,
+      role,
+      createdAt,
+    }));
+
   const markThreadRemote: ExecutionRuntimeServiceShape["markThreadRemote"] = (input) =>
     Effect.gen(function* () {
       const role: RuntimeRole = input.role ?? "agent";
-      threadFlavors.set(input.threadId, input.flavor);
-      yield* dispatchRuntimeCommand(input.threadId, "provision", (commandId, createdAt) => ({
-        type: "thread.runtime.provision",
-        commandId,
-        threadId: input.threadId,
-        targetKind: "remote-runtime",
+      threadIntents.set(input.threadId, {
         provider: "fake",
-        role,
-        createdAt,
-      }));
+        plan: planForFlavor(input.flavor),
+        fakeFlavor: input.flavor,
+      });
+      yield* recordProvisionRequest(input.threadId, "fake", role);
     });
 
   const applyRuntimePlan: ExecutionRuntimeServiceShape["applyRuntimePlan"] = (input) =>
     Effect.gen(function* () {
       const plan = input.plan;
       // No plan, or a local/worktree plan, keeps the existing compat path: no
-      // validation, no provisioning, no flavor.
+      // validation, no provisioning, no intent.
       if (plan == null || plan.targetKind !== "remote-runtime") {
         return;
       }
       const role: RuntimeRole = input.role ?? "agent";
-      const flavor = deriveFakeFlavor(plan);
-      // Validate against the flavor's descriptor before any provisioning, so an
-      // unsupported plan/role combination is rejected pre-provision.
-      const descriptor = yield* registry.getDescriptorByFlavor(flavor);
+      // Honor the plan's provider. The fake family validates against a
+      // flavor-keyed descriptor (the public `fake` provider hides its flavor);
+      // every other provider validates against its provider-keyed descriptor. A
+      // provider with no registered descriptor fails `RuntimeProviderUnsupportedError`
+      // here, pre-provision, which is correct until that provider lands.
+      const isFake = plan.provider === "fake";
+      const fakeFlavor = isFake ? deriveFakeFlavor(plan) : undefined;
+      const descriptor = isFake
+        ? yield* registry.getDescriptorByFlavor(fakeFlavor as FakeRuntimeFlavor)
+        : yield* registry.getDescriptor(plan.provider);
       yield* planner.validateAgainstDescriptor(plan, role, descriptor);
-      yield* markThreadRemote({ threadId: input.threadId, flavor, role });
+      threadIntents.set(input.threadId, {
+        provider: plan.provider,
+        plan,
+        ...(fakeFlavor !== undefined ? { fakeFlavor } : {}),
+      });
+      yield* recordProvisionRequest(input.threadId, plan.provider, role);
     });
 
   const provisionRemote = (
@@ -144,18 +182,30 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
     targetKind: ExecutionTargetKind,
   ): Effect.Effect<ResolvedExecutionTarget, RuntimeProvisionFailedError> =>
     Effect.gen(function* () {
-      const flavor = threadFlavors.get(threadId) ?? DEFAULT_FAKE_FLAVOR;
-      const context = yield* fakeAdapter
-        .provision({ threadId, flavor })
+      const intent = threadIntents.get(threadId) ?? {
+        provider: "fake" as ExecutionRuntimeProvider,
+        plan: planForFlavor(DEFAULT_FAKE_FLAVOR),
+        fakeFlavor: DEFAULT_FAKE_FLAVOR,
+      };
+      const adapter = yield* registry
+        .getAdapter(intent.provider)
+        .pipe(
+          Effect.mapError((cause) => failProvision(threadId, `provision failed: ${cause.message}`)),
+        );
+      const context = yield* adapter
+        .provision({ threadId, plan: intent.plan })
         .pipe(Effect.mapError((cause) => failProvision(threadId, `provision failed: ${cause}`)));
-      instanceFlavors.set(context.instance.id, flavor);
+      instanceProviders.set(context.instance.id, intent.provider);
+      if (intent.fakeFlavor !== undefined) {
+        instanceFakeFlavors.set(context.instance.id, intent.fakeFlavor);
+      }
 
       yield* dispatchRuntimeCommand(threadId, "instance.record", (commandId, createdAt) => ({
         type: "thread.runtime.instance.record",
         commandId,
         threadId,
         instanceId: context.instance.id,
-        provider: "fake",
+        provider: intent.provider,
         status: "running",
         rootPath: context.rootPath,
         createdAt,
@@ -192,9 +242,10 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
         runtime?.instance !== undefined &&
         RUNNING_INSTANCE_STATUSES.has(runtime.instance.status)
       ) {
-        const flavor = threadFlavors.get(threadId);
-        if (flavor !== undefined) {
-          instanceFlavors.set(runtime.instance.id, flavor);
+        const intent = threadIntents.get(threadId);
+        instanceProviders.set(runtime.instance.id, runtime.instance.provider);
+        if (intent?.fakeFlavor !== undefined) {
+          instanceFakeFlavors.set(runtime.instance.id, intent.fakeFlavor);
         }
         return {
           threadId,
@@ -209,13 +260,20 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
 
   const exec: ExecutionRuntimeServiceShape["exec"] = (input) =>
     Effect.gen(function* () {
-      const flavor = instanceFlavors.get(input.instanceId);
-      if (flavor === undefined) {
+      const provider = instanceProviders.get(input.instanceId);
+      if (provider === undefined) {
         return yield* failProvision(
           input.threadId,
-          `instance ${input.instanceId} is not a provisioned fake instance`,
+          `instance ${input.instanceId} is not a provisioned remote instance`,
         );
       }
+      const adapter = yield* registry
+        .getAdapter(provider)
+        .pipe(
+          Effect.mapError((cause) =>
+            failProvision(input.threadId, `create transport failed: ${cause.message}`),
+          ),
+        );
       const processId = RuntimeProcessId.makeUnsafe(`proc-${crypto.randomUUID()}`);
 
       yield* dispatchRuntimeCommand(
@@ -234,7 +292,7 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
       );
 
       const cwd = (yield* resolveThreadRuntime(input.threadId))?.runtime?.instance?.rootPath ?? ".";
-      const built = yield* fakeAdapter
+      const built = yield* adapter
         .createTransport(input.instanceId, {
           command: input.command,
           args: input.args,
@@ -281,8 +339,15 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
 
   const destroy: ExecutionRuntimeServiceShape["destroy"] = (threadId, instanceId) =>
     Effect.gen(function* () {
-      yield* fakeAdapter.destroy(instanceId).pipe(Effect.ignore);
-      instanceFlavors.delete(instanceId);
+      const provider = instanceProviders.get(instanceId);
+      if (provider !== undefined) {
+        yield* registry.getAdapter(provider).pipe(
+          Effect.flatMap((adapter) => adapter.destroy(instanceId)),
+          Effect.ignore,
+        );
+      }
+      instanceProviders.delete(instanceId);
+      instanceFakeFlavors.delete(instanceId);
       yield* dispatchRuntimeCommand(threadId, "destroy", (commandId, createdAt) => ({
         type: "thread.runtime.destroy",
         commandId,
@@ -298,7 +363,7 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
   // (`isAlive`) decides the rest. Provider knowledge stays here, not the reactor.
   const resolveFakeReconnect = (instanceId: ExecutionInstanceId) =>
     Effect.gen(function* () {
-      const flavor = instanceFlavors.get(instanceId);
+      const flavor = instanceFakeFlavors.get(instanceId);
       if (flavor === undefined) {
         return true;
       }
@@ -323,9 +388,10 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
         };
       }
       const supportsReconnect = yield* resolveFakeReconnect(input.instanceId);
-      const alive = yield* fakeAdapter
-        .isAlive(input.instanceId)
-        .pipe(Effect.orElseSucceed(() => false));
+      const alive = yield* registry.getAdapter("fake").pipe(
+        Effect.flatMap((adapter) => adapter.isAlive(input.instanceId)),
+        Effect.orElseSucceed(() => false),
+      );
       return {
         supportsReconnect,
         liveness: alive ? ("alive" as const) : ("absent" as const),

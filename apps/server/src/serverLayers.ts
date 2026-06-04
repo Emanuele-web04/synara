@@ -9,7 +9,7 @@ import { ExecutionRuntimeServiceLive } from "./executionRuntime/Layers/Execution
 import { FAKE_RUNTIME_DESCRIPTORS } from "./executionRuntime/Layers/fakeDescriptors";
 import { FakeRuntimeProviderAdapterLive } from "./executionRuntime/Layers/FakeRuntimeProviderAdapter";
 import { BUILT_IN_RUNTIME_DESCRIPTORS } from "./executionRuntime/Layers/descriptors";
-import { makeRuntimeProviderRegistryLive } from "./executionRuntime/Layers/RuntimeProviderRegistry";
+import { makeRuntimeProviderRegistryWithFakeLive } from "./executionRuntime/Layers/RuntimeProviderRegistry";
 import { RuntimeActivityLeaseManagerLive } from "./executionRuntime/Layers/RuntimeActivityLeaseManager";
 import { RuntimeCredentialBrokerLive } from "./executionRuntime/Layers/RuntimeCredentialBroker";
 import { RuntimeGitWorkspaceLive } from "./executionRuntime/Layers/RuntimeGitWorkspace";
@@ -58,19 +58,20 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(runtimeServicesLayer),
   );
   // The execution-runtime service resolves/provisions where a thread runs before
-  // the provider session starts. Its fake adapter needs FileSystem; the service
-  // itself needs ChildProcessSpawner — both come from NodeServices below. Engine
-  // + snapshot query come from runtimeServicesLayer. The planner + registry let
-  // it validate a public `runtimePlan` against the resolved descriptor (fake
-  // flavors included) before provisioning.
-  const runtimeProviderRegistryLayer = makeRuntimeProviderRegistryLive({
+  // the provider session starts. It routes provisioning/exec/teardown through an
+  // adapter resolved by provider from the registry; the service itself needs
+  // ChildProcessSpawner (from NodeServices below). Engine + snapshot query come
+  // from runtimeServicesLayer. The registry holds the descriptors the planner
+  // validates a public `runtimePlan` against (fake flavors included) plus the
+  // `fake` provider's lifecycle adapter; its fake adapter needs FileSystem from
+  // NodeServices.
+  const runtimeProviderRegistryLayer = makeRuntimeProviderRegistryWithFakeLive({
     descriptors: [...BUILT_IN_RUNTIME_DESCRIPTORS, ...FAKE_RUNTIME_DESCRIPTORS],
-  });
+  }).pipe(Layer.provide(FakeRuntimeProviderAdapterLive));
   const executionRuntimePlannerLayer = ExecutionRuntimePlannerLive.pipe(
     Layer.provide(runtimeProviderRegistryLayer),
   );
   const executionRuntimeServiceLayer = ExecutionRuntimeServiceLive.pipe(
-    Layer.provide(FakeRuntimeProviderAdapterLive),
     Layer.provide(executionRuntimePlannerLayer),
     Layer.provide(runtimeProviderRegistryLayer),
     Layer.provideMerge(runtimeServicesLayer),

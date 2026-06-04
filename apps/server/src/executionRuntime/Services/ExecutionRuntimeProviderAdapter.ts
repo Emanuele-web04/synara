@@ -1,17 +1,20 @@
 /**
- * ExecutionRuntimeProviderAdapter - Server-internal contract a concrete
- * execution-runtime provider (local, worktree, fake-remote, Daytona, ...)
- * implements.
+ * ExecutionRuntimeProviderAdapter - the provider-agnostic adapter surface
+ * `ExecutionRuntimeService` consumes to provision instances, run processes, and
+ * tear instances down.
  *
- * Each adapter pairs a static {@link RuntimeProviderDescriptor} (what it can
- * do) with the lifecycle operations that provision and tear down instances and
- * create process transports. The orchestration seam never references a concrete
- * adapter; it goes through `ExecutionRuntimeService` (later slice) which routes
- * via the registry. Interface-only in this slice: no provider calls yet.
+ * Every concrete execution-runtime provider (fake-remote today; Daytona, Vercel,
+ * Modal, Cloudflare in later increments) conforms to this shape, so the service
+ * routes by provider through `RuntimeProviderRegistry.getAdapter` without ever
+ * naming a concrete provider. The Effect error and requirement channels match the
+ * fake adapter exactly so the fake conforms through a thin facade rather than a
+ * lossy down-cast. Provider→descriptor resolution stays the registry's job; this
+ * surface is lifecycle-only.
  *
  * @module ExecutionRuntimeProviderAdapter
  */
 import type { Effect } from "effect";
+import type { ChildProcessSpawner } from "effect/unstable/process";
 
 import type {
   ExecutionInstanceId,
@@ -20,25 +23,74 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 
-import type { JsonRpcLineTransport } from "../../provider/process/JsonRpcLineTransport.ts";
+import type {
+  InMemoryTransportController,
+  JsonRpcLineTransport,
+} from "../../provider/process/JsonRpcLineTransport.ts";
+import type { RuntimeInstanceUnknownError } from "../Errors.ts";
 import type { RuntimeProcessSpawnInput } from "./RuntimeProcessTransport.ts";
-import type { RuntimeProviderDescriptor } from "./RuntimeProviderDescriptor.ts";
 
-export interface RuntimeProvisionInput {
+/** Input for provisioning the instance backing a thread from its resolved plan. */
+export interface ExecutionRuntimeProvisionInput {
   readonly threadId: ThreadId;
   readonly plan: RuntimePlan;
 }
 
+/** Result of provisioning: the recorded instance plus its working-directory root. */
+export interface ExecutionRuntimeProvisionResult {
+  readonly instance: RuntimeInstanceSummary;
+  readonly rootPath: string;
+}
+
+/** A collected fire-and-collect command run inside an instance. */
+export interface ExecutionRuntimeExecCollectInput {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  /** Resolved relative to the instance root; defaults to the root. */
+  readonly cwd?: string | undefined;
+  readonly env?: Record<string, string | undefined> | undefined;
+}
+
+export interface ExecutionRuntimeExecCollectResult {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly code: number | null;
+}
+
+/**
+ * The lifecycle surface a concrete runtime provider exposes. Signatures mirror
+ * the fake adapter (error + requirement channels included) so any provider plugs
+ * in without the service learning provider-specific error shapes.
+ */
 export interface ExecutionRuntimeProviderAdapterShape {
-  /** Static capability description used by the planner. */
-  readonly descriptor: RuntimeProviderDescriptor;
-  /** Provision (or resolve, for local/worktree) the instance backing a thread. */
-  readonly provision: (input: RuntimeProvisionInput) => Effect.Effect<RuntimeInstanceSummary>;
-  /** Create a JSON-RPC line transport for a process inside the instance. */
+  /** Provision the instance backing a thread, deriving any provider-internal sub-kind from the plan. */
+  readonly provision: (
+    input: ExecutionRuntimeProvisionInput,
+  ) => Effect.Effect<ExecutionRuntimeProvisionResult>;
+  /**
+   * Create the line transport for a process inside the instance. When the spawn
+   * input names a runnable command, the provider forwards it into the transport
+   * queues; otherwise it returns a bare scriptable transport the caller drives.
+   */
   readonly createTransport: (
     instanceId: ExecutionInstanceId,
     spawn: RuntimeProcessSpawnInput,
-  ) => Effect.Effect<JsonRpcLineTransport>;
-  /** Tear the instance down. Idempotent. */
+  ) => Effect.Effect<
+    { readonly transport: JsonRpcLineTransport; readonly controller: InMemoryTransportController },
+    never,
+    ChildProcessSpawner.ChildProcessSpawner
+  >;
+  /** Fire-and-collect command exec inside an instance, collecting full output. */
+  readonly execCollect: (
+    instanceId: ExecutionInstanceId,
+    input: ExecutionRuntimeExecCollectInput,
+  ) => Effect.Effect<
+    ExecutionRuntimeExecCollectResult,
+    RuntimeInstanceUnknownError,
+    ChildProcessSpawner.ChildProcessSpawner
+  >;
+  /** Whether the provider still recognizes a provisioned instance (reconnect probe). */
+  readonly isAlive: (instanceId: ExecutionInstanceId) => Effect.Effect<boolean>;
+  /** Tear the instance down and forget it. Idempotent. */
   readonly destroy: (instanceId: ExecutionInstanceId) => Effect.Effect<void>;
 }
