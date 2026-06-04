@@ -3413,6 +3413,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const binaryPath = providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
           const serverUrl = providerOptions?.serverUrl?.trim();
           const serverPassword = providerOptions?.serverPassword?.trim();
+          const experimentalWebSockets =
+            adapterConfig.providerOptionsKey === "opencode"
+              ? input.providerOptions?.opencode?.experimentalWebSockets
+              : undefined;
           const directory = input.cwd ?? serverConfig.cwd;
           const initialParsedModel =
             input.modelSelection?.provider === adapterConfig.provider
@@ -3442,7 +3446,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   binaryPath,
                   cliSpec: adapterConfig.cliSpec,
                   ...(serverUrl ? { serverUrl } : {}),
-                  ...(provider === "opencode" && providerOptions?.experimentalWebSockets
+                  ...(provider === "opencode" && experimentalWebSockets
                     ? { experimentalWebSockets: true }
                     : {}),
                 });
@@ -4153,44 +4157,41 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }),
         );
 
-      const listCommands: NonNullable<OpenCodeAdapterShape["listCommands"]> = (input) =>
-        withDiscoveryClient(
-          {
-            threadId: input.threadId,
-            binaryPath: input.binaryPath,
-            cwd: input.cwd,
-            serverUrl: input.serverUrl,
-            serverPassword: input.serverPassword,
-            experimentalWebSockets: input.experimentalWebSockets,
-          },
-          ({ client }) =>
-            runOpenCodeSdk("command.list", () => client.command.list()).pipe(
-              Effect.mapError(toAdapterRequestError),
-              Effect.map(
-                (commands) =>
-                  ({
-                    commands: flattenOpenCodeCommands(commands.data ?? []),
-                    source: adapterConfig.fallbackModelSource,
-                    cached: false,
-                  }) satisfies ProviderListCommandsResult,
-              ),
-              Effect.catch((cause) =>
-                isUnsupportedOpenCodeCommandListError(cause)
-                  ? Effect.succeed({
-                      commands: [],
-                      source: "unsupported",
-                      cached: false,
-                    } satisfies ProviderListCommandsResult)
-                  : Effect.fail(
-                      new ProviderAdapterRequestError({
-                        provider,
-                        method: cause.operation,
-                        detail: redactOpenCodeRequestDetail(cause.detail),
-                      }),
-                    ),
-              ),
+      const listCommands: NonNullable<OpenCodeAdapterShape["listCommands"]> = (input) => {
+        const discoveryInput = {
+          ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+          ...(input.binaryPath !== undefined ? { binaryPath: input.binaryPath } : {}),
+          cwd: input.cwd,
+          ...(input.serverUrl !== undefined ? { serverUrl: input.serverUrl } : {}),
+          ...(input.serverPassword !== undefined ? { serverPassword: input.serverPassword } : {}),
+          ...(input.experimentalWebSockets !== undefined
+            ? { experimentalWebSockets: input.experimentalWebSockets }
+            : {}),
+        };
+
+        return withDiscoveryClient(discoveryInput, ({ client }) =>
+          runOpenCodeSdk("command.list", () => client.command.list()).pipe(
+            Effect.map(
+              (commands) =>
+                ({
+                  commands: flattenOpenCodeCommands(commands.data ?? []),
+                  source: adapterConfig.fallbackModelSource,
+                  cached: false,
+                }) satisfies ProviderListCommandsResult,
             ),
+            Effect.catch((cause) =>
+              isUnsupportedOpenCodeCommandListError(cause)
+                ? Effect.succeed({
+                    commands: [],
+                    source: "unsupported",
+                    cached: false,
+                  } satisfies ProviderListCommandsResult)
+                : Effect.fail(cause),
+            ),
+            Effect.mapError(toAdapterRequestError),
+          ),
         );
+      };
 
       const getComposerCapabilities: NonNullable<
         OpenCodeAdapterShape["getComposerCapabilities"]

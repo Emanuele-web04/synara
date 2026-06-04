@@ -782,7 +782,9 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
           ChildProcess.make(input.binaryPath, args, {
             env: buildOpenCodeServerProcessEnv({
               cliSpec,
-              experimentalWebSockets: input.experimentalWebSockets,
+              ...(input.experimentalWebSockets !== undefined
+                ? { experimentalWebSockets: input.experimentalWebSockets }
+                : {}),
             }),
             detached: false,
             killSignal: "SIGKILL",

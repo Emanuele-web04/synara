@@ -192,9 +192,7 @@ export function resolveSettingsBackTarget(input: {
   const restorableRoute = resolveRestorableThreadRoute({
     lastThreadRoute: input.lastThreadRoute,
     availableThreadIds: input.availableThreadIds,
-    ...(input.availableSplitViewIds
-      ? { availableSplitViewIds: input.availableSplitViewIds }
-      : {}),
+    ...(input.availableSplitViewIds ? { availableSplitViewIds: input.availableSplitViewIds } : {}),
   });
 
   if (restorableRoute) {

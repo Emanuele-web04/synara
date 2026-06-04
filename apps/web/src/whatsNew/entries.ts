@@ -22,6 +22,78 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.1.1",
+    date: "Jun 4",
+    features: [
+      {
+        id: "opencode-provider-depth",
+        title: "OpenCode support is much deeper",
+        description:
+          "OpenCode startup, model discovery, command discovery, server connection options, and experimental WebSocket mode now flow through the same settings and runtime paths as the rest of Synara.",
+      },
+      {
+        id: "opencode-command-discovery-settings",
+        title: "Slash commands respect your OpenCode setup",
+        description:
+          "Composer slash-command discovery now uses the configured OpenCode binary, server URL, password state, and WebSocket mode, so command lists match the runtime you actually selected.",
+      },
+      {
+        id: "desktop-update-recovery",
+        title: "Desktop updates are harder to get stuck",
+        description:
+          "The updater now caches GitHub release metadata, preserves actionable update state across transient failures, detects stalled downloads, and clears stale same-version update payloads more deliberately.",
+      },
+      {
+        id: "chat-chrome-refresh",
+        title: "The chat surface feels tighter",
+        description:
+          "Composer padding, button spacing, picker sizing, panel headers, banners, dock surfaces, and chat chrome were tuned so the main workspace reads cleaner without losing controls.",
+      },
+      {
+        id: "desktop-window-polish",
+        title: "Desktop chrome fits the OS better",
+        description:
+          "macOS traffic-light spacing, sidebar seams, Electron card borders, motion, and titlebar controls were refined so the app frame feels more native on desktop.",
+      },
+      {
+        id: "markdown-and-transcript-performance",
+        title: "Large chats do less unnecessary work",
+        description:
+          "Markdown parsing is deferred more carefully, pending-interaction state is derived in one place, and transcript/session rendering avoids extra churn during busy or long-running chats.",
+      },
+      {
+        id: "settings-back-navigation",
+        title: "Settings back navigation lands in the right place",
+        description:
+          "The Settings sidebar back button now restores the last valid chat route, falls back to the newest live thread when needed, and drops stale split-view routes before navigating.",
+      },
+      {
+        id: "sidebar-section-toggles",
+        title: "Chats and Workspace can be hidden",
+        description:
+          "New sidebar section toggles let you hide the standalone Chats footer list or the Workspace tab while keeping Threads always available.",
+      },
+      {
+        id: "legacy-database-repairs",
+        title: "Imported legacy databases recover missing columns",
+        description:
+          "Fresh repair migrations reconcile older imported migration trackers that skipped Synara's sidechat-source or pinned-thread columns, preventing startup crashes in those upgraded histories.",
+      },
+      {
+        id: "opencode-visual-polish",
+        title: "OpenCode looks better in dark mode",
+        description:
+          "The OpenCode provider icon now switches to a clearer reversed asset in dark mode, with sidebar and provider picker styling adjusted around it.",
+      },
+      {
+        id: "settings-surface-cleanup",
+        title: "Settings are easier to scan",
+        description:
+          "Repeated boolean settings were consolidated into a shared row pattern, provider install rows got cleaner reset behavior, and OpenCode-specific controls sit with the rest of provider tools.",
+      },
+    ],
+  },
+  {
     version: "0.1.0",
     date: "Jun 3",
     features: [
