@@ -214,6 +214,14 @@ describe("ExecutionRuntimeService fake-remote path", () => {
     const afterExec = await readThreadRuntime(localRuntime, threadId);
     expect(afterExec?.processes.some((proc) => proc.id === handle.processId)).toBe(true);
 
+    // The fake/remote transport is the in-memory forwarding seam, so the fake
+    // provider always returns a controller to script the provider protocol.
+    const controller = handle.controller;
+    expect(controller).toBeDefined();
+    if (controller === undefined) {
+      throw new Error("expected fake transport controller");
+    }
+
     // Drive Codex over the supplied transport, proving the session is
     // transport-agnostic and runs through the remote (in-memory) path.
     const outboundFrames: OutboundFrame[] = [];
@@ -228,7 +236,7 @@ describe("ExecutionRuntimeService fake-remote path", () => {
       createTransport: async (_input: CodexTransportFactoryInput) => handle.transport,
     });
     manager.on("event", (event) => events.push(event));
-    const pump = startCodexResponder(localRuntime, handle.controller, outboundFrames, responders);
+    const pump = startCodexResponder(localRuntime, controller, outboundFrames, responders);
 
     const resolvedCwd = target.cwd as string;
     const session = await manager.startSession({
@@ -248,11 +256,11 @@ describe("ExecutionRuntimeService fake-remote path", () => {
     ]);
 
     // Stream logs through the transport's side channel.
-    await localRuntime.runPromise(handle.controller.pushStderr("codex: starting up"));
+    await localRuntime.runPromise(controller.pushStderr("codex: starting up"));
 
     // Signal process exit; the exec lifecycle records a process-completed event
     // on a forked fiber, so poll the read-model until it lands.
-    await localRuntime.runPromise(handle.controller.signalExit({ code: 0, signal: null }));
+    await localRuntime.runPromise(controller.signalExit({ code: 0, signal: null }));
     manager.stopAll();
     await localRuntime.runPromise(handle.transport.close).catch(() => {});
     await pump.catch(() => {});

@@ -76,7 +76,7 @@ export interface ExecutionRuntimeProviderAdapterShape {
     instanceId: ExecutionInstanceId,
     spawn: RuntimeProcessSpawnInput,
   ) => Effect.Effect<
-    { readonly transport: JsonRpcLineTransport; readonly controller: InMemoryTransportController },
+    { readonly transport: JsonRpcLineTransport; readonly controller?: InMemoryTransportController },
     never,
     ChildProcessSpawner.ChildProcessSpawner
   >;

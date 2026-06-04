@@ -86,9 +86,11 @@ export interface ExecutionRuntimeProcessHandle {
    * The transport controller, exposed because the fake-remote transport is the
    * remote forwarding seam: a real remote adapter pushes remote stdout/stderr
    * into it and reads outbound frames back. Tests script it directly to drive a
-   * provider protocol without a real binary.
+   * provider protocol without a real binary. Optional because a provider whose
+   * transport is already wired to a live stdio (no in-memory forwarding seam)
+   * returns no controller.
    */
-  readonly controller: InMemoryTransportController;
+  readonly controller?: InMemoryTransportController;
 }
 
 export interface ExecutionRuntimeServiceShape {

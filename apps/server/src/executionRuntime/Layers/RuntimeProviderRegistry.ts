@@ -25,6 +25,8 @@ import {
 import { BUILT_IN_RUNTIME_DESCRIPTORS } from "./descriptors.ts";
 import { FakeRuntimeProviderAdapter } from "../Services/FakeRuntimeProviderAdapter.ts";
 import { makeFakeRuntimeProviderFacade } from "./FakeRuntimeProviderFacade.ts";
+import { DaytonaRuntimeAdapter } from "../providers/daytona/DaytonaRuntimeAdapter.ts";
+import { makeDaytonaRuntimeProviderFacade } from "./DaytonaRuntimeProviderFacade.ts";
 
 export interface RuntimeProviderAdapterBinding {
   readonly provider: ExecutionRuntimeProvider;
@@ -120,6 +122,33 @@ export const makeRuntimeProviderRegistryWithFakeLive = (
         adapters: [
           ...(options?.adapters ?? []),
           { provider: "fake", adapter: makeFakeRuntimeProviderFacade(fake) },
+        ],
+      });
+    }),
+  );
+
+/**
+ * Registry Live carrying the `fake` adapter plus every real provider adapter
+ * registered to date. Each real adapter is resolved from its ServiceMap tag and
+ * wrapped in its facade so the service routes to it by provider literal through
+ * `getAdapter`. Callers `Layer.provide` each adapter's own Live layer (which
+ * env-selects real-vs-fake client). The fake binding stays so the fake/local
+ * paths are unchanged.
+ */
+export const makeRuntimeProviderRegistryWithAdaptersLive = (
+  options?: RuntimeProviderRegistryLiveOptions,
+) =>
+  Layer.effect(
+    RuntimeProviderRegistry,
+    Effect.gen(function* () {
+      const fake = yield* FakeRuntimeProviderAdapter;
+      const daytona = yield* DaytonaRuntimeAdapter;
+      return yield* makeRuntimeProviderRegistry({
+        ...options,
+        adapters: [
+          ...(options?.adapters ?? []),
+          { provider: "fake", adapter: makeFakeRuntimeProviderFacade(fake) },
+          { provider: "daytona", adapter: makeDaytonaRuntimeProviderFacade(daytona) },
         ],
       });
     }),

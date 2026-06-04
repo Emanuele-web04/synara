@@ -333,7 +333,7 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
       return {
         processId,
         transport: built.transport,
-        controller: built.controller,
+        ...(built.controller !== undefined ? { controller: built.controller } : {}),
       };
     });
 
@@ -375,20 +375,20 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
 
   const probeInstance: ExecutionRuntimeServiceShape["probeInstance"] = (input) =>
     Effect.gen(function* () {
-      // Only the fake provider family has a concrete adapter in this slice. Other
-      // providers resolve their reconnect capability from the registry; with no
-      // adapter to probe they report `absent`, so the reconciler marks them lost.
-      if (input.provider !== "fake") {
-        const descriptor = yield* registry
-          .getDescriptor(input.provider)
-          .pipe(Effect.catch(() => Effect.succeed(undefined)));
-        return {
-          supportsReconnect: descriptor?.capabilities.lifecycle.reconnect ?? false,
-          liveness: "absent" as const,
-        };
-      }
-      const supportsReconnect = yield* resolveFakeReconnect(input.instanceId);
-      const alive = yield* registry.getAdapter("fake").pipe(
+      const descriptor = yield* registry
+        .getDescriptor(input.provider)
+        .pipe(Effect.catch(() => Effect.succeed(undefined)));
+      // The fake family resolves its reconnect capability from the exact recorded
+      // flavor; every other provider reads it off the resolved descriptor.
+      const supportsReconnect =
+        input.provider === "fake"
+          ? yield* resolveFakeReconnect(input.instanceId)
+          : (descriptor?.capabilities.lifecycle.reconnect ?? false);
+      // Probe liveness through the provider's registered adapter. A provider with
+      // a descriptor but no adapter (validation-only wiring, or one not yet
+      // registered) has nothing to probe, so it reports `absent` and the
+      // reconciler marks it lost.
+      const alive = yield* registry.getAdapter(input.provider).pipe(
         Effect.flatMap((adapter) => adapter.isAlive(input.instanceId)),
         Effect.orElseSucceed(() => false),
       );

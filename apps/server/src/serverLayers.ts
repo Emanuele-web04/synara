@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Layer } from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
 
 import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQuery";
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore";
@@ -9,7 +10,9 @@ import { ExecutionRuntimeServiceLive } from "./executionRuntime/Layers/Execution
 import { FAKE_RUNTIME_DESCRIPTORS } from "./executionRuntime/Layers/fakeDescriptors";
 import { FakeRuntimeProviderAdapterLive } from "./executionRuntime/Layers/FakeRuntimeProviderAdapter";
 import { BUILT_IN_RUNTIME_DESCRIPTORS } from "./executionRuntime/Layers/descriptors";
-import { makeRuntimeProviderRegistryWithFakeLive } from "./executionRuntime/Layers/RuntimeProviderRegistry";
+import { makeRuntimeProviderRegistryWithAdaptersLive } from "./executionRuntime/Layers/RuntimeProviderRegistry";
+import { DAYTONA_RUNTIME_DESCRIPTOR } from "./executionRuntime/providers/daytona/descriptor";
+import { makeDaytonaRuntimeAdapterLayer } from "./executionRuntime/providers/daytona/runtimeLayer";
 import { RuntimeActivityLeaseManagerLive } from "./executionRuntime/Layers/RuntimeActivityLeaseManager";
 import { RuntimeCredentialBrokerLive } from "./executionRuntime/Layers/RuntimeCredentialBroker";
 import { RuntimeGitWorkspaceLive } from "./executionRuntime/Layers/RuntimeGitWorkspace";
@@ -65,9 +68,18 @@ export function makeServerRuntimeServicesLayer() {
   // validates a public `runtimePlan` against (fake flavors included) plus the
   // `fake` provider's lifecycle adapter; its fake adapter needs FileSystem from
   // NodeServices.
-  const runtimeProviderRegistryLayer = makeRuntimeProviderRegistryWithFakeLive({
-    descriptors: [...BUILT_IN_RUNTIME_DESCRIPTORS, ...FAKE_RUNTIME_DESCRIPTORS],
-  }).pipe(Layer.provide(FakeRuntimeProviderAdapterLive));
+  // The Daytona adapter env-selects its real REST client vs the in-repo fake
+  // client (local temp dirs): with `DAYTONA_API_KEY` present the real client is
+  // used, else the fake, so the server boots without provider access. The adapter
+  // resolves through the registry by the `daytona` provider literal.
+  const daytonaRuntimeAdapterLayer = makeDaytonaRuntimeAdapterLayer();
+  const runtimeProviderRegistryLayer = makeRuntimeProviderRegistryWithAdaptersLive({
+    descriptors: [
+      ...BUILT_IN_RUNTIME_DESCRIPTORS,
+      ...FAKE_RUNTIME_DESCRIPTORS,
+      DAYTONA_RUNTIME_DESCRIPTOR,
+    ],
+  }).pipe(Layer.provide(FakeRuntimeProviderAdapterLive), Layer.provide(daytonaRuntimeAdapterLayer));
   const executionRuntimePlannerLayer = ExecutionRuntimePlannerLive.pipe(
     Layer.provide(runtimeProviderRegistryLayer),
   );
@@ -148,5 +160,5 @@ export function makeServerRuntimeServicesLayer() {
     ServerRuntimeStartupLive,
     WorkspaceLayerLive,
     ProjectFaviconResolverLive,
-  ).pipe(Layer.provideMerge(NodeServices.layer));
+  ).pipe(Layer.provideMerge(NodeServices.layer), Layer.provideMerge(FetchHttpClient.layer));
 }
