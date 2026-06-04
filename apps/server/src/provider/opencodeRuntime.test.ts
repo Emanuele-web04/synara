@@ -22,7 +22,7 @@ const encoder = new TextEncoder();
 function mockOpenCodeServerHandle(input: {
   stdout: string;
   stderr: string;
-  exitCode?: Effect.Effect<number, never>;
+  exitCode?: Effect.Effect<ChildProcessSpawner.ExitCode, never>;
   kill?: () => Effect.Effect<void, never>;
 }) {
   return ChildProcessSpawner.makeHandle({

@@ -74,10 +74,10 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
           "Theme selection moved to a segmented control, settings rows share tighter typography, provider update failures can expose a copyable manual command, and custom binary-path confirmations survive restarts.",
       },
       {
-        id: "sidebar-chat-polish",
-        title: "Chat, sidebar, and browser surfaces got sharper",
+        id: "agent-task-activity-rendering",
+        title: "Agent task activity is easier to follow",
         description:
-          "Sidebar spacing, project headers, queued-turn styling, browser action menus, theme commands in search, right-dock toggles, and terminal search all picked up small visual and workflow refinements.",
+          "OpenCode task child sessions and newer shell-step events now flow into Synara's activity timeline, while generic agent task rows keep their useful prompt and result text instead of disappearing or showing wrapper noise.",
       },
       {
         id: "transport-reconnect-events",
