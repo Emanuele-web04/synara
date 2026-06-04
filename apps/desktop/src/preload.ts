@@ -15,6 +15,11 @@ const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 const SHOW_IN_FOLDER_CHANNEL = "desktop:show-in-folder";
+const WINDOW_MINIMIZE_CHANNEL = "desktop:window-minimize";
+const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = "desktop:window-toggle-maximize";
+const WINDOW_CLOSE_CHANNEL = "desktop:window-close";
+const WINDOW_GET_STATE_CHANNEL = "desktop:window-get-state";
+const WINDOW_STATE_CHANNEL = "desktop:window-state";
 const MENU_ACTION_CHANNEL = "desktop:menu-action";
 const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
@@ -44,6 +49,23 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   showInFolder: (path: string) => ipcRenderer.invoke(SHOW_IN_FOLDER_CHANNEL, path),
   shell: {
     showInFolder: (path: string) => ipcRenderer.invoke(SHOW_IN_FOLDER_CHANNEL, path),
+  },
+  windowControls: {
+    minimize: () => ipcRenderer.invoke(WINDOW_MINIMIZE_CHANNEL),
+    toggleMaximize: () => ipcRenderer.invoke(WINDOW_TOGGLE_MAXIMIZE_CHANNEL),
+    close: () => ipcRenderer.invoke(WINDOW_CLOSE_CHANNEL),
+    getState: () => ipcRenderer.invoke(WINDOW_GET_STATE_CHANNEL),
+    onState: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
+        if (typeof state !== "object" || state === null) return;
+        listener(state as Parameters<typeof listener>[0]);
+      };
+
+      ipcRenderer.on(WINDOW_STATE_CHANNEL, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(WINDOW_STATE_CHANNEL, wrappedListener);
+      };
+    },
   },
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {

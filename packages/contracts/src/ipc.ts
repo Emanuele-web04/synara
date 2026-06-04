@@ -261,6 +261,11 @@ export interface DesktopNotificationInput {
   threadId?: ThreadId;
 }
 
+export interface DesktopWindowState {
+  isMaximized: boolean;
+  isFullscreen: boolean;
+}
+
 export interface DesktopBridge {
   getWsUrl: () => string | null;
   pickFolder: () => Promise<string | null>;
@@ -279,6 +284,13 @@ export interface DesktopBridge {
   showInFolder: (path: string) => Promise<void>;
   shell?: {
     showInFolder: (path: string) => Promise<void>;
+  };
+  windowControls?: {
+    minimize: () => Promise<void>;
+    toggleMaximize: () => Promise<DesktopWindowState>;
+    close: () => Promise<void>;
+    getState: () => Promise<DesktopWindowState>;
+    onState: (listener: (state: DesktopWindowState) => void) => () => void;
   };
   onMenuAction: (listener: (action: string) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;

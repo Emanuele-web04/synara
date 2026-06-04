@@ -207,6 +207,7 @@ import {
 import PlanSidebar from "./PlanSidebar";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
+import { DesktopWindowControls } from "./DesktopWindowControls";
 import {
   ChevronDownIcon,
   ChevronLeftIcon,
@@ -7461,6 +7462,7 @@ export default function ChatView({
           >
             <SidebarHeaderNavigationControls />
             <span className="text-xs text-muted-foreground/50">No active thread</span>
+            <DesktopWindowControls className="ml-auto" />
           </div>
         )}
         <div className="flex flex-1 items-center justify-center">
@@ -8164,6 +8166,7 @@ export default function ChatView({
           onRenameThread={() => setRenameDialogOpen(true)}
           {...(onCloseThreadPane ? { onCloseThreadPane } : {})}
         />
+        <DesktopWindowControls className="-me-2 ml-2" />
       </header>
 
       <RenameThreadDialog
