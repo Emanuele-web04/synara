@@ -8,6 +8,7 @@ import {
   ThreadId,
   type ModelSelection,
   type ProviderEvent,
+  type RuntimePlan,
 } from "@t3tools/contracts";
 import { Effect, Layer, ManagedRuntime, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
@@ -31,6 +32,7 @@ import { ExecutionRuntimeService } from "../Services/ExecutionRuntimeService.ts"
 import { ExecutionRuntimeServiceLive } from "./ExecutionRuntimeService.ts";
 import { FakeRuntimeProviderAdapterLive } from "./FakeRuntimeProviderAdapter.ts";
 import { fakeRuntimeDescriptorByFlavor } from "./fakeDescriptors.ts";
+import { ExecutionRuntimePlanningTestLive } from "./testSupport.ts";
 
 interface OutboundFrame {
   readonly method?: string;
@@ -58,6 +60,7 @@ const makeServiceRuntime = () => {
   }).pipe(Layer.provide(NodeServices.layer));
   const layer = ExecutionRuntimeServiceLive.pipe(
     Layer.provide(FakeRuntimeProviderAdapterLive),
+    Layer.provide(ExecutionRuntimePlanningTestLive),
     Layer.provideMerge(orchestrationLayer),
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
     Layer.provideMerge(NodeServices.layer),
@@ -337,6 +340,141 @@ const collectFirstInboundLine = (
       Effect.map((option) => (option._tag === "Some" ? option.value : "")),
     ),
   );
+
+describe("ExecutionRuntimeService.applyRuntimePlan", () => {
+  let runtime: ServiceRuntime | undefined;
+
+  afterEach(async () => {
+    if (runtime) {
+      await runtime.dispose();
+      runtime = undefined;
+    }
+  });
+
+  const applyPlan = (localRuntime: ServiceRuntime, threadId: ThreadId, plan: RuntimePlan | null) =>
+    localRuntime.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ExecutionRuntimeService;
+        yield* service.applyRuntimePlan({ threadId, plan });
+      }),
+    );
+
+  it("provisions a remote thread end-to-end from a public runtimePlan", async () => {
+    runtime = makeServiceRuntime();
+    const localRuntime = runtime;
+    const threadId = ThreadId.makeUnsafe("thread-plan-remote");
+    await seedThread(localRuntime, threadId);
+
+    await applyPlan(localRuntime, threadId, {
+      targetKind: "remote-runtime",
+      provider: "fake",
+      ports: [],
+      persistent: true,
+      snapshotId: null,
+    });
+    const afterApply = await readThreadRuntime(localRuntime, threadId);
+    expect(afterApply?.targetKind).toBe("remote-runtime");
+    expect(afterApply?.provider).toBe("fake");
+    expect(afterApply?.status).toBe("provisioning");
+
+    const target = await localRuntime.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ExecutionRuntimeService;
+        return yield* service.ensureTargetForThread(threadId);
+      }),
+    );
+    expect(target.targetKind).toBe("remote-runtime");
+    expect(target.instanceId).not.toBeNull();
+    expect(existsSync(target.cwd as string)).toBe(true);
+
+    await localRuntime.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ExecutionRuntimeService;
+        yield* service.destroy(
+          threadId,
+          target.instanceId as NonNullable<typeof target.instanceId>,
+        );
+      }),
+    );
+  });
+
+  it("leaves local/worktree and no-plan threads on the compat path", async () => {
+    runtime = makeServiceRuntime();
+    const localRuntime = runtime;
+
+    const noPlanThread = ThreadId.makeUnsafe("thread-plan-none");
+    await seedThread(localRuntime, noPlanThread);
+    await applyPlan(localRuntime, noPlanThread, null);
+    expect(await readThreadRuntime(localRuntime, noPlanThread)).toBeNull();
+
+    const localThread = ThreadId.makeUnsafe("thread-plan-local");
+    await localRuntime.runPromise(
+      Effect.gen(function* () {
+        const engine = yield* OrchestrationEngineService;
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe(`cmd-thread-${localThread}`),
+          threadId: localThread,
+          projectId: ProjectId.makeUnsafe("project-1"),
+          title: "Local Thread",
+          modelSelection,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+        });
+      }),
+    );
+    await applyPlan(localRuntime, localThread, {
+      targetKind: "local",
+      provider: "local",
+      ports: [],
+      persistent: false,
+      snapshotId: null,
+    });
+    expect(await readThreadRuntime(localRuntime, localThread)).toBeNull();
+
+    const localTarget = await localRuntime.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ExecutionRuntimeService;
+        return yield* service.ensureTargetForThread(localThread);
+      }),
+    );
+    expect(localTarget.targetKind).toBe("local");
+    expect(localTarget.instanceId).toBeNull();
+    expect(localTarget.cwd).toBeUndefined();
+  });
+
+  it("rejects an invalid remote plan before any provisioning", async () => {
+    runtime = makeServiceRuntime();
+    const localRuntime = runtime;
+    const threadId = ThreadId.makeUnsafe("thread-plan-invalid");
+    await seedThread(localRuntime, threadId);
+
+    // A non-persistent plan derives the ephemeral flavor, which exposes no ports.
+    // Requesting one is unsupported and must be rejected before any provisioning.
+    const rejection = await localRuntime.runPromiseExit(
+      Effect.gen(function* () {
+        const service = yield* ExecutionRuntimeService;
+        yield* service.applyRuntimePlan({
+          threadId,
+          plan: {
+            targetKind: "remote-runtime",
+            provider: "fake",
+            ports: [9000],
+            persistent: false,
+            snapshotId: null,
+          },
+        });
+      }),
+    );
+    expect(rejection._tag).toBe("Failure");
+
+    // No runtime row was written: the thread stays on the compat path.
+    expect(await readThreadRuntime(localRuntime, threadId)).toBeNull();
+  });
+});
 
 describe("fake runtime descriptors", () => {
   it("declares PTY for the pty workspace and command-only for non-PTY fakes", () => {

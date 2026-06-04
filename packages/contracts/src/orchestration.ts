@@ -15,6 +15,7 @@ import {
   ExecutionRuntimeProvider,
   OrchestrationThreadRuntime,
   RuntimeInstanceStatus,
+  RuntimePlan,
   RuntimeRole,
 } from "./executionRuntime";
 import {
@@ -728,6 +729,9 @@ const ThreadCreateCommand = Schema.Struct({
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  runtimePlan: Schema.optional(Schema.NullOr(RuntimePlan)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   createdAt: IsoDateTime,
 });
 
@@ -762,6 +766,9 @@ const ThreadHandoffCreateCommand = Schema.Struct({
   createBranchFlowCompleted: Schema.optional(Schema.Boolean).pipe(
     Schema.withDecodingDefault(() => false),
   ),
+  runtimePlan: Schema.optional(Schema.NullOr(RuntimePlan)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   importedMessages: Schema.Array(ThreadHandoffImportedMessage),
   createdAt: IsoDateTime,
 });
@@ -788,6 +795,9 @@ const ThreadForkCreateCommand = Schema.Struct({
     Schema.withDecodingDefault(() => false),
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
+  runtimePlan: Schema.optional(Schema.NullOr(RuntimePlan)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   importedMessages: Schema.Array(ThreadHandoffImportedMessage),
   createdAt: IsoDateTime,
 });
@@ -1411,6 +1421,12 @@ export const ThreadCreatedPayload = Schema.Struct({
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  // The requested execution target carried from create/handoff/fork. It is plan
+  // *input*, not thread state: the reactor validates and provisions from it; the
+  // resolved runtime read-model lives on `OrchestrationThread.runtime` instead.
+  runtimePlan: Schema.optional(Schema.NullOr(RuntimePlan)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
   handoff: Schema.NullOr(ThreadHandoff).pipe(Schema.withDecodingDefault(() => null)),

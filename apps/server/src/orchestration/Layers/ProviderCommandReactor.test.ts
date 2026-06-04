@@ -29,12 +29,14 @@ import {
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
 import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
 import { ExecutionRuntimeServiceLive } from "../../executionRuntime/Layers/ExecutionRuntimeService.ts";
+import { ExecutionRuntimePlanningTestLive } from "../../executionRuntime/Layers/testSupport.ts";
 import { FakeRuntimeProviderAdapterLive } from "../../executionRuntime/Layers/FakeRuntimeProviderAdapter.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { ProviderCommandReactorLive } from "./ProviderCommandReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -76,7 +78,7 @@ async function waitFor(
 
 describe("ProviderCommandReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderCommandReactor,
+    OrchestrationEngineService | ProviderCommandReactor | ProjectionSnapshotQuery,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -302,6 +304,7 @@ describe("ProviderCommandReactor", () => {
     );
     const executionRuntimeLayer = ExecutionRuntimeServiceLive.pipe(
       Layer.provide(FakeRuntimeProviderAdapterLive),
+      Layer.provide(ExecutionRuntimePlanningTestLive),
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(NodeServices.layer),
@@ -332,6 +335,15 @@ describe("ProviderCommandReactor", () => {
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
+    const localRuntime = runtime;
+    const getThreadRuntime = (threadId: ThreadId) =>
+      localRuntime.runPromise(
+        Effect.gen(function* () {
+          const query = yield* ProjectionSnapshotQuery;
+          const option = yield* query.getThreadDetailById(threadId);
+          return option._tag === "Some" ? (option.value.runtime ?? null) : null;
+        }),
+      );
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(reactor.start.pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(reactor.drain);
@@ -385,6 +397,7 @@ describe("ProviderCommandReactor", () => {
       stateDir,
       drain,
       emitRuntimeEvent,
+      getThreadRuntime,
     };
   }
 
@@ -424,6 +437,67 @@ describe("ProviderCommandReactor", () => {
       }),
     );
   }
+
+  it("provisions a remote runtime from a thread.created runtimePlan", async () => {
+    const harness = await createHarness();
+    const createdAt = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-thread-remote-plan"),
+        threadId: ThreadId.makeUnsafe("thread-remote-plan"),
+        projectId: asProjectId("project-1"),
+        title: "Remote Plan Thread",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        runtimePlan: {
+          targetKind: "remote-runtime",
+          provider: "fake",
+          ports: [],
+          persistent: true,
+          snapshotId: null,
+        },
+        createdAt,
+      }),
+    );
+    await harness.drain();
+
+    // The reactor honored the plan: the runtime read-model reflects the remote
+    // target with the public `fake` provider, marked for provisioning.
+    await waitFor(async () => {
+      const runtimeRow = await harness.getThreadRuntime(ThreadId.makeUnsafe("thread-remote-plan"));
+      return runtimeRow?.targetKind === "remote-runtime";
+    });
+    const runtimeRow = await harness.getThreadRuntime(ThreadId.makeUnsafe("thread-remote-plan"));
+    expect(runtimeRow?.targetKind).toBe("remote-runtime");
+    expect(runtimeRow?.provider).toBe("fake");
+    expect(runtimeRow?.status).toBe("provisioning");
+  });
+
+  it("leaves a local thread.created (no runtimePlan) on the compat path", async () => {
+    const harness = await createHarness();
+    const createdAt = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-thread-local-plan"),
+        threadId: ThreadId.makeUnsafe("thread-local-plan"),
+        projectId: asProjectId("project-1"),
+        title: "Local Thread",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await harness.drain();
+    expect(await harness.getThreadRuntime(ThreadId.makeUnsafe("thread-local-plan"))).toBeNull();
+  });
 
   it("bootstraps sidechat context when the provider cannot fork natively", async () => {
     const harness = await createHarness();

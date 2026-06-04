@@ -65,24 +65,30 @@ const collectRejectionReasons = (
 const makeExecutionRuntimePlanner = Effect.gen(function* () {
   const registry = yield* RuntimeProviderRegistry;
 
-  const validate: ExecutionRuntimePlannerShape["validate"] = (plan, role) =>
-    registry.getDescriptor(plan.provider).pipe(
-      Effect.flatMap((descriptor) => {
-        const reasons = collectRejectionReasons(plan, role, descriptor);
-        if (reasons.length > 0) {
-          return Effect.fail(
-            new RuntimePlanRejectedError({
-              provider: plan.provider,
-              targetKind: plan.targetKind,
-              reasons,
-            }),
-          );
-        }
-        return Effect.succeed(plan);
-      }),
-    );
+  const validateAgainstDescriptor: ExecutionRuntimePlannerShape["validateAgainstDescriptor"] = (
+    plan,
+    role,
+    descriptor,
+  ) => {
+    const reasons = collectRejectionReasons(plan, role, descriptor);
+    if (reasons.length > 0) {
+      return Effect.fail(
+        new RuntimePlanRejectedError({
+          provider: plan.provider,
+          targetKind: plan.targetKind,
+          reasons,
+        }),
+      );
+    }
+    return Effect.succeed(plan);
+  };
 
-  return { validate } satisfies ExecutionRuntimePlannerShape;
+  const validate: ExecutionRuntimePlannerShape["validate"] = (plan, role) =>
+    registry
+      .getDescriptor(plan.provider)
+      .pipe(Effect.flatMap((descriptor) => validateAgainstDescriptor(plan, role, descriptor)));
+
+  return { validate, validateAgainstDescriptor } satisfies ExecutionRuntimePlannerShape;
 });
 
 export const ExecutionRuntimePlannerLive = Layer.effect(

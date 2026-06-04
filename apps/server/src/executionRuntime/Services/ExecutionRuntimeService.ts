@@ -19,6 +19,7 @@
 import type {
   ExecutionInstanceId,
   ExecutionTargetKind,
+  RuntimePlan,
   RuntimeRole,
   ThreadId,
 } from "@t3tools/contracts";
@@ -29,7 +30,11 @@ import type {
   InMemoryTransportController,
   JsonRpcLineTransport,
 } from "../../provider/process/JsonRpcLineTransport.ts";
-import type { RuntimeProvisionFailedError } from "../Errors.ts";
+import type {
+  RuntimePlanRejectedError,
+  RuntimeProvisionFailedError,
+  RuntimeProviderUnsupportedError,
+} from "../Errors.ts";
 import type { FakeRuntimeFlavor } from "./FakeRuntimeFlavor.ts";
 
 /**
@@ -80,6 +85,23 @@ export interface ExecutionRuntimeServiceShape {
     readonly flavor: FakeRuntimeFlavor;
     readonly role?: RuntimeRole;
   }) => Effect.Effect<void, RuntimeProvisionFailedError>;
+  /**
+   * Public entry point that honors a `RuntimePlan` carried on
+   * create/handoff/fork. For `local`/`worktree` (or no plan) it does nothing,
+   * preserving the existing compat path. For `remote-runtime` it validates the
+   * plan against the resolved descriptor *before* any provisioning, then marks
+   * the thread remote with the flavor derived from the plan. Validation failures
+   * surface as `RuntimePlanRejectedError` / `RuntimeProviderUnsupportedError`, so
+   * an invalid plan is rejected pre-provision.
+   */
+  readonly applyRuntimePlan: (input: {
+    readonly threadId: ThreadId;
+    readonly plan: RuntimePlan | null | undefined;
+    readonly role?: RuntimeRole;
+  }) => Effect.Effect<
+    void,
+    RuntimeProvisionFailedError | RuntimePlanRejectedError | RuntimeProviderUnsupportedError
+  >;
   /**
    * Resolve (and, for remote targets, provision) the execution target backing a
    * thread before its provider session starts. Idempotent: re-resolving a thread

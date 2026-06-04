@@ -286,7 +286,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      return {
+      const createdEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -325,11 +325,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           subagentRole: command.subagentRole,
           forkSourceThreadId: null,
           lastKnownPr: command.lastKnownPr,
+          runtimePlan: command.runtimePlan,
           handoff: null,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
       };
+      return createdEvent;
     }
 
     case "thread.handoff.create": {
@@ -405,6 +407,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           subagentNickname: null,
           subagentRole: null,
           forkSourceThreadId: null,
+          runtimePlan: command.runtimePlan,
           handoff: {
             sourceThreadId: command.sourceThreadId,
             sourceProvider: sourceThread.modelSelection.provider,
@@ -510,6 +513,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           subagentRole: null,
           forkSourceThreadId: command.sourceThreadId,
           sidechatSourceThreadId: command.sidechatSourceThreadId,
+          runtimePlan: command.runtimePlan,
           handoff: null,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,

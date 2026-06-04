@@ -3,8 +3,12 @@ import { Layer } from "effect";
 
 import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQuery";
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore";
+import { ExecutionRuntimePlannerLive } from "./executionRuntime/Layers/ExecutionRuntimePlanner";
 import { ExecutionRuntimeServiceLive } from "./executionRuntime/Layers/ExecutionRuntimeService";
+import { FAKE_RUNTIME_DESCRIPTORS } from "./executionRuntime/Layers/fakeDescriptors";
 import { FakeRuntimeProviderAdapterLive } from "./executionRuntime/Layers/FakeRuntimeProviderAdapter";
+import { BUILT_IN_RUNTIME_DESCRIPTORS } from "./executionRuntime/Layers/descriptors";
+import { makeRuntimeProviderRegistryLive } from "./executionRuntime/Layers/RuntimeProviderRegistry";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor";
@@ -52,9 +56,19 @@ export function makeServerRuntimeServicesLayer() {
   // The execution-runtime service resolves/provisions where a thread runs before
   // the provider session starts. Its fake adapter needs FileSystem; the service
   // itself needs ChildProcessSpawner — both come from NodeServices below. Engine
-  // + snapshot query come from runtimeServicesLayer.
+  // + snapshot query come from runtimeServicesLayer. The planner + registry let
+  // it validate a public `runtimePlan` against the resolved descriptor (fake
+  // flavors included) before provisioning.
+  const runtimeProviderRegistryLayer = makeRuntimeProviderRegistryLive({
+    descriptors: [...BUILT_IN_RUNTIME_DESCRIPTORS, ...FAKE_RUNTIME_DESCRIPTORS],
+  });
+  const executionRuntimePlannerLayer = ExecutionRuntimePlannerLive.pipe(
+    Layer.provide(runtimeProviderRegistryLayer),
+  );
   const executionRuntimeServiceLayer = ExecutionRuntimeServiceLive.pipe(
     Layer.provide(FakeRuntimeProviderAdapterLive),
+    Layer.provide(executionRuntimePlannerLayer),
+    Layer.provide(runtimeProviderRegistryLayer),
     Layer.provideMerge(runtimeServicesLayer),
   );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(

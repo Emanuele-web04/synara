@@ -67,6 +67,7 @@ type ProviderIntentEvent = Extract<
   OrchestrationEvent,
   {
     type:
+      | "thread.created"
       | "thread.meta-updated"
       | "thread.runtime-mode-set"
       | "thread.turn-queued"
@@ -1887,6 +1888,21 @@ const make = Effect.gen(function* () {
   const processDomainEvent = (event: ProviderIntentEvent) =>
     Effect.gen(function* () {
       switch (event.type) {
+        case "thread.created": {
+          // Honor a `runtimePlan` carried on create/handoff/fork. The reactor
+          // stays provider-agnostic: it hands the plan to the execution-runtime
+          // service, which validates it (rejecting invalid plans pre-provision)
+          // and marks the thread remote. No plan / local / worktree is a no-op,
+          // preserving the existing local spawn path exactly.
+          if (event.payload.runtimePlan == null) {
+            return;
+          }
+          yield* executionRuntimeService.applyRuntimePlan({
+            threadId: event.payload.threadId,
+            plan: event.payload.runtimePlan,
+          });
+          return;
+        }
         case "thread.meta-updated": {
           const thread = yield* resolveThread(event.payload.threadId);
           if (event.payload.modelSelection === undefined) {
@@ -1996,6 +2012,7 @@ const make = Effect.gen(function* () {
   const start: ProviderCommandReactorShape["start"] = Effect.all([
     Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
       if (
+        event.type !== "thread.created" &&
         event.type !== "thread.meta-updated" &&
         event.type !== "thread.runtime-mode-set" &&
         event.type !== "thread.turn-queued" &&

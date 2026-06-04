@@ -45,6 +45,7 @@ import { ProviderService } from "../src/provider/Services/ProviderService.ts";
 import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
 import { ExecutionRuntimeServiceLive } from "../src/executionRuntime/Layers/ExecutionRuntimeService.ts";
+import { ExecutionRuntimePlanningTestLive } from "../src/executionRuntime/Layers/testSupport.ts";
 import { FakeRuntimeProviderAdapterLive } from "../src/executionRuntime/Layers/FakeRuntimeProviderAdapter.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
@@ -312,6 +313,7 @@ export const makeOrchestrationIntegrationHarness = (
     } as unknown as TextGenerationShape);
     const executionRuntimeServiceLayer = ExecutionRuntimeServiceLive.pipe(
       Layer.provide(FakeRuntimeProviderAdapterLive),
+      Layer.provide(ExecutionRuntimePlanningTestLive),
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(NodeServices.layer),
     );

@@ -15,6 +15,7 @@ import type { Effect } from "effect";
 import type { RuntimePlan, RuntimeRole } from "@t3tools/contracts";
 
 import type { RuntimePlanRejectedError, RuntimeProviderUnsupportedError } from "../Errors.ts";
+import type { RuntimeProviderDescriptor } from "./RuntimeProviderDescriptor.ts";
 
 export interface ExecutionRuntimePlannerShape {
   /**
@@ -25,6 +26,16 @@ export interface ExecutionRuntimePlannerShape {
     plan: RuntimePlan,
     role: RuntimeRole,
   ) => Effect.Effect<RuntimePlan, RuntimePlanRejectedError | RuntimeProviderUnsupportedError>;
+  /**
+   * Validate against an already-resolved descriptor. Used when the descriptor is
+   * keyed by something finer than `plan.provider` (the `fake` family resolves by
+   * flavor), so the service resolves it and reuses the same rejection rules.
+   */
+  readonly validateAgainstDescriptor: (
+    plan: RuntimePlan,
+    role: RuntimeRole,
+    descriptor: RuntimeProviderDescriptor,
+  ) => Effect.Effect<RuntimePlan, RuntimePlanRejectedError>;
 }
 
 export class ExecutionRuntimePlanner extends ServiceMap.Service<

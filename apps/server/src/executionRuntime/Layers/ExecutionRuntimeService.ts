@@ -20,6 +20,7 @@ import {
   ExecutionInstanceId,
   RuntimeProcessId,
   type ExecutionTargetKind,
+  type RuntimePlan,
   type RuntimeRole,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -30,7 +31,9 @@ import { OrchestrationEngineService } from "../../orchestration/Services/Orchest
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { JsonRpcLineTransport } from "../../provider/process/JsonRpcLineTransport.ts";
 import { RuntimeProvisionFailedError } from "../Errors.ts";
-import type { FakeRuntimeFlavor } from "../Services/FakeRuntimeFlavor.ts";
+import { ExecutionRuntimePlanner } from "../Services/ExecutionRuntimePlanner.ts";
+import { type FakeRuntimeFlavor } from "../Services/FakeRuntimeFlavor.ts";
+import { RuntimeProviderRegistry } from "../Services/RuntimeProviderRegistry.ts";
 import {
   ExecutionRuntimeService,
   type ExecutionRuntimeServiceShape,
@@ -38,7 +41,27 @@ import {
 } from "../Services/ExecutionRuntimeService.ts";
 import { FakeRuntimeProviderAdapter } from "../Services/FakeRuntimeProviderAdapter.ts";
 
+/**
+ * Pick the server-internal fake flavor a public `RuntimePlan` maps to. The
+ * public `fake` provider hides flavor; we choose by the plan's persistence
+ * intent. A persistent (or snapshot-backed) plan lands on the pty-workspace
+ * flavor, which backs every role, ports, persistence, and snapshots. A
+ * non-persistent plan lands on the throwaway ephemeral flavor, which exposes no
+ * ports and no snapshots — so a non-persistent plan that still asks for ports or
+ * a snapshot is genuinely unsupported and the planner rejects it pre-provision.
+ */
+const deriveFakeFlavor = (plan: RuntimePlan): FakeRuntimeFlavor =>
+  plan.persistent === true || plan.snapshotId != null
+    ? "fake-pty-workspace"
+    : "fake-ephemeral-runtime";
+
 const RUNNING_INSTANCE_STATUSES: ReadonlySet<string> = new Set(["starting", "running", "idle"]);
+
+// When a remote thread is resolved after the in-memory flavor map is gone (a
+// server restart between provision-request and provisioning), the read-model
+// still says remote/`fake`. Fall back to a flavor that backs the agent role so
+// the public remote path stays resilient across restart instead of failing.
+const DEFAULT_FAKE_FLAVOR: FakeRuntimeFlavor = "fake-pty-workspace";
 
 const runtimeCommandId = (threadId: ThreadId, suffix: string): CommandId =>
   CommandId.makeUnsafe(`runtime:${threadId}:${suffix}`);
@@ -47,6 +70,8 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const fakeAdapter = yield* FakeRuntimeProviderAdapter;
+  const planner = yield* ExecutionRuntimePlanner;
+  const registry = yield* RuntimeProviderRegistry;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
   // Server-internal flavor registration standing in for a public `runtimePlan`.
@@ -97,18 +122,29 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
       }));
     });
 
+  const applyRuntimePlan: ExecutionRuntimeServiceShape["applyRuntimePlan"] = (input) =>
+    Effect.gen(function* () {
+      const plan = input.plan;
+      // No plan, or a local/worktree plan, keeps the existing compat path: no
+      // validation, no provisioning, no flavor.
+      if (plan == null || plan.targetKind !== "remote-runtime") {
+        return;
+      }
+      const role: RuntimeRole = input.role ?? "agent";
+      const flavor = deriveFakeFlavor(plan);
+      // Validate against the flavor's descriptor before any provisioning, so an
+      // unsupported plan/role combination is rejected pre-provision.
+      const descriptor = yield* registry.getDescriptorByFlavor(flavor);
+      yield* planner.validateAgainstDescriptor(plan, role, descriptor);
+      yield* markThreadRemote({ threadId: input.threadId, flavor, role });
+    });
+
   const provisionRemote = (
     threadId: ThreadId,
     targetKind: ExecutionTargetKind,
   ): Effect.Effect<ResolvedExecutionTarget, RuntimeProvisionFailedError> =>
     Effect.gen(function* () {
-      const flavor = threadFlavors.get(threadId);
-      if (flavor === undefined) {
-        return yield* failProvision(
-          threadId,
-          "no fake runtime flavor registered for remote thread",
-        );
-      }
+      const flavor = threadFlavors.get(threadId) ?? DEFAULT_FAKE_FLAVOR;
       const context = yield* fakeAdapter
         .provision({ threadId, flavor })
         .pipe(Effect.mapError((cause) => failProvision(threadId, `provision failed: ${cause}`)));
@@ -258,6 +294,7 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
 
   return {
     markThreadRemote,
+    applyRuntimePlan,
     ensureTargetForThread,
     exec,
     destroy,
