@@ -49,6 +49,12 @@ export const TerminalWriteInput = Schema.Struct({
 });
 export type TerminalWriteInput = Schema.Codec.Encoded<typeof TerminalWriteInput>;
 
+export const TerminalAckOutputInput = Schema.Struct({
+  ...TerminalSessionInput.fields,
+  bytes: Schema.Int.check(Schema.isGreaterThan(0)).check(Schema.isLessThanOrEqualTo(8_388_608)),
+});
+export type TerminalAckOutputInput = Schema.Codec.Encoded<typeof TerminalAckOutputInput>;
+
 export const TerminalResizeInput = Schema.Struct({
   ...TerminalSessionInput.fields,
   cols: TerminalColsSchema,
@@ -85,6 +91,7 @@ export const TerminalSessionSnapshot = Schema.Struct({
   status: TerminalSessionStatus,
   pid: Schema.NullOr(Schema.Int.check(Schema.isGreaterThan(0))),
   history: Schema.String,
+  replayPreamble: Schema.optional(Schema.String.check(Schema.isMaxLength(4_096))),
   exitCode: Schema.NullOr(Schema.Int),
   exitSignal: Schema.NullOr(Schema.Int),
   updatedAt: Schema.String,
@@ -107,6 +114,7 @@ const TerminalOutputEvent = Schema.Struct({
   ...TerminalEventBaseSchema.fields,
   type: Schema.Literal("output"),
   data: Schema.String,
+  byteLength: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 });
 
 const TerminalExitedEvent = Schema.Struct({

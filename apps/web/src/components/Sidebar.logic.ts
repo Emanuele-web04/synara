@@ -255,10 +255,11 @@ export function pruneExpandedProjectThreadListsForCollapsedProjects<
  * Literal class strings are required so Tailwind's JIT scanner emits them.
  */
 export function resolveThreadRowTrailingReserveClass(metaChipCount: number): string {
-  if (metaChipCount <= 0) return "pr-[2.75rem]";
-  if (metaChipCount === 1) return "pr-[3.75rem]";
-  if (metaChipCount === 2) return "pr-[4.25rem]";
-  return "pr-[4.75rem]";
+  // Timestamp/status keeps a fixed column; meta chips + hover actions share a second column.
+  if (metaChipCount <= 0) return "pr-[4.75rem]";
+  if (metaChipCount === 1) return "pr-[5.75rem]";
+  if (metaChipCount === 2) return "pr-[6.25rem]";
+  return "pr-[6.75rem]";
 }
 
 export function resolveThreadRowClassName(input: {

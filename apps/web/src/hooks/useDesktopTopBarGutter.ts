@@ -3,36 +3,21 @@
 // Layer: Shared web shell chrome
 // Depends on: sidebar context, electron env detection.
 
+import {
+  DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_VAR,
+  resolveMacDesktopTopBarTrafficLightGutterCssPx,
+} from "@t3tools/shared/desktopChrome";
+import { useLayoutEffect } from "react";
+
 import { isElectron } from "~/env";
 import { useSidebar } from "~/components/ui/sidebar";
 import { isMacPlatform } from "~/lib/utils";
 
 /**
- * Tailwind padding that clears the macOS traffic light cluster
- * (positioned at x=16, y=16 in the Electron BrowserWindow, see apps/desktop main).
- *
- * The 3-button cluster ends at roughly x=68 (16px inset + ~52px cluster); this
- * gutter places the leading controls ~36px to the right of the lights so they
- * read as a clearly separate group instead of crowding the green button.
- *
- * IMPORTANT — why the `!` (important) modifier:
- * Host headers carry their own horizontal padding (`px-4`, `px-3 sm:px-5`, …).
- * `twMerge` does NOT treat `px-*` and `pl-*` as conflicting in this direction, so
- * BOTH survive a `cn()` call and the winner is left to CSS-cascade order — which
- * differs per header (`px-4` vs `px-3 sm:px-5`), making the leading controls land
- * at a DIFFERENT x when the sidebar is open vs closed. Marking the gutter
- * `!important` makes `padding-left` always beat the non-important base
- * `px-*`, so every surface resolves to the exact same x in both states. Both the
- * base and `sm:` variants are emitted so the override also wins at `sm:` (e.g.
- * over `sm:px-5`).
- *
- * Single source of truth: every top bar AND the open-sidebar header use this so
- * the leading controls sit at the same x whether the sidebar is open or closed.
- * This is the one knob to tune the lights→controls gap. The three macOS dots at
- * `trafficLightPosition.x = 16` span to ~70px, so 84px leaves a tight ~14px gap
- * before the toggle (was 104px / ~34px, which read as too far from the lights).
+ * Class name backed by `index.css` (not Tailwind) so the gutter survives zoom
+ * retuning via {@link DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_VAR}.
  */
-export const DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS = "pl-[84px]! sm:pl-[84px]!";
+export const DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS = "desktop-top-bar-traffic-light-gutter";
 
 /**
  * Pure helper: should a top bar at the left edge of the desktop window reserve
@@ -58,6 +43,51 @@ export function shouldReserveDesktopTopBarTrafficLightGutter(input: {
   // so the chat header always owns the left edge in that mode.
   if (input.isMobile) return true;
   return !input.sidebarOpen;
+}
+
+function readDesktopZoomFactor(): number {
+  const bridge = window.desktopBridge;
+  if (!bridge?.getZoomFactor) return 1;
+  return bridge.getZoomFactor();
+}
+
+function applyTrafficLightGutterCssVar(zoomFactor: number): void {
+  document.documentElement.style.setProperty(
+    DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_VAR,
+    `${resolveMacDesktopTopBarTrafficLightGutterCssPx(zoomFactor)}px`,
+  );
+}
+
+/**
+ * Keeps the macOS traffic-light gutter CSS variable aligned with Electron page zoom.
+ * Mount once near the app root (see `__root.tsx`).
+ */
+export function useSyncDesktopTopBarTrafficLightGutterZoom(): void {
+  const isMacDesktop = typeof navigator !== "undefined" ? isMacPlatform(navigator.platform) : false;
+
+  useLayoutEffect(() => {
+    if (!isElectron || !isMacDesktop) {
+      return;
+    }
+
+    applyTrafficLightGutterCssVar(readDesktopZoomFactor());
+
+    const bridge = window.desktopBridge;
+    const unsubscribe = bridge?.onZoomFactorChange?.((zoomFactor) => {
+      applyTrafficLightGutterCssVar(zoomFactor);
+    });
+
+    // Preload can attach after the first layout pass; re-apply on the next frame.
+    const frame = requestAnimationFrame(() => {
+      applyTrafficLightGutterCssVar(readDesktopZoomFactor());
+    });
+
+    return () => {
+      cancelAnimationFrame(frame);
+      unsubscribe?.();
+      document.documentElement.style.removeProperty(DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_VAR);
+    };
+  }, [isMacDesktop]);
 }
 
 /**

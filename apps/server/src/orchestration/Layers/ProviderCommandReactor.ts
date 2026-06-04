@@ -199,6 +199,16 @@ function isStaleCodexResumeError(error: unknown): boolean {
   );
 }
 
+function isStaleClaudeResumeError(error: unknown): boolean {
+  if (Schema.is(ProviderAdapterRequestError)(error)) {
+    return (
+      error.provider === "claudeAgent" &&
+      error.detail.toLowerCase().includes("no conversation found with session id")
+    );
+  }
+  return String(error).toLowerCase().includes("no conversation found with session id");
+}
+
 function isRollbackStillInProgressError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
@@ -548,13 +558,10 @@ const make = Effect.gen(function* () {
         .stopSession({ threadId: input.threadId })
         .pipe(Effect.catch(() => Effect.void));
     }
-    yield* Effect.logWarning(
-      "provider command reactor cleared stale provider resume state during conversation rollback",
-      {
-        threadId: input.threadId,
-        cause: input.cause.message,
-      },
-    );
+    yield* Effect.logWarning("provider command reactor cleared stale provider resume state", {
+      threadId: input.threadId,
+      cause: input.cause.message,
+    });
   });
 
   const rollbackProviderConversationForEdit = Effect.fnUntraced(function* (input: {
@@ -954,6 +961,16 @@ const make = Effect.gen(function* () {
             }
           : requestedModelSelection
         : input.modelSelection;
+    const sendQueuedProviderTurn = (messageText: string | undefined) =>
+      providerService.sendTurn({
+        threadId: input.threadId,
+        ...(messageText ? { input: messageText } : {}),
+        ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
+        ...(input.skills !== undefined ? { skills: input.skills } : {}),
+        ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
+        ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
+        ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      });
 
     const captureMessageStartCheckpoint = Effect.gen(function* () {
       if ((input.dispatchMode ?? "queue") === "steer") {
@@ -1006,15 +1023,60 @@ const make = Effect.gen(function* () {
       });
     } else {
       yield* captureMessageStartCheckpoint;
-      yield* providerService.sendTurn({
-        threadId: input.threadId,
-        ...(normalizedInput ? { input: normalizedInput } : {}),
-        ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
-        ...(input.skills !== undefined ? { skills: input.skills } : {}),
-        ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
-        ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
-        ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
-      });
+      yield* sendQueuedProviderTurn(normalizedInput).pipe(
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            if (selectedProvider !== "claudeAgent" || !isStaleClaudeResumeError(error)) {
+              return yield* Effect.fail(error);
+            }
+
+            // Claude cannot continue from a missing native session; clear the
+            // dead cursor and replay once with Synara transcript context.
+            yield* clearStaleProviderResumeState({
+              threadId: input.threadId,
+              cause: error,
+            });
+            yield* ensureSessionForThread(input.threadId, input.createdAt, {
+              ...(input.modelSelection !== undefined
+                ? { modelSelection: input.modelSelection }
+                : {}),
+              ...(input.providerOptions !== undefined
+                ? { providerOptions: input.providerOptions }
+                : {}),
+              ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
+            });
+
+            const retryBootstrapText =
+              availableBootstrapChars > 0
+                ? buildPriorTranscriptBootstrapText(
+                    thread,
+                    input.messageId,
+                    availableBootstrapChars,
+                  )
+                : null;
+            const retryProviderInput = retryBootstrapText
+              ? `<thread_context>\n${retryBootstrapText}\n</thread_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
+              : boundaryMessageText;
+            const retryNormalizedInput = toNonEmptyProviderInput(
+              normalizeSkillMentionTextForProvider({
+                provider: selectedProvider as ProviderKind,
+                messageText: retryProviderInput,
+                ...(input.skills !== undefined ? { skills: input.skills } : {}),
+              }),
+            );
+
+            yield* Effect.logWarning(
+              "provider command reactor retrying claude turn after stale resume",
+              {
+                threadId: input.threadId,
+                messageId: input.messageId,
+                bootstrappedPriorTranscript: retryBootstrapText !== null,
+              },
+            );
+            return yield* sendQueuedProviderTurn(retryNormalizedInput);
+          }),
+        ),
+      );
     }
     if (handoffBootstrapText && thread.handoff !== null) {
       yield* orchestrationEngine.dispatch({

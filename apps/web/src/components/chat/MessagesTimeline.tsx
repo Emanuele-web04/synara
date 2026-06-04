@@ -673,7 +673,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           label="Edit message"
                           tooltip="Edit and resend"
                           disabled={isRevertingCheckpoint}
-                          className="disabled:text-muted-foreground/35"
+                          className={cn(
+                            MESSAGE_HOVER_REVEAL_CLASS_NAME,
+                            "disabled:text-muted-foreground/35",
+                          )}
                           onClick={() => startUserMessageEdit(row.message.id)}
                         >
                           <NewThreadIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
@@ -684,7 +687,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           label="Revert to this message"
                           tooltip="Revert to this message"
                           disabled={isRevertingCheckpoint || isWorking}
-                          className="disabled:text-muted-foreground/35"
+                          className={cn(
+                            MESSAGE_HOVER_REVEAL_CLASS_NAME,
+                            "disabled:text-muted-foreground/35",
+                          )}
                           onClick={() => onRevertUserMessage(row.message.id)}
                         >
                           <Undo2Icon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
@@ -1005,7 +1011,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       ? "Edited 1 file"
                       : `Edited ${checkpointFiles.length} files`;
                   return (
-                    <div className="mt-4 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)]">
+                    <div className="mt-1 mb-4 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)]">
                       <div
                         className={cn(
                           "flex items-center justify-between gap-3 bg-[var(--app-user-message-background)] px-3 py-1.5",

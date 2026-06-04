@@ -121,6 +121,8 @@ const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 const SHOW_IN_FOLDER_CHANNEL = "desktop:show-in-folder";
 const MENU_ACTION_CHANNEL = "desktop:menu-action";
+const ZOOM_FACTOR_CHANNEL = "desktop:zoom-factor";
+const ZOOM_FACTOR_CHANGED_CHANNEL = "desktop:zoom-factor-changed";
 const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 const UPDATE_CHECK_CHANNEL = "desktop:update-check";
@@ -868,6 +870,17 @@ function dispatchMenuAction(action: string): void {
 
 function resolveMenuTargetWindow(): BrowserWindow | null {
   return BrowserWindow.getFocusedWindow() ?? mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null;
+}
+
+function sendDesktopZoomFactor(webContents: Electron.WebContents): void {
+  if (webContents.isDestroyed()) return;
+  webContents.send(ZOOM_FACTOR_CHANGED_CHANNEL, webContents.getZoomFactor());
+}
+
+function attachDesktopZoomFactorSync(window: BrowserWindow): void {
+  const notify = () => sendDesktopZoomFactor(window.webContents);
+  window.webContents.on("zoom-changed", notify);
+  window.webContents.on("did-finish-load", notify);
 }
 
 function resetWindowZoomFromMenu(): void {
@@ -2101,6 +2114,11 @@ function registerIpcHandlers(): void {
       normalizeDesktopWsUrl(backendWsUrl) ?? resolveDesktopWsUrlFromEnv(process.env);
   });
 
+  ipcMain.removeAllListeners(ZOOM_FACTOR_CHANNEL);
+  ipcMain.on(ZOOM_FACTOR_CHANNEL, (event: IpcMainEvent) => {
+    event.returnValue = event.sender.getZoomFactor();
+  });
+
   ipcMain.removeHandler(PICK_FOLDER_CHANNEL);
   ipcMain.handle(PICK_FOLDER_CHANNEL, async () => {
     const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
@@ -2404,6 +2422,7 @@ function createWindow(): BrowserWindow {
     },
   });
   browserManager.setWindow(window);
+  attachDesktopZoomFactorSync(window);
 
   window.webContents.on("context-menu", (event, params) => {
     event.preventDefault();

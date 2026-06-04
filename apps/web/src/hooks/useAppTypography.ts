@@ -15,6 +15,7 @@ const TYPOGRAPHY_CSS_VARIABLES = [
   "--app-font-size-chat-code",
   "--app-font-size-chat-meta",
   "--app-font-size-chat-tiny",
+  "--app-font-size-terminal",
 ] as const;
 
 export function useAppTypography() {
@@ -36,6 +37,7 @@ export function useAppTypography() {
       "--app-font-size-chat-code": `${scale.chatCodePx}px`,
       "--app-font-size-chat-meta": `${scale.chatMetaPx}px`,
       "--app-font-size-chat-tiny": `${scale.chatTinyPx}px`,
+      "--app-font-size-terminal": `${settings.terminalFontSizePx}px`,
     };
 
     for (const cssVariable of TYPOGRAPHY_CSS_VARIABLES) {
@@ -47,5 +49,5 @@ export function useAppTypography() {
         rootStyle.removeProperty(cssVariable);
       }
     };
-  }, [settings.chatFontSizePx]);
+  }, [settings.chatFontSizePx, settings.terminalFontSizePx]);
 }

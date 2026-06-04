@@ -408,15 +408,12 @@
   --radius: 0.625rem;
   --radius-user-message: 0.8rem;
   --font-ui-family: var(
-    --app-font-ui-override,
-    var(
-      --theme-font-ui-family,
-      -apple-system,
-      BlinkMacSystemFont,
-      "Segoe UI",
-      system-ui,
-      sans-serif
-    )
+    --theme-font-ui-family,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    system-ui,
+    sans-serif
   );
   --font-mono-family: var(
     --theme-font-code-family,
@@ -429,10 +426,7 @@
     Menlo,
     monospace
   );
-  --font-chat-code-family: var(
-    --app-font-chat-code-override,
-    var(--theme-font-code-family, var(--font-mono-family))
-  );
+  --font-chat-code-family: var(--theme-font-code-family, var(--font-mono-family));
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --app-shell-background: transparent;
   --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
@@ -1189,6 +1183,12 @@ diffs-container {
 .chat-composer-stacked-top,
 .chat-composer-surface-banner {
   border-radius: var(--composer-radius);
+}
+
+/* macOS Electron: leading inset for sidebar toggle + route nav past native traffic lights.
+   Value is driven by --desktop-top-bar-traffic-light-gutter (inverse-scaled on View zoom). */
+:root[data-runtime="electron"] .desktop-top-bar-traffic-light-gutter {
+  padding-left: var(--desktop-top-bar-traffic-light-gutter, 90px) !important;
 }
 
 /* Electron: continuous macOS-style corners (do not stack with corner-shape). */

@@ -45,3 +45,26 @@ export function getMacTrafficLightPosition(): { x: number; y: number } {
     y: Math.round(CHAT_SURFACE_HEADER_HEIGHT_PX / 2 - MAC_TRAFFIC_LIGHT_DOT_RADIUS_PX),
   };
 }
+
+/**
+ * Leading inset (CSS px at zoom 1) from the window's left edge to the sidebar toggle /
+ * route-nav cluster on macOS Electron. Native traffic lights do not scale with
+ * `webContents` zoom, so callers divide this by the live zoom factor.
+ */
+export const MAC_DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_PX = 90;
+
+/** CSS custom property written by the web shell when macOS desktop zoom changes. */
+export const DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_VAR =
+  "--desktop-top-bar-traffic-light-gutter";
+
+/**
+ * Gutter width in layout CSS pixels for the current page zoom factor.
+ * Inverse-scales so the on-screen gap stays aligned with the native lights.
+ */
+export function resolveMacDesktopTopBarTrafficLightGutterCssPx(zoomFactor: number): number {
+  const safeZoom =
+    typeof zoomFactor === "number" && Number.isFinite(zoomFactor) && zoomFactor > 0
+      ? zoomFactor
+      : 1;
+  return Math.round(MAC_DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_PX / safeZoom);
+}

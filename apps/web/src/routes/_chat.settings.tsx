@@ -33,12 +33,15 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   type AppSettings,
   MAX_CHAT_FONT_SIZE_PX,
+  MAX_TERMINAL_FONT_SIZE_PX,
   getCustomModelsForProvider,
   getGitTextGenerationModelOptions,
   MAX_CUSTOM_MODEL_LENGTH,
   MIN_CHAT_FONT_SIZE_PX,
+  MIN_TERMINAL_FONT_SIZE_PX,
   MODEL_PROVIDER_SETTINGS,
   normalizeChatFontSizePx,
+  normalizeTerminalFontSizePx,
   patchCustomModels,
   useAppSettings,
 } from "../appSettings";
@@ -49,12 +52,9 @@ import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
 import {
-  CODE_FONT_PRESETS,
   SettingResetButton,
-  SettingsFontControl,
   SettingsSegmentedControl,
   SettingsSelectControl,
-  UI_FONT_PRESETS,
 } from "../components/settings/SettingControls";
 import { Select, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
@@ -445,8 +445,7 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
 
 // ── Settings UI primitives ────────────────────────────────────────────────
 
-// SettingResetButton / SettingsSelectControl / SettingsFontControl and the font
-// preset lists live in ~/components/settings/SettingControls (imported above).
+// Shared settings controls live in ~/components/settings/SettingControls.
 
 function isProviderSelectOption(value: string): value is ProviderKind {
   return PROVIDER_SELECT_OPTIONS.includes(value as ProviderKind);
@@ -774,7 +773,6 @@ function SettingsRouteView() {
     settings.openCodeServerPassword !== defaults.openCodeServerPassword ||
     settings.piBinaryPath !== defaults.piBinaryPath ||
     settings.piAgentDir !== defaults.piAgentDir;
-
   const changedSettingLabels = [
     ...(theme !== "system" ? ["Theme"] : []),
     ...(!isDefaultActiveTheme ? [`${resolvedTheme === "dark" ? "Dark" : "Light"} theme pack`] : []),
@@ -790,9 +788,8 @@ function SettingsRouteView() {
     ...(settings.showWorkspaceSection !== defaults.showWorkspaceSection
       ? ["Workspace section"]
       : []),
-    ...(settings.uiFontFamily !== defaults.uiFontFamily ? ["UI font"] : []),
-    ...(settings.chatCodeFontFamily !== defaults.chatCodeFontFamily ? ["Code font"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
+    ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx ? ["Terminal font size"] : []),
     ...(shouldShowFontSmoothing &&
     settings.enableNativeFontSmoothing !== defaults.enableNativeFontSmoothing
       ? ["Font smoothing"]
@@ -1561,52 +1558,6 @@ function SettingsRouteView() {
 
         <SettingsCard>
           <SettingsRow
-            title="UI font"
-            description="Set a custom font for the interface. Leave empty to use the active theme's UI font."
-            resetAction={
-              settings.uiFontFamily !== defaults.uiFontFamily ? (
-                <SettingResetButton
-                  label="UI font"
-                  onClick={() => updateSettings({ uiFontFamily: defaults.uiFontFamily })}
-                />
-              ) : null
-            }
-            control={
-              <SettingsFontControl
-                value={settings.uiFontFamily}
-                onValueChange={(value) => updateSettings({ uiFontFamily: value })}
-                presets={UI_FONT_PRESETS}
-                placeholder="System default"
-                ariaLabel="Custom UI font family"
-              />
-            }
-          />
-
-          <SettingsRow
-            title="Code font"
-            description="Set a custom font for code blocks and inline code in chat. Leave empty to use the active theme's code font."
-            resetAction={
-              settings.chatCodeFontFamily !== defaults.chatCodeFontFamily ? (
-                <SettingResetButton
-                  label="code font"
-                  onClick={() =>
-                    updateSettings({ chatCodeFontFamily: defaults.chatCodeFontFamily })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <SettingsFontControl
-                value={settings.chatCodeFontFamily}
-                onValueChange={(value) => updateSettings({ chatCodeFontFamily: value })}
-                presets={CODE_FONT_PRESETS}
-                placeholder="System default"
-                ariaLabel="Custom chat code font family"
-              />
-            }
-          />
-
-          <SettingsRow
             title="Base font size"
             description="Adjust the app text base in pixels. Chat and UI typography scale proportionally from this value."
             resetAction={
@@ -1639,6 +1590,45 @@ function SettingsRouteView() {
                     });
                   }}
                   aria-label="Base font size in pixels"
+                />
+                <span className="text-xs text-muted-foreground">px</span>
+              </div>
+            }
+          />
+
+          <SettingsRow
+            title="Terminal font size"
+            description="Adjust terminal text independently from the app and chat font size."
+            resetAction={
+              settings.terminalFontSizePx !== defaults.terminalFontSizePx ? (
+                <SettingResetButton
+                  label="terminal font size"
+                  onClick={() =>
+                    updateSettings({
+                      terminalFontSizePx: defaults.terminalFontSizePx,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+                <Input
+                  type="number"
+                  min={MIN_TERMINAL_FONT_SIZE_PX}
+                  max={MAX_TERMINAL_FONT_SIZE_PX}
+                  step={1}
+                  inputMode="numeric"
+                  className="w-full text-right sm:w-20"
+                  value={String(settings.terminalFontSizePx)}
+                  onChange={(event) => {
+                    const nextValue = event.target.value.trim();
+                    if (nextValue.length === 0) return;
+                    updateSettings({
+                      terminalFontSizePx: normalizeTerminalFontSizePx(Number(nextValue)),
+                    });
+                  }}
+                  aria-label="Terminal font size in pixels"
                 />
                 <span className="text-xs text-muted-foreground">px</span>
               </div>

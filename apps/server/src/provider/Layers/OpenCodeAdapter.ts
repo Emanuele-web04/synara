@@ -3456,40 +3456,49 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   cliSpec: adapterConfig.cliSpec,
                   ...(server.external && serverPassword ? { serverPassword } : {}),
                 });
-                const openCodeSessionId =
-                  resumedSessionId ??
-                  (yield* runOpenCodeSdk("session.create", () => {
-                    const sessionCreateInput = {
-                      ...(initialParsedModel
-                        ? {
-                            model: {
-                              providerID: initialParsedModel.providerID,
-                              id: initialParsedModel.modelID,
-                              ...(initialVariant ? { variant: initialVariant } : {}),
-                            },
-                          }
-                        : {}),
-                      ...(initialAgent ? { agent: initialAgent } : {}),
-                      permission: buildOpenCodePermissionRules(input.runtimeMode),
-                      title: `Synara ${input.threadId}`,
-                    };
-                    return client.session.create(
-                      sessionCreateInput as unknown as Parameters<typeof client.session.create>[0],
+                const createSessionId = resumedSessionId
+                  ? Effect.succeed(resumedSessionId)
+                  : runOpenCodeSdk("session.create", () => {
+                      const sessionCreateInput = {
+                        ...(initialParsedModel
+                          ? {
+                              model: {
+                                providerID: initialParsedModel.providerID,
+                                id: initialParsedModel.modelID,
+                                ...(initialVariant ? { variant: initialVariant } : {}),
+                              },
+                            }
+                          : {}),
+                        ...(initialAgent ? { agent: initialAgent } : {}),
+                        permission: buildOpenCodePermissionRules(input.runtimeMode),
+                        title: `Synara ${input.threadId}`,
+                      };
+                      return client.session.create(
+                        sessionCreateInput as unknown as Parameters<typeof client.session.create>[0],
+                      );
+                    }).pipe(
+                      Effect.flatMap((sessionResult) =>
+                        sessionResult.data?.id
+                          ? Effect.succeed(sessionResult.data.id)
+                          : Effect.fail(
+                              new OpenCodeRuntimeError({
+                                operation: "session.create",
+                                detail: `${adapterConfig.displayName} session.create returned no session payload.`,
+                              }),
+                            ),
+                      ),
                     );
-                  }).pipe(
-                    Effect.flatMap((sessionResult) =>
-                      sessionResult.data?.id
-                        ? Effect.succeed(sessionResult.data.id)
-                        : Effect.fail(
-                            new OpenCodeRuntimeError({
-                              operation: "session.create",
-                              detail: `${adapterConfig.displayName} session.create returned no session payload.`,
-                            }),
-                          ),
-                    ),
-                  ));
+                const loadModelContextLimits = openCodeRuntime.loadOpenCodeInventory(client).pipe(
+                  Effect.map(buildOpenCodeModelContextLimitMap),
+                  Effect.catchCause(() => Effect.succeed(new Map<string, number>())),
+                );
+                // Session creation and metadata discovery are independent once the server is up.
+                const [openCodeSessionId, modelContextLimitBySlug] = yield* Effect.all(
+                  [createSessionId, loadModelContextLimits],
+                  { concurrency: "unbounded" },
+                );
 
-                return { sessionScope, server, client, openCodeSessionId };
+                return { sessionScope, server, client, openCodeSessionId, modelContextLimitBySlug };
               }).pipe(Effect.provideService(Scope.Scope, sessionScope)),
             );
             if (Exit.isFailure(startedExit)) {
@@ -3511,12 +3520,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           const createdAt = nowIso();
-          const modelContextLimitBySlug = yield* openCodeRuntime
-            .loadOpenCodeInventory(started.client)
-            .pipe(
-              Effect.map(buildOpenCodeModelContextLimitMap),
-              Effect.catchCause(() => Effect.succeed(new Map<string, number>())),
-            );
           const session: ProviderSession = {
             provider,
             status: "ready",
@@ -3545,7 +3548,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             messageSnapshotKeyById: new Map(),
             completedAssistantPartIds: new Set(),
             turns: [],
-            modelContextLimitBySlug,
+            modelContextLimitBySlug: started.modelContextLimitBySlug,
             lastKnownTokenUsage: undefined,
             lastEmittedTokenUsageKey: undefined,
             latestTurnCostUsd: undefined,

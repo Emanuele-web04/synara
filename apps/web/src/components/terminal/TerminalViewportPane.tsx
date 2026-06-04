@@ -312,6 +312,16 @@ export default function TerminalViewportPane({
       const nextWeight = startWeights[handleIndex + 1] ?? 1;
       const pairWeight = currentWeight + nextWeight;
       const minWeight = Math.max((pairWeight * MIN_TERMINAL_PANE_SIZE_PX) / totalSize, 0.1);
+      let resizeFrame = 0;
+      let pendingWeights: number[] | null = null;
+
+      const flushResize = () => {
+        resizeFrame = 0;
+        if (!pendingWeights) return;
+        const nextWeights = pendingWeights;
+        pendingWeights = null;
+        onResizeSplit(groupId, splitNode.id, nextWeights);
+      };
 
       const onPointerMove = (moveEvent: PointerEvent) => {
         const currentCoordinate =
@@ -326,10 +336,21 @@ export default function TerminalViewportPane({
         const nextWeights = [...startWeights];
         nextWeights[handleIndex] = resizedCurrent;
         nextWeights[handleIndex + 1] = resizedNext;
-        onResizeSplit(groupId, splitNode.id, nextWeights);
+        pendingWeights = nextWeights;
+        if (resizeFrame === 0) {
+          resizeFrame = window.requestAnimationFrame(flushResize);
+        }
       };
 
       const onPointerUp = () => {
+        if (resizeFrame !== 0) {
+          window.cancelAnimationFrame(resizeFrame);
+          resizeFrame = 0;
+        }
+        if (pendingWeights) {
+          onResizeSplit(groupId, splitNode.id, pendingWeights);
+          pendingWeights = null;
+        }
         window.removeEventListener("pointermove", onPointerMove);
         window.removeEventListener("pointerup", onPointerUp);
       };

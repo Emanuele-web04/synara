@@ -105,6 +105,12 @@ export const CHAT_COLUMN_FRAME_CLASS_NAME = `mx-auto w-full min-w-0 ${COMPOSER_M
 /** Max width for the composer shell only; outer wrappers stay full width for shadow bleed. */
 export const COMPOSER_COLUMN_FRAME_CLASS_NAME = CHAT_COLUMN_FRAME_CLASS_NAME;
 
+/**
+ * Narrower centered frame for rows stacked above the composer (queued steer/queue
+ * rows, active task list). Keeps the main composer at full column width.
+ */
+export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto w-11/12 min-w-0";
+
 /** Opaque base behind the composer shell: the composer overlaps the scrolling
  *  transcript (`-mt-5`), so without a solid backing the frosted surface would let
  *  transcript text bleed through its top edge. Match the chat surface to stay seamless. */
@@ -183,9 +189,13 @@ export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME = `chat-composer-surface-b
 export const RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME =
   "text-[var(--runtime-full-access-accent)] hover:opacity-85";
 
-/** Minimum composer editor height — two lines at the element's line-height. */
-export const COMPOSER_EDITOR_LINE_HEIGHT_CLASS_NAME = "leading-tight";
+/** Minimum composer editor height — two lines at the element's line-height.
+ *  `leading-normal` (1.5) keeps the input in step with the transcript/bubble leading. */
+export const COMPOSER_EDITOR_LINE_HEIGHT_CLASS_NAME = "leading-normal";
 export const COMPOSER_EDITOR_TEXT_CLASS_NAME = "text-[length:var(--app-font-size-chat,12px)]";
+/** Font, size, and leading shared by the composer editor and its placeholder so the
+ *  placeholder always aligns with typed text. Keep both surfaces on this one token. */
+export const COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME = `font-system-ui ${COMPOSER_EDITOR_TEXT_CLASS_NAME} ${COMPOSER_EDITOR_LINE_HEIGHT_CLASS_NAME}`;
 export const COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME = "min-h-[2lh]";
 /** Lexical wraps lines in `<p>` nodes; reset default margins so text sits flush above the footer. */
 export const COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME = "[&_p]:m-0";

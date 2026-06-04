@@ -76,6 +76,8 @@ import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
 
 const DEFAULT_TIMEOUT_MS = 4_000;
+const OPENCODE_HEALTH_TIMEOUT_MS = 20_000;
+const PROVIDER_COMMAND_TIMEOUT_DETAIL = "Timed out while running command.";
 const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 const CURSOR_PROVIDER = "cursor" as const;
@@ -214,7 +216,7 @@ function isCommandMissingCause(error: unknown): boolean {
 function detailFromResult(
   result: CommandResult & { readonly timedOut?: boolean },
 ): string | undefined {
-  if (result.timedOut) return "Timed out while running command.";
+  if (result.timedOut) return PROVIDER_COMMAND_TIMEOUT_DETAIL;
   const stderr = nonEmptyTrimmed(result.stderr);
   if (stderr) return stderr;
   const stdout = nonEmptyTrimmed(result.stdout);
@@ -1359,7 +1361,7 @@ export const makeCheckOpenCodeProviderStatus = (
     const executable = nonEmptyTrimmed(binaryPath) ?? "opencode";
 
     const versionProbe = yield* runOpenCodeCommand(["--version"], executable).pipe(
-      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.timeoutOption(OPENCODE_HEALTH_TIMEOUT_MS),
       Effect.result,
     );
 
@@ -1384,7 +1386,7 @@ export const makeCheckOpenCodeProviderStatus = (
         available: false,
         authStatus: "unknown" as const,
         checkedAt,
-        message: "OpenCode CLI is installed but failed to run. Timed out while running command.",
+        message: `OpenCode CLI is installed but failed to run. ${PROVIDER_COMMAND_TIMEOUT_DETAIL}`,
       } satisfies ServerProviderStatus;
     }
 
@@ -1638,6 +1640,42 @@ function providerStatusesEqual(left: ProviderStatuses, right: ProviderStatuses):
         JSON.stringify(next.versionAdvisory ?? null) &&
       JSON.stringify(status.updateState ?? null) === JSON.stringify(next.updateState ?? null)
     );
+  });
+}
+
+function isTransientProviderCommandTimeout(status: ServerProviderStatus): boolean {
+  return (
+    status.status === "error" &&
+    !status.available &&
+    status.authStatus === "unknown" &&
+    (status.message ?? "").includes(PROVIDER_COMMAND_TIMEOUT_DETAIL)
+  );
+}
+
+export function stabilizeProviderStatusesAgainstTransientTimeouts(
+  previousStatuses: ReadonlyArray<ServerProviderStatus>,
+  nextStatuses: ReadonlyArray<ServerProviderStatus>,
+): ReadonlyArray<ServerProviderStatus> {
+  if (previousStatuses.length === 0) {
+    return nextStatuses;
+  }
+
+  const previousByProvider = new Map(
+    previousStatuses.map((status) => [status.provider, status] as const),
+  );
+
+  return nextStatuses.map((status) => {
+    const previous = previousByProvider.get(status.provider);
+    if (!previous?.available || !isTransientProviderCommandTimeout(status)) {
+      return status;
+    }
+
+    // A single slow CLI probe should not make an already usable provider look broken.
+    return {
+      ...previous,
+      checkedAt: status.checkedAt,
+      ...(status.updateState !== undefined ? { updateState: status.updateState } : {}),
+    };
   });
 }
 
@@ -1895,8 +1933,12 @@ export const ProviderHealthLive = Layer.effect(
       // / logout / add account outside the app) is reflected on the next
       // refresh instead of being pinned to the old account for up to 5 minutes.
       yield* Cache.invalidate(claudeSubscriptionCache, "claude");
-      const nextStatuses = yield* loadProviderStatuses;
+      const loadedStatuses = yield* loadProviderStatuses;
       const previousStatuses = yield* Ref.get(statusesRef);
+      const nextStatuses = stabilizeProviderStatusesAgainstTransientTimeouts(
+        previousStatuses,
+        loadedStatuses,
+      );
       if (providerStatusesEqual(previousStatuses, nextStatuses)) {
         yield* Ref.set(statusesRef, nextStatuses);
         return nextStatuses;

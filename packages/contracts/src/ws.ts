@@ -45,6 +45,7 @@ import {
   GitUnstageFilesInput,
 } from "./git";
 import {
+  TerminalAckOutputInput,
   TerminalClearInput,
   TerminalCloseInput,
   TerminalEvent,
@@ -127,6 +128,7 @@ export const WS_METHODS = {
   // Terminal methods
   terminalOpen: "terminal.open",
   terminalWrite: "terminal.write",
+  terminalAckOutput: "terminal.ackOutput",
   terminalResize: "terminal.resize",
   terminalClear: "terminal.clear",
   terminalRestart: "terminal.restart",
@@ -245,6 +247,7 @@ const WebSocketRequestBody = Schema.Union([
   // Terminal methods
   tagRequestBody(WS_METHODS.terminalOpen, TerminalOpenInput),
   tagRequestBody(WS_METHODS.terminalWrite, TerminalWriteInput),
+  tagRequestBody(WS_METHODS.terminalAckOutput, TerminalAckOutputInput),
   tagRequestBody(WS_METHODS.terminalResize, TerminalResizeInput),
   tagRequestBody(WS_METHODS.terminalClear, TerminalClearInput),
   tagRequestBody(WS_METHODS.terminalRestart, TerminalRestartInput),

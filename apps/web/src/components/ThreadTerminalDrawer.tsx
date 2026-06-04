@@ -4,7 +4,14 @@
 // Depends on: xterm addons, native terminal APIs, and terminal workspace state from ChatView.
 
 import { SearchAddon } from "@xterm/addon-search";
-import { Plus, SquareSplitHorizontal, SquareSplitVertical, Trash2 } from "~/lib/icons";
+import {
+  Loader2Icon,
+  Plus,
+  SquareSplitHorizontal,
+  SquareSplitVertical,
+  Trash2,
+  TriangleAlertIcon,
+} from "~/lib/icons";
 import { type ThreadId } from "@t3tools/contracts";
 import { type TerminalActivityState, type TerminalCliKind } from "@t3tools/shared/terminalThreads";
 import { Terminal } from "@xterm/xterm";
@@ -34,6 +41,7 @@ import {
 } from "./terminal/terminalRuntimeRegistry";
 import type {
   TerminalRuntimeConfig,
+  TerminalRuntimeStatus,
   TerminalRuntimeViewState,
 } from "./terminal/terminalRuntimeTypes";
 import TerminalViewportPane from "./terminal/TerminalViewportPane";
@@ -80,6 +88,28 @@ function getTerminalSelectionRect(mountElement: HTMLElement): DOMRect | null {
 
   const boundingRect = range.getBoundingClientRect();
   return boundingRect.width > 0 || boundingRect.height > 0 ? boundingRect : null;
+}
+
+function TerminalRuntimeStatusBadge({ status }: { status: TerminalRuntimeStatus }) {
+  if (status === "ready") return null;
+  const isError = status === "error";
+  const label =
+    status === "connecting" ? "Connecting" : status === "replaying" ? "Replaying" : "Error";
+  const Icon = isError ? TriangleAlertIcon : Loader2Icon;
+
+  return (
+    <div
+      className={cn(
+        "pointer-events-none absolute left-1 top-1 z-10 inline-flex h-6 max-w-[calc(100%-0.5rem)] items-center gap-1.5 rounded border px-2 text-[11px] leading-none shadow-sm backdrop-blur",
+        isError
+          ? "border-destructive/30 bg-destructive/10 text-destructive"
+          : "border-border/60 bg-background/80 text-muted-foreground",
+      )}
+    >
+      <Icon className={cn("size-3", !isError ? "animate-spin" : "")} />
+      <span className="truncate">{label}</span>
+    </div>
+  );
 }
 
 interface TerminalViewportProps {
@@ -131,6 +161,8 @@ function TerminalViewport({
   const [searchOpen, setSearchOpen] = useState(false);
   const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null);
   const [searchAddonInstance, setSearchAddonInstance] = useState<SearchAddon | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<TerminalRuntimeStatus>("connecting");
+  const runtimeStatusMountedRef = useRef(false);
   const runtimeKey = useMemo(
     () => buildTerminalRuntimeKey(threadId, terminalId),
     [terminalId, threadId],
@@ -153,6 +185,11 @@ function TerminalViewport({
         onSessionExited,
         onTerminalMetadataChange,
         onTerminalActivityChange,
+        onTerminalRuntimeStatusChange: (changedTerminalId, status) => {
+          if (changedTerminalId === terminalId && runtimeStatusMountedRef.current) {
+            setRuntimeStatus(status);
+          }
+        },
       },
     }),
     [
@@ -180,6 +217,13 @@ function TerminalViewport({
   }, [onAddTerminalContext]);
 
   useEffect(() => {
+    runtimeStatusMountedRef.current = true;
+    return () => {
+      runtimeStatusMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
     runtimeConfigRef.current = runtimeConfig;
   }, [runtimeConfig]);
 
@@ -203,6 +247,7 @@ function TerminalViewport({
     terminalRef.current = attachedRuntime.terminal;
     setTerminalInstance(attachedRuntime.terminal);
     setSearchAddonInstance(attachedRuntime.searchAddon);
+    setRuntimeStatus(attachedRuntime.runtimeStatus);
 
     return () => {
       if (selectionActionTimerRef.current !== null) {
@@ -388,6 +433,7 @@ function TerminalViewport({
             terminalRuntimeRegistry.focus(runtimeKey);
           }}
         />
+        <TerminalRuntimeStatusBadge status={runtimeStatus} />
         <TerminalScrollToBottom terminal={terminalInstance} />
         <div ref={containerRef} className="h-full w-full" />
       </div>

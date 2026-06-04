@@ -66,9 +66,8 @@ import {
 } from "../threadDetailSubscriptionRetention";
 import { getThreadFromState } from "../threadDerivation";
 import { useAppTypography } from "../hooks/useAppTypography";
-import { useChatCodeFont } from "../hooks/useChatCodeFont";
+import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopTopBarGutter";
 import { useTheme } from "../hooks/useTheme";
-import { useUIFont } from "../hooks/useUIFont";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
 import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
@@ -144,10 +143,9 @@ export const Route = createRootRouteWithContext<{
 
 function RootRouteView() {
   useAppTypography();
-  useChatCodeFont();
   useNativeFontSmoothing();
+  useSyncDesktopTopBarTrafficLightGutterZoom();
   useTheme();
-  useUIFont();
 
   if (!readNativeApi()) {
     return (

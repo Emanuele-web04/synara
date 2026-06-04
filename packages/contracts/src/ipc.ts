@@ -79,6 +79,7 @@ import type {
   ServerVoiceTranscriptionResult,
 } from "./server";
 import type {
+  TerminalAckOutputInput,
   TerminalClearInput,
   TerminalCloseInput,
   TerminalEvent,
@@ -281,6 +282,9 @@ export interface DesktopBridge {
     showInFolder: (path: string) => Promise<void>;
   };
   onMenuAction: (listener: (action: string) => void) => () => void;
+  /** Current `webContents` page zoom (1 = 100%). Used to keep macOS traffic-light gutter aligned. */
+  getZoomFactor: () => number;
+  onZoomFactorChange: (listener: (zoomFactor: number) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
   checkForUpdates: () => Promise<DesktopUpdateState>;
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
@@ -331,6 +335,7 @@ export interface NativeApi {
   terminal: {
     open: (input: TerminalOpenInput) => Promise<TerminalSessionSnapshot>;
     write: (input: TerminalWriteInput) => Promise<void>;
+    ackOutput: (input: TerminalAckOutputInput) => Promise<void>;
     resize: (input: TerminalResizeInput) => Promise<void>;
     clear: (input: TerminalClearInput) => Promise<void>;
     restart: (input: TerminalRestartInput) => Promise<TerminalSessionSnapshot>;

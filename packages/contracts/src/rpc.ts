@@ -100,6 +100,7 @@ import {
   ServerVoiceTranscriptionResult,
 } from "./server";
 import {
+  TerminalAckOutputInput,
   TerminalClearInput,
   TerminalCloseInput,
   TerminalEvent,
@@ -393,6 +394,12 @@ export const WsTerminalWriteRpc = Rpc.make(WS_METHODS.terminalWrite, {
   error: WsRpcError,
 });
 
+export const WsTerminalAckOutputRpc = Rpc.make(WS_METHODS.terminalAckOutput, {
+  payload: TerminalAckOutputInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
 export const WsTerminalResizeRpc = Rpc.make(WS_METHODS.terminalResize, {
   payload: TerminalResizeInput,
   success: Schema.Void,
@@ -618,6 +625,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitHandoffThreadRpc,
   WsTerminalOpenRpc,
   WsTerminalWriteRpc,
+  WsTerminalAckOutputRpc,
   WsTerminalResizeRpc,
   WsTerminalClearRpc,
   WsTerminalRestartRpc,

@@ -1,3 +1,8 @@
+// FILE: wsNativeApi.ts
+// Purpose: NativeApi implementation backed by the browser WebSocket RPC transport.
+// Layer: Web transport adapter
+// Exports: createWsNativeApi and event subscription helpers for server push channels.
+
 import {
   type AuthBearerBootstrapResult,
   type AuthBootstrapInput,
@@ -33,6 +38,7 @@ import {
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { WsTransport } from "./wsTransport";
+import { emitWsTransportState } from "./wsTransportEvents";
 
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
 const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
@@ -311,6 +317,7 @@ export function createWsNativeApi(): NativeApi {
   }
 
   const transport = new WsTransport();
+  transport.onStateChange((state) => emitWsTransportState(state));
 
   transport.subscribe(WS_CHANNELS.serverWelcome, (message) => {
     const payload = message.data;
@@ -441,6 +448,7 @@ export function createWsNativeApi(): NativeApi {
     terminal: {
       open: (input) => transport.request(WS_METHODS.terminalOpen, input),
       write: (input) => transport.request(WS_METHODS.terminalWrite, input),
+      ackOutput: (input) => transport.request(WS_METHODS.terminalAckOutput, input),
       resize: (input) => transport.request(WS_METHODS.terminalResize, input),
       clear: (input) => transport.request(WS_METHODS.terminalClear, input),
       restart: (input) => transport.request(WS_METHODS.terminalRestart, input),

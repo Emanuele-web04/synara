@@ -560,6 +560,8 @@ export const makeWsRpcLayer = () =>
           rpcEffect(terminalManager.open(input), "Failed to open terminal"),
         [WS_METHODS.terminalWrite]: (input) =>
           rpcEffect(terminalManager.write(input), "Failed to write terminal"),
+        [WS_METHODS.terminalAckOutput]: (input) =>
+          rpcEffect(terminalManager.ackOutput(input), "Failed to acknowledge terminal output"),
         [WS_METHODS.terminalResize]: (input) =>
           rpcEffect(terminalManager.resize(input), "Failed to resize terminal"),
         [WS_METHODS.terminalClear]: (input) =>
@@ -743,6 +745,9 @@ const makeRpcWebSocketHttpEffect = RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
     "rpc.transport": "websocket",
     "rpc.system": "effect-rpc",
   },
+  // JSON keeps the wire format symmetric with any web build. A serialization
+  // mismatch on this single multiplexed socket is a hard connect failure, and the
+  // desktop/dev setup routinely runs server and web on independently-built copies.
 }).pipe(Effect.provide(makeWsRpcLayer().pipe(Layer.provideMerge(RpcSerialization.layerJson))));
 
 export const websocketRpcRouteLayer = Layer.effectDiscard(

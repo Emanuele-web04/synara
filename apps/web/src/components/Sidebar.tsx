@@ -410,12 +410,20 @@ function ThreadStatusTrailingGlyph({ threadStatus }: { threadStatus: ThreadStatu
   );
 }
 
-// Right-aligned slot wrapper that matches the timestamp width and fades out on
-// row hover/focus so the trailing hover actions can take over.
-function threadStatusSlotClassName(isSubagentThread: boolean): string {
+/** Meta chips fade on row hover so pin/archive actions can occupy the same slot. */
+const THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME =
+  "flex shrink-0 items-center transition-opacity group-hover/thread-row:pointer-events-none group-hover/thread-row:opacity-0 group-focus-within/thread-row:pointer-events-none group-focus-within/thread-row:opacity-0";
+
+/** Fixed-width timestamp/status column; fades on hover so pin/archive can overlay this slot. */
+function threadRowTimestampSlotClassName(
+  isSubagentThread: boolean,
+  toneClassName?: string,
+): string {
   return cn(
-    "mr-1 flex shrink-0 items-center justify-end transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
-    isSubagentThread ? "w-[1.2rem]" : "w-[1.625rem]",
+    "mr-1 flex shrink-0 items-center justify-end leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+    isSubagentThread ? "w-[1.2rem] text-[10px]" : "w-[1.625rem] text-[length:var(--app-font-size-ui-meta,11px)]",
+    toneClassName ??
+      (isSubagentThread ? "text-muted-foreground/26" : "text-muted-foreground/38"),
   );
 }
 
@@ -2630,6 +2638,10 @@ export default function Sidebar() {
     [archiveThread],
   );
 
+  const dismissPendingArchiveConfirmation = useCallback((threadId: ThreadId) => {
+    setPendingArchiveConfirmationThreadId((current) => (current === threadId ? null : current));
+  }, []);
+
   /**
    * Archive every non-archived thread for a given project in one pass.
    * Skips (and reports) threads with a running session since the server
@@ -4013,10 +4025,12 @@ export default function Sidebar() {
   function renderThreadHoverActions(input: {
     threadId: ThreadId;
     toneClassName: string;
-    pinned: boolean;
+    isPinned: boolean;
+    includePinToggle?: boolean;
     compact?: boolean;
   }) {
     const compact = input.compact === true;
+    const includePinToggle = input.includePinToggle !== false;
     const isPendingConfirmation = pendingArchiveConfirmationThreadId === input.threadId;
 
     return (
@@ -4046,22 +4060,76 @@ export default function Sidebar() {
           </button>
         ) : (
           <div className="pointer-events-auto inline-flex items-center gap-1">
-            <ThreadPinToggleButton
-              pinned={input.pinned}
-              presentation="inline"
-              toneClassName={input.toneClassName}
-              onToggle={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                toggleThreadPinned(input.threadId);
-              }}
-            />
+            {includePinToggle ? (
+              <ThreadPinToggleButton
+                pinned={input.isPinned}
+                presentation="inline"
+                toneClassName={input.toneClassName}
+                onToggle={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  toggleThreadPinned(input.threadId);
+                }}
+              />
+            ) : null}
             {renderThreadArchiveAction(input.threadId, input.toneClassName, {
               compact,
             })}
           </div>
         )}
       </SidebarRowHoverActions>
+    );
+  }
+
+  function renderThreadRowTrailingCluster(input: {
+    isSubagentThread: boolean;
+    isPendingArchiveConfirmation: boolean;
+    threadJumpLabel: string | null;
+    threadJumpLabelParts: readonly string[];
+    rightMetaChips: ThreadMetaChip[];
+    threadStatus: ReturnType<typeof resolveThreadStatusForSidebar>;
+    updatedAt: string | null | undefined;
+    createdAt: string;
+    timestampToneClassName?: string;
+    hoverActions: ReactNode;
+  }) {
+    return (
+      <div className="relative flex shrink-0 items-center justify-end gap-1">
+        {!input.isPendingArchiveConfirmation && input.rightMetaChips.length > 0 ? (
+          <div className={THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME}>
+            <SidebarMetaChipStack chips={input.rightMetaChips} />
+          </div>
+        ) : null}
+        {!input.isPendingArchiveConfirmation && input.threadJumpLabel ? (
+          <KbdGroup className={THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME}>
+            {input.threadJumpLabelParts.map((part) => (
+              <Kbd key={part}>{part}</Kbd>
+            ))}
+          </KbdGroup>
+        ) : null}
+        {!input.isPendingArchiveConfirmation && !input.threadJumpLabel ? (
+          input.threadStatus ? (
+            <span
+              className={threadRowTimestampSlotClassName(
+                input.isSubagentThread,
+                input.timestampToneClassName,
+              )}
+            >
+              <ThreadStatusTrailingGlyph threadStatus={input.threadStatus} />
+            </span>
+          ) : (
+            <span
+              className={threadRowTimestampSlotClassName(
+                input.isSubagentThread,
+                input.timestampToneClassName,
+              )}
+            >
+              {formatRelativeTime(input.updatedAt ?? input.createdAt)}
+            </span>
+          )
+        ) : null}
+        {input.hoverActions}
+      </div>
     );
   }
 
@@ -4100,17 +4168,17 @@ export default function Sidebar() {
     const secondaryMetaClass = isActive
       ? "text-foreground/54 dark:text-foreground/64"
       : "text-muted-foreground/38";
-    const pinnedTimestampClassName = isSubagentThread
-      ? "mr-1 w-[1.2rem] text-right text-[10px] leading-none tabular-nums text-muted-foreground/26 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0"
-      : "mr-1 w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0";
-
     return (
-      <div key={thread.id} className="group/thread-row relative w-full opacity-85">
+      <div
+        key={thread.id}
+        className="group/thread-row relative w-full opacity-85"
+        onPointerLeave={() => dismissPendingArchiveConfirmation(thread.id)}
+      >
         {leadingPrStatus ? (
           <ThreadPrStatusBadge
             prStatus={leadingPrStatus}
             onOpen={openPrLink}
-            className="absolute left-1.5 top-1/2 z-20 size-5 -translate-y-1/2"
+            className="pointer-events-auto absolute left-1.5 top-1/2 z-30 size-5 -translate-y-1/2"
           />
         ) : null}
         <div
@@ -4206,35 +4274,23 @@ export default function Sidebar() {
             ) : null}
           </div>
           <div className="flex w-14 shrink-0 items-center justify-end">
-            <div className="relative flex shrink-0 items-center justify-end gap-1">
-              {!isPendingArchiveConfirmation ? (
-                <SidebarMetaChipStack chips={rightMetaChips} />
-              ) : null}
-              {!isPendingArchiveConfirmation && threadJumpLabel ? (
-                <KbdGroup>
-                  {threadJumpLabelParts.map((part) => (
-                    <Kbd key={part}>{part}</Kbd>
-                  ))}
-                </KbdGroup>
-              ) : null}
-              {!isPendingArchiveConfirmation && !threadJumpLabel ? (
-                threadStatus ? (
-                  <span className={threadStatusSlotClassName(isSubagentThread)}>
-                    <ThreadStatusTrailingGlyph threadStatus={threadStatus} />
-                  </span>
-                ) : (
-                  <span className={pinnedTimestampClassName}>
-                    {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
-                  </span>
-                )
-              ) : null}
-              {renderThreadHoverActions({
+            {renderThreadRowTrailingCluster({
+              isSubagentThread,
+              isPendingArchiveConfirmation,
+              threadJumpLabel,
+              threadJumpLabelParts,
+              rightMetaChips,
+              threadStatus,
+              updatedAt: thread.updatedAt,
+              createdAt: thread.createdAt,
+              timestampToneClassName: "text-muted-foreground/38",
+              hoverActions: renderThreadHoverActions({
                 threadId: thread.id,
                 toneClassName: "text-muted-foreground/42",
-                pinned: true,
+                isPinned: true,
                 compact: isSubagentThread,
-              })}
-            </div>
+              }),
+            })}
           </div>
         </div>
       </div>
@@ -4303,15 +4359,6 @@ export default function Sidebar() {
     // Untouched draft chat threads are intentionally text-only until they get a real title.
     const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
     const childCountLabel = `${childCount} subagent${childCount === 1 ? "" : "s"}`;
-    const trailingTimestampClassName = isSubagentThread
-      ? cn(
-          "mr-1 w-[1.2rem] text-right text-[10px] leading-none tabular-nums tracking-[-0.01em] transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
-          isHighlighted ? "text-foreground/38 dark:text-foreground/46" : "text-muted-foreground/24",
-        )
-      : cn(
-          "mr-1 w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
-          secondaryMetaClass,
-        );
     const toggleButtonClassName = isHighlighted
       ? "border-[color:var(--color-border)] bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
       : "border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground-secondary)] hover:border-[color:var(--color-border)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]";
@@ -4321,12 +4368,13 @@ export default function Sidebar() {
         key={thread.id}
         className="group/thread-row w-full opacity-85"
         data-thread-item
+        onPointerLeave={() => dismissPendingArchiveConfirmation(thread.id)}
       >
         {leadingPrStatus ? (
           <ThreadPrStatusBadge
             prStatus={leadingPrStatus}
             onOpen={openPrLink}
-            className="absolute left-1.5 top-1/2 z-20 size-5 -translate-y-1/2"
+            className="pointer-events-auto absolute left-1.5 top-1/2 z-30 size-5 -translate-y-1/2"
           />
         ) : null}
         <SidebarMenuSubButton
@@ -4532,35 +4580,27 @@ export default function Sidebar() {
             ) : null}
           </div>
           <div className={cn("absolute top-1/2 flex -translate-y-1/2 items-center", "right-1.5")}>
-            <div className="relative flex shrink-0 items-center justify-end gap-1">
-              {showCompactMeta && !isPendingArchiveConfirmation && rightMetaChips.length > 0 ? (
-                <SidebarMetaChipStack chips={rightMetaChips} />
-              ) : null}
-              {!isPendingArchiveConfirmation && threadJumpLabel ? (
-                <KbdGroup>
-                  {threadJumpLabelParts.map((part) => (
-                    <Kbd key={part}>{part}</Kbd>
-                  ))}
-                </KbdGroup>
-              ) : null}
-              {!isPendingArchiveConfirmation && !threadJumpLabel ? (
-                threadStatus ? (
-                  <span className={threadStatusSlotClassName(isSubagentThread)}>
-                    <ThreadStatusTrailingGlyph threadStatus={threadStatus} />
-                  </span>
-                ) : (
-                  <span className={trailingTimestampClassName}>
-                    {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
-                  </span>
-                )
-              ) : null}
-              {renderThreadHoverActions({
+            {renderThreadRowTrailingCluster({
+              isSubagentThread,
+              isPendingArchiveConfirmation,
+              threadJumpLabel,
+              threadJumpLabelParts,
+              rightMetaChips: showCompactMeta ? rightMetaChips : [],
+              threadStatus,
+              updatedAt: thread.updatedAt,
+              createdAt: thread.createdAt,
+              timestampToneClassName: isSubagentThread
+                ? isHighlighted
+                  ? "text-foreground/38 dark:text-foreground/46"
+                  : "text-muted-foreground/24"
+                : secondaryMetaClass,
+              hoverActions: renderThreadHoverActions({
                 threadId: thread.id,
                 toneClassName: secondaryMetaClass,
-                pinned: isPinned,
+                isPinned,
                 compact: isSubagentThread,
-              })}
-            </div>
+              }),
+            })}
           </div>
         </SidebarMenuSubButton>
       </SidebarMenuSubItem>
@@ -5634,15 +5674,14 @@ export default function Sidebar() {
             ) : (
               <SidebarGroup className="px-1.5 py-1.5">
                 {pinnedThreads.length > 0 ? (
-                  <>
+                  <div className="mb-3">
                     <div className="my-1 flex items-center justify-between px-2 py-1">
                       <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Pinned</span>
                     </div>
                     <div className="flex flex-col gap-0.5">
                       {pinnedThreads.map((thread) => renderPinnedThreadRow(thread))}
                     </div>
-                    <div className="-mx-1.5 my-1.5 h-px bg-border/70" />
-                  </>
+                  </div>
                 ) : null}
                 <div className="my-1 flex items-center justify-between px-2 py-1">
                   <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Threads</span>

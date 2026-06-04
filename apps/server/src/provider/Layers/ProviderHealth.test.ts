@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import type { ServerProviderStatus } from "@t3tools/contracts";
 import { describe, it, assert } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import * as PlatformError from "effect/PlatformError";
@@ -21,6 +22,7 @@ import {
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
   readCodexConfigModelProvider,
+  stabilizeProviderStatusesAgainstTransientTimeouts,
 } from "./ProviderHealth";
 
 // ── Test helpers ────────────────────────────────────────────────────
@@ -132,6 +134,61 @@ function withTempCodexHome(configContent?: string) {
 }
 
 it.layer(NodeServices.layer)("ProviderHealth", (it) => {
+  describe("stabilizeProviderStatusesAgainstTransientTimeouts", () => {
+    const previousReadyOpenCode = {
+      provider: "opencode",
+      status: "ready",
+      available: true,
+      authStatus: "unknown",
+      version: "1.15.13",
+      checkedAt: "2026-06-04T17:00:00.000Z",
+      message:
+        "OpenCode CLI is installed. Configure provider credentials inside OpenCode as needed.",
+    } satisfies ServerProviderStatus;
+
+    it("keeps an already usable provider available after a transient command timeout", () => {
+      const result = stabilizeProviderStatusesAgainstTransientTimeouts(
+        [previousReadyOpenCode],
+        [
+          {
+            provider: "opencode",
+            status: "error",
+            available: false,
+            authStatus: "unknown",
+            checkedAt: "2026-06-04T17:01:00.000Z",
+            message: "OpenCode CLI is installed but failed to run. Timed out while running command.",
+          },
+        ],
+      );
+
+      assert.deepStrictEqual(result, [
+        {
+          ...previousReadyOpenCode,
+          checkedAt: "2026-06-04T17:01:00.000Z",
+        },
+      ]);
+    });
+
+    it("does not hide non-timeout provider failures", () => {
+      const unavailableStatus = {
+        provider: "opencode",
+        status: "error",
+        available: false,
+        authStatus: "unknown",
+        checkedAt: "2026-06-04T17:01:00.000Z",
+        message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
+      } satisfies ServerProviderStatus;
+
+      assert.deepStrictEqual(
+        stabilizeProviderStatusesAgainstTransientTimeouts(
+          [previousReadyOpenCode],
+          [unavailableStatus],
+        ),
+        [unavailableStatus],
+      );
+    });
+  });
+
   // ── checkCodexProviderStatus tests ────────────────────────────────
   //
   // These tests control CODEX_HOME to ensure the custom-provider detection

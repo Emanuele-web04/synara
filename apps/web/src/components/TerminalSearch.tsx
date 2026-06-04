@@ -23,9 +23,11 @@ const SEARCH_DECORATIONS = {
   activeMatchBorder: "#ffd33d",
   activeMatchColorOverviewRuler: "#ffd33d",
 } satisfies NonNullable<ISearchOptions["decorations"]>;
+const SEARCH_DEBOUNCE_MS = 90;
 
 export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const searchTimerRef = useRef<number | null>(null);
   const [query, setQuery] = useState("");
   const [hasResults, setHasResults] = useState<boolean | null>(null);
   const [caseSensitive, setCaseSensitive] = useState(false);
@@ -55,6 +57,10 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
   const handleSearch = useCallback(
     (direction: "next" | "previous") => {
       if (!searchAddon || !query) return;
+      if (searchTimerRef.current !== null) {
+        window.clearTimeout(searchTimerRef.current);
+        searchTimerRef.current = null;
+      }
       const found =
         direction === "next"
           ? searchAddon.findNext(query, searchOptions)
@@ -64,16 +70,33 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
     [searchAddon, query, searchOptions],
   );
 
+  const clearSearchTimer = useCallback(() => {
+    if (searchTimerRef.current === null) return;
+    window.clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = null;
+  }, []);
+
+  const scheduleSearch = useCallback(
+    (nextQuery: string) => {
+      clearSearchTimer();
+      if (!searchAddon || !nextQuery) {
+        setHasResults(null);
+        searchAddon?.clearDecorations();
+        return;
+      }
+
+      searchTimerRef.current = window.setTimeout(() => {
+        searchTimerRef.current = null;
+        setHasResults(searchAddon.findNext(nextQuery, searchOptions));
+      }, SEARCH_DEBOUNCE_MS);
+    },
+    [clearSearchTimer, searchAddon, searchOptions],
+  );
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newQuery = e.target.value;
     setQuery(newQuery);
-    if (searchAddon && newQuery) {
-      const found = searchAddon.findNext(newQuery, searchOptions);
-      setHasResults(found);
-    } else {
-      setHasResults(null);
-      searchAddon?.clearDecorations();
-    }
+    scheduleSearch(newQuery);
   };
 
   // Re-run search when case sensitivity or search addon changes
@@ -88,10 +111,11 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
     prevCaseSensitiveRef.current = caseSensitive;
     prevSearchAddonRef.current = searchAddon;
     if (searchAddon && query) {
-      const found = searchAddon.findNext(query, searchOptions);
-      setHasResults(found);
+      scheduleSearch(query);
     }
-  }, [searchAddon, query, searchOptions, caseSensitive]);
+  }, [searchAddon, query, scheduleSearch, caseSensitive]);
+
+  useEffect(() => () => clearSearchTimer(), [clearSearchTimer]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") {

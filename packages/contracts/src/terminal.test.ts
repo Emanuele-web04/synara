@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_TERMINAL_ID,
+  TerminalAckOutputInput,
   TerminalClearInput,
   TerminalCloseInput,
   TerminalEvent,
@@ -111,6 +112,26 @@ describe("TerminalWriteInput", () => {
   });
 });
 
+describe("TerminalAckOutputInput", () => {
+  it("accepts positive parsed byte counts", () => {
+    expect(
+      decodes(TerminalAckOutputInput, {
+        threadId: "thread-1",
+        bytes: 4096,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects empty ACKs", () => {
+    expect(
+      decodes(TerminalAckOutputInput, {
+        threadId: "thread-1",
+        bytes: 0,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("TerminalThreadInput", () => {
   it("trims thread ids", () => {
     const parsed = decodeSync(TerminalThreadInput, { threadId: " thread-1 " });
@@ -160,6 +181,7 @@ describe("TerminalSessionSnapshot", () => {
         status: "running",
         pid: 1234,
         history: "hello\n",
+        replayPreamble: "\u001b[?2004h\u001b[=7;1u",
         exitCode: null,
         exitSignal: null,
         updatedAt: new Date().toISOString(),
@@ -177,6 +199,19 @@ describe("TerminalEvent", () => {
         terminalId: DEFAULT_TERMINAL_ID,
         createdAt: new Date().toISOString(),
         data: "line\n",
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts output events with byte length", () => {
+    expect(
+      decodes(TerminalEvent, {
+        type: "output",
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        createdAt: new Date().toISOString(),
+        data: "line\n",
+        byteLength: 5,
       }),
     ).toBe(true);
   });

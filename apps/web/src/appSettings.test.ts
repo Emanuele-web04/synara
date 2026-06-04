@@ -1,3 +1,8 @@
+// FILE: appSettings.test.ts
+// Purpose: Verifies app settings normalization, model options, and provider dispatch options.
+// Layer: Web settings tests
+// Exports: Vitest suites for appSettings.ts
+
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -5,9 +10,11 @@ import {
   AppSettingsSchema,
   DEFAULT_CHAT_FONT_SIZE_PX,
   DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
+  DEFAULT_TERMINAL_FONT_SIZE_PX,
   DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
   DEFAULT_TIMESTAMP_FORMAT,
   getAppModelOptions,
+  getCustomBinaryPathForProvider,
   getDefaultNativeFontSmoothing,
   getCustomModelOptionsByProvider,
   getCustomModelsByProvider,
@@ -19,6 +26,7 @@ import {
   normalizeChatFontSizePx,
   normalizeCustomModelSlugs,
   normalizeStoredAppSettings,
+  normalizeTerminalFontSizePx,
   patchCustomModels,
   resolveAppModelSelection,
 } from "./appSettings";
@@ -257,6 +265,19 @@ describe("chat font size defaults", () => {
   });
 });
 
+describe("terminal font size defaults", () => {
+  it("defaults terminal font size to 12px", () => {
+    expect(DEFAULT_TERMINAL_FONT_SIZE_PX).toBe(12);
+  });
+
+  it("clamps terminal font size updates into the supported range", () => {
+    expect(normalizeTerminalFontSizePx(8)).toBe(10);
+    expect(normalizeTerminalFontSizePx(20.4)).toBe(20);
+    expect(normalizeTerminalFontSizePx(99)).toBe(22);
+    expect(normalizeTerminalFontSizePx(Number.NaN)).toBe(DEFAULT_TERMINAL_FONT_SIZE_PX);
+  });
+});
+
 describe("sidebar sort defaults", () => {
   it("defaults project sorting to manual", () => {
     expect(DEFAULT_SIDEBAR_PROJECT_SORT_ORDER).toBe("manual");
@@ -285,6 +306,7 @@ describe("normalizeStoredAppSettings", () => {
       JSON.stringify({
         sidebarProjectSortOrder: "updated_at",
         chatFontSizePx: 99,
+        terminalFontSizePx: 3,
         customCodexModels: [" custom/internal-model ", "gpt-5.4", "custom/internal-model"],
       }),
     );
@@ -292,8 +314,37 @@ describe("normalizeStoredAppSettings", () => {
     expect(normalizeStoredAppSettings(decodedSettings)).toMatchObject({
       sidebarProjectSortOrder: "updated_at",
       chatFontSizePx: 18,
+      terminalFontSizePx: 10,
       customCodexModels: ["custom/internal-model"],
     });
+  });
+
+  it("drops default provider command names so they do not look like custom paths", () => {
+    const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
+      JSON.stringify({
+        claudeBinaryPath: "claude",
+        codexBinaryPath: "codex",
+        cursorBinaryPath: "cursor-agent",
+        geminiBinaryPath: "gemini",
+        grokBinaryPath: "grok",
+        kiloBinaryPath: "kilo",
+        openCodeBinaryPath: "opencode",
+        piBinaryPath: "pi",
+      }),
+    );
+    const normalized = normalizeStoredAppSettings(decodedSettings);
+
+    expect(normalized).toMatchObject({
+      claudeBinaryPath: "",
+      codexBinaryPath: "",
+      cursorBinaryPath: "",
+      geminiBinaryPath: "",
+      grokBinaryPath: "",
+      kiloBinaryPath: "",
+      openCodeBinaryPath: "",
+      piBinaryPath: "",
+    });
+    expect(getCustomBinaryPathForProvider(normalized, "opencode")).toBe("");
   });
 });
 
@@ -365,6 +416,29 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("ignores default provider command names as custom binary overrides", () => {
+    expect(
+      getProviderStartOptions({
+        claudeBinaryPath: "claude",
+        codexBinaryPath: "codex",
+        codexHomePath: "",
+        cursorApiEndpoint: "",
+        cursorBinaryPath: "cursor-agent",
+        geminiBinaryPath: "gemini",
+        grokBinaryPath: "grok",
+        kiloBinaryPath: "kilo",
+        kiloServerPassword: "",
+        kiloServerUrl: "",
+        openCodeBinaryPath: "opencode",
+        openCodeExperimentalWebSockets: false,
+        openCodeServerPassword: "",
+        openCodeServerUrl: "",
+        piAgentDir: "",
+        piBinaryPath: "pi",
       }),
     ).toBeUndefined();
   });
