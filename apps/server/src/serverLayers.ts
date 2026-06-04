@@ -17,6 +17,8 @@ import { VERCEL_SANDBOX_DESCRIPTOR } from "./executionRuntime/providers/vercelSa
 import { makeVercelSandboxRuntimeAdapterLayer } from "./executionRuntime/providers/vercelSandbox/runtimeLayer";
 import { MODAL_PROVIDER_DESCRIPTOR } from "./executionRuntime/providers/modal/modalDescriptors";
 import { makeModalRuntimeAdapterLayer } from "./executionRuntime/providers/modal/runtimeLayer";
+import { CLOUDFLARE_RUNTIME_DESCRIPTOR } from "./executionRuntime/Layers/cloudflareDescriptor";
+import { makeCloudflareRuntimeAdapterLayer } from "./executionRuntime/Layers/CloudflareRuntimeProviderFacadeLayer";
 import { RuntimeActivityLeaseManagerLive } from "./executionRuntime/Layers/RuntimeActivityLeaseManager";
 import { RuntimeCredentialBrokerLive } from "./executionRuntime/Layers/RuntimeCredentialBroker";
 import { RuntimeGitWorkspaceLive } from "./executionRuntime/Layers/RuntimeGitWorkspace";
@@ -89,6 +91,13 @@ export function makeServerRuntimeServicesLayer() {
   // the plan, and the adapter resolves by the `modal` provider literal. The
   // registry binds the broadest `service`-shaped descriptor for `modal`.
   const modalRuntimeAdapterLayer = makeModalRuntimeAdapterLayer();
+  // The Cloudflare adapter env-selects the real bridge connection (HTTP/WS to the
+  // Runtime Bridge Worker) vs the in-process fake bridge: with
+  // `SYNARA_CLOUDFLARE_BRIDGE_URL` + `SYNARA_CLOUDFLARE_BRIDGE_TOKEN` present the
+  // real connection is used, else the fake, so the server boots without provider
+  // access. The adapter resolves by the `cloudflare` provider literal; the
+  // registry binds the broadest `workspace`-shaped descriptor for `cloudflare`.
+  const cloudflareRuntimeAdapterLayer = makeCloudflareRuntimeAdapterLayer();
   const runtimeProviderRegistryLayer = makeRuntimeProviderRegistryWithAdaptersLive({
     descriptors: [
       ...BUILT_IN_RUNTIME_DESCRIPTORS,
@@ -96,12 +105,14 @@ export function makeServerRuntimeServicesLayer() {
       DAYTONA_RUNTIME_DESCRIPTOR,
       VERCEL_SANDBOX_DESCRIPTOR,
       MODAL_PROVIDER_DESCRIPTOR,
+      CLOUDFLARE_RUNTIME_DESCRIPTOR,
     ],
   }).pipe(
     Layer.provide(FakeRuntimeProviderAdapterLive),
     Layer.provide(daytonaRuntimeAdapterLayer),
     Layer.provide(vercelSandboxRuntimeAdapterLayer),
     Layer.provide(modalRuntimeAdapterLayer),
+    Layer.provide(cloudflareRuntimeAdapterLayer),
   );
   const executionRuntimePlannerLayer = ExecutionRuntimePlannerLive.pipe(
     Layer.provide(runtimeProviderRegistryLayer),

@@ -14,6 +14,7 @@ export * from "./settings";
 export * from "./git";
 export * from "./orchestration";
 export * from "./executionRuntime";
+export * from "./cloudflareRuntimeBridge";
 export * from "./editor";
 export * from "./environment";
 export * from "./project";

@@ -20,6 +20,7 @@ import { makeRuntimeProviderRegistryWithFakeLive } from "./RuntimeProviderRegist
 import { DAYTONA_RUNTIME_DESCRIPTOR } from "../providers/daytona/descriptor.ts";
 import { VERCEL_SANDBOX_DESCRIPTOR } from "../providers/vercelSandbox/descriptor.ts";
 import { MODAL_PROVIDER_DESCRIPTOR } from "../providers/modal/modalDescriptors.ts";
+import { CLOUDFLARE_RUNTIME_DESCRIPTOR } from "./cloudflareDescriptor.ts";
 
 // Real provider descriptors register here so the planner validates their plans
 // pre-provision; their lifecycle adapters do not (these tests drive the fake
@@ -31,6 +32,7 @@ const runtimeProviderRegistryLayer = makeRuntimeProviderRegistryWithFakeLive({
     DAYTONA_RUNTIME_DESCRIPTOR,
     VERCEL_SANDBOX_DESCRIPTOR,
     MODAL_PROVIDER_DESCRIPTOR,
+    CLOUDFLARE_RUNTIME_DESCRIPTOR,
   ],
 }).pipe(Layer.provide(FakeRuntimeProviderAdapterLive));
 

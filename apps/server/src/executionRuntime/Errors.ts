@@ -100,3 +100,24 @@ export class RuntimeProvisionFailedError extends Schema.TaggedErrorClass<Runtime
     return `Execution-runtime provisioning failed for thread ${this.threadId}: ${this.detail}`;
   }
 }
+
+/**
+ * CloudflareBridgeError - A call to the Cloudflare Runtime Bridge failed
+ * (transport error, non-2xx response, or a malformed body). `operation` names
+ * the bridge route so the adapter can surface a provider-agnostic
+ * `RuntimeProvisionFailedError` without leaking HTTP specifics upward. `detail`
+ * is already redacted of any bearer token before construction.
+ */
+export class CloudflareBridgeError extends Schema.TaggedErrorClass<CloudflareBridgeError>()(
+  "CloudflareBridgeError",
+  {
+    operation: Schema.String,
+    status: Schema.NullOr(Schema.Int),
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    const code = this.status === null ? "transport" : `status ${this.status}`;
+    return `Cloudflare bridge ${this.operation} failed (${code}): ${this.detail}`;
+  }
+}

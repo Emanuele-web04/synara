@@ -31,6 +31,8 @@ import { VercelSandboxAdapter } from "../providers/vercelSandbox/Services/Vercel
 import { makeVercelSandboxRuntimeProviderFacade } from "./VercelSandboxRuntimeProviderFacade.ts";
 import { ModalRuntimeProviderAdapter } from "../providers/modal/ModalRuntimeProviderAdapter.ts";
 import { makeModalRuntimeProviderFacade } from "./ModalRuntimeProviderFacade.ts";
+import { CloudflareRuntimeProviderAdapter } from "../Services/CloudflareRuntimeProviderAdapter.ts";
+import { makeCloudflareRuntimeProviderFacade } from "./CloudflareRuntimeProviderFacade.ts";
 
 export interface RuntimeProviderAdapterBinding {
   readonly provider: ExecutionRuntimeProvider;
@@ -149,6 +151,7 @@ export const makeRuntimeProviderRegistryWithAdaptersLive = (
       const daytona = yield* DaytonaRuntimeAdapter;
       const vercel = yield* VercelSandboxAdapter;
       const modal = yield* ModalRuntimeProviderAdapter;
+      const cloudflare = yield* CloudflareRuntimeProviderAdapter;
       return yield* makeRuntimeProviderRegistry({
         ...options,
         adapters: [
@@ -157,6 +160,7 @@ export const makeRuntimeProviderRegistryWithAdaptersLive = (
           { provider: "daytona", adapter: makeDaytonaRuntimeProviderFacade(daytona) },
           { provider: "vercel-sandbox", adapter: makeVercelSandboxRuntimeProviderFacade(vercel) },
           { provider: "modal", adapter: makeModalRuntimeProviderFacade(modal) },
+          { provider: "cloudflare", adapter: makeCloudflareRuntimeProviderFacade(cloudflare) },
         ],
       });
     }),

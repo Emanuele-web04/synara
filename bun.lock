@@ -12,6 +12,16 @@
         "vitest": "catalog:",
       },
     },
+    "apps/cloudflare-runtime-bridge": {
+      "name": "@t3tools/cloudflare-runtime-bridge",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@t3tools/contracts": "workspace:*",
+        "effect": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+    },
     "apps/desktop": {
       "name": "@t3tools/desktop",
       "version": "0.1.0",
@@ -1019,6 +1029,8 @@
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
 
     "@szmarczak/http-timer": ["@szmarczak/http-timer@4.0.6", "", { "dependencies": { "defer-to-connect": "^2.0.0" } }, "sha512-4BAffykYOgO+5nzBWYwE3W90sBgLJoUPRWWcL8wlyiM8IB8ipJz3UMJ9KXQd1RKQXpKp8Tutn80HZtWsu2u76w=="],
+
+    "@t3tools/cloudflare-runtime-bridge": ["@t3tools/cloudflare-runtime-bridge@workspace:apps/cloudflare-runtime-bridge"],
 
     "@t3tools/contracts": ["@t3tools/contracts@workspace:packages/contracts"],
 
