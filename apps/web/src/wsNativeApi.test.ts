@@ -302,6 +302,14 @@ describe("wsNativeApi", () => {
           },
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
         },
+        sandboxes: {
+          defaultRemoteProvider: "",
+          defaultSnapshot: "",
+          daytona: { apiKey: "", apiUrl: "", organizationId: "", target: "", snapshot: "" },
+          vercel: { token: "", teamId: "", projectId: "", runtime: "" },
+          modal: { tokenId: "", tokenSecret: "", environment: "" },
+          cloudflare: { bridgeUrl: "", bridgeToken: "" },
+        },
       },
     } as const;
     emitPush(WS_CHANNELS.serverSettingsUpdated, payload);
