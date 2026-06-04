@@ -42,6 +42,7 @@ import {
   SurfaceChipIcon,
 } from "./chatHeaderControls";
 import { getRightDockPaneMeta, resolveRightDockPaneLabel } from "./rightDockPaneMeta";
+import { useDesktopTopBarWindowControlsGutterClassName } from "~/hooks/useDesktopTopBarGutter";
 
 interface RightDockProps {
   state: RightDockThreadState;
@@ -129,6 +130,10 @@ function useKeepMountedPaneIds(
 export function RightDock(props: RightDockProps) {
   const activePane = resolveActivePane(props.state);
   const activePaneRuntimeMode = props.activePaneRuntimeMode ?? "live";
+  // The dock is the right-most surface when open, so its header sits under the
+  // fixed Windows caption cluster — reserve the same gutter the chat header uses.
+  const desktopTopBarWindowControlsGutterClassName =
+    useDesktopTopBarWindowControlsGutterClassName();
 
   const keepMountedPaneIds = useKeepMountedPaneIds(props.state.panes, activePane);
   const renderedPanes = props.state.panes.filter(
@@ -186,7 +191,13 @@ export function RightDock(props: RightDockProps) {
         }}
       >
         <div className="flex h-full min-h-0 w-full flex-col">
-          <div className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "gap-1 px-1.5")}>
+          <div
+            className={cn(
+              CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
+              "gap-1 px-1.5",
+              desktopTopBarWindowControlsGutterClassName,
+            )}
+          >
             <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
               {props.state.panes.map((pane) => (
                 <RightDockTab

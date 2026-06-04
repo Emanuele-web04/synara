@@ -207,7 +207,6 @@ import {
 import PlanSidebar from "./PlanSidebar";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
-import { DesktopWindowControls } from "./DesktopWindowControls";
 import {
   ChevronDownIcon,
   ChevronLeftIcon,
@@ -305,7 +304,10 @@ import {
 } from "./chat/chatHeaderControls";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SidebarHeaderTrigger } from "./ui/sidebar";
-import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
+import {
+  useDesktopTopBarTrafficLightGutterClassName,
+  useDesktopTopBarWindowControlsGutterClassName,
+} from "~/hooks/useDesktopTopBarGutter";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
@@ -872,6 +874,8 @@ export default function ChatView({
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
   const { settings } = useAppSettings();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
+  const desktopTopBarWindowControlsGutterClassName =
+    useDesktopTopBarWindowControlsGutterClassName();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
@@ -7458,11 +7462,11 @@ export default function ChatView({
               CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
               "drag-region px-5",
               desktopTopBarTrafficLightGutterClassName,
+              desktopTopBarWindowControlsGutterClassName,
             )}
           >
             <SidebarHeaderNavigationControls />
             <span className="text-xs text-muted-foreground/50">No active thread</span>
-            <DesktopWindowControls className="ml-auto" />
           </div>
         )}
         <div className="flex flex-1 items-center justify-center">
@@ -8099,6 +8103,7 @@ export default function ChatView({
           CHAT_SURFACE_HEADER_HEIGHT_CLASS,
           isElectron && "drag-region",
           desktopTopBarTrafficLightGutterClassName,
+          desktopTopBarWindowControlsGutterClassName,
         )}
       >
         <ChatHeader
@@ -8166,7 +8171,6 @@ export default function ChatView({
           onRenameThread={() => setRenameDialogOpen(true)}
           {...(onCloseThreadPane ? { onCloseThreadPane } : {})}
         />
-        <DesktopWindowControls className="-me-2 ml-2" />
       </header>
 
       <RenameThreadDialog

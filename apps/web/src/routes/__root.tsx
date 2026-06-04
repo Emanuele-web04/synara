@@ -22,6 +22,7 @@ import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME } from "../branding";
+import { DesktopWindowControls } from "../components/DesktopWindowControls";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import WhatsNewDialog from "../components/WhatsNewDialog";
 import { useWhatsNew } from "../whatsNew/useWhatsNew";
@@ -149,31 +150,47 @@ function RootRouteView() {
   useTheme();
   useUIFont();
 
+  // Single mount point for the Windows caption buttons. The cluster is pinned to the
+  // window's top-right corner (frameless Windows shell) and renders nothing on macOS,
+  // Linux, or the web build, so it is safe to mount unconditionally here — including on
+  // the pre-backend "connecting" screen, so the window stays closable before the
+  // renderer connects. Top bars reserve space for it via
+  // useDesktopTopBarWindowControlsGutterClassName().
+  // z above dialogs (z-50) and toasts (z-[200]) so the caption buttons stay
+  // reachable even while a modal is open, matching native title-bar behavior.
+  const desktopWindowControls = <DesktopWindowControls className="fixed top-0 right-0 z-[250]" />;
+
   if (!readNativeApi()) {
     return (
-      <div className="flex h-screen flex-col bg-background text-foreground">
-        <div className="flex flex-1 items-center justify-center">
-          <p className="text-sm text-muted-foreground">
-            Connecting to {APP_DISPLAY_NAME} server...
-          </p>
+      <>
+        {desktopWindowControls}
+        <div className="flex h-screen flex-col bg-background text-foreground">
+          <div className="flex flex-1 items-center justify-center">
+            <p className="text-sm text-muted-foreground">
+              Connecting to {APP_DISPLAY_NAME} server...
+            </p>
+          </div>
         </div>
-      </div>
+      </>
     );
   }
 
   return (
-    <ToastProvider position="top-center">
-      <AnchoredToastProvider>
-        <GitProgressToastPreviewDev />
-        <EventRouter />
-        <GlobalShortcutsDialog />
-        <GlobalWhatsNewSurface />
-        <TaskCompletionNotifications />
-        <ProviderUpdateNotifications />
-        <DesktopProjectBootstrap />
-        <Outlet />
-      </AnchoredToastProvider>
-    </ToastProvider>
+    <>
+      {desktopWindowControls}
+      <ToastProvider position="top-center">
+        <AnchoredToastProvider>
+          <GitProgressToastPreviewDev />
+          <EventRouter />
+          <GlobalShortcutsDialog />
+          <GlobalWhatsNewSurface />
+          <TaskCompletionNotifications />
+          <ProviderUpdateNotifications />
+          <DesktopProjectBootstrap />
+          <Outlet />
+        </AnchoredToastProvider>
+      </ToastProvider>
+    </>
   );
 }
 
