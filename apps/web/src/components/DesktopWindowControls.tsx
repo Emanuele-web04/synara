@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import type { DesktopWindowState } from "@t3tools/contracts";
 
 import { isElectron } from "~/env";
-import { cn, isMacPlatform } from "~/lib/utils";
+import { cn, isWindowsPlatform } from "~/lib/utils";
 
 import { ChatHeaderIconButton } from "./chat/chatHeaderControls";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -33,7 +33,7 @@ function WindowsCaptionGlyph({ code }: { code: string }) {
 export function DesktopWindowControls({ className }: { className?: string }) {
   const [windowState, setWindowState] = useState<DesktopWindowState>(DEFAULT_WINDOW_STATE);
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
-  const isMacDesktop = isMacPlatform(platform);
+  const isWindowsDesktop = isWindowsPlatform(platform);
   const controls = typeof window === "undefined" ? undefined : window.desktopBridge?.windowControls;
 
   useEffect(() => {
@@ -51,7 +51,7 @@ export function DesktopWindowControls({ className }: { className?: string }) {
     };
   }, [controls]);
 
-  if (!isElectron || isMacDesktop || !controls) {
+  if (!isElectron || !isWindowsDesktop || !controls) {
     return null;
   }
 

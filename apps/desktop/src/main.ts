@@ -2417,13 +2417,15 @@ function getWindowMaterialOptions(): BrowserWindowConstructorOptions {
   };
 }
 
-// macOS keeps native traffic lights inset into the renderer's top chrome. Other
-// platforms use a fully frameless shell and renderer-owned minimize/maximize/close
-// controls, so the toolbar can occupy the top edge instead of sitting below a native
-// title bar.
+// macOS keeps native traffic lights inset into the renderer's top chrome. Windows
+// uses a fully frameless shell and renderer-owned minimize/maximize/close controls,
+// so the toolbar can occupy the top edge instead of sitting below a native title bar.
 function getTitleBarOptions(): BrowserWindowConstructorOptions {
-  if (process.platform !== "darwin") {
+  if (process.platform === "win32") {
     return { frame: false };
+  }
+  if (process.platform !== "darwin") {
+    return {};
   }
   return {
     titleBarStyle: "hiddenInset",
