@@ -31,6 +31,7 @@ import {
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  type AppSettings,
   MAX_CHAT_FONT_SIZE_PX,
   getCustomModelsForProvider,
   getGitTextGenerationModelOptions,
@@ -512,6 +513,12 @@ function providerUpdateFailureMessage(provider: ServerProviderStatus | undefined
   return state.output?.trim() || state.message || "The provider update did not complete.";
 }
 
+// Keys of AppSettings whose value is a plain boolean — the only ones that can be
+// driven by the shared on/off toggle row below.
+type BooleanSettingKey = {
+  [Key in keyof AppSettings]-?: AppSettings[Key] extends boolean ? Key : never;
+}[keyof AppSettings];
+
 // ── Route screen ───────────────────────────────────────────────────────────
 
 function SettingsRouteView() {
@@ -555,9 +562,9 @@ function SettingsRouteView() {
     kilo: Boolean(settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword),
     opencode: Boolean(
       settings.openCodeBinaryPath ||
-        settings.openCodeExperimentalWebSockets ||
-        settings.openCodeServerUrl ||
-        settings.openCodeServerPassword,
+      settings.openCodeExperimentalWebSockets ||
+      settings.openCodeServerUrl ||
+      settings.openCodeServerPassword,
     ),
     pi: Boolean(settings.piBinaryPath || settings.piAgentDir),
   });
@@ -767,6 +774,10 @@ function SettingsRouteView() {
       : []),
     ...(settings.sidebarThreadSortOrder !== defaults.sidebarThreadSortOrder
       ? ["Thread sort order"]
+      : []),
+    ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
+    ...(settings.showWorkspaceSection !== defaults.showWorkspaceSection
+      ? ["Workspace section"]
       : []),
     ...(settings.uiFontFamily !== defaults.uiFontFamily ? ["UI font"] : []),
     ...(settings.chatCodeFontFamily !== defaults.chatCodeFontFamily ? ["Code font"] : []),
@@ -1272,6 +1283,46 @@ function SettingsRouteView() {
     [deleteArchivedThread, unarchiveThread],
   );
 
+  // Shared on/off settings row: a labelled Switch bound to a boolean AppSettings
+  // key, with the standard "reset to default" affordance shown only when changed.
+  // Rows with bespoke controls (e.g. the desktop-notifications Test button) keep
+  // their own markup instead of using this helper.
+  const renderBooleanSettingRow = (config: {
+    settingKey: BooleanSettingKey;
+    title: string;
+    description: string;
+    resetLabel: string;
+    ariaLabel: string;
+  }) => {
+    const { settingKey, title, description, resetLabel, ariaLabel } = config;
+    const isChanged = settings[settingKey] !== defaults[settingKey];
+    return (
+      <SettingsRow
+        title={title}
+        description={description}
+        resetAction={
+          isChanged ? (
+            <SettingResetButton
+              label={resetLabel}
+              onClick={() =>
+                updateSettings({ [settingKey]: defaults[settingKey] } as Partial<AppSettings>)
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings[settingKey]}
+            onCheckedChange={(checked) =>
+              updateSettings({ [settingKey]: Boolean(checked) } as Partial<AppSettings>)
+            }
+            aria-label={ariaLabel}
+          />
+        }
+      />
+    );
+  };
+
   const renderGeneralPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Core defaults">
@@ -1429,6 +1480,26 @@ function SettingsRouteView() {
           }
         />
       </SettingsSection>
+
+      <SettingsSection title="Sidebar sections">
+        {renderBooleanSettingRow({
+          settingKey: "showChatsSection",
+          title: "Chats",
+          description:
+            "Show the standalone Chats list in the sidebar footer (chats not tied to a project).",
+          resetLabel: "chats section",
+          ariaLabel: "Show the Chats section in the sidebar",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "showWorkspaceSection",
+          title: "Workspace",
+          description:
+            "Show the Workspace tab in the sidebar switcher. The Threads tab always stays visible.",
+          resetLabel: "workspace section",
+          ariaLabel: "Show the Workspace section in the sidebar",
+        })}
+      </SettingsSection>
     </div>
   );
 
@@ -1568,33 +1639,15 @@ function SettingsRouteView() {
             }
           />
 
-          {shouldShowFontSmoothing ? (
-            <SettingsRow
-              title="Font smoothing"
-              description="Use macOS-style antialiasing for lighter, crisper text rendering."
-              resetAction={
-                settings.enableNativeFontSmoothing !== defaults.enableNativeFontSmoothing ? (
-                  <SettingResetButton
-                    label="font smoothing"
-                    onClick={() =>
-                      updateSettings({
-                        enableNativeFontSmoothing: defaults.enableNativeFontSmoothing,
-                      })
-                    }
-                  />
-                ) : null
-              }
-              control={
-                <Switch
-                  checked={settings.enableNativeFontSmoothing}
-                  onCheckedChange={(checked) =>
-                    updateSettings({ enableNativeFontSmoothing: checked })
-                  }
-                  aria-label="Enable font smoothing"
-                />
-              }
-            />
-          ) : null}
+          {shouldShowFontSmoothing
+            ? renderBooleanSettingRow({
+                settingKey: "enableNativeFontSmoothing",
+                title: "Font smoothing",
+                description: "Use macOS-style antialiasing for lighter, crisper text rendering.",
+                resetLabel: "font smoothing",
+                ariaLabel: "Enable font smoothing",
+              })
+            : null}
         </SettingsCard>
       </section>
 
@@ -1648,31 +1701,14 @@ function SettingsRouteView() {
   const renderNotificationsPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Activity alerts">
-        <SettingsRow
-          title="Activity toasts"
-          description="Show an in-app toast when a chat or managed terminal agent finishes or needs input."
-          resetAction={
-            settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts ? (
-              <SettingResetButton
-                label="activity toasts"
-                onClick={() =>
-                  updateSettings({
-                    enableTaskCompletionToasts: defaults.enableTaskCompletionToasts,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.enableTaskCompletionToasts}
-              onCheckedChange={(checked) =>
-                updateSettings({ enableTaskCompletionToasts: Boolean(checked) })
-              }
-              aria-label="Activity toast notifications"
-            />
-          }
-        />
+        {renderBooleanSettingRow({
+          settingKey: "enableTaskCompletionToasts",
+          title: "Activity toasts",
+          description:
+            "Show an in-app toast when a chat or managed terminal agent finishes or needs input.",
+          resetLabel: "activity toasts",
+          ariaLabel: "Activity toast notifications",
+        })}
 
         <SettingsRow
           title="Desktop notifications"
@@ -1714,175 +1750,56 @@ function SettingsRouteView() {
   const renderBehaviorPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Runtime behavior">
-        <SettingsRow
-          title="Assistant output"
-          description="Show token-by-token output while a response is in progress."
-          resetAction={
-            settings.enableAssistantStreaming !== defaults.enableAssistantStreaming ? (
-              <SettingResetButton
-                label="assistant output"
-                onClick={() =>
-                  updateSettings({
-                    enableAssistantStreaming: defaults.enableAssistantStreaming,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.enableAssistantStreaming}
-              onCheckedChange={(checked) =>
-                updateSettings({
-                  enableAssistantStreaming: Boolean(checked),
-                })
-              }
-              aria-label="Stream assistant messages"
-            />
-          }
-        />
+        {renderBooleanSettingRow({
+          settingKey: "enableAssistantStreaming",
+          title: "Assistant output",
+          description: "Show token-by-token output while a response is in progress.",
+          resetLabel: "assistant output",
+          ariaLabel: "Stream assistant messages",
+        })}
 
-        <SettingsRow
-          title="Diff line wrapping"
-          description="Set the default wrap state when the diff panel opens. The in-panel wrap toggle only affects the current diff session."
-          resetAction={
-            settings.diffWordWrap !== defaults.diffWordWrap ? (
-              <SettingResetButton
-                label="diff line wrapping"
-                onClick={() =>
-                  updateSettings({
-                    diffWordWrap: defaults.diffWordWrap,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.diffWordWrap}
-              onCheckedChange={(checked) =>
-                updateSettings({
-                  diffWordWrap: Boolean(checked),
-                })
-              }
-              aria-label="Wrap diff lines by default"
-            />
-          }
-        />
+        {renderBooleanSettingRow({
+          settingKey: "diffWordWrap",
+          title: "Diff line wrapping",
+          description:
+            "Set the default wrap state when the diff panel opens. The in-panel wrap toggle only affects the current diff session.",
+          resetLabel: "diff line wrapping",
+          ariaLabel: "Wrap diff lines by default",
+        })}
 
-        <SettingsRow
-          title="Prompt suggestions"
-          description="Show suggested prompts under the composer when starting a new thread."
-          resetAction={
-            settings.enableComposerSuggestions !== defaults.enableComposerSuggestions ? (
-              <SettingResetButton
-                label="prompt suggestions"
-                onClick={() =>
-                  updateSettings({
-                    enableComposerSuggestions: defaults.enableComposerSuggestions,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.enableComposerSuggestions}
-              onCheckedChange={(checked) =>
-                updateSettings({
-                  enableComposerSuggestions: Boolean(checked),
-                })
-              }
-              aria-label="Show composer prompt suggestions"
-            />
-          }
-        />
+        {renderBooleanSettingRow({
+          settingKey: "enableComposerSuggestions",
+          title: "Prompt suggestions",
+          description: "Show suggested prompts under the composer when starting a new thread.",
+          resetLabel: "prompt suggestions",
+          ariaLabel: "Show composer prompt suggestions",
+        })}
       </SettingsSection>
 
       <SettingsSection title="Safety confirmations">
-        <SettingsRow
-          title="Delete confirmation"
-          description="Ask before deleting a thread and its chat history."
-          resetAction={
-            settings.confirmThreadDelete !== defaults.confirmThreadDelete ? (
-              <SettingResetButton
-                label="delete confirmation"
-                onClick={() =>
-                  updateSettings({
-                    confirmThreadDelete: defaults.confirmThreadDelete,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.confirmThreadDelete}
-              onCheckedChange={(checked) =>
-                updateSettings({
-                  confirmThreadDelete: Boolean(checked),
-                })
-              }
-              aria-label="Confirm thread deletion"
-            />
-          }
-        />
+        {renderBooleanSettingRow({
+          settingKey: "confirmThreadDelete",
+          title: "Delete confirmation",
+          description: "Ask before deleting a thread and its chat history.",
+          resetLabel: "delete confirmation",
+          ariaLabel: "Confirm thread deletion",
+        })}
 
-        <SettingsRow
-          title="Archive confirmation"
-          description="Ask before archiving a thread."
-          resetAction={
-            settings.confirmThreadArchive !== defaults.confirmThreadArchive ? (
-              <SettingResetButton
-                label="archive confirmation"
-                onClick={() =>
-                  updateSettings({
-                    confirmThreadArchive: defaults.confirmThreadArchive,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.confirmThreadArchive}
-              onCheckedChange={(checked) =>
-                updateSettings({
-                  confirmThreadArchive: Boolean(checked),
-                })
-              }
-              aria-label="Confirm thread archive"
-            />
-          }
-        />
+        {renderBooleanSettingRow({
+          settingKey: "confirmThreadArchive",
+          title: "Archive confirmation",
+          description: "Ask before archiving a thread.",
+          resetLabel: "archive confirmation",
+          ariaLabel: "Confirm thread archive",
+        })}
 
-        <SettingsRow
-          title="Terminal close confirmation"
-          description="Ask before closing a terminal tab and clearing its history."
-          resetAction={
-            settings.confirmTerminalTabClose !== defaults.confirmTerminalTabClose ? (
-              <SettingResetButton
-                label="terminal close confirmation"
-                onClick={() =>
-                  updateSettings({
-                    confirmTerminalTabClose: defaults.confirmTerminalTabClose,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.confirmTerminalTabClose}
-              onCheckedChange={(checked) =>
-                updateSettings({
-                  confirmTerminalTabClose: Boolean(checked),
-                })
-              }
-              aria-label="Confirm terminal tab close"
-            />
-          }
-        />
+        {renderBooleanSettingRow({
+          settingKey: "confirmTerminalTabClose",
+          title: "Terminal close confirmation",
+          description: "Ask before closing a terminal tab and clearing its history.",
+          resetLabel: "terminal close confirmation",
+          ariaLabel: "Confirm terminal tab close",
+        })}
       </SettingsSection>
     </div>
   );

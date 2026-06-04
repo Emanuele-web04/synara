@@ -122,6 +122,14 @@ export const AppSettingsSchema = Schema.Struct({
   // Local-only UI preference: show prompt suggestions under the composer on the
   // empty new-thread landing. Off hides the suggestion list entirely.
   enableComposerSuggestions: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
+  // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
+  // (rootless chats not tied to a project). `showWorkspaceSection` controls the
+  // "Workspace" tab in the section switcher. The "Threads"/Projects tab is always
+  // shown, so the switcher simply collapses to a static Threads view when Workspace
+  // is hidden (see the sidebar segmented picker).
+  showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
+  showWorkspaceSection: Schema.Boolean.pipe(withDefaults(() => true)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => false)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -161,6 +169,7 @@ export const AppSettingsSchema = Schema.Struct({
   ).pipe(withDefaults(() => [])),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
+
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 type MutableServerSettingsPatch = Mutable<ServerSettingsPatch>;
 type MutableServerSettingsProvidersPatch = Mutable<NonNullable<ServerSettingsPatch["providers"]>>;
@@ -730,9 +739,9 @@ export function getProviderStartOptions(
 ): ProviderStartOptions | undefined {
   const hasOpenCodeStartOptions = Boolean(
     settings.openCodeBinaryPath ||
-      settings.openCodeExperimentalWebSockets ||
-      settings.openCodeServerUrl ||
-      settings.openCodeServerPassword,
+    settings.openCodeExperimentalWebSockets ||
+    settings.openCodeServerUrl ||
+    settings.openCodeServerPassword,
   );
   const providerOptions: ProviderStartOptions = {
     ...(settings.codexBinaryPath || settings.codexHomePath
@@ -785,9 +794,7 @@ export function getProviderStartOptions(
       ? {
           opencode: {
             ...(settings.openCodeBinaryPath ? { binaryPath: settings.openCodeBinaryPath } : {}),
-            ...(settings.openCodeExperimentalWebSockets
-              ? { experimentalWebSockets: true }
-              : {}),
+            ...(settings.openCodeExperimentalWebSockets ? { experimentalWebSockets: true } : {}),
             ...(settings.openCodeServerUrl ? { serverUrl: settings.openCodeServerUrl } : {}),
             ...(settings.openCodeServerPassword
               ? { serverPassword: settings.openCodeServerPassword }

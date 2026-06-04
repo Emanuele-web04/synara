@@ -24,7 +24,10 @@ import {
 export type ProviderIconTone = "default" | "header";
 
 // The bundled SVG has a dark outer fill, so dark mode swaps to the reversed Central asset.
-const OpenCodeProviderIcon: Icon = ({
+// React's SVGProps has no `title`, so accept it via an explicit prop type and forward it
+// only to CentralIcon (an HTML span, which supports `title`); the light-mode SVG conveys
+// its accessible name through aria-label instead.
+const OpenCodeProviderIcon = ({
   className,
   style,
   title,
@@ -32,7 +35,7 @@ const OpenCodeProviderIcon: Icon = ({
   "aria-hidden": ariaHidden,
   "aria-label": ariaLabel,
   ...svgProps
-}) => {
+}: SVGProps<SVGSVGElement> & { title?: string }) => {
   const centralIconLabel =
     ariaHidden === true || ariaHidden === "true" || typeof ariaLabel !== "string"
       ? undefined
@@ -45,7 +48,6 @@ const OpenCodeProviderIcon: Icon = ({
         aria-hidden={ariaHidden}
         aria-label={ariaLabel}
         role={role}
-        title={title}
         className={cn(className, "dark:hidden")}
         style={style}
       />

@@ -1018,16 +1018,23 @@ function SortableProjectItem({
 }
 
 function SidebarSegmentedPicker({
+  views,
   activeView,
   onSelectView,
 }: {
+  views: ReadonlyArray<"threads" | "workspace">;
   activeView: "threads" | "workspace";
   onSelectView: (view: "threads" | "workspace") => void;
 }) {
+  // A single-option switcher is just a static label, so hide it entirely when the
+  // user has turned off one of the two sections in Settings.
+  if (views.length < 2) {
+    return null;
+  }
   return (
     <div className="px-3 pb-2.5">
       <div className="sidebar-segmented-picker inline-flex w-full rounded-lg p-0.5">
-        {(["threads", "workspace"] as const).map((view) => {
+        {views.map((view) => {
           const active = activeView === view;
           return (
             <button
@@ -1133,6 +1140,10 @@ export default function Sidebar() {
   });
   const isOnWorkspace = pathname.startsWith("/workspace");
   const { settings: appSettings, updateSettings } = useAppSettings();
+  // The Threads/Projects tab is always available; only the optional Workspace tab
+  // and the standalone Chats footer list can be hidden from Settings.
+  const chatsSectionVisible = appSettings.showChatsSection;
+  const workspaceSectionVisible = appSettings.showWorkspaceSection;
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
   const { createThreadHandoff } = useThreadHandoff();
@@ -1738,6 +1749,7 @@ export default function Sidebar() {
       const restorableRoute = resolveRestorableThreadRoute({
         lastThreadRoute,
         availableThreadIds: new Set(Object.keys(sidebarThreadSummaryById)),
+        availableSplitViewIds: new Set(Object.keys(splitViewsById)),
       });
       if (restorableRoute) {
         void navigate({
@@ -1773,9 +1785,22 @@ export default function Sidebar() {
       routeWorkspaceId,
       sidebarThreadSummaryById,
       sidebarThreads,
+      splitViewsById,
       workspacePages,
     ],
   );
+
+  // Keep the user off the Workspace tab once it's hidden in Settings: viewing it
+  // (e.g. via a bookmark/deep link) jumps back to the always-visible Threads tab.
+  // Settings is its own route and is never redirected.
+  useEffect(() => {
+    if (isOnSettings) {
+      return;
+    }
+    if (isOnWorkspace && !workspaceSectionVisible) {
+      handleSidebarViewChange("threads");
+    }
+  }, [handleSidebarViewChange, isOnSettings, isOnWorkspace, workspaceSectionVisible]);
 
   const handleCreateWorkspace = useCallback(() => {
     const workspaceId = createWorkspace();
@@ -5375,6 +5400,7 @@ export default function Sidebar() {
         ) : (
           <>
             <SidebarSegmentedPicker
+              views={["threads", ...(workspaceSectionVisible ? (["workspace"] as const) : [])]}
               activeView={isOnWorkspace ? "workspace" : "threads"}
               onSelectView={handleSidebarViewChange}
             />
@@ -5719,7 +5745,7 @@ export default function Sidebar() {
       </SidebarContent>
 
       <SidebarFooter className="gap-2 p-2 font-system-ui">
-        {!isOnSettings ? (
+        {!isOnSettings && chatsSectionVisible ? (
           <div className="group/collapsible">
             <div className="group/project-header relative">
               <SidebarMenuButton

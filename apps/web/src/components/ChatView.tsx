@@ -2382,23 +2382,23 @@ export default function ChatView({
       cwd: composerSkillCwd,
       threadId,
       binaryPath:
-        selectedProvider === "opencode"
+        (selectedProvider === "opencode"
           ? providerOptionsForDispatch?.opencode?.binaryPath
           : selectedProvider === "kilo"
             ? providerOptionsForDispatch?.kilo?.binaryPath
-            : null,
+            : null) ?? null,
       serverUrl:
-        selectedProvider === "opencode"
+        (selectedProvider === "opencode"
           ? providerOptionsForDispatch?.opencode?.serverUrl
           : selectedProvider === "kilo"
             ? providerOptionsForDispatch?.kilo?.serverUrl
-            : null,
+            : null) ?? null,
       serverPassword:
-        selectedProvider === "opencode"
+        (selectedProvider === "opencode"
           ? providerOptionsForDispatch?.opencode?.serverPassword
           : selectedProvider === "kilo"
             ? providerOptionsForDispatch?.kilo?.serverPassword
-            : null,
+            : null) ?? null,
       experimentalWebSockets:
         selectedProvider === "opencode"
           ? providerOptionsForDispatch?.opencode?.experimentalWebSockets

@@ -120,7 +120,8 @@ export function providerCommandsQueryOptions(input: {
   binaryPath?: string | null;
   serverUrl?: string | null;
   serverPassword?: string | null;
-  experimentalWebSockets?: boolean;
+  // Undefined means "not applicable" (non-OpenCode providers); the body normalizes it.
+  experimentalWebSockets?: boolean | undefined;
   agentDir?: string | null;
   enabled?: boolean;
 }) {

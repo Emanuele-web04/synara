@@ -4062,19 +4062,20 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           },
           ({ activeContext, client }) =>
             Effect.gen(function* () {
-              const inventory = yield* openCodeRuntime.loadOpenCodeInventory(client).pipe(
-                Effect.mapError(toAdapterRequestError),
-              );
+              const inventory = yield* openCodeRuntime
+                .loadOpenCodeInventory(client)
+                .pipe(Effect.mapError(toAdapterRequestError));
               if (activeContext) {
                 replaceModelContextLimits(
                   activeContext,
                   buildOpenCodeModelContextLimitMap(inventory),
                 );
               }
-              const credentialProviderIDs = yield* openCodeRuntime.loadOpenCodeCredentialProviderIDs(
-                client,
-                adapterConfig.cliSpec,
-              );
+              const credentialProviderIDs =
+                yield* openCodeRuntime.loadOpenCodeCredentialProviderIDs(
+                  client,
+                  adapterConfig.cliSpec,
+                );
               return yield* fn({
                 client,
                 inventory,
