@@ -99,6 +99,11 @@ import {
   readBrowserNotificationPermissionState,
   requestBrowserNotificationPermission,
 } from "../notifications/taskCompletion";
+import {
+  SANDBOX_APP_SETTINGS_KEYS,
+  SANDBOX_DEFAULT_PROVIDER_OPTIONS,
+  SANDBOX_PROVIDER_DESCRIPTORS,
+} from "../sandboxSettings";
 import { normalizeSettingsSection, SETTINGS_NAV_ITEMS } from "../settingsNavigation";
 import {
   SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME,
@@ -203,7 +208,10 @@ type InstallProviderSettings = {
   agentDirDescription?: ReactNode;
 };
 
-const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{ provider: ProviderKind; title: string }> = [
+const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{
+  provider: ProviderKind;
+  title: string;
+}> = [
   { provider: "codex", title: PROVIDER_DISPLAY_NAMES.codex },
   { provider: "claudeAgent", title: PROVIDER_DISPLAY_NAMES.claudeAgent },
   { provider: "cursor", title: PROVIDER_DISPLAY_NAMES.cursor },
@@ -279,9 +287,15 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     provider: "codex",
     title: "Codex",
     docs: [
-      { label: "Install", href: "https://help.openai.com/en/articles/11096431" },
+      {
+        label: "Install",
+        href: "https://help.openai.com/en/articles/11096431",
+      },
       { label: "Update", href: "https://help.openai.com/en/articles/11096431" },
-      { label: "Config", href: "https://github.com/openai/codex/blob/main/docs/config.md" },
+      {
+        label: "Config",
+        href: "https://github.com/openai/codex/blob/main/docs/config.md",
+      },
     ],
     binaryPathKey: "codexBinaryPath",
     binaryPlaceholder: "Codex binary path",
@@ -298,8 +312,14 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     provider: "claudeAgent",
     title: "Claude",
     docs: [
-      { label: "Install", href: "https://code.claude.com/docs/en/installation" },
-      { label: "Update", href: "https://code.claude.com/docs/en/installation#update-claude-code" },
+      {
+        label: "Install",
+        href: "https://code.claude.com/docs/en/installation",
+      },
+      {
+        label: "Update",
+        href: "https://code.claude.com/docs/en/installation#update-claude-code",
+      },
       { label: "Config", href: "https://code.claude.com/docs/en/settings" },
     ],
     binaryPathKey: "claudeBinaryPath",
@@ -315,7 +335,10 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     title: "Cursor",
     docs: [
       { label: "Install", href: "https://docs.cursor.com/en/cli/installation" },
-      { label: "Update", href: "https://docs.cursor.com/en/cli/installation#updates" },
+      {
+        label: "Update",
+        href: "https://docs.cursor.com/en/cli/installation#updates",
+      },
       { label: "Config", href: "https://docs.cursor.com/en/cli/overview" },
     ],
     binaryPathKey: "cursorBinaryPath",
@@ -333,7 +356,10 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     provider: "gemini",
     title: "Gemini",
     docs: [
-      { label: "Install", href: "https://google-gemini.github.io/gemini-cli/docs/get-started/" },
+      {
+        label: "Install",
+        href: "https://google-gemini.github.io/gemini-cli/docs/get-started/",
+      },
       { label: "Update", href: "https://github.com/google-gemini/gemini-cli" },
       {
         label: "Config",
@@ -353,7 +379,10 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     title: "Grok",
     docs: [
       { label: "Install", href: "https://docs.x.ai/build/overview" },
-      { label: "Headless", href: "https://docs.x.ai/build/cli/headless-scripting" },
+      {
+        label: "Headless",
+        href: "https://docs.x.ai/build/cli/headless-scripting",
+      },
       { label: "Config", href: "https://docs.x.ai/build/overview" },
     ],
     binaryPathKey: "grokBinaryPath",
@@ -656,7 +685,10 @@ function SettingsRouteView() {
     }
 
     const frame = window.requestAnimationFrame(() => {
-      providerUpdatesRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+      providerUpdatesRef.current?.scrollIntoView({
+        block: "start",
+        behavior: "smooth",
+      });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [serverConfigQuery.data?.providers, shouldFocusProviderUpdates]);
@@ -752,6 +784,10 @@ function SettingsRouteView() {
     settings.piBinaryPath !== defaults.piBinaryPath ||
     settings.piAgentDir !== defaults.piAgentDir;
 
+  const isSandboxSettingsDirty = SANDBOX_APP_SETTINGS_KEYS.some(
+    (key) => settings[key] !== defaults[key],
+  );
+
   const changedSettingLabels = [
     ...(theme !== "system" ? ["Theme"] : []),
     ...(!isDefaultActiveTheme ? [`${resolvedTheme === "dark" ? "Dark" : "Light"} theme pack`] : []),
@@ -809,6 +845,7 @@ function SettingsRouteView() {
     ...(isInstallSettingsDirty ? ["Provider installs"] : []),
     ...(hiddenProviderCount > 0 ? ["Provider visibility"] : []),
     ...(isProviderOrderDirty ? ["Provider order"] : []),
+    ...(isSandboxSettingsDirty ? ["Sandbox config"] : []),
   ];
 
   const openKeybindingsFile = useCallback(() => {
@@ -927,7 +964,9 @@ function SettingsRouteView() {
       }
       setUpdatingProviders((current) => new Set(current).add(provider));
       try {
-        const result = await ensureNativeApi().server.updateProvider({ provider });
+        const result = await ensureNativeApi().server.updateProvider({
+          provider,
+        });
         const refreshedProvider = result.providers.find((status) => status.provider === provider);
         const failureMessage = providerUpdateFailureMessage(refreshedProvider);
         if (failureMessage) {
@@ -1036,7 +1075,11 @@ function SettingsRouteView() {
     const body = "Notification test for chats and terminal agents.";
 
     if (window.desktopBridge) {
-      const shown = await window.desktopBridge.notifications.show({ title, body, silent: false });
+      const shown = await window.desktopBridge.notifications.show({
+        title,
+        body,
+        silent: false,
+      });
       toastManager.add({
         type: shown ? "success" : "warning",
         title: shown ? "Test notification sent" : "Notifications unavailable",
@@ -1058,7 +1101,10 @@ function SettingsRouteView() {
       return;
     }
 
-    const notification = new Notification(title, { body, tag: "synara:test-notification" });
+    const notification = new Notification(title, {
+      body,
+      tag: "synara:test-notification",
+    });
     notification.addEventListener("click", () => {
       window.focus();
     });
@@ -1546,7 +1592,9 @@ function SettingsRouteView() {
                 <SettingResetButton
                   label="code font"
                   onClick={() =>
-                    updateSettings({ chatCodeFontFamily: defaults.chatCodeFontFamily })
+                    updateSettings({
+                      chatCodeFontFamily: defaults.chatCodeFontFamily,
+                    })
                   }
                 />
               ) : null
@@ -2685,19 +2733,33 @@ function SettingsRouteView() {
                                     providerSettings.binaryPathKey === "claudeBinaryPath"
                                       ? { claudeBinaryPath: event.target.value }
                                       : providerSettings.binaryPathKey === "cursorBinaryPath"
-                                        ? { cursorBinaryPath: event.target.value }
+                                        ? {
+                                            cursorBinaryPath: event.target.value,
+                                          }
                                         : providerSettings.binaryPathKey === "geminiBinaryPath"
-                                          ? { geminiBinaryPath: event.target.value }
+                                          ? {
+                                              geminiBinaryPath: event.target.value,
+                                            }
                                           : providerSettings.binaryPathKey === "grokBinaryPath"
-                                            ? { grokBinaryPath: event.target.value }
+                                            ? {
+                                                grokBinaryPath: event.target.value,
+                                              }
                                             : providerSettings.binaryPathKey === "kiloBinaryPath"
-                                              ? { kiloBinaryPath: event.target.value }
+                                              ? {
+                                                  kiloBinaryPath: event.target.value,
+                                                }
                                               : providerSettings.binaryPathKey ===
                                                   "openCodeBinaryPath"
-                                                ? { openCodeBinaryPath: event.target.value }
+                                                ? {
+                                                    openCodeBinaryPath: event.target.value,
+                                                  }
                                                 : providerSettings.binaryPathKey === "piBinaryPath"
-                                                  ? { piBinaryPath: event.target.value }
-                                                  : { codexBinaryPath: event.target.value },
+                                                  ? {
+                                                      piBinaryPath: event.target.value,
+                                                    }
+                                                  : {
+                                                      codexBinaryPath: event.target.value,
+                                                    },
                                   )
                                 }
                                 placeholder={providerSettings.binaryPlaceholder}
@@ -2812,7 +2874,9 @@ function SettingsRouteView() {
                                     updateSettings(
                                       providerSettings.serverUrlKey === "kiloServerUrl"
                                         ? { kiloServerUrl: event.target.value }
-                                        : { openCodeServerUrl: event.target.value },
+                                        : {
+                                            openCodeServerUrl: event.target.value,
+                                          },
                                     )
                                   }
                                   placeholder={providerSettings.serverUrlPlaceholder}
@@ -2845,8 +2909,12 @@ function SettingsRouteView() {
                                   onChange={(event) =>
                                     updateSettings(
                                       providerSettings.serverPasswordKey === "kiloServerPassword"
-                                        ? { kiloServerPassword: event.target.value }
-                                        : { openCodeServerPassword: event.target.value },
+                                        ? {
+                                            kiloServerPassword: event.target.value,
+                                          }
+                                        : {
+                                            openCodeServerPassword: event.target.value,
+                                          },
                                     )
                                   }
                                   placeholder={providerSettings.serverPasswordPlaceholder}
@@ -2870,6 +2938,115 @@ function SettingsRouteView() {
           </div>
         </SettingsRow>
       </SettingsSection>
+    </div>
+  );
+
+  const renderSandboxesPanel = () => (
+    <div className="space-y-6">
+      <SettingsSection title="Defaults">
+        <SettingsRow
+          title="Default remote provider"
+          description="Provider used when a new remote-runtime thread does not pick one."
+          resetAction={
+            settings.sandboxDefaultRemoteProvider !== defaults.sandboxDefaultRemoteProvider ? (
+              <SettingResetButton
+                label="default remote provider"
+                onClick={() =>
+                  updateSettings({
+                    sandboxDefaultRemoteProvider: defaults.sandboxDefaultRemoteProvider,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={settings.sandboxDefaultRemoteProvider}
+              onValueChange={(value) => updateSettings({ sandboxDefaultRemoteProvider: value })}
+              ariaLabel="Default remote provider"
+              valueContent={
+                SANDBOX_DEFAULT_PROVIDER_OPTIONS.find(
+                  (option) => option.value === settings.sandboxDefaultRemoteProvider,
+                )?.label ?? "No preference"
+              }
+            >
+              {SANDBOX_DEFAULT_PROVIDER_OPTIONS.map((option) => (
+                <SelectItem hideIndicator key={option.value || "none"} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SettingsSelectControl>
+          }
+        />
+        <SettingsRow
+          title="Default snapshot"
+          description="Snapshot ID applied to new remote sandboxes when supported."
+          resetAction={
+            settings.sandboxDefaultSnapshot !== defaults.sandboxDefaultSnapshot ? (
+              <SettingResetButton
+                label="default snapshot"
+                onClick={() =>
+                  updateSettings({
+                    sandboxDefaultSnapshot: defaults.sandboxDefaultSnapshot,
+                  })
+                }
+              />
+            ) : null
+          }
+        >
+          <Input
+            id="sandbox-default-snapshot"
+            className="mt-3"
+            value={settings.sandboxDefaultSnapshot}
+            onChange={(event) => updateSettings({ sandboxDefaultSnapshot: event.target.value })}
+            placeholder="Snapshot ID"
+            spellCheck={false}
+          />
+        </SettingsRow>
+      </SettingsSection>
+
+      {SANDBOX_PROVIDER_DESCRIPTORS.map((provider) => (
+        <SettingsSection key={provider.id} title={provider.title}>
+          <SettingsRow
+            title={`${provider.title} credentials`}
+            description="Secrets are stored on the server and never sent back to the browser."
+          >
+            <div className="mt-3 space-y-4">
+              {provider.fields.map((field) => {
+                const value = settings[field.appKey];
+                const inputId = `sandbox-${provider.id}-${field.serverField}`;
+                return (
+                  <label key={field.appKey} htmlFor={inputId} className="block">
+                    <span className="flex items-center gap-2">
+                      <span className="block text-xs font-medium text-foreground">
+                        {field.label}
+                      </span>
+                      {field.secret && value ? (
+                        <span className="inline-flex items-center rounded-full border border-[color:var(--color-border)] px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                          Configured
+                        </span>
+                      ) : null}
+                    </span>
+                    <Input
+                      id={inputId}
+                      className="mt-1"
+                      type={field.secret ? "password" : "text"}
+                      autoComplete={field.secret ? "off" : undefined}
+                      value={value}
+                      onChange={(event) => updateSettings({ [field.appKey]: event.target.value })}
+                      placeholder={field.placeholder}
+                      spellCheck={false}
+                    />
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {field.description}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </SettingsRow>
+        </SettingsSection>
+      ))}
     </div>
   );
 
@@ -2990,6 +3167,8 @@ function SettingsRouteView() {
         return renderModelsPanel();
       case "providers":
         return renderProvidersPanel();
+      case "sandboxes":
+        return renderSandboxesPanel();
       case "advanced":
         return renderAdvancedPanel();
       default:

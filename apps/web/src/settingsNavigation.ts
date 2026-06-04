@@ -12,6 +12,7 @@ export const SETTINGS_SECTION_IDS = [
   "archived",
   "models",
   "providers",
+  "sandboxes",
   "advanced",
 ] as const;
 
@@ -100,6 +101,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "Choose visible providers, review CLI installs, and update provider tools.",
     icon: "plugin-1",
     eyebrow: "Picker visibility",
+  },
+  {
+    id: "sandboxes",
+    group: "synara",
+    label: "Sandboxes",
+    description: "Credentials and defaults for remote runtime providers.",
+    icon: "cloud-2",
+    eyebrow: "Remote runtimes",
   },
   {
     id: "advanced",

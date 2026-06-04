@@ -26,6 +26,11 @@ import {
 } from "./providerOrdering";
 import { ensureNativeApi } from "./nativeApi";
 import { serverQueryKeys, serverSettingsQueryOptions } from "./lib/serverReactQuery";
+import {
+  appSettingsPatchToSandboxesPatch,
+  SANDBOX_APP_SETTINGS_KEYS,
+  sandboxSettingsToAppSettings,
+} from "./sandboxSettings";
 
 const APP_SETTINGS_STORAGE_KEY = "synara:app-settings:v1";
 const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "t3code:server-settings-migrated:v1";
@@ -95,6 +100,10 @@ const withDefaults =
       Schema.withDecodingDefault(() => fallback()),
     );
 
+const SandboxStringSetting = Schema.String.check(Schema.isMaxLength(4096)).pipe(
+  withDefaults(() => ""),
+);
+
 export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   chatFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_CHAT_FONT_SIZE_PX)),
@@ -161,6 +170,25 @@ export const AppSettingsSchema = Schema.Struct({
       slug: Schema.String,
     }),
   ).pipe(withDefaults(() => [])),
+  // Remote sandbox/runtime-provider config. Non-secret fields mirror
+  // ServerSettings.sandboxes; secret fields are write-only locally (the server
+  // routes them through ServerSecretStore and never echoes them back).
+  sandboxDefaultRemoteProvider: SandboxStringSetting,
+  sandboxDefaultSnapshot: SandboxStringSetting,
+  sandboxDaytonaApiKey: SandboxStringSetting,
+  sandboxDaytonaApiUrl: SandboxStringSetting,
+  sandboxDaytonaOrganizationId: SandboxStringSetting,
+  sandboxDaytonaTarget: SandboxStringSetting,
+  sandboxDaytonaSnapshot: SandboxStringSetting,
+  sandboxVercelToken: SandboxStringSetting,
+  sandboxVercelTeamId: SandboxStringSetting,
+  sandboxVercelProjectId: SandboxStringSetting,
+  sandboxVercelRuntime: SandboxStringSetting,
+  sandboxModalTokenId: SandboxStringSetting,
+  sandboxModalTokenSecret: SandboxStringSetting,
+  sandboxModalEnvironment: SandboxStringSetting,
+  sandboxCloudflareBridgeUrl: SandboxStringSetting,
+  sandboxCloudflareBridgeToken: SandboxStringSetting,
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
@@ -336,6 +364,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     customPiModels: settings.providers.pi.customModels,
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationModel: settings.textGenerationModelSelection.model,
+    ...sandboxSettingsToAppSettings(settings),
   };
 }
 
@@ -474,6 +503,11 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
   if (Object.keys(providers).length > 0) {
     serverPatch.providers = providers;
   }
+
+  const sandboxes = appSettingsPatchToSandboxesPatch(patch);
+  if (sandboxes) {
+    serverPatch.sandboxes = sandboxes;
+  }
   return serverPatch;
 }
 
@@ -505,7 +539,8 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "piBinaryPath",
     "textGenerationModel",
     "textGenerationProvider",
-  ] as const) {
+    ...SANDBOX_APP_SETTINGS_KEYS,
+  ] as const satisfies ReadonlyArray<keyof AppSettings>) {
     if (settings[key] !== defaults[key]) {
       patch[key] = settings[key] as never;
     }
@@ -611,7 +646,10 @@ export function getAppModelOptions(
     options.push({
       provider,
       slug: normalizedSelectedModel,
-      name: formatProviderModelOptionName({ provider, slug: normalizedSelectedModel }),
+      name: formatProviderModelOptionName({
+        provider,
+        slug: normalizedSelectedModel,
+      }),
       isCustom: true,
     });
   }
@@ -654,7 +692,10 @@ export function getGitTextGenerationModelOptions(
     deduped.push({
       provider: selectedProvider,
       slug: selectedModel,
-      name: formatProviderModelOptionName({ provider: selectedProvider, slug: selectedModel }),
+      name: formatProviderModelOptionName({
+        provider: selectedProvider,
+        slug: selectedModel,
+      }),
       isCustom: true,
     });
   }
@@ -874,7 +915,9 @@ export function useAppSettings() {
         globalThis.localStorage?.setItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY, "1");
       })
       .catch(() => {
-        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
+        void queryClient.invalidateQueries({
+          queryKey: serverQueryKeys.settings(),
+        });
       })
       .finally(() => {
         serverSettingsMigrationInFlight = false;
@@ -896,7 +939,9 @@ export function useAppSettings() {
           queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
         })
         .catch(() => {
-          void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
+          void queryClient.invalidateQueries({
+            queryKey: serverQueryKeys.settings(),
+          });
         });
     },
     [queryClient, setSettings],
@@ -911,7 +956,9 @@ export function useAppSettings() {
         queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
       })
       .catch(() => {
-        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
+        void queryClient.invalidateQueries({
+          queryKey: serverQueryKeys.settings(),
+        });
       });
   }, [defaults, queryClient, setSettings]);
 
