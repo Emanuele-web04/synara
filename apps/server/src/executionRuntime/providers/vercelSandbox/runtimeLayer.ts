@@ -2,11 +2,11 @@
  * Vercel Sandbox runtime wiring.
  *
  * Selects the sandbox client by environment, mirroring `daytona/runtimeLayer`:
- * with the `VERCEL_*` credentials present the real (credentialed) client is
- * resolved; otherwise the in-memory fake (local temp dirs + local processes)
- * backs the adapter, so the server boots and the baseline contract suite runs
- * without provider access. The real client is not wired to the `@vercel/sandbox`
- * SDK yet (see `VercelSandboxClientLive`); a credentialed run fails loudly rather
+ * with the `VERCEL_*` credentials present the real `@vercel/sandbox`-backed
+ * client is resolved; otherwise the in-memory fake (local temp dirs + local
+ * processes) backs the adapter, so the server boots and the baseline contract
+ * suite runs without provider access. The real client loads `@vercel/sandbox`
+ * lazily; a credentialed run without the package installed fails loudly rather
  * than silently using the fake. The adapter shape is identical either way.
  *
  * @module vercelSandbox/runtimeLayer
@@ -16,11 +16,7 @@ import type { FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 
 import { VercelSandboxAdapterLive } from "./Layers/VercelSandboxAdapter.ts";
-import { FakeVercelSandboxClientLive } from "./Layers/FakeVercelSandboxClient.ts";
-import {
-  hasVercelSandboxCredentials,
-  realVercelSandboxClientUnavailable,
-} from "./Layers/VercelSandboxClientLive.ts";
+import { selectVercelSandboxClientLive } from "./Layers/VercelSandboxClientLive.ts";
 import { VercelSandboxAdapter } from "./Services/VercelSandboxAdapter.ts";
 import { VercelSandboxClient } from "./Services/VercelSandboxClient.ts";
 
@@ -44,9 +40,7 @@ export interface VercelSandboxRuntimeLayerOptions {
 export const makeVercelSandboxClientLayer = (
   options?: VercelSandboxRuntimeLayerOptions,
 ): Layer.Layer<VercelSandboxClient, never, VercelSandboxClientServices> =>
-  hasVercelSandboxCredentials(options?.env ?? process.env)
-    ? realVercelSandboxClientUnavailable
-    : FakeVercelSandboxClientLive;
+  selectVercelSandboxClientLive(options?.env ?? process.env);
 
 /** The Vercel Sandbox adapter backed by the environment-selected client. */
 export const makeVercelSandboxRuntimeAdapterLayer = (
