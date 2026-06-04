@@ -20,6 +20,7 @@ import type {
   ExecutionInstanceId,
   ExecutionRuntimeProvider,
   ExecutionTargetKind,
+  OrchestrationThreadRuntime,
   RuntimeInstanceStatus,
   RuntimePlan,
   RuntimeRole,
@@ -127,9 +128,15 @@ export interface ExecutionRuntimeServiceShape {
    * Resolve (and, for remote targets, provision) the execution target backing a
    * thread before its provider session starts. Idempotent: re-resolving a thread
    * that already has a live remote instance returns it without re-provisioning.
+   *
+   * `runtime` is the already-hydrated `OrchestrationThread.runtime` row when the
+   * caller holds it (the reactor loaded the full thread detail before this call).
+   * Passing it skips a redundant full thread-detail query on the turn-start hot
+   * path; omit it (or pass `undefined`) to have the service load it itself.
    */
   readonly ensureTargetForThread: (
     threadId: ThreadId,
+    runtime?: OrchestrationThreadRuntime | null,
   ) => Effect.Effect<ResolvedExecutionTarget, RuntimeProvisionFailedError>;
   /**
    * Start a process inside a provisioned instance and return its line transport,
@@ -138,8 +145,22 @@ export interface ExecutionRuntimeServiceShape {
   readonly exec: (
     input: ExecutionRuntimeExecInput,
   ) => Effect.Effect<ExecutionRuntimeProcessHandle, RuntimeProvisionFailedError>;
-  /** Tear an instance down and record the destroyed event. Idempotent. */
-  readonly destroy: (threadId: ThreadId, instanceId: ExecutionInstanceId) => Effect.Effect<void>;
+  /**
+   * Tear an instance down and record the destroyed event. Idempotent.
+   *
+   * `provider` is the provider backing the instance when the caller already knows
+   * it (the reconciler reads it off the DB row). The in-memory instance→provider
+   * map is empty after a server restart — precisely when the reconciler runs its
+   * TTL/idle destroy and pending-destroy retry — so without this fallback the
+   * adapter teardown is skipped while the event log still records the instance as
+   * destroyed, leaking the remote sandbox. Passing it resolves the adapter from
+   * the DB even on a cold map.
+   */
+  readonly destroy: (
+    threadId: ThreadId,
+    instanceId: ExecutionInstanceId,
+    provider?: ExecutionRuntimeProvider,
+  ) => Effect.Effect<void>;
   /**
    * Probe a persisted instance against its provider for reconciliation. Resolves
    * the provider's reconnect capability and (when supported) whether the instance

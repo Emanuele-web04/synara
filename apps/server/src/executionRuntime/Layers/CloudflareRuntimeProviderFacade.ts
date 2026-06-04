@@ -4,12 +4,13 @@
  *
  * The Cloudflare adapter provisions from a Cloudflare-shaped input and fails with
  * `CloudflareBridgeError`; the common surface provisions from a public
- * `RuntimePlan` and carries narrower channels (no error on `provision`/
- * `createTransport`, `RuntimeInstanceUnknownError` on `execCollect`). This facade
- * owns that translation: it maps the plan onto the Cloudflare provision input,
- * erases the bridge error on the channels the common shape declares as `never`
- * (via `Effect.orDie`), and converts the bridge error to
- * `RuntimeInstanceUnknownError` on `execCollect`.
+ * `RuntimePlan` and carries provider-neutral channels
+ * (`RuntimeRemoteOperationFailedError` on `provision`/`createTransport`,
+ * `RuntimeInstanceUnknownError` on `execCollect`). This facade owns that
+ * translation: it maps the plan onto the Cloudflare provision input, converts the
+ * bridge error to `RuntimeRemoteOperationFailedError` on `provision`/
+ * `createTransport` so a real outage surfaces as a recoverable typed failure, and
+ * converts the bridge error to `RuntimeInstanceUnknownError` on `execCollect`.
  *
  * Cloudflare's `createTransport` returns a BARE `JsonRpcLineTransport` (the
  * bridge terminal needs no in-memory forwarding controller — the WebSocket is the
@@ -28,9 +29,17 @@ import { Effect } from "effect";
 
 import type { RuntimePlan } from "@t3tools/contracts";
 
-import { RuntimeInstanceUnknownError } from "../Errors.ts";
+import { RuntimeInstanceUnknownError, RuntimeRemoteOperationFailedError } from "../Errors.ts";
+import type { CloudflareBridgeError } from "../Errors.ts";
 import type { ExecutionRuntimeProviderAdapterShape } from "../Services/ExecutionRuntimeProviderAdapter.ts";
 import type { CloudflareRuntimeProviderAdapterShape } from "./CloudflareRuntimeProviderAdapter.ts";
+
+const toRemoteOperationFailed = (error: CloudflareBridgeError): RuntimeRemoteOperationFailedError =>
+  new RuntimeRemoteOperationFailedError({
+    provider: "cloudflare",
+    operation: error.operation,
+    detail: error.detail,
+  });
 
 const provisionInput = (
   threadId: string,
@@ -49,12 +58,12 @@ export const makeCloudflareRuntimeProviderFacade = (
   provision: ({ threadId, plan }) =>
     cloudflare.provision(provisionInput(String(threadId), plan)).pipe(
       Effect.map((context) => ({ instance: context.instance, rootPath: context.rootPath })),
-      Effect.orDie,
+      Effect.mapError(toRemoteOperationFailed),
     ),
   createTransport: (instanceId, spawn) =>
     cloudflare.createTransport(instanceId, spawn).pipe(
       Effect.map((transport) => ({ transport })),
-      Effect.orDie,
+      Effect.mapError(toRemoteOperationFailed),
     ),
   execCollect: (instanceId, input) =>
     cloudflare

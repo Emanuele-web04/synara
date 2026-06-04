@@ -217,7 +217,9 @@ function SidebarInstanceProvider({
     () => ({ resizable: resolvedResizable, side }),
     [resolvedResizable, side],
   );
-  return <SidebarInstanceContext.Provider value={value}>{children}</SidebarInstanceContext.Provider>;
+  return (
+    <SidebarInstanceContext.Provider value={value}>{children}</SidebarInstanceContext.Provider>
+  );
 }
 
 function Sidebar({

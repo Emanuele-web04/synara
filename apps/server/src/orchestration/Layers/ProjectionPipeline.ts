@@ -2011,6 +2011,18 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         }
 
         case "thread.runtime-failed": {
+          if (event.payload.instanceId !== null) {
+            yield* projectionThreadRuntimeRepository.upsertInstance({
+              instanceId: event.payload.instanceId,
+              threadId: event.payload.threadId,
+              provider: (yield* loadRuntimeReadModel(event.payload.threadId))?.provider ?? "local",
+              status: "failed",
+              rootPath: null,
+              failureReason: event.payload.failureReason,
+              createdAt: event.payload.occurredAt,
+              updatedAt: event.payload.occurredAt,
+            });
+          }
           const existing = yield* loadRuntimeReadModel(event.payload.threadId);
           if (existing === null) {
             return;

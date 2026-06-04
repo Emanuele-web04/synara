@@ -194,22 +194,28 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
         );
       const context = yield* adapter
         .provision({ threadId, plan: intent.plan })
-        .pipe(Effect.mapError((cause) => failProvision(threadId, `provision failed: ${cause}`)));
+        .pipe(
+          Effect.mapError((cause) => failProvision(threadId, `provision failed: ${cause.message}`)),
+        );
       instanceProviders.set(context.instance.id, intent.provider);
       if (intent.fakeFlavor !== undefined) {
         instanceFakeFlavors.set(context.instance.id, intent.fakeFlavor);
       }
 
-      yield* dispatchRuntimeCommand(threadId, "instance.record", (commandId, createdAt) => ({
-        type: "thread.runtime.instance.record",
-        commandId,
+      yield* dispatchRuntimeCommand(
         threadId,
-        instanceId: context.instance.id,
-        provider: intent.provider,
-        status: "running",
-        rootPath: context.rootPath,
-        createdAt,
-      }));
+        `instance.record.${context.instance.id}`,
+        (commandId, createdAt) => ({
+          type: "thread.runtime.instance.record",
+          commandId,
+          threadId,
+          instanceId: context.instance.id,
+          provider: intent.provider,
+          status: "running",
+          rootPath: context.rootPath,
+          createdAt,
+        }),
+      );
 
       return {
         threadId,
@@ -219,10 +225,19 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
       } satisfies ResolvedExecutionTarget;
     });
 
-  const ensureTargetForThread: ExecutionRuntimeServiceShape["ensureTargetForThread"] = (threadId) =>
+  const ensureTargetForThread: ExecutionRuntimeServiceShape["ensureTargetForThread"] = (
+    threadId,
+    hydratedRuntime,
+  ) =>
     Effect.gen(function* () {
-      const thread = yield* resolveThreadRuntime(threadId);
-      const runtime = thread?.runtime ?? null;
+      // Reuse the caller's already-loaded runtime row when present (the reactor
+      // hydrates it on the full thread detail it loads before turn start), so the
+      // hot path does not pay a second full thread-detail query just to read the
+      // nullable runtime row. `undefined` means the caller did not supply it.
+      const runtime =
+        hydratedRuntime !== undefined
+          ? hydratedRuntime
+          : ((yield* resolveThreadRuntime(threadId))?.runtime ?? null);
       const targetKind: ExecutionTargetKind = runtime?.targetKind ?? "local";
 
       // Compat path: local/worktree threads keep the reactor's existing cwd
@@ -302,7 +317,7 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
         .pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.mapError((cause) =>
-            failProvision(input.threadId, `create transport failed: ${cause}`),
+            failProvision(input.threadId, `create transport failed: ${cause.message}`),
           ),
         );
 
@@ -337,9 +352,12 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
       };
     });
 
-  const destroy: ExecutionRuntimeServiceShape["destroy"] = (threadId, instanceId) =>
+  const destroy: ExecutionRuntimeServiceShape["destroy"] = (threadId, instanceId, knownProvider) =>
     Effect.gen(function* () {
-      const provider = instanceProviders.get(instanceId);
+      // The map is empty after a server restart, which is exactly when the
+      // reconciler issues its destroy. Fall back to the provider the caller read
+      // off the DB row so the adapter teardown still fires on a cold map.
+      const provider = instanceProviders.get(instanceId) ?? knownProvider;
       if (provider !== undefined) {
         yield* registry.getAdapter(provider).pipe(
           Effect.flatMap((adapter) => adapter.destroy(instanceId)),
@@ -348,7 +366,7 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
       }
       instanceProviders.delete(instanceId);
       instanceFakeFlavors.delete(instanceId);
-      yield* dispatchRuntimeCommand(threadId, "destroy", (commandId, createdAt) => ({
+      yield* dispatchRuntimeCommand(threadId, `destroy.${instanceId}`, (commandId, createdAt) => ({
         type: "thread.runtime.destroy",
         commandId,
         threadId,

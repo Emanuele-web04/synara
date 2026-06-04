@@ -70,6 +70,18 @@ describe("cloudflareTerminalTransport", () => {
       ),
     );
 
+  const takeInbound = (
+    rt: EmptyRuntime,
+    inbound: JsonRpcLineTransport["inbound"],
+    count: number,
+  ): Promise<ReadonlyArray<string>> =>
+    rt.runPromise(
+      Stream.take(inbound, count).pipe(
+        Stream.runCollect,
+        Effect.map((chunk) => Array.from(chunk)),
+      ),
+    );
+
   it("delivers data frames as inbound lines", async () => {
     const rt = makeRuntime();
     const fake = makeFakeSocket();
@@ -78,6 +90,44 @@ describe("cloudflareTerminalTransport", () => {
     fake.deliver({ _tag: "data", data: "ready\n" });
     expect(await inboundPromise).toContain("ready");
     await rt.runPromise(transport.close).catch(() => {});
+  });
+
+  it("splits a data frame carrying multiple messages into separate inbound lines", async () => {
+    const rt = makeRuntime();
+    const fake = makeFakeSocket();
+    const transport = await rt.runPromise(makeCloudflareTerminalTransport(fake.socket));
+    const inboundPromise = takeInbound(rt, transport.inbound, 2);
+    // A single terminal chunk carrying two whole JSON-RPC messages must surface
+    // as two inbound elements, not one (each is JSON.parse'd by the consumer).
+    fake.deliver({ _tag: "data", data: '{"id":1}\n{"id":2}\n' });
+    expect(await inboundPromise).toEqual(['{"id":1}', '{"id":2}']);
+    await rt.runPromise(transport.close).catch(() => {});
+  });
+
+  it("carries a message split across two data frames as one inbound line", async () => {
+    const rt = makeRuntime();
+    const fake = makeFakeSocket();
+    const transport = await rt.runPromise(makeCloudflareTerminalTransport(fake.socket));
+    const message = '{"jsonrpc":"2.0","id":7,"method":"ping"}';
+    const inboundPromise = takeInbound(rt, transport.inbound, 1);
+    // The message's bytes arrive across two frames; the first frame ends
+    // mid-message (no newline). It must not be emitted until terminated.
+    fake.deliver({ _tag: "data", data: message.slice(0, 15) });
+    fake.deliver({ _tag: "data", data: `${message.slice(15)}\n` });
+    expect(await inboundPromise).toEqual([message]);
+    await rt.runPromise(transport.close).catch(() => {});
+  });
+
+  it("flushes an unterminated residual line on exit", async () => {
+    const rt = makeRuntime();
+    const fake = makeFakeSocket();
+    const transport = await rt.runPromise(makeCloudflareTerminalTransport(fake.socket));
+    const inboundPromise = takeInbound(rt, transport.inbound, 1);
+    // A final message with no trailing newline must still surface once the
+    // process exits, since no further bytes can arrive to terminate it.
+    fake.deliver({ _tag: "data", data: '{"final":true}' });
+    fake.deliver({ _tag: "exit", exitCode: 0 });
+    expect(await inboundPromise).toEqual(['{"final":true}']);
   });
 
   it("relays consumer sends as stdin frames over the socket", async () => {

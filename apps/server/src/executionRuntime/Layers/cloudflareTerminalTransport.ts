@@ -25,6 +25,7 @@ import { Deferred, Effect, Exit, Schema, Scope, Stream } from "effect";
 import {
   makeInMemoryJsonRpcTransport,
   type JsonRpcLineTransport,
+  type ProcessExit,
 } from "../../provider/process/JsonRpcLineTransport.ts";
 
 /**
@@ -59,6 +60,39 @@ export const makeCloudflareTerminalTransport = (
 
     // Bridge -> consumer: terminal output becomes inbound lines; exit resolves
     // the transport. A malformed frame is dropped rather than killing the stream.
+    //
+    // `pushInbound` expects one already-line-framed message per call, but a
+    // terminal `data` frame is an opaque byte chunk that can carry zero, partial,
+    // or multiple newlines — and a single JSON-RPC message can split across two
+    // frames. Buffer the residual after the last `\n` and only push complete
+    // lines, mirroring `Stream.splitLines` on the local/Modal/Vercel paths. The
+    // residual is flushed as a final line on exit/close.
+    let residual = "";
+
+    const pushCompleteLines = (chunk: string) => {
+      const combined = residual + chunk;
+      const lastNewline = combined.lastIndexOf("\n");
+      if (lastNewline < 0) {
+        residual = combined;
+        return;
+      }
+      residual = combined.slice(lastNewline + 1);
+      for (const line of combined.slice(0, lastNewline).split("\n")) {
+        if (line.length > 0) {
+          Effect.runFork(controller.pushInbound(line));
+        }
+      }
+    };
+
+    const flushResidualAndExit = (status: ProcessExit) => {
+      if (residual.length > 0) {
+        const line = residual;
+        residual = "";
+        Effect.runFork(controller.pushInbound(line));
+      }
+      Effect.runFork(controller.signalExit(status));
+    };
+
     socket.onMessage((raw) => {
       let parsed: unknown;
       try {
@@ -72,14 +106,14 @@ export const makeCloudflareTerminalTransport = (
       }
       const frame: BridgeTerminalFrameType = decoded.value;
       if (frame._tag === "data") {
-        Effect.runFork(controller.pushInbound(frame.data));
+        pushCompleteLines(frame.data);
       } else if (frame._tag === "exit") {
-        Effect.runFork(controller.signalExit({ code: frame.exitCode, signal: null }));
+        flushResidualAndExit({ code: frame.exitCode, signal: null });
       }
     });
 
     socket.onClose(() => {
-      Effect.runFork(controller.signalExit({ code: null, signal: null }));
+      flushResidualAndExit({ code: null, signal: null });
     });
 
     // Consumer -> bridge: each outbound frame the consumer wrote is relayed as a

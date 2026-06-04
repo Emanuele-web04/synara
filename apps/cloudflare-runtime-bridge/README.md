@@ -10,20 +10,20 @@ instance` is a stable single-writer mapping.
 All requests carry `Authorization: Bearer <BRIDGE_AUTH_TOKEN>` (the terminal
 WebSocket also accepts `?token=`).
 
-| Method | Path                            | Purpose                               |
-| ------ | ------------------------------- | ------------------------------------- |
-| POST   | `/instances`                    | Create an instance (mints a new DO)   |
-| GET    | `/instances/:id`                | Read the instance record              |
-| DELETE | `/instances/:id`                | Destroy the instance (idempotent)     |
-| POST   | `/instances/:id/exec`           | Fire-and-collect command              |
+| Method | Path                            | Purpose                                        |
+| ------ | ------------------------------- | ---------------------------------------------- |
+| POST   | `/instances`                    | Create an instance (mints a new DO)            |
+| GET    | `/instances/:id`                | Read the instance record                       |
+| DELETE | `/instances/:id`                | Destroy the instance (idempotent)              |
+| POST   | `/instances/:id/exec`           | Fire-and-collect command                       |
 | GET    | `/instances/:id/logs`           | NDJSON log stream (replays recent ring + live) |
-| GET    | `/instances/:id/terminal` (WS)  | Interactive terminal (workspace only) |
-| GET    | `/instances/:id/files?path=`    | Read a file (base64)                  |
-| PUT    | `/instances/:id/files`          | Write a file (base64)                 |
-| GET    | `/instances/:id/files/watch`    | NDJSON file-change stream             |
-| POST   | `/instances/:id/ports`          | Expose a port on demand               |
-| PUT    | `/instances/:id/network-policy` | Set the outbound network policy       |
-| POST   | `/instances/:id/renew-activity` | Renew the keepalive lease             |
+| GET    | `/instances/:id/terminal` (WS)  | Interactive terminal (workspace only)          |
+| GET    | `/instances/:id/files?path=`    | Read a file (base64)                           |
+| PUT    | `/instances/:id/files`          | Write a file (base64)                          |
+| GET    | `/instances/:id/files/watch`    | NDJSON file-change stream                      |
+| POST   | `/instances/:id/ports`          | Expose a port on demand                        |
+| PUT    | `/instances/:id/network-policy` | Set the outbound network policy                |
+| POST   | `/instances/:id/renew-activity` | Renew the keepalive lease                      |
 
 Wire shapes live in `@t3tools/contracts` (`cloudflareRuntimeBridge.ts`); both the
 Worker and the Synara `CloudflareBridgeClient` adapter validate against them.

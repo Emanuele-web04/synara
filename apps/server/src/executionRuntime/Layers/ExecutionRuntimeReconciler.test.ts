@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
@@ -23,6 +25,7 @@ import { ProjectionThreadRuntimeRepository } from "../../persistence/Services/Pr
 import type { FakeRuntimeFlavor } from "../Services/FakeRuntimeFlavor.ts";
 import { ExecutionRuntimeReconciler } from "../Services/ExecutionRuntimeReconciler.ts";
 import { ExecutionRuntimeService } from "../Services/ExecutionRuntimeService.ts";
+import { FakeRuntimeProviderAdapter } from "../Services/FakeRuntimeProviderAdapter.ts";
 import { ExecutionRuntimeServiceLive } from "./ExecutionRuntimeService.ts";
 import { makeExecutionRuntimeReconcilerLive } from "./ExecutionRuntimeReconciler.ts";
 import { FakeRuntimeProviderAdapterLive } from "./FakeRuntimeProviderAdapter.ts";
@@ -46,9 +49,12 @@ const makeReconcilerRuntime = (options?: ReconcilerOptions) => {
   const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
     prefix: "exec-runtime-reconciler-test",
   }).pipe(Layer.provide(NodeServices.layer));
+  // Merge (not just `provide`) the fake adapter so its single `roots` instance is
+  // shared with the service and resolvable in tests: the cold-map test provisions
+  // straight through it to warm the adapter without warming the service map.
   const executionRuntimeServiceLayer = ExecutionRuntimeServiceLive.pipe(
-    Layer.provide(FakeRuntimeProviderAdapterLive),
     Layer.provide(ExecutionRuntimePlanningTestLive),
+    Layer.provideMerge(FakeRuntimeProviderAdapterLive),
     Layer.provideMerge(orchestrationLayer),
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
     Layer.provideMerge(NodeServices.layer),
@@ -159,7 +165,9 @@ describe("ExecutionRuntimeReconciler partial-failure matrix", () => {
         const engine = yield* OrchestrationEngineService;
         yield* engine.dispatch({
           type: "thread.runtime.instance.record",
-          commandId: CommandId.makeUnsafe(`runtime:${threadId}:instance.record`),
+          commandId: CommandId.makeUnsafe(
+            `runtime:${threadId}:instance.record.${orphanInstanceId}`,
+          ),
           threadId,
           instanceId: orphanInstanceId,
           provider: "fake",
@@ -244,6 +252,63 @@ describe("ExecutionRuntimeReconciler partial-failure matrix", () => {
     expect(summary.retriedDestroy).toBe(1);
     expect(await readRuntimeStatus(localRuntime, threadId)).toBe("destroyed");
     expect(await readInstanceStatus(localRuntime, instanceId)).toBeNull();
+  });
+
+  it("tears down the adapter on a cold service map (post-restart reconciler destroy)", async () => {
+    // After a restart the service's in-memory instance→provider map is empty,
+    // which is exactly when the reconciler runs its TTL destroy. Provision
+    // straight through the adapter so the adapter's roots are warm but the
+    // service map never learned the instance: only the DB-provider fallback on
+    // `destroy` can reach `adapter.destroy()`. TTL is 1 ms so the live instance
+    // expires immediately and the reconciler issues the destroy.
+    runtime = makeReconcilerRuntime({
+      instanceTtlMs: 1,
+      idleThresholdMs: 24 * 60 * 60 * 1000,
+    });
+    const localRuntime = runtime;
+    const threadId = ThreadId.makeUnsafe("thread-cold-map-destroy");
+    await seedThread(localRuntime, threadId);
+
+    const { instanceId, rootPath } = await localRuntime.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ExecutionRuntimeService;
+        yield* service.markThreadRemote({ threadId, flavor: "fake-pty-workspace" });
+        const adapter = yield* FakeRuntimeProviderAdapter;
+        const context = yield* adapter.provision({ threadId, flavor: "fake-pty-workspace" });
+        const engine = yield* OrchestrationEngineService;
+        yield* engine.dispatch({
+          type: "thread.runtime.instance.record",
+          commandId: CommandId.makeUnsafe(
+            `runtime:${threadId}:instance.record.${context.instance.id}`,
+          ),
+          threadId,
+          instanceId: context.instance.id,
+          provider: "fake",
+          status: "running",
+          rootPath: context.rootPath,
+          createdAt: now,
+        });
+        return { instanceId: context.instance.id, rootPath: context.rootPath };
+      }),
+    );
+    expect(existsSync(rootPath)).toBe(true);
+
+    const summary = await reconcile(localRuntime);
+    expect(summary.expired).toBe(1);
+    expect(await readRuntimeStatus(localRuntime, threadId)).toBe("destroyed");
+    expect(await readInstanceStatus(localRuntime, instanceId)).toBeNull();
+
+    // The adapter teardown actually fired: its temp dir is gone and it no longer
+    // recognizes the instance. Without the cold-map fallback the read-model would
+    // still flip to destroyed while the temp dir leaked.
+    expect(existsSync(rootPath)).toBe(false);
+    const stillAlive = await localRuntime.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* FakeRuntimeProviderAdapter;
+        return yield* adapter.isAlive(instanceId);
+      }),
+    );
+    expect(stillAlive).toBe(false);
   });
 
   it("destroys an instance past its TTL", async () => {

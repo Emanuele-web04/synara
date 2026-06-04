@@ -27,7 +27,7 @@ import type {
   InMemoryTransportController,
   JsonRpcLineTransport,
 } from "../../provider/process/JsonRpcLineTransport.ts";
-import type { RuntimeInstanceUnknownError } from "../Errors.ts";
+import type { RuntimeInstanceUnknownError, RuntimeRemoteOperationFailedError } from "../Errors.ts";
 import type { RuntimeProcessSpawnInput } from "./RuntimeProcessTransport.ts";
 
 /** Input for provisioning the instance backing a thread from its resolved plan. */
@@ -59,14 +59,19 @@ export interface ExecutionRuntimeExecCollectResult {
 
 /**
  * The lifecycle surface a concrete runtime provider exposes. Signatures mirror
- * the fake adapter (error + requirement channels included) so any provider plugs
- * in without the service learning provider-specific error shapes.
+ * the fake adapter (requirement channels included) so any provider plugs in
+ * without the service learning provider-specific error shapes. `provision` and
+ * `createTransport` carry the provider-neutral `RuntimeRemoteOperationFailedError`
+ * so a real provider outage at provision time (auth/quota/5xx/network) reaches
+ * the service as a recoverable typed failure it maps to
+ * `RuntimeProvisionFailedError`, rather than a fiber defect. Providers that
+ * cannot fail at these steps (fake, Modal) conform with a `never` channel.
  */
 export interface ExecutionRuntimeProviderAdapterShape {
   /** Provision the instance backing a thread, deriving any provider-internal sub-kind from the plan. */
   readonly provision: (
     input: ExecutionRuntimeProvisionInput,
-  ) => Effect.Effect<ExecutionRuntimeProvisionResult>;
+  ) => Effect.Effect<ExecutionRuntimeProvisionResult, RuntimeRemoteOperationFailedError>;
   /**
    * Create the line transport for a process inside the instance. When the spawn
    * input names a runnable command, the provider forwards it into the transport
@@ -77,7 +82,7 @@ export interface ExecutionRuntimeProviderAdapterShape {
     spawn: RuntimeProcessSpawnInput,
   ) => Effect.Effect<
     { readonly transport: JsonRpcLineTransport; readonly controller?: InMemoryTransportController },
-    never,
+    RuntimeRemoteOperationFailedError,
     ChildProcessSpawner.ChildProcessSpawner
   >;
   /** Fire-and-collect command exec inside an instance, collecting full output. */

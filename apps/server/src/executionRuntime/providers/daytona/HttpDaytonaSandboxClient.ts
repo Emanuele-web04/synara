@@ -398,10 +398,45 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
         const consumed = yield* Ref.make(0);
 
         // Poll the session command on each tick: read the cumulative log output
-        // and line-frame the newly appended slice (cumulative-length tracking
-        // avoids re-emitting old lines), then read the command status for an exit
-        // code. The exit code lives on the command-status endpoint, not the logs
-        // endpoint; a non-null code ends the loop.
+        // and line-frame the newly appended slice, then read the command status
+        // for an exit code. The exit code lives on the command-status endpoint,
+        // not the logs endpoint; a non-null code ends the loop.
+        //
+        // Only complete lines (text up to and including a `\n`) are emitted; the
+        // residual after the last `\n` is carried in `consumed` and re-examined
+        // next tick. This preserves the one-JSON-RPC-message-per-line contract
+        // when a single message's bytes arrive split across two poll ticks —
+        // emitting the partial line early would yield two corrupt fragments that
+        // each fail `JSON.parse`. The trailing residual is flushed on exit.
+        const offerCompleteLines = (output: string) =>
+          Effect.gen(function* () {
+            const seen = yield* Ref.get(consumed);
+            const lastNewline = output.lastIndexOf("\n");
+            if (lastNewline < seen) {
+              return;
+            }
+            const fresh = output.slice(seen, lastNewline + 1);
+            yield* Ref.set(consumed, lastNewline + 1);
+            for (const line of fresh.split("\n")) {
+              if (line.length > 0) {
+                yield* Queue.offer(stdoutQueue, line);
+              }
+            }
+          });
+
+        // Flush any residual after the last emitted `\n` as a final complete
+        // line. Called once the process has exited and no further bytes can
+        // arrive to terminate it.
+        const flushResidual = (output: string) =>
+          Effect.gen(function* () {
+            const seen = yield* Ref.get(consumed);
+            const residual = output.slice(seen);
+            if (residual.length > 0) {
+              yield* Ref.set(consumed, output.length);
+              yield* Queue.offer(stdoutQueue, residual);
+            }
+          });
+
         const pollOnce = Effect.gen(function* () {
           const logReq = HttpClientRequest.get(
             `${sessionBase}/${sessionId}/command/${commandId}/logs`,
@@ -412,16 +447,7 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
             ),
           );
           const output = log.output ?? log.stdout ?? "";
-          const seen = yield* Ref.get(consumed);
-          if (output.length > seen) {
-            const fresh = output.slice(seen);
-            yield* Ref.set(consumed, output.length);
-            for (const line of fresh.split("\n")) {
-              if (line.length > 0) {
-                yield* Queue.offer(stdoutQueue, line);
-              }
-            }
-          }
+          yield* offerCompleteLines(output);
           const statusReq = HttpClientRequest.get(
             `${sessionBase}/${sessionId}/command/${commandId}`,
           );
@@ -430,7 +456,11 @@ export const makeHttpDaytonaSandboxClient = (credentials: DaytonaCredentials) =>
             statusReq,
             SessionCommandStatusResponse,
           ).pipe(Effect.orElseSucceed(() => ({ exitCode: undefined }) as const));
-          return status.exitCode ?? null;
+          const exitCode = status.exitCode ?? null;
+          if (exitCode !== null) {
+            yield* flushResidual(output);
+          }
+          return exitCode;
         });
 
         yield* pollOnce.pipe(

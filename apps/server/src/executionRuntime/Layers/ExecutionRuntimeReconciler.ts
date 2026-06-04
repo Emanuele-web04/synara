@@ -101,7 +101,7 @@ const makeExecutionRuntimeReconciler = (options?: ExecutionRuntimeReconcilerLive
         );
 
     const retryDestroy = (instance: ExecutionRuntimeInstance) =>
-      service.destroy(instance.threadId, instance.instanceId).pipe(
+      service.destroy(instance.threadId, instance.instanceId, instance.provider).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("execution-runtime reconciler failed to retry destroy", {
             instanceId: instance.instanceId,

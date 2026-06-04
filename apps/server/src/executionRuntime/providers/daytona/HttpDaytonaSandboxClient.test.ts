@@ -227,6 +227,86 @@ describe("HttpDaytonaSandboxClient", () => {
     ).toBe(true);
   });
 
+  it("carries a partial trailing line across poll ticks instead of splitting it", async () => {
+    // A JSON-RPC message whose bytes arrive across two poll ticks: tick 1's
+    // cumulative log ends mid-message (no trailing newline), tick 2 completes it.
+    // The transport contract is one message per inbound line, so the half-message
+    // must NOT be emitted on tick 1 and re-emitted on tick 2 — it must surface as
+    // exactly one line once terminated.
+    const message = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" });
+    const half = message.slice(0, 12);
+    const cumulativeByLogCall = [
+      // Tick 1: a complete line, then the start of the next message (no newline).
+      `{"first":true}\n${half}`,
+      // Tick 2: the rest of the message arrives, terminated.
+      `{"first":true}\n${message}\n`,
+    ];
+    let logCall = 0;
+
+    const recorded: RecordedRequest[] = [];
+    const statefulLogs: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) =>
+        Effect.sync(() => {
+          recorded.push({
+            method: request.method,
+            url: request.url,
+            body: undefined,
+            authorization: request.headers["authorization"],
+            organization: request.headers["x-daytona-organization-id"],
+          });
+          const respond = (json: unknown) =>
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(JSON.stringify(json), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+            );
+          if (request.method === "POST" && request.url.includes("/exec")) {
+            return respond({ cmdId: "cmd-split" });
+          }
+          if (request.method === "POST" && request.url.includes("/process/session")) {
+            return respond({});
+          }
+          if (request.method === "GET" && request.url.endsWith("/logs")) {
+            // The status endpoint only reports an exit once both ticks have run,
+            // so the loop polls logs at least twice (partial then complete).
+            const output = cumulativeByLogCall[Math.min(logCall, cumulativeByLogCall.length - 1)];
+            logCall += 1;
+            return respond({ output });
+          }
+          if (request.method === "GET" && request.url.includes("/command/cmd-split")) {
+            // Hold the exit until the completing log tick has been served so the
+            // residual flush sees the terminated message.
+            return respond({ exitCode: logCall >= 2 ? 0 : undefined });
+          }
+          return HttpClientResponse.fromWeb(request, new Response("not found", { status: 404 }));
+        }),
+      ),
+    );
+
+    const splitRuntime = ManagedRuntime.make(
+      makeHttpDaytonaSandboxClientLive(credentials).pipe(Layer.provide(statefulLogs)),
+    );
+    try {
+      const result = await splitRuntime.runPromise(
+        Effect.flatMap(DaytonaSandboxClient.asEffect(), (client) =>
+          Effect.gen(function* () {
+            const session = yield* client.startSession("sb-1", { command: "codex", args: [] });
+            const lines = yield* session.stdoutLines.pipe(Stream.runCollect);
+            yield* session.exit;
+            yield* session.close;
+            return Array.from(lines);
+          }),
+        ),
+      );
+      expect(result).toEqual([`{"first":true}`, message]);
+    } finally {
+      await splitRuntime.dispose();
+    }
+  });
+
   it("exposes a port at the preview-url endpoint and returns only the url", async () => {
     const recorded: RecordedRequest[] = [];
     runtime = makeRuntime(

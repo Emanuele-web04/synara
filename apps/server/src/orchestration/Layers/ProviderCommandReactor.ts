@@ -702,17 +702,19 @@ const make = Effect.gen(function* () {
     // target it returns the provisioned root the session should run in. The
     // reactor stays provider-agnostic: it reads only the resolved cwd, never any
     // provider-specific instance ids, states, or routes.
-    const resolvedTarget = yield* executionRuntimeService.ensureTargetForThread(threadId).pipe(
-      Effect.catchTag("RuntimeProvisionFailedError", (error) =>
-        Effect.fail(
-          new ProviderAdapterRequestError({
-            provider: threadProvider,
-            method: "thread.turn.start",
-            detail: error.message,
-          }),
+    const resolvedTarget = yield* executionRuntimeService
+      .ensureTargetForThread(threadId, thread.runtime)
+      .pipe(
+        Effect.catchTag("RuntimeProvisionFailedError", (error) =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: threadProvider,
+              method: "thread.turn.start",
+              detail: error.message,
+            }),
+          ),
         ),
-      ),
-    );
+      );
     const projectedCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     const effectiveCwd = resolvedTarget.cwd ?? projectedCwd;
     const workspaceState = resolveThreadWorkspaceState({
