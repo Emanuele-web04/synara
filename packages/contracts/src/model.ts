@@ -552,8 +552,8 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   ],
   devin: [
     {
-      slug: "swe",
-      name: "SWE",
+      slug: "adaptive",
+      name: "Adaptive",
       capabilities: {
         reasoningEffortLevels: [],
         supportsFastMode: false,
@@ -563,8 +563,8 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
     {
-      slug: "opus",
-      name: "Opus",
+      slug: "swe-1-6",
+      name: "SWE 1.6",
       capabilities: {
         reasoningEffortLevels: [],
         supportsFastMode: false,
@@ -574,8 +574,8 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
     {
-      slug: "sonnet",
-      name: "Sonnet",
+      slug: "swe-1-6-fast",
+      name: "SWE 1.6 Fast",
       capabilities: {
         reasoningEffortLevels: [],
         supportsFastMode: false,
@@ -585,8 +585,8 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
     {
-      slug: "gpt",
-      name: "GPT",
+      slug: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
       capabilities: {
         reasoningEffortLevels: [],
         supportsFastMode: false,
@@ -596,8 +596,8 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
     {
-      slug: "codex",
-      name: "Codex",
+      slug: "claude-opus-4-8-medium",
+      name: "Claude Opus 4.8 Medium",
       capabilities: {
         reasoningEffortLevels: [],
         supportsFastMode: false,
@@ -607,8 +607,19 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
     {
-      slug: "gemini",
-      name: "Gemini",
+      slug: "gpt-5-5-medium",
+      name: "GPT-5.5 Medium",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "gemini-3-5-flash-medium",
+      name: "Gemini 3.5 Flash Medium",
       capabilities: {
         reasoningEffortLevels: [],
         supportsFastMode: false,

@@ -57,6 +57,19 @@ const DEVIN_RESUME_VERSION = 1 as const;
 const DEVIN_PLAN_MODE_ALIASES = ["plan"];
 const DEVIN_FULL_ACCESS_MODE_ALIASES = ["bypass", "bypass permissions"];
 const DEVIN_CODE_MODE_ALIASES = ["accept-edits", "code", "accept edits"];
+const DEVIN_ACP_MODEL_ALIASES: Readonly<Record<string, string>> = {
+  swe: "swe-1-6",
+  opus: "claude-opus-4-8-medium",
+  sonnet: "claude-sonnet-4-6",
+  gpt: "gpt-5-5-medium",
+  codex: "gpt-5-3-codex-medium",
+  gemini: "gemini-3-5-flash-medium",
+};
+
+function normalizeDevinAcpModel(model: string): string {
+  const trimmed = model.trim();
+  return DEVIN_ACP_MODEL_ALIASES[trimmed.toLowerCase()] ?? trimmed;
+}
 
 export interface DevinAcpRuntimeFactoryInput {
   readonly devinSettings: DevinAcpRuntimeSettings;
@@ -387,7 +400,9 @@ function makeProviderAdapter(
         );
 
         const selectedModel =
-          input.modelSelection?.provider === PROVIDER ? input.modelSelection.model.trim() : "";
+          input.modelSelection?.provider === PROVIDER
+            ? normalizeDevinAcpModel(input.modelSelection.model)
+            : "";
         yield* applyDevinModeSelection({
           runtime: acp,
           threadId: input.threadId,
@@ -575,7 +590,9 @@ function makeProviderAdapter(
 
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
         const turnModel =
-          input.modelSelection?.provider === PROVIDER ? input.modelSelection.model.trim() : "";
+          input.modelSelection?.provider === PROVIDER
+            ? normalizeDevinAcpModel(input.modelSelection.model)
+            : "";
         const model = turnModel || ctx.session.model;
         yield* applyDevinModeSelection({
           runtime: ctx.acp,

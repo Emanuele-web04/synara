@@ -194,7 +194,7 @@ describe("DevinAdapterLive", () => {
     );
   });
 
-  it.effect("applies Devin model selection in-session", () => {
+  it.effect("normalizes Devin model aliases before applying model selection in-session", () => {
     let resolveObservedModel!: (model: string) => void;
     const observedModelPromise = new Promise<string>((resolve) => {
       resolveObservedModel = resolve;
@@ -218,7 +218,7 @@ describe("DevinAdapterLive", () => {
       });
       const model = yield* Effect.promise(() => observedModelPromise);
 
-      assert.strictEqual(model, "opus");
+      assert.strictEqual(model, "claude-opus-4-8-medium");
     }).pipe(
       Effect.provide(
         makeDevinAdapterLive({
