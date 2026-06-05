@@ -16,7 +16,11 @@ import {
   type GitHubPullRequestSummary,
   GitHubCli,
 } from "../Services/GitHubCli.ts";
-import { type TextGenerationShape, TextGeneration } from "../Services/TextGeneration.ts";
+import {
+  type TextGenerationShape,
+  TextGeneration,
+  type ThreadRecapGenerationInput,
+} from "../Services/TextGeneration.ts";
 import { GitCoreLive } from "./GitCore.ts";
 import { GitCore } from "../Services/GitCore.ts";
 import { makeGitManager } from "./GitManager.ts";
@@ -92,16 +96,9 @@ interface FakeGitTextGeneration {
     model?: string;
     modelSelection?: ModelSelection;
   }) => Effect.Effect<{ title: string }, TextGenerationError>;
-  generateThreadRecap: (input: {
-    cwd: string;
-    previousRecap?: string;
-    newMaterial: string;
-    currentState?: string;
-    codexHomePath?: string;
-    providerOptions?: ProviderStartOptions;
-    model?: string;
-    modelSelection?: ModelSelection;
-  }) => Effect.Effect<{ recap: string }, TextGenerationError>;
+  generateThreadRecap: (
+    input: ThreadRecapGenerationInput,
+  ) => Effect.Effect<{ recap: string }, TextGenerationError>;
 }
 
 type FakePullRequest = NonNullable<FakeGhScenario["pullRequest"]>;

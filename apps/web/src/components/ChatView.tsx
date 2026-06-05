@@ -1295,11 +1295,6 @@ export default function ChatView({
     isFocusedPane && !latestTurnSettled && !diffEnvironmentPending && !resolvedDiffOpen
       ? GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS
       : false;
-  const repoDiffTotals = useRepoDiffTotals({
-    gitCwd: threadWorkspaceCwd,
-    isGitRepo,
-    refetchInterval: repoDiffBadgeRefreshIntervalMs,
-  });
   const activeThreadAssociatedWorktree = useMemo(
     () =>
       deriveAssociatedWorktreeMetadata({
@@ -2858,6 +2853,11 @@ export default function ChatView({
   }, [activeProjectCwd, activeThreadWorktreePath]);
   // Default true while loading to avoid toolbar flicker.
   const isGitRepo = branchesQuery.data?.isRepo ?? true;
+  const repoDiffTotals = useRepoDiffTotals({
+    gitCwd: threadWorkspaceCwd,
+    isGitRepo,
+    refetchInterval: repoDiffBadgeRefreshIntervalMs,
+  });
   const splitTerminalShortcutLabel = useMemo(
     () =>
       shortcutLabelForCommand(keybindings, "terminal.splitRight") ??

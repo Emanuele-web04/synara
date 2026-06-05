@@ -515,7 +515,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                     textFontSizePx={normalizedChatFontSizePx}
                     density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
-                    onOpenAgentActivity={onOpenAgentActivity}
+                    {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                     {...(onOpenThread ? { onOpenThread } : {})}
                   />
                 ))}
@@ -871,7 +871,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               density={
                                 prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"
                               }
-                              onOpenAgentActivity={onOpenAgentActivity}
+                              {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                               {...(onOpenThread ? { onOpenThread } : {})}
                             />
                           ) : (
@@ -917,7 +917,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           density="compact"
                           fileDiffStatByPath={fileDiffStatByPath}
                           onOpenTurnDiff={onOpenTurnDiff}
-                          onOpenAgentActivity={onOpenAgentActivity}
+                          {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                           {...(onOpenThread ? { onOpenThread } : {})}
                           {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
                         />
@@ -949,7 +949,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                         textFontSizePx={normalizedChatFontSizePx}
                         density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
-                        onOpenAgentActivity={onOpenAgentActivity}
+                        {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                         {...(onOpenThread ? { onOpenThread } : {})}
                       />
                     ))}

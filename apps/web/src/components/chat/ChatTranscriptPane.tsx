@@ -176,7 +176,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             workspaceRoot={workspaceRoot}
             bottomContentInsetPx={bottomContentInsetPx}
             contentInsetRightPx={contentInsetRightPx}
-            onOpenAgentActivity={onOpenAgentActivity}
+            {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
             emptyStateContent={<ChatEmptyStateHero projectName={emptyStateProjectName} />}
             {...(expandedWorkGroups ? { expandedWorkGroups } : {})}
             {...(onToggleWorkGroup ? { onToggleWorkGroup } : {})}

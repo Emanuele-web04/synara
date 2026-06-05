@@ -152,7 +152,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
                   key={subagent.threadId}
                   subagent={subagent}
                   textStyle={chatTypographyStyle}
-                  onOpenThread={onOpenThread}
+                  {...(onOpenThread ? { onOpenThread } : {})}
                 />
               ))}
             </div>

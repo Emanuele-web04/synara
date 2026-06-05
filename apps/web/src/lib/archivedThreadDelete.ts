@@ -14,8 +14,10 @@ interface DeleteArchivedThreadFromClientInput {
   syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
 }
 
-interface DeleteArchivedThreadsFromClientInput
-  extends Omit<DeleteArchivedThreadFromClientInput, "threadId"> {
+interface DeleteArchivedThreadsFromClientInput extends Omit<
+  DeleteArchivedThreadFromClientInput,
+  "threadId"
+> {
   threadIds: ReadonlyArray<ThreadId>;
 }
 

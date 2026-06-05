@@ -1279,35 +1279,38 @@ function SettingsRouteView() {
     }
   }, []);
 
-  const deleteArchivedThread = useCallback(async (threadId: ThreadId, threadTitle: string) => {
-    const api = readNativeApi();
-    if (!api) return;
+  const deleteArchivedThread = useCallback(
+    async (threadId: ThreadId, threadTitle: string) => {
+      const api = readNativeApi();
+      if (!api) return;
 
-    const confirmed = await api.dialogs.confirm(
-      `Permanently delete "${threadTitle}"?\n\nThis will remove the thread and its conversation history forever.`,
-    );
-    if (!confirmed) return;
+      const confirmed = await api.dialogs.confirm(
+        `Permanently delete "${threadTitle}"?\n\nThis will remove the thread and its conversation history forever.`,
+      );
+      if (!confirmed) return;
 
-    try {
-      await deleteArchivedThreadFromClient({
-        api: api.orchestration,
-        threadId,
-        removeDeletedThreadFromClientState,
-        syncServerShellSnapshot,
-      });
-      toastManager.add({
-        type: "success",
-        title: "Thread deleted",
-        description: "The archived thread has been permanently removed.",
-      });
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Could not delete thread",
-        description: error instanceof Error ? error.message : "Unable to delete the thread.",
-      });
-    }
-  }, [removeDeletedThreadFromClientState, syncServerShellSnapshot]);
+      try {
+        await deleteArchivedThreadFromClient({
+          api: api.orchestration,
+          threadId,
+          removeDeletedThreadFromClientState,
+          syncServerShellSnapshot,
+        });
+        toastManager.add({
+          type: "success",
+          title: "Thread deleted",
+          description: "The archived thread has been permanently removed.",
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not delete thread",
+          description: error instanceof Error ? error.message : "Unable to delete the thread.",
+        });
+      }
+    },
+    [removeDeletedThreadFromClientState, syncServerShellSnapshot],
+  );
 
   const handleArchivedThreadContextMenu = useCallback(
     async (threadId: ThreadId, threadTitle: string, position: { x: number; y: number }) => {

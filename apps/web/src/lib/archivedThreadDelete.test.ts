@@ -45,7 +45,8 @@ describe("deleteArchivedThreadFromClient", () => {
       removeDeletedThreadFromClientState.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
     const secondRemoveOrder =
       removeDeletedThreadFromClientState.mock.invocationCallOrder[1] ?? Number.MAX_SAFE_INTEGER;
-    const syncOrder = syncServerShellSnapshot.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
+    const syncOrder =
+      syncServerShellSnapshot.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
     expect(dispatchOrder).toBeLessThan(firstRemoveOrder);
     expect(firstRemoveOrder).toBeLessThan(syncOrder);
     expect(syncOrder).toBeLessThan(secondRemoveOrder);

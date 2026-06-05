@@ -22,6 +22,54 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.1.3",
+    date: "Jun 5",
+    features: [
+      {
+        id: "session-side-panel-clarity",
+        title: "The chat side panel is clearer",
+        description:
+          "Thread activity, agent detail rows, environment controls, Git actions, branch controls, and queued composer state were tightened so the main chat and side panel stay easier to scan during busy sessions.",
+      },
+      {
+        id: "thread-recap-panel",
+        title: "Long chats can be recapped in place",
+        description:
+          "Synara can now generate and cache thread recaps, show current-state context in the chat environment, and reuse provider-backed recap generation without making the transcript harder to follow.",
+      },
+      {
+        id: "diff-totals-performance",
+        title: "Large diffs do less duplicate work",
+        description:
+          "Repo diff totals are computed once for the active chat and shared between the header and environment panel, with memoized patch stats to avoid re-parsing the same large diff during live updates.",
+      },
+      {
+        id: "archived-delete-cleanup",
+        title: "Archived cleanup is more immediate",
+        description:
+          "Deleting archived threads now goes through one shared client path, removes rows optimistically, batches worktree-linked deletes, and reconciles once with the latest server snapshot.",
+      },
+      {
+        id: "terminal-and-transcript-guards",
+        title: "Terminals and transcripts are safer under load",
+        description:
+          "Terminal runtime cleanup, provider activity ingestion, transcript rendering, and session handoff logic picked up extra safeguards for reconnects, shell summaries, agent activity, and active task rendering.",
+      },
+      {
+        id: "desktop-update-polish",
+        title: "Desktop update prompts are quieter",
+        description:
+          "Background update polling no longer exposes a manual check button at the wrong time, update state is restored more predictably, and production builds keep source maps off unless a diagnostic release opts in.",
+      },
+      {
+        id: "release-readiness-fixes",
+        title: "Small release-readiness fixes landed too",
+        description:
+          "Image attachment expectations, optional callback typing, recap test doubles, composer spacing, reference chips, and queued row styling were aligned with the current UI so the final check suite stays green.",
+      },
+    ],
+  },
+  {
     version: "0.1.2",
     date: "Jun 4",
     features: [
