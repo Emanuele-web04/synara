@@ -174,7 +174,6 @@ export const AppSettingsSchema = Schema.Struct({
   // ServerSettings.sandboxes; secret fields are write-only locally (the server
   // routes them through ServerSecretStore and never echoes them back).
   sandboxDefaultRemoteProvider: SandboxStringSetting,
-  sandboxDefaultSnapshot: SandboxStringSetting,
   sandboxDaytonaApiKey: SandboxStringSetting,
   sandboxDaytonaApiUrl: SandboxStringSetting,
   sandboxDaytonaOrganizationId: SandboxStringSetting,

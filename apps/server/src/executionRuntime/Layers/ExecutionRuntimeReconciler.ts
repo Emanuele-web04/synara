@@ -158,10 +158,16 @@ const makeExecutionRuntimeReconciler = (options?: ExecutionRuntimeReconcilerLive
           yield* retryDestroy(instance);
           return { markedLost: false, retriedDestroy: false, expired: true };
         }
-        const lastActivityMs = yield* resolveLastActivityMs(instance);
-        if (now() - lastActivityMs >= idleThresholdMs) {
-          yield* retryDestroy(instance);
-          return { markedLost: false, retriedDestroy: false, expired: true };
+        // A live transport (an in-flight turn) keeps the instance off the idle
+        // path: stream output is not event-sourced, so `lastActivityAt` freezes
+        // mid-conversation and would otherwise idle-destroy a sandbox under a live
+        // agent. TTL above is a hard age cap and still applies; only idle is skipped.
+        if (!probe.liveActivity) {
+          const lastActivityMs = yield* resolveLastActivityMs(instance);
+          if (now() - lastActivityMs >= idleThresholdMs) {
+            yield* retryDestroy(instance);
+            return { markedLost: false, retriedDestroy: false, expired: true };
+          }
         }
 
         return { markedLost: false, retriedDestroy: false, expired: false };

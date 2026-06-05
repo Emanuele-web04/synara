@@ -130,7 +130,12 @@ const forwardLocalCommand = (
       .spawn(
         ChildProcess.make(spawn.command, [...spawn.args], {
           cwd: spawn.cwd,
-          env: spawn.env,
+          // The fake remote forwards to a real local child, so it inherits the
+          // host environment like any local process would; the caller's env only
+          // overrides. Without this base, a caller passing a minimal env (e.g. a
+          // remote-agent spawn that leaves env to the target) loses PATH/HOME and
+          // the binary cannot be found.
+          env: { ...process.env, ...spawn.env },
         }),
       )
       .pipe(Effect.provideService(Scope.Scope, forwardScope), Effect.exit);

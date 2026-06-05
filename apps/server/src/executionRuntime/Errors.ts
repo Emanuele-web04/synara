@@ -85,6 +85,26 @@ export class RuntimeRemoteOperationFailedError extends Schema.TaggedErrorClass<R
 }
 
 /**
+ * MissingCredentialsError - A non-`fake` remote provider was asked to provision
+ * but has no usable credentials configured (none in Settings, the secret store,
+ * or the environment). Raised at the create boundary before any provider call, so
+ * a misconfigured provider fails fast and clearly rather than silently falling
+ * back to the fake client or erroring deep inside an adapter. Carries the thread
+ * and provider so the surface can point the user at the right Settings panel.
+ */
+export class MissingCredentialsError extends Schema.TaggedErrorClass<MissingCredentialsError>()(
+  "MissingCredentialsError",
+  {
+    threadId: Schema.String,
+    provider: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `No credentials configured for runtime provider ${this.provider} (thread ${this.threadId})`;
+  }
+}
+
+/**
  * RuntimeProvisionFailedError - Provisioning, exec, or recording a runtime
  * instance failed. Provider-agnostic at the orchestration seam: the reactor sees
  * only this tagged error, never a concrete provider's failure type.

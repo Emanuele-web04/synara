@@ -7,7 +7,6 @@ describe("ServerSettings sandbox config", () => {
     const decoded = Schema.decodeSync(ServerSettings)({});
     expect(decoded.sandboxes).toEqual({
       defaultRemoteProvider: "",
-      defaultSnapshot: "",
       daytona: { apiKey: "", apiUrl: "", organizationId: "", target: "", snapshot: "" },
       vercel: { token: "", teamId: "", projectId: "", runtime: "" },
       modal: { tokenId: "", tokenSecret: "", environment: "" },

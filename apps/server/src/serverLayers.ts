@@ -77,9 +77,10 @@ export function makeServerRuntimeServicesLayer() {
   // `fake` provider's lifecycle adapter; its fake adapter needs FileSystem from
   // NodeServices.
   // The Daytona adapter env-selects its real REST client vs the in-repo fake
-  // client (local temp dirs): with `DAYTONA_API_KEY` present the real client is
-  // used, else the fake, so the server boots without provider access. The adapter
-  // resolves through the registry by the `daytona` provider literal.
+  // client (local temp dirs) per provision: with `DAYTONA_API_KEY` present the
+  // real client is used, else the fake, so the server boots without provider
+  // access and a key saved in Settings takes effect on the next provision with no
+  // restart. The adapter resolves through the registry by the `daytona` literal.
   const daytonaRuntimeAdapterLayer = makeDaytonaRuntimeAdapterLayer();
   // The Vercel Sandbox adapter env-selects its real client vs the in-repo fake
   // client (temp dirs + local processes): with the `VERCEL_*` credentials present
@@ -101,10 +102,12 @@ export function makeServerRuntimeServicesLayer() {
   // registry binds the broadest `workspace`-shaped descriptor for `cloudflare`.
   const cloudflareRuntimeAdapterLayer = makeCloudflareRuntimeAdapterLayer();
   // Each real adapter resolves its real-vs-fake client from the merged credential
-  // env (settings + stored secrets over `process.env`) read at layer build through
-  // this service, so a key entered in Settings selects the real client on the next
-  // server start without an env restart. The service reads ServerSettings live and
-  // pulls secret tokens from ServerSecretStore by name.
+  // env (settings + stored secrets over `process.env`) through this service. The
+  // service reads ServerSettings live and pulls secret tokens from
+  // ServerSecretStore by name. Daytona re-reads it per provision, so a key entered
+  // in Settings takes effect on the next provision with no restart; the other
+  // providers still resolve once at layer build (their per-provision migration is
+  // a later slice), taking effect on the next server start.
   const runtimeProviderCredentialsLayer = RuntimeProviderCredentialsLive.pipe(
     Layer.provide(ServerSettingsLive),
     Layer.provide(ServerSecretStoreLive),
@@ -132,6 +135,18 @@ export function makeServerRuntimeServicesLayer() {
   const executionRuntimeServiceLayer = ExecutionRuntimeServiceLive.pipe(
     Layer.provide(executionRuntimePlannerLayer),
     Layer.provide(runtimeProviderRegistryLayer),
+    // The service runs the missing-creds preflight through this same per-provision
+    // credential service, so a Settings change is honored without a restart.
+    Layer.provide(runtimeProviderCredentialsLayer),
+    // Host-side git for resolving the project repo's origin URL when cloning it
+    // into a real remote instance during provision.
+    Layer.provide(GitCoreLive),
+    // The activity-lease keepalive: `exec` acquires a lease and renews it on a
+    // timer (routed through the adapter's keepalive) while a turn's transport is
+    // alive. Leases live and die inside `exec`, so a service-local instance is
+    // self-contained; the published one in runtimeRemoteConcernsLayer serves any
+    // external resolver.
+    Layer.provide(RuntimeActivityLeaseManagerLive),
     Layer.provideMerge(runtimeServicesLayer),
   );
   // Cross-cutting remote concerns: runtime-neutral git over the exec channel,

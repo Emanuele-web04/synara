@@ -44,6 +44,7 @@ import type { ChildProcessSpawner } from "effect/unstable/process";
 
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
+import { selectAvailableCodexModel } from "./provider/codexModelSelection.ts";
 import { assertSupportedCodexCliVersion } from "./provider/process/codexCliVersionGate.ts";
 import {
   makeCodexProcessTransport,
@@ -204,6 +205,13 @@ export interface CodexAppServerStartSessionInput {
   readonly resumeCursor?: unknown;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
   readonly runtimeMode: RuntimeMode;
+  /**
+   * Per-session transport override for a sandbox-backed thread: starts
+   * `codex app-server` inside the provisioned remote instance and returns its
+   * line transport. Takes precedence over the constructor-level factory. When
+   * absent the manager spawns a local codex process (the default).
+   */
+  readonly createTransport?: CodexTransportFactory;
 }
 
 export interface CodexThreadTurnSnapshot {
@@ -218,7 +226,22 @@ export interface CodexThreadSnapshot {
 }
 
 const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
-const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
+const ANSI_BELL_CHAR = String.fromCharCode(7);
+// Strip the full ANSI repertoire a real PTY emits, not just SGR color codes. On
+// the merged Daytona PTY stream codex stdout interleaves with the shell's own
+// control sequences — bracketed-paste toggles (`\e[?2004h`/`l`), cursor/erase
+// CSI (`\e[K`, `\e[J`), keypad-mode two-char escapes (`\e=`, `\e>`), and an
+// OSC window-title (`\e]0;...\a`). A JSON-RPC frame prefixed by any of these
+// would fail the `{`-prefix frame gate (dropped as log noise) or fail
+// `JSON.parse` (silently dropped) — a lost real frame. The three alternatives
+// cover OSC (`\e]...` to BEL or `\e\`), CSI (`\e[` + params + final byte), and
+// the remaining single-/two-char escapes the live daemon was observed to send.
+const ANSI_ESCAPE_REGEX = new RegExp(
+  `${ANSI_ESCAPE_CHAR}\\][^${ANSI_BELL_CHAR}${ANSI_ESCAPE_CHAR}]*(?:${ANSI_BELL_CHAR}|${ANSI_ESCAPE_CHAR}\\\\)` +
+    `|${ANSI_ESCAPE_CHAR}\\[[0-9;?]*[ -/]*[@-~]` +
+    `|${ANSI_ESCAPE_CHAR}[=>()#][0-9A-Za-z]?`,
+  "g",
+);
 const CODEX_STDERR_LOG_REGEX =
   /^\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO|WARN|ERROR)\s+\S+:\s+(.*)$/;
 const BENIGN_ERROR_LOG_SNIPPETS = [
@@ -259,6 +282,14 @@ function isIgnorableCodexProcessLine(rawLine: string): boolean {
     return true;
   }
   return BENIGN_PROCESS_OUTPUT_REGEXES.some((pattern) => pattern.test(line));
+}
+
+// A JSON-RPC frame is a single JSON object, so its first non-whitespace byte is
+// `{`. ANSI escapes are stripped first because a PTY can prefix control codes.
+// Cheap structural gate, not a full parse: it only decides whether a line should
+// reach `JSON.parse` at all or be treated as interleaved process/log output.
+export function isJsonObjectLine(rawLine: string): boolean {
+  return normalizeCodexProcessLine(rawLine).startsWith("{");
 }
 
 function normalizeCodexUserVisibleErrorMessage(rawMessage: string): string {
@@ -705,9 +736,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return (this.services ? Effect.runPromiseWith(this.services) : Effect.runPromise)(erased);
   }
 
-  private async createTransport(input: CodexTransportFactoryInput): Promise<JsonRpcLineTransport> {
-    if (this.transportFactory) {
-      return this.transportFactory(input);
+  private async createTransport(
+    input: CodexTransportFactoryInput,
+    perSessionFactory?: CodexTransportFactory,
+  ): Promise<JsonRpcLineTransport> {
+    const factory = perSessionFactory ?? this.transportFactory;
+    if (factory) {
+      return factory(input);
     }
     const env = buildCodexProcessEnv(input.homePath ? { homePath: input.homePath } : {});
     return this.runTransportEffect(
@@ -764,12 +799,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        hasSuppliedTransport: input.createTransport !== undefined,
       });
-      const transport = await this.createTransport({
-        binaryPath: codexBinaryPath,
-        cwd: resolvedCwd,
-        ...(codexHomePath ? { homePath: codexHomePath } : {}),
-      });
+      const transport = await this.createTransport(
+        {
+          binaryPath: codexBinaryPath,
+          cwd: resolvedCwd,
+          ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        },
+        input.createTransport,
+      );
 
       context = {
         session,
@@ -797,9 +836,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
 
       this.writeMessage(context, { method: "initialized" });
+      let advertisedModelSlugs: ReadonlyArray<string> = [];
       try {
         const modelListResponse = await this.sendRequest(context, "model/list", {});
         console.log("codex model/list response", modelListResponse);
+        advertisedModelSlugs = this.parseModelListResponse(modelListResponse).map(
+          (model) => model.slug,
+        );
       } catch (error) {
         console.log("codex model/list failed", error);
       }
@@ -820,8 +863,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         normalizeCodexModelSlug(input.model),
         context.account,
       );
+      // Remote-only: a sandbox codex may advertise a different model catalog than
+      // the host, so a request it does not recognize would wedge the turn. Resolve
+      // against what the sandbox actually advertised, falling back to the product
+      // default. The local path is untouched (the gate skips it), so it stays
+      // byte-for-byte unchanged.
+      const effectiveModel =
+        input.createTransport !== undefined
+          ? this.selectSandboxCodexModel(normalizedModel, advertisedModelSlugs, {
+              threadId,
+            })
+          : (normalizedModel ?? null);
       const sessionOverrides = {
-        model: normalizedModel ?? null,
+        model: effectiveModel,
         ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
         cwd: resolvedCwd,
         ...mapCodexRuntimeMode(input.runtimeMode ?? "full-access"),
@@ -2116,15 +2170,36 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
 
+    // A line whose first non-whitespace char is not `{` is not a JSON-RPC frame:
+    // it is codex process/log output. On a remote PTY transport stdout and stderr
+    // are merged, so codex's own log lines are interleaved into this inbound
+    // stream rather than arriving on the (empty) stderr side channel. Route them
+    // through the stderr classifier — emitting `process/stderr` only for
+    // ERROR-level codex logs — to restore the local-transport split where such
+    // lines were warnings, never a user-visible `protocol/parseError` flood.
+    if (!isJsonObjectLine(line)) {
+      const classified = classifyCodexStderrLine(line);
+      if (classified) {
+        this.emitErrorEvent(context, "process/stderr", classified.message);
+      }
+      return;
+    }
+
+    // Parse the ANSI-stripped line, not the raw one: on the merged PTY stream a
+    // real frame can carry non-SGR ANSI (bracketed-paste, OSC) that `JSON.parse`
+    // rejects. `isJsonObjectLine` gated on the stripped form, so parsing must use
+    // the same normalization or a stripped-but-real frame is silently dropped.
+    const normalizedLine = normalizeCodexProcessLine(line);
     let parsed: unknown;
     try {
-      parsed = JSON.parse(line);
+      parsed = JSON.parse(normalizedLine);
     } catch {
-      this.emitErrorEvent(
-        context,
-        "protocol/parseError",
-        "Received invalid JSON from codex app-server.",
-      );
+      // The frame gate already filtered non-JSON log noise; a line that looks
+      // like a JSON object yet fails to parse is a rare malformed frame. Keep it
+      // out of the user-visible error channel — log at debug and drop it.
+      if (process.env.SYNARA_DEBUG_CODEX_TRANSPORT === "1") {
+        console.debug("[codex] dropped unparseable inbound frame", line);
+      }
       return;
     }
 
@@ -2582,14 +2657,41 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     readonly binaryPath: string;
     readonly cwd: string;
     readonly homePath?: string;
+    readonly hasSuppliedTransport?: boolean;
   }): void {
     // The CLI version gate runs `codex --version` against this host, so it only
     // applies to the local-process transport. A supplied transport (in-memory
-    // test fake or, later, a remote runtime) has no local binary to probe.
-    if (this.transportFactory) {
+    // test fake, or a remote sandbox runtime) has no local binary to probe —
+    // whether supplied at construction or per session.
+    if (this.transportFactory || input.hasSuppliedTransport) {
       return;
     }
     assertSupportedCodexCliVersion(input);
+  }
+
+  // Resolve the model to send to a sandbox-backed codex against the catalog it
+  // advertised via `model/list`. Falls back to the product default when the
+  // request is absent from the catalog so a mismatch degrades to a working model
+  // instead of wedging the turn (g32). An empty catalog trusts the request.
+  private selectSandboxCodexModel(
+    requested: string | undefined,
+    available: ReadonlyArray<string>,
+    context: { readonly threadId: string },
+  ): string | null {
+    const selection = selectAvailableCodexModel({
+      requested,
+      available,
+      preferredFallback: CODEX_DEFAULT_MODEL,
+    });
+    if (selection.fellBack) {
+      console.log("codex model fallback (sandbox catalog mismatch)", {
+        threadId: context.threadId,
+        requested: requested ?? null,
+        selected: selection.model,
+        available,
+      });
+    }
+    return selection.model;
   }
 
   private updateSession(context: CodexSessionContext, updates: Partial<ProviderSession>): void {
@@ -2894,7 +2996,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private findLatestReviewTurnId(snapshot: CodexThreadSnapshot): TurnId | undefined {
     const latestReviewTurn = [...snapshot.turns]
-      .reverse()
+      .toReversed()
       .find((turn) => this.turnHasReviewItem(turn, "entered"));
     return latestReviewTurn?.id;
   }

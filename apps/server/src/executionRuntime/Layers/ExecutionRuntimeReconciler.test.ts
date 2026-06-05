@@ -26,6 +26,7 @@ import type { FakeRuntimeFlavor } from "../Services/FakeRuntimeFlavor.ts";
 import { ExecutionRuntimeReconciler } from "../Services/ExecutionRuntimeReconciler.ts";
 import { ExecutionRuntimeService } from "../Services/ExecutionRuntimeService.ts";
 import { FakeRuntimeProviderAdapter } from "../Services/FakeRuntimeProviderAdapter.ts";
+import { GitCoreLive } from "../../git/Layers/GitCore.ts";
 import { ExecutionRuntimeServiceLive } from "./ExecutionRuntimeService.ts";
 import { makeExecutionRuntimeReconcilerLive } from "./ExecutionRuntimeReconciler.ts";
 import { FakeRuntimeProviderAdapterLive } from "./FakeRuntimeProviderAdapter.ts";
@@ -54,6 +55,7 @@ const makeReconcilerRuntime = (options?: ReconcilerOptions) => {
   // straight through it to warm the adapter without warming the service map.
   const executionRuntimeServiceLayer = ExecutionRuntimeServiceLive.pipe(
     Layer.provide(ExecutionRuntimePlanningTestLive),
+    Layer.provide(GitCoreLive),
     Layer.provideMerge(FakeRuntimeProviderAdapterLive),
     Layer.provideMerge(orchestrationLayer),
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
@@ -349,6 +351,48 @@ describe("ExecutionRuntimeReconciler partial-failure matrix", () => {
 
     const summary = await reconcile(localRuntime);
     expect(summary.expired).toBe(1);
+    expect(await readRuntimeStatus(localRuntime, threadId)).toBe("destroyed");
+    expect(await readInstanceStatus(localRuntime, instanceId)).toBeNull();
+  });
+
+  it("skips idle-destroy while a live transport (in-flight turn) holds the instance", async () => {
+    // Idle is 1 ms, so a quiescent instance would normally be destroyed at once.
+    // A live transport flips `probeInstance().liveActivity` true, which the
+    // reconciler reads to skip idle-destroy: stream output is not event-sourced,
+    // so `lastActivityAt` would otherwise freeze mid-conversation and tear down
+    // the sandbox under a live agent. TTL is wide so idle is the path under test.
+    runtime = makeReconcilerRuntime({
+      instanceTtlMs: 24 * 60 * 60 * 1000,
+      idleThresholdMs: 1,
+    });
+    const localRuntime = runtime;
+    const threadId = ThreadId.makeUnsafe("thread-live-transport");
+    await seedThread(localRuntime, threadId);
+
+    const target = await markRemoteAndProvision(localRuntime, threadId, "fake-pty-workspace");
+    const instanceId = target.instanceId as ExecutionInstanceId;
+
+    // Start a process: the in-memory transport stays open (no exit signalled), so
+    // the service holds a live-transport marker for the instance.
+    const handle = await localRuntime.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ExecutionRuntimeService;
+        return yield* service.exec({ threadId, instanceId, role: "agent", command: "", args: [] });
+      }),
+    );
+
+    const withLiveTransport = await reconcile(localRuntime);
+    expect(withLiveTransport.expired).toBe(0);
+    expect(await readRuntimeStatus(localRuntime, threadId)).toBe("running");
+    expect(await readInstanceStatus(localRuntime, instanceId)).not.toBeNull();
+
+    // Close the transport: the live-transport marker clears, so the instance is
+    // back on the idle path and the next sweep destroys it.
+    await localRuntime.runPromise(handle.transport.close).catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const afterClose = await reconcile(localRuntime);
+    expect(afterClose.expired).toBe(1);
     expect(await readRuntimeStatus(localRuntime, threadId)).toBe("destroyed");
     expect(await readInstanceStatus(localRuntime, instanceId)).toBeNull();
   });

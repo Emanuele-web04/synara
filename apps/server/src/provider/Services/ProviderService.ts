@@ -32,18 +32,24 @@ import { ServiceMap } from "effect";
 import type { Effect, Stream } from "effect";
 
 import type { ProviderServiceError } from "../Errors.ts";
-import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
+import type {
+  ProviderAdapterCapabilities,
+  ProviderSessionStartServerOptions,
+} from "./ProviderAdapter.ts";
 
 /**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
 export interface ProviderServiceShape {
   /**
-   * Start a provider session.
+   * Start a provider session. `serverOptions` carries server-only capabilities
+   * (e.g. a remote transport factory for sandbox-backed threads) that cannot
+   * ride the serializable `input`; omit it for local/worktree threads.
    */
   readonly startSession: (
     threadId: ThreadId,
     input: ProviderSessionStartInput,
+    serverOptions?: ProviderSessionStartServerOptions,
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
 
   /**

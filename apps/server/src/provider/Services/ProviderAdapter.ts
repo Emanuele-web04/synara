@@ -41,7 +41,49 @@ import type {
 import type { Effect } from "effect";
 import type { Stream } from "effect";
 
+import type { JsonRpcLineTransport } from "../process/JsonRpcLineTransport.ts";
+
 export type ProviderSessionModelSwitchMode = "in-session" | "restart-session" | "unsupported";
+
+/**
+ * The agent-process spawn the provider adapter would have run locally, handed to
+ * a {@link RemoteAgentTransportFactory} so the execution runtime can start it
+ * inside a provisioned instance instead. Carries no environment: the target owns
+ * the agent's environment (the sandbox's own shell, or — for the local-forward
+ * fake — the host process env). Provider-specific env overrides are intentionally
+ * out of scope until a provider actually needs them.
+ */
+export interface RemoteAgentSpawnSpec {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd: string;
+}
+
+/**
+ * Starts the agent process inside a thread's provisioned remote runtime and
+ * returns its line transport. The factory is bound to one thread+instance by the
+ * orchestration layer, so the provider adapter stays runtime-agnostic: it only
+ * describes the codex/agent spawn and receives a transport back, exactly as it
+ * would from a local child process.
+ *
+ * Lifecycle contract: closing the returned transport MUST terminate the remote
+ * agent process (not merely detach from it). Callers tear a session down by
+ * closing its transport and rely on this to avoid orphaned sandbox processes.
+ */
+export type RemoteAgentTransportFactory = (
+  spec: RemoteAgentSpawnSpec,
+) => Promise<JsonRpcLineTransport>;
+
+/**
+ * Server-only session-start options that cannot ride the schema-validated
+ * `ProviderSessionStartInput` (which is serializable contract data, so it drops
+ * unknown fields and cannot carry a function). Passed as a separate argument
+ * through `ProviderService.startSession` → adapter. Absent for local/worktree
+ * threads, leaving the local spawn path unchanged.
+ */
+export interface ProviderSessionStartServerOptions {
+  readonly remoteTransport?: RemoteAgentTransportFactory;
+}
 
 export interface ProviderAdapterCapabilities {
   /**
@@ -76,10 +118,14 @@ export interface ProviderAdapterShape<TError> {
   readonly capabilities: ProviderAdapterCapabilities;
 
   /**
-   * Start a provider-backed session.
+   * Start a provider-backed session. `serverOptions` carries server-only
+   * capabilities (e.g. a remote transport factory for sandbox-backed threads)
+   * that cannot travel on the serializable `input`. Adapters that do not support
+   * remote runtimes ignore it and spawn locally.
    */
   readonly startSession: (
     input: ProviderSessionStartInput,
+    serverOptions?: ProviderSessionStartServerOptions,
   ) => Effect.Effect<ProviderSession, TError>;
 
   /**

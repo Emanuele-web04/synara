@@ -41,6 +41,7 @@ import { CodexAdapter, type CodexAdapterShape } from "../Services/CodexAdapter.t
 import {
   CodexAppServerManager,
   type CodexAppServerStartSessionInput,
+  type CodexTransportFactoryInput,
 } from "../../codexAppServerManager.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import {
@@ -414,13 +415,10 @@ function toUserInputQuestions(payload: Record<string, unknown> | undefined) {
       if (!id || !header || !prompt || !options || options.length === 0) {
         return undefined;
       }
-      return {
-        id,
-        header,
-        question: prompt,
-        options,
-        ...(question.multiSelect === true ? { multiSelect: true } : {}),
-      };
+      return Object.assign(
+        { id, header, question: prompt, options },
+        question.multiSelect === true ? { multiSelect: true } : {},
+      );
     })
     .filter(
       (
@@ -1568,7 +1566,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         }),
     );
 
-    const startSession: CodexAdapterShape["startSession"] = (input) => {
+    const startSession: CodexAdapterShape["startSession"] = (input, serverOptions) => {
       if (input.provider !== undefined && input.provider !== PROVIDER) {
         return Effect.fail(
           new ProviderAdapterValidationError({
@@ -1579,12 +1577,31 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         );
       }
 
+      // For a sandbox-backed thread, run `codex app-server` inside the provisioned
+      // instance instead of spawning locally. The runtime supplies the instance;
+      // codex supplies the spawn (binary + `app-server`). The host `homePath`
+      // (codex CODEX_HOME) is deliberately NOT forwarded: the sandbox owns codex
+      // and its auth under its own HOME, and forwarding a host path would point
+      // the remote agent at a directory that does not exist there. The
+      // local-forward fake inherits the host process env, so it resolves codex
+      // the same way the local path does.
+      const remoteTransport = serverOptions?.remoteTransport;
       const managerInput: CodexAppServerStartSessionInput = {
         threadId: input.threadId,
         provider: "codex",
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+        ...(remoteTransport
+          ? {
+              createTransport: (codexInput: CodexTransportFactoryInput) =>
+                remoteTransport({
+                  command: codexInput.binaryPath,
+                  args: ["app-server"],
+                  cwd: codexInput.cwd,
+                }),
+            }
+          : {}),
         runtimeMode: input.runtimeMode,
         ...(input.modelSelection?.provider === "codex"
           ? { model: input.modelSelection.model }

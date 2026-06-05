@@ -37,11 +37,24 @@ export interface RuntimeProviderCredentialsShape {
    * The credential env map for a provider: `process.env` with the provider's
    * configured non-secret settings and stored secrets overlaid on top. Feed it to
    * the provider's `resolve*Credentials(env)` so a Settings change selects the
-   * real client on the next read, with `process.env` as the fallback.
+   * real client on the next provision, with `process.env` as the fallback. Read
+   * per provision (not captured at layer build), so a key entered in Settings
+   * takes effect on the next provision with no server restart.
    */
   readonly envFor: (
     provider: CredentialedRuntimeProvider,
   ) => Effect.Effect<Record<string, string | undefined>, ServerSettingsError | SecretStoreError>;
+  /**
+   * Whether the provider has real credentials configured right now — resolves the
+   * merged env (settings + secrets over `process.env`) and runs the provider's own
+   * credential gate. This is the provider-agnostic preflight `provisionRemote` uses
+   * to reject a non-`fake` provision that has no usable credentials, before any
+   * provider call. Resolved per provision for the same no-restart reason as
+   * {@link envFor}.
+   */
+  readonly credentialsConfigured: (
+    provider: CredentialedRuntimeProvider,
+  ) => Effect.Effect<boolean, ServerSettingsError | SecretStoreError>;
 }
 
 export class RuntimeProviderCredentials extends ServiceMap.Service<

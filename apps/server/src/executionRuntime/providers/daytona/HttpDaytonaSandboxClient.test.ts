@@ -31,6 +31,7 @@ const credentials: DaytonaCredentials = {
   target: undefined,
   organizationId: "org-1",
   snapshot: undefined,
+  ptyTransport: false,
 };
 
 interface RecordedRequest {
@@ -123,7 +124,13 @@ describe("HttpDaytonaSandboxClient", () => {
   it("creates a sandbox at POST /sandbox with the thread label and auth headers", async () => {
     const recorded: RecordedRequest[] = [];
     runtime = makeRuntime(
-      [{ method: "POST", path: "/sandbox", json: { id: "sb-1", state: "started" } }],
+      [
+        {
+          method: "POST",
+          path: "/sandbox",
+          json: { id: "sb-1", state: "started" },
+        },
+      ],
       recorded,
     );
     const local = runtime;
@@ -147,7 +154,13 @@ describe("HttpDaytonaSandboxClient", () => {
   it("resumes from a snapshot id by sending it as the create snapshot", async () => {
     const recorded: RecordedRequest[] = [];
     runtime = makeRuntime(
-      [{ method: "POST", path: "/sandbox", json: { id: "sb-2", state: "creating" } }],
+      [
+        {
+          method: "POST",
+          path: "/sandbox",
+          json: { id: "sb-2", state: "creating" },
+        },
+      ],
       recorded,
     );
     const local = runtime;
@@ -184,6 +197,19 @@ describe("HttpDaytonaSandboxClient", () => {
     // `/api`), with a single `toolbox` segment — verified against the live API.
     expect(recorded[0]?.url).toBe("https://proxy.daytona.test/toolbox/sb-1/process/execute");
     expect(recorded[0]?.url).not.toContain("toolbox/sb-1/toolbox");
+    // The toolbox runs commands bare (no login shell), so the client wraps the
+    // inner script in `bash -lc` for codex to be on PATH and `$HOME` to resolve,
+    // and silences codex's Rust logs at the source with RUST_LOG=off. The inner
+    // script is single-quoted, so its own quotes are escaped (`'\''`); decoding
+    // that escaping back recovers the literal inner script.
+    const command = (recorded[0]?.body as { command?: string } | undefined)?.command ?? "";
+    expect(command).toMatch(/^bash -lc /);
+    const innerScript = command
+      .replace(/^bash -lc '/, "")
+      .replace(/'$/, "")
+      .replaceAll("'\\''", "'");
+    expect(innerScript).toContain("env RUST_LOG='off'");
+    expect(innerScript).toContain("'echo' 'hello'");
   });
 
   it("reads a session command's exit code from the command-status endpoint, not the logs", async () => {
@@ -205,7 +231,10 @@ describe("HttpDaytonaSandboxClient", () => {
     const exit = await local.runPromise(
       Effect.flatMap(DaytonaSandboxClient.asEffect(), (client) =>
         Effect.gen(function* () {
-          const session = yield* client.startSession("sb-1", { command: "codex", args: [] });
+          const session = yield* client.startSession("sb-1", {
+            command: "codex",
+            args: [],
+          });
           // The poll fork offers both lines then `Queue.end`s the stream once it
           // reads the exit code, so the consumer drains to completion gracefully.
           const lines = yield* session.stdoutLines.pipe(Stream.runCollect);
@@ -226,6 +255,101 @@ describe("HttpDaytonaSandboxClient", () => {
           !request.url.endsWith("/logs"),
       ),
     ).toBe(true);
+    // The primary output transport is a single long-lived `?follow=true` stream,
+    // not the cumulative-body poll loop — the streamed body is line-framed
+    // through the same gate the poll path uses.
+    expect(
+      recorded.some(
+        (request) => request.method === "GET" && request.url.includes("/logs?follow=true"),
+      ),
+    ).toBe(true);
+  });
+
+  it("falls back to the poll loop when the follow stream fails to open", async () => {
+    // The `?follow=true` GET errors (proxy 500); the transport must still produce
+    // the agent's output and exit by re-reading the cumulative body on the poll
+    // loop. This keeps the working codex-on-Daytona default intact when streaming
+    // is unavailable.
+    let exitReady = false;
+    const recorded: RecordedRequest[] = [];
+    const fallbackLayer: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) =>
+        Effect.sync(() => {
+          recorded.push({
+            method: request.method,
+            url: request.url,
+            body: undefined,
+            authorization: request.headers["authorization"],
+            organization: request.headers["x-daytona-organization-id"],
+          });
+          const respondJson = (json: unknown, status = 200) =>
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(JSON.stringify(json), {
+                status,
+                headers: { "content-type": "application/json" },
+              }),
+            );
+          if (request.method === "POST" && request.url.includes("/exec")) {
+            return respondJson({ cmdId: "cmd-fb" });
+          }
+          if (request.method === "POST" && request.url.includes("/process/session")) {
+            return respondJson({});
+          }
+          if (request.method === "GET" && request.url.includes("/logs")) {
+            // The follow stream (`?follow=true`) is unavailable; the plain poll
+            // GET serves the cumulative body. Both hit `/logs`, so distinguish by
+            // the query param to fail only the follow attempt.
+            if (request.url.includes("follow=true")) {
+              return HttpClientResponse.fromWeb(request, new Response("boom", { status: 500 }));
+            }
+            exitReady = true;
+            return HttpClientResponse.fromWeb(
+              request,
+              new Response("poll-line\n", { status: 200 }),
+            );
+          }
+          if (request.method === "GET" && request.url.includes("/command/cmd-fb")) {
+            // Report the exit only after the poll GET has served the body, so the
+            // line is framed before the loop ends.
+            return respondJson({ exitCode: exitReady ? 0 : undefined });
+          }
+          return HttpClientResponse.fromWeb(request, new Response("not found", { status: 404 }));
+        }),
+      ),
+    );
+
+    const fallbackRuntime = ManagedRuntime.make(
+      makeHttpDaytonaSandboxClientLive(credentials).pipe(Layer.provide(fallbackLayer)),
+    );
+    try {
+      const result = await fallbackRuntime.runPromise(
+        Effect.flatMap(DaytonaSandboxClient.asEffect(), (client) =>
+          Effect.gen(function* () {
+            const session = yield* client.startSession("sb-1", {
+              command: "codex",
+              args: [],
+            });
+            const lines = yield* session.stdoutLines.pipe(Stream.runCollect);
+            const status = yield* session.exit;
+            yield* session.close;
+            return { lines: Array.from(lines), status };
+          }),
+        ),
+      );
+      expect(result.lines).toEqual(["poll-line"]);
+      expect(result.status).toEqual({ code: 0, signal: null });
+      // The follow stream was attempted (and failed), then the plain poll GET ran.
+      expect(recorded.some((request) => request.url.includes("/logs?follow=true"))).toBe(true);
+      expect(
+        recorded.some(
+          (request) => request.url.includes("/logs") && !request.url.includes("follow=true"),
+        ),
+      ).toBe(true);
+    } finally {
+      await fallbackRuntime.dispose();
+    }
   });
 
   it("carries a partial trailing line across poll ticks instead of splitting it", async () => {
@@ -295,7 +419,10 @@ describe("HttpDaytonaSandboxClient", () => {
       const result = await splitRuntime.runPromise(
         Effect.flatMap(DaytonaSandboxClient.asEffect(), (client) =>
           Effect.gen(function* () {
-            const session = yield* client.startSession("sb-1", { command: "codex", args: [] });
+            const session = yield* client.startSession("sb-1", {
+              command: "codex",
+              args: [],
+            });
             const lines = yield* session.stdoutLines.pipe(Stream.runCollect);
             yield* session.exit;
             yield* session.close;
@@ -316,7 +443,10 @@ describe("HttpDaytonaSandboxClient", () => {
         {
           method: "GET",
           path: "/ports/3000/preview-url",
-          json: { url: "https://3000-sb-1.proxy.daytona.work", token: "preview-tok" },
+          json: {
+            url: "https://3000-sb-1.proxy.daytona.work",
+            token: "preview-tok",
+          },
         },
       ],
       recorded,
@@ -371,7 +501,13 @@ describe("HttpDaytonaSandboxClient", () => {
   it("normalizes a get-status state and reports a 404 as a lost (null) instance", async () => {
     const recorded: RecordedRequest[] = [];
     runtime = makeRuntime(
-      [{ method: "GET", path: "/sandbox/sb-live", json: { id: "sb-live", state: "started" } }],
+      [
+        {
+          method: "GET",
+          path: "/sandbox/sb-live",
+          json: { id: "sb-live", state: "started" },
+        },
+      ],
       recorded,
     );
     const local = runtime;
@@ -403,7 +539,14 @@ describe("HttpDaytonaSandboxClient", () => {
   it("fails create with a DaytonaApiError carrying the HTTP status on a non-2xx", async () => {
     const recorded: RecordedRequest[] = [];
     runtime = makeRuntime(
-      [{ method: "POST", path: "/sandbox", status: 500, text: "internal error" }],
+      [
+        {
+          method: "POST",
+          path: "/sandbox",
+          status: 500,
+          text: "internal error",
+        },
+      ],
       recorded,
     );
     const local = runtime;
@@ -438,7 +581,14 @@ describe("HttpDaytonaSandboxClient", () => {
     const recorded: RecordedRequest[] = [];
     runtime = makeRuntime(
       // The error body echoes the API key; it must be masked in the detail.
-      [{ method: "POST", path: "/sandbox", status: 401, text: "bad token secret-key-123" }],
+      [
+        {
+          method: "POST",
+          path: "/sandbox",
+          status: 401,
+          text: "bad token secret-key-123",
+        },
+      ],
       recorded,
     );
     const local = runtime;

@@ -26,6 +26,7 @@ import {
   CodexAppServerManager,
   classifyCodexStderrLine,
   ensureIsolatedScratchWorkspace,
+  isJsonObjectLine,
   isRecoverableThreadResumeError,
   normalizeCodexModelSlug,
   readCodexAccountSnapshot,
@@ -79,7 +80,9 @@ function createSendTurnHarness(runtimeMode: "approval-required" | "full-access" 
     .mockReturnValue(context);
   const sendRequest = vi
     .spyOn(
-      manager as unknown as { sendRequest: (...args: unknown[]) => Promise<unknown> },
+      manager as unknown as {
+        sendRequest: (...args: unknown[]) => Promise<unknown>;
+      },
       "sendRequest",
     )
     .mockResolvedValue({
@@ -120,7 +123,9 @@ function createThreadControlHarness() {
     )
     .mockReturnValue(context);
   const sendRequest = vi.spyOn(
-    manager as unknown as { sendRequest: (...args: unknown[]) => Promise<unknown> },
+    manager as unknown as {
+      sendRequest: (...args: unknown[]) => Promise<unknown>;
+    },
     "sendRequest",
   );
   const updateSession = vi
@@ -130,7 +135,14 @@ function createThreadControlHarness() {
     .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
     .mockImplementation(() => {});
 
-  return { manager, context, requireSession, sendRequest, updateSession, emitEvent };
+  return {
+    manager,
+    context,
+    requireSession,
+    sendRequest,
+    updateSession,
+    emitEvent,
+  };
 }
 
 function createPendingUserInputHarness() {
@@ -237,7 +249,9 @@ function createPendingApprovalHarness(
     .mockImplementation(() => {});
   const sendRequest = vi
     .spyOn(
-      manager as unknown as { sendRequest: (...args: unknown[]) => Promise<unknown> },
+      manager as unknown as {
+        sendRequest: (...args: unknown[]) => Promise<unknown>;
+      },
       "sendRequest",
     )
     .mockResolvedValue({
@@ -364,6 +378,29 @@ describe("classifyCodexStderrLine", () => {
     expect(classifyCodexStderrLine(line)).toEqual({
       message: "Tool call failed because the same argument was sent twice (yield_time_ms).",
     });
+  });
+});
+
+describe("isJsonObjectLine", () => {
+  it("accepts a JSON object frame", () => {
+    expect(isJsonObjectLine('{"jsonrpc":"2.0","id":1}')).toBe(true);
+  });
+
+  it("accepts a frame with leading whitespace and ANSI control codes", () => {
+    expect(isJsonObjectLine('[2m  {"method":"ping"}')).toBe(true);
+  });
+
+  it("rejects a codex tracing log line (interleaved on the merged PTY stream)", () => {
+    const line = "2026-02-08T04:24:20.085687Z ERROR codex_core::runtime: unrecoverable failure";
+    expect(isJsonObjectLine(line)).toBe(false);
+  });
+
+  it("rejects a JSON array (a frame is always a single object)", () => {
+    expect(isJsonObjectLine("[1,2,3]")).toBe(false);
+  });
+
+  it("rejects plain process output", () => {
+    expect(isJsonObjectLine("Listening on http://127.0.0.1:1455")).toBe(false);
   });
 });
 
@@ -570,6 +607,33 @@ describe("handleStdoutLine", () => {
     );
 
     expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it("parses a JSON-RPC frame wrapped in bracketed-paste and OSC noise from the merged PTY stream", () => {
+    const { manager, context, emitEvent } = createProcessOutputHarness();
+    const emitErrorEvent = vi
+      .spyOn(
+        manager as unknown as { emitErrorEvent: (...args: unknown[]) => void },
+        "emitErrorEvent",
+      )
+      .mockImplementation(() => {});
+
+    // A real notification frame the daemon emitted with the shell's bracketed-
+    // paste toggles, an OSC window-title, and a trailing keypad escape — exactly
+    // the non-SGR ANSI the live PTY interleaves. Before the broadened ANSI strip
+    // this either failed the `{`-prefix gate or failed JSON.parse and was dropped.
+    const frame = '{"jsonrpc":"2.0","method":"session/idle"}';
+    const wrapped = `[?2004h]0;codex@sandbox${frame}[?2004l>`;
+
+    (
+      manager as unknown as {
+        handleStdoutLine: (context: unknown, line: string) => void;
+      }
+    ).handleStdoutLine(context, wrapped);
+
+    // It parsed and dispatched as a notification (not dropped, not an error).
+    expect(emitEvent).toHaveBeenCalledTimes(1);
+    expect(emitErrorEvent).not.toHaveBeenCalled();
   });
 });
 
@@ -1776,7 +1840,12 @@ describe("thread checkpoint control", () => {
         turns: [
           {
             id: "turn_1",
-            items: [{ type: "userMessage", content: [{ type: "text", text: "hello" }] }],
+            items: [
+              {
+                type: "userMessage",
+                content: [{ type: "text", text: "hello" }],
+              },
+            ],
           },
         ],
       },
@@ -2855,7 +2924,10 @@ describe("Codex protocol over an in-memory transport", () => {
       const approvalReply = harness.outboundFrames.find(
         (frame) => frame.id === 4242 && frame.method === undefined,
       );
-      expect(approvalReply).toEqual({ id: 4242, result: { decision: "accept" } });
+      expect(approvalReply).toEqual({
+        id: 4242,
+        result: { decision: "accept" },
+      });
     } finally {
       await harness.stop();
     }

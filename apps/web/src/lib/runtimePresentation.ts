@@ -6,12 +6,13 @@
 // client command from the chip/panel.
 // Layer: Web UI logic (pure, unit-tested)
 
-import type {
-  ExecutionRuntimeProvider,
-  ExecutionTargetKind,
-  OrchestrationThreadRuntime,
-  RuntimeInstanceStatus,
-  RuntimePlan,
+import {
+  RuntimeSnapshotId,
+  type ExecutionRuntimeProvider,
+  type ExecutionTargetKind,
+  type OrchestrationThreadRuntime,
+  type RuntimeInstanceStatus,
+  type RuntimePlan,
 } from "@t3tools/contracts";
 
 /** Display label for each execution target the UI offers at thread creation. */
@@ -178,6 +179,8 @@ export interface RuntimePlanDraft {
   readonly timeoutSeconds: number | null;
   readonly ports: ReadonlyArray<number>;
   readonly persistent: boolean;
+  /** Base image/snapshot to provision from; null defers to the provider default. */
+  readonly snapshotId: string | null;
   /** Comma/space separated egress allow-list, free text until providers consume it. */
   readonly egressText: string;
   /** Whether secrets are forwarded to the runtime. */
@@ -193,6 +196,17 @@ export const REMOTE_RUNTIME_PROVIDERS: ReadonlyArray<ExecutionRuntimeProvider> =
   "cloudflare",
 ];
 
+/**
+ * Resolve the provider a freshly opted-in remote draft should default to. The
+ * configured `sandboxDefaultRemoteProvider` setting wins when it names a real
+ * remote provider; otherwise (unset, "no preference", or an unknown value) the
+ * draft falls back to `fake`, the only provider that runs without credentials.
+ */
+export function resolveDefaultRemoteProvider(configuredProvider: string): ExecutionRuntimeProvider {
+  const candidate = configuredProvider.trim();
+  return REMOTE_RUNTIME_PROVIDERS.find((provider) => provider === candidate) ?? "fake";
+}
+
 export const DEFAULT_RUNTIME_PLAN_DRAFT: RuntimePlanDraft = {
   enabled: false,
   provider: "fake",
@@ -201,6 +215,7 @@ export const DEFAULT_RUNTIME_PLAN_DRAFT: RuntimePlanDraft = {
   timeoutSeconds: null,
   ports: [],
   persistent: false,
+  snapshotId: null,
   egressText: "",
   forwardSecrets: false,
 };
@@ -242,12 +257,13 @@ export function buildRuntimePlanFromDraft(
   if (draft.memoryMb && draft.memoryMb > 0) {
     resources.memoryMb = draft.memoryMb;
   }
+  const trimmedSnapshot = draft.snapshotId?.trim() ?? "";
   const plan: RuntimePlan = {
     targetKind: "remote-runtime",
     provider: draft.provider,
     ports: draft.ports.length > 0 ? draft.ports : [],
     persistent: draft.persistent,
-    snapshotId: null,
+    snapshotId: trimmedSnapshot.length > 0 ? RuntimeSnapshotId.makeUnsafe(trimmedSnapshot) : null,
     ...(Object.keys(resources).length > 0 ? { resources } : {}),
     ...(draft.timeoutSeconds && draft.timeoutSeconds > 0
       ? { timeoutSeconds: draft.timeoutSeconds }

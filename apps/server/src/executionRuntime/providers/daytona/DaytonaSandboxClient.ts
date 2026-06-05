@@ -88,6 +88,17 @@ export interface DaytonaSnapshotResult {
 }
 
 export interface DaytonaSandboxClientShape {
+  /**
+   * Whether a given sandbox is backed by a real remote sandbox (the REST client)
+   * rather than the local fake. The adapter gates host-credential injection on
+   * this: the fake runs commands as local child processes sharing the host's real
+   * `$HOME`, so injecting `$HOME/.codex/auth.json` there would clobber the
+   * developer's own login. A client that backs only remote sandboxes returns
+   * `true`; the fake returns `false`; the dispatching client answers per sandbox
+   * (real-vs-fake is chosen per provision). Absent means "never remote — do not
+   * inject", which keeps the fake/local path side-effect free.
+   */
+  readonly isRemoteSandbox?: (sandboxId: string) => boolean;
   /** Create (or resume) a sandbox and wait for it to be reachable. */
   readonly create: (input: DaytonaCreateInput) => Effect.Effect<DaytonaSandbox, DaytonaApiError>;
   /** Fire-and-collect command exec inside the sandbox (git rides this). */

@@ -70,9 +70,12 @@ import type { JsonRpcLineTransport } from "../../provider/process/JsonRpcLineTra
 import { BUILT_IN_RUNTIME_DESCRIPTORS } from "../Layers/descriptors.ts";
 import { ExecutionRuntimePlannerLive } from "../Layers/ExecutionRuntimePlanner.ts";
 import { ExecutionRuntimeServiceLive } from "../Layers/ExecutionRuntimeService.ts";
+import { RuntimeProviderCredentialsTestLive } from "../Layers/testSupport.ts";
 import { FAKE_RUNTIME_DESCRIPTORS } from "../Layers/fakeDescriptors.ts";
 import { FakeRuntimeProviderAdapterLive } from "../Layers/FakeRuntimeProviderAdapter.ts";
 import { makeRuntimeProviderRegistryWithAdaptersLive } from "../Layers/RuntimeProviderRegistry.ts";
+import { RuntimeActivityLeaseManagerLive } from "../Layers/RuntimeActivityLeaseManager.ts";
+import { GitCoreLive } from "../../git/Layers/GitCore.ts";
 import { CLOUDFLARE_RUNTIME_DESCRIPTOR } from "../Layers/cloudflareDescriptor.ts";
 import { DAYTONA_RUNTIME_DESCRIPTOR } from "../providers/daytona/descriptor.ts";
 import { DaytonaRuntimeAdapter } from "../providers/daytona/DaytonaRuntimeAdapter.ts";
@@ -169,6 +172,9 @@ const makeServiceRuntime = () => {
   const layer = ExecutionRuntimeServiceLive.pipe(
     Layer.provide(ExecutionRuntimePlannerLive.pipe(Layer.provide(registryLayer))),
     Layer.provide(registryLayer),
+    Layer.provide(RuntimeProviderCredentialsTestLive),
+    Layer.provide(RuntimeActivityLeaseManagerLive),
+    Layer.provide(GitCoreLive),
     Layer.provideMerge(daytonaAdapterLayer),
     Layer.provideMerge(orchestrationLayer),
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),

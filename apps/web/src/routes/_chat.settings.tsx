@@ -275,7 +275,7 @@ function SortableProviderVisibilityRow(props: {
       </div>
       <Switch
         checked={!props.isHidden}
-        onCheckedChange={(checked) => props.onHiddenChange(!Boolean(checked))}
+        onCheckedChange={(checked) => props.onHiddenChange(!checked)}
         aria-label={`Show ${props.option.title} in the provider picker`}
       />
     </div>
@@ -565,7 +565,7 @@ function SettingsRouteView() {
     if (!threadsHydrated || projects.length === 0) {
       return false;
     }
-    return threads.length === 0 || threads.every((thread) => thread.messages.length === 0);
+    return threads.every((thread) => thread.messages.length === 0);
   }, [projects.length, threads, threadsHydrated]);
 
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
@@ -2978,31 +2978,6 @@ function SettingsRouteView() {
             </SettingsSelectControl>
           }
         />
-        <SettingsRow
-          title="Default snapshot"
-          description="Snapshot ID applied to new remote sandboxes when supported."
-          resetAction={
-            settings.sandboxDefaultSnapshot !== defaults.sandboxDefaultSnapshot ? (
-              <SettingResetButton
-                label="default snapshot"
-                onClick={() =>
-                  updateSettings({
-                    sandboxDefaultSnapshot: defaults.sandboxDefaultSnapshot,
-                  })
-                }
-              />
-            ) : null
-          }
-        >
-          <Input
-            id="sandbox-default-snapshot"
-            className="mt-3"
-            value={settings.sandboxDefaultSnapshot}
-            onChange={(event) => updateSettings({ sandboxDefaultSnapshot: event.target.value })}
-            placeholder="Snapshot ID"
-            spellCheck={false}
-          />
-        </SettingsRow>
       </SettingsSection>
 
       {SANDBOX_PROVIDER_DESCRIPTORS.map((provider) => (

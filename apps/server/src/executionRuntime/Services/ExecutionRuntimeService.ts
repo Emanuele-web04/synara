@@ -34,6 +34,7 @@ import type {
   JsonRpcLineTransport,
 } from "../../provider/process/JsonRpcLineTransport.ts";
 import type {
+  MissingCredentialsError,
   RuntimePlanRejectedError,
   RuntimeProvisionFailedError,
   RuntimeProviderUnsupportedError,
@@ -74,10 +75,18 @@ export interface ExecutionRuntimeExecInput {
  * - `supportsReconnect: true` + `liveness: "alive"` — re-attach succeeded.
  * - `supportsReconnect: true` + `liveness: "absent"` — DB row exists but the
  *   provider has no record of the instance; mark `lost`.
+ *
+ * `liveActivity` is true while the service holds a live transport (and its
+ * activity lease) for the instance this process lifetime — an in-flight turn.
+ * The reconciler reads it to skip idle-destroy under a live agent, since
+ * stream-only output is not event-sourced so `lastActivityAt` would otherwise
+ * freeze mid-conversation and trip the idle threshold. It does not exempt the TTL
+ * cap (a hard age limit) or the lost/absent verdicts.
  */
 export interface RuntimeInstanceProbe {
   readonly supportsReconnect: boolean;
   readonly liveness: "alive" | "absent";
+  readonly liveActivity: boolean;
 }
 
 export interface ExecutionRuntimeProcessHandle {
@@ -111,10 +120,12 @@ export interface ExecutionRuntimeServiceShape {
    * Public entry point that honors a `RuntimePlan` carried on
    * create/handoff/fork. For `local`/`worktree` (or no plan) it does nothing,
    * preserving the existing compat path. For `remote-runtime` it validates the
-   * plan against the resolved descriptor *before* any provisioning, then marks
-   * the thread remote with the flavor derived from the plan. Validation failures
-   * surface as `RuntimePlanRejectedError` / `RuntimeProviderUnsupportedError`, so
-   * an invalid plan is rejected pre-provision.
+   * plan against the resolved descriptor *before* any provisioning, rejects a
+   * non-`fake` provider with no credentials configured, then marks the thread
+   * remote with the flavor derived from the plan. Validation failures surface as
+   * `RuntimePlanRejectedError` / `RuntimeProviderUnsupportedError`; a missing-creds
+   * provider surfaces as `MissingCredentialsError`, so both are rejected
+   * pre-provision.
    */
   readonly applyRuntimePlan: (input: {
     readonly threadId: ThreadId;
@@ -122,7 +133,10 @@ export interface ExecutionRuntimeServiceShape {
     readonly role?: RuntimeRole;
   }) => Effect.Effect<
     void,
-    RuntimeProvisionFailedError | RuntimePlanRejectedError | RuntimeProviderUnsupportedError
+    | RuntimeProvisionFailedError
+    | RuntimePlanRejectedError
+    | RuntimeProviderUnsupportedError
+    | MissingCredentialsError
   >;
   /**
    * Resolve (and, for remote targets, provision) the execution target backing a

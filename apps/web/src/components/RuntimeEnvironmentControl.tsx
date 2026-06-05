@@ -10,6 +10,7 @@ import type { ThreadId } from "@t3tools/contracts";
 import { useState } from "react";
 import { FiServer } from "react-icons/fi";
 import { LuSplit } from "react-icons/lu";
+import { useAppSettings } from "~/appSettings";
 import { CentralIcon } from "~/lib/central-icons";
 import { ChevronDownIcon } from "~/lib/icons";
 import { useRuntimePlanDraftStore } from "~/runtimePlanDraftStore";
@@ -19,6 +20,7 @@ import {
   EXECUTION_TARGET_LABELS,
   parsePortsInput,
   REMOTE_RUNTIME_PROVIDERS,
+  resolveDefaultRemoteProvider,
 } from "~/lib/runtimePresentation";
 import type { EnvMode } from "./BranchToolbar.logic";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -52,10 +54,17 @@ export function RuntimeEnvironmentControl({
   className,
 }: RuntimeEnvironmentControlProps) {
   const [open, setOpen] = useState(false);
+  const { settings } = useAppSettings();
   const draft = useRuntimePlanDraftStore((store) => store.draftByThreadId[threadId]);
   const setDraft = useRuntimePlanDraftStore((store) => store.setDraft);
   const remoteEnabled = draft?.enabled ?? false;
-  const provider = draft?.provider ?? "fake";
+  const defaultProvider = resolveDefaultRemoteProvider(settings.sandboxDefaultRemoteProvider);
+  const provider = draft?.provider ?? defaultProvider;
+  // Default the snapshot input to the configured Daytona snapshot so "Remote"
+  // provisions from the same base image as the settings page, without forcing a
+  // stored draft value before the user touches the field.
+  const snapshotPlaceholderDefault =
+    draft?.snapshotId ?? (settings.sandboxDaytonaSnapshot.trim() || null);
 
   const selected: SelectedTarget = remoteEnabled ? "remote-runtime" : effectiveEnvMode;
 
@@ -70,7 +79,19 @@ export function RuntimeEnvironmentControl({
     setOpen(false);
   };
   const selectRemote = () => {
-    setDraft(threadId, { enabled: true });
+    // First opt-in seeds the provider and snapshot from the configured defaults
+    // so "Remote" means the real configured backend, not always fake. A draft
+    // that already exists keeps the user's chosen provider/snapshot.
+    setDraft(
+      threadId,
+      draft
+        ? { enabled: true }
+        : {
+            enabled: true,
+            provider: defaultProvider,
+            snapshotId: settings.sandboxDaytonaSnapshot.trim() || null,
+          },
+    );
   };
 
   const triggerLabel = EXECUTION_TARGET_LABELS[selected];
@@ -154,6 +175,18 @@ export function RuntimeEnvironmentControl({
                     </option>
                   ))}
                 </select>
+              </Field>
+              <Field label="Snapshot (image)">
+                <Input
+                  size="sm"
+                  defaultValue={snapshotPlaceholderDefault ?? ""}
+                  placeholder="provider default"
+                  spellCheck={false}
+                  onBlur={(event) => {
+                    const next = event.currentTarget.value.trim();
+                    setDraft(threadId, { snapshotId: next.length > 0 ? next : null });
+                  }}
+                />
               </Field>
               <div className="grid grid-cols-2 gap-2">
                 <Field label="CPU">

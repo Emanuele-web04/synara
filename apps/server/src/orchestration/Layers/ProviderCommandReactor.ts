@@ -48,6 +48,7 @@ import {
 } from "../../git/Services/TextGeneration.ts";
 import { ExecutionRuntimeService } from "../../executionRuntime/Services/ExecutionRuntimeService.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import type { ProviderSessionStartServerOptions } from "../../provider/Services/ProviderAdapter.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
 import {
@@ -698,11 +699,11 @@ const make = Effect.gen(function* () {
     const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
     // Provision (or resolve) the execution target before the provider session
-    // starts. For local/worktree threads this returns no cwd override and does
-    // nothing, preserving the existing local spawn path exactly. For a remote
-    // target it returns the provisioned root the session should run in. The
-    // reactor stays provider-agnostic: it reads only the resolved cwd, never any
-    // provider-specific instance ids, states, or routes.
+    // starts. For local/worktree threads this returns no cwd override and no
+    // instance, preserving the existing local spawn path exactly. For a remote
+    // target it returns the provisioned root plus an opaque instance id. The
+    // reactor stays provider-agnostic: it reads the resolved cwd and the opaque
+    // instance id, never any provider-specific states or routes.
     const resolvedTarget = yield* executionRuntimeService
       .ensureTargetForThread(threadId, thread.runtime)
       .pipe(
@@ -718,6 +719,41 @@ const make = Effect.gen(function* () {
       );
     const projectedCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     const effectiveCwd = resolvedTarget.cwd ?? projectedCwd;
+    // For a remote target, bind a transport factory to this thread's instance so
+    // the provider runs its agent process *inside* the sandbox (and streams back
+    // over that transport) rather than spawning locally. `exec` starts the agent
+    // the provider describes and returns its line transport; the env is left to
+    // the target. Absent for local/worktree threads, so the local path is
+    // untouched.
+    const remoteInstanceId = resolvedTarget.instanceId;
+    const sessionServerOptions: ProviderSessionStartServerOptions | undefined =
+      remoteInstanceId !== null
+        ? {
+            remoteTransport: (spec) =>
+              Effect.runPromise(
+                executionRuntimeService
+                  .exec({
+                    threadId,
+                    instanceId: remoteInstanceId,
+                    role: "agent",
+                    command: spec.command,
+                    args: spec.args,
+                  })
+                  .pipe(Effect.map((handle) => handle.transport)),
+              ).catch((cause: unknown) => {
+                // The Effect→Promise boundary (the manager is a plain class, not
+                // an Effect service) flattens a typed failure/defect into an
+                // opaque rejection. Re-wrap with the instance so a failed remote
+                // start is diagnosable instead of a bare "transport failed".
+                throw new Error(
+                  `Remote runtime exec failed for instance ${remoteInstanceId}: ${
+                    cause instanceof Error ? cause.message : String(cause)
+                  }`,
+                  { cause },
+                );
+              }),
+          }
+        : undefined;
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
       worktreePath: thread.worktreePath,
@@ -739,17 +775,21 @@ const make = Effect.gen(function* () {
       readonly resumeCursor?: unknown;
       readonly provider?: ProviderKind;
     }) =>
-      providerService.startSession(threadId, {
+      providerService.startSession(
         threadId,
-        ...(preferredProvider ? { provider: preferredProvider } : {}),
-        ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-        modelSelection: desiredModelSelection,
-        ...(options?.providerOptions !== undefined
-          ? { providerOptions: options.providerOptions }
-          : {}),
-        ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-        runtimeMode: desiredRuntimeMode,
-      });
+        {
+          threadId,
+          ...(preferredProvider ? { provider: preferredProvider } : {}),
+          ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+          modelSelection: desiredModelSelection,
+          ...(options?.providerOptions !== undefined
+            ? { providerOptions: options.providerOptions }
+            : {}),
+          ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+          runtimeMode: desiredRuntimeMode,
+        },
+        sessionServerOptions,
+      );
 
     const bindSessionToThread = (session: ProviderSession) =>
       setThreadSession({
@@ -831,7 +871,18 @@ const make = Effect.gen(function* () {
       return restartedSession.threadId;
     }
 
-    if (providerService.forkThread && thread.forkSourceThreadId) {
+    // Native provider fork spawns the agent locally, so it cannot back a remote
+    // thread. Skip it for remote targets and start a fresh sandbox session via
+    // `startProviderSession` (which carries `sessionServerOptions`) instead. The
+    // fork's prior conversation is unavailable on the remote agent, so this is a
+    // deliberate, logged degradation rather than a silent local spawn.
+    if (remoteInstanceId !== null && thread.forkSourceThreadId) {
+      yield* Effect.logInfo(
+        "provider command reactor skipping native fork for remote thread; starting a fresh remote session",
+        { threadId, forkSourceThreadId: thread.forkSourceThreadId },
+      );
+    }
+    if (providerService.forkThread && thread.forkSourceThreadId && remoteInstanceId === null) {
       const forked = yield* providerService.forkThread({
         sourceThreadId: thread.forkSourceThreadId,
         threadId,

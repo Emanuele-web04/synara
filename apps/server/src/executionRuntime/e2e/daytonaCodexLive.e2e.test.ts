@@ -43,9 +43,12 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { BUILT_IN_RUNTIME_DESCRIPTORS } from "../Layers/descriptors.ts";
 import { ExecutionRuntimePlannerLive } from "../Layers/ExecutionRuntimePlanner.ts";
 import { ExecutionRuntimeServiceLive } from "../Layers/ExecutionRuntimeService.ts";
+import { RuntimeProviderCredentialsTestLive } from "../Layers/testSupport.ts";
 import { FAKE_RUNTIME_DESCRIPTORS } from "../Layers/fakeDescriptors.ts";
 import { FakeRuntimeProviderAdapterLive } from "../Layers/FakeRuntimeProviderAdapter.ts";
 import { makeRuntimeProviderRegistryWithAdaptersLive } from "../Layers/RuntimeProviderRegistry.ts";
+import { RuntimeActivityLeaseManagerLive } from "../Layers/RuntimeActivityLeaseManager.ts";
+import { GitCoreLive } from "../../git/Layers/GitCore.ts";
 import { CLOUDFLARE_RUNTIME_DESCRIPTOR } from "../Layers/cloudflareDescriptor.ts";
 import { makeCloudflareRuntimeAdapterLayer } from "../Layers/CloudflareRuntimeProviderFacadeLayer.ts";
 import { DAYTONA_RUNTIME_DESCRIPTOR } from "../providers/daytona/descriptor.ts";
@@ -67,7 +70,10 @@ const describeLive = LIVE ? describe : describe.skip;
 
 const SNAPSHOT =
   process.env.DAYTONA_CODEX_SNAPSHOT ?? "terry-vCPU-4-RAM-8GB-2026-05-27-20-58-54-codex";
-const modelSelection: ModelSelection = { provider: "codex", model: "gpt-5.3-codex" };
+const modelSelection: ModelSelection = {
+  provider: "codex",
+  model: "gpt-5.3-codex",
+};
 const now = "2026-06-04T00:00:00.000Z";
 
 const makeLiveRuntime = () => {
@@ -82,9 +88,9 @@ const makeLiveRuntime = () => {
   }).pipe(Layer.provide(NodeServices.layer));
 
   const providerDeps = Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer);
-  const daytonaAdapterLayer = makeDaytonaRuntimeAdapterLayer({ env: process.env }).pipe(
-    Layer.provide(providerDeps),
-  );
+  const daytonaAdapterLayer = makeDaytonaRuntimeAdapterLayer({
+    env: process.env,
+  }).pipe(Layer.provide(providerDeps));
 
   const otherEnv: Record<string, string | undefined> = { ...process.env };
   for (const k of [
@@ -124,6 +130,9 @@ const makeLiveRuntime = () => {
   const layer = ExecutionRuntimeServiceLive.pipe(
     Layer.provide(ExecutionRuntimePlannerLive.pipe(Layer.provide(registryLayer))),
     Layer.provide(registryLayer),
+    Layer.provide(RuntimeProviderCredentialsTestLive),
+    Layer.provide(RuntimeActivityLeaseManagerLive),
+    Layer.provide(GitCoreLive),
     Layer.provideMerge(daytonaAdapterLayer),
     Layer.provideMerge(orchestrationLayer),
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
@@ -225,15 +234,15 @@ describeLive("LIVE Daytona + real codex: drive a turn inside a codex-equipped sa
       `[daytonaCodexLive] provisioned ${instanceId} root=${workdir} snapshot=${SNAPSHOT}`,
     );
 
-    // Inject the host's codex auth ($HOME/.codex/auth.json). b64 is a positional
-    // arg so its content cannot break the shell.
-    const b64 = Buffer.from(hostAuth as string, "utf8").toString("base64");
-    const inject = await execIn(live, instanceId, "bash", [
+    // Auth is injected by `provision` itself (production path): the adapter wrote
+    // the host operator's `$HOME/.codex/auth.json` into the sandbox before this
+    // point. Assert it landed rather than injecting it here.
+    const authCheck = await execIn(live, instanceId, "bash", [
       "-lc",
-      'mkdir -p "$HOME/.codex" && printf %s "$0" | base64 -d > "$HOME/.codex/auth.json" && echo injected',
-      b64,
+      'test -s "$HOME/.codex/auth.json" && echo present',
     ]);
-    expect(inject.code).toBe(0);
+    expect(authCheck.code).toBe(0);
+    expect(authCheck.stdout).toContain("present");
 
     // Drive a real turn through CodexAppServerManager. Its createTransport
     // factory returns the Daytona PTY-backed transport (the production seam);

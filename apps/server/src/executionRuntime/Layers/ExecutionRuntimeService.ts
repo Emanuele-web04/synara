@@ -31,16 +31,27 @@ import {
   type RuntimeRole,
   type ThreadId,
 } from "@t3tools/contracts";
-import { Deferred, Effect, Layer, Option } from "effect";
+import { Deferred, Duration, Effect, Layer, Option } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import { GitCore } from "../../git/Services/GitCore.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import type { JsonRpcLineTransport } from "../../provider/process/JsonRpcLineTransport.ts";
-import { RuntimeProvisionFailedError } from "../Errors.ts";
+import type {
+  JsonRpcLineTransport,
+  ProcessExit,
+} from "../../provider/process/JsonRpcLineTransport.ts";
+import { MissingCredentialsError, RuntimeProvisionFailedError } from "../Errors.ts";
+import { buildTokenizedRepoUrl, resolveGitHubToken } from "../gitWorkspaceBootstrap.ts";
+import type { ExecutionRuntimeRepoSource } from "../Services/ExecutionRuntimeProviderAdapter.ts";
 import { ExecutionRuntimePlanner } from "../Services/ExecutionRuntimePlanner.ts";
 import { type FakeRuntimeFlavor } from "../Services/FakeRuntimeFlavor.ts";
+import { RuntimeActivityLeaseManager } from "../Services/RuntimeActivityLeaseManager.ts";
 import { RuntimeProviderRegistry } from "../Services/RuntimeProviderRegistry.ts";
+import {
+  RuntimeProviderCredentials,
+  type CredentialedRuntimeProvider,
+} from "../Services/RuntimeProviderCredentials.ts";
 import {
   ExecutionRuntimeService,
   type ExecutionRuntimeServiceShape,
@@ -49,6 +60,11 @@ import {
 import { deriveFakeFlavor } from "./FakeRuntimeProviderFacade.ts";
 
 const RUNNING_INSTANCE_STATUSES: ReadonlySet<string> = new Set(["starting", "running", "idle"]);
+
+// How often the activity-lease keepalive renews while a turn's transport is
+// alive. A provider that auto-stops an idle sandbox (Daytona) uses a window far
+// larger than this, so a single missed tick never trips its idle stop.
+const ACTIVITY_RENEW_INTERVAL_MS = 60_000;
 
 // When a remote thread is resolved after the in-memory flavor map is gone (a
 // server restart between provision-request and provisioning), the read-model
@@ -79,12 +95,29 @@ interface ProvisionIntent {
   readonly fakeFlavor?: FakeRuntimeFlavor;
 }
 
+// The providers whose credentials gate the real client. `fake`/`local`/`worktree`
+// need none, so the missing-creds preflight skips them.
+const CREDENTIALED_PROVIDERS: ReadonlySet<ExecutionRuntimeProvider> = new Set([
+  "daytona",
+  "vercel-sandbox",
+  "modal",
+  "cloudflare",
+]);
+
+const asCredentialedProvider = (
+  provider: ExecutionRuntimeProvider,
+): CredentialedRuntimeProvider | null =>
+  CREDENTIALED_PROVIDERS.has(provider) ? (provider as CredentialedRuntimeProvider) : null;
+
 const makeExecutionRuntimeService = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const planner = yield* ExecutionRuntimePlanner;
   const registry = yield* RuntimeProviderRegistry;
+  const credentials = yield* RuntimeProviderCredentials;
+  const leases = yield* RuntimeActivityLeaseManager;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const git = yield* GitCore;
 
   // Per-thread provisioning intent, stashed at plan/mark time and read at
   // provision time (the wrinkle: plan derivation precedes provisioning). Stands
@@ -97,9 +130,49 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
   // Fake-only: maps a provisioned instance id to its exact flavor for the
   // flavor-specific reconnect-capability probe.
   const instanceFakeFlavors = new Map<string, FakeRuntimeFlavor>();
+  // Instances with a live transport (an in-flight turn) this process lifetime.
+  // The reconciler reads this through `probeInstance().liveActivity` to skip
+  // idle-destroy: stream output is not event-sourced, so `lastActivityAt` freezes
+  // mid-conversation and would otherwise trip the idle threshold. Multiple
+  // concurrent processes can share one instance, so it is reference-counted.
+  const liveTransportCounts = new Map<string, number>();
+  const retainLiveTransport = (instanceId: ExecutionInstanceId) => {
+    const key = String(instanceId);
+    liveTransportCounts.set(key, (liveTransportCounts.get(key) ?? 0) + 1);
+  };
+  const releaseLiveTransport = (instanceId: ExecutionInstanceId) => {
+    const key = String(instanceId);
+    const next = (liveTransportCounts.get(key) ?? 0) - 1;
+    if (next <= 0) {
+      liveTransportCounts.delete(key);
+    } else {
+      liveTransportCounts.set(key, next);
+    }
+  };
 
   const failProvision = (threadId: ThreadId, detail: string) =>
     new RuntimeProvisionFailedError({ threadId, detail });
+
+  // Reject a non-`fake` provision that has no usable credentials before any
+  // provider call (mirrors each provider's real-vs-fake gate). `fake`/`local`/
+  // `worktree` need none and pass through. A credential-read failure is treated as
+  // "not configured" so a misconfigured store fails closed rather than reaching a
+  // provider with no key. Succeeds for an unconfigured provider with no error.
+  const ensureCredentialsConfigured = (
+    threadId: ThreadId,
+    provider: ExecutionRuntimeProvider,
+  ): Effect.Effect<void, MissingCredentialsError> => {
+    const credentialed = asCredentialedProvider(provider);
+    if (credentialed === null) {
+      return Effect.void;
+    }
+    return credentials.credentialsConfigured(credentialed).pipe(
+      Effect.orElseSucceed(() => false),
+      Effect.flatMap((configured) =>
+        configured ? Effect.void : Effect.fail(new MissingCredentialsError({ threadId, provider })),
+      ),
+    );
+  };
 
   const dispatchRuntimeCommand = (
     threadId: ThreadId,
@@ -170,6 +243,9 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
         ? yield* registry.getDescriptorByFlavor(fakeFlavor as FakeRuntimeFlavor)
         : yield* registry.getDescriptor(plan.provider);
       yield* planner.validateAgainstDescriptor(plan, role, descriptor);
+      // A descriptor-valid plan for a credentialed provider with no key still
+      // cannot provision; reject it here, pre-provision, alongside plan validation.
+      yield* ensureCredentialsConfigured(input.threadId, plan.provider);
       threadIntents.set(input.threadId, {
         provider: plan.provider,
         plan,
@@ -178,23 +254,117 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
       yield* recordProvisionRequest(input.threadId, plan.provider, role);
     });
 
-  const provisionRemote = (
-    threadId: ThreadId,
-    targetKind: ExecutionTargetKind,
-  ): Effect.Effect<ResolvedExecutionTarget, RuntimeProvisionFailedError> =>
-    Effect.gen(function* () {
-      const intent = threadIntents.get(threadId) ?? {
-        provider: "fake" as ExecutionRuntimeProvider,
+  // Synthesize a provision intent when none was stashed this process lifetime (a
+  // server restart between provision-request and provisioning). The read-model's
+  // persisted provider is the source of truth: a `fake` row resumes the default
+  // fake flavor; any other persisted provider resumes that provider's own plan, so
+  // a remote thread does not silently downgrade to `fake` after a restart.
+  const intentForMissing = (persistedProvider: ExecutionRuntimeProvider): ProvisionIntent => {
+    if (persistedProvider === "fake") {
+      return {
+        provider: "fake",
         plan: planForFlavor(DEFAULT_FAKE_FLAVOR),
         fakeFlavor: DEFAULT_FAKE_FLAVOR,
       };
+    }
+    return {
+      provider: persistedProvider,
+      plan: {
+        targetKind: "remote-runtime",
+        provider: persistedProvider,
+        ports: [],
+        persistent: true,
+        snapshotId: null,
+      },
+    };
+  };
+
+  // Derive a clone-target dir name from a repo URL (`.../synara.git` -> `synara`).
+  // Falls back to a stable default so a malformed URL still clones somewhere.
+  const repoDirNameFromUrl = (repoUrl: string): string => {
+    const last = repoUrl.split(/[/\\]/).filter(Boolean).at(-1) ?? "workspace";
+    const name = last.replace(/\.git$/i, "").trim();
+    return name.length > 0 ? name : "workspace";
+  };
+
+  // Resolve the source repo to clone into a *real remote* instance so the agent
+  // runs with its cwd inside the working tree. Reads the thread's project
+  // workspaceRoot (the host local repo), its origin URL, and a host GitHub token,
+  // then builds the tokenized clone URL. Returns `undefined` (skip cloning) when
+  // the provider is `fake` (shares the host FS), the thread has no project repo,
+  // or the host repo has no origin remote. Degrades to the clean URL when no token
+  // resolves — a public repo clones fine, and a private repo surfaces git's own
+  // actionable 403 through the adapter. Never logs the token.
+  const resolveRepoSourceFor = (
+    threadId: ThreadId,
+    provider: ExecutionRuntimeProvider,
+  ): Effect.Effect<ExecutionRuntimeRepoSource | undefined> =>
+    Effect.gen(function* () {
+      if (provider === "fake") {
+        return undefined;
+      }
+      const thread = yield* resolveThreadRuntime(threadId);
+      if (thread === undefined) {
+        return undefined;
+      }
+      const project = Option.getOrUndefined(
+        yield* snapshotQuery
+          .getProjectShellById(thread.projectId)
+          .pipe(Effect.catchCause(() => Effect.succeed(Option.none()))),
+      );
+      if (project === undefined) {
+        return undefined;
+      }
+      const originUrl = yield* git
+        .readConfigValue(project.workspaceRoot, "remote.origin.url")
+        .pipe(Effect.catchCause(() => Effect.succeed(null)));
+      if (originUrl === null || originUrl.trim().length === 0) {
+        return undefined;
+      }
+      const repoUrl = originUrl.trim();
+      // Prefer the thread's worktree branch, then its branch; default to "main"
+      // (the clone's `checkout -B` creates it from HEAD if it is not on origin).
+      const ref = thread.associatedWorktreeBranch?.trim() || thread.branch?.trim() || "main";
+      const token = yield* resolveGitHubToken().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.orElseSucceed(() => null),
+      );
+      const tokenizedUrl = buildTokenizedRepoUrl(repoUrl, token);
+      return {
+        repoUrl,
+        ref,
+        tokenizedUrl,
+        targetSubdir: repoDirNameFromUrl(repoUrl),
+      } satisfies ExecutionRuntimeRepoSource;
+    });
+
+  const provisionRemote = (
+    threadId: ThreadId,
+    targetKind: ExecutionTargetKind,
+    persistedProvider: ExecutionRuntimeProvider,
+  ): Effect.Effect<ResolvedExecutionTarget, RuntimeProvisionFailedError> =>
+    Effect.gen(function* () {
+      const intent = threadIntents.get(threadId) ?? intentForMissing(persistedProvider);
+      // Reject a credentialed provider with no key before any provider call, even
+      // on the restart-resume path where no plan was re-applied. Surfaced as a
+      // provision failure so the reactor's single catch handles it unchanged.
+      yield* ensureCredentialsConfigured(threadId, intent.provider).pipe(
+        Effect.mapError((error) => failProvision(threadId, error.message)),
+      );
       const adapter = yield* registry
         .getAdapter(intent.provider)
         .pipe(
           Effect.mapError((cause) => failProvision(threadId, `provision failed: ${cause.message}`)),
         );
+      // Resolve the repo to clone into a real remote instance (skipped for `fake`,
+      // a thread with no project repo, or a repo with no origin). Token resolution
+      // and the host origin read never fail the provision: a missing repo source
+      // just provisions an empty sandbox as before.
+      const repoSource = yield* resolveRepoSourceFor(threadId, intent.provider).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
       const context = yield* adapter
-        .provision({ threadId, plan: intent.plan })
+        .provision({ threadId, plan: intent.plan, ...(repoSource ? { repoSource } : {}) })
         .pipe(
           Effect.mapError((cause) => failProvision(threadId, `provision failed: ${cause.message}`)),
         );
@@ -225,6 +395,23 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
         instanceId: context.instance.id,
       } satisfies ResolvedExecutionTarget;
     });
+
+  // Best-effort re-injection of host-resolved agent credentials into a resumed
+  // instance. Routes through the resolved adapter so the service stays
+  // provider-agnostic; a provider that injects none (or one the registry cannot
+  // resolve) is a silent no-op, and a failed rewrite never blocks the resume.
+  const reinjectCredentials = (
+    provider: ExecutionRuntimeProvider,
+    instanceId: ExecutionInstanceId,
+  ): Effect.Effect<void> =>
+    registry.getAdapter(provider).pipe(
+      Effect.flatMap((adapter) =>
+        adapter.reinjectCredentials !== undefined
+          ? adapter.reinjectCredentials(instanceId)
+          : Effect.void,
+      ),
+      Effect.ignore,
+    );
 
   const ensureTargetForThread: ExecutionRuntimeServiceShape["ensureTargetForThread"] = (
     threadId,
@@ -263,6 +450,11 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
         if (intent?.fakeFlavor !== undefined) {
           instanceFakeFlavors.set(runtime.instance.id, intent.fakeFlavor);
         }
+        // Resume path: refresh host-injected agent credentials before the next
+        // turn. A token written at first provision may have expired while the
+        // sandbox sat idle; the adapter rewrites a fresh one (no-op for providers
+        // that inject none). Best-effort — a failed rewrite must not block resume.
+        yield* reinjectCredentials(runtime.instance.provider, runtime.instance.id);
         return {
           threadId,
           targetKind,
@@ -271,7 +463,59 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
         } satisfies ResolvedExecutionTarget;
       }
 
-      return yield* provisionRemote(threadId, targetKind);
+      // Use the read-model's persisted provider as the fallback intent when none
+      // was stashed (restart between provision-request and provisioning), so the
+      // remote thread resumes its real provider instead of downgrading to `fake`.
+      const persistedProvider: ExecutionRuntimeProvider = runtime?.provider ?? "fake";
+      return yield* provisionRemote(threadId, targetKind, persistedProvider);
+    });
+
+  // Keep a live turn's instance alive: take an activity lease and, while the
+  // transport is open, renew it on a timer — routing the renew through the
+  // adapter's `refreshActivity` so a provider that auto-stops an idle sandbox
+  // (Daytona) does not tear it down under an active agent. Released on transport
+  // exit. Provider-agnostic: a provider with no `refreshActivity` (fake) renews
+  // only the in-memory lease, which is a harmless no-op for it. Best-effort
+  // throughout — a failed renew never propagates to the turn.
+  const startActivityKeepalive = (
+    instanceId: ExecutionInstanceId,
+    adapter: { readonly refreshActivity?: (id: ExecutionInstanceId) => Effect.Effect<void> },
+    exit: Deferred.Deferred<ProcessExit>,
+  ): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const lease = yield* leases.acquire({ instanceId, reason: "turn" });
+      retainLiveTransport(instanceId);
+
+      const renewOnce = leases.renew(lease.id).pipe(
+        Effect.flatMap(() =>
+          adapter.refreshActivity !== undefined ? adapter.refreshActivity(instanceId) : Effect.void,
+        ),
+        Effect.ignore,
+      );
+
+      // Sleep, but wake immediately when the transport exits so the loop tears
+      // down promptly instead of waiting out a full interval. `raceFirst` returns
+      // whichever wins; the exit branch flips `transportLive` false to end the loop.
+      const tick = Effect.raceFirst(
+        Effect.sleep(Duration.millis(ACTIVITY_RENEW_INTERVAL_MS)).pipe(Effect.as(true as const)),
+        Deferred.await(exit).pipe(Effect.as(false as const)),
+      );
+
+      const loop: Effect.Effect<void> = tick.pipe(
+        Effect.flatMap((transportLive) =>
+          transportLive ? renewOnce.pipe(Effect.flatMap(() => loop)) : Effect.void,
+        ),
+      );
+
+      yield* loop.pipe(
+        Effect.ensuring(
+          Effect.sync(() => releaseLiveTransport(instanceId)).pipe(
+            Effect.flatMap(() => leases.release(lease.id)),
+          ),
+        ),
+        Effect.forkDetach,
+        Effect.asVoid,
+      );
     });
 
   const exec: ExecutionRuntimeServiceShape["exec"] = (input) =>
@@ -363,6 +607,11 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
           Effect.ignore,
         ),
       );
+
+      // Hold the instance alive for the life of this transport: an activity lease
+      // renewed on a timer through the adapter's keepalive, plus a live-transport
+      // marker the reconciler reads to skip idle-destroy mid-conversation.
+      yield* startActivityKeepalive(input.instanceId, adapter, built.transport.exit);
 
       return {
         processId,
@@ -496,6 +745,9 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
       return {
         supportsReconnect,
         liveness: alive ? ("alive" as const) : ("absent" as const),
+        // True while this process holds a live transport (an in-flight turn) for
+        // the instance, so the reconciler skips idle-destroy under a live agent.
+        liveActivity: (liveTransportCounts.get(String(input.instanceId)) ?? 0) > 0,
       };
     });
 

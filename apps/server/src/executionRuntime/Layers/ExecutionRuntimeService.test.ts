@@ -10,7 +10,7 @@ import {
   type ProviderEvent,
   type RuntimePlan,
 } from "@t3tools/contracts";
-import { Effect, Layer, ManagedRuntime, Stream } from "effect";
+import { Cause, Effect, Exit, Layer, ManagedRuntime, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -21,6 +21,7 @@ import { OrchestrationEngineLive } from "../../orchestration/Layers/Orchestratio
 import { OrchestrationProjectionPipelineLive } from "../../orchestration/Layers/ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "../../orchestration/Layers/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
+import { GitCoreLive } from "../../git/Layers/GitCore.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -29,10 +30,14 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import type { InMemoryTransportController } from "../../provider/process/JsonRpcLineTransport.ts";
 import type { FakeRuntimeFlavor } from "../Services/FakeRuntimeFlavor.ts";
 import { ExecutionRuntimeService } from "../Services/ExecutionRuntimeService.ts";
+import { RuntimeProviderCredentials } from "../Services/RuntimeProviderCredentials.ts";
 import { ExecutionRuntimeServiceLive } from "./ExecutionRuntimeService.ts";
 import { FakeRuntimeProviderAdapterLive } from "./FakeRuntimeProviderAdapter.ts";
 import { fakeRuntimeDescriptorByFlavor } from "./fakeDescriptors.ts";
-import { ExecutionRuntimePlanningTestLive } from "./testSupport.ts";
+import {
+  ExecutionRuntimePlanningOnlyTestLive,
+  ExecutionRuntimePlanningTestLive,
+} from "./testSupport.ts";
 
 interface OutboundFrame {
   readonly method?: string;
@@ -61,6 +66,7 @@ const makeServiceRuntime = () => {
   const layer = ExecutionRuntimeServiceLive.pipe(
     Layer.provide(FakeRuntimeProviderAdapterLive),
     Layer.provide(ExecutionRuntimePlanningTestLive),
+    Layer.provide(GitCoreLive),
     Layer.provideMerge(orchestrationLayer),
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
     Layer.provideMerge(NodeServices.layer),
@@ -481,6 +487,163 @@ describe("ExecutionRuntimeService.applyRuntimePlan", () => {
 
     // No runtime row was written: the thread stays on the compat path.
     expect(await readThreadRuntime(localRuntime, threadId)).toBeNull();
+  });
+});
+
+// A credential service whose verdict the test controls, so the missing-creds
+// preflight can be exercised both ways without touching Settings or secrets.
+const makeCredentialsLayer = (configured: boolean) =>
+  Layer.succeed(RuntimeProviderCredentials, {
+    envFor: () => Effect.succeed({ ...process.env }),
+    credentialsConfigured: () => Effect.succeed(configured),
+  });
+
+// Mirrors makeServiceRuntime but provides a chosen credential service instead of
+// the default (nothing-configured) stub bundled in ExecutionRuntimePlanningTestLive.
+const makePreflightRuntime = (configured: boolean) => {
+  const orchestrationLayer = OrchestrationEngineLive.pipe(
+    Layer.provide(OrchestrationProjectionPipelineLive),
+    Layer.provide(OrchestrationProjectionSnapshotQueryLive),
+    Layer.provide(OrchestrationEventStoreLive),
+    Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+  );
+  const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
+    prefix: "exec-runtime-preflight-test",
+  }).pipe(Layer.provide(NodeServices.layer));
+  const layer = ExecutionRuntimeServiceLive.pipe(
+    Layer.provide(FakeRuntimeProviderAdapterLive),
+    // Planning without the bundled stub credentials, so this harness pins its own.
+    Layer.provide(ExecutionRuntimePlanningOnlyTestLive),
+    Layer.provide(makeCredentialsLayer(configured)),
+    Layer.provide(GitCoreLive),
+    Layer.provideMerge(orchestrationLayer),
+    Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
+    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(serverConfigLayer),
+    Layer.provideMerge(SqlitePersistenceMemory),
+  );
+  return ManagedRuntime.make(layer);
+};
+
+// The tag + message of the squashed failure, for asserting which error a rejected
+// effect produced without depending on the cause's internal shape.
+const failureText = (exit: Exit.Exit<unknown, unknown>): string => {
+  if (!Exit.isFailure(exit)) {
+    return "";
+  }
+  const error = Cause.squash(exit.cause);
+  const tag =
+    typeof error === "object" && error !== null && "_tag" in error
+      ? String((error as { _tag: unknown })._tag)
+      : "";
+  return `${tag} ${String(error)}`;
+};
+
+describe("ExecutionRuntimeService missing-credentials preflight", () => {
+  let runtime: ServiceRuntime | undefined;
+
+  afterEach(async () => {
+    if (runtime) {
+      await runtime.dispose();
+      runtime = undefined;
+    }
+  });
+
+  const daytonaPlan: RuntimePlan = {
+    targetKind: "remote-runtime",
+    provider: "daytona",
+    ports: [],
+    persistent: true,
+    snapshotId: null,
+  };
+
+  it("rejects applyRuntimePlan for a credentialed provider with no creds (pre-provision)", async () => {
+    runtime = makePreflightRuntime(false);
+    const localRuntime = runtime;
+    const threadId = ThreadId.makeUnsafe("thread-preflight-missing");
+    await seedThread(localRuntime, threadId);
+
+    const exit = await localRuntime.runPromiseExit(
+      Effect.gen(function* () {
+        const service = yield* ExecutionRuntimeService;
+        yield* service.applyRuntimePlan({ threadId, plan: daytonaPlan });
+      }),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    // The plan is descriptor-valid; only the missing-creds gate fails it. No
+    // runtime row is written: the thread never leaves the compat path.
+    expect(failureText(exit)).toContain("MissingCredentialsError");
+    expect(await readThreadRuntime(localRuntime, threadId)).toBeNull();
+  });
+
+  it("passes the preflight when creds are configured (fails later for the unregistered adapter)", async () => {
+    runtime = makePreflightRuntime(true);
+    const localRuntime = runtime;
+    const threadId = ThreadId.makeUnsafe("thread-preflight-configured");
+    await seedThread(localRuntime, threadId);
+
+    // With creds present the preflight passes, so applyRuntimePlan records the
+    // provision request and marks the thread remote — the daytona adapter is not
+    // registered in this fake-only harness, but that surfaces only at provision.
+    await localRuntime.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ExecutionRuntimeService;
+        yield* service.applyRuntimePlan({ threadId, plan: daytonaPlan });
+      }),
+    );
+    const afterApply = await readThreadRuntime(localRuntime, threadId);
+    expect(afterApply?.targetKind).toBe("remote-runtime");
+    expect(afterApply?.provider).toBe("daytona");
+    expect(afterApply?.status).toBe("provisioning");
+
+    // Provisioning now fails because no daytona adapter is registered here — a
+    // RuntimeProvisionFailedError, not a MissingCredentialsError, proving the
+    // preflight let it through.
+    const exit = await localRuntime.runPromiseExit(
+      Effect.gen(function* () {
+        const service = yield* ExecutionRuntimeService;
+        return yield* service.ensureTargetForThread(threadId);
+      }),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(failureText(exit)).toContain("RuntimeProvisionFailedError");
+    expect(failureText(exit)).not.toContain("MissingCredentialsError");
+  });
+
+  it("rejects provisionRemote on the restart-resume path when the persisted provider has no creds", async () => {
+    runtime = makePreflightRuntime(false);
+    const localRuntime = runtime;
+    const threadId = ThreadId.makeUnsafe("thread-preflight-resume");
+    await seedThread(localRuntime, threadId);
+
+    // Simulate the read-model after a restart: a remote daytona row with no
+    // in-memory intent (no applyRuntimePlan this process). ensureTargetForThread
+    // resolves the persisted provider as the fallback intent and must reject for
+    // missing creds rather than downgrade to fake.
+    const exit = await localRuntime.runPromiseExit(
+      Effect.gen(function* () {
+        const service = yield* ExecutionRuntimeService;
+        return yield* service.ensureTargetForThread(threadId, {
+          threadId,
+          targetKind: "remote-runtime",
+          provider: "daytona",
+          role: "agent",
+          status: "provisioning",
+          instance: null,
+          processes: [],
+          routes: [],
+          snapshots: [],
+          leases: [],
+          lastActivityAt: null,
+          updatedAt: now,
+        });
+      }),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    // Surfaced through the provision channel (RuntimeProvisionFailedError) but the
+    // missing-creds reason is carried in its detail.
+    expect(failureText(exit)).toContain("RuntimeProvisionFailedError");
+    expect(failureText(exit)).toContain("No credentials configured");
   });
 });
 

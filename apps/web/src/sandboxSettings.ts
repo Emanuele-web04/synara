@@ -20,7 +20,6 @@ export type SandboxProviderId = (typeof SANDBOX_PROVIDER_IDS)[number];
 /** Flat AppSettings keys this module owns (mirrors the per-provider fields below). */
 export type SandboxAppSettingsKey =
   | "sandboxDefaultRemoteProvider"
-  | "sandboxDefaultSnapshot"
   | "sandboxDaytonaApiKey"
   | "sandboxDaytonaApiUrl"
   | "sandboxDaytonaOrganizationId"
@@ -209,7 +208,6 @@ export const SANDBOX_PROVIDER_DESCRIPTORS: ReadonlyArray<SandboxProviderDescript
 /** Every flat sandbox AppSettings key, in declaration order. */
 export const SANDBOX_APP_SETTINGS_KEYS: ReadonlyArray<SandboxAppSettingsKey> = [
   "sandboxDefaultRemoteProvider",
-  "sandboxDefaultSnapshot",
   ...SANDBOX_PROVIDER_DESCRIPTORS.flatMap((provider) =>
     provider.fields.map((field) => field.appKey),
   ),
@@ -240,7 +238,6 @@ export function sandboxSettingsToAppSettings(
   const sandboxes = settings.sandboxes;
   const result: Partial<SandboxAppSettings> = {
     sandboxDefaultRemoteProvider: sandboxes.defaultRemoteProvider,
-    sandboxDefaultSnapshot: sandboxes.defaultSnapshot,
   };
   for (const provider of SANDBOX_PROVIDER_DESCRIPTORS) {
     const providerSettings = sandboxes[provider.settingsKey] as Record<string, string>;
@@ -271,9 +268,6 @@ export function appSettingsPatchToSandboxesPatch(
 
   if (hasKey(patch, "sandboxDefaultRemoteProvider")) {
     sandboxes.defaultRemoteProvider = patch.sandboxDefaultRemoteProvider ?? "";
-  }
-  if (hasKey(patch, "sandboxDefaultSnapshot")) {
-    sandboxes.defaultSnapshot = patch.sandboxDefaultSnapshot ?? "";
   }
 
   for (const provider of SANDBOX_PROVIDER_DESCRIPTORS) {

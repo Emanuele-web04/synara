@@ -5,6 +5,7 @@ import {
   DEFAULT_RUNTIME_PLAN_DRAFT,
   isTerminalRuntimeStatus,
   parsePortsInput,
+  resolveDefaultRemoteProvider,
   resolveRuntimeActions,
   resolveRuntimeHeaderPresentation,
   resolveRuntimeStatusTone,
@@ -165,5 +166,46 @@ describe("buildRuntimePlanFromDraft", () => {
     );
     expect(plan?.resources).toBeUndefined();
     expect(plan?.ports).toEqual([]);
+  });
+
+  it("defaults snapshotId to null so the provider default applies", () => {
+    const plan = buildRuntimePlanFromDraft(
+      { ...DEFAULT_RUNTIME_PLAN_DRAFT, enabled: true },
+      undefined,
+    );
+    expect(plan?.snapshotId).toBeNull();
+  });
+
+  it("threads a trimmed snapshot id into the plan", () => {
+    const plan = buildRuntimePlanFromDraft(
+      { ...DEFAULT_RUNTIME_PLAN_DRAFT, enabled: true, snapshotId: "  snap-7  " },
+      undefined,
+    );
+    expect(plan?.snapshotId).toBe("snap-7");
+  });
+
+  it("treats a blank snapshot id as null (no provider-default override)", () => {
+    const plan = buildRuntimePlanFromDraft(
+      { ...DEFAULT_RUNTIME_PLAN_DRAFT, enabled: true, snapshotId: "   " },
+      undefined,
+    );
+    expect(plan?.snapshotId).toBeNull();
+  });
+});
+
+describe("resolveDefaultRemoteProvider", () => {
+  it("uses a configured remote provider verbatim", () => {
+    expect(resolveDefaultRemoteProvider("daytona")).toBe("daytona");
+    expect(resolveDefaultRemoteProvider("vercel-sandbox")).toBe("vercel-sandbox");
+  });
+
+  it("trims surrounding whitespace before matching", () => {
+    expect(resolveDefaultRemoteProvider("  modal  ")).toBe("modal");
+  });
+
+  it("falls back to fake for unset, no-preference, or unknown values", () => {
+    expect(resolveDefaultRemoteProvider("")).toBe("fake");
+    expect(resolveDefaultRemoteProvider("local")).toBe("fake");
+    expect(resolveDefaultRemoteProvider("gibberish")).toBe("fake");
   });
 });

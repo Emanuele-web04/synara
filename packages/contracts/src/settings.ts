@@ -122,7 +122,6 @@ export type CloudflareSandboxSettings = typeof CloudflareSandboxSettings.Type;
 
 export const SandboxSettings = Schema.Struct({
   defaultRemoteProvider: StringSettingDefaulted,
-  defaultSnapshot: StringSettingDefaulted,
   daytona: DaytonaSandboxSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   vercel: VercelSandboxSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   modal: ModalSandboxSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -170,7 +169,6 @@ const ProviderSettingsBasePatch = {
 
 const SandboxSettingsPatch = Schema.Struct({
   defaultRemoteProvider: Schema.optionalKey(StringSetting),
-  defaultSnapshot: Schema.optionalKey(StringSetting),
   daytona: Schema.optionalKey(
     Schema.Struct({
       apiKey: Schema.optionalKey(StringSetting),

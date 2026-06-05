@@ -13,6 +13,9 @@
  */
 import type { SandboxSettings } from "@t3tools/contracts";
 
+import { resolveDaytonaCredentials } from "./providers/daytona/DaytonaConfig.ts";
+import { resolveModalCredentials } from "./providers/modal/ModalCredentials.ts";
+import { resolveVercelSandboxCredentials } from "./providers/vercelSandbox/Layers/VercelSandboxConfig.ts";
 import type { CredentialedRuntimeProvider } from "./Services/RuntimeProviderCredentials.ts";
 
 /** A sandbox setting field mapped to the provider env var it overlays. */
@@ -33,7 +36,24 @@ interface SandboxProviderMapping {
   /** Key under `ServerSettings.sandboxes`. */
   readonly settingsKey: keyof Pick<SandboxSettings, "daytona" | "vercel" | "modal" | "cloudflare">;
   readonly fields: ReadonlyArray<SandboxFieldMapping>;
+  /**
+   * Whether the resolved env carries real credentials for this provider — the
+   * same gate the provider's runtime layer uses to pick real-vs-fake. The
+   * credential service runs this to answer `credentialsConfigured`, so the
+   * missing-creds preflight stays in sync with what actually selects the real
+   * client.
+   */
+  readonly credentialsConfigured: (env: Record<string, string | undefined>) => boolean;
 }
+
+// Cloudflare gates on the bridge URL + token both being present (the real
+// connection's required pair). It has no `null`-returning resolver of its own, so
+// the gate is inlined here to keep all four provider gates in one table.
+const cloudflareCredentialsConfigured = (env: Record<string, string | undefined>): boolean =>
+  typeof env.SYNARA_CLOUDFLARE_BRIDGE_URL === "string" &&
+  env.SYNARA_CLOUDFLARE_BRIDGE_URL.trim().length > 0 &&
+  typeof env.SYNARA_CLOUDFLARE_BRIDGE_TOKEN === "string" &&
+  env.SYNARA_CLOUDFLARE_BRIDGE_TOKEN.trim().length > 0;
 
 export const SANDBOX_CREDENTIAL_MAPPING: Record<
   CredentialedRuntimeProvider,
@@ -48,6 +68,7 @@ export const SANDBOX_CREDENTIAL_MAPPING: Record<
       { field: "target", env: "DAYTONA_TARGET", secret: false },
       { field: "snapshot", env: "DAYTONA_SNAPSHOT", secret: false },
     ],
+    credentialsConfigured: (env) => resolveDaytonaCredentials(env) !== null,
   },
   "vercel-sandbox": {
     settingsKey: "vercel",
@@ -57,6 +78,7 @@ export const SANDBOX_CREDENTIAL_MAPPING: Record<
       { field: "projectId", env: "VERCEL_PROJECT_ID", secret: false },
       { field: "runtime", env: "VERCEL_SANDBOX_RUNTIME", secret: false },
     ],
+    credentialsConfigured: (env) => resolveVercelSandboxCredentials(env) !== null,
   },
   modal: {
     settingsKey: "modal",
@@ -65,6 +87,7 @@ export const SANDBOX_CREDENTIAL_MAPPING: Record<
       { field: "tokenSecret", env: "MODAL_TOKEN_SECRET", secret: true },
       { field: "environment", env: "MODAL_ENVIRONMENT", secret: false },
     ],
+    credentialsConfigured: (env) => resolveModalCredentials(env) !== null,
   },
   cloudflare: {
     settingsKey: "cloudflare",
@@ -72,6 +95,7 @@ export const SANDBOX_CREDENTIAL_MAPPING: Record<
       { field: "bridgeUrl", env: "SYNARA_CLOUDFLARE_BRIDGE_URL", secret: false },
       { field: "bridgeToken", env: "SYNARA_CLOUDFLARE_BRIDGE_TOKEN", secret: true },
     ],
+    credentialsConfigured: cloudflareCredentialsConfigured,
   },
 };
 

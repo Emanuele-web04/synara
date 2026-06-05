@@ -3,10 +3,10 @@
  * overlaying configured settings + stored secrets onto `process.env`.
  *
  * Reads `ServerSettingsService.getSettings` live, so a Settings change is picked
- * up the next time a provider resolves credentials (no env capture at layer
- * build). The secret-bearing fields come from `ServerSecretStore` by name, decoded
- * UTF-8 only long enough to place into the env map the provider client consumes —
- * the raw token is never logged and never returned to a client.
+ * up on the next provision a provider resolves credentials for (no env capture at
+ * layer build). The secret-bearing fields come from `ServerSecretStore` by name,
+ * decoded UTF-8 only long enough to place into the env map the provider client
+ * consumes — the raw token is never logged and never returned to a client.
  *
  * Precedence: a configured field (non-empty settings value or present secret)
  * overrides the matching env var; a blank/absent field leaves the env var
@@ -68,7 +68,14 @@ const makeRuntimeProviderCredentials = Effect.gen(function* () {
       return env;
     });
 
-  return { envFor } satisfies RuntimeProviderCredentialsShape;
+  const credentialsConfigured: RuntimeProviderCredentialsShape["credentialsConfigured"] = (
+    provider: CredentialedRuntimeProvider,
+  ) =>
+    envFor(provider).pipe(
+      Effect.map((env) => SANDBOX_CREDENTIAL_MAPPING[provider].credentialsConfigured(env)),
+    );
+
+  return { envFor, credentialsConfigured } satisfies RuntimeProviderCredentialsShape;
 });
 
 export const RuntimeProviderCredentialsLive = Layer.effect(

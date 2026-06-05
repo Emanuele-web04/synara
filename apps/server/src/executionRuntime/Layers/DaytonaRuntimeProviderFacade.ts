@@ -24,8 +24,14 @@ import type { RuntimePlan } from "@t3tools/contracts";
 
 import { RuntimeInstanceUnknownError, RuntimeRemoteOperationFailedError } from "../Errors.ts";
 import type { DaytonaApiError } from "../providers/daytona/DaytonaErrors.ts";
-import type { ExecutionRuntimeProviderAdapterShape } from "../Services/ExecutionRuntimeProviderAdapter.ts";
-import type { DaytonaRuntimeAdapterShape } from "../providers/daytona/DaytonaRuntimeAdapter.ts";
+import type {
+  ExecutionRuntimeProviderAdapterShape,
+  ExecutionRuntimeProvisionInput,
+} from "../Services/ExecutionRuntimeProviderAdapter.ts";
+import type {
+  DaytonaProvisionInput,
+  DaytonaRuntimeAdapterShape,
+} from "../providers/daytona/DaytonaRuntimeAdapter.ts";
 
 const toRemoteOperationFailed = (error: DaytonaApiError): RuntimeRemoteOperationFailedError =>
   new RuntimeRemoteOperationFailedError({
@@ -37,21 +43,19 @@ const toRemoteOperationFailed = (error: DaytonaApiError): RuntimeRemoteOperation
 const provisionInput = (
   threadId: string,
   plan: RuntimePlan,
-): {
-  readonly threadId: string;
-  readonly ports: ReadonlyArray<number>;
-  readonly snapshotId: string | null;
-} => ({
+  repoSource: ExecutionRuntimeProvisionInput["repoSource"],
+): DaytonaProvisionInput => ({
   threadId,
   ports: plan.ports ?? [],
   snapshotId: plan.snapshotId == null ? null : String(plan.snapshotId),
+  ...(repoSource !== undefined ? { repoSource } : {}),
 });
 
 export const makeDaytonaRuntimeProviderFacade = (
   daytona: DaytonaRuntimeAdapterShape,
 ): ExecutionRuntimeProviderAdapterShape => ({
-  provision: ({ threadId, plan }) =>
-    daytona.provision(provisionInput(String(threadId), plan)).pipe(
+  provision: ({ threadId, plan, repoSource }) =>
+    daytona.provision(provisionInput(String(threadId), plan, repoSource)).pipe(
       Effect.map((context) => ({ instance: context.instance, rootPath: context.rootPath })),
       Effect.mapError(toRemoteOperationFailed),
     ),
@@ -63,6 +67,15 @@ export const makeDaytonaRuntimeProviderFacade = (
       .pipe(
         Effect.mapError(() => new RuntimeInstanceUnknownError({ instanceId: String(instanceId) })),
       ),
+  // Refresh the injected host codex auth on resume so an expired ChatGPT token is
+  // rewritten before the next turn. Best-effort: a failed rewrite never blocks the
+  // resume (codex surfaces its own auth error on first turn instead).
+  reinjectCredentials: (instanceId) => daytona.reinjectCredentials(instanceId).pipe(Effect.ignore),
+  // Route the activity-lease keepalive to Daytona's auto-stop refresh. Daytona
+  // auto-stops an idle sandbox, so the service renews this on a timer under a live
+  // turn. Best-effort: a failed refresh never breaks the renew loop (the next tick
+  // retries, and the reconciler's idle-skip already protects a live transport).
+  refreshActivity: (instanceId) => daytona.refreshActivity(instanceId).pipe(Effect.ignore),
   isAlive: daytona.isAlive,
   destroy: daytona.destroy,
   // Surface Daytona's native stop/snapshot through the common surface. The

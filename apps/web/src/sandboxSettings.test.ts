@@ -17,7 +17,6 @@ describe("sandboxSettingsToAppSettings", () => {
       sandboxes: {
         ...DEFAULT_SERVER_SETTINGS.sandboxes,
         defaultRemoteProvider: "daytona",
-        defaultSnapshot: "snap-1",
         daytona: {
           // Secret stripped by the server before persistence; modeled here as "".
           apiKey: "",
@@ -38,7 +37,6 @@ describe("sandboxSettingsToAppSettings", () => {
     const flat = sandboxSettingsToAppSettings(settings);
 
     expect(flat.sandboxDefaultRemoteProvider).toBe("daytona");
-    expect(flat.sandboxDefaultSnapshot).toBe("snap-1");
     expect(flat.sandboxDaytonaApiUrl).toBe("https://app.daytona.io/api");
     expect(flat.sandboxDaytonaOrganizationId).toBe("org-9");
     expect(flat.sandboxVercelTeamId).toBe("team-1");
@@ -80,13 +78,11 @@ describe("appSettingsPatchToSandboxesPatch", () => {
   it("maps defaults and a single provider field without touching others", () => {
     const patch = appSettingsPatchToSandboxesPatch({
       sandboxDefaultRemoteProvider: "vercel-sandbox",
-      sandboxDefaultSnapshot: "snap",
       sandboxVercelRuntime: "node22",
     });
 
     expect(patch).toEqual({
       defaultRemoteProvider: "vercel-sandbox",
-      defaultSnapshot: "snap",
       vercel: { runtime: "node22" },
     });
   });

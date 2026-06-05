@@ -13,6 +13,9 @@
  *   - DAYTONA_TARGET         — region/target hint passed at create (optional).
  *   - DAYTONA_ORGANIZATION_ID — org scope header (optional).
  *   - DAYTONA_SNAPSHOT       — base image/snapshot for new sandboxes (optional).
+ *   - DAYTONA_PTY_TRANSPORT  — `1`/`true` to prefer the real-time PTY WebSocket
+ *                              session transport; any WS failure falls back to
+ *                              the polling transport (the working default).
  *
  * @module daytona/DaytonaConfig
  */
@@ -23,6 +26,12 @@ export interface DaytonaCredentials {
   readonly target: string | undefined;
   readonly organizationId: string | undefined;
   readonly snapshot: string | undefined;
+  /**
+   * Prefer the duplex PTY WebSocket session transport over the logs-polling
+   * default. Off unless explicitly enabled, so the working polling path stays
+   * the default until the PTY transport is proven in production.
+   */
+  readonly ptyTransport: boolean;
 }
 
 const DEFAULT_API_URL = "https://app.daytona.io/api";
@@ -34,6 +43,11 @@ const trimmedEnv = (env: Record<string, string | undefined>, key: string): strin
   }
   const trimmed = value.trim();
   return trimmed.length === 0 ? undefined : trimmed;
+};
+
+const flagEnv = (env: Record<string, string | undefined>, key: string): boolean => {
+  const value = trimmedEnv(env, key)?.toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
 };
 
 /**
@@ -54,6 +68,7 @@ export const resolveDaytonaCredentials = (
     target: trimmedEnv(env, "DAYTONA_TARGET"),
     organizationId: trimmedEnv(env, "DAYTONA_ORGANIZATION_ID"),
     snapshot: trimmedEnv(env, "DAYTONA_SNAPSHOT"),
+    ptyTransport: flagEnv(env, "DAYTONA_PTY_TRANSPORT"),
   };
 };
 

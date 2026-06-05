@@ -30,10 +30,40 @@ import type {
 import type { RuntimeInstanceUnknownError, RuntimeRemoteOperationFailedError } from "../Errors.ts";
 import type { RuntimeProcessSpawnInput } from "./RuntimeProcessTransport.ts";
 
+/**
+ * Source repo to clone into a remote instance during provision so the agent runs
+ * with its cwd inside the working tree. Resolved host-side by the service from the
+ * thread's project + branch; absent for `fake`/local provisioning, which shares
+ * the host filesystem and must not clone.
+ */
+export interface ExecutionRuntimeRepoSource {
+  /** Token-less origin URL (`https://github.com/owner/repo.git`). */
+  readonly repoUrl: string;
+  /** Branch to check out after clone. */
+  readonly ref: string;
+  /**
+   * Tokenized clone URL when a host token was resolved; equals `repoUrl` when no
+   * token was needed/available. Carries a secret — never log it.
+   */
+  readonly tokenizedUrl: string;
+  /**
+   * Directory name to clone into, joined by the provider with the instance's
+   * discovered root (e.g. `synara` -> `/root/synara`). The provider records the
+   * resulting absolute path as the instance root so the agent's cwd is the repo.
+   */
+  readonly targetSubdir: string;
+}
+
 /** Input for provisioning the instance backing a thread from its resolved plan. */
 export interface ExecutionRuntimeProvisionInput {
   readonly threadId: ThreadId;
   readonly plan: RuntimePlan;
+  /**
+   * Repo to clone into the provisioned instance, when the thread is backed by a
+   * project repo and the provider clones into a fresh remote filesystem. Absent
+   * for providers/flavors that share the host filesystem (fake/local).
+   */
+  readonly repoSource?: ExecutionRuntimeRepoSource;
 }
 
 /** Result of provisioning: the recorded instance plus its working-directory root. */
@@ -94,6 +124,23 @@ export interface ExecutionRuntimeProviderAdapterShape {
     RuntimeInstanceUnknownError,
     ChildProcessSpawner.ChildProcessSpawner
   >;
+  /**
+   * Re-write any host-resolved agent credentials into a resumed instance so a
+   * stale (expired) token from a prior session is refreshed before the next turn.
+   * Optional: a provider that injects no host credentials (fake, or one whose
+   * image carries its own auth) leaves this undefined, and the service treats
+   * undefined as unsupported (no-op). Best-effort: it never throws.
+   */
+  readonly reinjectCredentials?: (instanceId: ExecutionInstanceId) => Effect.Effect<void>;
+  /**
+   * Refresh the provider's idle/auto-stop timer for a live instance (the
+   * activity-lease keepalive). The service renews this on a timer while a turn's
+   * transport is alive so the provider does not auto-stop a sandbox under an
+   * active agent. Optional: a provider with no idle auto-stop (fake, or one whose
+   * instance never sleeps) leaves this undefined, and the service treats undefined
+   * as unsupported (no-op). Best-effort: it never throws.
+   */
+  readonly refreshActivity?: (instanceId: ExecutionInstanceId) => Effect.Effect<void>;
   /** Whether the provider still recognizes a provisioned instance (reconnect probe). */
   readonly isAlive: (instanceId: ExecutionInstanceId) => Effect.Effect<boolean>;
   /** Tear the instance down and forget it. Idempotent. */
