@@ -45,7 +45,13 @@ import {
 import { buildGitCloneCommand, buildPostCloneCommand } from "../../gitWorkspaceBootstrap.ts";
 import { redactSecrets } from "../../Layers/redactCredentials.ts";
 import type { RuntimeProcessSpawnInput } from "../../Services/RuntimeProcessTransport.ts";
+import type { RuntimeLiveness } from "../../Services/ExecutionRuntimeProviderAdapter.ts";
 import { DaytonaApiError, DaytonaSandboxUnknownError } from "./DaytonaErrors.ts";
+
+// Resume waits for the sandbox to report running before the turn proceeds; bounded
+// so a sandbox the provider reclaimed (never reaches running) resolves to false.
+const RESUME_POLL_ATTEMPTS = 30;
+const RESUME_POLL_DELAY = "1 second";
 import {
   DaytonaSandboxClient,
   type DaytonaExecInput,
@@ -144,11 +150,19 @@ export interface DaytonaRuntimeAdapterShape {
   /** Stop the sandbox without destroying it (FS persists). */
   readonly stop: (instanceId: ExecutionInstanceId) => Effect.Effect<void, DaytonaApiError>;
   /**
+   * Resume a stopped sandbox (POST /start) and wait until it reports running.
+   * Returns true once running, false when it could not be resumed (the provider
+   * reclaimed it, or it never reached running) — the caller then re-provisions.
+   */
+  readonly start: (instanceId: ExecutionInstanceId) => Effect.Effect<boolean>;
+  /**
    * Whether the provider still recognizes a sandbox as live. The reconciler reads
    * this as the provider-agnostic liveness probe: a DB row the provider no longer
    * knows about (or one that errored) is a lost instance.
    */
   readonly isAlive: (instanceId: ExecutionInstanceId) => Effect.Effect<boolean>;
+  /** Three-way liveness: running, stopped-but-resumable, or gone. */
+  readonly livenessProbe: (instanceId: ExecutionInstanceId) => Effect.Effect<RuntimeLiveness>;
   /** Archive then delete the sandbox. Idempotent. */
   readonly destroy: (instanceId: ExecutionInstanceId) => Effect.Effect<void>;
 }
@@ -557,6 +571,48 @@ const makeDaytonaRuntimeAdapter = (options: DaytonaRuntimeAdapterOptions = {}) =
         Effect.orElseSucceed(() => false),
       );
 
+    const livenessProbe: DaytonaRuntimeAdapterShape["livenessProbe"] = (instanceId) =>
+      client.getStatus(String(instanceId)).pipe(
+        Effect.map((sandbox): RuntimeLiveness => {
+          if (sandbox === null) {
+            return "absent";
+          }
+          if (sandbox.status === "running" || sandbox.status === "starting") {
+            return "alive";
+          }
+          // A Daytona-auto-stopped sandbox keeps its disk and resumes via /start —
+          // a resting state, not gone. archived/destroyed/error are unrecoverable.
+          return sandbox.status === "stopped" ? "suspended" : "absent";
+        }),
+        Effect.orElseSucceed(() => "absent" as RuntimeLiveness),
+      );
+
+    const start: DaytonaRuntimeAdapterShape["start"] = (instanceId) =>
+      Effect.gen(function* () {
+        // POST /start is the same endpoint the keepalive uses: it resumes a stopped
+        // sandbox and is a no-op refresh on a running one. Swallow its failure —
+        // the poll below is the source of truth for whether it actually came up.
+        yield* client
+          .refreshActivity(String(instanceId))
+          .pipe(Effect.catchTag("DaytonaSandboxUnknownError", wrapUnknown("start")), Effect.ignore);
+        for (let attempt = 0; attempt < RESUME_POLL_ATTEMPTS; attempt += 1) {
+          const sandbox = yield* client
+            .getStatus(String(instanceId))
+            .pipe(Effect.orElseSucceed(() => null));
+          if (sandbox === null) {
+            return false;
+          }
+          if (sandbox.status === "running") {
+            return true;
+          }
+          if (sandbox.status !== "starting" && sandbox.status !== "stopped") {
+            return false;
+          }
+          yield* Effect.sleep(RESUME_POLL_DELAY);
+        }
+        return false;
+      });
+
     const destroy: DaytonaRuntimeAdapterShape["destroy"] = (instanceId) =>
       Effect.sync(() => {
         sandboxRoots.delete(String(instanceId));
@@ -575,7 +631,9 @@ const makeDaytonaRuntimeAdapter = (options: DaytonaRuntimeAdapterOptions = {}) =
       snapshot,
       refreshActivity,
       stop,
+      start,
       isAlive,
+      livenessProbe,
       destroy,
     } satisfies DaytonaRuntimeAdapterShape;
   });

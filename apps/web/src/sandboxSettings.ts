@@ -21,6 +21,11 @@ export type SandboxProviderId = (typeof SANDBOX_PROVIDER_IDS)[number];
 export type SandboxAppSettingsKey =
   | "sandboxDefaultRemoteProvider"
   | "sandboxPostCloneCommand"
+  | "sandboxRuntimeCpu"
+  | "sandboxRuntimeMemoryMb"
+  | "sandboxRuntimeTimeoutSeconds"
+  | "sandboxRuntimePorts"
+  | "sandboxRuntimePersistent"
   | "sandboxDaytonaApiKey"
   | "sandboxDaytonaApiUrl"
   | "sandboxDaytonaOrganizationId"
@@ -206,10 +211,28 @@ export const SANDBOX_PROVIDER_DESCRIPTORS: ReadonlyArray<SandboxProviderDescript
   },
 ];
 
+/**
+ * Workspace-level runtime defaults, stored flat under `sandboxes.runtime`. These
+ * are the per-thread runtime-plan knobs that used to live in the composer; a new
+ * remote thread reads them at create time. All non-secret and round-tripped both
+ * directions like the provider config fields.
+ */
+export const SANDBOX_RUNTIME_FIELDS: ReadonlyArray<{
+  readonly appKey: SandboxAppSettingsKey;
+  readonly serverField: "cpu" | "memoryMb" | "timeoutSeconds" | "ports" | "persistent";
+}> = [
+  { appKey: "sandboxRuntimeCpu", serverField: "cpu" },
+  { appKey: "sandboxRuntimeMemoryMb", serverField: "memoryMb" },
+  { appKey: "sandboxRuntimeTimeoutSeconds", serverField: "timeoutSeconds" },
+  { appKey: "sandboxRuntimePorts", serverField: "ports" },
+  { appKey: "sandboxRuntimePersistent", serverField: "persistent" },
+];
+
 /** Every flat sandbox AppSettings key, in declaration order. */
 export const SANDBOX_APP_SETTINGS_KEYS: ReadonlyArray<SandboxAppSettingsKey> = [
   "sandboxDefaultRemoteProvider",
   "sandboxPostCloneCommand",
+  ...SANDBOX_RUNTIME_FIELDS.map((field) => field.appKey),
   ...SANDBOX_PROVIDER_DESCRIPTORS.flatMap((provider) =>
     provider.fields.map((field) => field.appKey),
   ),
@@ -242,6 +265,10 @@ export function sandboxSettingsToAppSettings(
     sandboxDefaultRemoteProvider: sandboxes.defaultRemoteProvider,
     sandboxPostCloneCommand: sandboxes.postCloneCommand,
   };
+  const runtime = sandboxes.runtime as Record<string, string>;
+  for (const field of SANDBOX_RUNTIME_FIELDS) {
+    result[field.appKey] = runtime[field.serverField] ?? "";
+  }
   for (const provider of SANDBOX_PROVIDER_DESCRIPTORS) {
     const providerSettings = sandboxes[provider.settingsKey] as Record<string, string>;
     for (const field of provider.fields) {
@@ -275,6 +302,16 @@ export function appSettingsPatchToSandboxesPatch(
 
   if (hasKey(patch, "sandboxPostCloneCommand")) {
     sandboxes.postCloneCommand = patch.sandboxPostCloneCommand ?? "";
+  }
+
+  const runtimePatch: Record<string, string> = {};
+  for (const field of SANDBOX_RUNTIME_FIELDS) {
+    if (hasKey(patch, field.appKey)) {
+      runtimePatch[field.serverField] = patch[field.appKey] ?? "";
+    }
+  }
+  if (Object.keys(runtimePatch).length > 0) {
+    sandboxes.runtime = runtimePatch;
   }
 
   for (const provider of SANDBOX_PROVIDER_DESCRIPTORS) {

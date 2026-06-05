@@ -30,7 +30,9 @@ const makeStubAdapter = (
   snapshot: unimplemented as DaytonaRuntimeAdapterShape["snapshot"],
   refreshActivity: () => Effect.void,
   stop: () => Effect.void,
+  start: () => Effect.succeed(true),
   isAlive: () => Effect.succeed(true),
+  livenessProbe: () => Effect.succeed("alive" as const),
   destroy: () => Effect.void,
   ...overrides,
 });

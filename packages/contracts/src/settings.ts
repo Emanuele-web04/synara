@@ -120,6 +120,23 @@ export const CloudflareSandboxSettings = Schema.Struct({
 });
 export type CloudflareSandboxSettings = typeof CloudflareSandboxSettings.Type;
 
+/**
+ * Workspace-level defaults a new `remote-runtime` thread provisions with. These
+ * moved out of the composer so the chat input stays a target picker, not an infra
+ * form; a per-thread override is intentionally not offered. Stored as strings
+ * (numbers and the boolean ride as text, matching this section's convention) and
+ * parsed into the `RuntimePlan` at thread-create time. Blank means provider
+ * default.
+ */
+export const SandboxRuntimeDefaults = Schema.Struct({
+  cpu: StringSettingDefaulted,
+  memoryMb: StringSettingDefaulted,
+  timeoutSeconds: StringSettingDefaulted,
+  ports: StringSettingDefaulted,
+  persistent: StringSettingDefaulted,
+});
+export type SandboxRuntimeDefaults = typeof SandboxRuntimeDefaults.Type;
+
 export const SandboxSettings = Schema.Struct({
   defaultRemoteProvider: StringSettingDefaulted,
   /**
@@ -131,6 +148,7 @@ export const SandboxSettings = Schema.Struct({
    * logged but never blocks the session.
    */
   postCloneCommand: StringSettingDefaulted,
+  runtime: SandboxRuntimeDefaults.pipe(Schema.withDecodingDefault(() => ({}))),
   daytona: DaytonaSandboxSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   vercel: VercelSandboxSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   modal: ModalSandboxSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -179,6 +197,15 @@ const ProviderSettingsBasePatch = {
 const SandboxSettingsPatch = Schema.Struct({
   defaultRemoteProvider: Schema.optionalKey(StringSetting),
   postCloneCommand: Schema.optionalKey(StringSetting),
+  runtime: Schema.optionalKey(
+    Schema.Struct({
+      cpu: Schema.optionalKey(StringSetting),
+      memoryMb: Schema.optionalKey(StringSetting),
+      timeoutSeconds: Schema.optionalKey(StringSetting),
+      ports: Schema.optionalKey(StringSetting),
+      persistent: Schema.optionalKey(StringSetting),
+    }),
+  ),
   daytona: Schema.optionalKey(
     Schema.Struct({
       apiKey: Schema.optionalKey(StringSetting),

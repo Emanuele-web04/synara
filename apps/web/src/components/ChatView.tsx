@@ -235,7 +235,7 @@ import {
   resolveTerminalCloseTitle,
 } from "~/lib/terminalCloseConfirmation";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
-import { buildRuntimePlanFromDraft } from "~/lib/runtimePresentation";
+import { buildRuntimePlanFromDefaults } from "~/lib/runtimePresentation";
 import { clearRuntimePlanDraft, readRuntimePlanDraft } from "~/runtimePlanDraftStore";
 import {
   getAppModelOptions,
@@ -243,6 +243,7 @@ import {
   getCustomModelsByProvider,
   getProviderStartOptions,
   resolveAppModelSelection,
+  runtimePlanDefaultsFromSettings,
   useAppSettings,
 } from "../appSettings";
 import { resolveTerminalNewAction } from "../lib/terminalNewAction";
@@ -2359,10 +2360,6 @@ export default function ChatView({
     composerCommandPicker === null &&
     isMentionTrigger &&
     isLocalFolderMentionQuery(mentionTriggerQuery);
-  const skillTriggerQuery =
-    composerTrigger?.kind === "skill" || composerTrigger?.kind === "slash-command"
-      ? composerTrigger.query
-      : "";
   const isSkillTrigger = composerTriggerKind === "skill";
   const [debouncedPathQuery, composerPathQueryDebouncer] = useDebouncedValue(
     mentionTriggerQuery,
@@ -2384,10 +2381,6 @@ export default function ChatView({
       cwd: composerSkillCwd,
       threadId,
       agentDir: selectedProvider === "pi" ? settings.piAgentDir || null : null,
-      query:
-        composerTriggerKind === "slash-command" || composerTriggerKind === "slash-model"
-          ? (composerTrigger?.query ?? "")
-          : "",
       enabled:
         (composerTriggerKind === "slash-command" || composerTriggerKind === "slash-model") &&
         supportsNativeSlashCommandDiscovery(providerComposerCapabilitiesQuery.data) &&
@@ -2402,7 +2395,6 @@ export default function ChatView({
       cwd: composerSkillCwd,
       threadId,
       agentDir: selectedProvider === "pi" ? settings.piAgentDir || null : null,
-      query: skillTriggerQuery,
       enabled:
         (isSkillTrigger || composerTriggerKind === "slash-command" || selectedProvider === "pi") &&
         canDiscoverProviderSkills &&
@@ -5719,11 +5711,15 @@ export default function ChatView({
 
       if (isLocalDraftThread) {
         // Remote execution target is an explicit opt-in: a null plan keeps the
-        // create command identical to today's local/worktree behavior.
-        const runtimePlan = buildRuntimePlanFromDraft(
-          readRuntimePlanDraft(threadIdForSend),
-          selectedProviderForSend,
-        );
+        // create command identical to today's local/worktree behavior. When the
+        // draft opted in, the plan is assembled from the Sandboxes settings
+        // defaults — the composer no longer carries per-thread runtime config.
+        const runtimePlan = readRuntimePlanDraft(threadIdForSend).enabled
+          ? buildRuntimePlanFromDefaults(
+              runtimePlanDefaultsFromSettings(settings),
+              selectedProviderForSend,
+            )
+          : null;
         await promoteThreadCreate(
           {
             type: "thread.create",

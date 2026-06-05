@@ -76,6 +76,83 @@ export function useComposerCommandMenuItems(input: {
     dynamicAgents,
   } = input;
 
+  // Precompute each item's lowercased search blob once per source list — keyed on
+  // the list, not the query — so every keystroke does a cheap substring test
+  // instead of rebuilding and re-normalizing every blob. Mirrors how
+  // searchableModelOptions is prebuilt upstream.
+  const searchableSkills = useMemo(
+    () => providerSkills.map((skill) => ({ skill, blob: buildSkillSearchBlob(skill) })),
+    [providerSkills],
+  );
+
+  const searchablePlugins = useMemo(
+    () =>
+      providerPlugins
+        .filter(({ plugin }) => isInstalledProviderPlugin(plugin))
+        .map(({ plugin, mention }) => ({ plugin, mention, blob: buildPluginSearchBlob(plugin) })),
+    [providerPlugins],
+  );
+
+  const searchableNativeCommands = useMemo(
+    () =>
+      providerNativeCommands
+        .filter(
+          (command) => !shouldHideProviderNativeCommandFromComposerMenu(provider, command.name),
+        )
+        .map((command) => ({
+          command,
+          blob: buildCommandSearchBlob(command),
+          terms: getProviderNativeSlashCommandSearchTerms(provider, command.name),
+        })),
+    [provider, providerNativeCommands],
+  );
+
+  const searchableAgents = useMemo(() => {
+    // Dynamic agents when available, static aliases otherwise. The blob matches
+    // the original (raw lowercase, no discovery normalization) so behavior is
+    // unchanged — only the per-keystroke rebuild is removed.
+    if (dynamicAgents.length > 0) {
+      return dynamicAgents.map(({ name, displayName }) => ({
+        id: `agent:${provider}:${name}`,
+        alias: name,
+        color: "violet" as const,
+        label: `@${name}`,
+        description: displayName,
+        blob: `${name} ${displayName}`.toLowerCase(),
+      }));
+    }
+    return getAgentMentionAutocompleteAliases(provider).map(({ alias, displayName, color }) => ({
+      id: `agent:${provider}:${alias}`,
+      alias,
+      color,
+      label: `@${alias}`,
+      description: displayName,
+      blob: `${alias} ${displayName}`.toLowerCase(),
+    }));
+  }, [dynamicAgents, provider]);
+
+  const availableSlashCommands = useMemo(
+    () =>
+      getAvailableComposerSlashCommands({
+        provider,
+        supportsFastSlashCommand,
+        canOfferCompactCommand,
+        canOfferReviewCommand,
+        canOfferForkCommand,
+        canOfferSideCommand,
+        providerNativeCommandNames: providerNativeCommands.map((command) => command.name),
+      }),
+    [
+      canOfferCompactCommand,
+      canOfferForkCommand,
+      canOfferReviewCommand,
+      canOfferSideCommand,
+      provider,
+      providerNativeCommands,
+      supportsFastSlashCommand,
+    ],
+  );
+
   return useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
 
@@ -83,49 +160,20 @@ export function useComposerCommandMenuItems(input: {
     if (composerTrigger.kind === "mention") {
       const query = normalizeProviderDiscoveryText(composerTrigger.query);
 
-      const agentItems: ComposerCommandItem[] = (() => {
-        // Use dynamic agents when available, fallback to static
-        if (dynamicAgents.length > 0) {
-          return dynamicAgents
-            .filter(({ name, displayName }) => {
-              if (!query) return true;
-              const searchBlob = `${name} ${displayName}`.toLowerCase();
-              return searchBlob.includes(query);
-            })
-            .map(({ name, displayName }) => ({
-              id: `agent:${provider}:${name}`,
-              type: "agent" as const,
-              provider,
-              alias: name,
-              color: "violet" as const,
-              label: `@${name}`,
-              description: displayName,
-            }));
-        }
-        // Static fallback
-        return getAgentMentionAutocompleteAliases(provider)
-          .filter(({ alias, displayName }) => {
-            if (!query) return true;
-            const searchBlob = `${alias} ${displayName}`.toLowerCase();
-            return searchBlob.includes(query);
-          })
-          .map(({ alias, displayName, color }) => ({
-            id: `agent:${provider}:${alias}`,
-            type: "agent" as const,
-            provider,
-            alias,
-            color,
-            label: `@${alias}`,
-            description: displayName,
-          }));
-      })();
+      const agentItems: ComposerCommandItem[] = searchableAgents
+        .filter(({ blob }) => !query || blob.includes(query))
+        .map(({ id, alias, color, label, description }) => ({
+          id,
+          type: "agent" as const,
+          provider,
+          alias,
+          color,
+          label,
+          description,
+        }));
 
-      const pluginItems = providerPlugins
-        .filter(({ plugin }) => isInstalledProviderPlugin(plugin))
-        .filter(({ plugin }) => {
-          if (!query) return true;
-          return buildPluginSearchBlob(plugin).includes(query);
-        })
+      const pluginItems = searchablePlugins
+        .filter(({ blob }) => !query || blob.includes(query))
         .map(({ plugin, mention }) => ({
           id: `plugin:${plugin.id}`,
           type: "plugin" as const,
@@ -160,18 +208,9 @@ export function useComposerCommandMenuItems(input: {
 
     if (composerTrigger.kind === "slash-command") {
       const query = normalizeProviderDiscoveryText(composerTrigger.query);
-      const availableCommands = getAvailableComposerSlashCommands({
-        provider,
-        supportsFastSlashCommand,
-        canOfferCompactCommand,
-        canOfferReviewCommand,
-        canOfferForkCommand,
-        canOfferSideCommand,
-        providerNativeCommandNames: providerNativeCommands.map((command) => command.name),
-      });
       const builtInItems = filterComposerSlashCommands(
         composerTrigger.query,
-        availableCommands,
+        availableSlashCommands,
       ).map((definition) => ({
         id: `slash:${definition.command}`,
         type: "slash-command" as const,
@@ -180,20 +219,12 @@ export function useComposerCommandMenuItems(input: {
         description: definition.description,
         source: definition.source,
       }));
-      const providerCommandItems = providerNativeCommands
-        .filter(
-          (command) => !shouldHideProviderNativeCommandFromComposerMenu(provider, command.name),
-        )
-        .filter((command) => {
+      const providerCommandItems = searchableNativeCommands
+        .filter(({ blob, terms }) => {
           if (!query) return true;
-          return (
-            buildCommandSearchBlob(command).includes(query) ||
-            getProviderNativeSlashCommandSearchTerms(provider, command.name).some((term) =>
-              term.includes(query),
-            )
-          );
+          return blob.includes(query) || terms.some((term) => term.includes(query));
         })
-        .map((command) => ({
+        .map(({ command }) => ({
           id: `provider-command:${provider}:${command.name}`,
           type: "provider-native-command" as const,
           provider,
@@ -203,12 +234,9 @@ export function useComposerCommandMenuItems(input: {
         }));
       // `/` is the universal picker surface; provider dispatch can adapt the
       // visible slash token to backend-specific skill syntax when needed.
-      const skillItems: ComposerCommandItem[] = providerSkills
-        .filter((skill) => {
-          if (!query) return true;
-          return buildSkillSearchBlob(skill).includes(query);
-        })
-        .map((skill) => ({
+      const skillItems: ComposerCommandItem[] = searchableSkills
+        .filter(({ blob }) => !query || blob.includes(query))
+        .map(({ skill }) => ({
           id: `skill:${skill.path}`,
           type: "skill" as const,
           skill,
@@ -220,12 +248,9 @@ export function useComposerCommandMenuItems(input: {
 
     if (composerTrigger.kind === "skill") {
       const query = normalizeProviderDiscoveryText(composerTrigger.query);
-      return providerSkills
-        .filter((skill) => {
-          if (!query) return true;
-          return buildSkillSearchBlob(skill).includes(query);
-        })
-        .map((skill) => ({
+      return searchableSkills
+        .filter(({ blob }) => !query || blob.includes(query))
+        .map(({ skill }) => ({
           id: `skill:${skill.path}`,
           type: "skill" as const,
           skill,
@@ -254,18 +279,14 @@ export function useComposerCommandMenuItems(input: {
         description: `${providerLabel} · ${slug}`,
       }));
   }, [
-    canOfferForkCommand,
-    canOfferCompactCommand,
-    canOfferReviewCommand,
-    canOfferSideCommand,
+    availableSlashCommands,
     composerTrigger,
-    dynamicAgents,
     provider,
-    providerPlugins,
-    providerNativeCommands,
-    providerSkills,
+    searchableAgents,
     searchableModelOptions,
-    supportsFastSlashCommand,
+    searchableNativeCommands,
+    searchablePlugins,
+    searchableSkills,
     workspaceEntries,
   ]);
 }

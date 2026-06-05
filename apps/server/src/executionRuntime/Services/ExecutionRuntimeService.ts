@@ -102,6 +102,10 @@ export interface ExecutionRuntimeWorkspaceDiff {
  * - `supportsReconnect: false` — the provider cannot re-attach after a restart,
  *   so a persisted instance is unrecoverable and must be marked `lost`.
  * - `supportsReconnect: true` + `liveness: "alive"` — re-attach succeeded.
+ * - `supportsReconnect: true` + `liveness: "suspended"` — the provider stopped the
+ *   instance to save compute but its disk survives; it is a valid resting state,
+ *   not lost. The reconciler keeps it (subject to the TTL cap) so the next turn can
+ *   resume it instead of re-provisioning.
  * - `supportsReconnect: true` + `liveness: "absent"` — DB row exists but the
  *   provider has no record of the instance; mark `lost`.
  *
@@ -114,7 +118,7 @@ export interface ExecutionRuntimeWorkspaceDiff {
  */
 export interface RuntimeInstanceProbe {
   readonly supportsReconnect: boolean;
-  readonly liveness: "alive" | "absent";
+  readonly liveness: "alive" | "suspended" | "absent";
   readonly liveActivity: boolean;
 }
 

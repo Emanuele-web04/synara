@@ -70,13 +70,26 @@ export const makeDaytonaRuntimeProviderFacade = (
   // Refresh the injected host codex auth on resume so an expired ChatGPT token is
   // rewritten before the next turn. Best-effort: a failed rewrite never blocks the
   // resume (codex surfaces its own auth error on first turn instead).
-  reinjectCredentials: (instanceId) => daytona.reinjectCredentials(instanceId).pipe(Effect.ignore),
+  reinjectCredentials: (instanceId) =>
+    daytona
+      .reinjectCredentials(instanceId)
+      .pipe(
+        Effect.catchCause(() =>
+          Effect.logWarning(
+            `Daytona credential reinjection failed for ${String(instanceId)}; the agent may hit a stale-auth error on its first turn after resume.`,
+          ),
+        ),
+      ),
   // Route the activity-lease keepalive to Daytona's auto-stop refresh. Daytona
   // auto-stops an idle sandbox, so the service renews this on a timer under a live
   // turn. Best-effort: a failed refresh never breaks the renew loop (the next tick
   // retries, and the reconciler's idle-skip already protects a live transport).
   refreshActivity: (instanceId) => daytona.refreshActivity(instanceId).pipe(Effect.ignore),
   isAlive: daytona.isAlive,
+  livenessProbe: daytona.livenessProbe,
+  // Resume a stopped sandbox (reuse its disk) instead of re-provisioning. Returns
+  // false when the provider reclaimed it, so the caller provisions fresh.
+  start: daytona.start,
   destroy: daytona.destroy,
   // Surface Daytona's native stop/snapshot through the common surface. The
   // service drives these from user-initiated runtime actions, so a provider

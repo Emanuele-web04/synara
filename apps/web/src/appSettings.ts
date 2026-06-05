@@ -25,6 +25,7 @@ import {
   normalizeProviderOrder,
 } from "./providerOrdering";
 import { ensureNativeApi } from "./nativeApi";
+import { resolveDefaultRemoteProvider, type RuntimePlanDefaults } from "./lib/runtimePresentation";
 import { serverQueryKeys, serverSettingsQueryOptions } from "./lib/serverReactQuery";
 import {
   appSettingsPatchToSandboxesPatch,
@@ -175,6 +176,13 @@ export const AppSettingsSchema = Schema.Struct({
   // routes them through ServerSecretStore and never echoes them back).
   sandboxDefaultRemoteProvider: SandboxStringSetting,
   sandboxPostCloneCommand: SandboxStringSetting,
+  // Workspace-level remote-runtime defaults (moved out of the composer). Stored
+  // as strings; parsed into the RuntimePlan at thread-create time.
+  sandboxRuntimeCpu: SandboxStringSetting,
+  sandboxRuntimeMemoryMb: SandboxStringSetting,
+  sandboxRuntimeTimeoutSeconds: SandboxStringSetting,
+  sandboxRuntimePorts: SandboxStringSetting,
+  sandboxRuntimePersistent: SandboxStringSetting,
   sandboxDaytonaApiKey: SandboxStringSetting,
   sandboxDaytonaApiUrl: SandboxStringSetting,
   sandboxDaytonaOrganizationId: SandboxStringSetting,
@@ -191,6 +199,26 @@ export const AppSettingsSchema = Schema.Struct({
   sandboxCloudflareBridgeToken: SandboxStringSetting,
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
+
+/**
+ * Resolve the workspace-level remote-runtime defaults a new remote thread should
+ * provision with. The snapshot is provider-specific (only Daytona configures one
+ * today); the rest are the flat runtime-default settings the Sandboxes section
+ * owns. Consumed at `thread.create` via {@link buildRuntimePlanFromDefaults}.
+ */
+export function runtimePlanDefaultsFromSettings(settings: AppSettings): RuntimePlanDefaults {
+  const provider = resolveDefaultRemoteProvider(settings.sandboxDefaultRemoteProvider);
+  return {
+    provider,
+    snapshotId: provider === "daytona" ? settings.sandboxDaytonaSnapshot : "",
+    cpu: settings.sandboxRuntimeCpu,
+    memoryMb: settings.sandboxRuntimeMemoryMb,
+    timeoutSeconds: settings.sandboxRuntimeTimeoutSeconds,
+    ports: settings.sandboxRuntimePorts,
+    persistent: settings.sandboxRuntimePersistent,
+  };
+}
+
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 type MutableServerSettingsPatch = Mutable<ServerSettingsPatch>;
 type MutableServerSettingsProvidersPatch = Mutable<NonNullable<ServerSettingsPatch["providers"]>>;

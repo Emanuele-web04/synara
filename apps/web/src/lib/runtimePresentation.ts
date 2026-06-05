@@ -171,20 +171,14 @@ export const RUNTIME_ACTION_LABELS: Record<RuntimeActionKind, string> = {
   refresh: "Refresh",
 };
 
+/**
+ * Per-draft-thread remote opt-in. The runtime knobs (provider, snapshot,
+ * resources, ports, persistence) are workspace-level settings now, not per-thread
+ * — so the only state a draft carries is whether Remote is chosen. The plan is
+ * assembled from settings at create time via {@link buildRuntimePlanFromDefaults}.
+ */
 export interface RuntimePlanDraft {
   readonly enabled: boolean;
-  readonly provider: ExecutionRuntimeProvider;
-  readonly cpu: number | null;
-  readonly memoryMb: number | null;
-  readonly timeoutSeconds: number | null;
-  readonly ports: ReadonlyArray<number>;
-  readonly persistent: boolean;
-  /** Base image/snapshot to provision from; null defers to the provider default. */
-  readonly snapshotId: string | null;
-  /** Comma/space separated egress allow-list, free text until providers consume it. */
-  readonly egressText: string;
-  /** Whether secrets are forwarded to the runtime. */
-  readonly forwardSecrets: boolean;
 }
 
 /** Remote-runtime providers the UI offers (excludes the local/worktree compat targets). */
@@ -207,18 +201,7 @@ export function resolveDefaultRemoteProvider(configuredProvider: string): Execut
   return REMOTE_RUNTIME_PROVIDERS.find((provider) => provider === candidate) ?? "fake";
 }
 
-export const DEFAULT_RUNTIME_PLAN_DRAFT: RuntimePlanDraft = {
-  enabled: false,
-  provider: "fake",
-  cpu: null,
-  memoryMb: null,
-  timeoutSeconds: null,
-  ports: [],
-  persistent: false,
-  snapshotId: null,
-  egressText: "",
-  forwardSecrets: false,
-};
+export const DEFAULT_RUNTIME_PLAN_DRAFT: RuntimePlanDraft = { enabled: false };
 
 /** Parse a free-text ports field ("3000, 8080") into a deduped positive-int list. */
 export function parsePortsInput(input: string): number[] {
@@ -238,37 +221,61 @@ export function parsePortsInput(input: string): number[] {
   return result;
 }
 
-/**
- * Build the `RuntimePlan` input for `thread.create` from a draft. Returns null
- * when the draft is not remote — the create command then keeps `runtimePlan`
- * unset, preserving today's local/worktree behavior exactly.
- */
-export function buildRuntimePlanFromDraft(
-  draft: RuntimePlanDraft,
-  providerKind: RuntimePlan["providerKind"],
-): RuntimePlan | null {
-  if (!draft.enabled) {
+/** Parse one raw setting string into a positive integer, or null when unusable. */
+function parsePositiveInt(value: string): number | null {
+  const raw = value.trim();
+  if (raw.length === 0) {
     return null;
   }
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+/**
+ * The workspace-level remote-runtime defaults a new thread provisions with,
+ * sourced from the Sandboxes settings. Fields are the raw setting strings (parsed
+ * here) plus the already-resolved provider; `snapshotId` is the provider's
+ * configured snapshot or null.
+ */
+export interface RuntimePlanDefaults {
+  readonly provider: ExecutionRuntimeProvider;
+  readonly snapshotId: string | null;
+  readonly cpu: string;
+  readonly memoryMb: string;
+  readonly timeoutSeconds: string;
+  readonly ports: string;
+  /** "true" enables persistence; anything else (incl. blank) is off. */
+  readonly persistent: string;
+}
+
+/**
+ * Build the `RuntimePlan` input for `thread.create` from the configured Sandboxes
+ * defaults. The caller invokes this only when the draft opted into Remote, so a
+ * local/worktree thread keeps `runtimePlan` unset exactly as before.
+ */
+export function buildRuntimePlanFromDefaults(
+  defaults: RuntimePlanDefaults,
+  providerKind: RuntimePlan["providerKind"],
+): RuntimePlan {
   const resources: { cpu?: number; memoryMb?: number } = {};
-  if (draft.cpu && draft.cpu > 0) {
-    resources.cpu = draft.cpu;
+  const cpu = parsePositiveInt(defaults.cpu);
+  const memoryMb = parsePositiveInt(defaults.memoryMb);
+  if (cpu !== null) {
+    resources.cpu = cpu;
   }
-  if (draft.memoryMb && draft.memoryMb > 0) {
-    resources.memoryMb = draft.memoryMb;
+  if (memoryMb !== null) {
+    resources.memoryMb = memoryMb;
   }
-  const trimmedSnapshot = draft.snapshotId?.trim() ?? "";
-  const plan: RuntimePlan = {
+  const timeoutSeconds = parsePositiveInt(defaults.timeoutSeconds);
+  const snapshot = defaults.snapshotId?.trim() ?? "";
+  return {
     targetKind: "remote-runtime",
-    provider: draft.provider,
-    ports: draft.ports.length > 0 ? draft.ports : [],
-    persistent: draft.persistent,
-    snapshotId: trimmedSnapshot.length > 0 ? RuntimeSnapshotId.makeUnsafe(trimmedSnapshot) : null,
+    provider: defaults.provider,
+    ports: parsePortsInput(defaults.ports),
+    persistent: defaults.persistent.trim() === "true",
+    snapshotId: snapshot.length > 0 ? RuntimeSnapshotId.makeUnsafe(snapshot) : null,
     ...(Object.keys(resources).length > 0 ? { resources } : {}),
-    ...(draft.timeoutSeconds && draft.timeoutSeconds > 0
-      ? { timeoutSeconds: draft.timeoutSeconds }
-      : {}),
+    ...(timeoutSeconds !== null ? { timeoutSeconds } : {}),
     ...(providerKind ? { providerKind } : {}),
   };
-  return plan;
 }

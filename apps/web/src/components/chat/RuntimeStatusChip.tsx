@@ -27,7 +27,9 @@ interface RuntimeStatusChipProps {
 
 const TONE_DOT_CLASS: Record<RuntimeStatusTone, string> = {
   active: "bg-success",
-  pending: "bg-warning",
+  // Pulse while the instance is mid-transition (provisioning/starting/stopping)
+  // so the chip reads as "working", not stalled. Honors reduced-motion.
+  pending: "bg-warning animate-pulse motion-reduce:animate-none",
   idle: "bg-[var(--color-text-foreground-secondary)]",
   terminal: "bg-[var(--color-text-foreground-secondary)]",
   error: "bg-destructive",

@@ -1,10 +1,10 @@
 import type { OrchestrationThreadRuntime } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 import {
-  buildRuntimePlanFromDraft,
-  DEFAULT_RUNTIME_PLAN_DRAFT,
+  buildRuntimePlanFromDefaults,
   isTerminalRuntimeStatus,
   parsePortsInput,
+  type RuntimePlanDefaults,
   resolveDefaultRemoteProvider,
   resolveRuntimeActions,
   resolveRuntimeHeaderPresentation,
@@ -130,66 +130,73 @@ describe("parsePortsInput", () => {
   });
 });
 
-describe("buildRuntimePlanFromDraft", () => {
-  it("returns null when the draft is not remote-enabled (preserves local default)", () => {
-    expect(buildRuntimePlanFromDraft(DEFAULT_RUNTIME_PLAN_DRAFT, "codex")).toBeNull();
-  });
+describe("buildRuntimePlanFromDefaults", () => {
+  const BLANK: RuntimePlanDefaults = {
+    provider: "fake",
+    snapshotId: null,
+    cpu: "",
+    memoryMb: "",
+    timeoutSeconds: "",
+    ports: "",
+    persistent: "",
+  };
 
-  it("builds a remote plan with resources, ports, and provider kind", () => {
-    const plan = buildRuntimePlanFromDraft(
+  it("builds a remote plan with resources, ports, persistence, and provider kind", () => {
+    const plan = buildRuntimePlanFromDefaults(
       {
-        ...DEFAULT_RUNTIME_PLAN_DRAFT,
-        enabled: true,
         provider: "daytona",
-        cpu: 2,
-        memoryMb: 4096,
-        timeoutSeconds: 600,
-        ports: [3000],
-        persistent: true,
+        snapshotId: null,
+        cpu: "2",
+        memoryMb: "4096",
+        timeoutSeconds: "600",
+        ports: "3000",
+        persistent: "true",
       },
       "codex",
     );
-    expect(plan).not.toBeNull();
-    expect(plan?.targetKind).toBe("remote-runtime");
-    expect(plan?.provider).toBe("daytona");
-    expect(plan?.resources).toEqual({ cpu: 2, memoryMb: 4096 });
-    expect(plan?.timeoutSeconds).toBe(600);
-    expect(plan?.ports).toEqual([3000]);
-    expect(plan?.persistent).toBe(true);
-    expect(plan?.providerKind).toBe("codex");
+    expect(plan.targetKind).toBe("remote-runtime");
+    expect(plan.provider).toBe("daytona");
+    expect(plan.resources).toEqual({ cpu: 2, memoryMb: 4096 });
+    expect(plan.timeoutSeconds).toBe(600);
+    expect(plan.ports).toEqual([3000]);
+    expect(plan.persistent).toBe(true);
+    expect(plan.providerKind).toBe("codex");
   });
 
-  it("omits resources when none are set", () => {
-    const plan = buildRuntimePlanFromDraft(
-      { ...DEFAULT_RUNTIME_PLAN_DRAFT, enabled: true },
-      undefined,
-    );
-    expect(plan?.resources).toBeUndefined();
-    expect(plan?.ports).toEqual([]);
+  it("omits resources/timeout when blank, and ports defaults to empty", () => {
+    const plan = buildRuntimePlanFromDefaults(BLANK, undefined);
+    expect(plan.resources).toBeUndefined();
+    expect(plan.timeoutSeconds).toBeUndefined();
+    expect(plan.ports).toEqual([]);
+    expect(plan.persistent).toBe(false);
   });
 
-  it("defaults snapshotId to null so the provider default applies", () => {
-    const plan = buildRuntimePlanFromDraft(
-      { ...DEFAULT_RUNTIME_PLAN_DRAFT, enabled: true },
+  it("ignores non-positive or non-numeric resource defaults", () => {
+    const plan = buildRuntimePlanFromDefaults(
+      { ...BLANK, cpu: "0", memoryMb: "abc", timeoutSeconds: "-5" },
       undefined,
     );
-    expect(plan?.snapshotId).toBeNull();
+    expect(plan.resources).toBeUndefined();
+    expect(plan.timeoutSeconds).toBeUndefined();
   });
 
-  it("threads a trimmed snapshot id into the plan", () => {
-    const plan = buildRuntimePlanFromDraft(
-      { ...DEFAULT_RUNTIME_PLAN_DRAFT, enabled: true, snapshotId: "  snap-7  " },
-      undefined,
-    );
-    expect(plan?.snapshotId).toBe("snap-7");
+  it("threads a trimmed snapshot id and treats blank as null", () => {
+    expect(
+      buildRuntimePlanFromDefaults({ ...BLANK, snapshotId: "  snap-7  " }, undefined).snapshotId,
+    ).toBe("snap-7");
+    expect(
+      buildRuntimePlanFromDefaults({ ...BLANK, snapshotId: "   " }, undefined).snapshotId,
+    ).toBeNull();
+    expect(buildRuntimePlanFromDefaults(BLANK, undefined).snapshotId).toBeNull();
   });
 
-  it("treats a blank snapshot id as null (no provider-default override)", () => {
-    const plan = buildRuntimePlanFromDraft(
-      { ...DEFAULT_RUNTIME_PLAN_DRAFT, enabled: true, snapshotId: "   " },
-      undefined,
-    );
-    expect(plan?.snapshotId).toBeNull();
+  it("treats persistent='true' as on and anything else as off", () => {
+    expect(
+      buildRuntimePlanFromDefaults({ ...BLANK, persistent: "true" }, undefined).persistent,
+    ).toBe(true);
+    expect(
+      buildRuntimePlanFromDefaults({ ...BLANK, persistent: "false" }, undefined).persistent,
+    ).toBe(false);
   });
 });
 

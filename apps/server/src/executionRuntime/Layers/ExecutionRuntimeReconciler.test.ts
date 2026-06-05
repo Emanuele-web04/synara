@@ -237,25 +237,62 @@ describe("ExecutionRuntimeReconciler partial-failure matrix", () => {
     const target = await markRemoteAndProvision(localRuntime, threadId, "fake-pty-workspace");
     const instanceId = target.instanceId as ExecutionInstanceId;
 
-    // A stop was requested but never confirmed: the instance is stuck `stopping`.
+    // A destroy was requested but never confirmed: the instance is stuck
+    // `destroying`. ("stopping" is a suspend transition, not a pending destroy.)
     await localRuntime.runPromise(
       Effect.gen(function* () {
         const engine = yield* OrchestrationEngineService;
         yield* engine.dispatch({
-          type: "thread.runtime.stop",
-          commandId: CommandId.makeUnsafe(`runtime:${threadId}:stop`),
+          type: "thread.runtime.state.record",
+          commandId: CommandId.makeUnsafe(`runtime:${threadId}:state.destroying`),
           threadId,
           instanceId,
+          status: "destroying",
           createdAt: now,
         });
       }),
     );
-    expect(await readRuntimeStatus(localRuntime, threadId)).toBe("stopping");
+    expect(await readRuntimeStatus(localRuntime, threadId)).toBe("destroying");
 
     const summary = await reconcile(localRuntime);
     expect(summary.retriedDestroy).toBe(1);
     expect(await readRuntimeStatus(localRuntime, threadId)).toBe("destroyed");
     expect(await readInstanceStatus(localRuntime, instanceId)).toBeNull();
+  });
+
+  it("does not destroy an instance stuck in the suspend transition (stopping)", async () => {
+    // Regression: idle-suspend records "stopping" before the next sweep records
+    // "stopped". "stopping" must not be treated as a pending destroy — the disk
+    // persists and the instance resumes; destroying it would lose the workspace.
+    runtime = makeReconcilerRuntime({
+      instanceTtlMs: 24 * 60 * 60 * 1000,
+      idleThresholdMs: 24 * 60 * 60 * 1000,
+    });
+    const localRuntime = runtime;
+    const threadId = ThreadId.makeUnsafe("thread-stopping-kept");
+    await seedThread(localRuntime, threadId);
+
+    const target = await markRemoteAndProvision(localRuntime, threadId, "fake-pty-workspace");
+    const instanceId = target.instanceId as ExecutionInstanceId;
+
+    await localRuntime.runPromise(
+      Effect.gen(function* () {
+        const engine = yield* OrchestrationEngineService;
+        yield* engine.dispatch({
+          type: "thread.runtime.state.record",
+          commandId: CommandId.makeUnsafe(`runtime:${threadId}:state.stopping`),
+          threadId,
+          instanceId,
+          status: "stopping",
+          createdAt: now,
+        });
+      }),
+    );
+
+    const summary = await reconcile(localRuntime);
+    expect(summary.retriedDestroy).toBe(0);
+    expect(await readRuntimeStatus(localRuntime, threadId)).not.toBe("destroyed");
+    expect(await readInstanceStatus(localRuntime, instanceId)).not.toBeNull();
   });
 
   it("tears down the adapter on a cold service map (post-restart reconciler destroy)", async () => {
@@ -336,10 +373,12 @@ describe("ExecutionRuntimeReconciler partial-failure matrix", () => {
     expect(await readInstanceStatus(localRuntime, instanceId)).toBeNull();
   });
 
-  it("destroys an instance idle past the threshold", async () => {
+  it("suspends an instance idle past the threshold instead of destroying it", async () => {
     // Idle falls back to the instance's recorded updatedAt (real wall-clock) when
-    // no activity exists, so a 1 ms idle threshold expires under the default
-    // clock. TTL is set wide so idle is the path under test.
+    // no activity exists, so a 1 ms idle threshold trips under the default clock.
+    // TTL is set wide so idle is the path under test. Idle now suspends (stops),
+    // keeping the disk and the row so the next turn resumes it; only the TTL cap
+    // destroys.
     runtime = makeReconcilerRuntime({
       instanceTtlMs: 24 * 60 * 60 * 1000,
       idleThresholdMs: 1,
@@ -352,9 +391,9 @@ describe("ExecutionRuntimeReconciler partial-failure matrix", () => {
     const instanceId = target.instanceId as ExecutionInstanceId;
 
     const summary = await reconcile(localRuntime);
-    expect(summary.expired).toBe(1);
-    expect(await readRuntimeStatus(localRuntime, threadId)).toBe("destroyed");
-    expect(await readInstanceStatus(localRuntime, instanceId)).toBeNull();
+    expect(summary.expired).toBe(0);
+    expect(await readInstanceStatus(localRuntime, instanceId)).not.toBeNull();
+    expect(await readRuntimeStatus(localRuntime, threadId)).not.toBe("destroyed");
   });
 
   it("skips idle-destroy while a live transport (in-flight turn) holds the instance", async () => {
@@ -389,14 +428,15 @@ describe("ExecutionRuntimeReconciler partial-failure matrix", () => {
     expect(await readInstanceStatus(localRuntime, instanceId)).not.toBeNull();
 
     // Close the transport: the live-transport marker clears, so the instance is
-    // back on the idle path and the next sweep destroys it.
+    // back on the idle path and the next sweep suspends (stops) it — the disk and
+    // row persist for resume rather than being destroyed.
     await localRuntime.runPromise(handle.transport.close).catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const afterClose = await reconcile(localRuntime);
-    expect(afterClose.expired).toBe(1);
-    expect(await readRuntimeStatus(localRuntime, threadId)).toBe("destroyed");
-    expect(await readInstanceStatus(localRuntime, instanceId)).toBeNull();
+    expect(afterClose.expired).toBe(0);
+    expect(await readInstanceStatus(localRuntime, instanceId)).not.toBeNull();
+    expect(await readRuntimeStatus(localRuntime, threadId)).not.toBe("destroyed");
   });
 
   it("examines nothing when an event was appended but no instance row exists (provision failed)", async () => {

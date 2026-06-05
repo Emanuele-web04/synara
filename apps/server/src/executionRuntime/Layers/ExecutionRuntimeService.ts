@@ -44,7 +44,10 @@ import type {
 } from "../../provider/process/JsonRpcLineTransport.ts";
 import { MissingCredentialsError, RuntimeProvisionFailedError } from "../Errors.ts";
 import { buildTokenizedRepoUrl, resolveGitHubToken } from "../gitWorkspaceBootstrap.ts";
-import type { ExecutionRuntimeRepoSource } from "../Services/ExecutionRuntimeProviderAdapter.ts";
+import type {
+  ExecutionRuntimeRepoSource,
+  RuntimeLiveness,
+} from "../Services/ExecutionRuntimeProviderAdapter.ts";
 import { ExecutionRuntimePlanner } from "../Services/ExecutionRuntimePlanner.ts";
 import { type FakeRuntimeFlavor } from "../Services/FakeRuntimeFlavor.ts";
 import { RuntimeActivityLeaseManager } from "../Services/RuntimeActivityLeaseManager.ts";
@@ -63,6 +66,12 @@ import {
 import { deriveFakeFlavor } from "./FakeRuntimeProviderFacade.ts";
 
 const RUNNING_INSTANCE_STATUSES: ReadonlySet<string> = new Set(["starting", "running", "idle"]);
+// Stopped-but-recoverable: resume the same disk via the provider's `start` rather
+// than re-provisioning fresh. A failed resume falls through to a fresh provision.
+// Includes "stopping": idle-suspend records "stopping" before the next sweep
+// records "stopped", and `start` resumes a stopping sandbox just as well — without
+// it, a turn in that window would re-provision and orphan the suspended disk.
+const RESUMABLE_INSTANCE_STATUSES: ReadonlySet<string> = new Set(["stopped", "stopping"]);
 
 // How often the activity-lease keepalive renews while a turn's transport is
 // alive. A provider that auto-stops an idle sandbox (Daytona) uses a window far
@@ -425,6 +434,20 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
       Effect.ignore,
     );
 
+  // Wake a suspended (stopped) instance so its disk is reused. Returns false when
+  // the provider has no resume capability or could not bring it back, signalling
+  // the caller to provision fresh. Best-effort: never throws.
+  const resumeInstance = (
+    provider: ExecutionRuntimeProvider,
+    instanceId: ExecutionInstanceId,
+  ): Effect.Effect<boolean> =>
+    registry.getAdapter(provider).pipe(
+      Effect.flatMap((adapter) =>
+        adapter.start !== undefined ? adapter.start(instanceId) : Effect.succeed(false),
+      ),
+      Effect.orElseSucceed(() => false),
+    );
+
   const ensureTargetForThread: ExecutionRuntimeServiceShape["ensureTargetForThread"] = (
     threadId,
     hydratedRuntime,
@@ -473,6 +496,53 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
           cwd: runtime.instance.rootPath ?? undefined,
           instanceId: runtime.instance.id,
         } satisfies ResolvedExecutionTarget;
+      }
+
+      // Resume a suspended (stopped) instance — reuse its disk (the cloned repo,
+      // uncommitted edits, installed deps) via the provider's `start` rather than
+      // re-provisioning fresh. A failed resume (the provider reclaimed it, or has
+      // no resume tier) falls through to the fresh-provision path below.
+      if (
+        runtime?.instance !== null &&
+        runtime?.instance !== undefined &&
+        RESUMABLE_INSTANCE_STATUSES.has(runtime.instance.status)
+      ) {
+        const resumed = yield* resumeInstance(runtime.instance.provider, runtime.instance.id);
+        if (resumed) {
+          const intent = threadIntents.get(threadId);
+          instanceProviders.set(runtime.instance.id, runtime.instance.provider);
+          if (intent?.fakeFlavor !== undefined) {
+            instanceFakeFlavors.set(runtime.instance.id, intent.fakeFlavor);
+          }
+          yield* reinjectCredentials(runtime.instance.provider, runtime.instance.id);
+          // Converge the read-model to running and refresh the idle clock so the
+          // next sweep does not re-suspend the just-resumed instance before its
+          // turn takes the live-transport marker, and so the next turn reuses fast.
+          yield* recordInstanceState({
+            threadId,
+            instanceId: runtime.instance.id,
+            status: "running",
+          }).pipe(Effect.ignore);
+          yield* Effect.logInfo("execution-runtime resumed a suspended instance", {
+            threadId,
+            instanceId: runtime.instance.id,
+            provider: runtime.instance.provider,
+          });
+          return {
+            threadId,
+            targetKind,
+            cwd: runtime.instance.rootPath ?? undefined,
+            instanceId: runtime.instance.id,
+          } satisfies ResolvedExecutionTarget;
+        }
+        yield* Effect.logWarning(
+          "execution-runtime could not resume a suspended instance; provisioning fresh",
+          {
+            threadId,
+            instanceId: runtime.instance.id,
+            provider: runtime.instance.provider,
+          },
+        );
       }
 
       // Use the read-model's persisted provider as the fallback intent when none
@@ -774,13 +844,22 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
       // a descriptor but no adapter (validation-only wiring, or one not yet
       // registered) has nothing to probe, so it reports `absent` and the
       // reconciler marks it lost.
-      const alive = yield* registry.getAdapter(input.provider).pipe(
-        Effect.flatMap((adapter) => adapter.isAlive(input.instanceId)),
-        Effect.orElseSucceed(() => false),
-      );
+      const adapter = yield* registry
+        .getAdapter(input.provider)
+        .pipe(Effect.orElseSucceed(() => undefined));
+      const liveness: RuntimeLiveness =
+        adapter === undefined
+          ? "absent"
+          : adapter.livenessProbe !== undefined
+            ? yield* adapter
+                .livenessProbe(input.instanceId)
+                .pipe(Effect.orElseSucceed(() => "absent" as RuntimeLiveness))
+            : (yield* adapter.isAlive(input.instanceId).pipe(Effect.orElseSucceed(() => false)))
+              ? "alive"
+              : "absent";
       return {
         supportsReconnect,
-        liveness: alive ? ("alive" as const) : ("absent" as const),
+        liveness,
         // True while this process holds a live transport (an in-flight turn) for
         // the instance, so the reconciler skips idle-destroy under a live agent.
         liveActivity: (liveTransportCounts.get(String(input.instanceId)) ?? 0) > 0,

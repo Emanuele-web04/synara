@@ -35,7 +35,12 @@ import {
   type ExecutionRuntimeReconcilerShape,
 } from "../Services/ExecutionRuntimeReconciler.ts";
 
-const DEFAULT_INSTANCE_TTL_MS = 6 * 60 * 60 * 1000;
+// Hard age cap on a workspace from creation. Generous because idle no longer
+// destroys — it suspends — so this is the only timer that reclaims disk. A
+// workspace touched in the evening survives until the next day.
+const DEFAULT_INSTANCE_TTL_MS = 24 * 60 * 60 * 1000;
+// Idle now suspends (stops) the instance, not destroys it; the disk persists and
+// the next turn resumes it. Acts as a backstop to the provider's own auto-stop.
 const DEFAULT_IDLE_THRESHOLD_MS = 30 * 60 * 1000;
 const DEFAULT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -52,7 +57,10 @@ export interface ExecutionRuntimeReconcilerLiveOptions {
 // Statuses that mean the provider is mid-teardown: a destroy was requested but
 // not confirmed (the "destroy timed out" matrix entry). Retrying destroy is safe
 // because destroy is idempotent and dedupes on its stable commandId.
-const PENDING_DESTROY_STATUSES: ReadonlySet<string> = new Set(["destroying", "stopping"]);
+// Only a destroy-in-progress is retried here. "stopping" is a suspend transition
+// (the disk persists and the instance resumes), not a teardown — including it
+// would make the next sweep destroy a sandbox that was merely put to sleep.
+const PENDING_DESTROY_STATUSES: ReadonlySet<string> = new Set(["destroying"]);
 
 const makeExecutionRuntimeReconciler = (options?: ExecutionRuntimeReconcilerLiveOptions) =>
   Effect.gen(function* () {
@@ -150,23 +158,44 @@ const makeExecutionRuntimeReconciler = (options?: ExecutionRuntimeReconcilerLive
           return { markedLost: true, retriedDestroy: false, expired: false };
         }
 
-        // Re-attached and live. Enforce TTL/idle: a stale instance is destroyed
-        // through the same provider-agnostic seam.
         const createdMs = parseMs(instance.createdAt) ?? now();
         const ageMs = now() - createdMs;
+        // The TTL is a hard age cap that applies to every recognized instance,
+        // running or suspended, so a workspace cannot live forever.
         if (ageMs >= instanceTtlMs) {
           yield* retryDestroy(instance);
           return { markedLost: false, retriedDestroy: false, expired: true };
         }
+
+        // Suspended (stopped) is a valid resting state with its disk intact — the
+        // agent's cloned repo, uncommitted edits, installed deps. Keep it so the
+        // next turn resumes the same workspace instead of re-provisioning fresh.
+        // Record the stopped state so the read-model and the turn-start path route
+        // to resume rather than reuse-a-running.
+        if (probe.liveness === "suspended") {
+          yield* service
+            .recordInstanceState({
+              threadId: instance.threadId,
+              instanceId: instance.instanceId,
+              status: "stopped",
+            })
+            .pipe(Effect.ignore);
+          return { markedLost: false, retriedDestroy: false, expired: false };
+        }
+
         // A live transport (an in-flight turn) keeps the instance off the idle
         // path: stream output is not event-sourced, so `lastActivityAt` freezes
-        // mid-conversation and would otherwise idle-destroy a sandbox under a live
-        // agent. TTL above is a hard age cap and still applies; only idle is skipped.
+        // mid-conversation and would otherwise reap a sandbox under a live agent.
         if (!probe.liveActivity) {
           const lastActivityMs = yield* resolveLastActivityMs(instance);
           if (now() - lastActivityMs >= idleThresholdMs) {
-            yield* retryDestroy(instance);
-            return { markedLost: false, retriedDestroy: false, expired: true };
+            // Idle: suspend (stop), don't destroy. The disk persists and the next
+            // turn resumes it; only the TTL cap above reclaims a workspace. A
+            // provider with no stop tier records the requested state as a no-op.
+            yield* service
+              .stop(instance.threadId, instance.instanceId, instance.provider)
+              .pipe(Effect.ignore);
+            return { markedLost: false, retriedDestroy: false, expired: false };
           }
         }
 

@@ -1,31 +1,23 @@
 // FILE: RuntimeEnvironmentControl.tsx
 // Purpose: Thread-creation execution-target picker. Offers Local / Worktree /
-// Remote and, when Remote is chosen, the advanced runtime-plan inputs (provider,
-// resources, timeout, ports, persistence, egress, secrets). Local/Worktree
-// delegate to the existing env-mode flow; Remote writes a `RuntimePlan` draft the
-// creation flow reads. Default stays Local — opting into Remote is explicit.
+// Remote. Remote is a plain opt-in — the runtime is provisioned from the
+// workspace-level Sandboxes settings (provider, snapshot, resources), so the
+// composer stays a target picker rather than an infra form. Local/Worktree
+// delegate to the existing env-mode flow. Default stays Local.
 // Layer: Web UI component (composer workspace control)
 
 import type { ThreadId } from "@t3tools/contracts";
+import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { FiServer } from "react-icons/fi";
 import { LuSplit } from "react-icons/lu";
-import { useAppSettings } from "~/appSettings";
 import { CentralIcon } from "~/lib/central-icons";
-import { ChevronDownIcon } from "~/lib/icons";
+import { ArrowRightIcon, ChevronDownIcon } from "~/lib/icons";
 import { useRuntimePlanDraftStore } from "~/runtimePlanDraftStore";
 import { cn } from "~/lib/utils";
-import {
-  EXECUTION_RUNTIME_PROVIDER_LABELS,
-  EXECUTION_TARGET_LABELS,
-  parsePortsInput,
-  REMOTE_RUNTIME_PROVIDERS,
-  resolveDefaultRemoteProvider,
-} from "~/lib/runtimePresentation";
+import { EXECUTION_TARGET_LABELS } from "~/lib/runtimePresentation";
 import type { EnvMode } from "./BranchToolbar.logic";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
-import { Input } from "./ui/input";
-import { Switch } from "./ui/switch";
 
 interface RuntimeEnvironmentControlProps {
   /** The draft thread the runtime plan is being authored for. */
@@ -54,17 +46,10 @@ export function RuntimeEnvironmentControl({
   className,
 }: RuntimeEnvironmentControlProps) {
   const [open, setOpen] = useState(false);
-  const { settings } = useAppSettings();
+  const navigate = useNavigate();
   const draft = useRuntimePlanDraftStore((store) => store.draftByThreadId[threadId]);
   const setDraft = useRuntimePlanDraftStore((store) => store.setDraft);
   const remoteEnabled = draft?.enabled ?? false;
-  const defaultProvider = resolveDefaultRemoteProvider(settings.sandboxDefaultRemoteProvider);
-  const provider = draft?.provider ?? defaultProvider;
-  // Default the snapshot input to the configured Daytona snapshot so "Remote"
-  // provisions from the same base image as the settings page, without forcing a
-  // stored draft value before the user touches the field.
-  const snapshotPlaceholderDefault =
-    draft?.snapshotId ?? (settings.sandboxDaytonaSnapshot.trim() || null);
 
   const selected: SelectedTarget = remoteEnabled ? "remote-runtime" : effectiveEnvMode;
 
@@ -79,22 +64,16 @@ export function RuntimeEnvironmentControl({
     setOpen(false);
   };
   const selectRemote = () => {
-    // First opt-in seeds the provider and snapshot from the configured defaults
-    // so "Remote" means the real configured backend, not always fake. A draft
-    // that already exists keeps the user's chosen provider/snapshot.
-    setDraft(
-      threadId,
-      draft
-        ? { enabled: true }
-        : {
-            enabled: true,
-            provider: defaultProvider,
-            snapshotId: settings.sandboxDaytonaSnapshot.trim() || null,
-          },
-    );
+    setDraft(threadId, { enabled: true });
   };
 
-  const triggerLabel = EXECUTION_TARGET_LABELS[selected];
+  const openSandboxSettings = () => {
+    setOpen(false);
+    void navigate({
+      to: "/settings",
+      search: (previous) => ({ ...previous, section: "sandboxes" }),
+    });
+  };
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -111,14 +90,14 @@ export function RuntimeEnvironmentControl({
         ) : (
           <CentralIcon name="macbook" className="size-3.5" />
         )}
-        {triggerLabel}
+        {EXECUTION_TARGET_LABELS[selected]}
         <ChevronDownIcon className="size-3 opacity-60" />
       </PopoverTrigger>
       <PopoverPopup
         align="start"
         side="top"
         sideOffset={6}
-        className="w-72 [&_[data-slot=popover-viewport]]:py-0 [&_[data-slot=popover-viewport]]:[--viewport-inline-padding:0px]"
+        className="w-64 [&_[data-slot=popover-viewport]]:py-0 [&_[data-slot=popover-viewport]]:[--viewport-inline-padding:0px]"
       >
         <div className="py-1.5">
           <p className="px-3 pb-1 pt-1 text-[11px] font-medium text-[var(--color-text-foreground-secondary)]">
@@ -155,93 +134,17 @@ export function RuntimeEnvironmentControl({
 
         {remoteEnabled ? (
           <div className="border-t border-[color:var(--color-border-light)] px-3 py-2">
-            <p className="pb-1.5 text-[11px] font-medium uppercase tracking-wide text-[var(--color-text-foreground-secondary)]">
-              Advanced
+            <p className="text-[11px] leading-snug text-[var(--color-text-foreground-secondary)]">
+              Provisions from your Sandboxes settings — provider, snapshot, and resources.
             </p>
-            <div className="flex flex-col gap-2">
-              <Field label="Provider">
-                <select
-                  value={provider}
-                  onChange={(event) =>
-                    setDraft(threadId, {
-                      provider: event.target.value as (typeof REMOTE_RUNTIME_PROVIDERS)[number],
-                    })
-                  }
-                  className="h-8 w-full rounded-md border border-border bg-background px-2 text-[length:var(--app-font-size-ui,12px)] text-foreground"
-                >
-                  {REMOTE_RUNTIME_PROVIDERS.map((value) => (
-                    <option key={value} value={value}>
-                      {EXECUTION_RUNTIME_PROVIDER_LABELS[value]}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Snapshot (image)">
-                <Input
-                  size="sm"
-                  defaultValue={snapshotPlaceholderDefault ?? ""}
-                  placeholder="provider default"
-                  spellCheck={false}
-                  onBlur={(event) => {
-                    const next = event.currentTarget.value.trim();
-                    setDraft(threadId, { snapshotId: next.length > 0 ? next : null });
-                  }}
-                />
-              </Field>
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="CPU">
-                  <NumberInput
-                    value={draft?.cpu ?? null}
-                    placeholder="auto"
-                    onChange={(cpu) => setDraft(threadId, { cpu })}
-                  />
-                </Field>
-                <Field label="Memory (MB)">
-                  <NumberInput
-                    value={draft?.memoryMb ?? null}
-                    placeholder="auto"
-                    onChange={(memoryMb) => setDraft(threadId, { memoryMb })}
-                  />
-                </Field>
-              </div>
-              <Field label="Timeout (s)">
-                <NumberInput
-                  value={draft?.timeoutSeconds ?? null}
-                  placeholder="provider default"
-                  onChange={(timeoutSeconds) => setDraft(threadId, { timeoutSeconds })}
-                />
-              </Field>
-              <Field label="Ports">
-                <Input
-                  size="sm"
-                  defaultValue={(draft?.ports ?? []).join(", ")}
-                  placeholder="3000, 8080"
-                  onBlur={(event) =>
-                    setDraft(threadId, { ports: parsePortsInput(event.currentTarget.value) })
-                  }
-                />
-              </Field>
-              <Field label="Egress allow-list">
-                <Input
-                  size="sm"
-                  defaultValue={draft?.egressText ?? ""}
-                  placeholder="example.com, api.internal"
-                  onBlur={(event) => setDraft(threadId, { egressText: event.currentTarget.value })}
-                />
-              </Field>
-              <ToggleRow
-                label="Persistent"
-                hint="Keep the runtime between turns"
-                checked={draft?.persistent ?? false}
-                onChange={(persistent) => setDraft(threadId, { persistent })}
-              />
-              <ToggleRow
-                label="Forward secrets"
-                hint="Pass configured secrets to the runtime"
-                checked={draft?.forwardSecrets ?? false}
-                onChange={(forwardSecrets) => setDraft(threadId, { forwardSecrets })}
-              />
-            </div>
+            <button
+              type="button"
+              onClick={openSandboxSettings}
+              className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-medium text-[var(--color-text-foreground)] transition-colors hover:text-[var(--color-text-link,var(--color-text-foreground))]"
+            >
+              Configure remote defaults
+              <ArrowRightIcon className="size-3" />
+            </button>
           </div>
         ) : null}
       </PopoverPopup>
@@ -283,65 +186,5 @@ function TargetOption({
         </svg>
       ) : null}
     </button>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="flex flex-col gap-1 text-[11px] text-[var(--color-text-foreground-secondary)]">
-      <span>{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function NumberInput({
-  value,
-  placeholder,
-  onChange,
-}: {
-  value: number | null;
-  placeholder?: string;
-  onChange: (value: number | null) => void;
-}) {
-  return (
-    <Input
-      size="sm"
-      type="number"
-      min={1}
-      defaultValue={value ?? ""}
-      placeholder={placeholder}
-      onBlur={(event) => {
-        const raw = event.currentTarget.value.trim();
-        if (raw.length === 0) {
-          onChange(null);
-          return;
-        }
-        const parsed = Number(raw);
-        onChange(Number.isInteger(parsed) && parsed > 0 ? parsed : null);
-      }}
-    />
-  );
-}
-
-function ToggleRow({
-  label,
-  hint,
-  checked,
-  onChange,
-}: {
-  label: string;
-  hint: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <label className="flex items-center justify-between gap-2 text-[12px] text-[var(--color-text-foreground)]">
-      <span className="flex flex-col">
-        <span>{label}</span>
-        <span className="text-[10px] text-[var(--color-text-foreground-secondary)]">{hint}</span>
-      </span>
-      <Switch checked={checked} onCheckedChange={onChange} />
-    </label>
   );
 }

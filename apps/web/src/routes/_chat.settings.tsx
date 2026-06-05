@@ -2941,6 +2941,47 @@ function SettingsRouteView() {
     </div>
   );
 
+  const sandboxRuntimeTextFields: ReadonlyArray<{
+    appKey:
+      | "sandboxRuntimeCpu"
+      | "sandboxRuntimeMemoryMb"
+      | "sandboxRuntimeTimeoutSeconds"
+      | "sandboxRuntimePorts";
+    title: string;
+    resetLabel: string;
+    description: string;
+    placeholder: string;
+  }> = [
+    {
+      appKey: "sandboxRuntimeCpu",
+      title: "CPU",
+      resetLabel: "CPU default",
+      description: "vCPUs requested for the sandbox. Blank uses the provider default.",
+      placeholder: "provider default",
+    },
+    {
+      appKey: "sandboxRuntimeMemoryMb",
+      title: "Memory (MB)",
+      resetLabel: "memory default",
+      description: "Memory requested for the sandbox, in MB. Blank uses the provider default.",
+      placeholder: "provider default",
+    },
+    {
+      appKey: "sandboxRuntimeTimeoutSeconds",
+      title: "Timeout (s)",
+      resetLabel: "timeout default",
+      description: "Max sandbox lifetime in seconds before the provider reclaims it.",
+      placeholder: "provider default",
+    },
+    {
+      appKey: "sandboxRuntimePorts",
+      title: "Exposed ports",
+      resetLabel: "ports default",
+      description: "Comma-separated ports to expose from the sandbox.",
+      placeholder: "3000, 8080",
+    },
+  ];
+
   const renderSandboxesPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Defaults">
@@ -3002,6 +3043,60 @@ function SettingsRouteView() {
               placeholder="pnpm install --frozen-lockfile"
               spellCheck={false}
               aria-label="Post-clone command"
+            />
+          }
+        />
+      </SettingsSection>
+
+      <SettingsSection title="Remote runtime defaults">
+        {sandboxRuntimeTextFields.map((field) => (
+          <SettingsRow
+            key={field.appKey}
+            title={field.title}
+            description={field.description}
+            resetAction={
+              settings[field.appKey] !== defaults[field.appKey] ? (
+                <SettingResetButton
+                  label={field.resetLabel}
+                  onClick={() => updateSettings({ [field.appKey]: defaults[field.appKey] })}
+                />
+              ) : null
+            }
+            control={
+              <Input
+                className="w-full"
+                type="text"
+                value={settings[field.appKey]}
+                onChange={(event) => updateSettings({ [field.appKey]: event.target.value })}
+                placeholder={field.placeholder}
+                spellCheck={false}
+                aria-label={field.title}
+              />
+            }
+          />
+        ))}
+        <SettingsRow
+          title="Persistent runtime"
+          description="Keep the sandbox alive between turns instead of tearing it down after each one. The provider must support a persistent filesystem."
+          resetAction={
+            settings.sandboxRuntimePersistent !== defaults.sandboxRuntimePersistent ? (
+              <SettingResetButton
+                label="persistent runtime"
+                onClick={() =>
+                  updateSettings({
+                    sandboxRuntimePersistent: defaults.sandboxRuntimePersistent,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sandboxRuntimePersistent === "true"}
+              onCheckedChange={(checked) =>
+                updateSettings({ sandboxRuntimePersistent: checked ? "true" : "false" })
+              }
+              aria-label="Persistent runtime"
             />
           }
         />

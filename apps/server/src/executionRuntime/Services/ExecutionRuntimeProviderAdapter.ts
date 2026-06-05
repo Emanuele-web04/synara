@@ -103,6 +103,9 @@ export interface ExecutionRuntimeExecCollectResult {
  * `RuntimeProvisionFailedError`, rather than a fiber defect. Providers that
  * cannot fail at these steps (fake, Modal) conform with a `never` channel.
  */
+/** A provider's live verdict for an instance: running, resumable, or gone. */
+export type RuntimeLiveness = "alive" | "suspended" | "absent";
+
 export interface ExecutionRuntimeProviderAdapterShape {
   /** Provision the instance backing a thread, deriving any provider-internal sub-kind from the plan. */
   readonly provision: (
@@ -149,6 +152,23 @@ export interface ExecutionRuntimeProviderAdapterShape {
   readonly refreshActivity?: (instanceId: ExecutionInstanceId) => Effect.Effect<void>;
   /** Whether the provider still recognizes a provisioned instance (reconnect probe). */
   readonly isAlive: (instanceId: ExecutionInstanceId) => Effect.Effect<boolean>;
+  /**
+   * Richer liveness for providers with a cheap resumable rest state: `suspended`
+   * means the provider stopped the instance but its disk survives and `start` can
+   * wake it; `absent` means it is gone. Optional — a provider that only models
+   * recognized/gone leaves this undefined and the service falls back to `isAlive`
+   * (alive/absent, never suspended). Best-effort: it never throws.
+   */
+  readonly livenessProbe?: (instanceId: ExecutionInstanceId) => Effect.Effect<RuntimeLiveness>;
+  /**
+   * Resume a suspended (stopped) instance so the same disk — the agent's cloned
+   * repo, uncommitted edits, installed deps — is reused instead of re-provisioning
+   * fresh. Returns true when the instance is running again, false when it could
+   * not be resumed (e.g. the provider reclaimed it out-of-band) and the caller
+   * should provision a fresh instance. Optional: a provider with no suspend/resume
+   * tier leaves this undefined and the service re-provisions instead.
+   */
+  readonly start?: (instanceId: ExecutionInstanceId) => Effect.Effect<boolean>;
   /** Tear the instance down and forget it. Idempotent. */
   readonly destroy: (instanceId: ExecutionInstanceId) => Effect.Effect<void>;
   /**
