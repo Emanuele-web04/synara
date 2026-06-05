@@ -358,6 +358,7 @@ import {
 import { getComposerTraitSelection } from "./chat/composerTraits";
 import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { ProjectPicker } from "./chat/ProjectPicker";
+import { FolderClosed } from "./FolderClosed";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import {
@@ -6814,6 +6815,7 @@ export default function ChatView({
       if (isLocalDraftThread) {
         setDraftThreadContext(threadId, {
           envMode: mode,
+          ...(mode === "local" ? { worktreePath: null } : {}),
           ...(nextBranch ? { branch: nextBranch } : {}),
         });
       }
@@ -7654,6 +7656,44 @@ export default function ChatView({
       ? { onCheckoutPullRequestRequest: openPullRequestDialog }
       : {}),
   };
+  const showEmptyLandingBranchToolbar =
+    isCenteredEmptyLanding && Boolean(activeProject) && !isHomeChatContainer && isGitRepo;
+  const emptyLandingProjectChip =
+    !isEmptyChatLanding && activeProjectDisplayName ? (
+      <span className="inline-flex min-w-0 max-w-56 shrink items-center gap-2 overflow-hidden rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] sm:max-w-64">
+        <FolderClosed className="size-3.5 shrink-0" />
+        <span className="min-w-0 truncate">{activeProjectDisplayName}</span>
+      </span>
+    ) : null;
+  const emptyLandingControls =
+    isCenteredEmptyLanding &&
+    (isEmptyChatLanding || emptyLandingProjectChip || showEmptyLandingBranchToolbar) ? (
+      <div
+        className={cn(
+          "chat-composer-shell relative mt-0 flex flex-wrap items-center gap-x-2 gap-y-1 !rounded-t-none !rounded-b-[var(--composer-radius)] bg-[color-mix(in_srgb,var(--color-background-elevated-secondary)_72%,var(--color-background-surface)_28%)] px-2 pb-2 pt-2.5 shadow-[0_18px_36px_-26px_rgba(0,0,0,0.78)] before:pointer-events-none before:absolute before:inset-x-0 before:-top-3 before:h-3 before:bg-inherit before:content-['']",
+          COMPOSER_COLUMN_FRAME_CLASS_NAME,
+        )}
+      >
+        {isEmptyChatLanding ? (
+          <ProjectPicker
+            align="start"
+            side="top"
+            showResetToHome={Boolean(resolvedThreadWorktreePath)}
+            selectedWorkspaceRoot={resolvedThreadWorktreePath}
+            onSelectWorkspaceRoot={handleSelectWorkspaceRoot}
+            onResetToHome={handleResetWorkspaceToHome}
+          />
+        ) : (
+          emptyLandingProjectChip
+        )}
+        {showEmptyLandingBranchToolbar ? (
+          <BranchToolbar
+            {...branchToolbarProps}
+            className="mx-0 !w-auto min-w-0 shrink-0 !justify-start !px-0 !pb-0 !pt-0"
+          />
+        ) : null}
+      </div>
+    ) : null;
 
   // Shared inputs for both Environment panel surfaces (the header Popover when the dock is
   // open, and the docked right column when it is closed) so the two never drift.
@@ -8149,23 +8189,7 @@ export default function ChatView({
             </div>
           </div>
         </form>
-        {isEmptyChatLanding ? (
-          <div
-            className={cn(
-              "mt-2 flex items-center justify-start gap-3 px-3",
-              COMPOSER_COLUMN_FRAME_CLASS_NAME,
-            )}
-          >
-            <ProjectPicker
-              align="start"
-              side="top"
-              showResetToHome={Boolean(resolvedThreadWorktreePath)}
-              selectedWorkspaceRoot={resolvedThreadWorktreePath}
-              onSelectWorkspaceRoot={handleSelectWorkspaceRoot}
-              onResetToHome={handleResetWorkspaceToHome}
-            />
-          </div>
-        ) : null}
+        {emptyLandingControls}
       </>
     ) : (
       <div
@@ -8339,7 +8363,7 @@ export default function ChatView({
                     </h2>
                   </div>
                   {composerSection}
-                  {isGitRepo && !environmentEnabled ? (
+                  {isGitRepo && !environmentEnabled && !isCenteredEmptyLanding ? (
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
                       <BranchToolbar {...branchToolbarProps} />
                     </div>
