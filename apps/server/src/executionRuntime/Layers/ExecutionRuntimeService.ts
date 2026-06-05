@@ -37,6 +37,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import type {
   JsonRpcLineTransport,
   ProcessExit,
@@ -52,9 +53,11 @@ import {
   RuntimeProviderCredentials,
   type CredentialedRuntimeProvider,
 } from "../Services/RuntimeProviderCredentials.ts";
+import { RuntimeWorkspaceDiff } from "../Services/RuntimeWorkspaceDiff.ts";
 import {
   ExecutionRuntimeService,
   type ExecutionRuntimeServiceShape,
+  type ExecutionRuntimeWorkspaceDiff,
   type ResolvedExecutionTarget,
 } from "../Services/ExecutionRuntimeService.ts";
 import { deriveFakeFlavor } from "./FakeRuntimeProviderFacade.ts";
@@ -118,6 +121,8 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
   const leases = yield* RuntimeActivityLeaseManager;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const git = yield* GitCore;
+  const serverSettings = yield* ServerSettingsService;
+  const runtimeWorkspaceDiff = yield* RuntimeWorkspaceDiff;
 
   // Per-thread provisioning intent, stashed at plan/mark time and read at
   // provision time (the wrinkle: plan derivation precedes provisioning). Stands
@@ -330,11 +335,18 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
         Effect.orElseSucceed(() => null),
       );
       const tokenizedUrl = buildTokenizedRepoUrl(repoUrl, token);
+      // Opt-in post-clone install. Read live so a Settings change applies on the
+      // next provision; a failed read degrades to "" (off) rather than blocking.
+      const postCloneCommand = yield* serverSettings.getSettings.pipe(
+        Effect.map((settings) => settings.sandboxes.postCloneCommand),
+        Effect.orElseSucceed(() => ""),
+      );
       return {
         repoUrl,
         ref,
         tokenizedUrl,
         targetSubdir: repoDirNameFromUrl(repoUrl),
+        ...(postCloneCommand.trim().length > 0 ? { postCloneCommand } : {}),
       } satisfies ExecutionRuntimeRepoSource;
     });
 
@@ -620,6 +632,26 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
       };
     });
 
+  // Read the sandbox working-tree diff for a remote thread. The caller passes the
+  // instance's provider when it has it (the reactor reads it off the persisted
+  // runtime row); otherwise fall back to the in-memory instance→provider map.
+  // Delegates the registry-routed git to the standalone RuntimeWorkspaceDiff seam
+  // so the diff logic lives in one place. Best-effort: an unresolvable provider
+  // degrades to an empty-but-clean diff.
+  const EMPTY_WORKSPACE_DIFF: ExecutionRuntimeWorkspaceDiff = { diff: "", changedPaths: [] };
+  const workspaceDiff: ExecutionRuntimeServiceShape["workspaceDiff"] = (input) =>
+    Effect.gen(function* () {
+      const provider = input.provider ?? instanceProviders.get(input.instanceId);
+      if (provider === undefined) {
+        return EMPTY_WORKSPACE_DIFF;
+      }
+      return yield* runtimeWorkspaceDiff.read({
+        instanceId: input.instanceId,
+        provider,
+        workdir: input.workdir,
+      });
+    });
+
   const destroy: ExecutionRuntimeServiceShape["destroy"] = (threadId, instanceId, knownProvider) =>
     Effect.gen(function* () {
       // The map is empty after a server restart, which is exactly when the
@@ -771,6 +803,7 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
     applyRuntimePlan,
     ensureTargetForThread,
     exec,
+    workspaceDiff,
     destroy,
     stop,
     snapshot,

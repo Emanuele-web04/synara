@@ -18,6 +18,7 @@ import { FAKE_RUNTIME_DESCRIPTORS } from "./fakeDescriptors.ts";
 import { FakeRuntimeProviderAdapterLive } from "./FakeRuntimeProviderAdapter.ts";
 import { makeRuntimeProviderRegistryWithFakeLive } from "./RuntimeProviderRegistry.ts";
 import { RuntimeActivityLeaseManagerLive } from "./RuntimeActivityLeaseManager.ts";
+import { RuntimeWorkspaceDiffLive } from "./RuntimeWorkspaceDiff.ts";
 import { DAYTONA_RUNTIME_DESCRIPTOR } from "../providers/daytona/descriptor.ts";
 import { VERCEL_SANDBOX_DESCRIPTOR } from "../providers/vercelSandbox/descriptor.ts";
 import { MODAL_PROVIDER_DESCRIPTOR } from "../providers/modal/modalDescriptors.ts";
@@ -51,14 +52,16 @@ export const RuntimeProviderCredentialsTestLive = Layer.succeed(RuntimeProviderC
 });
 
 /**
- * Planner + registry (with fake descriptors + adapter) and the activity-lease
- * manager the service injects for the keepalive, for the execution-runtime
- * service — without a credential service, so a caller can pin its own.
+ * Planner + registry (with fake descriptors + adapter), the activity-lease
+ * manager the service injects for the keepalive, and the remote workspace-diff
+ * seam — for the execution-runtime service, without a credential service so a
+ * caller can pin its own.
  */
 export const ExecutionRuntimePlanningOnlyTestLive = Layer.mergeAll(
   ExecutionRuntimePlannerLive.pipe(Layer.provide(runtimeProviderRegistryLayer)),
   runtimeProviderRegistryLayer,
   RuntimeActivityLeaseManagerLive,
+  RuntimeWorkspaceDiffLive.pipe(Layer.provide(runtimeProviderRegistryLayer)),
 );
 
 /**

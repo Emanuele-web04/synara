@@ -215,3 +215,58 @@ export const buildGitCloneCommand = (
     args: ["-lc", script, tokenizedB64, cleanB64, targetB64, refB64],
   };
 };
+
+/**
+ * The sentinel that opts into lockfile-based package-manager auto-detection
+ * instead of a literal command. An operator sets `postCloneCommand` to `auto` to
+ * run the right install for whatever lockfile the cloned repo ships.
+ */
+export const POST_CLONE_AUTO_DETECT = "auto";
+
+/**
+ * Build the exec that runs an opt-in post-clone command inside the clone dir, or
+ * `null` when nothing should run (the default).
+ *
+ * `command` is the operator's raw setting:
+ *   - blank -> `null` (off; the default, so a provision costs nothing extra).
+ *   - `auto` -> a lockfile-detecting install (`bun.lock`/`bun.lockb` -> bun,
+ *     `pnpm-lock.yaml` -> pnpm, `package-lock.json` -> npm; none -> a no-op echo).
+ *   - anything else -> that literal command, run via `eval` in the clone dir.
+ *
+ * The command and the dir ride as base64 positional args (`$0`, `$1`) so neither
+ * can break the shell or appear awkwardly on the visible command line, and the
+ * script `cd`s into the dir first so the command lands in the working tree. The
+ * caller runs this best-effort and never fatally blocks the session on a non-zero
+ * exit.
+ */
+export const buildPostCloneCommand = (
+  command: string,
+  cloneDir: string,
+): ExecutionRuntimeExecCollectInput | null => {
+  const trimmed = command.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const dirB64 = Buffer.from(cloneDir, "utf8").toString("base64");
+  if (trimmed.toLowerCase() === POST_CLONE_AUTO_DETECT) {
+    const script = [
+      "set -e",
+      'dir="$(printf %s "$0" | base64 -d)"',
+      'cd "$dir"',
+      "if [ -f bun.lock ] || [ -f bun.lockb ]; then bun install;",
+      "elif [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile;",
+      "elif [ -f package-lock.json ]; then npm ci;",
+      'else echo "no lockfile; skipping dependency install"; fi',
+    ].join("\n");
+    return { command: "bash", args: ["-lc", script, dirB64] };
+  }
+  const commandB64 = Buffer.from(trimmed, "utf8").toString("base64");
+  const script = [
+    "set -e",
+    'dir="$(printf %s "$0" | base64 -d)"',
+    'cmd="$(printf %s "$1" | base64 -d)"',
+    'cd "$dir"',
+    'eval "$cmd"',
+  ].join(" && ");
+  return { command: "bash", args: ["-lc", script, dirB64, commandB64] };
+};

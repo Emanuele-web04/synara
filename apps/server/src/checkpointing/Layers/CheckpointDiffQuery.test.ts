@@ -11,6 +11,14 @@ import { checkpointRefForThreadTurn, checkpointRefForThreadTurnStart } from "../
 import { CheckpointDiffQueryLive } from "./CheckpointDiffQuery.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
 import { CheckpointDiffQuery } from "../Services/CheckpointDiffQuery.ts";
+import { RuntimeWorkspaceDiff } from "../../executionRuntime/Services/RuntimeWorkspaceDiff.ts";
+
+// These tests cover local/worktree threads, which never reach the sandbox diff
+// seam. A fake that dies on call would also satisfy the type; returning an empty
+// result keeps the type honest without asserting it is never called.
+const RuntimeWorkspaceDiffFakeLive = Layer.succeed(RuntimeWorkspaceDiff, {
+  read: () => Effect.succeed({ diff: "", changedPaths: [] }),
+});
 
 function makeThreadCheckpointContext(input: {
   readonly projectId: ProjectId;
@@ -105,6 +113,7 @@ describe("CheckpointDiffQueryLive", () => {
 
     const layer = CheckpointDiffQueryLive.pipe(
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
+      Layer.provideMerge(RuntimeWorkspaceDiffFakeLive),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getSnapshot: () => Effect.die("unused"),
@@ -119,7 +128,7 @@ describe("CheckpointDiffQueryLive", () => {
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
-          getThreadDetailById: () => Effect.die("unused"),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
       ),
@@ -190,6 +199,7 @@ describe("CheckpointDiffQueryLive", () => {
 
     const layer = CheckpointDiffQueryLive.pipe(
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
+      Layer.provideMerge(RuntimeWorkspaceDiffFakeLive),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getSnapshot: () => Effect.die("unused"),
@@ -204,7 +214,7 @@ describe("CheckpointDiffQueryLive", () => {
           getFullThreadDiffContext: () => Effect.succeed(Option.some(fullThreadDiffContext)),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
-          getThreadDetailById: () => Effect.die("unused"),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
       ),
@@ -251,6 +261,7 @@ describe("CheckpointDiffQueryLive", () => {
 
     const layer = CheckpointDiffQueryLive.pipe(
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
+      Layer.provideMerge(RuntimeWorkspaceDiffFakeLive),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getSnapshot: () => Effect.die("unused"),
@@ -265,7 +276,7 @@ describe("CheckpointDiffQueryLive", () => {
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
-          getThreadDetailById: () => Effect.die("unused"),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
       ),
@@ -312,6 +323,7 @@ describe("CheckpointDiffQueryLive", () => {
 
     const layer = CheckpointDiffQueryLive.pipe(
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
+      Layer.provideMerge(RuntimeWorkspaceDiffFakeLive),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getSnapshot: () => Effect.die("unused"),
@@ -326,7 +338,7 @@ describe("CheckpointDiffQueryLive", () => {
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
-          getThreadDetailById: () => Effect.die("unused"),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
       ),
@@ -374,6 +386,7 @@ describe("CheckpointDiffQueryLive", () => {
 
     const layer = CheckpointDiffQueryLive.pipe(
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
+      Layer.provideMerge(RuntimeWorkspaceDiffFakeLive),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getSnapshot: () => Effect.die("unused"),
@@ -388,7 +401,7 @@ describe("CheckpointDiffQueryLive", () => {
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
-          getThreadDetailById: () => Effect.die("unused"),
+          getThreadDetailById: () => Effect.succeed(Option.none()),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
       ),

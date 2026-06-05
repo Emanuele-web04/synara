@@ -291,6 +291,25 @@ export const makeHttpDaytonaSandboxClient = (
     const redact = (value: string): string =>
       redactSecrets(value, [credentials.apiKey, ...dynamicSecrets]);
 
+    // Wrap any thrown cause as a redacted `DaytonaApiError` for `operation`. The
+    // status defaults to `null` (no HTTP response — transport or pre-flight
+    // failure); pass the response status once a response exists so a caller can
+    // special-case it (e.g. 404 as idempotent).
+    const toApiError =
+      (operation: string, status: number | null = null) =>
+      (cause: unknown): DaytonaApiError =>
+        new DaytonaApiError({ operation, status, detail: redact(String(cause)) });
+
+    // Build a JSON-bodied request, mapping a body-encode failure to a redacted
+    // `DaytonaApiError`. The body is encoded before any request is sent, so the
+    // status is always `null` here.
+    const bodyJsonRequest = (
+      operation: string,
+      request: HttpClientRequest.HttpClientRequest,
+      body: unknown,
+    ): Effect.Effect<HttpClientRequest.HttpClientRequest, DaytonaApiError> =>
+      HttpClientRequest.bodyJson(request, body).pipe(Effect.mapError(toApiError(operation)));
+
     const authed = (request: HttpClientRequest.HttpClientRequest) => {
       const withOrg =
         credentials.organizationId === undefined
@@ -326,16 +345,9 @@ export const makeHttpDaytonaSandboxClient = (
       schema: Schema.Codec<A, I, RD, RE>,
     ): Effect.Effect<A, DaytonaApiError, RD> =>
       Effect.gen(function* () {
-        const response = yield* httpClient.execute(authed(request)).pipe(
-          Effect.mapError(
-            (cause) =>
-              new DaytonaApiError({
-                operation,
-                status: null,
-                detail: redact(String(cause)),
-              }),
-          ),
-        );
+        const response = yield* httpClient
+          .execute(authed(request))
+          .pipe(Effect.mapError(toApiError(operation)));
         if (response.status >= 400) {
           const body = yield* response.text.pipe(Effect.orElseSucceed(() => ""));
           return yield* Effect.fail(
@@ -347,24 +359,10 @@ export const makeHttpDaytonaSandboxClient = (
           );
         }
         const json = yield* response.json.pipe(
-          Effect.mapError(
-            (cause) =>
-              new DaytonaApiError({
-                operation,
-                status: response.status,
-                detail: redact(String(cause)),
-              }),
-          ),
+          Effect.mapError(toApiError(operation, response.status)),
         );
         return yield* Schema.decodeUnknownEffect(schema)(json).pipe(
-          Effect.mapError(
-            (cause) =>
-              new DaytonaApiError({
-                operation,
-                status: response.status,
-                detail: redact(String(cause)),
-              }),
-          ),
+          Effect.mapError(toApiError(operation, response.status)),
         );
       });
 
@@ -375,25 +373,11 @@ export const makeHttpDaytonaSandboxClient = (
       request: HttpClientRequest.HttpClientRequest,
     ): Effect.Effect<string, DaytonaApiError> =>
       Effect.gen(function* () {
-        const response = yield* httpClient.execute(authed(request)).pipe(
-          Effect.mapError(
-            (cause) =>
-              new DaytonaApiError({
-                operation,
-                status: null,
-                detail: redact(String(cause)),
-              }),
-          ),
-        );
+        const response = yield* httpClient
+          .execute(authed(request))
+          .pipe(Effect.mapError(toApiError(operation)));
         const body = yield* response.text.pipe(
-          Effect.mapError(
-            (cause) =>
-              new DaytonaApiError({
-                operation,
-                status: response.status,
-                detail: redact(String(cause)),
-              }),
-          ),
+          Effect.mapError(toApiError(operation, response.status)),
         );
         if (response.status >= 400) {
           return yield* Effect.fail(
@@ -412,16 +396,9 @@ export const makeHttpDaytonaSandboxClient = (
       request: HttpClientRequest.HttpClientRequest,
     ): Effect.Effect<void, DaytonaApiError> =>
       Effect.gen(function* () {
-        const response = yield* httpClient.execute(authed(request)).pipe(
-          Effect.mapError(
-            (cause) =>
-              new DaytonaApiError({
-                operation,
-                status: null,
-                detail: redact(String(cause)),
-              }),
-          ),
-        );
+        const response = yield* httpClient
+          .execute(authed(request))
+          .pipe(Effect.mapError(toApiError(operation)));
         if (response.status >= 400) {
           const body = yield* response.text.pipe(Effect.orElseSucceed(() => ""));
           return yield* Effect.fail(
@@ -445,18 +422,10 @@ export const makeHttpDaytonaSandboxClient = (
               : { snapshot: credentials.snapshot }
             : { snapshot: input.snapshotId }),
         };
-        const request = yield* HttpClientRequest.bodyJson(
+        const request = yield* bodyJsonRequest(
+          "create",
           HttpClientRequest.post(apiUrl("/sandbox")),
           body,
-        ).pipe(
-          Effect.mapError(
-            (cause) =>
-              new DaytonaApiError({
-                operation: "create",
-                status: null,
-                detail: redact(String(cause)),
-              }),
-          ),
         );
         const response = yield* requestJson("create", request, SandboxResponse);
         return {
@@ -468,18 +437,10 @@ export const makeHttpDaytonaSandboxClient = (
 
     const exec: DaytonaSandboxClientShape["exec"] = (sandboxId, input) =>
       Effect.gen(function* () {
-        const request = yield* HttpClientRequest.bodyJson(
+        const request = yield* bodyJsonRequest(
+          "exec",
           HttpClientRequest.post(toolboxUrl(`/toolbox/${sandboxId}/process/execute`)),
           { command: buildShellCommand(input, SANDBOX_ROOT) },
-        ).pipe(
-          Effect.mapError(
-            (cause) =>
-              new DaytonaApiError({
-                operation: "exec",
-                status: null,
-                detail: redact(String(cause)),
-              }),
-          ),
         );
         const response = yield* requestJson("exec", request, ExecResponse);
         return {
@@ -498,36 +459,20 @@ export const makeHttpDaytonaSandboxClient = (
         const sessionId = `synara-${crypto.randomUUID()}`;
         const sessionBase = toolboxUrl(`/toolbox/${sandboxId}/process/session`);
 
-        const createSessionReq = yield* HttpClientRequest.bodyJson(
+        const createSessionReq = yield* bodyJsonRequest(
+          "startSession",
           HttpClientRequest.post(sessionBase),
           { sessionId },
-        ).pipe(
-          Effect.mapError(
-            (cause) =>
-              new DaytonaApiError({
-                operation: "startSession",
-                status: null,
-                detail: redact(String(cause)),
-              }),
-          ),
         );
         yield* requestVoid("startSession", createSessionReq);
 
-        const execReq = yield* HttpClientRequest.bodyJson(
+        const execReq = yield* bodyJsonRequest(
+          "startSession",
           HttpClientRequest.post(`${sessionBase}/${sessionId}/exec`),
           {
             command: wrapInPty(buildShellCommand(input, SANDBOX_ROOT)),
             runAsync: true,
           },
-        ).pipe(
-          Effect.mapError(
-            (cause) =>
-              new DaytonaApiError({
-                operation: "startSession",
-                status: null,
-                detail: redact(String(cause)),
-              }),
-          ),
         );
         const command = yield* requestJson("startSession", execReq, SessionCommandResponse);
         const commandId = command.commandId ?? command.cmdId;
@@ -776,18 +721,10 @@ export const makeHttpDaytonaSandboxClient = (
 
     const snapshot: DaytonaSandboxClientShape["snapshot"] = (sandboxId, label) =>
       Effect.gen(function* () {
-        const request = yield* HttpClientRequest.bodyJson(
+        const request = yield* bodyJsonRequest(
+          "snapshot",
           HttpClientRequest.post(apiUrl(`/sandbox/${sandboxId}/snapshot`)),
           label === null ? {} : { name: label },
-        ).pipe(
-          Effect.mapError(
-            (cause) =>
-              new DaytonaApiError({
-                operation: "snapshot",
-                status: null,
-                detail: redact(String(cause)),
-              }),
-          ),
         );
         const response = yield* requestJson("snapshot", request, SnapshotResponse);
         const snapshotId = response.snapshotId ?? response.id ?? response.name;

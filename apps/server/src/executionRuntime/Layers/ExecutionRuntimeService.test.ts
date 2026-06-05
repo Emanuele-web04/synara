@@ -22,6 +22,7 @@ import { OrchestrationProjectionPipelineLive } from "../../orchestration/Layers/
 import { OrchestrationProjectionSnapshotQueryLive } from "../../orchestration/Layers/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
 import { GitCoreLive } from "../../git/Layers/GitCore.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -67,6 +68,7 @@ const makeServiceRuntime = () => {
     Layer.provide(FakeRuntimeProviderAdapterLive),
     Layer.provide(ExecutionRuntimePlanningTestLive),
     Layer.provide(GitCoreLive),
+    Layer.provide(ServerSettingsService.layerTest()),
     Layer.provideMerge(orchestrationLayer),
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
     Layer.provideMerge(NodeServices.layer),
@@ -516,6 +518,7 @@ const makePreflightRuntime = (configured: boolean) => {
     Layer.provide(ExecutionRuntimePlanningOnlyTestLive),
     Layer.provide(makeCredentialsLayer(configured)),
     Layer.provide(GitCoreLive),
+    Layer.provide(ServerSettingsService.layerTest()),
     Layer.provideMerge(orchestrationLayer),
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
     Layer.provideMerge(NodeServices.layer),

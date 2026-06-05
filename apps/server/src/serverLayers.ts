@@ -20,6 +20,7 @@ import { makeModalRuntimeAdapterLayer } from "./executionRuntime/providers/modal
 import { CLOUDFLARE_RUNTIME_DESCRIPTOR } from "./executionRuntime/Layers/cloudflareDescriptor";
 import { makeCloudflareRuntimeAdapterLayer } from "./executionRuntime/Layers/CloudflareRuntimeProviderFacadeLayer";
 import { RuntimeActivityLeaseManagerLive } from "./executionRuntime/Layers/RuntimeActivityLeaseManager";
+import { RuntimeWorkspaceDiffLive } from "./executionRuntime/Layers/RuntimeWorkspaceDiff";
 import { RuntimeCredentialBrokerLive } from "./executionRuntime/Layers/RuntimeCredentialBroker";
 import { RuntimeProviderCredentialsLive } from "./executionRuntime/Layers/RuntimeProviderCredentials";
 import { SandboxSecretWriterLive } from "./executionRuntime/Layers/SandboxSecretWriter";
@@ -54,28 +55,16 @@ export { makeServerProviderLayer } from "./provider/runtimeLayer";
 export function makeServerRuntimeServicesLayer() {
   const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));
 
-  const checkpointDiffQueryLayer = CheckpointDiffQueryLive.pipe(
-    Layer.provideMerge(OrchestrationLayerLive),
-    Layer.provideMerge(checkpointStoreLayer),
-  );
-
-  const runtimeServicesLayer = Layer.mergeAll(
-    OrchestrationLayerLive,
-    checkpointStoreLayer,
-    checkpointDiffQueryLayer,
-    RuntimeReceiptBusLive,
-  );
-  const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
-    Layer.provideMerge(runtimeServicesLayer),
-  );
   // The execution-runtime service resolves/provisions where a thread runs before
   // the provider session starts. It routes provisioning/exec/teardown through an
   // adapter resolved by provider from the registry; the service itself needs
-  // ChildProcessSpawner (from NodeServices below). Engine + snapshot query come
-  // from runtimeServicesLayer. The registry holds the descriptors the planner
-  // validates a public `runtimePlan` against (fake flavors included) plus the
-  // `fake` provider's lifecycle adapter; its fake adapter needs FileSystem from
-  // NodeServices.
+  // ChildProcessSpawner (from NodeServices below). The registry holds the
+  // descriptors the planner validates a public `runtimePlan` against (fake
+  // flavors included) plus the `fake` provider's lifecycle adapter; its fake
+  // adapter needs FileSystem from NodeServices. The registry/adapters are built
+  // here (before the checkpoint diff query) so the remote workspace-diff seam,
+  // which both that query and the execution-runtime service consume, can route
+  // git through the provider adapters without a layer cycle.
   // The Daytona adapter env-selects its real REST client vs the in-repo fake
   // client (local temp dirs) per provision: with `DAYTONA_API_KEY` present the
   // real client is used, else the fake, so the server boots without provider
@@ -129,6 +118,32 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provide(cloudflareRuntimeAdapterLayer),
     Layer.provide(runtimeProviderCredentialsLayer),
   );
+  // Provider-agnostic remote working-tree diff: routes `git` inside an instance
+  // through the provider's exec channel (resolved by provider from the registry).
+  // Depends only on the registry, so both the checkpoint diff query and the
+  // execution-runtime service can consume it without a layer cycle.
+  const runtimeWorkspaceDiffLayer = RuntimeWorkspaceDiffLive.pipe(
+    Layer.provide(runtimeProviderRegistryLayer),
+  );
+
+  // Built after the registry/workspace-diff so a remote thread's Review diff can
+  // be sourced from its sandbox instead of the host CheckpointStore.
+  const checkpointDiffQueryLayer = CheckpointDiffQueryLive.pipe(
+    Layer.provideMerge(OrchestrationLayerLive),
+    Layer.provideMerge(checkpointStoreLayer),
+    Layer.provideMerge(runtimeWorkspaceDiffLayer),
+  );
+
+  const runtimeServicesLayer = Layer.mergeAll(
+    OrchestrationLayerLive,
+    checkpointStoreLayer,
+    checkpointDiffQueryLayer,
+    RuntimeReceiptBusLive,
+  );
+  const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+
   const executionRuntimePlannerLayer = ExecutionRuntimePlannerLive.pipe(
     Layer.provide(runtimeProviderRegistryLayer),
   );
@@ -141,12 +156,18 @@ export function makeServerRuntimeServicesLayer() {
     // Host-side git for resolving the project repo's origin URL when cloning it
     // into a real remote instance during provision.
     Layer.provide(GitCoreLive),
+    // Read live so the opt-in post-clone install setting applies on the next
+    // provision with no restart, the same way the credential overlay does.
+    Layer.provide(ServerSettingsLive),
     // The activity-lease keepalive: `exec` acquires a lease and renews it on a
     // timer (routed through the adapter's keepalive) while a turn's transport is
     // alive. Leases live and die inside `exec`, so a service-local instance is
     // self-contained; the published one in runtimeRemoteConcernsLayer serves any
     // external resolver.
     Layer.provide(RuntimeActivityLeaseManagerLive),
+    // The remote workspace-diff seam, shared with the checkpoint diff query, so
+    // the service's `workspaceDiff` routes git through the provider adapters.
+    Layer.provide(runtimeWorkspaceDiffLayer),
     Layer.provideMerge(runtimeServicesLayer),
   );
   // Cross-cutting remote concerns: runtime-neutral git over the exec channel,
@@ -172,7 +193,11 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(executionRuntimeServiceLayer),
     Layer.provideMerge(runtimeServicesLayer),
   );
+  // The reactor routes a remote thread's turn diff to its sandbox through the
+  // execution-runtime seam; local/worktree threads keep the host CheckpointStore
+  // path unchanged.
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
+    Layer.provideMerge(executionRuntimeServiceLayer),
     Layer.provideMerge(runtimeServicesLayer),
   );
   const orchestrationReactorLayer = OrchestrationReactorLive.pipe(

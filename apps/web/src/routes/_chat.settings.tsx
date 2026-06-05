@@ -2978,6 +2978,33 @@ function SettingsRouteView() {
             </SettingsSelectControl>
           }
         />
+        <SettingsRow
+          title="Post-clone command"
+          description="Optional command run in the sandbox after the repo is cloned (e.g. `pnpm install --frozen-lockfile`), so a remote agent can run tests/lint/typecheck. Use `auto` to detect a package manager from the lockfile. Empty (default) skips it. Best-effort: a failure does not block the session."
+          resetAction={
+            settings.sandboxPostCloneCommand !== defaults.sandboxPostCloneCommand ? (
+              <SettingResetButton
+                label="post-clone command"
+                onClick={() =>
+                  updateSettings({
+                    sandboxPostCloneCommand: defaults.sandboxPostCloneCommand,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Input
+              className="w-full"
+              type="text"
+              value={settings.sandboxPostCloneCommand}
+              onChange={(event) => updateSettings({ sandboxPostCloneCommand: event.target.value })}
+              placeholder="pnpm install --frozen-lockfile"
+              spellCheck={false}
+              aria-label="Post-clone command"
+            />
+          }
+        />
       </SettingsSection>
 
       {SANDBOX_PROVIDER_DESCRIPTORS.map((provider) => (

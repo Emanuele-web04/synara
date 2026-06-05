@@ -314,6 +314,11 @@ export const makeOrchestrationIntegrationHarness = (
     const executionRuntimeServiceLayer = ExecutionRuntimeServiceLive.pipe(
       Layer.provide(FakeRuntimeProviderAdapterLive),
       Layer.provide(ExecutionRuntimePlanningTestLive),
+      // Self-provide the service's host-side git + settings deps so it is
+      // complete on its own — the checkpoint reactor consumes it too, not only
+      // the provider command reactor which historically supplied them downstream.
+      Layer.provide(gitCoreLayer),
+      Layer.provide(ServerSettingsService.layerTest()),
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -325,6 +330,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(ServerSettingsService.layerTest()),
     );
     const checkpointReactorLayer = CheckpointReactorLive.pipe(
+      Layer.provideMerge(executionRuntimeServiceLayer),
       Layer.provideMerge(runtimeServicesLayer),
     );
     const orchestrationReactorLayer = OrchestrationReactorLive.pipe(

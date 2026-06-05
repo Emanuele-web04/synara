@@ -8,6 +8,7 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
+  ExecutionInstanceId,
   MessageId,
   ProjectId,
   ThreadId,
@@ -37,6 +38,11 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
+import {
+  ExecutionRuntimeService,
+  type ExecutionRuntimeServiceShape,
+  type ExecutionRuntimeWorkspaceDiff,
+} from "../../executionRuntime/Services/ExecutionRuntimeService.ts";
 import {
   checkpointRefForThreadMessageStart,
   checkpointRefForThreadTurn,
@@ -114,6 +120,37 @@ function createProviderServiceHarness(
     rollbackConversation,
     emit,
   };
+}
+
+// A stub ExecutionRuntimeService whose `workspaceDiff` is a spy returning a
+// canned sandbox diff. Only `workspaceDiff` is exercised by the reactor's remote
+// path; the rest die if touched so an unexpected call surfaces loudly.
+function createExecutionRuntimeHarness(diff: ExecutionRuntimeWorkspaceDiff) {
+  const workspaceDiff = vi.fn(
+    (_input: {
+      readonly threadId: ThreadId;
+      readonly instanceId: ExecutionInstanceId;
+      readonly workdir?: string | undefined;
+    }) => Effect.succeed(diff),
+  );
+  const die = <A>() =>
+    Effect.die(new Error("Unexpected ExecutionRuntimeService call in test")) as Effect.Effect<
+      A,
+      never
+    >;
+  const service = {
+    markThreadRemote: () => die(),
+    applyRuntimePlan: () => die(),
+    ensureTargetForThread: () => die(),
+    exec: () => die(),
+    workspaceDiff,
+    destroy: () => die(),
+    stop: () => die(),
+    snapshot: () => die(),
+    probeInstance: () => die(),
+    recordInstanceState: () => die(),
+  } as unknown as ExecutionRuntimeServiceShape;
+  return { service, workspaceDiff };
 }
 
 async function waitForThread(
@@ -256,6 +293,7 @@ describe("CheckpointReactor", () => {
     readonly threadWorktreePath?: string | null;
     readonly providerSessionCwd?: string;
     readonly providerName?: ProviderKind;
+    readonly sandboxDiff?: ExecutionRuntimeWorkspaceDiff;
   }) {
     const cwd = createGitRepository();
     tempDirs.push(cwd);
@@ -264,6 +302,9 @@ describe("CheckpointReactor", () => {
       options?.hasSession ?? true,
       options?.providerSessionCwd ?? cwd,
       options?.providerName ?? "codex",
+    );
+    const executionRuntime = createExecutionRuntimeHarness(
+      options?.sandboxDiff ?? { diff: "", changedPaths: [] },
     );
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionPipelineLive),
@@ -281,6 +322,7 @@ describe("CheckpointReactor", () => {
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(RuntimeReceiptBusLive),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
+      Layer.provideMerge(Layer.succeed(ExecutionRuntimeService, executionRuntime.service)),
       Layer.provideMerge(CheckpointStoreLive.pipe(Layer.provide(GitCoreLive))),
       Layer.provideMerge(ServerConfigLayer),
       Layer.provideMerge(NodeServices.layer),
@@ -355,6 +397,7 @@ describe("CheckpointReactor", () => {
     return {
       engine,
       provider,
+      executionRuntime,
       cwd,
       drain,
     };
@@ -1449,5 +1492,174 @@ describe("CheckpointReactor", () => {
       true,
     );
     expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
+  });
+
+  const REMOTE_INSTANCE_ID = ExecutionInstanceId.makeUnsafe("inst-remote-1");
+  const REMOTE_ROOT_PATH = "/root/synara";
+
+  async function markThreadRemote(
+    engine: OrchestrationEngineShape,
+    threadId: ThreadId,
+    createdAt: string,
+  ) {
+    await Effect.runPromise(
+      engine.dispatch({
+        type: "thread.runtime.provision",
+        commandId: CommandId.makeUnsafe("cmd-runtime-provision"),
+        threadId,
+        targetKind: "remote-runtime",
+        provider: "daytona",
+        role: "agent",
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      engine.dispatch({
+        type: "thread.runtime.instance.record",
+        commandId: CommandId.makeUnsafe("cmd-runtime-instance-record"),
+        threadId,
+        instanceId: REMOTE_INSTANCE_ID,
+        provider: "daytona",
+        status: "running",
+        rootPath: REMOTE_ROOT_PATH,
+        createdAt,
+      }),
+    );
+  }
+
+  it("routes a remote thread's turn diff to the sandbox instead of the host CheckpointStore", async () => {
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      sandboxDiff: {
+        diff: [
+          "diff --git a/sandbox.txt b/sandbox.txt",
+          "new file mode 100644",
+          "index 0000000..a1b2c3d",
+          "--- /dev/null",
+          "+++ b/sandbox.txt",
+          "@@ -0,0 +1,1 @@",
+          "+from the sandbox",
+          "",
+        ].join("\n"),
+        changedPaths: ["sandbox.txt"],
+      },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("turn-remote-1");
+    const createdAt = new Date().toISOString();
+
+    await markThreadRemote(harness.engine, threadId, createdAt);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-remote"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-turn-completed-remote-1"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId,
+      payload: { state: "completed" },
+    });
+
+    await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.length === 1 &&
+        entry.checkpoints[0]?.files?.map((file) => file.path).includes("sandbox.txt") === true,
+    );
+
+    // The reactor sourced the diff from the sandbox.
+    expect(harness.executionRuntime.workspaceDiff).toHaveBeenCalledTimes(1);
+    expect(harness.executionRuntime.workspaceDiff.mock.calls[0]?.[0]).toMatchObject({
+      threadId,
+      instanceId: REMOTE_INSTANCE_ID,
+      workdir: REMOTE_ROOT_PATH,
+    });
+    expect(thread.checkpoints[0]?.checkpointTurnCount).toBe(1);
+    expect(thread.checkpoints[0]?.files?.map((file) => file.path)).toEqual(["sandbox.txt"]);
+    // No host checkpoint git ref was created for the remote thread.
+    expect(
+      gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1)),
+    ).toBe(false);
+  });
+
+  it("keeps a local thread on the host CheckpointStore path without touching the sandbox diff", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const createdAt = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-local-path"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("evt-turn-started-local-path"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId: asTurnId("turn-local-1"),
+    });
+    await waitForGitRefExists(
+      harness.cwd,
+      checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
+    );
+
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "v2\n", "utf8");
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-turn-completed-local-path"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId: asTurnId("turn-local-1"),
+      payload: { state: "completed" },
+    });
+
+    await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
+    await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.length === 1 &&
+        entry.checkpoints[0]?.files?.map((file) => file.path).includes("README.md") === true,
+    );
+
+    // The sandbox diff seam was never consulted for a local thread, and the host
+    // checkpoint git ref exists.
+    expect(harness.executionRuntime.workspaceDiff).not.toHaveBeenCalled();
+    expect(
+      gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1)),
+    ).toBe(true);
   });
 });

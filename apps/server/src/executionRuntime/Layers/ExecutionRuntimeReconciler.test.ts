@@ -27,6 +27,7 @@ import { ExecutionRuntimeReconciler } from "../Services/ExecutionRuntimeReconcil
 import { ExecutionRuntimeService } from "../Services/ExecutionRuntimeService.ts";
 import { FakeRuntimeProviderAdapter } from "../Services/FakeRuntimeProviderAdapter.ts";
 import { GitCoreLive } from "../../git/Layers/GitCore.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { ExecutionRuntimeServiceLive } from "./ExecutionRuntimeService.ts";
 import { makeExecutionRuntimeReconcilerLive } from "./ExecutionRuntimeReconciler.ts";
 import { FakeRuntimeProviderAdapterLive } from "./FakeRuntimeProviderAdapter.ts";
@@ -56,6 +57,7 @@ const makeReconcilerRuntime = (options?: ReconcilerOptions) => {
   const executionRuntimeServiceLayer = ExecutionRuntimeServiceLive.pipe(
     Layer.provide(ExecutionRuntimePlanningTestLive),
     Layer.provide(GitCoreLive),
+    Layer.provide(ServerSettingsService.layerTest()),
     Layer.provideMerge(FakeRuntimeProviderAdapterLive),
     Layer.provideMerge(orchestrationLayer),
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),

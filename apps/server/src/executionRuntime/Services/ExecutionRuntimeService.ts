@@ -64,6 +64,29 @@ export interface ExecutionRuntimeExecInput {
   readonly env?: Record<string, string | undefined>;
 }
 
+export interface ExecutionRuntimeWorkspaceDiffInput {
+  readonly threadId: ThreadId;
+  readonly instanceId: ExecutionInstanceId;
+  /**
+   * The instance's working directory (its discovered/recorded `rootPath`). The
+   * git commands run here; omit to default to the recorded root.
+   */
+  readonly workdir?: string | undefined;
+  /** Provider backing the instance, supplied when the in-memory map is cold. */
+  readonly provider?: ExecutionRuntimeProvider | undefined;
+}
+
+/**
+ * The sandbox working-tree diff for a remote-runtime thread: the unified diff of
+ * uncommitted changes against the cloned ref, plus the path of every changed
+ * file (including untracked ones) so the caller can render a complete file list
+ * even when a file's content diff is empty (binary/untracked-only).
+ */
+export interface ExecutionRuntimeWorkspaceDiff {
+  readonly diff: string;
+  readonly changedPaths: ReadonlyArray<string>;
+}
+
 /**
  * Provider-agnostic liveness verdict for a persisted instance, the only fact the
  * reconciler reads back from a provider. `supportsReconnect` mirrors the resolved
@@ -159,6 +182,20 @@ export interface ExecutionRuntimeServiceShape {
   readonly exec: (
     input: ExecutionRuntimeExecInput,
   ) => Effect.Effect<ExecutionRuntimeProcessHandle, RuntimeProvisionFailedError>;
+  /**
+   * Read the working-tree diff from inside a remote instance's cloned repo,
+   * routing `git` through the provider's exec channel. Used by the checkpoint
+   * reactor to populate the Review panel for a remote thread, whose edits land
+   * in the sandbox rather than the host repo the host CheckpointStore diffs.
+   *
+   * Best-effort and provider-agnostic: a missing/destroyed instance, an exec
+   * failure, or a non-repo workdir degrades to an empty-but-clean diff so the
+   * Review panel shows "no changes" instead of the host's "ref unavailable"
+   * error. It never throws.
+   */
+  readonly workspaceDiff: (
+    input: ExecutionRuntimeWorkspaceDiffInput,
+  ) => Effect.Effect<ExecutionRuntimeWorkspaceDiff>;
   /**
    * Tear an instance down and record the destroyed event. Idempotent.
    *

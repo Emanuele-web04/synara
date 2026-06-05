@@ -17,42 +17,14 @@
 import { Effect, Layer } from "effect";
 
 import { RuntimeGitFailedError } from "../Errors.ts";
+import { parsePorcelainZEntries } from "../gitPorcelain.ts";
 import { FakeRuntimeProviderAdapter } from "../Services/FakeRuntimeProviderAdapter.ts";
 import {
   RuntimeGitWorkspace,
   type RuntimeGitCloneInput,
-  type RuntimeGitStatusEntry,
   type RuntimeGitWorkspaceShape,
 } from "../Services/RuntimeGitWorkspace.ts";
 import { redactSecrets } from "./redactCredentials.ts";
-
-/**
- * Parse `git status --porcelain=v1 -z`. The `-z` form is NUL-delimited and
- * never quotes/escapes paths, so a path with spaces or unusual bytes parses
- * unambiguously. Each record is `XY<space>path`; renames carry a second
- * NUL-separated path (the origin), which we skip — the entry reports the new
- * path.
- */
-const parsePorcelainZ = (output: string): ReadonlyArray<RuntimeGitStatusEntry> => {
-  const entries: RuntimeGitStatusEntry[] = [];
-  const records = output.split("\0");
-  for (let i = 0; i < records.length; i += 1) {
-    const record = records[i];
-    if (record === undefined || record.length === 0) {
-      continue;
-    }
-    const status = record.slice(0, 2);
-    const path = record.slice(3);
-    // A rename/copy status (`R`/`C` in either column) is followed by its origin
-    // path as the next NUL-separated record; consume it so it is not mistaken
-    // for a fresh entry.
-    if (status.charAt(0) === "R" || status.charAt(0) === "C") {
-      i += 1;
-    }
-    entries.push({ path, status });
-  }
-  return entries;
-};
 
 const makeRuntimeGitWorkspace = Effect.gen(function* () {
   const adapter = yield* FakeRuntimeProviderAdapter;
@@ -114,7 +86,7 @@ const makeRuntimeGitWorkspace = Effect.gen(function* () {
 
   const status: RuntimeGitWorkspaceShape["status"] = (input) =>
     runGit("status", input.instanceId, ["status", "--porcelain=v1", "-z"], input.workdir, []).pipe(
-      Effect.map((result) => parsePorcelainZ(result.stdout)),
+      Effect.map((result) => parsePorcelainZEntries(result.stdout)),
     );
 
   const diff: RuntimeGitWorkspaceShape["diff"] = (input) =>

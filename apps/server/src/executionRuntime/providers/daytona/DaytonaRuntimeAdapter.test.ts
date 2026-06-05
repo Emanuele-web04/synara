@@ -464,8 +464,10 @@ describe("DaytonaRuntimeAdapter repo clone on provision", () => {
   // A recording client where `exec` records every input. `pwd` reports the
   // sandbox root, `codex --version` answers a supported version, and the clone
   // (a `bash -lc git clone ...`) succeeds unless `cloneExit` is non-zero, which
-  // simulates a private-repo 403 to exercise the redacted-error path.
-  const makeRecordingClientLayer = (isRemote: boolean, cloneExit = 0) =>
+  // simulates a private-repo 403 to exercise the redacted-error path. The
+  // post-clone command (a `bash -lc ... eval "$cmd"`) exits `postCloneExit` so a
+  // failing install can be exercised without affecting provisioning.
+  const makeRecordingClientLayer = (isRemote: boolean, cloneExit = 0, postCloneExit = 0) =>
     Layer.succeed(DaytonaSandboxClient, {
       isRemoteSandbox: () => isRemote,
       create: () => Effect.succeed({ id: "sb-clone", status: "running", rootPath: "/root" }),
@@ -490,6 +492,12 @@ describe("DaytonaRuntimeAdapter repo clone on provision", () => {
                   stderr: `fatal: could not read from ${repoSource.tokenizedUrl}\n`,
                   exitCode: 128,
                 };
+          }
+          const isPostClone = input.args.some((arg) => arg.includes('eval "$cmd"'));
+          if (isPostClone) {
+            return postCloneExit === 0
+              ? { stdout: "installed\n", stderr: "", exitCode: 0 }
+              : { stdout: "", stderr: "install failed\n", exitCode: postCloneExit };
           }
           return { stdout: "codex-auth-injected\n", stderr: "", exitCode: 0 };
         }),
@@ -656,6 +664,89 @@ describe("DaytonaRuntimeAdapter repo clone on provision", () => {
     } finally {
       await runtime.dispose();
     }
+  });
+
+  it("runs the opt-in post-clone command in the clone dir after checkout", async () => {
+    const runtime = ManagedRuntime.make(
+      makeDaytonaRuntimeAdapterServiceLive({ env: { CODEX_HOME: makeCodexHome() } }).pipe(
+        Layer.provide(makeRecordingClientLayer(true)),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    );
+    try {
+      await runtime.runPromise(
+        Effect.flatMap(DaytonaRuntimeAdapter.asEffect(), (adapter) =>
+          adapter.provision({
+            threadId: "t-postclone",
+            ports: [],
+            snapshotId: null,
+            repoSource: { ...repoSource, postCloneCommand: "pnpm install --frozen-lockfile" },
+          }),
+        ),
+      );
+    } finally {
+      await runtime.dispose();
+    }
+    const postCloneExec = recordedExecs.find((exec) =>
+      exec.args.some((arg) => arg.includes('eval "$cmd"')),
+    );
+    expect(postCloneExec).toBeDefined();
+    expect(postCloneExec?.command).toBe("bash");
+    // The clone dir ($0) and command ($1) ride as base64 args.
+    expect(Buffer.from(postCloneExec?.args[2] as string, "base64").toString("utf8")).toBe(
+      "/root/synara",
+    );
+    expect(Buffer.from(postCloneExec?.args[3] as string, "base64").toString("utf8")).toBe(
+      "pnpm install --frozen-lockfile",
+    );
+  });
+
+  it("does not run a post-clone command when the setting is empty (default OFF)", async () => {
+    const runtime = ManagedRuntime.make(
+      makeDaytonaRuntimeAdapterServiceLive({ env: { CODEX_HOME: makeCodexHome() } }).pipe(
+        Layer.provide(makeRecordingClientLayer(true)),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    );
+    try {
+      await runtime.runPromise(
+        Effect.flatMap(DaytonaRuntimeAdapter.asEffect(), (adapter) =>
+          adapter.provision({ threadId: "t-noinstall", ports: [], snapshotId: null, repoSource }),
+        ),
+      );
+    } finally {
+      await runtime.dispose();
+    }
+    expect(recordedExecs.some((exec) => exec.args.some((arg) => arg.includes('eval "$cmd"')))).toBe(
+      false,
+    );
+  });
+
+  it("does not fail provisioning when the post-clone command exits non-zero (best-effort)", async () => {
+    const runtime = ManagedRuntime.make(
+      makeDaytonaRuntimeAdapterServiceLive({ env: { CODEX_HOME: makeCodexHome() } }).pipe(
+        Layer.provide(makeRecordingClientLayer(true, 0, 1)),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    );
+    let context;
+    try {
+      context = await runtime.runPromise(
+        Effect.flatMap(DaytonaRuntimeAdapter.asEffect(), (adapter) =>
+          adapter.provision({
+            threadId: "t-install-fail",
+            ports: [],
+            snapshotId: null,
+            repoSource: { ...repoSource, postCloneCommand: "pnpm install" },
+          }),
+        ),
+      );
+    } finally {
+      await runtime.dispose();
+    }
+    // The session still provisions; the failed install is logged, not fatal.
+    expect(context.instance.status).toBe("running");
+    expect(context.rootPath).toBe("/root/synara");
   });
 });
 

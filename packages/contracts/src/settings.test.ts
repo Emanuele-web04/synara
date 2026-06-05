@@ -7,6 +7,7 @@ describe("ServerSettings sandbox config", () => {
     const decoded = Schema.decodeSync(ServerSettings)({});
     expect(decoded.sandboxes).toEqual({
       defaultRemoteProvider: "",
+      postCloneCommand: "",
       daytona: { apiKey: "", apiUrl: "", organizationId: "", target: "", snapshot: "" },
       vercel: { token: "", teamId: "", projectId: "", runtime: "" },
       modal: { tokenId: "", tokenSecret: "", environment: "" },
@@ -33,6 +34,18 @@ describe("ServerSettings sandbox config", () => {
     expect(decoded.sandboxes.daytona.target).toBe("");
     expect(decoded.sandboxes.modal.tokenSecret).toBe("secret");
     expect(decoded.sandboxes.vercel.token).toBe("");
+  });
+
+  it("decodes the opt-in post-clone command, defaulting it to off", () => {
+    expect(Schema.decodeSync(ServerSettings)({}).sandboxes.postCloneCommand).toBe("");
+    const decoded = Schema.decodeSync(ServerSettings)({
+      sandboxes: { postCloneCommand: "pnpm install --frozen-lockfile" },
+    });
+    expect(decoded.sandboxes.postCloneCommand).toBe("pnpm install --frozen-lockfile");
+    const patch = Schema.decodeSync(ServerSettingsPatch)({
+      sandboxes: { postCloneCommand: "auto" },
+    });
+    expect(patch.sandboxes?.postCloneCommand).toBe("auto");
   });
 
   it("decodes a sparse sandbox patch with only changed secret fields", () => {

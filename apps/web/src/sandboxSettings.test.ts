@@ -17,6 +17,7 @@ describe("sandboxSettingsToAppSettings", () => {
       sandboxes: {
         ...DEFAULT_SERVER_SETTINGS.sandboxes,
         defaultRemoteProvider: "daytona",
+        postCloneCommand: "pnpm install --frozen-lockfile",
         daytona: {
           // Secret stripped by the server before persistence; modeled here as "".
           apiKey: "",
@@ -37,6 +38,7 @@ describe("sandboxSettingsToAppSettings", () => {
     const flat = sandboxSettingsToAppSettings(settings);
 
     expect(flat.sandboxDefaultRemoteProvider).toBe("daytona");
+    expect(flat.sandboxPostCloneCommand).toBe("pnpm install --frozen-lockfile");
     expect(flat.sandboxDaytonaApiUrl).toBe("https://app.daytona.io/api");
     expect(flat.sandboxDaytonaOrganizationId).toBe("org-9");
     expect(flat.sandboxVercelTeamId).toBe("team-1");
@@ -84,6 +86,15 @@ describe("appSettingsPatchToSandboxesPatch", () => {
     expect(patch).toEqual({
       defaultRemoteProvider: "vercel-sandbox",
       vercel: { runtime: "node22" },
+    });
+  });
+
+  it("maps the post-clone command, including an explicit empty string to clear it", () => {
+    expect(appSettingsPatchToSandboxesPatch({ sandboxPostCloneCommand: "auto" })).toEqual({
+      postCloneCommand: "auto",
+    });
+    expect(appSettingsPatchToSandboxesPatch({ sandboxPostCloneCommand: "" })).toEqual({
+      postCloneCommand: "",
     });
   });
 

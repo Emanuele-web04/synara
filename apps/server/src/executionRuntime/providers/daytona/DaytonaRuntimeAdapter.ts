@@ -42,10 +42,10 @@ import {
   resolveOperatorCodexAuth,
   resolveOperatorCodexInstructions,
 } from "../../codexAuthBootstrap.ts";
-import { buildGitCloneCommand } from "../../gitWorkspaceBootstrap.ts";
+import { buildGitCloneCommand, buildPostCloneCommand } from "../../gitWorkspaceBootstrap.ts";
 import { redactSecrets } from "../../Layers/redactCredentials.ts";
 import type { RuntimeProcessSpawnInput } from "../../Services/RuntimeProcessTransport.ts";
-import { DaytonaApiError } from "./DaytonaErrors.ts";
+import { DaytonaApiError, DaytonaSandboxUnknownError } from "./DaytonaErrors.ts";
 import {
   DaytonaSandboxClient,
   type DaytonaExecInput,
@@ -69,6 +69,11 @@ export interface DaytonaProvisionRepoSource {
   readonly tokenizedUrl: string;
   /** Dir name joined with the discovered sandbox root to form the clone dir. */
   readonly targetSubdir: string;
+  /**
+   * Opt-in command run in the clone dir after checkout (`pnpm install ...`, or
+   * `auto` for lockfile detection). Empty/absent skips it. Best-effort.
+   */
+  readonly postCloneCommand?: string;
 }
 
 export interface DaytonaProvisionInput {
@@ -159,6 +164,16 @@ const toExecInput = (spawn: RuntimeProcessSpawnInput): DaytonaExecInput => ({
   cwd: spawn.cwd,
   env: spawn.env,
 });
+
+// Map a client `DaytonaSandboxUnknownError` (an id the client no longer knows)
+// into the adapter-boundary `DaytonaApiError` carrying the `operation` label.
+// `detail` defaults to the underlying message; a caller that touched a secret
+// passes a transform (e.g. redaction) so a token can never survive into the
+// surfaced error.
+const wrapUnknown =
+  (operation: string, mapDetail: (message: string) => string = (message) => message) =>
+  (error: DaytonaSandboxUnknownError): Effect.Effect<never, DaytonaApiError> =>
+    Effect.fail(new DaytonaApiError({ operation, status: null, detail: mapDetail(error.message) }));
 
 // Join a sandbox-absolute root with a subdir, POSIX-style (the sandbox is Linux).
 // `node:path` would use the host separator, so it is not used here.
@@ -286,17 +301,7 @@ const makeDaytonaRuntimeAdapter = (options: DaytonaRuntimeAdapterOptions = {}) =
         }
         const result = yield* client
           .exec(sandboxId, { command: "codex", args: ["--version"] })
-          .pipe(
-            Effect.catchTag("DaytonaSandboxUnknownError", (error) =>
-              Effect.fail(
-                new DaytonaApiError({
-                  operation: "provision",
-                  status: null,
-                  detail: error.message,
-                }),
-              ),
-            ),
-          );
+          .pipe(Effect.catchTag("DaytonaSandboxUnknownError", wrapUnknown("provision")));
         if (result.exitCode !== 0) {
           return yield* Effect.fail(
             new DaytonaApiError({
@@ -349,14 +354,9 @@ const makeDaytonaRuntimeAdapter = (options: DaytonaRuntimeAdapterOptions = {}) =
         // even though the clone strips the token from .git/config afterward.
         secretTainted.add(sandboxId);
         const result = yield* client.exec(sandboxId, command).pipe(
-          Effect.catchTag("DaytonaSandboxUnknownError", (error) =>
-            Effect.fail(
-              new DaytonaApiError({
-                operation: "provision",
-                status: null,
-                detail: redactSecrets(error.message, secrets),
-              }),
-            ),
+          Effect.catchTag(
+            "DaytonaSandboxUnknownError",
+            wrapUnknown("provision", (message) => redactSecrets(message, secrets)),
           ),
         );
         if (result.exitCode !== 0) {
@@ -371,6 +371,44 @@ const makeDaytonaRuntimeAdapter = (options: DaytonaRuntimeAdapterOptions = {}) =
                 secrets,
               ),
             }),
+          );
+        }
+        // Opt-in dependency install so a remote agent can run tests/lint/typecheck.
+        // Default OFF (empty setting -> no command), best-effort: a non-zero exit
+        // or a sandbox error is logged but never aborts provisioning — the session
+        // still starts, just without node_modules. Runs in the clone dir.
+        yield* runPostCloneCommand(sandboxId, repo.postCloneCommand ?? "", cloneDir);
+      });
+
+    // Best-effort post-clone command (dependency install). Builds the exec from
+    // the operator's setting (blank -> nothing; `auto` -> lockfile detection;
+    // else the literal command) and runs it in the clone dir. Never fails: a
+    // non-zero exit or a sandbox error is logged and swallowed so a broken install
+    // does not block the agent session.
+    const runPostCloneCommand = (
+      sandboxId: string,
+      command: string,
+      cloneDir: string,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const exec = buildPostCloneCommand(command, cloneDir);
+        if (exec === null) {
+          return;
+        }
+        const result = yield* client.exec(sandboxId, exec).pipe(
+          Effect.map((value) => ({ ok: true as const, value })),
+          Effect.catch((error) => Effect.succeed({ ok: false as const, error })),
+        );
+        if (!result.ok) {
+          yield* Effect.logWarning(
+            `post-clone command failed inside sandbox ${sandboxId}: ${result.error.message}`,
+          );
+          return;
+        }
+        if (result.value.exitCode !== 0) {
+          yield* Effect.logWarning(
+            `post-clone command exited ${result.value.exitCode ?? "null"} inside sandbox ${sandboxId}: ` +
+              `${result.value.stderr.trim() || result.value.stdout.trim()}`,
           );
         }
       });
@@ -463,17 +501,7 @@ const makeDaytonaRuntimeAdapter = (options: DaytonaRuntimeAdapterOptions = {}) =
         );
 
         return { transport: built.transport, controller: built.controller };
-      }).pipe(
-        Effect.catchTag("DaytonaSandboxUnknownError", (error) =>
-          Effect.fail(
-            new DaytonaApiError({
-              operation: "createTransport",
-              status: null,
-              detail: error.message,
-            }),
-          ),
-        ),
-      );
+      }).pipe(Effect.catchTag("DaytonaSandboxUnknownError", wrapUnknown("createTransport")));
 
     const execCollect: DaytonaRuntimeAdapterShape["execCollect"] = (instanceId, input) =>
       client.exec(String(instanceId), input).pipe(
@@ -482,29 +510,13 @@ const makeDaytonaRuntimeAdapter = (options: DaytonaRuntimeAdapterOptions = {}) =
           stderr: result.stderr,
           code: result.exitCode,
         })),
-        Effect.catchTag("DaytonaSandboxUnknownError", (error) =>
-          Effect.fail(
-            new DaytonaApiError({
-              operation: "execCollect",
-              status: null,
-              detail: error.message,
-            }),
-          ),
-        ),
+        Effect.catchTag("DaytonaSandboxUnknownError", wrapUnknown("execCollect")),
       );
 
     const exposePort: DaytonaRuntimeAdapterShape["exposePort"] = (instanceId, port) =>
-      client.exposePort(String(instanceId), port).pipe(
-        Effect.catchTag("DaytonaSandboxUnknownError", (error) =>
-          Effect.fail(
-            new DaytonaApiError({
-              operation: "exposePort",
-              status: null,
-              detail: error.message,
-            }),
-          ),
-        ),
-      );
+      client
+        .exposePort(String(instanceId), port)
+        .pipe(Effect.catchTag("DaytonaSandboxUnknownError", wrapUnknown("exposePort")));
 
     const reinjectCredentials: DaytonaRuntimeAdapterShape["reinjectCredentials"] = (instanceId) =>
       injectCodexCredentials(String(instanceId));
@@ -524,44 +536,20 @@ const makeDaytonaRuntimeAdapter = (options: DaytonaRuntimeAdapterOptions = {}) =
             }),
           );
         }
-        return client.snapshot(String(instanceId), label).pipe(
-          Effect.catchTag("DaytonaSandboxUnknownError", (error) =>
-            Effect.fail(
-              new DaytonaApiError({
-                operation: "snapshot",
-                status: null,
-                detail: error.message,
-              }),
-            ),
-          ),
-        );
+        return client
+          .snapshot(String(instanceId), label)
+          .pipe(Effect.catchTag("DaytonaSandboxUnknownError", wrapUnknown("snapshot")));
       });
 
     const refreshActivity: DaytonaRuntimeAdapterShape["refreshActivity"] = (instanceId) =>
-      client.refreshActivity(String(instanceId)).pipe(
-        Effect.catchTag("DaytonaSandboxUnknownError", (error) =>
-          Effect.fail(
-            new DaytonaApiError({
-              operation: "refreshActivity",
-              status: null,
-              detail: error.message,
-            }),
-          ),
-        ),
-      );
+      client
+        .refreshActivity(String(instanceId))
+        .pipe(Effect.catchTag("DaytonaSandboxUnknownError", wrapUnknown("refreshActivity")));
 
     const stop: DaytonaRuntimeAdapterShape["stop"] = (instanceId) =>
-      client.stop(String(instanceId)).pipe(
-        Effect.catchTag("DaytonaSandboxUnknownError", (error) =>
-          Effect.fail(
-            new DaytonaApiError({
-              operation: "stop",
-              status: null,
-              detail: error.message,
-            }),
-          ),
-        ),
-      );
+      client
+        .stop(String(instanceId))
+        .pipe(Effect.catchTag("DaytonaSandboxUnknownError", wrapUnknown("stop")));
 
     const isAlive: DaytonaRuntimeAdapterShape["isAlive"] = (instanceId) =>
       client.getStatus(String(instanceId)).pipe(

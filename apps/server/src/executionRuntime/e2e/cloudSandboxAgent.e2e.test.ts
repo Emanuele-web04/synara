@@ -75,7 +75,9 @@ import { FAKE_RUNTIME_DESCRIPTORS } from "../Layers/fakeDescriptors.ts";
 import { FakeRuntimeProviderAdapterLive } from "../Layers/FakeRuntimeProviderAdapter.ts";
 import { makeRuntimeProviderRegistryWithAdaptersLive } from "../Layers/RuntimeProviderRegistry.ts";
 import { RuntimeActivityLeaseManagerLive } from "../Layers/RuntimeActivityLeaseManager.ts";
+import { RuntimeWorkspaceDiffLive } from "../Layers/RuntimeWorkspaceDiff.ts";
 import { GitCoreLive } from "../../git/Layers/GitCore.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { CLOUDFLARE_RUNTIME_DESCRIPTOR } from "../Layers/cloudflareDescriptor.ts";
 import { DAYTONA_RUNTIME_DESCRIPTOR } from "../providers/daytona/descriptor.ts";
 import { DaytonaRuntimeAdapter } from "../providers/daytona/DaytonaRuntimeAdapter.ts";
@@ -174,7 +176,9 @@ const makeServiceRuntime = () => {
     Layer.provide(registryLayer),
     Layer.provide(RuntimeProviderCredentialsTestLive),
     Layer.provide(RuntimeActivityLeaseManagerLive),
+    Layer.provide(RuntimeWorkspaceDiffLive.pipe(Layer.provide(registryLayer))),
     Layer.provide(GitCoreLive),
+    Layer.provide(ServerSettingsService.layerTest()),
     Layer.provideMerge(daytonaAdapterLayer),
     Layer.provideMerge(orchestrationLayer),
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),

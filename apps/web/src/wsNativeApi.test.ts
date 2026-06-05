@@ -304,6 +304,7 @@ describe("wsNativeApi", () => {
         },
         sandboxes: {
           defaultRemoteProvider: "",
+          postCloneCommand: "",
           daytona: { apiKey: "", apiUrl: "", organizationId: "", target: "", snapshot: "" },
           vercel: { token: "", teamId: "", projectId: "", runtime: "" },
           modal: { tokenId: "", tokenSecret: "", environment: "" },

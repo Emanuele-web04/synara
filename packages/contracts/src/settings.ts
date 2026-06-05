@@ -122,6 +122,15 @@ export type CloudflareSandboxSettings = typeof CloudflareSandboxSettings.Type;
 
 export const SandboxSettings = Schema.Struct({
   defaultRemoteProvider: StringSettingDefaulted,
+  /**
+   * Opt-in command run inside the sandbox after the project repo is cloned and
+   * checked out, in the clone dir (e.g. `pnpm install --frozen-lockfile`). Empty
+   * (the default) skips it: most tasks do not need dependencies, and an install
+   * adds minutes to every provision. Set to `auto` to auto-detect a package
+   * manager from a lockfile in the clone dir. Best-effort — a failure is
+   * logged but never blocks the session.
+   */
+  postCloneCommand: StringSettingDefaulted,
   daytona: DaytonaSandboxSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   vercel: VercelSandboxSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   modal: ModalSandboxSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -169,6 +178,7 @@ const ProviderSettingsBasePatch = {
 
 const SandboxSettingsPatch = Schema.Struct({
   defaultRemoteProvider: Schema.optionalKey(StringSetting),
+  postCloneCommand: Schema.optionalKey(StringSetting),
   daytona: Schema.optionalKey(
     Schema.Struct({
       apiKey: Schema.optionalKey(StringSetting),

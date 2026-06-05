@@ -52,6 +52,12 @@ export interface ExecutionRuntimeRepoSource {
    * resulting absolute path as the instance root so the agent's cwd is the repo.
    */
   readonly targetSubdir: string;
+  /**
+   * Opt-in command to run in the clone dir after checkout (`pnpm install ...`, or
+   * `auto` to detect a package manager from a lockfile). Empty/absent skips it.
+   * Best-effort — a failure must not block provisioning or the session.
+   */
+  readonly postCloneCommand?: string;
 }
 
 /** Input for provisioning the instance backing a thread from its resolved plan. */
