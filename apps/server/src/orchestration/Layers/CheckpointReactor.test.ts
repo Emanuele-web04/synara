@@ -304,7 +304,7 @@ describe("CheckpointReactor", () => {
       options?.providerName ?? "codex",
     );
     const executionRuntime = createExecutionRuntimeHarness(
-      options?.sandboxDiff ?? { diff: "", changedPaths: [] },
+      options?.sandboxDiff ?? { diff: "", changedPaths: [], degraded: false },
     );
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionPipelineLive),
@@ -1542,6 +1542,7 @@ describe("CheckpointReactor", () => {
           "",
         ].join("\n"),
         changedPaths: ["sandbox.txt"],
+        degraded: false,
       },
     });
     const threadId = ThreadId.makeUnsafe("thread-1");

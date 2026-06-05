@@ -25,6 +25,7 @@ import {
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { ExecutionRuntimeService } from "../../executionRuntime/Services/ExecutionRuntimeService.ts";
+import { resolveDiffableRemoteInstance } from "../../executionRuntime/remoteDiffability.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
@@ -72,36 +73,6 @@ function checkpointStatusFromRuntime(status: string | undefined): "ready" | "mis
 
 const serverCommandId = (tag: string): CommandId =>
   CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
-
-// Instance statuses for which the sandbox is reachable for a workspace diff.
-const REMOTE_DIFFABLE_INSTANCE_STATUSES: ReadonlySet<string> = new Set([
-  "starting",
-  "running",
-  "idle",
-]);
-
-// A thread whose edits land in a remote sandbox rather than the host repo: the
-// host CheckpointStore has nothing to diff, so the turn diff is sourced from the
-// instance instead. Returns the instance only when one is reachable.
-function remoteInstanceForDiff(thread: OrchestrationThread): {
-  readonly instanceId: ExecutionInstanceId;
-  readonly rootPath: string | undefined;
-  readonly provider: ExecutionRuntimeProvider;
-} | null {
-  const runtime = thread.runtime;
-  if (runtime?.targetKind !== "remote-runtime") {
-    return null;
-  }
-  const instance = runtime.instance;
-  if (instance === null || !REMOTE_DIFFABLE_INSTANCE_STATUSES.has(instance.status)) {
-    return null;
-  }
-  return {
-    instanceId: instance.id,
-    rootPath: instance.rootPath ?? undefined,
-    provider: instance.provider,
-  };
-}
 
 const ASSISTANT_MESSAGE_ID_RETRY_DELAY_MS = 20;
 const ASSISTANT_MESSAGE_ID_RETRY_ATTEMPTS = 6;
@@ -508,6 +479,12 @@ const make = Effect.gen(function* () {
       provider: input.provider,
     });
 
+    if (workspaceDiff.degraded) {
+      yield* Effect.logWarning(
+        `Remote workspace diff unreadable for thread ${input.threadId} instance ${input.instanceId}; Review shows an empty diff (not necessarily a clean tree).`,
+      );
+    }
+
     const summarized = parseTurnDiffFilesFromUnifiedDiff(workspaceDiff.diff).map((file) => ({
       path: file.path,
       kind: "modified" as const,
@@ -659,7 +636,7 @@ const make = Effect.gen(function* () {
 
     // Remote thread: the agent edited the sandbox, not the host repo. Source the
     // turn diff from the instance instead of the host CheckpointStore.
-    const remoteInstance = remoteInstanceForDiff(thread);
+    const remoteInstance = resolveDiffableRemoteInstance(thread.runtime);
     if (remoteInstance) {
       yield* captureAndDispatchRemoteDiff({
         threadId: thread.id,

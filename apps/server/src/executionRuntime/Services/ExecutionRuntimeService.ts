@@ -85,6 +85,12 @@ export interface ExecutionRuntimeWorkspaceDiffInput {
 export interface ExecutionRuntimeWorkspaceDiff {
   readonly diff: string;
   readonly changedPaths: ReadonlyArray<string>;
+  /**
+   * True when the sandbox diff could not be read (missing instance or a failed
+   * `git` exec) and the empty result is a degraded fallback, not a clean tree.
+   * The caller logs a warning instead of silently reporting "no changes".
+   */
+  readonly degraded: boolean;
 }
 
 /**

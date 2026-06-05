@@ -6,7 +6,8 @@
  * files) appear in `git diff HEAD` without staging their content, so the Review
  * panel lists them with real add/delete counts. `--porcelain` independently
  * enumerates every changed path so a binary/empty content diff still reports the
- * file. Best-effort throughout: any failure degrades to an empty-but-clean diff.
+ * file. Best-effort throughout: any failure degrades to an empty diff flagged
+ * `degraded` so the caller can tell an unreadable sandbox from a clean tree.
  *
  * @module RuntimeWorkspaceDiffLive
  */
@@ -21,7 +22,7 @@ import {
   type RuntimeWorkspaceDiffShape,
 } from "../Services/RuntimeWorkspaceDiff.ts";
 
-const EMPTY: RuntimeWorkspaceDiffResult = { diff: "", changedPaths: [] };
+const EMPTY: RuntimeWorkspaceDiffResult = { diff: "", changedPaths: [], degraded: true };
 
 const makeRuntimeWorkspaceDiff = Effect.gen(function* () {
   const registry = yield* RuntimeProviderRegistry;
@@ -58,6 +59,7 @@ const makeRuntimeWorkspaceDiff = Effect.gen(function* () {
       return {
         diff: diffResult.code === 0 ? diffResult.stdout : "",
         changedPaths: statusResult.code === 0 ? parsePorcelainZPaths(statusResult.stdout) : [],
+        degraded: diffResult.code !== 0 || statusResult.code !== 0,
       } satisfies RuntimeWorkspaceDiffResult;
     });
 

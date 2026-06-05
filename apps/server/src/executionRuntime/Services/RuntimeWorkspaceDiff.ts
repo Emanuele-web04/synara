@@ -31,6 +31,12 @@ export interface RuntimeWorkspaceDiffInput {
 export interface RuntimeWorkspaceDiffResult {
   readonly diff: string;
   readonly changedPaths: ReadonlyArray<string>;
+  /**
+   * True when the diff could not be read (no adapter, or a `git` exec failed) and
+   * the empty result is a degraded fallback rather than a genuinely clean tree, so
+   * a caller can warn instead of silently reporting "no changes".
+   */
+  readonly degraded: boolean;
 }
 
 export interface RuntimeWorkspaceDiffShape {

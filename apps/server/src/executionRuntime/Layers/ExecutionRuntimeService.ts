@@ -637,8 +637,12 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
   // runtime row); otherwise fall back to the in-memory instance→provider map.
   // Delegates the registry-routed git to the standalone RuntimeWorkspaceDiff seam
   // so the diff logic lives in one place. Best-effort: an unresolvable provider
-  // degrades to an empty-but-clean diff.
-  const EMPTY_WORKSPACE_DIFF: ExecutionRuntimeWorkspaceDiff = { diff: "", changedPaths: [] };
+  // degrades to an empty diff flagged degraded (an unread sandbox, not a clean tree).
+  const EMPTY_WORKSPACE_DIFF: ExecutionRuntimeWorkspaceDiff = {
+    diff: "",
+    changedPaths: [],
+    degraded: true,
+  };
   const workspaceDiff: ExecutionRuntimeServiceShape["workspaceDiff"] = (input) =>
     Effect.gen(function* () {
       const provider = input.provider ?? instanceProviders.get(input.instanceId);

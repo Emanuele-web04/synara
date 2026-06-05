@@ -113,19 +113,22 @@ describe("RuntimeWorkspaceDiffLive", () => {
     expect(calls.every((call) => call.cwd === WORKDIR)).toBe(true);
     expect(result.diff).toBe(SANDBOX_DIFF);
     expect(result.changedPaths).toEqual(["sandbox.txt"]);
+    // A successful read of real changes is not degraded — distinct from the
+    // empty fallback paths below.
+    expect(result.degraded).toBe(false);
   });
 
-  it("degrades to an empty-but-clean diff when no adapter resolves", async () => {
+  it("degrades to a flagged empty diff when no adapter resolves", async () => {
     const calls: GitCall[] = [];
     const registry = makeRegistry({ adapterResolves: false, calls });
 
     const result = await readDiff(registry);
 
-    expect(result).toEqual({ diff: "", changedPaths: [] });
+    expect(result).toEqual({ diff: "", changedPaths: [], degraded: true });
     expect(calls).toHaveLength(0);
   });
 
-  it("degrades to an empty-but-clean diff when a git exec fails", async () => {
+  it("degrades to a flagged empty diff when a git exec fails", async () => {
     const calls: GitCall[] = [];
     const registry = makeRegistry({
       adapterResolves: true,
@@ -136,7 +139,17 @@ describe("RuntimeWorkspaceDiffLive", () => {
 
     const result = await readDiff(registry);
 
-    // The seam never throws on a failed exec; it reports a clean tree instead.
-    expect(result).toEqual({ diff: "", changedPaths: [] });
+    // The seam never throws on a failed exec; it reports a degraded empty diff so
+    // the caller can tell an unreadable sandbox from a genuinely clean tree.
+    expect(result).toEqual({ diff: "", changedPaths: [], degraded: true });
+  });
+
+  it("reports a clean tree as not degraded when git succeeds with no changes", async () => {
+    const calls: GitCall[] = [];
+    const registry = makeRegistry({ adapterResolves: true, calls });
+
+    const result = await readDiff(registry);
+
+    expect(result).toEqual({ diff: "", changedPaths: [], degraded: false });
   });
 });

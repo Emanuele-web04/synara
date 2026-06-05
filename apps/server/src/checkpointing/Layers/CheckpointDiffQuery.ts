@@ -8,6 +8,7 @@ import { Effect, Layer, Option, Schema } from "effect";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { RuntimeWorkspaceDiff } from "../../executionRuntime/Services/RuntimeWorkspaceDiff.ts";
+import { resolveDiffableRemoteInstance } from "../../executionRuntime/remoteDiffability.ts";
 import { CheckpointInvariantError, CheckpointUnavailableError } from "../Errors.ts";
 import {
   checkpointRefForThreadTurn,
@@ -54,19 +55,34 @@ const make = Effect.gen(function* () {
     toTurnCount: number,
   ) =>
     Effect.gen(function* () {
-      const threadOption = yield* projectionSnapshotQuery
-        .getThreadDetailById(threadId)
-        .pipe(Effect.catchCause(() => Effect.succeed(Option.none())));
+      const threadOption = yield* projectionSnapshotQuery.getThreadDetailById(threadId).pipe(
+        Effect.catchCause((cause) =>
+          // A failed read (DB error) is not "local thread": warn so a remote
+          // thread routed to the host path by a transient failure is visible,
+          // rather than silently returning an empty host diff.
+          Effect.gen(function* () {
+            yield* Effect.logWarning(
+              `Failed to read thread detail for remote diff routing (thread ${threadId}); falling back to host checkpoint path. ${String(cause)}`,
+            );
+            return Option.none();
+          }),
+        ),
+      );
       const thread = Option.getOrUndefined(threadOption);
-      const runtime = thread?.runtime;
-      if (runtime?.targetKind !== "remote-runtime" || runtime.instance === null) {
+      const remoteInstance = resolveDiffableRemoteInstance(thread?.runtime);
+      if (remoteInstance === null) {
         return null;
       }
       const workspaceDiff = yield* runtimeWorkspaceDiff.read({
-        instanceId: runtime.instance.id,
-        provider: runtime.instance.provider,
-        workdir: runtime.instance.rootPath ?? undefined,
+        instanceId: remoteInstance.instanceId,
+        provider: remoteInstance.provider,
+        workdir: remoteInstance.rootPath,
       });
+      if (workspaceDiff.degraded) {
+        yield* Effect.logWarning(
+          `Remote workspace diff unreadable for thread ${threadId}; Review shows an empty diff (not necessarily a clean tree).`,
+        );
+      }
       return buildTurnDiffResult({
         threadId,
         fromTurnCount,
