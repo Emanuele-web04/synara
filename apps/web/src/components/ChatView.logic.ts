@@ -67,6 +67,28 @@ export function shouldRenderProviderHealthBanner(input: {
   return input.threadEntryPoint === "chat" && !input.terminalWorkspaceTerminalTabActive;
 }
 
+// Default-open policy for the Environment panel; render-time visibility is resolved separately.
+export function resolveDefaultEnvironmentPanelOpen(input: {
+  environmentEnabled: boolean;
+  isCenteredEmptyLanding: boolean;
+  isTerminalPrimarySurface: boolean;
+}): boolean {
+  return (
+    input.environmentEnabled &&
+    !input.isCenteredEmptyLanding &&
+    !input.isTerminalPrimarySurface
+  );
+}
+
+// Hides stale open state immediately on empty landing views, before reset effects run.
+export function resolveEnvironmentPanelVisible(input: {
+  environmentEnabled: boolean;
+  environmentPanelOpen: boolean;
+  isCenteredEmptyLanding: boolean;
+}): boolean {
+  return input.environmentEnabled && input.environmentPanelOpen && !input.isCenteredEmptyLanding;
+}
+
 export function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,

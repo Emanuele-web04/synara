@@ -14,7 +14,10 @@ import serverPackageJson from "../apps/server/package.json" with { type: "json" 
 
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { DESKTOP_STAGE_DEPENDENCY_OVERRIDES } from "./lib/desktop-stage-dependency-overrides.ts";
-import { createDesktopPlatformBuildConfig } from "./lib/desktop-platform-build-config.ts";
+import {
+  createDesktopPlatformBuildConfig,
+  validateDesktopNativeBuildHost,
+} from "./lib/desktop-platform-build-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -53,6 +56,9 @@ const ProductionWindowsIconSource = Effect.zipWith(
   RepoRoot,
   Effect.service(Path.Path),
   (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionWindowsIconIco),
+);
+const NodePtySmokeScript = Effect.zipWith(RepoRoot, Effect.service(Path.Path), (repoRoot, path) =>
+  path.join(repoRoot, "scripts/node-pty-smoke.mjs"),
 );
 const encodeJsonString = Schema.encodeEffect(Schema.UnknownFromJsonString);
 
@@ -494,6 +500,25 @@ function resolveGitHubPublishConfig():
   };
 }
 
+const verifyStagedNodePty = Effect.fn("verifyStagedNodePty")(function* (
+  stageAppDir: string,
+  verbose: boolean,
+) {
+  const smokeScript = yield* NodePtySmokeScript;
+  yield* Effect.log("[desktop-artifact] Verifying staged node-pty native PTY...");
+  yield* runCommand(
+    ChildProcess.make({
+      cwd: stageAppDir,
+      env: {
+        ...process.env,
+        SYNARA_NODE_PTY_SMOKE_REQUIRE_ROOT: stageAppDir,
+      },
+      ...commandOutputOptions(verbose),
+      shell: process.platform === "win32",
+    })`node ${smokeScript}`,
+  );
+});
+
 const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
@@ -577,6 +602,17 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (!platformConfig) {
     return yield* new BuildScriptError({
       message: `Unsupported platform '${options.platform}'.`,
+    });
+  }
+  const nativeBuildHostIssue = validateDesktopNativeBuildHost({
+    platform: options.platform,
+    arch: options.arch,
+    hostPlatform: process.platform,
+    hostArch: process.arch,
+  });
+  if (nativeBuildHostIssue) {
+    return yield* new BuildScriptError({
+      message: nativeBuildHostIssue,
     });
   }
 
@@ -746,6 +782,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       shell: process.platform === "win32",
     })`bun install --production`,
   );
+
+  if (options.platform === "linux") {
+    yield* verifyStagedNodePty(stageAppDir, options.verbose);
+  }
 
   const buildEnv: NodeJS.ProcessEnv = {
     ...process.env,

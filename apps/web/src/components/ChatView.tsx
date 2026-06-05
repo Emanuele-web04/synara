@@ -114,6 +114,8 @@ import {
   enrichSubagentWorkEntries,
   resolveActiveThreadTitle,
   resolveCommittedProviderModel,
+  resolveDefaultEnvironmentPanelOpen,
+  resolveEnvironmentPanelVisible,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
 } from "./ChatView.logic";
@@ -312,6 +314,7 @@ import {
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SidebarHeaderTrigger } from "./ui/sidebar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
+import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
@@ -2954,6 +2957,9 @@ export default function ChatView({
     terminalWorkspaceOpen &&
     (terminalState.workspaceLayout === "terminal-only" ||
       terminalState.workspaceActiveTab === "terminal");
+  const isTerminalPrimarySurface = terminalState.entryPoint === "terminal";
+  const isTerminalEnvironmentContext =
+    isTerminalPrimarySurface || terminalWorkspaceTerminalTabActive;
   const shouldShowProviderHealthBanner = shouldRenderProviderHealthBanner({
     threadEntryPoint: terminalState.entryPoint,
     terminalWorkspaceTerminalTabActive,
@@ -3468,7 +3474,31 @@ export default function ChatView({
   // threads; disposable (temporary/draft) threads keep the legacy inline controls.
   const isDisposableThread = useIsDisposableThread(threadId);
   const environmentEnabled = !isDisposableThread;
-  const [environmentPanelOpen, setEnvironmentPanelOpen] = useState(false);
+  const environmentDefaultOpen = resolveDefaultEnvironmentPanelOpen({
+    environmentEnabled,
+    isCenteredEmptyLanding,
+    isTerminalPrimarySurface,
+  });
+  const [environmentPanelOpen, setEnvironmentPanelOpen] = useState(() => environmentDefaultOpen);
+  useEffect(() => {
+    // Terminal threads keep the Environment panel closed by default so the full
+    // workspace stays untouched until the user explicitly toggles the overlay.
+    // Each normal chat thread starts open; empty/disposable views stay hidden.
+    setEnvironmentPanelOpen(environmentDefaultOpen);
+  }, [environmentDefaultOpen, threadId]);
+  const environmentPanelVisible = resolveEnvironmentPanelVisible({
+    environmentEnabled,
+    environmentPanelOpen,
+    isCenteredEmptyLanding,
+  });
+  const threadRecap = useThreadRecap({
+    thread: activeThread,
+    cwd: threadWorkspaceCwd,
+    enabled: environmentPanelVisible,
+    latestTurnSettled,
+    codexHomePath: settings.codexHomePath || null,
+    providerOptions: providerOptionsForDispatch ?? null,
+  });
   const hasRightDockPanes = useRightDockStore(
     (store) => selectRightDockState(threadId)(store).panes.length > 0,
   );
@@ -7633,18 +7663,21 @@ export default function ChatView({
     diffDisabledReason,
     diffBadgeRefreshIntervalMs: repoDiffBadgeRefreshIntervalMs,
     branchToolbar: branchToolbarProps,
+    recap: threadRecap,
     onToggleDiff,
     onClose: () => setEnvironmentPanelOpen(false),
   };
   // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
   // column is already narrow — right dock open or a split pane (same as header compact mode).
-  const environmentUsesFloatingOverlay = rightDockOpen || surfaceMode === "split";
+  // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
+  const environmentUsesFloatingOverlay =
+    isTerminalEnvironmentContext || rightDockOpen || surfaceMode === "split";
   const environmentAppliesContentInset =
-    environmentEnabled && environmentPanelOpen && !environmentUsesFloatingOverlay;
+    environmentPanelVisible && !environmentUsesFloatingOverlay;
   const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
   const environmentHeaderState = environmentEnabled
     ? {
-        open: environmentPanelOpen,
+        open: environmentPanelVisible,
         onOpenChange: setEnvironmentPanelOpen,
       }
     : null;
@@ -8450,7 +8483,7 @@ export default function ChatView({
           {environmentEnabled ? (
             <EnvironmentPanel
               {...environmentPanelProps}
-              open={environmentPanelOpen}
+              open={environmentPanelVisible}
               variant={environmentOverlayVariant}
             />
           ) : null}

@@ -814,6 +814,28 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
+  it("emits nested PTY spawn failure details", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+    ptyAdapter.spawnFailures.push(new Error("native binding missing"));
+
+    const snapshot = await manager.open(openInput());
+
+    expect(snapshot.status).toBe("error");
+    expect(
+      events.some(
+        (event) =>
+          event.type === "error" &&
+          event.message === "Failed to spawn PTY process: native binding missing",
+      ),
+    ).toBe(true);
+
+    manager.dispose();
+  });
+
   it("filters app runtime env variables from terminal sessions", async () => {
     const originalValues = new Map<string, string | undefined>();
     const setEnv = (key: string, value: string | undefined) => {

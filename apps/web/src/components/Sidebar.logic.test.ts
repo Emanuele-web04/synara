@@ -829,8 +829,8 @@ describe("buildProjectThreadTree", () => {
 });
 
 describe("getVisibleSidebarEntriesForPreview", () => {
-  it("caps project preview by root rows, not flattened child rows", () => {
-    const visibleEntries = getVisibleSidebarEntriesForPreview({
+  it("caps preview by rendered rows, not root-thread count", () => {
+    const result = getVisibleSidebarEntriesForPreview({
       entries: [
         {
           rowId: ThreadId.makeUnsafe("thread-parent"),
@@ -852,12 +852,47 @@ describe("getVisibleSidebarEntriesForPreview", () => {
       activeEntryId: undefined,
       isExpanded: false,
       previewLimit: 2,
-    }).visibleEntries;
+    });
 
-    expect(visibleEntries.map((entry) => entry.rowId)).toEqual([
+    expect(result.hasHiddenEntries).toBe(true);
+    expect(result.visibleEntries.map((entry) => entry.rowId)).toEqual([
       ThreadId.makeUnsafe("thread-parent"),
       ThreadId.makeUnsafe("thread-child"),
-      ThreadId.makeUnsafe("thread-second-root"),
+    ]);
+  });
+
+  it("reveals the active row and its ancestor chain when it falls below the preview", () => {
+    const entries = [
+      {
+        rowId: ThreadId.makeUnsafe("thread-parent"),
+        rootRowId: ThreadId.makeUnsafe("thread-parent"),
+      },
+      {
+        rowId: ThreadId.makeUnsafe("thread-child"),
+        rootRowId: ThreadId.makeUnsafe("thread-parent"),
+      },
+      {
+        rowId: ThreadId.makeUnsafe("thread-second-root"),
+        rootRowId: ThreadId.makeUnsafe("thread-second-root"),
+      },
+      {
+        rowId: ThreadId.makeUnsafe("thread-third-root"),
+        rootRowId: ThreadId.makeUnsafe("thread-third-root"),
+      },
+    ];
+
+    const result = getVisibleSidebarEntriesForPreview({
+      entries,
+      activeEntryId: ThreadId.makeUnsafe("thread-third-root"),
+      isExpanded: false,
+      previewLimit: 2,
+    });
+
+    expect(result.hasHiddenEntries).toBe(true);
+    expect(result.visibleEntries.map((entry) => entry.rowId)).toEqual([
+      ThreadId.makeUnsafe("thread-parent"),
+      ThreadId.makeUnsafe("thread-child"),
+      ThreadId.makeUnsafe("thread-third-root"),
     ]);
   });
 });

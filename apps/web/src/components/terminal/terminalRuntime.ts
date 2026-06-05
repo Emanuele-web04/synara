@@ -14,6 +14,7 @@ import {
   consumeTerminalIdentityInput,
   deriveTerminalOutputIdentity,
 } from "@t3tools/shared/terminalThreads";
+import { describeErrorMessage } from "@t3tools/shared/errorMessages";
 import type { TerminalSessionSnapshot } from "@t3tools/contracts";
 import { Terminal } from "@xterm/xterm";
 
@@ -672,7 +673,7 @@ async function sendTerminalInput(
   try {
     await api.terminal.write({ threadId: entry.threadId, terminalId: entry.terminalId, data });
   } catch (error) {
-    writeSystemMessage(entry.terminal, error instanceof Error ? error.message : fallbackError);
+    writeSystemMessage(entry.terminal, describeErrorMessage(error, fallbackError));
   }
 }
 
@@ -948,7 +949,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
                 void api.shell.openExternal(match.text).catch((error) => {
                   writeSystemMessage(
                     terminal,
-                    error instanceof Error ? error.message : "Unable to open link",
+                    describeErrorMessage(error, "Unable to open link"),
                   );
                 });
                 return;
@@ -958,7 +959,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
               void openInPreferredEditor(api, target).catch((error) => {
                 writeSystemMessage(
                   terminal,
-                  error instanceof Error ? error.message : "Unable to open path",
+                  describeErrorMessage(error, "Unable to open path"),
                 );
               });
             },
@@ -986,7 +987,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
         .catch((error) =>
           writeSystemMessage(
             terminal,
-            error instanceof Error ? error.message : "Terminal write failed",
+            describeErrorMessage(error, "Terminal write failed"),
           ),
         );
     }),
@@ -1147,7 +1148,7 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
       setRuntimeStatus(entry, "error");
       writeSystemMessage(
         entry.terminal,
-        error instanceof Error ? error.message : "Failed to open terminal",
+        describeErrorMessage(error, "Failed to open terminal"),
       );
     });
 }

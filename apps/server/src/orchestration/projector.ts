@@ -28,6 +28,7 @@ import {
   ThreadTurnDiffCompletedPayload,
   ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
+import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
@@ -532,7 +533,10 @@ export function projectEvent(
                     streaming: message.streaming,
                     source: message.source,
                     updatedAt: message.updatedAt,
-                    turnId: message.turnId,
+                    turnId: resolveStableMessageTurnId({
+                      existingTurnId: entry.turnId,
+                      incomingTurnId: message.turnId,
+                    }),
                     ...(message.attachments !== undefined
                       ? { attachments: message.attachments }
                       : {}),

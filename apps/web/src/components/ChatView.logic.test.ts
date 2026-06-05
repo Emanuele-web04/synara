@@ -12,6 +12,8 @@ import {
   isVoiceAuthExpiredMessage,
   resolveActiveThreadTitle,
   resolveCommittedProviderModel,
+  resolveDefaultEnvironmentPanelOpen,
+  resolveEnvironmentPanelVisible,
   resolveRuntimeModeAfterApprovalDecision,
   sanitizeVoiceErrorMessage,
   buildExpiredTerminalContextToastCopy,
@@ -154,6 +156,45 @@ describe("voice helpers", () => {
       canStartVoiceNotes: false,
       showVoiceNotesControl: true,
     });
+  });
+});
+
+describe("environment panel visibility", () => {
+  it("opens normal chat threads by default", () => {
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps empty landing and terminal-primary surfaces closed by default", () => {
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: true,
+        isTerminalPrimarySurface: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("never renders the panel on the centered empty landing while stale open state resets", () => {
+    expect(
+      resolveEnvironmentPanelVisible({
+        environmentEnabled: true,
+        environmentPanelOpen: true,
+        isCenteredEmptyLanding: true,
+      }),
+    ).toBe(false);
   });
 });
 

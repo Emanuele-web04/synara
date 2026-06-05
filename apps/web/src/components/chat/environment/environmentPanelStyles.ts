@@ -1,0 +1,47 @@
+// FILE: environmentPanelStyles.ts
+// Purpose: Shared Environment panel typography tokens. Section labels, the panel title,
+//          and muted body copy (e.g. recap) all reuse the composer placeholder color so
+//          secondary chrome reads consistently across the chat shell.
+// Layer: Environment panel design tokens
+
+import {
+  COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
+  COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
+} from "~/components/chat/composerPickerStyles";
+import { cn } from "~/lib/utils";
+
+/** Panel title ("Environment") and section labels ("Editor", "Recap"). */
+export const ENVIRONMENT_PANEL_LABEL_CLASS_NAME = cn(
+  "font-medium",
+  COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
+);
+
+/** Top-of-card title row. */
+export const ENVIRONMENT_PANEL_TITLE_CLASS_NAME = cn(
+  ENVIRONMENT_PANEL_LABEL_CLASS_NAME,
+  "text-[length:var(--app-font-size-ui,12px)]",
+);
+
+/** Section headings inside the card. */
+export const ENVIRONMENT_PANEL_SECTION_LABEL_CLASS_NAME = cn(
+  ENVIRONMENT_PANEL_LABEL_CLASS_NAME,
+  "px-2 pb-0.5 pt-0.5 text-[length:var(--app-font-size-ui-sm,11px)]",
+);
+
+/** Muted secondary copy such as the recap body. */
+export const ENVIRONMENT_PANEL_MUTED_BODY_CLASS_NAME = cn(
+  COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
+  COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
+);
+
+/** Recap markdown — same placeholder tone with markdown-specific spacing overrides. */
+export const ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME = cn(
+  ENVIRONMENT_PANEL_MUTED_BODY_CLASS_NAME,
+  `!${COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME}`,
+  "[&_strong]:font-medium [&_strong]:text-muted-foreground/40",
+  "[&_:not(pre)>code]:!text-muted-foreground/45",
+  "[&_p]:my-1.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0",
+  "[&_ul]:my-1.5 [&_ol]:my-1.5",
+  "[&_li]:my-0.5",
+  "[&_pre]:my-2",
+);

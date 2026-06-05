@@ -83,6 +83,8 @@ import {
   ServerConfig,
   ServerConfigStreamEvent,
   ServerDiagnosticsResult,
+  ServerGenerateThreadRecapInput,
+  ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
   ServerGetProviderUsageSnapshotInput,
   ServerGetProviderUsageSnapshotResult,
@@ -494,6 +496,12 @@ export const WsServerTranscribeVoiceRpc = Rpc.make(WS_METHODS.serverTranscribeVo
   error: WsRpcError,
 });
 
+export const WsServerGenerateThreadRecapRpc = Rpc.make(WS_METHODS.serverGenerateThreadRecap, {
+  payload: ServerGenerateThreadRecapInput,
+  success: ServerGenerateThreadRecapResult,
+  error: WsRpcError,
+});
+
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
   payload: KeybindingRule,
   success: ServerUpsertKeybindingResult,
@@ -641,6 +649,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProviderUsageSnapshotRpc,
   WsServerGetDiagnosticsRpc,
   WsServerTranscribeVoiceRpc,
+  WsServerGenerateThreadRecapRpc,
   WsServerUpsertKeybindingRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeServerConfigRpc,

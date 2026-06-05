@@ -16,6 +16,7 @@ import {
   ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
 } from "~/components/chat/composerPickerStyles";
 import BranchToolbar, { type BranchToolbarProps } from "~/components/BranchToolbar";
+import ChatMarkdown from "~/components/ChatMarkdown";
 import GitActionsControl from "~/components/GitActionsControl";
 import { IconButton } from "~/components/ui/icon-button";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
@@ -23,7 +24,13 @@ import { ChangesIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import { EnvironmentEditorSection } from "./EnvironmentEditorSection";
-import { ENVIRONMENT_ROW_ICON_CLASS_NAME, EnvironmentRow } from "./EnvironmentRow";
+import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "./environmentPanelStyles";
+import {
+  ENVIRONMENT_ROW_ICON_CLASS_NAME,
+  EnvironmentPanelTitle,
+  EnvironmentRow,
+  EnvironmentSectionLabel,
+} from "./EnvironmentRow";
 
 // Horizontal space (px) the docked card reserves on the right edge of the chat area.
 // Mirrors the card footprint — w-72 (288px) plus the p-3 wrapper gutters — so insetting
@@ -60,6 +67,12 @@ export interface EnvironmentPanelProps {
   diffBadgeRefreshIntervalMs?: number | false;
   /** Env/branch picker config — `variant` is supplied by the panel. */
   branchToolbar: Omit<BranchToolbarProps, "variant">;
+  /** Compact idle-generated chat memory for the top of the panel. */
+  recap?: {
+    readonly text: string | null;
+    readonly status: "idle" | "pending" | "error";
+    readonly updatedAt: string | null;
+  } | null;
   /** Toggle the Diff panel/route (same handler the header diff toggle used). */
   onToggleDiff: () => void;
   /** Dismiss the panel overlay — invoked after actions that open the dock. */
@@ -67,6 +80,35 @@ export interface EnvironmentPanelProps {
 }
 
 const PANEL_DIVIDER_CLASS_NAME = "my-1 border-t border-[color:var(--color-border-light)]";
+
+function EnvironmentRecapSection({
+  recap,
+  markdownCwd,
+}: {
+  recap: NonNullable<EnvironmentPanelProps["recap"]>;
+  markdownCwd: string | undefined;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5 pb-2.5 pt-1">
+      <EnvironmentSectionLabel>Recap</EnvironmentSectionLabel>
+      {recap.text ? (
+        <div className="px-2">
+          <ChatMarkdown
+            text={recap.text}
+            cwd={markdownCwd}
+            isStreaming={false}
+            className={ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME}
+          />
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1.5 px-2" aria-hidden>
+          <div className="h-2.5 w-full rounded bg-[var(--color-background-button-secondary-hover)]/45 motion-safe:animate-pulse" />
+          <div className="h-2.5 w-4/5 rounded bg-[var(--color-background-button-secondary-hover)]/35 motion-safe:animate-pulse" />
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function EnvironmentPanel({
   open,
@@ -82,6 +124,7 @@ export function EnvironmentPanel({
   diffDisabledReason = null,
   diffBadgeRefreshIntervalMs = false,
   branchToolbar,
+  recap = null,
   onToggleDiff,
   onClose,
 }: EnvironmentPanelProps) {
@@ -95,13 +138,13 @@ export function EnvironmentPanel({
   // Disable the Changes row only when the diff cannot be opened *and* is not already open
   // (so an open diff stays toggleable closed even when there are no pending changes).
   const changesDisabled = diffDisabledReason !== null && !diffOpen;
+  const showRecap = Boolean(recap?.text) || recap?.status === "pending";
+  const markdownCwd = openInCwd ?? gitCwd ?? undefined;
 
   const content = (
     <div className="flex flex-col gap-0.5 p-1.5">
       <div className="flex items-center justify-between gap-2 px-2 pb-0.5 pt-0.5">
-        <p className="text-[length:var(--app-font-size-ui,12px)] font-medium text-[var(--color-text-foreground-secondary)]">
-          Environment
-        </p>
+        <EnvironmentPanelTitle>Environment</EnvironmentPanelTitle>
         <IconButton
           label="Environment settings"
           tooltip="Environment settings"
@@ -144,6 +187,13 @@ export function EnvironmentPanel({
         availableEditors={availableEditors}
         openInCwd={openInCwd}
       />
+
+      {showRecap && recap ? (
+        <>
+          <div className={PANEL_DIVIDER_CLASS_NAME} />
+          <EnvironmentRecapSection recap={recap} markdownCwd={markdownCwd} />
+        </>
+      ) : null}
     </div>
   );
 

@@ -60,6 +60,7 @@ import { cn } from "~/lib/utils";
 import {
   COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME,
   COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
+  COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
   COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
 } from "./chat/composerPickerStyles";
 import {
@@ -978,7 +979,8 @@ function ComposerPromptEditorInner({
             terminalContexts.length > 0 ? null : (
               <div
                 className={cn(
-                  "pointer-events-none absolute inset-0 text-muted-foreground/40",
+                  "pointer-events-none absolute inset-0",
+                  COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
                   COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
                 )}
               >

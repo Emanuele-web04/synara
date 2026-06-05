@@ -16,6 +16,7 @@ import {
   type TerminalEvent,
   type TerminalSessionSnapshot,
 } from "@t3tools/contracts";
+import { describeErrorMessage } from "@t3tools/shared/errorMessages";
 import {
   consumeTerminalIdentityInput,
   deriveTerminalOutputIdentity,
@@ -109,6 +110,13 @@ export interface TerminalSubprocessActivity {
 type TerminalSubprocessChecker = (
   terminalPid: number,
 ) => Promise<boolean | TerminalSubprocessActivity>;
+
+function terminalErrorFromCause(fallbackMessage: string, cause: unknown): TerminalError {
+  return new TerminalError({
+    message: describeErrorMessage(cause, fallbackMessage),
+    cause,
+  });
+}
 
 function normalizeSubprocessActivity(
   result: boolean | TerminalSubprocessActivity,
@@ -1360,8 +1368,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       }
 
       if (!ptyProcess) {
-        const detail =
-          lastSpawnError instanceof Error ? lastSpawnError.message : "Terminal start failed";
+        const detail = describeErrorMessage(lastSpawnError, "Terminal start failed");
         const tried =
           shellCandidates.length > 0
             ? ` Tried shells: ${shellCandidates.map((candidate) => formatShellCandidate(candidate)).join(", ")}.`
@@ -1406,7 +1413,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       session.updatedAt = new Date().toISOString();
       this.evictInactiveSessionsIfNeeded();
       this.updateSubprocessPollingState();
-      const message = error instanceof Error ? error.message : "Terminal start failed";
+      const message = describeErrorMessage(error, "Terminal start failed");
       this.emitEvent({
         type: "error",
         threadId: session.threadId,
@@ -2338,38 +2345,38 @@ export const TerminalManagerLive = Layer.effect(
       open: (input) =>
         Effect.tryPromise({
           try: () => runtime.open(input),
-          catch: (cause) => new TerminalError({ message: "Failed to open terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to open terminal", cause),
         }),
       write: (input) =>
         Effect.tryPromise({
           try: () => runtime.write(input),
-          catch: (cause) => new TerminalError({ message: "Failed to write to terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to write to terminal", cause),
         }),
       ackOutput: (input) =>
         Effect.tryPromise({
           try: () => runtime.ackOutput(input),
           catch: (cause) =>
-            new TerminalError({ message: "Failed to acknowledge terminal output", cause }),
+            terminalErrorFromCause("Failed to acknowledge terminal output", cause),
         }),
       resize: (input) =>
         Effect.tryPromise({
           try: () => runtime.resize(input),
-          catch: (cause) => new TerminalError({ message: "Failed to resize terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to resize terminal", cause),
         }),
       clear: (input) =>
         Effect.tryPromise({
           try: () => runtime.clear(input),
-          catch: (cause) => new TerminalError({ message: "Failed to clear terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to clear terminal", cause),
         }),
       restart: (input) =>
         Effect.tryPromise({
           try: () => runtime.restart(input),
-          catch: (cause) => new TerminalError({ message: "Failed to restart terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to restart terminal", cause),
         }),
       close: (input) =>
         Effect.tryPromise({
           try: () => runtime.close(input),
-          catch: (cause) => new TerminalError({ message: "Failed to close terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to close terminal", cause),
         }),
       subscribe: (listener) =>
         Effect.sync(() => {

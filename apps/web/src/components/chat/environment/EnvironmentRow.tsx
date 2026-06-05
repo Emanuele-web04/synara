@@ -10,6 +10,11 @@ import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { ChevronDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
+import {
+  ENVIRONMENT_PANEL_SECTION_LABEL_CLASS_NAME,
+  ENVIRONMENT_PANEL_TITLE_CLASS_NAME,
+} from "./environmentPanelStyles";
+
 /**
  * Interactive full-width row skin shared by every Environment panel entry and by the
  * relocated env/branch/git pickers when they render their trigger as a panel row.
@@ -34,13 +39,14 @@ export function EnvironmentRowChevron({ className }: { className?: string }) {
   return <ChevronDownIcon aria-hidden className={cn("size-3 shrink-0 opacity-60", className)} />;
 }
 
-/** Small muted label that introduces a group of rows (e.g. "Editor"). */
+/** Top-of-card title (e.g. "Environment"). */
+export function EnvironmentPanelTitle({ children }: { children: ReactNode }) {
+  return <p className={ENVIRONMENT_PANEL_TITLE_CLASS_NAME}>{children}</p>;
+}
+
+/** Small muted label that introduces a group of rows (e.g. "Editor", "Recap"). */
 export function EnvironmentSectionLabel({ children }: { children: ReactNode }) {
-  return (
-    <p className="px-2 pb-0.5 pt-0.5 text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-[var(--color-text-foreground-secondary)]">
-      {children}
-    </p>
-  );
+  return <p className={ENVIRONMENT_PANEL_SECTION_LABEL_CLASS_NAME}>{children}</p>;
 }
 
 /**

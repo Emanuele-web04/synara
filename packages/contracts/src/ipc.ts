@@ -63,6 +63,8 @@ import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem
 import type {
   ServerConfig,
   ServerDiagnosticsResult,
+  ServerGenerateThreadRecapInput,
+  ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
   ServerGetProviderUsageSnapshotInput,
   ServerGetProviderUsageSnapshotResult,
@@ -420,6 +422,9 @@ export interface NativeApi {
       input: ServerGetProviderUsageSnapshotInput,
     ) => Promise<ServerGetProviderUsageSnapshotResult>;
     getDiagnostics: () => Promise<ServerDiagnosticsResult>;
+    generateThreadRecap: (
+      input: ServerGenerateThreadRecapInput,
+    ) => Promise<ServerGenerateThreadRecapResult>;
     transcribeVoice: (
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;

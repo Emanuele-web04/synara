@@ -16,6 +16,10 @@
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"
     },
+    "./errorMessages": {
+      "types": "./src/errorMessages.ts",
+      "import": "./src/errorMessages.ts"
+    },
     "./shell": {
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"

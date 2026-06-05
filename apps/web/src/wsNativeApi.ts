@@ -587,6 +587,10 @@ export function createWsNativeApi(): NativeApi {
       getProviderUsageSnapshot: (input) =>
         transport.request(WS_METHODS.serverGetProviderUsageSnapshot, input),
       getDiagnostics: () => transport.request(WS_METHODS.serverGetDiagnostics),
+      generateThreadRecap: (input) =>
+        transport.request(WS_METHODS.serverGenerateThreadRecap, input, {
+          timeoutMs: null,
+        }),
       transcribeVoice: (input) => {
         if (window.desktopBridge?.server?.transcribeVoice) {
           return window.desktopBridge.server.transcribeVoice(input);

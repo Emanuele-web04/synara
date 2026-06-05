@@ -615,18 +615,8 @@ export function getVisibleSidebarEntriesForPreview<
   visibleEntries: T[];
 } {
   const { activeEntryId, entries, isExpanded, previewLimit } = input;
-  const orderedRootRowIds: Thread["id"][] = [];
-  const seenRootRowIds = new Set<Thread["id"]>();
+  const hasHiddenEntries = entries.length > previewLimit;
 
-  for (const entry of entries) {
-    if (seenRootRowIds.has(entry.rootRowId)) {
-      continue;
-    }
-    seenRootRowIds.add(entry.rootRowId);
-    orderedRootRowIds.push(entry.rootRowId);
-  }
-
-  const hasHiddenEntries = orderedRootRowIds.length > previewLimit;
   if (!hasHiddenEntries || isExpanded) {
     return {
       hasHiddenEntries,
@@ -634,19 +624,43 @@ export function getVisibleSidebarEntriesForPreview<
     };
   }
 
-  const visibleRootRowIds = new Set(orderedRootRowIds.slice(0, previewLimit));
-  const activeRootRowId =
-    activeEntryId !== undefined
-      ? (entries.find((entry) => entry.rowId === activeEntryId)?.rootRowId ?? null)
-      : null;
+  const previewEntries = entries.slice(0, previewLimit);
+  const visibleEntryIds = new Set(previewEntries.map((entry) => entry.rowId));
 
-  if (activeRootRowId) {
-    visibleRootRowIds.add(activeRootRowId);
+  if (!activeEntryId || visibleEntryIds.has(activeEntryId)) {
+    return {
+      hasHiddenEntries: true,
+      visibleEntries: previewEntries,
+    };
+  }
+
+  const activeEntryIndex = entries.findIndex((entry) => entry.rowId === activeEntryId);
+  if (activeEntryIndex === -1) {
+    return {
+      hasHiddenEntries: true,
+      visibleEntries: previewEntries,
+    };
+  }
+
+  const activeEntry = entries[activeEntryIndex];
+  if (!activeEntry) {
+    return {
+      hasHiddenEntries: true,
+      visibleEntries: previewEntries,
+    };
+  }
+
+  const rootEntryIndex = entries.findIndex((entry) => entry.rowId === activeEntry.rootRowId);
+  const forcedVisibleEntries =
+    rootEntryIndex === -1 ? [activeEntry] : entries.slice(rootEntryIndex, activeEntryIndex + 1);
+
+  for (const entry of forcedVisibleEntries) {
+    visibleEntryIds.add(entry.rowId);
   }
 
   return {
     hasHiddenEntries: true,
-    visibleEntries: entries.filter((entry) => visibleRootRowIds.has(entry.rootRowId)),
+    visibleEntries: entries.filter((entry) => visibleEntryIds.has(entry.rowId)),
   };
 }
 

@@ -29,6 +29,7 @@ import { ServerConfig } from "./config";
 import { GitCore } from "./git/Services/GitCore";
 import { GitManager } from "./git/Services/GitManager";
 import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
+import { TextGeneration } from "./git/Services/TextGeneration";
 import { Keybindings } from "./keybindings";
 import { Open, resolveAvailableEditors } from "./open";
 import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
@@ -194,6 +195,7 @@ export const makeWsRpcLayer = () =>
       const serverEnvironment = yield* ServerEnvironment;
       const serverSettings = yield* ServerSettingsService;
       const terminalManager = yield* TerminalManager;
+      const textGeneration = yield* TextGeneration;
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
 
@@ -647,6 +649,25 @@ export const makeWsRpcLayer = () =>
                 ),
               ),
             "Voice transcription failed",
+          ),
+        [WS_METHODS.serverGenerateThreadRecap]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const settings = yield* serverSettings.getSettings;
+              const modelSelection =
+                input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
+              return yield* textGeneration.generateThreadRecap({
+                cwd: input.cwd,
+                newMaterial: input.newMaterial,
+                ...(input.previousRecap ? { previousRecap: input.previousRecap } : {}),
+                ...(input.currentState ? { currentState: input.currentState } : {}),
+                ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+                model: input.textGenerationModel ?? modelSelection.model,
+                modelSelection,
+                ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+              });
+            }),
+            "Failed to generate thread recap",
           ),
         [WS_METHODS.serverUpsertKeybinding]: (input) =>
           rpcEffect(
