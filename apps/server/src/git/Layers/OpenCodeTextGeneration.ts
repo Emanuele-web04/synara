@@ -36,11 +36,13 @@ import {
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
+  buildThreadRecapPrompt,
   buildThreadTitlePrompt,
   decodeStructuredTextGenerationOutput,
   type RawTextFallback,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
+  sanitizeThreadRecap,
   sanitizePrTitle,
 } from "../textGenerationShared.ts";
 
@@ -191,7 +193,8 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
         | "generatePrContent"
         | "generateDiffSummary"
         | "generateBranchName"
-        | "generateThreadTitle";
+        | "generateThreadTitle"
+        | "generateThreadRecap";
     }) =>
       sharedServerMutex.withPermit(
         Effect.gen(function* () {
@@ -288,7 +291,8 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
         | "generatePrContent"
         | "generateDiffSummary"
         | "generateBranchName"
-        | "generateThreadTitle";
+        | "generateThreadTitle"
+        | "generateThreadRecap";
       readonly cwd: string;
       readonly prompt: string;
       readonly outputSchemaJson: S;
@@ -574,12 +578,44 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       };
     });
 
+    const generateThreadRecap: TextGenerationShape["generateThreadRecap"] = Effect.fn(
+      `${config.serviceName}.generateThreadRecap`,
+    )(function* (input) {
+      const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
+      if (!modelSelection) {
+        return yield* new TextGenerationError({
+          operation: "generateThreadRecap",
+          detail: `Invalid ${config.displayName} model selection.`,
+        });
+      }
+
+      const { prompt, outputSchemaJson, rawTextFallback } = buildThreadRecapPrompt({
+        ...(input.previousRecap ? { previousRecap: input.previousRecap } : {}),
+        newMaterial: input.newMaterial,
+        ...(input.currentState ? { currentState: input.currentState } : {}),
+      });
+      const generated = yield* runOpenCodeJson({
+        operation: "generateThreadRecap",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson,
+        rawTextFallback,
+        modelSelection,
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      });
+
+      return {
+        recap: sanitizeThreadRecap(generated.recap, input.previousRecap),
+      };
+    });
+
     return {
       generateCommitMessage,
       generatePrContent,
       generateDiffSummary,
       generateBranchName,
       generateThreadTitle,
+      generateThreadRecap,
     } satisfies TextGenerationShape;
   });
 

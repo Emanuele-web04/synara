@@ -60,6 +60,7 @@ import {
   advanceProjectMetadataSnapshotState,
   PROJECT_METADATA_SNAPSHOT_PROJECTORS,
 } from "../projectMetadataProjection.ts";
+import { resolveStableMessageTurnId } from "../messageTurnId.ts";
 import {
   attachmentRelativePath,
   parseAttachmentIdFromRelativePath,
@@ -926,7 +927,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           yield* projectionThreadMessageRepository.upsert({
             messageId: event.payload.messageId,
             threadId: event.payload.threadId,
-            turnId: event.payload.turnId,
+            turnId: resolveStableMessageTurnId({
+              existingTurnId: Option.isSome(existingMessage) ? existingMessage.value.turnId : null,
+              incomingTurnId: event.payload.turnId,
+            }),
             role: event.payload.role,
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),

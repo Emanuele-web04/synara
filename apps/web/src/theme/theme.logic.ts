@@ -143,6 +143,10 @@ const SURFACE_UNDER_CONTRAST_STEP: Record<ThemeVariant, number> = {
   dark: 0.0015,
   light: 0.0012,
 };
+const WARNING_COLOR_BY_VARIANT: Record<ThemeVariant, string> = {
+  dark: "#f5b44a",
+  light: "#d97706",
+};
 const PANEL_BASE_ALPHA: Record<ThemeVariant, number> = {
   dark: 0.03,
   light: 0.18,
@@ -668,7 +672,7 @@ export function buildThemeCssVariables(
     options?.electron === true && options?.isMac === true && !pack.theme.opaqueWindows
       ? "translucent"
       : "opaque";
-  const warningColor = variant === "dark" ? "#f5b44a" : "#d97706";
+  const warningColor = WARNING_COLOR_BY_VARIANT[variant];
   // Codex paints the app sidebar with the PRIMARY surface (--color-background-surface,
   // mapped through --color-token-side-bar-background), not the darker "under" surface.
   // The under-surface is reserved for the window body behind the content (see
@@ -830,13 +834,18 @@ function buildCodexCssVariables(
     | ReturnType<typeof buildDarkDerivedTokens>,
   panelBackground: string,
 ) {
+  const terminalAnsiGreen = buildTerminalAnsiGreen(theme.theme.semanticColors.diffAdded);
+
   return {
     "--codex-base-accent": theme.theme.accent,
     "--codex-base-contrast": String(theme.theme.contrast),
     "--codex-base-ink": theme.theme.ink,
     "--codex-base-surface": theme.theme.surface,
     "--color-accent-blue": theme.theme.accent,
+    "--color-accent-green": theme.theme.semanticColors.diffAdded,
+    "--color-accent-red": theme.theme.semanticColors.diffRemoved,
     "--color-accent-purple": theme.theme.semanticColors.skill,
+    "--color-accent-yellow": WARNING_COLOR_BY_VARIANT[theme.variant],
     "--color-background-accent": derivedTokens.accentBackground,
     "--color-background-accent-active": derivedTokens.accentBackgroundActive,
     "--color-background-accent-hover": derivedTokens.accentBackgroundHover,
@@ -890,7 +899,31 @@ function buildCodexCssVariables(
     "--color-text-foreground": derivedTokens.textForeground,
     "--color-text-foreground-secondary": derivedTokens.textForegroundSecondary,
     "--color-text-foreground-tertiary": derivedTokens.textForegroundTertiary,
+    "--vscode-terminal-ansiBlack": derivedTokens.textForegroundTertiary,
+    "--vscode-terminal-ansiBlue": theme.theme.accent,
+    "--vscode-terminal-ansiBrightBlack": derivedTokens.textForegroundSecondary,
+    "--vscode-terminal-ansiBrightBlue": theme.theme.accent,
+    "--vscode-terminal-ansiBrightCyan": theme.theme.accent,
+    "--vscode-terminal-ansiBrightGreen": terminalAnsiGreen,
+    "--vscode-terminal-ansiBrightMagenta": theme.theme.semanticColors.skill,
+    "--vscode-terminal-ansiBrightRed": theme.theme.semanticColors.diffRemoved,
+    "--vscode-terminal-ansiBrightWhite": derivedTokens.textForeground,
+    "--vscode-terminal-ansiBrightYellow": WARNING_COLOR_BY_VARIANT[theme.variant],
+    "--vscode-terminal-ansiCyan": theme.theme.accent,
+    "--vscode-terminal-ansiGreen": terminalAnsiGreen,
+    "--vscode-terminal-ansiMagenta": theme.theme.semanticColors.skill,
+    "--vscode-terminal-ansiRed": theme.theme.semanticColors.diffRemoved,
+    "--vscode-terminal-ansiWhite": derivedTokens.textForeground,
+    "--vscode-terminal-ansiYellow": WARNING_COLOR_BY_VARIANT[theme.variant],
+    "--vscode-terminal-background": theme.theme.surface,
+    "--vscode-terminal-border": derivedTokens.border,
+    "--vscode-terminal-foreground": derivedTokens.textForeground,
   };
+}
+
+function buildTerminalAnsiGreen(diffAddedColor: string): string {
+  // Terminal success green should read calmer than diff decorations on a white shell.
+  return mixHex(diffAddedColor, "#000000", 0.18);
 }
 
 function buildThemeTokenAliases(codexVariables: Record<string, string>): Record<string, string> {
@@ -943,6 +976,39 @@ function buildThemeTokenAliases(codexVariables: Record<string, string>): Record<
     "--color-token-scrollbar-slider-background": readCodexVariable("--color-border-light"),
     "--color-token-scrollbar-slider-hover-background": readCodexVariable("--color-border"),
     "--color-token-side-bar-background": readCodexVariable("--color-background-surface"),
+    "--color-token-terminal-ansi-black": readCodexVariable("--vscode-terminal-ansiBlack"),
+    "--color-token-terminal-ansi-blue": readCodexVariable("--vscode-terminal-ansiBlue"),
+    "--color-token-terminal-ansi-bright-black": readCodexVariable(
+      "--vscode-terminal-ansiBrightBlack",
+    ),
+    "--color-token-terminal-ansi-bright-blue": readCodexVariable(
+      "--vscode-terminal-ansiBrightBlue",
+    ),
+    "--color-token-terminal-ansi-bright-cyan": readCodexVariable(
+      "--vscode-terminal-ansiBrightCyan",
+    ),
+    "--color-token-terminal-ansi-bright-green": readCodexVariable(
+      "--vscode-terminal-ansiBrightGreen",
+    ),
+    "--color-token-terminal-ansi-bright-magenta": readCodexVariable(
+      "--vscode-terminal-ansiBrightMagenta",
+    ),
+    "--color-token-terminal-ansi-bright-red": readCodexVariable("--vscode-terminal-ansiBrightRed"),
+    "--color-token-terminal-ansi-bright-white": readCodexVariable(
+      "--vscode-terminal-ansiBrightWhite",
+    ),
+    "--color-token-terminal-ansi-bright-yellow": readCodexVariable(
+      "--vscode-terminal-ansiBrightYellow",
+    ),
+    "--color-token-terminal-ansi-cyan": readCodexVariable("--vscode-terminal-ansiCyan"),
+    "--color-token-terminal-ansi-green": readCodexVariable("--vscode-terminal-ansiGreen"),
+    "--color-token-terminal-ansi-magenta": readCodexVariable("--vscode-terminal-ansiMagenta"),
+    "--color-token-terminal-ansi-red": readCodexVariable("--vscode-terminal-ansiRed"),
+    "--color-token-terminal-ansi-white": readCodexVariable("--vscode-terminal-ansiWhite"),
+    "--color-token-terminal-ansi-yellow": readCodexVariable("--vscode-terminal-ansiYellow"),
+    "--color-token-terminal-background": readCodexVariable("--vscode-terminal-background"),
+    "--color-token-terminal-border": readCodexVariable("--vscode-terminal-border"),
+    "--color-token-terminal-foreground": readCodexVariable("--vscode-terminal-foreground"),
     "--color-token-text-code-block-background": readCodexVariable(
       "--color-background-elevated-secondary-opaque",
     ),

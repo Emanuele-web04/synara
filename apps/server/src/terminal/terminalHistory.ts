@@ -12,16 +12,6 @@ export interface HistoryLimits {
   maxBytes: number;
 }
 
-export function countCharacter(value: string, target: string): number {
-  let count = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    if (value[index] === target) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
 /** Trim to the last `maxLines` lines, preserving a trailing newline if present. */
 export function capHistoryLines(history: string, maxLines: number): string {
   if (history.length === 0) return history;
@@ -83,4 +73,92 @@ export function capHistoryBytes(history: string, maxBytes: number, scanWindow = 
 /** Apply the byte ceiling first (bounds size), then the line cap. */
 export function capHistoryByLimits(history: string, limits: HistoryLimits): string {
   return capHistoryLines(capHistoryBytes(history, limits.maxBytes), limits.maxLines);
+}
+
+/**
+ * Append-optimized scrollback buffer.
+ *
+ * Terminal history is appended on the hot output path but read rarely (persist
+ * debounce, reconnect snapshot). Capping eagerly on every append re-scans the
+ * whole retained buffer — O(history) per chunk — which throttles streaming
+ * output once scrollback fills. Instead we keep raw chunks and only drop whole
+ * chunks from the front once they fall entirely outside the byte ceiling, so
+ * `append()` is O(chunk). The precise replay-safe cap (`capHistoryByLimits`)
+ * runs lazily in `toString()`.
+ *
+ * Capping only ever trims from the front and retains at most `maxBytes` bytes,
+ * so capping once over the retained window is identical to capping incrementally
+ * on every append: the eviction window always covers the last `maxBytes` bytes,
+ * which is the only region `capHistoryByLimits` can keep. `toString()` therefore
+ * produces exactly the string eager per-chunk capping would have.
+ */
+export class TerminalHistoryBuffer {
+  private chunks: Array<{ text: string; bytes: number }> = [];
+  private totalBytes = 0;
+  /** Cached materialized (capped) form; null when chunks changed since last read. */
+  private cached: string | null = "";
+
+  constructor(private readonly limits: HistoryLimits) {}
+
+  static fromString(text: string, limits: HistoryLimits): TerminalHistoryBuffer {
+    const buffer = new TerminalHistoryBuffer(limits);
+    buffer.append(text);
+    return buffer;
+  }
+
+  get isEmpty(): boolean {
+    return this.totalBytes === 0;
+  }
+
+  append(chunk: string): void {
+    if (chunk.length === 0) return;
+    const bytes = Buffer.byteLength(chunk, "utf8");
+    this.chunks.push({ text: chunk, bytes });
+    this.totalBytes += bytes;
+    this.cached = null;
+    this.evictFront();
+  }
+
+  reset(): void {
+    this.chunks = [];
+    this.totalBytes = 0;
+    this.cached = "";
+  }
+
+  /**
+   * Drop whole front chunks while the remaining bytes still cover the byte
+   * ceiling. `capHistoryByLimits` never retains anything before `length -
+   * maxBytes`, so any chunk fully outside that window is safe to discard. Keeps
+   * the buffer bounded to roughly `maxBytes + lastChunkSize`.
+   */
+  private evictFront(): void {
+    const { maxBytes } = this.limits;
+    while (this.chunks.length > 1) {
+      const front = this.chunks[0];
+      if (front === undefined) break;
+      if (this.totalBytes - front.bytes < maxBytes) break;
+      this.chunks.shift();
+      this.totalBytes -= front.bytes;
+    }
+  }
+
+  toString(): string {
+    if (this.cached !== null) return this.cached;
+    const joined =
+      this.chunks.length === 1
+        ? (this.chunks[0]?.text ?? "")
+        : this.chunks.map((chunk) => chunk.text).join("");
+    const capped = capHistoryByLimits(joined, this.limits);
+    // Compact to the capped form so repeated reads are O(1) and the retained
+    // footprint matches the observable history exactly.
+    if (capped.length > 0) {
+      this.chunks = [{ text: capped, bytes: Buffer.byteLength(capped, "utf8") }];
+      this.totalBytes = this.chunks[0]?.bytes ?? 0;
+    } else {
+      this.chunks = [];
+      this.totalBytes = 0;
+    }
+    this.cached = capped;
+    return capped;
+  }
 }

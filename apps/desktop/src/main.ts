@@ -126,6 +126,8 @@ const WINDOW_CLOSE_CHANNEL = "desktop:window-close";
 const WINDOW_GET_STATE_CHANNEL = "desktop:window-get-state";
 const WINDOW_STATE_CHANNEL = "desktop:window-state";
 const MENU_ACTION_CHANNEL = "desktop:menu-action";
+const ZOOM_FACTOR_CHANNEL = "desktop:zoom-factor";
+const ZOOM_FACTOR_CHANGED_CHANNEL = "desktop:zoom-factor-changed";
 const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 const UPDATE_CHECK_CHANNEL = "desktop:update-check";
@@ -890,6 +892,17 @@ function resolveMenuTargetWindow(): BrowserWindow | null {
   return BrowserWindow.getFocusedWindow() ?? mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null;
 }
 
+function sendDesktopZoomFactor(webContents: Electron.WebContents): void {
+  if (webContents.isDestroyed()) return;
+  webContents.send(ZOOM_FACTOR_CHANGED_CHANNEL, webContents.getZoomFactor());
+}
+
+function attachDesktopZoomFactorSync(window: BrowserWindow): void {
+  const notify = () => sendDesktopZoomFactor(window.webContents);
+  window.webContents.on("zoom-changed", notify);
+  window.webContents.on("did-finish-load", notify);
+}
+
 function resetWindowZoomFromMenu(): void {
   resolveMenuTargetWindow()?.webContents.setZoomFactor(1);
 }
@@ -949,6 +962,20 @@ async function checkForUpdatesFromMenu(): Promise<void> {
       type: "info",
       title: "You're up to date!",
       message: `Synara ${updateState.currentVersion} is currently the newest version available.`,
+      buttons: ["OK"],
+    });
+  } else if (updateState.status === "downloading" || updateState.status === "available") {
+    void dialog.showMessageBox({
+      type: "info",
+      title: "Update found",
+      message: "Synara is preparing the update in the background.",
+      buttons: ["OK"],
+    });
+  } else if (updateState.status === "downloaded") {
+    void dialog.showMessageBox({
+      type: "info",
+      title: "Update ready",
+      message: "Click Update in the sidebar when you’re ready to restart and install it.",
       buttons: ["OK"],
     });
   } else if (updateState.status === "error") {
@@ -1598,7 +1625,6 @@ async function downloadAvailableUpdate(): Promise<{
   }
   updateDownloadInFlight = true;
   setUpdateState(reduceDesktopUpdateStateOnDownloadStart(updateState));
-  autoUpdater.disableDifferentialDownload = true;
   // Keep existing cancellation suppressions across immediate retries; the old
   // updater cancellation can arrive after a new download has already started.
   lastUpdateDownloadProgressSample = null;
@@ -1658,6 +1684,25 @@ async function downloadAvailableUpdate(): Promise<{
       await clearPendingUpdateCache(pendingCacheClearReason);
     }
   }
+}
+
+// Starts the automatic prepare step after a successful update check; install
+// stays user-controlled so active agent work is not interrupted by a restart.
+function prepareAvailableUpdateInBackground(reason: string): void {
+  if (updateDownloadInFlight || updateState.status !== "available") {
+    return;
+  }
+  void downloadAvailableUpdate()
+    .then((result) => {
+      if (result.accepted && result.completed) {
+        console.info(`[desktop-updater] Background update download completed (${reason}).`);
+      }
+    })
+    .catch((error) => {
+      console.error(
+        `[desktop-updater] Background update download crashed (${reason}): ${formatErrorMessage(error)}`,
+      );
+    });
 }
 
 async function installDownloadedUpdate(): Promise<{
@@ -1744,10 +1789,9 @@ function configureAutoUpdater(): void {
   autoUpdater.channel = DESKTOP_UPDATE_CHANNEL;
   autoUpdater.allowPrerelease = DESKTOP_UPDATE_ALLOW_PRERELEASE;
   autoUpdater.allowDowngrade = false;
-  // We resolve the exact latest stable release when the feed cache is cold/stale
-  // and point the updater at that tag directly, so full downloads are more reliable
-  // than blockmap-based patching against a moving "latest" target.
-  autoUpdater.disableDifferentialDownload = true;
+  // The feed is pinned to an exact release tag before each check, so blockmap
+  // differential downloads can be used without racing a moving "latest" target.
+  autoUpdater.disableDifferentialDownload = false;
   let lastLoggedDownloadMilestone = -1;
 
   if (isArm64HostRunningIntelBuild(desktopRuntimeInfo)) {
@@ -1779,6 +1823,7 @@ function configureAutoUpdater(): void {
     );
     lastLoggedDownloadMilestone = -1;
     console.info(`[desktop-updater] Update available: ${info.version}`);
+    prepareAvailableUpdateInBackground(`available ${info.version}`);
   });
   autoUpdater.on("update-not-available", () => {
     clearUpdateCheckTimeoutTimer();
@@ -2121,6 +2166,11 @@ function registerIpcHandlers(): void {
       normalizeDesktopWsUrl(backendWsUrl) ?? resolveDesktopWsUrlFromEnv(process.env);
   });
 
+  ipcMain.removeAllListeners(ZOOM_FACTOR_CHANNEL);
+  ipcMain.on(ZOOM_FACTOR_CHANNEL, (event: IpcMainEvent) => {
+    event.returnValue = event.sender.getZoomFactor();
+  });
+
   ipcMain.removeHandler(PICK_FOLDER_CHANNEL);
   ipcMain.handle(PICK_FOLDER_CHANNEL, async () => {
     const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
@@ -2459,6 +2509,7 @@ function createWindow(): BrowserWindow {
     },
   });
   browserManager.setWindow(window);
+  attachDesktopZoomFactorSync(window);
 
   window.webContents.on("context-menu", (event, params) => {
     event.preventDefault();

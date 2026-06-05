@@ -57,7 +57,20 @@ import {
 } from "./ui/combobox";
 import { Input } from "./ui/input";
 import { toastManager } from "./ui/toast";
+import {
+  ENVIRONMENT_ROW_CLASS_NAME,
+  ENVIRONMENT_ROW_ICON_CLASS_NAME,
+  EnvironmentRowBody,
+  EnvironmentRowChevron,
+} from "./chat/environment/EnvironmentRow";
 import type { ThreadWorkspacePatch } from "../types";
+
+/**
+ * Where the selector is rendered. `toolbar` keeps the compact composer-footer pill;
+ * `panel` makes the trigger a full-width Environment panel row and drops its menu
+ * downward instead of upward.
+ */
+export type BranchSelectorVariant = "toolbar" | "panel";
 
 interface BranchToolbarBranchSelectorProps {
   activeProjectCwd: string;
@@ -69,6 +82,7 @@ interface BranchToolbarBranchSelectorProps {
   onSetThreadWorkspace: (patch: ThreadWorkspacePatch) => void;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
+  variant?: BranchSelectorVariant;
 }
 
 type StashDiscardDialogState = {
@@ -357,7 +371,9 @@ export function BranchToolbarBranchSelector({
   onSetThreadWorkspace,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
+  variant = "toolbar",
 }: BranchToolbarBranchSelectorProps) {
+  const isPanel = variant === "panel";
   const queryClient = useQueryClient();
   const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false);
   const [isCreateBranchDialogOpen, setIsCreateBranchDialogOpen] = useState(false);
@@ -817,14 +833,28 @@ export function BranchToolbarBranchSelector({
       value={resolvedActiveBranch}
     >
       <ComboboxTrigger
-        className="inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+        className={
+          isPanel
+            ? ENVIRONMENT_ROW_CLASS_NAME
+            : "inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+        }
         disabled={(branchesQuery.isLoading && branches.length === 0) || isBranchActionPending}
       >
-        <CentralIcon name="branch" className="size-3.5 shrink-0" />
-        <span className="max-w-[240px] truncate">{triggerLabel}</span>
-        <ChevronDownIcon className="size-3 opacity-60" />
+        {isPanel ? (
+          <EnvironmentRowBody
+            icon={<CentralIcon name="branch" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+            label={triggerLabel}
+            trailing={<EnvironmentRowChevron />}
+          />
+        ) : (
+          <>
+            <CentralIcon name="branch" className="size-3.5 shrink-0" />
+            <span className="max-w-[240px] truncate">{triggerLabel}</span>
+            <ChevronDownIcon className="size-3 opacity-60" />
+          </>
+        )}
       </ComboboxTrigger>
-      <ComboboxPopup align="end" side="top" className="w-80">
+      <ComboboxPopup align="end" side={isPanel ? "bottom" : "top"} className="w-80">
         <div className="border-b p-1">
           <ComboboxInput
             className="rounded-xl border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] shadow-none before:hidden has-focus-visible:border-[color:var(--color-border-focus)] has-focus-visible:ring-0 [&_input]:font-sans"

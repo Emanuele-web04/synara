@@ -16,6 +16,7 @@ import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
+import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 import {
   listActiveProjectsByWorkspaceRoot,
   listThreadsByProjectId,
@@ -1114,11 +1115,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.message.assistant.delta": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      const existingMessage = thread.messages.find((message) => message.id === command.messageId);
       return {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1132,7 +1134,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: command.delta,
-          turnId: command.turnId ?? null,
+          turnId: resolveStableMessageTurnId({
+            existingTurnId: existingMessage?.turnId,
+            incomingTurnId: command.turnId,
+          }),
           streaming: true,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
@@ -1160,7 +1165,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: existingMessage?.text ?? "",
-          turnId: command.turnId ?? null,
+          turnId: resolveStableMessageTurnId({
+            existingTurnId: existingMessage?.turnId,
+            incomingTurnId: command.turnId,
+          }),
           streaming: false,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,

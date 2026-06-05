@@ -16,6 +16,7 @@ import { useAppSettings } from "~/appSettings";
 import {
   confirmTerminalTabClose,
   resolveTerminalCloseTitle,
+  shouldPromptForTerminalClose,
 } from "~/lib/terminalCloseConfirmation";
 import { readNativeApi } from "~/nativeApi";
 import { selectThreadTerminalState, useTerminalStateStore } from "~/terminalStateStore";
@@ -96,7 +97,12 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
       const api = readNativeApi();
       const confirmed = await confirmTerminalTabClose({
         api,
-        enabled: settings.confirmTerminalTabClose,
+        enabled: shouldPromptForTerminalClose({
+          confirmationEnabled: settings.confirmTerminalTabClose,
+          runningTerminalIds: terminalState.runningTerminalIds,
+          terminalAttentionStatesById: terminalState.terminalAttentionStatesById,
+          terminalId,
+        }),
         terminalTitle: resolveTerminalCloseTitle({
           terminalId,
           terminalLabelsById: terminalState.terminalLabelsById,
@@ -114,6 +120,8 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
       bumpFocusRequest,
       closeTerminalStore,
       settings.confirmTerminalTabClose,
+      terminalState.runningTerminalIds,
+      terminalState.terminalAttentionStatesById,
       terminalState.terminalLabelsById,
       terminalState.terminalTitleOverridesById,
       threadId,

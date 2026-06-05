@@ -61,6 +61,7 @@ import {
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
 import { deriveInlineCommandCall } from "../../lib/toolCallLabel";
+import { isAgentActivityWorkEntry } from "./agentActivity.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import {
@@ -76,6 +77,7 @@ import {
 import {
   CHAT_COLUMN_FRAME_CLASS_NAME,
   CHAT_COLUMN_GUTTER_CLASS_NAME,
+  ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
 } from "./composerPickerStyles";
 import { formatShortTimestamp } from "../../timestampFormat";
 import {
@@ -181,6 +183,7 @@ interface MessagesTimelineProps {
   nowIso?: string;
   expandedWorkGroups?: Record<string, boolean>;
   onToggleWorkGroup?: (groupId: string) => void;
+  onOpenAgentActivity?: (activityId: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread?: (threadId: ThreadId) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
@@ -206,6 +209,12 @@ interface MessagesTimelineProps {
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
   bottomContentInsetPx?: number | undefined;
+  /**
+   * Right padding (px) applied to the scroll viewport so transcript rows clear a right-edge
+   * overlay (e.g. the docked Environment card). The scrollbar stays pinned to the viewport's
+   * far right; only the content is inset.
+   */
+  contentInsetRightPx?: number | undefined;
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
@@ -220,6 +229,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   nowIso,
   expandedWorkGroups,
   onToggleWorkGroup,
+  onOpenAgentActivity,
   onOpenTurnDiff,
   onOpenThread,
   revertTurnCountByUserMessageId,
@@ -246,8 +256,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   workspaceRoot,
   emptyStateContent,
   bottomContentInsetPx,
+  contentInsetRightPx,
 }: MessagesTimelineProps) {
   const normalizedChatFontSizePx = normalizeChatFontSizePx(chatFontSizePx);
+  // Inset rows from the right (overriding the gutter's right padding) without moving the
+  // scroll viewport, so the scrollbar stays pinned to the far right while content clears
+  // any right-edge overlay. Kept stable so LegendList isn't re-rendered on unrelated updates.
+  const listScrollStyle = useMemo(
+    () => (contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined),
+    [contentInsetRightPx],
+  );
   const appTypographyScale = useMemo(
     () => getAppTypographyScale(normalizedChatFontSizePx),
     [normalizedChatFontSizePx],
@@ -497,6 +515,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                     textFontSizePx={normalizedChatFontSizePx}
                     density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
+                    onOpenAgentActivity={onOpenAgentActivity}
                     {...(onOpenThread ? { onOpenThread } : {})}
                   />
                 ))}
@@ -673,7 +692,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           label="Edit message"
                           tooltip="Edit and resend"
                           disabled={isRevertingCheckpoint}
-                          className="disabled:text-muted-foreground/35"
+                          className={cn(
+                            MESSAGE_HOVER_REVEAL_CLASS_NAME,
+                            "disabled:text-muted-foreground/35",
+                          )}
                           onClick={() => startUserMessageEdit(row.message.id)}
                         >
                           <NewThreadIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
@@ -684,7 +706,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           label="Revert to this message"
                           tooltip="Revert to this message"
                           disabled={isRevertingCheckpoint || isWorking}
-                          className="disabled:text-muted-foreground/35"
+                          className={cn(
+                            MESSAGE_HOVER_REVEAL_CLASS_NAME,
+                            "disabled:text-muted-foreground/35",
+                          )}
                           onClick={() => onRevertUserMessage(row.message.id)}
                         >
                           <Undo2Icon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
@@ -846,6 +871,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               density={
                                 prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"
                               }
+                              onOpenAgentActivity={onOpenAgentActivity}
                               {...(onOpenThread ? { onOpenThread } : {})}
                             />
                           ) : (
@@ -891,6 +917,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           density="compact"
                           fileDiffStatByPath={fileDiffStatByPath}
                           onOpenTurnDiff={onOpenTurnDiff}
+                          onOpenAgentActivity={onOpenAgentActivity}
                           {...(onOpenThread ? { onOpenThread } : {})}
                           {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
                         />
@@ -922,6 +949,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                         textFontSizePx={normalizedChatFontSizePx}
                         density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
+                        onOpenAgentActivity={onOpenAgentActivity}
                         {...(onOpenThread ? { onOpenThread } : {})}
                       />
                     ))}
@@ -1005,7 +1033,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       ? "Edited 1 file"
                       : `Edited ${checkpointFiles.length} files`;
                   return (
-                    <div className="mt-4 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)]">
+                    <div className="mt-1 mb-4 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)]">
                       <div
                         className={cn(
                           "flex items-center justify-between gap-3 bg-[var(--app-user-message-background)] px-3 py-1.5",
@@ -1211,8 +1239,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       ListFooterComponent={listFooter}
       className={cn(
         "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
+        ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
         CHAT_COLUMN_GUTTER_CLASS_NAME,
       )}
+      {...(listScrollStyle ? { style: listScrollStyle } : {})}
     />
   );
 });
@@ -1827,6 +1857,10 @@ function workEntryPreview(
     return labels.length === 1 ? labels[0]! : `${labels.length} subagents`;
   }
 
+  if (workEntry.itemType === "collab_agent_tool_call") {
+    return workEntry.detail ?? workEntry.subagentAction?.prompt ?? null;
+  }
+
   // For detail, try to extract a clean file path first
   if (workEntry.detail) {
     const filePath = extractFilePathFromDetail(workEntry.detail);
@@ -1907,6 +1941,19 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
     return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));
   }
   return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
+}
+
+function normalizeWorkDisplayText(value: string): string {
+  return normalizeCompactToolLabel(value).toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function combineWorkEntryDisplayText(heading: string, preview: string | null): string {
+  if (!preview) {
+    return heading;
+  }
+  return normalizeWorkDisplayText(heading) === normalizeWorkDisplayText(preview)
+    ? heading
+    : `${heading} ${preview}`;
 }
 
 // Splits compact work labels so the action verb can carry visual emphasis.
@@ -2015,6 +2062,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   fileDiffStatByPath?: ReadonlyMap<string, { additions: number; deletions: number }>;
   turnId?: TurnId;
   onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
+  onOpenAgentActivity?: (activityId: string) => void;
   onOpenThread?: (threadId: ThreadId) => void;
 }) {
   const {
@@ -2025,6 +2073,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     fileDiffStatByPath,
     turnId,
     onOpenTurnDiff,
+    onOpenAgentActivity,
     onOpenThread,
   } = props;
   const compact = density === "compact";
@@ -2039,15 +2088,19 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     compact && workEntry.itemType === "mcp_tool_call" && !showInlineGitHubIcon;
   const heading = toolWorkEntryHeading(workEntry);
   const preview = workEntryPreview(workEntry);
-  const displayText = preview ? `${heading} ${preview}` : heading;
+  const displayText = combineWorkEntryDisplayText(heading, preview);
   const displayTextParts = splitWorkEntryActionText(displayText);
+  const showInlineAgentTaskPreview =
+    workEntry.itemType === "collab_agent_tool_call" &&
+    (workEntry.subagents?.length ?? 0) === 0 &&
+    Boolean(preview) &&
+    normalizeWorkDisplayText(heading) !== normalizeWorkDisplayText(preview ?? "");
   const rawCommand = workEntry.rawCommand ?? workEntry.command;
   const hoverText = rawCommand ?? displayText;
   const changedFiles = workEntry.changedFiles ?? [];
   const showEditedRows = isFileChangeWorkEntry(workEntry) && changedFiles.length > 0;
   const showSubagentRows =
-    workEntry.itemType === "collab_agent_tool_call" &&
-    ((workEntry.subagents?.length ?? 0) > 0 || Boolean(workEntry.subagentAction));
+    workEntry.itemType === "collab_agent_tool_call" && (workEntry.subagents?.length ?? 0) > 0;
   const visibleSubagents = workEntry.subagents?.slice(0, 3) ?? [];
   const hiddenSubagentCount = Math.max(
     0,
@@ -2055,6 +2108,10 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   );
   const subagentSummary = subagentCardSummary(workEntry);
   const subagentMeta = subagentCardMeta(workEntry);
+  const canOpenAgentActivity = Boolean(onOpenAgentActivity) && isAgentActivityWorkEntry(workEntry);
+  const openAgentActivity = canOpenAgentActivity
+    ? () => onOpenAgentActivity?.(workEntry.id)
+    : undefined;
 
   // Use the text font size (matching the UI settings) for tool call rows
   const rowFontSizePx = textFontSizePx;
@@ -2116,11 +2173,11 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         </div>
       ) : showSubagentRows ? (
         <div className="space-y-1.5">
-          <div
-            className={cn(
-              "flex items-center transition-[opacity,translate] duration-200",
-              compact ? "gap-1.5" : "gap-2",
-            )}
+          <AgentActivityOpenSurface
+            canOpen={canOpenAgentActivity}
+            compact={compact}
+            title={hoverText}
+            onOpen={openAgentActivity}
           >
             <span
               className={cn(
@@ -2151,7 +2208,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 </p>
               ) : null}
             </div>
-          </div>
+          </AgentActivityOpenSurface>
           {visibleSubagents.length > 0 || hiddenSubagentCount > 0 ? (
             <div
               className={cn(
@@ -2261,14 +2318,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         </div>
       ) : (
         (() => {
-          const rowContent = (
-            <div
-              className={cn(
-                "flex items-center transition-[opacity,translate] duration-200",
-                compact ? "gap-1.5" : "gap-2",
-              )}
-              title={hoverText}
-            >
+          const rowContentChildren = (
+            <>
               {showIconLeft && (
                 <span
                   className={cn(
@@ -2280,62 +2331,84 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 </span>
               )}
               <div className="min-w-0 flex-1 overflow-hidden">
-                <p
-                  className={cn(
-                    compact ? "truncate leading-5" : "truncate leading-6",
-                    "text-muted-foreground/50",
-                  )}
-                  style={{ fontSize: `${rowFontSizePx}px` }}
-                >
-                  {showInlineWebSearchIcon || showInlineGitHubIcon || showInlineMcpIcon ? (
-                    <span
-                      className="mr-1 inline-flex align-[-0.125em] text-muted-foreground/38"
-                      data-inline-tool-icon={
-                        showInlineGitHubIcon ? "github" : showInlineMcpIcon ? "mcp" : "web-search"
-                      }
+                {showInlineAgentTaskPreview ? (
+                  <div className={cn(compact ? "space-y-[1px]" : "space-y-0.5")}>
+                    <p
+                      className="truncate font-medium leading-5 text-muted-foreground/72"
+                      style={{ fontSize: `${rowFontSizePx}px` }}
                     >
-                      {showInlineGitHubIcon ? (
-                        <GitHubIcon
-                          style={{
-                            width: `${rowFontSizePx}px`,
-                            height: `${rowFontSizePx}px`,
-                          }}
-                        />
-                      ) : null}
-                      {showInlineMcpIcon ? (
-                        <McpIcon
-                          style={{
-                            width: `${rowFontSizePx}px`,
-                            height: `${rowFontSizePx}px`,
-                          }}
-                        />
-                      ) : null}
-                      {showInlineWebSearchIcon ? (
-                        <GlobeIcon
-                          style={{
-                            width: `${rowFontSizePx}px`,
-                            height: `${rowFontSizePx}px`,
-                          }}
-                        />
-                      ) : null}
-                    </span>
-                  ) : null}
-                  <span className="text-muted-foreground/48" data-work-entry-display-text="true">
-                    {displayTextParts ? (
-                      <>
-                        <span
-                          className="font-medium text-muted-foreground/72"
-                          data-work-entry-action-word="true"
-                        >
-                          {displayTextParts.action}
-                        </span>
-                        {displayTextParts.rest}
-                      </>
-                    ) : (
-                      displayText
+                      {heading}
+                    </p>
+                    <p
+                      className="text-muted-foreground/42"
+                      style={{
+                        fontSize: `${Math.max(11, rowFontSizePx - 1)}px`,
+                        lineHeight: compact ? "18px" : "19px",
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {preview}
+                    </p>
+                  </div>
+                ) : (
+                  <p
+                    className={cn(
+                      compact ? "truncate leading-5" : "truncate leading-6",
+                      "text-muted-foreground/50",
                     )}
-                  </span>
-                </p>
+                    style={{ fontSize: `${rowFontSizePx}px` }}
+                  >
+                    {showInlineWebSearchIcon || showInlineGitHubIcon || showInlineMcpIcon ? (
+                      <span
+                        className="mr-1 inline-flex align-[-0.125em] text-muted-foreground/38"
+                        data-inline-tool-icon={
+                          showInlineGitHubIcon ? "github" : showInlineMcpIcon ? "mcp" : "web-search"
+                        }
+                      >
+                        {showInlineGitHubIcon ? (
+                          <GitHubIcon
+                            style={{
+                              width: `${rowFontSizePx}px`,
+                              height: `${rowFontSizePx}px`,
+                            }}
+                          />
+                        ) : null}
+                        {showInlineMcpIcon ? (
+                          <McpIcon
+                            style={{
+                              width: `${rowFontSizePx}px`,
+                              height: `${rowFontSizePx}px`,
+                            }}
+                          />
+                        ) : null}
+                        {showInlineWebSearchIcon ? (
+                          <GlobeIcon
+                            style={{
+                              width: `${rowFontSizePx}px`,
+                              height: `${rowFontSizePx}px`,
+                            }}
+                          />
+                        ) : null}
+                      </span>
+                    ) : null}
+                    <span className="text-muted-foreground/48" data-work-entry-display-text="true">
+                      {displayTextParts ? (
+                        <>
+                          <span
+                            className="font-medium text-muted-foreground/72"
+                            data-work-entry-action-word="true"
+                          >
+                            {displayTextParts.action}
+                          </span>
+                          {displayTextParts.rest}
+                        </>
+                      ) : (
+                        displayText
+                      )}
+                    </span>
+                  </p>
+                )}
               </div>
               {showIconRight && (
                 <span
@@ -2345,7 +2418,17 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   <EntryIcon style={{ width: rowFontSizePx, height: rowFontSizePx }} />
                 </span>
               )}
-            </div>
+            </>
+          );
+          const rowContent = (
+            <AgentActivityOpenSurface
+              canOpen={canOpenAgentActivity}
+              compact={compact}
+              title={hoverText}
+              onOpen={openAgentActivity}
+            >
+              {rowContentChildren}
+            </AgentActivityOpenSurface>
           );
 
           if (!rawCommand) {
@@ -2365,3 +2448,33 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     </div>
   );
 });
+
+function AgentActivityOpenSurface(props: {
+  canOpen: boolean;
+  children: ReactNode;
+  compact: boolean;
+  onOpen?: (() => void) | undefined;
+  title?: string | undefined;
+}) {
+  const className = cn(
+    "flex w-full items-center text-left transition-[opacity,translate] duration-200",
+    props.compact ? "gap-1.5" : "gap-2",
+    props.canOpen
+      ? "cursor-pointer rounded-md hover:bg-[var(--color-background-button-secondary-hover)]"
+      : "cursor-default",
+  );
+
+  if (props.canOpen) {
+    return (
+      <button type="button" className={className} title={props.title} onClick={props.onOpen}>
+        {props.children}
+      </button>
+    );
+  }
+
+  return (
+    <div className={className} title={props.title}>
+      {props.children}
+    </div>
+  );
+}

@@ -8,6 +8,9 @@ import { cn } from "~/lib/utils";
 import {
   SETTINGS_CARD_CLASS_NAME,
   SETTINGS_CARD_ROW_CLASS_NAME,
+  SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
+  SETTINGS_CARD_ROW_TITLE_CLASS_NAME,
+  SETTINGS_PANEL_SECTION_CLASS_NAME,
   SETTINGS_SECTION_LABEL_CLASS_NAME,
 } from "~/settingsPanelStyles";
 import { SelectPopup } from "~/components/ui/select";
@@ -24,14 +27,14 @@ export function SettingsCard({ children }: { children: ReactNode }) {
 
 export function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="space-y-2">
+    <section className={SETTINGS_PANEL_SECTION_CLASS_NAME}>
       <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>{title}</h2>
       <SettingsCard>{children}</SettingsCard>
     </section>
   );
 }
 
-/** Frosted select dropdown panel with settings `rounded-md` chrome. */
+/** Frosted select dropdown panel with settings `rounded-lg` chrome. */
 export function SettingsSelectPopup({
   align = "end",
   alignItemWithTrigger = false,
@@ -70,19 +73,19 @@ export function SettingsRow({
     <div className={SETTINGS_CARD_ROW_CLASS_NAME} data-slot="settings-row">
       <div
         className={cn(
-          "flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between",
+          "flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between",
           onClick && "cursor-pointer",
         )}
         onClick={onClick}
       >
         <div className="min-w-0 flex-1 space-y-0.5">
           <div className="flex min-h-5 items-center gap-1.5">
-            <h3 className="text-sm font-medium text-foreground">{title}</h3>
+            <h3 className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>{title}</h3>
             <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
               {resetAction}
             </span>
           </div>
-          <p className="text-xs text-muted-foreground">{description}</p>
+          <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>{description}</p>
           {status ? <div className="pt-1 text-[11px] text-muted-foreground">{status}</div> : null}
         </div>
         {control ? (

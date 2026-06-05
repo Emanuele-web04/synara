@@ -2499,6 +2499,239 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
+  it("forwards OpenCode child-session tool activity created by task parts", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 5)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-child-session-tools"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-child-session-tools"),
+          input: "inspect files",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push({
+          type: "message.part.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            part: {
+              id: "parent-task-part",
+              messageID: "assistant-message-1",
+              type: "tool",
+              tool: "task",
+              callID: "task-call-1",
+              state: {
+                status: "running",
+                title: "Find changelog implementation",
+                input: {
+                  description: "Find changelog implementation",
+                  prompt: "Explore changelog files.",
+                },
+                metadata: {
+                  sessionId: "child-session-1",
+                  parentSessionId: "opencode-session-1",
+                },
+                time: {
+                  start: 1,
+                },
+              },
+            },
+          },
+        });
+        eventQueue.push({
+          type: "message.part.updated",
+          properties: {
+            sessionID: "child-session-1",
+            part: {
+              id: "child-grep-part",
+              messageID: "child-assistant-message-1",
+              type: "tool",
+              tool: "grep",
+              callID: "grep-call-1",
+              state: {
+                status: "completed",
+                input: {
+                  pattern: "changelog",
+                },
+                output: "Found 18 matches",
+                time: {
+                  start: 2,
+                  end: 3,
+                },
+              },
+            },
+          },
+        });
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return events;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "item.updated",
+      "item.completed",
+    ]);
+    expect(result[3]).toMatchObject({
+      type: "item.updated",
+      payload: {
+        itemType: "collab_agent_tool_call",
+        status: "inProgress",
+        title: "Find changelog implementation",
+      },
+    });
+    expect(result[4]).toMatchObject({
+      type: "item.completed",
+      turnId: result[2]?.turnId,
+      payload: {
+        itemType: "dynamic_tool_call",
+        status: "completed",
+        detail: "Found 18 matches",
+      },
+    });
+  });
+
+  it("projects newer OpenCode shell step events as command executions", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 5)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-next-shell"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-next-shell"),
+          input: "inspect files",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push({
+          id: "evt-next-shell-started",
+          type: "session.next.shell.started",
+          properties: {
+            timestamp: 4,
+            sessionID: "opencode-session-1",
+            callID: "shell-call-1",
+            command: "cat package.json | grep next",
+          },
+        });
+        eventQueue.push({
+          id: "evt-next-shell-ended",
+          type: "session.next.shell.ended",
+          properties: {
+            timestamp: 5,
+            sessionID: "opencode-session-1",
+            callID: "shell-call-1",
+            output: '"next": "15.5.0"',
+          },
+        });
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return events;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "item.started",
+      "item.completed",
+    ]);
+    expect(result[3]).toMatchObject({
+      type: "item.started",
+      payload: {
+        itemType: "command_execution",
+        status: "inProgress",
+        detail: "cat package.json | grep next",
+        data: {
+          command: "cat package.json | grep next",
+        },
+      },
+    });
+    expect(result[4]).toMatchObject({
+      type: "item.completed",
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        detail: '"next": "15.5.0"',
+        data: {
+          output: '"next": "15.5.0"',
+        },
+      },
+    });
+  });
+
   it("does not block sendTurn when the OpenCode prompt request stalls during startup", async () => {
     const runtime = createMockOpenCodeRuntime({
       promptAsync: async () => await new Promise(() => {}),

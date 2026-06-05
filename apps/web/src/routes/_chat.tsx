@@ -252,7 +252,6 @@ function ChatRouteGlobalShortcuts() {
       : null;
   const activeProjectScripts = activeProject?.kind === "project" ? activeProject.scripts : [];
   const terminalWorkspaceOpen = shouldRenderTerminalWorkspace({
-    activeProjectExists: activeProject !== null,
     presentationMode: activeThreadTerminalState?.presentationMode ?? "drawer",
     terminalOpen,
   });

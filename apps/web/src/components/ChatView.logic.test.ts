@@ -12,11 +12,14 @@ import {
   isVoiceAuthExpiredMessage,
   resolveActiveThreadTitle,
   resolveCommittedProviderModel,
+  resolveDefaultEnvironmentPanelOpen,
+  resolveEnvironmentPanelVisible,
   resolveRuntimeModeAfterApprovalDecision,
   sanitizeVoiceErrorMessage,
   buildExpiredTerminalContextToastCopy,
   shouldAutoDeleteTerminalThreadOnLastClose,
   shouldConsumePendingCustomBinaryConfirmation,
+  shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,
   shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
@@ -153,6 +156,45 @@ describe("voice helpers", () => {
       canStartVoiceNotes: false,
       showVoiceNotesControl: true,
     });
+  });
+});
+
+describe("environment panel visibility", () => {
+  it("opens normal chat threads by default", () => {
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps empty landing and terminal-primary surfaces closed by default", () => {
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: true,
+        isTerminalPrimarySurface: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("never renders the panel on the centered empty landing while stale open state resets", () => {
+    expect(
+      resolveEnvironmentPanelVisible({
+        environmentEnabled: true,
+        environmentPanelOpen: true,
+        isCenteredEmptyLanding: true,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -373,31 +415,57 @@ describe("buildExpiredTerminalContextToastCopy", () => {
 });
 
 describe("shouldRenderTerminalWorkspace", () => {
-  it("requires an active project to render workspace mode", () => {
+  it("renders the workspace shell before the active project has hydrated", () => {
     expect(
       shouldRenderTerminalWorkspace({
-        activeProjectExists: false,
         presentationMode: "workspace",
         terminalOpen: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("renders only for an open workspace terminal", () => {
     expect(
       shouldRenderTerminalWorkspace({
-        activeProjectExists: true,
         presentationMode: "workspace",
         terminalOpen: true,
       }),
     ).toBe(true);
     expect(
       shouldRenderTerminalWorkspace({
-        activeProjectExists: true,
         presentationMode: "drawer",
         terminalOpen: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("shouldRenderProviderHealthBanner", () => {
+  it("does not show chat provider health while a terminal thread is active", () => {
+    expect(
+      shouldRenderProviderHealthBanner({
+        threadEntryPoint: "terminal",
+        terminalWorkspaceTerminalTabActive: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not show chat provider health while the terminal workspace tab is active", () => {
+    expect(
+      shouldRenderProviderHealthBanner({
+        threadEntryPoint: "chat",
+        terminalWorkspaceTerminalTabActive: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("shows chat provider health only on the chat surface", () => {
+    expect(
+      shouldRenderProviderHealthBanner({
+        threadEntryPoint: "chat",
+        terminalWorkspaceTerminalTabActive: false,
+      }),
+    ).toBe(true);
   });
 });
 

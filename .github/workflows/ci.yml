@@ -45,6 +45,10 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Verify Linux terminal PTY native dependency
+        if: runner.os == 'Linux'
+        run: node scripts/node-pty-smoke.mjs
+
       - name: Format
         run: bun run fmt:check
 

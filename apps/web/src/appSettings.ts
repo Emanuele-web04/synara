@@ -1,3 +1,8 @@
+// FILE: appSettings.ts
+// Purpose: Normalizes persisted UI settings and maps them to server/provider options.
+// Layer: Web settings state
+// Exports: app setting schema, normalization helpers, provider option builders
+
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Option, Schema } from "effect";
@@ -35,6 +40,29 @@ export const MAX_CUSTOM_MODEL_LENGTH = 256;
 export const MIN_CHAT_FONT_SIZE_PX = 11;
 export const MAX_CHAT_FONT_SIZE_PX = 18;
 export const DEFAULT_CHAT_FONT_SIZE_PX = 12;
+export const MIN_TERMINAL_FONT_SIZE_PX = 10;
+export const MAX_TERMINAL_FONT_SIZE_PX = 22;
+export const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
+
+// Terminal font is a free-form font-family value: the user can type any font
+// installed on their machine. An empty value keeps the bundled default stack
+// (defined in index.css). The list below is only autocomplete inspiration shown
+// in the settings input — it does NOT restrict what can be entered.
+export const DEFAULT_TERMINAL_FONT_FAMILY = "";
+
+export const TERMINAL_FONT_FAMILY_SUGGESTIONS: ReadonlyArray<string> = [
+  "JetBrains Mono",
+  "Fira Code",
+  "Cascadia Code",
+  "SF Mono",
+  "Menlo",
+  "Source Code Pro",
+  "IBM Plex Mono",
+  "Hack",
+  "Roboto Mono",
+  "Ubuntu Mono",
+  "Consolas",
+];
 
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
@@ -97,6 +125,10 @@ export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   chatFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_CHAT_FONT_SIZE_PX)),
   chatCodeFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
+  terminalFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_TERMINAL_FONT_SIZE_PX)),
+  terminalFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(
+    withDefaults(() => DEFAULT_TERMINAL_FONT_FAMILY),
+  ),
   codexBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -296,10 +328,79 @@ export function normalizeChatFontSizePx(value: number | null | undefined): numbe
   return Math.min(MAX_CHAT_FONT_SIZE_PX, Math.max(MIN_CHAT_FONT_SIZE_PX, Math.round(value)));
 }
 
+export function normalizeTerminalFontSizePx(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_TERMINAL_FONT_SIZE_PX;
+  }
+
+  return Math.min(
+    MAX_TERMINAL_FONT_SIZE_PX,
+    Math.max(MIN_TERMINAL_FONT_SIZE_PX, Math.round(value)),
+  );
+}
+
+export function normalizeTerminalFontFamily(value: string | null | undefined): string {
+  // Free-form font-family text. Only strip characters that can't legitimately
+  // appear in a CSS font-family value so the typed name can't break out of the
+  // custom property (`;`, `{}`, angle brackets, newlines) or smuggle in other
+  // declarations. Whitespace is intentionally preserved here so multi-word names
+  // ("Fira Code") remain typable in a controlled input; the CSS resolver trims.
+  return (value ?? "").replace(/[;{}<>\n\r]/g, "").slice(0, 256);
+}
+
+// Build the CSS font-family stack written to `--terminal-font-family`, or null
+// when the bundled default (defined in index.css) should stay in effect.
+//
+// Accepts either a single family name (`Fira Code`) or a full comma-separated
+// stack (`"Fira Code", Menlo, monospace`). Single names are quoted when needed,
+// and a `monospace` fallback is appended so an uninstalled font degrades.
+export function resolveTerminalFontFamilyStack(value: string | null | undefined): string | null {
+  const normalized = normalizeTerminalFontFamily(value).replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const hasGenericFallback = /\b(?:monospace|serif|sans-serif|system-ui|ui-monospace)\b/.test(
+    normalized,
+  );
+
+  if (normalized.includes(",")) {
+    return hasGenericFallback ? normalized : `${normalized}, monospace`;
+  }
+
+  const isQuoted = /^(["']).*\1$/.test(normalized);
+  const family = !isQuoted && /\s/.test(normalized) ? `"${normalized}"` : normalized;
+  return hasGenericFallback ? family : `${family}, monospace`;
+}
+
+function normalizeProviderBinaryPathOverride(
+  provider: ProviderKind,
+  value: string | null | undefined,
+): string {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed || trimmed === DEFAULT_SERVER_SETTINGS.providers[provider].binaryPath) {
+    return "";
+  }
+  return trimmed;
+}
+
 function normalizeAppSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
+    claudeBinaryPath: normalizeProviderBinaryPathOverride("claudeAgent", settings.claudeBinaryPath),
+    codexBinaryPath: normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath),
+    cursorBinaryPath: normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath),
+    geminiBinaryPath: normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath),
+    grokBinaryPath: normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath),
+    kiloBinaryPath: normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath),
+    openCodeBinaryPath: normalizeProviderBinaryPathOverride(
+      "opencode",
+      settings.openCodeBinaryPath,
+    ),
+    piBinaryPath: normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath),
     chatFontSizePx: normalizeChatFontSizePx(settings.chatFontSizePx),
+    terminalFontSizePx: normalizeTerminalFontSizePx(settings.terminalFontSizePx),
+    terminalFontFamily: normalizeTerminalFontFamily(settings.terminalFontFamily),
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
     customCursorModels: normalizeCustomModelSlugs(settings.customCursorModels, "cursor"),
@@ -508,6 +609,7 @@ function isServerSettingsPatchEmpty(patch: ServerSettingsPatch): boolean {
 
 function buildInitialServerSettingsMigrationPatch(settings: AppSettings): ServerSettingsPatch {
   const patch: Partial<Mutable<AppSettings>> = {};
+  const normalizedSettings = normalizeAppSettings(settings);
   const defaults = DEFAULT_APP_SETTINGS;
 
   for (const key of [
@@ -532,8 +634,8 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "textGenerationModel",
     "textGenerationProvider",
   ] as const) {
-    if (settings[key] !== defaults[key]) {
-      patch[key] = settings[key] as never;
+    if (normalizedSettings[key] !== defaults[key]) {
+      patch[key] = normalizedSettings[key] as never;
     }
   }
 
@@ -547,8 +649,8 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customOpenCodeModels",
     "customPiModels",
   ] as const) {
-    if (settings[key].length > 0) {
-      patch[key] = settings[key] as never;
+    if (normalizedSettings[key].length > 0) {
+      patch[key] = normalizedSettings[key] as never;
     }
   }
 
@@ -737,54 +839,68 @@ export function getProviderStartOptions(
     | "piBinaryPath"
   >,
 ): ProviderStartOptions | undefined {
+  const claudeBinaryPath = normalizeProviderBinaryPathOverride(
+    "claudeAgent",
+    settings.claudeBinaryPath,
+  );
+  const codexBinaryPath = normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath);
+  const cursorBinaryPath = normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath);
+  const geminiBinaryPath = normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath);
+  const grokBinaryPath = normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath);
+  const kiloBinaryPath = normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath);
+  const openCodeBinaryPath = normalizeProviderBinaryPathOverride(
+    "opencode",
+    settings.openCodeBinaryPath,
+  );
+  const piBinaryPath = normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath);
   const hasOpenCodeStartOptions = Boolean(
-    settings.openCodeBinaryPath ||
+    openCodeBinaryPath ||
     settings.openCodeExperimentalWebSockets ||
     settings.openCodeServerUrl ||
     settings.openCodeServerPassword,
   );
   const providerOptions: ProviderStartOptions = {
-    ...(settings.codexBinaryPath || settings.codexHomePath
+    ...(codexBinaryPath || settings.codexHomePath
       ? {
           codex: {
-            ...(settings.codexBinaryPath ? { binaryPath: settings.codexBinaryPath } : {}),
+            ...(codexBinaryPath ? { binaryPath: codexBinaryPath } : {}),
             ...(settings.codexHomePath ? { homePath: settings.codexHomePath } : {}),
           },
         }
       : {}),
-    ...(settings.claudeBinaryPath
+    ...(claudeBinaryPath
       ? {
           claudeAgent: {
-            binaryPath: settings.claudeBinaryPath,
+            binaryPath: claudeBinaryPath,
           },
         }
       : {}),
-    ...(settings.cursorBinaryPath || settings.cursorApiEndpoint
+    ...(cursorBinaryPath || settings.cursorApiEndpoint
       ? {
           cursor: {
-            ...(settings.cursorBinaryPath ? { binaryPath: settings.cursorBinaryPath } : {}),
+            ...(cursorBinaryPath ? { binaryPath: cursorBinaryPath } : {}),
             ...(settings.cursorApiEndpoint ? { apiEndpoint: settings.cursorApiEndpoint } : {}),
           },
         }
       : {}),
-    ...(settings.geminiBinaryPath
+    ...(geminiBinaryPath
       ? {
           gemini: {
-            binaryPath: settings.geminiBinaryPath,
+            binaryPath: geminiBinaryPath,
           },
         }
       : {}),
-    ...(settings.grokBinaryPath
+    ...(grokBinaryPath
       ? {
           grok: {
-            binaryPath: settings.grokBinaryPath,
+            binaryPath: grokBinaryPath,
           },
         }
       : {}),
-    ...(settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword
+    ...(kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword
       ? {
           kilo: {
-            ...(settings.kiloBinaryPath ? { binaryPath: settings.kiloBinaryPath } : {}),
+            ...(kiloBinaryPath ? { binaryPath: kiloBinaryPath } : {}),
             ...(settings.kiloServerUrl ? { serverUrl: settings.kiloServerUrl } : {}),
             ...(settings.kiloServerPassword ? { serverPassword: settings.kiloServerPassword } : {}),
           },
@@ -793,7 +909,7 @@ export function getProviderStartOptions(
     ...(hasOpenCodeStartOptions
       ? {
           opencode: {
-            ...(settings.openCodeBinaryPath ? { binaryPath: settings.openCodeBinaryPath } : {}),
+            ...(openCodeBinaryPath ? { binaryPath: openCodeBinaryPath } : {}),
             ...(settings.openCodeExperimentalWebSockets ? { experimentalWebSockets: true } : {}),
             ...(settings.openCodeServerUrl ? { serverUrl: settings.openCodeServerUrl } : {}),
             ...(settings.openCodeServerPassword
@@ -802,10 +918,10 @@ export function getProviderStartOptions(
           },
         }
       : {}),
-    ...(settings.piBinaryPath || settings.piAgentDir
+    ...(piBinaryPath || settings.piAgentDir
       ? {
           pi: {
-            ...(settings.piBinaryPath ? { binaryPath: settings.piBinaryPath } : {}),
+            ...(piBinaryPath ? { binaryPath: piBinaryPath } : {}),
             ...(settings.piAgentDir ? { agentDir: settings.piAgentDir } : {}),
           },
         }
@@ -831,21 +947,21 @@ export function getCustomBinaryPathForProvider(
 ): string {
   switch (provider) {
     case "codex":
-      return settings.codexBinaryPath;
+      return normalizeProviderBinaryPathOverride(provider, settings.codexBinaryPath);
     case "claudeAgent":
-      return settings.claudeBinaryPath;
+      return normalizeProviderBinaryPathOverride(provider, settings.claudeBinaryPath);
     case "cursor":
-      return settings.cursorBinaryPath;
+      return normalizeProviderBinaryPathOverride(provider, settings.cursorBinaryPath);
     case "gemini":
-      return settings.geminiBinaryPath;
+      return normalizeProviderBinaryPathOverride(provider, settings.geminiBinaryPath);
     case "grok":
-      return settings.grokBinaryPath;
+      return normalizeProviderBinaryPathOverride(provider, settings.grokBinaryPath);
     case "kilo":
-      return settings.kiloBinaryPath;
+      return normalizeProviderBinaryPathOverride(provider, settings.kiloBinaryPath);
     case "opencode":
-      return settings.openCodeBinaryPath;
+      return normalizeProviderBinaryPathOverride(provider, settings.openCodeBinaryPath);
     case "pi":
-      return settings.piBinaryPath;
+      return normalizeProviderBinaryPathOverride(provider, settings.piBinaryPath);
   }
 }
 

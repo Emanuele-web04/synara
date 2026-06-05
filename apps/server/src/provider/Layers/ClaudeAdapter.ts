@@ -270,6 +270,20 @@ function isSyntheticClaudeThreadId(value: string): boolean {
   return value.startsWith("claude-thread-");
 }
 
+// Claude hook system messages can carry transient session ids; only durable
+// conversation messages should advance the resumable provider cursor.
+function hasDurableClaudeSessionId(message: SDKMessage): boolean {
+  if (message.type !== "system") {
+    return true;
+  }
+
+  return (
+    message.subtype !== "hook_started" &&
+    message.subtype !== "hook_progress" &&
+    message.subtype !== "hook_response"
+  );
+}
+
 function toMessage(cause: unknown, fallback: string): string {
   if (cause instanceof Error && cause.message.length > 0) {
     return cause.message;
@@ -1543,6 +1557,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (typeof message.session_id !== "string" || message.session_id.length === 0) {
+          return;
+        }
+        if (!hasDurableClaudeSessionId(message)) {
           return;
         }
         const nextThreadId = message.session_id;

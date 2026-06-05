@@ -114,6 +114,8 @@ import {
   enrichSubagentWorkEntries,
   resolveActiveThreadTitle,
   resolveCommittedProviderModel,
+  resolveDefaultEnvironmentPanelOpen,
+  resolveEnvironmentPanelVisible,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
 } from "./ChatView.logic";
@@ -172,6 +174,7 @@ import {
   togglePendingUserInputOptionSelection,
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
+import { selectRightDockState, useRightDockStore } from "../rightDockStore";
 import { useStore } from "../store";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { getThreadFromState } from "../threadDerivation";
@@ -212,11 +215,10 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ComposerSendArrowIcon,
-  QueueArrow,
   RefreshCwIcon,
   XIcon,
 } from "~/lib/icons";
-import { QueuedComposerActions } from "./chat/QueuedComposerActions";
+import { ComposerQueuedHeader } from "./chat/ComposerQueuedHeader";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
@@ -237,6 +239,7 @@ import { readNativeApi } from "~/nativeApi";
 import {
   confirmTerminalTabClose,
   resolveTerminalCloseTitle,
+  shouldPromptForTerminalClose,
 } from "~/lib/terminalCloseConfirmation";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
 import {
@@ -297,6 +300,12 @@ import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./Compose
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
 import {
+  ENVIRONMENT_DOCKED_CONTENT_INSET_PX,
+  EnvironmentPanel,
+  type EnvironmentPanelProps,
+} from "./chat/environment/EnvironmentPanel";
+import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
+import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
@@ -308,8 +317,10 @@ import {
   useDesktopTopBarTrafficLightGutterClassName,
   useDesktopTopBarWindowControlsGutterClassName,
 } from "~/hooks/useDesktopTopBarGutter";
+import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
+import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { AVAILABLE_PROVIDER_OPTIONS } from "./chat/ProviderModelPicker";
@@ -322,24 +333,20 @@ import {
 import { ComposerPendingApprovalActions } from "./chat/ComposerPendingApprovalActions";
 import { ComposerExtrasMenu } from "./chat/ComposerExtrasMenu";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
-import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
-import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
-import { ComposerPlanFollowUpBanner } from "./chat/ComposerPlanFollowUpBanner";
+import { ComposerInputBanners } from "./chat/ComposerInputBanners";
 import { ComposerVoiceButton } from "./chat/ComposerVoiceButton";
 import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
 import { ComposerSuggestions } from "./chat/ComposerSuggestions";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
-import { ActiveTaskListCard } from "./chat/ActiveTaskListCard";
+import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
 import { getComposerProviderState } from "./chat/composerProviderRegistry";
 import {
   COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME,
   COMPOSER_INPUT_SHELL_CLASS_NAME,
-  COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
   COMPOSER_INPUT_SURFACE_CLASS_NAME,
-  COMPOSER_SURFACE_BORDER_CLASS_NAME,
   COMPOSER_COLUMN_FRAME_CLASS_NAME,
   COMPOSER_EDITOR_PADDING_CLASS_NAME,
   COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME,
@@ -348,6 +355,7 @@ import {
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_COLUMN_FRAME_CLASS_NAME,
   CHAT_COLUMN_GUTTER_CLASS_NAME,
+  ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
 } from "./chat/composerPickerStyles";
 import { getComposerTraitSelection } from "./chat/composerTraits";
 import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
@@ -383,6 +391,7 @@ import {
   type LocalDispatchSnapshot,
   PullRequestDialogState,
   readFileAsDataUrl,
+  shouldRenderProviderHealthBanner,
   resolveRuntimeModeAfterApprovalDecision,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
@@ -1480,6 +1489,10 @@ export default function ChatView({
     providerModelsQueryOptions({ provider: "claudeAgent" }),
   );
   const codexDynamicModelsQuery = useQuery(providerModelsQueryOptions({ provider: "codex" }));
+  const openCodeModelDiscoveryEnabled =
+    selectedProvider === "opencode" || lockedProvider === "opencode" || isModelPickerOpen;
+  const kiloModelDiscoveryEnabled =
+    selectedProvider === "kilo" || lockedProvider === "kilo" || isModelPickerOpen;
   const cursorDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "cursor",
@@ -1506,13 +1519,14 @@ export default function ChatView({
     providerModelsQueryOptions({
       provider: "opencode",
       binaryPath: settings.openCodeBinaryPath || null,
+      enabled: openCodeModelDiscoveryEnabled,
     }),
   );
   const kiloDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "kilo",
       binaryPath: settings.kiloBinaryPath || null,
-      enabled: selectedProvider === "kilo" || lockedProvider === "kilo" || isModelPickerOpen,
+      enabled: kiloModelDiscoveryEnabled,
     }),
   );
   const piDynamicModelsQuery = useQuery(
@@ -1527,8 +1541,12 @@ export default function ChatView({
     providerAgentsQueryOptions({ provider: "claudeAgent" }),
   );
   const codexDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "codex" }));
-  const openCodeDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "opencode" }));
-  const kiloDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "kilo" }));
+  const openCodeDynamicAgentsQuery = useQuery(
+    providerAgentsQueryOptions({ provider: "opencode", enabled: openCodeModelDiscoveryEnabled }),
+  );
+  const kiloDynamicAgentsQuery = useQuery(
+    providerAgentsQueryOptions({ provider: "kilo", enabled: kiloModelDiscoveryEnabled }),
+  );
   const cursorRuntimeModels = useMemo(
     () =>
       showExpandedCursorModelVariants
@@ -1545,8 +1563,6 @@ export default function ChatView({
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
     (cursorDynamicModelsQuery.isLoading || cursorDynamicModelsQuery.isFetching);
-  const kiloModelDiscoveryEnabled =
-    selectedProvider === "kilo" || lockedProvider === "kilo" || isModelPickerOpen;
   const hasResolvedKiloModelDiscovery =
     (kiloDynamicModelsQuery.data?.source === "kilo-cli" ||
       kiloDynamicModelsQuery.data?.source === "kilo") &&
@@ -1858,6 +1874,22 @@ export default function ChatView({
         : rawWorkLogEntries,
     [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries, relevantWorkLogThreads],
   );
+  const [openAgentActivityId, setOpenAgentActivityId] = useState<string | null>(null);
+  const agentActivityTimelineState = useMemo(
+    () => deriveAgentActivityTimelineState(workLogEntries),
+    [workLogEntries],
+  );
+  const openAgentActivityDetail = openAgentActivityId
+    ? (agentActivityTimelineState.detailById.get(openAgentActivityId) ?? null)
+    : null;
+  useEffect(() => {
+    setOpenAgentActivityId(null);
+  }, [activeThread?.id]);
+  useEffect(() => {
+    if (openAgentActivityId && !agentActivityTimelineState.detailById.has(openAgentActivityId)) {
+      setOpenAgentActivityId(null);
+    }
+  }, [agentActivityTimelineState.detailById, openAgentActivityId]);
   const pendingApprovals = useMemo(
     () => derivePendingApprovals(threadActivities),
     [threadActivities],
@@ -2276,8 +2308,12 @@ export default function ChatView({
   ]);
   const timelineEntries = useMemo(
     () =>
-      deriveTimelineEntries(timelineMessages, activeThread?.proposedPlans ?? [], workLogEntries),
-    [activeThread?.proposedPlans, timelineMessages, workLogEntries],
+      deriveTimelineEntries(
+        timelineMessages,
+        activeThread?.proposedPlans ?? [],
+        agentActivityTimelineState.timelineWorkEntries,
+      ),
+    [activeThread?.proposedPlans, agentActivityTimelineState.timelineWorkEntries, timelineMessages],
   );
   // Empty top-level threads render the centered landing composer instead of the transcript pane.
   // Home-scoped chats get the global "What should we work on?" copy plus the project picker,
@@ -2919,7 +2955,6 @@ export default function ChatView({
     (activeTerminalGroup ? collectTerminalIdsFromLayout(activeTerminalGroup.layout).length : 0) >=
     MAX_TERMINALS_PER_GROUP;
   const terminalWorkspaceOpen = shouldRenderTerminalWorkspace({
-    activeProjectExists: activeProject !== undefined,
     presentationMode: terminalState.presentationMode,
     terminalOpen: terminalState.terminalOpen,
   });
@@ -2927,6 +2962,17 @@ export default function ChatView({
     terminalWorkspaceOpen &&
     (terminalState.workspaceLayout === "terminal-only" ||
       terminalState.workspaceActiveTab === "terminal");
+  const isTerminalPrimarySurface = terminalState.entryPoint === "terminal";
+  const isTerminalEnvironmentContext =
+    isTerminalPrimarySurface || terminalWorkspaceTerminalTabActive;
+  const shouldShowProviderHealthBanner = shouldRenderProviderHealthBanner({
+    threadEntryPoint: terminalState.entryPoint,
+    terminalWorkspaceTerminalTabActive,
+  });
+  // Terminal-only threads should not pay to mount the hidden chat/composer pane.
+  const shouldRenderChatPaneContent = !(
+    terminalWorkspaceTerminalTabActive && terminalState.workspaceLayout === "terminal-only"
+  );
   const secondaryChromeThreadId = activeThread?.id ?? threadId;
   const shouldDeferSecondaryChrome =
     activeThread !== undefined && !isCenteredEmptyLanding && !terminalWorkspaceTerminalTabActive;
@@ -3316,7 +3362,12 @@ export default function ChatView({
       });
       const confirmed = await confirmTerminalTabClose({
         api,
-        enabled: settings.confirmTerminalTabClose,
+        enabled: shouldPromptForTerminalClose({
+          confirmationEnabled: settings.confirmTerminalTabClose,
+          runningTerminalIds: terminalState.runningTerminalIds,
+          terminalAttentionStatesById: terminalState.terminalAttentionStatesById,
+          terminalId,
+        }),
         terminalTitle: resolveTerminalCloseTitle({
           terminalId,
           terminalLabelsById: terminalState.terminalLabelsById,
@@ -3387,6 +3438,8 @@ export default function ChatView({
       syncServerShellSnapshot,
       settings.confirmTerminalTabClose,
       terminalState.entryPoint,
+      terminalState.runningTerminalIds,
+      terminalState.terminalAttentionStatesById,
       terminalState.terminalIds.length,
       terminalState.terminalLabelsById,
       terminalState.terminalTitleOverridesById,
@@ -3419,9 +3472,50 @@ export default function ChatView({
     terminalState.workspaceLayout,
     terminalWorkspaceOpen,
   ]);
+  // The terminal's panel toggle mirrors the right dock's collapse control: it shows
+  // or hides the side panel only when this thread already has a pane to show.
+  const rightDockOpen = useRightDockStore((store) => selectRightDockState(threadId)(store).open);
+  // The Environment panel replaces the old header diff toggle + footer pickers for normal
+  // threads; disposable (temporary/draft) threads keep the legacy inline controls.
+  const isDisposableThread = useIsDisposableThread(threadId);
+  const environmentEnabled = !isDisposableThread;
+  const environmentDefaultOpen = resolveDefaultEnvironmentPanelOpen({
+    environmentEnabled,
+    isCenteredEmptyLanding,
+    isTerminalPrimarySurface,
+  });
+  const [environmentPanelOpen, setEnvironmentPanelOpen] = useState(() => environmentDefaultOpen);
+  useEffect(() => {
+    // Terminal threads keep the Environment panel closed by default so the full
+    // workspace stays untouched until the user explicitly toggles the overlay.
+    // Each normal chat thread starts open; empty/disposable views stay hidden.
+    setEnvironmentPanelOpen(environmentDefaultOpen);
+  }, [environmentDefaultOpen, threadId]);
+  const environmentPanelVisible = resolveEnvironmentPanelVisible({
+    environmentEnabled,
+    environmentPanelOpen,
+    isCenteredEmptyLanding,
+  });
+  const threadRecap = useThreadRecap({
+    thread: activeThread,
+    cwd: threadWorkspaceCwd,
+    enabled: environmentPanelVisible,
+    latestTurnSettled,
+    codexHomePath: settings.codexHomePath || null,
+    providerOptions: providerOptionsForDispatch ?? null,
+  });
+  const hasRightDockPanes = useRightDockStore(
+    (store) => selectRightDockState(threadId)(store).panes.length > 0,
+  );
+  const setRightDockOpen = useRightDockStore((store) => store.setDockOpen);
+  const toggleRightDock = useCallback(() => {
+    setRightDockOpen(threadId, !rightDockOpen);
+  }, [rightDockOpen, setRightDockOpen, threadId]);
   const terminalDrawerProps = useMemo(
     () => ({
       threadId,
+      onTogglePanel: hasRightDockPanes ? toggleRightDock : undefined,
+      isPanelOpen: hasRightDockPanes ? rightDockOpen : undefined,
       cwd: gitCwd ?? activeProject?.cwd ?? "",
       runtimeEnv: threadTerminalRuntimeEnv,
       height: terminalState.terminalHeight,
@@ -3510,6 +3604,9 @@ export default function ChatView({
       terminalState.runningTerminalIds,
       threadId,
       threadTerminalRuntimeEnv,
+      toggleRightDock,
+      rightDockOpen,
+      hasRightDockPanes,
     ],
   );
   const runProjectScript = useCallback(
@@ -7298,8 +7395,14 @@ export default function ChatView({
           : null;
 
       if (slashTriggerText === "/" && snapshot.expandedCursor === trigger?.rangeEnd) {
-        clearComposerSlashDraft();
-        return true;
+        // Pressing `/` again on a lone `/` dismisses the picker. Only wipe the
+        // draft when the slash IS the whole prompt; a mid-line slash (e.g. after
+        // an existing chip) must keep surrounding content, so let it type through.
+        if (trigger.rangeStart === 0 && trigger.rangeEnd === snapshot.value.length) {
+          clearComposerSlashDraft();
+          return true;
+        }
+        return false;
       }
       return false;
     }
@@ -7552,6 +7655,39 @@ export default function ChatView({
       : {}),
   };
 
+  // Shared inputs for both Environment panel surfaces (the header Popover when the dock is
+  // open, and the docked right column when it is closed) so the two never drift.
+  const environmentPanelProps: Omit<EnvironmentPanelProps, "open" | "variant"> = {
+    gitCwd: threadWorkspaceCwd,
+    openInCwd: threadWorkspaceCwd,
+    isGitRepo,
+    keybindings,
+    availableEditors,
+    activeThreadId: activeThread.id,
+    showGitActions,
+    diffOpen: resolvedDiffOpen,
+    diffDisabledReason,
+    diffBadgeRefreshIntervalMs: repoDiffBadgeRefreshIntervalMs,
+    branchToolbar: branchToolbarProps,
+    recap: threadRecap,
+    onToggleDiff,
+    onClose: () => setEnvironmentPanelOpen(false),
+  };
+  // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
+  // column is already narrow — right dock open or a split pane (same as header compact mode).
+  // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
+  const environmentUsesFloatingOverlay =
+    isTerminalEnvironmentContext || rightDockOpen || surfaceMode === "split";
+  const environmentAppliesContentInset =
+    environmentPanelVisible && !environmentUsesFloatingOverlay;
+  const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
+  const environmentHeaderState = environmentEnabled
+    ? {
+        open: environmentPanelVisible,
+        onOpenChange: setEnvironmentPanelOpen,
+      }
+    : null;
+
   // Composer layout keeps the task list and footer actions in one render path so
   // follow-up prompts and normal chat mode stay visually in sync.
   const taskListAboveComposer = Boolean(activeTaskList && !planSidebarOpen);
@@ -7561,531 +7697,489 @@ export default function ChatView({
   const composerHasStackedHeader = taskListAboveComposer || queuedComposerTurns.length > 0;
   const renderActiveTaskListCard = () =>
     activeTaskList && !planSidebarOpen ? (
-      <div className="pointer-events-none w-full">
-        <div
-          ref={activeTaskListCardRef}
-          className={cn("pointer-events-auto", COMPOSER_COLUMN_FRAME_CLASS_NAME)}
-        >
-          <ActiveTaskListCard
-            activeTaskList={activeTaskList}
-            backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
-            compact={activeTaskListCompact}
-            onCompactChange={setActiveTaskListCompact}
-            onOpenSidebar={() => setPlanSidebarOpen(true)}
-          />
-        </div>
-      </div>
+      <ComposerActiveTaskListCard
+        activeTaskList={activeTaskList}
+        cardRef={activeTaskListCardRef}
+        backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
+        compact={activeTaskListCompact}
+        onCompactChange={setActiveTaskListCompact}
+        onOpenSidebar={() => setPlanSidebarOpen(true)}
+      />
     ) : null;
 
-  const composerSection = secondaryChromeReady ? (
-    <>
-      {renderActiveTaskListCard()}
-      <form
-        ref={composerFormRef}
-        onSubmit={onSend}
-        className="relative z-10 w-full overflow-visible"
-        data-chat-composer-form="true"
-        data-chat-pane-scope={paneScopeId}
-      >
-        <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
-          {queuedComposerTurns.length > 0 ? (
-            <div className="flex w-full flex-col">
-              {queuedComposerTurns.map((queuedTurn, queuedTurnIndex) => (
-                <div
-                  key={queuedTurn.id}
-                  data-testid="queued-follow-up-row"
-                  className={cn(
-                    "chat-composer-surface flex items-center gap-2 border border-b-0 px-3 pt-2.5 pb-2.5 text-[12px]",
-                    COMPOSER_SURFACE_BORDER_CLASS_NAME,
-                    queuedTurnIndex === 0 && !taskListAboveComposer
-                      ? "chat-composer-stacked-top"
-                      : "rounded-none",
-                  )}
-                >
-                  <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                    <QueueArrow className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)]" />
-                    <span className="truncate text-[12px] font-medium text-foreground/85">
-                      {queuedTurn.previewText}
-                    </span>
-                  </div>
-                  <QueuedComposerActions
-                    queuedTurn={queuedTurn}
-                    onSteer={onSteerQueuedComposerTurn}
-                    onRemove={removeQueuedComposerTurn}
-                    onEdit={onEditQueuedComposerTurn}
-                  />
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <div
-            className={cn(
-              COMPOSER_INPUT_SHELL_CLASS_NAME,
-              composerHasStackedHeader && "!rounded-t-none",
-              composerProviderState.composerFrameClassName,
-              composerMenuOpen && !isComposerApprovalState && "overflow-visible",
-            )}
-            onDragEnter={onComposerDragEnter}
-            onDragOver={onComposerDragOver}
-            onDragLeave={onComposerDragLeave}
-            onDrop={onComposerDrop}
-          >
+  const composerSection =
+    secondaryChromeReady && shouldRenderChatPaneContent ? (
+      <>
+        {renderActiveTaskListCard()}
+        <form
+          ref={composerFormRef}
+          onSubmit={onSend}
+          className="relative z-10 w-full overflow-visible"
+          data-chat-composer-form="true"
+          data-chat-pane-scope={paneScopeId}
+        >
+          <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
+            <ComposerQueuedHeader
+              queuedTurns={queuedComposerTurns}
+              taskListAboveComposer={taskListAboveComposer}
+              onSteer={onSteerQueuedComposerTurn}
+              onRemove={removeQueuedComposerTurn}
+              onEdit={onEditQueuedComposerTurn}
+            />
             <div
               className={cn(
-                COMPOSER_INPUT_SURFACE_CLASS_NAME,
+                COMPOSER_INPUT_SHELL_CLASS_NAME,
                 composerHasStackedHeader && "!rounded-t-none",
-                isDragOverComposer ? "!bg-[var(--color-background-control)]" : "",
-                composerProviderState.composerSurfaceClassName,
+                composerProviderState.composerFrameClassName,
                 composerMenuOpen && !isComposerApprovalState && "overflow-visible",
               )}
+              onDragEnter={onComposerDragEnter}
+              onDragOver={onComposerDragOver}
+              onDragLeave={onComposerDragLeave}
+              onDrop={onComposerDrop}
             >
-              {activePendingApproval ? (
-                <div
-                  className={cn(
-                    COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
-                    composerHasStackedHeader && "!rounded-t-none",
-                  )}
-                >
-                  <ComposerPendingApprovalPanel
-                    approval={activePendingApproval}
-                    pendingCount={pendingApprovals.length}
-                  />
-                </div>
-              ) : pendingUserInputs.length > 0 ? (
-                <div
-                  className={cn(
-                    COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
-                    composerHasStackedHeader && "!rounded-t-none",
-                  )}
-                >
-                  <ComposerPendingUserInputPanel
-                    pendingUserInputs={pendingUserInputs}
-                    respondingRequestIds={respondingUserInputRequestIds}
-                    answers={activePendingDraftAnswers}
-                    questionIndex={activePendingQuestionIndex}
-                    onToggleOption={onToggleActivePendingUserInputOption}
-                    onAdvance={onAdvanceActivePendingUserInput}
-                  />
-                </div>
-              ) : showPlanFollowUpPrompt && activeProposedPlan ? (
-                <div
-                  className={cn(
-                    COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
-                    composerHasStackedHeader && "!rounded-t-none",
-                  )}
-                >
-                  <ComposerPlanFollowUpBanner
-                    key={activeProposedPlan.id}
-                    planTitle={proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null}
-                  />
-                </div>
-              ) : null}
               <div
                 className={cn(
-                  COMPOSER_EDITOR_PADDING_CLASS_NAME,
+                  COMPOSER_INPUT_SURFACE_CLASS_NAME,
+                  composerHasStackedHeader && "!rounded-t-none",
+                  isDragOverComposer ? "!bg-[var(--color-background-control)]" : "",
+                  composerProviderState.composerSurfaceClassName,
                   composerMenuOpen && !isComposerApprovalState && "overflow-visible",
                 )}
               >
-                {composerMenuOpen && !isComposerApprovalState ? (
-                  <div className={COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME}>
-                    {isLocalFolderBrowserOpen ? (
-                      <ComposerLocalDirectoryMenu
-                        mentionQuery={mentionTriggerQuery}
-                        rootLabel={localFolderBrowseRootPath ?? "Local folders unavailable"}
-                        homeDir={serverConfigQuery.data?.homeDir ?? null}
-                        onSelectEntry={(absolutePath) =>
-                          handleSelectLocalDirectoryMention(absolutePath)
+                <ComposerInputBanners
+                  roundedTopReset={composerHasStackedHeader}
+                  activeApproval={activePendingApproval}
+                  pendingApprovalCount={pendingApprovals.length}
+                  pendingUserInputs={pendingUserInputs}
+                  respondingUserInputRequestIds={respondingUserInputRequestIds}
+                  pendingUserInputAnswers={activePendingDraftAnswers}
+                  pendingUserInputQuestionIndex={activePendingQuestionIndex}
+                  onToggleUserInputOption={onToggleActivePendingUserInputOption}
+                  onAdvanceUserInput={onAdvanceActivePendingUserInput}
+                  planFollowUp={
+                    showPlanFollowUpPrompt && activeProposedPlan
+                      ? {
+                          id: activeProposedPlan.id,
+                          title: proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null,
                         }
-                        onNavigateFolder={handleNavigateLocalFolder}
-                        handleRef={localDirectoryMenuRef}
-                      />
-                    ) : (
-                      <ComposerCommandMenu
-                        items={composerMenuItems}
-                        resolvedTheme={resolvedTheme}
-                        isLoading={isComposerMenuLoading}
-                        triggerKind={
-                          composerCommandPicker !== null
-                            ? "slash-command"
-                            : effectiveComposerTriggerKind
-                        }
-                        activeItemId={activeComposerMenuItem?.id ?? null}
-                        onHighlightedItemChange={onComposerMenuItemHighlighted}
-                        onSelect={onSelectComposerItem}
-                      />
-                    )}
-                  </div>
-                ) : null}
-                {!isComposerApprovalState &&
-                  pendingUserInputs.length === 0 &&
-                  (composerAssistantSelections.length > 0 || composerImages.length > 0) && (
-                    <ComposerReferenceAttachments
-                      assistantSelections={composerAssistantSelections}
-                      images={composerImages}
-                      nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
-                      onExpandImage={setExpandedImage}
-                      onRemoveAssistantSelections={clearComposerAssistantSelectionsFromDraft}
-                      onRemoveImage={removeComposerImage}
-                    />
-                  )}
-                <ComposerPromptEditor
-                  ref={composerEditorRef}
-                  value={
-                    isComposerApprovalState
-                      ? ""
-                      : activePendingProgress
-                        ? activePendingProgress.customAnswer
-                        : prompt
+                      : null
                   }
-                  cursor={composerCursor}
-                  terminalContexts={
-                    !isComposerApprovalState && pendingUserInputs.length === 0
-                      ? composerTerminalContexts
-                      : []
-                  }
-                  mentionReferences={selectedComposerMentions}
-                  onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
-                  onChange={onPromptChange}
-                  onCommandKeyDown={onComposerCommandKey}
-                  onPaste={onComposerPaste}
-                  placeholder={
-                    isComposerApprovalState
-                      ? "Resolve this approval request to continue"
-                      : activePendingProgress
-                        ? "Type your own answer, or leave this blank to use the selected option"
-                        : showPlanFollowUpPrompt && activeProposedPlan
-                          ? "Add feedback to refine the plan, or leave this blank to implement it"
-                          : hasLiveTurn
-                            ? "Ask for follow-up changes"
-                            : phase === "disconnected"
-                              ? "Ask for follow-up changes or attach images"
-                              : "Ask anything, @tag files/folders, or use / to show available commands"
-                  }
-                  disabled={isConnecting || isComposerApprovalState}
                 />
-              </div>
-              {/* Bottom toolbar */}
-              {activePendingApproval ? (
-                <div className={COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME}>
-                  <ComposerPendingApprovalActions
-                    requestId={activePendingApproval.requestId}
-                    isResponding={respondingRequestIds.includes(activePendingApproval.requestId)}
-                    onRespondToApproval={onRespondToApproval}
-                  />
-                </div>
-              ) : (
                 <div
-                  data-chat-composer-footer="true"
                   className={cn(
-                    "@container",
-                    COMPOSER_FOOTER_ROW_CLASS_NAME,
-                    isComposerFooterCompact
-                      ? "gap-1.5"
-                      : "flex-wrap gap-1.5 sm:flex-nowrap sm:gap-0",
+                    COMPOSER_EDITOR_PADDING_CLASS_NAME,
+                    composerMenuOpen && !isComposerApprovalState && "overflow-visible",
                   )}
                 >
-                  <div
-                    className={cn(
-                      "flex items-center",
-                      isVoiceRecording || isVoiceTranscribing
-                        ? "min-w-0 shrink-0 gap-1"
-                        : isComposerFooterCompact
-                          ? "min-w-0 flex-1 gap-1 overflow-hidden"
-                          : "min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-w-max sm:overflow-visible",
-                    )}
-                  >
-                    <ComposerExtrasMenu
-                      interactionMode={interactionMode}
-                      supportsFastMode={composerTraitSelection.caps.supportsFastMode}
-                      fastModeEnabled={composerTraitSelection.fastModeEnabled}
-                      onAddPhotos={addComposerImages}
-                      onToggleFastMode={toggleFastMode}
-                      onSetPlanMode={setPlanMode}
-                    />
-
-                    {!isVoiceRecording && !isVoiceTranscribing ? (
-                      <>
-                        <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
-
-                        {interactionMode === "plan" ? (
-                          <Button
-                            variant="ghost"
-                            className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] sm:px-3"
-                            size="sm"
-                            type="button"
-                            onClick={toggleInteractionMode}
-                            title="Plan mode — click to return to normal build mode"
-                          >
-                            <GoTasklist className="size-3.5" />
-                            <span className="sr-only sm:not-sr-only">Plan</span>
-                          </Button>
-                        ) : null}
-
-                        {activeTaskList || sidebarProposedPlan || planSidebarOpen ? (
-                          <Button
-                            variant="ghost"
-                            className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal sm:px-3"
-                            size="sm"
-                            type="button"
-                            onClick={togglePlanSidebar}
-                            title={
-                              planSidebarOpen
-                                ? `Hide ${planSidebarLabel.toLowerCase()} sidebar`
-                                : `Show ${planSidebarLabel.toLowerCase()} sidebar`
-                            }
-                          >
-                            <GoTasklist className="size-3.5" />
-                            <span className="sr-only sm:not-sr-only">
-                              {planSidebarOpen ? `Hide ${planSidebarLabel}` : planSidebarLabel}
-                            </span>
-                          </Button>
-                        ) : null}
-                      </>
-                    ) : null}
-                  </div>
-
-                  <div
-                    data-chat-composer-actions="right"
-                    className={cn(
-                      "flex items-center gap-2",
-                      isVoiceRecording || isVoiceTranscribing ? "min-w-0 flex-1" : "shrink-0",
-                    )}
-                  >
-                    {isPreparingWorktree ? (
-                      <span className="text-[length:var(--app-font-size-ui-xs,10px)] text-[var(--color-text-foreground-secondary)]">
-                        Preparing worktree...
-                      </span>
-                    ) : null}
-                    {!isVoiceRecording && !isVoiceTranscribing && runtimeUsageContextWindow ? (
-                      <ContextWindowMeter
-                        usage={runtimeUsageContextWindow}
-                        {...(activeCumulativeCostUsd != null
-                          ? { cumulativeCostUsd: activeCumulativeCostUsd }
-                          : {})}
-                        {...(contextWindowSelectionStatus.activeLabel !== undefined
-                          ? {
-                              activeWindowLabel: contextWindowSelectionStatus.activeLabel,
-                            }
-                          : {})}
-                        {...(contextWindowSelectionStatus.pendingSelectedLabel !== undefined
-                          ? {
-                              pendingWindowLabel: contextWindowSelectionStatus.pendingSelectedLabel,
-                            }
-                          : {})}
-                      />
-                    ) : null}
-                    {!isVoiceRecording && !isVoiceTranscribing
-                      ? composerModelEffortPickerControl
-                      : null}
-                    {showVoiceNotesControl && (isVoiceRecording || isVoiceTranscribing) ? (
-                      <ComposerVoiceRecorderBar
-                        disabled={isComposerApprovalState || isConnecting || isSendBusy}
-                        isRecording={isVoiceRecording}
-                        isTranscribing={isVoiceTranscribing}
-                        durationLabel={voiceRecordingDurationLabel}
-                        waveformLevels={voiceWaveformLevels}
-                        onCancel={() => {
-                          if (isVoiceRecording) {
-                            void submitComposerVoiceRecording();
-                            return;
+                  {composerMenuOpen && !isComposerApprovalState ? (
+                    <div className={COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME}>
+                      {isLocalFolderBrowserOpen ? (
+                        <ComposerLocalDirectoryMenu
+                          mentionQuery={mentionTriggerQuery}
+                          rootLabel={localFolderBrowseRootPath ?? "Local folders unavailable"}
+                          homeDir={serverConfigQuery.data?.homeDir ?? null}
+                          onSelectEntry={(absolutePath) =>
+                            handleSelectLocalDirectoryMention(absolutePath)
                           }
-                          cancelComposerVoiceRecording();
-                        }}
-                        onSubmit={() => {
-                          void submitComposerVoiceRecording();
-                        }}
-                      />
-                    ) : null}
-                    {activePendingProgress ? (
-                      <div className="flex items-center gap-2">
-                        {activePendingProgress.questionIndex > 0 ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="rounded-full"
-                            onClick={onPreviousActivePendingUserInputQuestion}
-                            disabled={activePendingIsResponding}
-                          >
-                            Previous
-                          </Button>
-                        ) : null}
-                        <Button
-                          type="submit"
-                          size="sm"
-                          className="rounded-full px-4"
-                          disabled={
-                            activePendingIsResponding ||
-                            (activePendingProgress.isLastQuestion
-                              ? !activePendingResolvedAnswers
-                              : !activePendingProgress.canAdvance)
-                          }
-                        >
-                          {activePendingIsResponding
-                            ? "Submitting..."
-                            : activePendingProgress.isLastQuestion
-                              ? "Submit answers"
-                              : "Next question"}
-                        </Button>
-                      </div>
-                    ) : phase === "running" ? (
-                      <Button
-                        type="button"
-                        variant="prominent"
-                        size="icon-xs"
-                        className="sm:size-[26px]"
-                        onClick={() => void onInterrupt()}
-                        aria-label="Stop generation"
-                        title="Stop the current response. On Mac, press Ctrl+C to interrupt."
-                      >
-                        <span
-                          aria-hidden="true"
-                          className="block size-2 rounded-[2px] bg-current"
+                          onNavigateFolder={handleNavigateLocalFolder}
+                          handleRef={localDirectoryMenuRef}
                         />
-                      </Button>
-                    ) : pendingUserInputs.length === 0 &&
-                      !isVoiceRecording &&
-                      !isVoiceTranscribing ? (
-                      showPlanFollowUpPrompt ? (
-                        prompt.trim().length > 0 ? (
-                          <Button
-                            type="submit"
-                            size="sm"
-                            className="h-9 rounded-full px-4 sm:h-8"
-                            disabled={isSendBusy || isConnecting}
-                          >
-                            {isConnecting || isSendBusy ? "Sending..." : "Refine"}
-                          </Button>
-                        ) : (
-                          <div className="flex items-center">
-                            <Button
-                              type="submit"
-                              size="sm"
-                              className="h-9 rounded-l-full rounded-r-none px-4 sm:h-8"
-                              disabled={isSendBusy || isConnecting}
-                            >
-                              {isConnecting || isSendBusy ? "Sending..." : "Implement"}
-                            </Button>
-                            <Menu>
-                              <MenuTrigger
-                                render={
-                                  <Button
-                                    size="sm"
-                                    variant="default"
-                                    className="h-9 rounded-l-none rounded-r-full border-l-white/12 px-2 sm:h-8"
-                                    aria-label="Implementation actions"
-                                    disabled={isSendBusy || isConnecting}
-                                  />
-                                }
-                              >
-                                <ChevronDownIcon className="size-3.5" />
-                              </MenuTrigger>
-                              <MenuPopup align="end" side="top">
-                                <MenuItem
-                                  disabled={isSendBusy || isConnecting}
-                                  onClick={() => void onImplementPlanInNewThread()}
-                                >
-                                  Implement in a new thread
-                                </MenuItem>
-                              </MenuPopup>
-                            </Menu>
-                          </div>
-                        )
                       ) : (
+                        <ComposerCommandMenu
+                          items={composerMenuItems}
+                          resolvedTheme={resolvedTheme}
+                          isLoading={isComposerMenuLoading}
+                          triggerKind={
+                            composerCommandPicker !== null
+                              ? "slash-command"
+                              : effectiveComposerTriggerKind
+                          }
+                          activeItemId={activeComposerMenuItem?.id ?? null}
+                          onHighlightedItemChange={onComposerMenuItemHighlighted}
+                          onSelect={onSelectComposerItem}
+                        />
+                      )}
+                    </div>
+                  ) : null}
+                  {!isComposerApprovalState &&
+                    pendingUserInputs.length === 0 &&
+                    (composerAssistantSelections.length > 0 || composerImages.length > 0) && (
+                      <ComposerReferenceAttachments
+                        assistantSelections={composerAssistantSelections}
+                        images={composerImages}
+                        nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
+                        onExpandImage={setExpandedImage}
+                        onRemoveAssistantSelections={clearComposerAssistantSelectionsFromDraft}
+                        onRemoveImage={removeComposerImage}
+                      />
+                    )}
+                  <ComposerPromptEditor
+                    ref={composerEditorRef}
+                    value={
+                      isComposerApprovalState
+                        ? ""
+                        : activePendingProgress
+                          ? activePendingProgress.customAnswer
+                          : prompt
+                    }
+                    cursor={composerCursor}
+                    terminalContexts={
+                      !isComposerApprovalState && pendingUserInputs.length === 0
+                        ? composerTerminalContexts
+                        : []
+                    }
+                    mentionReferences={selectedComposerMentions}
+                    onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
+                    onChange={onPromptChange}
+                    onCommandKeyDown={onComposerCommandKey}
+                    onPaste={onComposerPaste}
+                    placeholder={
+                      isComposerApprovalState
+                        ? "Resolve this approval request to continue"
+                        : activePendingProgress
+                          ? "Type your own answer, or leave this blank to use the selected option"
+                          : showPlanFollowUpPrompt && activeProposedPlan
+                            ? "Add feedback to refine the plan, or leave this blank to implement it"
+                            : hasLiveTurn
+                              ? "Ask for follow-up changes"
+                              : phase === "disconnected"
+                                ? "Ask for follow-up changes or attach images"
+                                : "Ask anything, @tag files/folders, or use / to show available commands"
+                    }
+                    disabled={isConnecting || isComposerApprovalState}
+                  />
+                </div>
+                {/* Bottom toolbar */}
+                {activePendingApproval ? (
+                  <div className={COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME}>
+                    <ComposerPendingApprovalActions
+                      requestId={activePendingApproval.requestId}
+                      isResponding={respondingRequestIds.includes(activePendingApproval.requestId)}
+                      onRespondToApproval={onRespondToApproval}
+                    />
+                  </div>
+                ) : (
+                  <div
+                    data-chat-composer-footer="true"
+                    className={cn(
+                      "@container",
+                      COMPOSER_FOOTER_ROW_CLASS_NAME,
+                      isComposerFooterCompact
+                        ? "gap-1.5"
+                        : "flex-wrap gap-1.5 sm:flex-nowrap sm:gap-0",
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        "flex items-center",
+                        isVoiceRecording || isVoiceTranscribing
+                          ? "min-w-0 shrink-0 gap-1"
+                          : isComposerFooterCompact
+                            ? "min-w-0 flex-1 gap-1 overflow-hidden"
+                            : "min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-w-max sm:overflow-visible",
+                      )}
+                    >
+                      <ComposerExtrasMenu
+                        interactionMode={interactionMode}
+                        supportsFastMode={composerTraitSelection.caps.supportsFastMode}
+                        fastModeEnabled={composerTraitSelection.fastModeEnabled}
+                        onAddPhotos={addComposerImages}
+                        onToggleFastMode={toggleFastMode}
+                        onSetPlanMode={setPlanMode}
+                      />
+
+                      {!isVoiceRecording && !isVoiceTranscribing ? (
                         <>
-                          {showVoiceNotesControl ? (
-                            <ComposerVoiceButton
-                              disabled={isComposerApprovalState || isConnecting || isSendBusy}
-                              isRecording={isVoiceRecording}
-                              isTranscribing={isVoiceTranscribing}
-                              durationLabel={voiceRecordingDurationLabel}
-                              onClick={toggleComposerVoiceRecording}
-                            />
+                          <RuntimeUsageControls
+                            {...runtimeUsageControlsProps}
+                            className="shrink-0"
+                          />
+
+                          {interactionMode === "plan" ? (
+                            <Button
+                              variant="ghost"
+                              className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] sm:px-3"
+                              size="sm"
+                              type="button"
+                              onClick={toggleInteractionMode}
+                              title="Plan mode — click to return to normal build mode"
+                            >
+                              <GoTasklist className="size-3.5" />
+                              <span className="sr-only sm:not-sr-only">Plan</span>
+                            </Button>
+                          ) : null}
+
+                          {activeTaskList || sidebarProposedPlan || planSidebarOpen ? (
+                            <Button
+                              variant="ghost"
+                              className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal sm:px-3"
+                              size="sm"
+                              type="button"
+                              onClick={togglePlanSidebar}
+                              title={
+                                planSidebarOpen
+                                  ? `Hide ${planSidebarLabel.toLowerCase()} sidebar`
+                                  : `Show ${planSidebarLabel.toLowerCase()} sidebar`
+                              }
+                            >
+                              <GoTasklist className="size-3.5" />
+                              <span className="sr-only sm:not-sr-only">
+                                {planSidebarOpen ? `Hide ${planSidebarLabel}` : planSidebarLabel}
+                              </span>
+                            </Button>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </div>
+
+                    <div
+                      data-chat-composer-actions="right"
+                      className={cn(
+                        "flex items-center gap-2",
+                        isVoiceRecording || isVoiceTranscribing ? "min-w-0 flex-1" : "shrink-0",
+                      )}
+                    >
+                      {isPreparingWorktree ? (
+                        <span className="text-[length:var(--app-font-size-ui-xs,10px)] text-[var(--color-text-foreground-secondary)]">
+                          Preparing worktree...
+                        </span>
+                      ) : null}
+                      {!isVoiceRecording && !isVoiceTranscribing && runtimeUsageContextWindow ? (
+                        <ContextWindowMeter
+                          usage={runtimeUsageContextWindow}
+                          {...(activeCumulativeCostUsd != null
+                            ? { cumulativeCostUsd: activeCumulativeCostUsd }
+                            : {})}
+                          {...(contextWindowSelectionStatus.activeLabel !== undefined
+                            ? {
+                                activeWindowLabel: contextWindowSelectionStatus.activeLabel,
+                              }
+                            : {})}
+                          {...(contextWindowSelectionStatus.pendingSelectedLabel !== undefined
+                            ? {
+                                pendingWindowLabel:
+                                  contextWindowSelectionStatus.pendingSelectedLabel,
+                              }
+                            : {})}
+                        />
+                      ) : null}
+                      {!isVoiceRecording && !isVoiceTranscribing
+                        ? composerModelEffortPickerControl
+                        : null}
+                      {showVoiceNotesControl && (isVoiceRecording || isVoiceTranscribing) ? (
+                        <ComposerVoiceRecorderBar
+                          disabled={isComposerApprovalState || isConnecting || isSendBusy}
+                          isRecording={isVoiceRecording}
+                          isTranscribing={isVoiceTranscribing}
+                          durationLabel={voiceRecordingDurationLabel}
+                          waveformLevels={voiceWaveformLevels}
+                          onCancel={() => {
+                            if (isVoiceRecording) {
+                              void submitComposerVoiceRecording();
+                              return;
+                            }
+                            cancelComposerVoiceRecording();
+                          }}
+                          onSubmit={() => {
+                            void submitComposerVoiceRecording();
+                          }}
+                        />
+                      ) : null}
+                      {activePendingProgress ? (
+                        <div className="flex items-center gap-2">
+                          {activePendingProgress.questionIndex > 0 ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="rounded-full"
+                              onClick={onPreviousActivePendingUserInputQuestion}
+                              disabled={activePendingIsResponding}
+                            >
+                              Previous
+                            </Button>
                           ) : null}
                           <Button
                             type="submit"
-                            variant="prominent"
-                            size="icon-xs"
-                            className="size-7 rounded-full sm:size-7"
+                            size="sm"
+                            className="rounded-full px-4"
                             disabled={
-                              isSendBusy ||
-                              isConnecting ||
-                              isVoiceTranscribing ||
-                              !composerSendState.hasSendableContent
-                            }
-                            aria-label={
-                              isConnecting
-                                ? "Connecting"
-                                : isVoiceTranscribing
-                                  ? "Transcribing voice note"
-                                  : isPreparingWorktree
-                                    ? "Preparing worktree"
-                                    : isSendBusy
-                                      ? "Sending"
-                                      : "Send message"
+                              activePendingIsResponding ||
+                              (activePendingProgress.isLastQuestion
+                                ? !activePendingResolvedAnswers
+                                : !activePendingProgress.canAdvance)
                             }
                           >
-                            {isConnecting || isSendBusy ? (
-                              <svg
-                                width="12"
-                                height="12"
-                                viewBox="0 0 14 14"
-                                fill="none"
-                                className="animate-spin"
-                                aria-hidden="true"
-                              >
-                                <circle
-                                  cx="7"
-                                  cy="7"
-                                  r="5.5"
-                                  stroke="currentColor"
-                                  strokeWidth="1.5"
-                                  strokeLinecap="round"
-                                  strokeDasharray="20 12"
-                                />
-                              </svg>
-                            ) : (
-                              <ComposerSendArrowIcon
-                                aria-hidden="true"
-                                className="size-5 shrink-0"
-                              />
-                            )}
+                            {activePendingIsResponding
+                              ? "Submitting..."
+                              : activePendingProgress.isLastQuestion
+                                ? "Submit answers"
+                                : "Next question"}
                           </Button>
-                        </>
-                      )
-                    ) : null}
+                        </div>
+                      ) : phase === "running" ? (
+                        <Button
+                          type="button"
+                          variant="prominent"
+                          size="icon-xs"
+                          className="sm:size-[26px]"
+                          onClick={() => void onInterrupt()}
+                          aria-label="Stop generation"
+                          title="Stop the current response. On Mac, press Ctrl+C to interrupt."
+                        >
+                          <span
+                            aria-hidden="true"
+                            className="block size-2 rounded-[2px] bg-current"
+                          />
+                        </Button>
+                      ) : pendingUserInputs.length === 0 &&
+                        !isVoiceRecording &&
+                        !isVoiceTranscribing ? (
+                        showPlanFollowUpPrompt ? (
+                          prompt.trim().length > 0 ? (
+                            <Button
+                              type="submit"
+                              size="sm"
+                              className="h-9 rounded-full px-4 sm:h-8"
+                              disabled={isSendBusy || isConnecting}
+                            >
+                              {isConnecting || isSendBusy ? "Sending..." : "Refine"}
+                            </Button>
+                          ) : (
+                            <div className="flex items-center">
+                              <Button
+                                type="submit"
+                                size="sm"
+                                className="h-9 rounded-l-full rounded-r-none px-4 sm:h-8"
+                                disabled={isSendBusy || isConnecting}
+                              >
+                                {isConnecting || isSendBusy ? "Sending..." : "Implement"}
+                              </Button>
+                              <Menu>
+                                <MenuTrigger
+                                  render={
+                                    <Button
+                                      size="sm"
+                                      variant="default"
+                                      className="h-9 rounded-l-none rounded-r-full border-l-white/12 px-2 sm:h-8"
+                                      aria-label="Implementation actions"
+                                      disabled={isSendBusy || isConnecting}
+                                    />
+                                  }
+                                >
+                                  <ChevronDownIcon className="size-3.5" />
+                                </MenuTrigger>
+                                <MenuPopup align="end" side="top">
+                                  <MenuItem
+                                    disabled={isSendBusy || isConnecting}
+                                    onClick={() => void onImplementPlanInNewThread()}
+                                  >
+                                    Implement in a new thread
+                                  </MenuItem>
+                                </MenuPopup>
+                              </Menu>
+                            </div>
+                          )
+                        ) : (
+                          <>
+                            {showVoiceNotesControl ? (
+                              <ComposerVoiceButton
+                                disabled={isComposerApprovalState || isConnecting || isSendBusy}
+                                isRecording={isVoiceRecording}
+                                isTranscribing={isVoiceTranscribing}
+                                durationLabel={voiceRecordingDurationLabel}
+                                onClick={toggleComposerVoiceRecording}
+                              />
+                            ) : null}
+                            <Button
+                              type="submit"
+                              variant="prominent"
+                              size="icon-xs"
+                              className="size-7 rounded-full sm:size-7"
+                              disabled={
+                                isSendBusy ||
+                                isConnecting ||
+                                isVoiceTranscribing ||
+                                !composerSendState.hasSendableContent
+                              }
+                              aria-label={
+                                isConnecting
+                                  ? "Connecting"
+                                  : isVoiceTranscribing
+                                    ? "Transcribing voice note"
+                                    : isPreparingWorktree
+                                      ? "Preparing worktree"
+                                      : isSendBusy
+                                        ? "Sending"
+                                        : "Send message"
+                              }
+                            >
+                              {isConnecting || isSendBusy ? (
+                                <svg
+                                  width="12"
+                                  height="12"
+                                  viewBox="0 0 14 14"
+                                  fill="none"
+                                  className="animate-spin"
+                                  aria-hidden="true"
+                                >
+                                  <circle
+                                    cx="7"
+                                    cy="7"
+                                    r="5.5"
+                                    stroke="currentColor"
+                                    strokeWidth="1.5"
+                                    strokeLinecap="round"
+                                    strokeDasharray="20 12"
+                                  />
+                                </svg>
+                              ) : (
+                                <ComposerSendArrowIcon
+                                  aria-hidden="true"
+                                  className="size-5 shrink-0"
+                                />
+                              )}
+                            </Button>
+                          </>
+                        )
+                      ) : null}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      </form>
-      {isEmptyChatLanding ? (
-        <div
-          className={cn(
-            "mt-2 flex items-center justify-start gap-3 px-3",
-            COMPOSER_COLUMN_FRAME_CLASS_NAME,
-          )}
-        >
-          <ProjectPicker
-            align="start"
-            side="top"
-            showResetToHome={Boolean(resolvedThreadWorktreePath)}
-            selectedWorkspaceRoot={resolvedThreadWorktreePath}
-            onSelectWorkspaceRoot={handleSelectWorkspaceRoot}
-            onResetToHome={handleResetWorkspaceToHome}
-          />
-        </div>
-      ) : null}
-    </>
-  ) : (
-    <div aria-hidden="true" className="w-full overflow-visible" data-chat-composer-form="deferred">
+        </form>
+        {isEmptyChatLanding ? (
+          <div
+            className={cn(
+              "mt-2 flex items-center justify-start gap-3 px-3",
+              COMPOSER_COLUMN_FRAME_CLASS_NAME,
+            )}
+          >
+            <ProjectPicker
+              align="start"
+              side="top"
+              showResetToHome={Boolean(resolvedThreadWorktreePath)}
+              selectedWorkspaceRoot={resolvedThreadWorktreePath}
+              onSelectWorkspaceRoot={handleSelectWorkspaceRoot}
+              onResetToHome={handleResetWorkspaceToHome}
+            />
+          </div>
+        ) : null}
+      </>
+    ) : (
       <div
-        className={cn(COMPOSER_INPUT_SURFACE_CLASS_NAME, COMPOSER_COLUMN_FRAME_CLASS_NAME)}
-        style={{ height: secondaryChromePlaceholderHeight }}
-      />
-    </div>
-  );
+        aria-hidden="true"
+        className="w-full overflow-visible"
+        data-chat-composer-form="deferred"
+      >
+        <div
+          className={cn(COMPOSER_INPUT_SURFACE_CLASS_NAME, COMPOSER_COLUMN_FRAME_CLASS_NAME)}
+          style={{ height: secondaryChromePlaceholderHeight }}
+        />
+      </div>
+    );
 
   return (
     <div
@@ -8135,6 +8229,7 @@ export default function ChatView({
           showGitActions={showGitActions}
           diffOpen={resolvedDiffOpen}
           diffDisabledReason={diffDisabledReason}
+          environment={environmentHeaderState}
           surfaceMode={surfaceMode}
           chatLayoutAction={
             surfaceMode === "single" && onSplitSurface
@@ -8182,7 +8277,7 @@ export default function ChatView({
 
       {/* Error banner */}
       <ProviderHealthBanner
-        status={visibleActiveProviderStatus}
+        status={shouldShowProviderHealthBanner ? visibleActiveProviderStatus : null}
         onDismiss={dismissActiveProviderHealthBanner}
       />
       <ThreadErrorBanner error={activeThread.error} onDismiss={dismissActiveThreadError} />
@@ -8211,7 +8306,7 @@ export default function ChatView({
               terminalWorkspaceTerminalTabActive ? "pointer-events-none invisible" : "",
             )}
           >
-            {isCenteredEmptyLanding ? (
+            {shouldRenderChatPaneContent && isCenteredEmptyLanding ? (
               <div
                 className={cn(
                   "chat-pane-enter flex flex-1 items-center justify-center",
@@ -8246,7 +8341,7 @@ export default function ChatView({
                     </h2>
                   </div>
                   {composerSection}
-                  {isGitRepo ? (
+                  {isGitRepo && !environmentEnabled ? (
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
                       <BranchToolbar {...branchToolbarProps} />
                     </div>
@@ -8265,12 +8360,15 @@ export default function ChatView({
                   ) : null}
                 </div>
               </div>
-            ) : (
+            ) : null}
+
+            {shouldRenderChatPaneContent && !isCenteredEmptyLanding ? (
               <div className="flex min-h-0 flex-1 flex-col">
                 <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
                   <ChatTranscriptPane
                     activeThreadId={activeThread.id}
                     activeTurnId={activeThread.session?.activeTurnId ?? null}
+                    agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
                     isWorking={isWorking}
                     activeTurnInProgress={activeTurnInProgress}
@@ -8304,6 +8402,8 @@ export default function ChatView({
                     onMessagesTouchStart={onMessagesTouchStart}
                     onMessagesTouchMove={onMessagesTouchMove}
                     onMessagesTouchEnd={onMessagesTouchEnd}
+                    onOpenAgentActivity={setOpenAgentActivityId}
+                    onCloseAgentActivityDetail={() => setOpenAgentActivityId(null)}
                     scrollButtonVisible={showScrollToBottom}
                     onScrollToBottom={onScrollToBottom}
                     bottomContentInsetPx={
@@ -8311,19 +8411,34 @@ export default function ChatView({
                         ? activeTaskListCardHeight + 8
                         : undefined
                     }
+                    contentInsetRightPx={
+                      environmentAppliesContentInset
+                        ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX
+                        : undefined
+                    }
                   />
                 </div>
 
                 <div
                   className={cn(
-                    "chat-pane-enter relative z-10 -mt-5 shrink-0 overflow-visible w-full pt-0 sm:pt-0",
+                    "relative z-10 -mt-5 w-full shrink-0 overflow-visible pt-0 sm:pt-0",
+                    ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
                     CHAT_COLUMN_GUTTER_CLASS_NAME,
-                    isGitRepo ? "pb-0.5" : "pb-2 sm:pb-2.5",
+                    // A trailing BranchToolbar only renders for legacy git threads; otherwise the
+                    // composer is the last element, so give it a comfortable bottom margin.
+                    isGitRepo && !environmentEnabled ? "pb-0.5" : "pb-3 sm:pb-4",
                   )}
+                  // Match the transcript's right inset so the composer stays aligned with chat
+                  // content (and clear of the docked Environment overlay).
+                  style={
+                    environmentAppliesContentInset
+                      ? { paddingRight: ENVIRONMENT_DOCKED_CONTENT_INSET_PX }
+                      : undefined
+                  }
                 >
                   {composerSection}
                 </div>
-                {secondaryChromeReady && isGitRepo ? (
+                {secondaryChromeReady && isGitRepo && !environmentEnabled ? (
                   <div className={CHAT_COLUMN_GUTTER_CLASS_NAME}>
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
                       <BranchToolbar {...branchToolbarProps} />
@@ -8331,9 +8446,9 @@ export default function ChatView({
                   </div>
                 ) : null}
               </div>
-            )}
+            ) : null}
 
-            {secondaryChromeReady && pullRequestDialogState ? (
+            {shouldRenderChatPaneContent && secondaryChromeReady && pullRequestDialogState ? (
               <PullRequestThreadDialog
                 key={pullRequestDialogState.key}
                 open
@@ -8370,6 +8485,15 @@ export default function ChatView({
               />
             </div>
           ) : null}
+
+          {/* Environment overlay — always mounted so open/close can transition in lockstep with inset. */}
+          {environmentEnabled ? (
+            <EnvironmentPanel
+              {...environmentPanelProps}
+              open={environmentPanelVisible}
+              variant={environmentOverlayVariant}
+            />
+          ) : null}
         </div>
         {/* end chat column */}
 
@@ -8395,7 +8519,7 @@ export default function ChatView({
       {/* end horizontal flex container */}
 
       {(() => {
-        if (!terminalState.terminalOpen || !activeProject || terminalWorkspaceOpen) {
+        if (!terminalState.terminalOpen || terminalWorkspaceOpen) {
           return null;
         }
         return (

@@ -35,6 +35,21 @@ export function buildTerminalCloseConfirmationMessage(options: {
   ].join("\n");
 }
 
+export function shouldPromptForTerminalClose(options: {
+  confirmationEnabled: boolean;
+  runningTerminalIds: readonly string[];
+  terminalAttentionStatesById: Record<string, unknown>;
+  terminalId: string;
+}): boolean {
+  if (!options.confirmationEnabled) {
+    return false;
+  }
+  return (
+    options.runningTerminalIds.includes(options.terminalId) ||
+    options.terminalAttentionStatesById[options.terminalId] !== undefined
+  );
+}
+
 export async function confirmTerminalTabClose(options: {
   api: Pick<NativeApi, "dialogs"> | null | undefined;
   enabled: boolean;

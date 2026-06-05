@@ -1060,6 +1060,80 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.runtimeMode).toBe("approval-required");
   });
 
+  it("clears stale Claude resume state and retries the turn with transcript context", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+    });
+    const now = new Date().toISOString();
+    harness.sendTurn.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "claudeAgent",
+          method: "turn/setModel",
+          detail:
+            "Claude Code returned an error result: No conversation found with session ID: b469168a-2625-4447-927f-d86d94bb7237",
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.messages.import",
+        commandId: CommandId.makeUnsafe("cmd-import-claude-stale-resume-history"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messages: [
+          {
+            messageId: asMessageId("user-message-claude-history"),
+            role: "user",
+            text: "Move the changelog navigation to the left.",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            messageId: asMessageId("assistant-message-claude-history"),
+            role: "assistant",
+            text: "I moved the changelog navigation into the left rail.",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-claude-stale-resume"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-claude-stale-resume"),
+          role: "user",
+          text: "nice but bring it on the left.",
+          attachments: [],
+        },
+        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.clearSessionResumeCursor).toHaveBeenCalledWith({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+    expect(harness.startSession.mock.calls.length).toBe(2);
+    const retryStartInput = harness.startSession.mock.calls[1]?.[1];
+    expect(retryStartInput).not.toHaveProperty("resumeCursor");
+
+    const retrySendInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
+    expect(retrySendInput.input).toContain("<thread_context>");
+    expect(retrySendInput.input).toContain("Move the changelog navigation to the left.");
+    expect(retrySendInput.input).toContain("<latest_user_message>");
+    expect(retrySendInput.input).toContain("nice but bring it on the left.");
+  });
+
   it("marks the thread session errored when normal turn start fails", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

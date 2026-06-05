@@ -165,52 +165,68 @@ function hasTokenEqual(query: string, token: string): boolean {
   return queryTokens(query).includes(token);
 }
 
+function createThemeCommandItem(
+  mode: ThemeCommandItem["mode"],
+  activeMode: ThemeCommandItem["mode"],
+): ThemeCommandItem {
+  if (mode === "system") {
+    return {
+      id: "theme-command:system",
+      label: "Switch to system theme",
+      description: "Match your OS appearance setting.",
+      mode,
+      isActive: activeMode === mode,
+    };
+  }
+
+  return {
+    id: `theme-command:${mode}`,
+    label: `Switch to ${mode} theme`,
+    description: mode === "light" ? "Always use the light theme." : "Always use the dark theme.",
+    mode,
+    isActive: activeMode === mode,
+  };
+}
+
 // Treat any token of length >= 2 that is a prefix of `keyword` as a match,
 // so typing `th` / `the` already starts surfacing theme actions.
 function hasTokenPrefixOf(query: string, keyword: string): boolean {
   return queryTokens(query).some((token) => token.length >= 2 && keyword.startsWith(token));
 }
 
-// Keep the palette quiet by default, then expose one focused appearance action
-// once the user is clearly asking about themes.
-function buildThemeCommandItem(input: {
+// Keep the palette quiet by default, then expose focused appearance actions
+// once the user is clearly asking about theme modes.
+function buildThemeCommandItems(input: {
   query: string;
   resolvedTheme: "light" | "dark";
   theme: "system" | "light" | "dark";
-}): ThemeCommandItem | null {
+}): ThemeCommandItem[] {
   const normalizedQuery = input.query.trim().toLowerCase();
   if (!normalizedQuery) {
-    return null;
+    return [];
   }
 
-  if (hasTokenEqual(normalizedQuery, "system")) {
-    return {
-      id: "theme-command:system",
-      label: "Follow system theme",
-      description: "Match your OS appearance setting.",
-      mode: "system",
-      isActive: input.theme === "system",
-    };
+  if (
+    hasTokenEqual(normalizedQuery, "system") ||
+    hasTokenEqual(normalizedQuery, "auto") ||
+    hasTokenEqual(normalizedQuery, "automatic") ||
+    hasTokenEqual(normalizedQuery, "os")
+  ) {
+    return [createThemeCommandItem("system", input.theme)];
   }
 
   if (hasTokenEqual(normalizedQuery, "light")) {
-    return {
-      id: "theme-command:light",
-      label: "Switch to light theme",
-      description: "Always use the light theme.",
-      mode: "light",
-      isActive: input.theme === "light",
-    };
+    return [
+      createThemeCommandItem("light", input.theme),
+      createThemeCommandItem("system", input.theme),
+    ];
   }
 
   if (hasTokenEqual(normalizedQuery, "dark")) {
-    return {
-      id: "theme-command:dark",
-      label: "Switch to dark theme",
-      description: "Always use the dark theme.",
-      mode: "dark",
-      isActive: input.theme === "dark",
-    };
+    return [
+      createThemeCommandItem("dark", input.theme),
+      createThemeCommandItem("system", input.theme),
+    ];
   }
 
   if (
@@ -218,17 +234,13 @@ function buildThemeCommandItem(input: {
     hasTokenPrefixOf(normalizedQuery, "appearance")
   ) {
     const nextMode = input.resolvedTheme === "dark" ? "light" : "dark";
-    return {
-      id: `theme-command:${nextMode}`,
-      label: `Switch to ${nextMode} theme`,
-      description:
-        nextMode === "light" ? "Always use the light theme." : "Always use the dark theme.",
-      mode: nextMode,
-      isActive: input.theme === nextMode,
-    };
+    return [
+      createThemeCommandItem(nextMode, input.theme),
+      createThemeCommandItem("system", input.theme),
+    ];
   }
 
-  return null;
+  return [];
 }
 
 function CodeThemeBadge(props: { accent: string; background: string; foreground: string }) {
@@ -410,9 +422,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     () => (isBrowsing ? [] : matchSidebarSearchActions(props.actions, query)),
     [isBrowsing, props.actions, query],
   );
-  const themeCommandItem = useMemo(
+  const themeCommandItems = useMemo(
     () =>
-      buildThemeCommandItem({
+      buildThemeCommandItems({
         query,
         resolvedTheme,
         theme,
@@ -443,7 +455,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const showThemeSection =
     !isBrowsing &&
     query.trim().length > 0 &&
-    (themeCommandItem !== null || matchedCurrentThemes.length > 0);
+    (themeCommandItems.length > 0 || matchedCurrentThemes.length > 0);
   const matchedProjects = useMemo(
     () => (isBrowsing ? [] : matchSidebarSearchProjects(props.projects, query)),
     [isBrowsing, props.projects, query],
@@ -454,7 +466,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   );
   const hasSearchResults =
     matchedActions.length > 0 ||
-    themeCommandItem !== null ||
+    themeCommandItems.length > 0 ||
     matchedCurrentThemes.length > 0 ||
     matchedProjects.length > 0 ||
     matchedThreads.length > 0;
@@ -983,30 +995,37 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
 
                   {showThemeSection ? (
                     <>
-                      {themeCommandItem ? (
+                      {themeCommandItems.length > 0 ? (
                         <CommandGroup>
                           <CommandGroupLabel className="py-1.5 pl-3">Configure</CommandGroupLabel>
-                          <CommandItem
-                            key={themeCommandItem.id}
-                            value={themeCommandItem.id}
-                            className="cursor-pointer items-center gap-3 rounded-lg px-3 py-1.5"
-                            onMouseDown={(event) => {
-                              event.preventDefault();
-                            }}
-                            onClick={() => {
-                              if (themeCommandItem.isActive) return;
-                              props.onOpenChange(false);
-                              setTheme(themeCommandItem.mode);
-                            }}
-                          >
-                            <PaletteIcon icon={THEME_MODE_ICONS[themeCommandItem.mode]} />
-                            <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground">
-                              {themeCommandItem.label}
-                            </span>
-                            {themeCommandItem.isActive ? (
-                              <CheckIcon className="size-3.5 shrink-0 text-muted-foreground/79" />
-                            ) : null}
-                          </CommandItem>
+                          {themeCommandItems.map((themeCommandItem) => (
+                            <CommandItem
+                              key={themeCommandItem.id}
+                              value={themeCommandItem.id}
+                              className="cursor-pointer items-center gap-3 rounded-lg px-3 py-1.5"
+                              onMouseDown={(event) => {
+                                event.preventDefault();
+                              }}
+                              onClick={() => {
+                                if (themeCommandItem.isActive) return;
+                                props.onOpenChange(false);
+                                setTheme(themeCommandItem.mode);
+                              }}
+                            >
+                              <PaletteIcon icon={THEME_MODE_ICONS[themeCommandItem.mode]} />
+                              <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground">
+                                {themeCommandItem.label}
+                              </span>
+                              <span
+                                className="flex size-3.5 shrink-0 items-center justify-center"
+                                aria-hidden={!themeCommandItem.isActive}
+                              >
+                                {themeCommandItem.isActive ? (
+                                  <CheckIcon className="size-3.5 text-muted-foreground/79" />
+                                ) : null}
+                              </span>
+                            </CommandItem>
+                          ))}
                         </CommandGroup>
                       ) : null}
                       {matchedCurrentThemes.length > 0 ? (

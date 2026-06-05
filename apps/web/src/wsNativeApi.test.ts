@@ -1,3 +1,8 @@
+// FILE: wsNativeApi.test.ts
+// Purpose: Verifies the WebSocket-backed NativeApi adapter and push listener fanout.
+// Layer: Web transport tests
+// Depends on: wsTransport mock plus contracts channel constants.
+
 import {
   ApprovalRequestId,
   CommandId,
@@ -55,6 +60,9 @@ vi.mock("./wsTransport", () => {
     WsTransport: class MockWsTransport {
       request = requestMock;
       subscribe = subscribeMock;
+      onStateChange() {
+        return () => undefined;
+      }
       getLatestPush(channel: string) {
         return latestPushByChannel.get(channel) ?? null;
       }
@@ -407,6 +415,17 @@ describe("wsNativeApi", () => {
     expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.dispatchCommand, {
       command,
     });
+  });
+
+  it("forwards terminal output ACKs to the websocket transport", async () => {
+    requestMock.mockResolvedValue(undefined);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    const input = { threadId: "thread-1", terminalId: "default", bytes: 4096 };
+    await api.terminal.ackOutput(input);
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.terminalAckOutput, input);
   });
 
   it("omits null user-input answers before dispatching to orchestration", async () => {

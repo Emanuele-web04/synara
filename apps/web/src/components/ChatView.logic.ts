@@ -60,6 +60,35 @@ export function resolveRuntimeModeAfterApprovalDecision(
   return null;
 }
 
+export function shouldRenderProviderHealthBanner(input: {
+  threadEntryPoint: ThreadPrimarySurface;
+  terminalWorkspaceTerminalTabActive: boolean;
+}): boolean {
+  return input.threadEntryPoint === "chat" && !input.terminalWorkspaceTerminalTabActive;
+}
+
+// Default-open policy for the Environment panel; render-time visibility is resolved separately.
+export function resolveDefaultEnvironmentPanelOpen(input: {
+  environmentEnabled: boolean;
+  isCenteredEmptyLanding: boolean;
+  isTerminalPrimarySurface: boolean;
+}): boolean {
+  return (
+    input.environmentEnabled &&
+    !input.isCenteredEmptyLanding &&
+    !input.isTerminalPrimarySurface
+  );
+}
+
+// Hides stale open state immediately on empty landing views, before reset effects run.
+export function resolveEnvironmentPanelVisible(input: {
+  environmentEnabled: boolean;
+  environmentPanelOpen: boolean;
+  isCenteredEmptyLanding: boolean;
+}): boolean {
+  return input.environmentEnabled && input.environmentPanelOpen && !input.isCenteredEmptyLanding;
+}
+
 export function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,
@@ -492,13 +521,12 @@ export function buildExpiredTerminalContextToastCopy(
 }
 
 export function shouldRenderTerminalWorkspace(options: {
-  activeProjectExists: boolean;
   presentationMode: "drawer" | "workspace";
   terminalOpen: boolean;
 }): boolean {
-  return (
-    options.terminalOpen && options.presentationMode === "workspace" && options.activeProjectExists
-  );
+  // The workspace shell should paint immediately; the terminal viewport gates the
+  // backend attach until a valid cwd is available.
+  return options.terminalOpen && options.presentationMode === "workspace";
 }
 
 export function shouldAutoDeleteTerminalThreadOnLastClose(options: {

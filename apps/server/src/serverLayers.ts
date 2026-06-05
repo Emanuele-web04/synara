@@ -91,6 +91,7 @@ export function makeServerRuntimeServicesLayer() {
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
     GitLayerLive,
+    TextGenerationLayerLive,
     TerminalLayerLive,
     KeybindingsLive,
     ServerSettingsLive,

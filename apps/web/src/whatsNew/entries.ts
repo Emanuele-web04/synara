@@ -22,6 +22,72 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.1.2",
+    date: "Jun 4",
+    features: [
+      {
+        id: "lighter-terminals",
+        title: "Terminals are lighter",
+        description:
+          "Terminal output now does less work end-to-end: batching, renderer acknowledgements, smarter backpressure, cheaper history updates, and more faithful reconnect replay keep busy terminals lighter under noisy commands and long-running TUIs.",
+      },
+      {
+        id: "terminal-workspace-and-appearance",
+        title: "Terminal workspaces feel cleaner",
+        description:
+          "Terminal-only workspaces skip hidden chat work, panes move between layouts without remount churn, close prompts only appear when a tab is active or needs attention, and terminal font/color settings now follow the active theme.",
+      },
+      {
+        id: "opencode-startup-reliability",
+        title: "OpenCode starts faster and fails louder",
+        description:
+          "Local OpenCode servers are pooled for recent sessions, startup waits longer before timing out, session creation runs alongside inventory discovery, and failure details now include redacted command output instead of vague startup errors.",
+      },
+      {
+        id: "provider-health-stability",
+        title: "Provider health checks are less jumpy",
+        description:
+          "Slow Claude and OpenCode probes get longer timeouts, transient command timeouts no longer make a previously ready provider look broken, and Claude auth refreshes invalidate cached subscription state.",
+      },
+      {
+        id: "stale-claude-resume-recovery",
+        title: "Claude resumes recover from stale native sessions",
+        description:
+          "When Claude reports a missing conversation id, Synara clears the stale resume cursor, recreates the provider session, and retries with transcript context instead of leaving the turn failed.",
+      },
+      {
+        id: "desktop-update-manual-fallback",
+        title: "Desktop updates now have a manual escape hatch",
+        description:
+          "If an in-app install silently fails, Synara restarts the backend, resumes update polling, deduplicates error toasts, and points you at the exact GitHub release page for a manual download.",
+      },
+      {
+        id: "mac-desktop-chrome-alignment",
+        title: "macOS desktop chrome stays aligned",
+        description:
+          "Traffic-light placement and renderer gutter spacing now share one geometry helper and react to Electron zoom changes, keeping top-bar controls lined up across chat, settings, and workspace views.",
+      },
+      {
+        id: "settings-appearance-refresh",
+        title: "Settings and appearance controls are easier to scan",
+        description:
+          "Theme selection moved to a segmented control, settings rows share tighter typography, provider update failures can expose a copyable manual command, and custom binary-path confirmations survive restarts.",
+      },
+      {
+        id: "agent-task-activity-rendering",
+        title: "Agent task activity is easier to follow",
+        description:
+          "OpenCode task child sessions and newer shell-step events now flow into Synara's activity timeline, while generic agent task rows keep their useful prompt and result text instead of disappearing or showing wrapper noise.",
+      },
+      {
+        id: "transport-reconnect-events",
+        title: "Reconnect state is visible to UI runtimes",
+        description:
+          "The web transport now publishes local WebSocket state changes, giving terminal recovery and other renderer code a cleaner signal when the server reconnects or closes.",
+      },
+    ],
+  },
+  {
     version: "0.1.1",
     date: "Jun 4",
     features: [

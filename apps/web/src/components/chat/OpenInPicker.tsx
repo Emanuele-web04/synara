@@ -4,14 +4,11 @@
 // Depends on: shared editor metadata, native shell bridge, and preferred editor state.
 
 import { type EditorId, type ResolvedKeybindingsConfig } from "@t3tools/contracts";
-import { memo, useCallback, useEffect, useMemo } from "react";
-import { isOpenFavoriteEditorShortcut, shortcutLabelForCommand } from "../../keybindings";
-import { usePreferredEditor } from "../../editorPreferences";
-import { resolveAvailableEditorOptions } from "../../editorMetadata";
+import { memo } from "react";
+import { useEditorLaunchers } from "~/hooks/useEditorLaunchers";
 import { ChevronDownIcon, PlusIcon } from "~/lib/icons";
 import { Menu, MenuItem, MenuSeparator, MenuShortcut, MenuTrigger } from "../ui/menu";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
-import { readNativeApi } from "~/nativeApi";
 import {
   ChatHeaderButton,
   ChatHeaderIconButton,
@@ -33,43 +30,8 @@ export const OpenInPicker = memo(function OpenInPicker({
   // Optional project "Add action" entry rendered at the bottom of the editor menu.
   onAddAction?: () => void;
 }) {
-  const [preferredEditor, setPreferredEditor] = usePreferredEditor(availableEditors);
-  const options = useMemo(
-    () => resolveAvailableEditorOptions(navigator.platform, availableEditors),
-    [availableEditors],
-  );
-  const primaryOption = options.find(({ value }) => value === preferredEditor) ?? null;
-
-  const openInEditor = useCallback(
-    (editorId: EditorId | null) => {
-      const api = readNativeApi();
-      if (!api || !openInCwd) return;
-      const editor = editorId ?? preferredEditor;
-      if (!editor) return;
-      void api.shell.openInEditor(openInCwd, editor);
-      setPreferredEditor(editor);
-    },
-    [preferredEditor, openInCwd, setPreferredEditor],
-  );
-
-  const openFavoriteEditorShortcutLabel = useMemo(
-    () => shortcutLabelForCommand(keybindings, "editor.openFavorite"),
-    [keybindings],
-  );
-
-  useEffect(() => {
-    const handler = (e: globalThis.KeyboardEvent) => {
-      const api = readNativeApi();
-      if (!isOpenFavoriteEditorShortcut(e, keybindings)) return;
-      if (!api || !openInCwd) return;
-      if (!preferredEditor) return;
-
-      e.preventDefault();
-      void api.shell.openInEditor(openInCwd, preferredEditor);
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [preferredEditor, keybindings, openInCwd]);
+  const { options, preferredEditor, primaryOption, openFavoriteShortcutLabel, openInEditor } =
+    useEditorLaunchers({ keybindings, availableEditors, openInCwd });
 
   return (
     <ChatHeaderSplitGroup label="Open in editor">
@@ -105,8 +67,8 @@ export const OpenInPicker = memo(function OpenInPicker({
                 <Icon aria-hidden="true" className="size-3.5 text-muted-foreground" />
               </span>
               {label}
-              {value === preferredEditor && openFavoriteEditorShortcutLabel && (
-                <MenuShortcut>{openFavoriteEditorShortcutLabel}</MenuShortcut>
+              {value === preferredEditor && openFavoriteShortcutLabel && (
+                <MenuShortcut>{openFavoriteShortcutLabel}</MenuShortcut>
               )}
             </MenuItem>
           ))}

@@ -137,6 +137,7 @@ interface CursorSessionContext {
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
   readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
+  readonly assistantItemTurnIds: Map<string, TurnId>;
   lastPlanFingerprint: string | undefined;
   completedPlanFingerprint: string | undefined;
   activeInteractionMode: ProviderInteractionMode | undefined;
@@ -159,6 +160,33 @@ function clearCursorActiveTurn(ctx: CursorSessionContext, turnId: TurnId): boole
   const { activeTurnId: _activeTurnId, ...session } = ctx.session;
   ctx.session = session;
   return true;
+}
+
+function resolveCursorAssistantItemTurnId(
+  ctx: CursorSessionContext,
+  itemId: string | undefined,
+): TurnId | undefined {
+  if (itemId === undefined) {
+    return ctx.activeTurnId;
+  }
+  const knownTurnId = ctx.assistantItemTurnIds.get(itemId);
+  if (knownTurnId !== undefined) {
+    return knownTurnId;
+  }
+  if (ctx.activeTurnId !== undefined) {
+    ctx.assistantItemTurnIds.set(itemId, ctx.activeTurnId);
+    return ctx.activeTurnId;
+  }
+  return ctx.assistantItemTurnIds.get(itemId);
+}
+
+function completeCursorAssistantItemTurnId(
+  ctx: CursorSessionContext,
+  itemId: string,
+): TurnId | undefined {
+  const turnId = resolveCursorAssistantItemTurnId(ctx, itemId);
+  ctx.assistantItemTurnIds.delete(itemId);
+  return turnId;
 }
 
 function readAcpUsdCost(cost: EffectAcpSchema.Cost | null | undefined): number | undefined {
@@ -839,6 +867,7 @@ export function makeCursorAdapter(
             pendingApprovals,
             pendingUserInputs,
             turns: [],
+            assistantItemTurnIds: new Map(),
             lastPlanFingerprint: undefined,
             completedPlanFingerprint: undefined,
             activeInteractionMode: undefined,
@@ -856,28 +885,34 @@ export function makeCursorAdapter(
                   case "ModeChanged":
                     return;
                   case "AssistantItemStarted":
-                    yield* offerRuntimeEvent(
-                      makeAcpAssistantItemEvent({
-                        stamp: yield* makeEventStamp(),
-                        provider: PROVIDER,
-                        threadId: ctx.threadId,
-                        turnId: ctx.activeTurnId,
-                        itemId: event.itemId,
-                        lifecycle: "item.started",
-                      }),
-                    );
+                    {
+                      const turnId = resolveCursorAssistantItemTurnId(ctx, event.itemId);
+                      yield* offerRuntimeEvent(
+                        makeAcpAssistantItemEvent({
+                          stamp: yield* makeEventStamp(),
+                          provider: PROVIDER,
+                          threadId: ctx.threadId,
+                          turnId,
+                          itemId: event.itemId,
+                          lifecycle: "item.started",
+                        }),
+                      );
+                    }
                     return;
                   case "AssistantItemCompleted":
-                    yield* offerRuntimeEvent(
-                      makeAcpAssistantItemEvent({
-                        stamp: yield* makeEventStamp(),
-                        provider: PROVIDER,
-                        threadId: ctx.threadId,
-                        turnId: ctx.activeTurnId,
-                        itemId: event.itemId,
-                        lifecycle: "item.completed",
-                      }),
-                    );
+                    {
+                      const turnId = completeCursorAssistantItemTurnId(ctx, event.itemId);
+                      yield* offerRuntimeEvent(
+                        makeAcpAssistantItemEvent({
+                          stamp: yield* makeEventStamp(),
+                          provider: PROVIDER,
+                          threadId: ctx.threadId,
+                          turnId,
+                          itemId: event.itemId,
+                          lifecycle: "item.completed",
+                        }),
+                      );
+                    }
                     return;
                   case "PlanUpdated":
                     yield* logNative(
@@ -928,7 +963,7 @@ export function makeCursorAdapter(
                         stamp: yield* makeEventStamp(),
                         provider: PROVIDER,
                         threadId: ctx.threadId,
-                        turnId: ctx.activeTurnId,
+                        turnId: resolveCursorAssistantItemTurnId(ctx, event.itemId),
                         ...(event.itemId ? { itemId: event.itemId } : {}),
                         text: event.text,
                         ...(event.streamKind ? { streamKind: event.streamKind } : {}),

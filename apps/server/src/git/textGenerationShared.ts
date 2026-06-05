@@ -194,6 +194,26 @@ export function sanitizeDiffSummary(raw: string): string {
   ].join("\n");
 }
 
+export function sanitizeThreadRecap(raw: string, previousRecap?: string): string {
+  const strippedPrefix = raw
+    .trim()
+    .replace(/^recap\s*:\s*/iu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+  const fallback = previousRecap?.trim().replace(/\s+/gu, " ") ?? "";
+  const candidate = strippedPrefix.length > 0 ? strippedPrefix : fallback;
+
+  if (candidate.length === 0) {
+    return "No meaningful recap yet.";
+  }
+  if (candidate.length <= 240) {
+    return candidate;
+  }
+
+  const clipped = candidate.slice(0, 237).trimEnd();
+  return `${clipped}...`;
+}
+
 function attachmentMetadataLines(attachments: ReadonlyArray<ChatAttachment> | undefined): string[] {
   return (attachments ?? [])
     .filter((attachment) => attachment.type === "image")
@@ -304,6 +324,47 @@ export function buildDiffSummaryPrompt(input: { readonly patch: string }) {
       summary: Schema.String,
     }),
     rawTextFallback: { key: "summary" } satisfies RawTextFallback,
+  };
+}
+
+export function buildThreadRecapPrompt(input: {
+  readonly previousRecap?: string;
+  readonly newMaterial: string;
+  readonly currentState?: string;
+}) {
+  return {
+    prompt: [
+      "You are writing a compact live recap for Synara's chat side panel.",
+      "Return a JSON object with key: recap.",
+      "Respond with only the JSON object, no prose and no code fences.",
+      "Goal:",
+      "Help the user quickly remember what happened in this chat, especially the latest concrete work and the current next step.",
+      "",
+      "Rules:",
+      "- recap must be only the recap text; no title, no prefix, no bullets, no markdown",
+      "- use the same language as the active chat",
+      "- maximum 220 characters; prefer 150-190 characters",
+      "- write one compact paragraph that fits in 3-4 narrow panel lines",
+      "- mention the current work area first",
+      "- prioritize recent completed changes over old context",
+      "- include the next step, blocker, or pending decision if useful",
+      "- ignore tool noise unless it changed the outcome",
+      "- do not invent completed work, files, tests, or decisions",
+      "- if there is no meaningful new information, return the previous recap unchanged",
+      "",
+      "Previous recap:",
+      limitSection(input.previousRecap?.trim() || "(none)", 600),
+      "",
+      "New material:",
+      limitSection(input.newMaterial, 5_000),
+      "",
+      "Current state:",
+      limitSection(input.currentState?.trim() || "(none)", 1_500),
+    ].join("\n"),
+    outputSchemaJson: Schema.Struct({
+      recap: Schema.String,
+    }),
+    rawTextFallback: { key: "recap" } satisfies RawTextFallback,
   };
 }
 

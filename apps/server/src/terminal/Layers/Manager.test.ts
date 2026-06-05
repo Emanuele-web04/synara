@@ -372,6 +372,75 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
+  it("keeps pty reads paused until renderer output ACKs drain", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    await manager.ackOutput({ threadId: "thread-1", terminalId: "default", bytes: 1 });
+    const output = "x".repeat(120_000);
+    process.emitData(output);
+
+    await waitFor(() => process.paused);
+    expect(
+      events.some((event) => event.type === "output" && event.byteLength === output.length),
+    ).toBe(true);
+
+    await manager.ackOutput({ threadId: "thread-1", terminalId: "default", bytes: 116_000 });
+
+    expect(process.paused).toBe(false);
+    manager.dispose();
+  });
+
+  it("resumes ack-paused reads when a renderer reattaches", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    // Renderer proves ACK support, then a burst pauses reads without draining.
+    await manager.ackOutput({ threadId: "thread-1", terminalId: "default", bytes: 1 });
+    process.emitData("x".repeat(120_000));
+    await waitFor(() => process.paused);
+
+    // Renderer disconnects while paused and reattaches (open on a running session).
+    // Without resetting the previous client's ACK accounting the PTY would stay
+    // paused forever, since the fresh renderer never ACKs output it never received.
+    await manager.open(openInput());
+
+    expect(process.paused).toBe(false);
+    manager.dispose();
+  });
+
+  it("includes live terminal mode replay preamble in reattach snapshots", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    process.emitData("\u001b[?2004h\u001b[>7u");
+    const snapshot = await manager.open(openInput());
+
+    expect(snapshot.replayPreamble).toContain("\u001b[?2004h");
+    expect(snapshot.replayPreamble).toContain("\u001b[=7;1u");
+
+    process.emitData("\u001b[?2004l\u001b[=0;1u");
+    const resetSnapshot = await manager.open(openInput());
+
+    expect(resetSnapshot.replayPreamble ?? "").not.toContain("?2004");
+    expect(resetSnapshot.replayPreamble ?? "").not.toContain("=7;1u");
+
+    manager.dispose();
+  });
+
   it("restarts terminal with empty transcript and respawns pty", async () => {
     const { manager, ptyAdapter, logsDir } = makeManager();
     await manager.open(openInput());
@@ -741,6 +810,28 @@ describe("TerminalManager", () => {
         ),
       ).toBe(true);
     }
+
+    manager.dispose();
+  });
+
+  it("emits nested PTY spawn failure details", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+    ptyAdapter.spawnFailures.push(new Error("native binding missing"));
+
+    const snapshot = await manager.open(openInput());
+
+    expect(snapshot.status).toBe("error");
+    expect(
+      events.some(
+        (event) =>
+          event.type === "error" &&
+          event.message === "Failed to spawn PTY process: native binding missing",
+      ),
+    ).toBe(true);
 
     manager.dispose();
   });

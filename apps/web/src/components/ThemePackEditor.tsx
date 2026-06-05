@@ -27,7 +27,11 @@ import { SettingResetButton } from "./settings/SettingControls";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { type ChromeTheme, type ThemeMode, type ThemeVariant, useTheme } from "../hooks/useTheme";
 import { cn } from "../lib/utils";
-import { SETTINGS_CARD_CLASS_NAME, SETTINGS_CARD_ROW_CLASS_NAME } from "../settingsPanelStyles";
+import {
+  SETTINGS_CARD_CLASS_NAME,
+  SETTINGS_CARD_ROW_CLASS_NAME,
+  SETTINGS_CONTROL_RADIUS_CLASS_NAME,
+} from "../settingsPanelStyles";
 import {
   CODE_THEME_OPTIONS,
   DEFAULT_THEME_STATE,
@@ -141,7 +145,7 @@ export function ThemePackEditor({
           >
             <SelectTrigger
               size="sm"
-              className="ml-1 min-w-52 gap-2"
+              className={cn(SETTINGS_CONTROL_RADIUS_CLASS_NAME, "ml-1 min-w-52 gap-2")}
               aria-label={`${titleLabel} code theme`}
             >
               <SelectValue className="flex-1 text-left">
@@ -154,7 +158,7 @@ export function ThemePackEditor({
                   hideIndicator
                   key={option.id}
                   value={option.id}
-                  className="rounded-md px-2 py-2"
+                  className={cn(SETTINGS_CONTROL_RADIUS_CLASS_NAME, "px-2 py-2")}
                 >
                   <CodeThemeSelectOption label={option.label} theme={option.previewTheme} />
                 </SelectItem>
@@ -384,7 +388,10 @@ function ColorPill({
           render={
             <button
               type="button"
-              className="group relative flex h-8 min-w-44 items-center gap-2 overflow-hidden rounded-md border px-2 pr-3 text-left transition-[transform,box-shadow] hover:scale-[1.005] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              className={cn(
+                SETTINGS_CONTROL_RADIUS_CLASS_NAME,
+                "group relative flex h-8 min-w-44 items-center gap-2 overflow-hidden border px-2 pr-3 text-left transition-[transform,box-shadow] hover:scale-[1.005] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+              )}
               // borderColor rides the readable color so a near-white fill still shows
               // a crisp edge against the (also near-white) settings card.
               style={{ backgroundColor: previewColor, color: textColor, borderColor: ringColor }}
@@ -423,7 +430,10 @@ function ColorPill({
               }}
               spellCheck={false}
               maxLength={7}
-              className="h-8 rounded-md border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] px-2 text-center font-chat-code text-xs uppercase outline-none focus:border-[color:var(--color-border-focus)]"
+              className={cn(
+                SETTINGS_CONTROL_RADIUS_CLASS_NAME,
+                "h-8 border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] px-2 text-center font-chat-code text-xs uppercase outline-none focus:border-[color:var(--color-border-focus)]",
+              )}
               aria-label={`${ariaLabel} hex value`}
             />
           </div>
@@ -488,7 +498,7 @@ function FontInput({
       onBlur={() => setDraft(null)}
       spellCheck={false}
       aria-label={ariaLabel}
-      className={cn("w-56", mono && "font-chat-code")}
+      className={cn(SETTINGS_CONTROL_RADIUS_CLASS_NAME, "w-56", mono && "font-chat-code")}
     />
   );
 }
