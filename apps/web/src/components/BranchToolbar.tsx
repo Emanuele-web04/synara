@@ -26,11 +26,20 @@ import {
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
 } from "./BranchToolbar.logic";
-import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
+import {
+  BranchToolbarBranchSelector,
+  type BranchSelectorVariant,
+} from "./BranchToolbarBranchSelector";
 import {
   RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
 } from "./chat/composerPickerStyles";
+import {
+  ENVIRONMENT_ROW_CLASS_NAME,
+  ENVIRONMENT_ROW_ICON_CLASS_NAME,
+  EnvironmentRowBody,
+  EnvironmentRowChevron,
+} from "./chat/environment/EnvironmentRow";
 import type { ContextWindowSnapshot } from "../lib/contextWindow";
 import { ProviderUsagePanelContent } from "./ProviderUsagePanelContent";
 import { Button } from "./ui/button";
@@ -43,7 +52,7 @@ function WorktreeGlyph({ className }: { className?: string }) {
   return <LuSplit className={cn("rotate-90", className)} />;
 }
 
-interface BranchToolbarProps {
+export interface BranchToolbarProps {
   threadId: ThreadId;
   className?: string;
   onEnvModeChange: (mode: EnvMode) => void;
@@ -53,6 +62,9 @@ interface BranchToolbarProps {
   handoffBusy?: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
+  // `toolbar` renders the compact composer-footer row; `panel` stacks the env and branch
+  // pickers as full-width Environment panel rows that open downward.
+  variant?: BranchSelectorVariant;
 }
 
 export interface RuntimeUsageControlsProps {
@@ -156,7 +168,9 @@ export default function BranchToolbar({
   handoffBusy = false,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
+  variant = "toolbar",
 }: BranchToolbarProps) {
+  const isPanel = variant === "panel";
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
@@ -292,25 +306,49 @@ export default function BranchToolbar({
 
   if (!activeThreadId || !activeProject) return null;
 
+  const envGlyph = (className: string) =>
+    environmentPresentation.mode === "local" ? (
+      <CentralIcon name="macbook" className={className} />
+    ) : (
+      <WorktreeGlyph className={className} />
+    );
+
   return (
     <div
-      className={cn("mx-auto flex w-full items-center justify-between px-3 pb-1.5 pt-1", className)}
+      className={cn(
+        isPanel
+          ? "flex w-full flex-col gap-0.5"
+          : "mx-auto flex w-full items-center justify-between px-3 pb-1.5 pt-1",
+        className,
+      )}
     >
-      <div className="flex items-center gap-2">
+      <div className={isPanel ? "flex flex-col gap-0.5" : "flex items-center gap-2"}>
         {showEnvPicker ? (
           <Popover open={envPickerOpen} onOpenChange={setEnvPickerOpen}>
-            <PopoverTrigger className="inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]">
-              {environmentPresentation.mode === "local" ? (
-                <CentralIcon name="macbook" className="size-3.5" />
+            <PopoverTrigger
+              className={
+                isPanel
+                  ? ENVIRONMENT_ROW_CLASS_NAME
+                  : "inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
+              }
+            >
+              {isPanel ? (
+                <EnvironmentRowBody
+                  icon={envGlyph(ENVIRONMENT_ROW_ICON_CLASS_NAME)}
+                  label={environmentPresentation.shortLabel}
+                  trailing={<EnvironmentRowChevron />}
+                />
               ) : (
-                <WorktreeGlyph className="size-3.5" />
+                <>
+                  {envGlyph("size-3.5")}
+                  {environmentPresentation.shortLabel}
+                  <ChevronDownIcon className="size-3 opacity-60" />
+                </>
               )}
-              {environmentPresentation.shortLabel}
-              <ChevronDownIcon className="size-3 opacity-60" />
             </PopoverTrigger>
             <PopoverPopup
               align="start"
-              side="top"
+              side={isPanel ? "bottom" : "top"}
               sideOffset={6}
               className="w-56 [&_[data-slot=popover-viewport]]:py-0 [&_[data-slot=popover-viewport]]:[--viewport-inline-padding:0px]"
             >
@@ -453,6 +491,13 @@ export default function BranchToolbar({
               </div>
             </PopoverPopup>
           </Popover>
+        ) : isPanel ? (
+          <div className={cn(ENVIRONMENT_ROW_CLASS_NAME, "cursor-default hover:bg-transparent")}>
+            <EnvironmentRowBody
+              icon={<WorktreeGlyph className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+              label={environmentPresentation.shortLabel}
+            />
+          </div>
         ) : (
           <span className="inline-flex items-center gap-1 px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)]">
             <WorktreeGlyph className="size-3.5" />
@@ -468,6 +513,7 @@ export default function BranchToolbar({
           effectiveEnvMode={effectiveEnvMode}
           envLocked={envLocked}
           onSetThreadWorkspace={setThreadWorkspace}
+          variant={variant}
           {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
           {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
         />

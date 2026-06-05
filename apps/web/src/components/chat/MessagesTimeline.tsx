@@ -61,6 +61,7 @@ import {
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
 import { deriveInlineCommandCall } from "../../lib/toolCallLabel";
+import { isAgentActivityWorkEntry } from "./agentActivity.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import {
@@ -76,6 +77,7 @@ import {
 import {
   CHAT_COLUMN_FRAME_CLASS_NAME,
   CHAT_COLUMN_GUTTER_CLASS_NAME,
+  ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
 } from "./composerPickerStyles";
 import { formatShortTimestamp } from "../../timestampFormat";
 import {
@@ -181,6 +183,7 @@ interface MessagesTimelineProps {
   nowIso?: string;
   expandedWorkGroups?: Record<string, boolean>;
   onToggleWorkGroup?: (groupId: string) => void;
+  onOpenAgentActivity?: (activityId: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread?: (threadId: ThreadId) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
@@ -206,6 +209,12 @@ interface MessagesTimelineProps {
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
   bottomContentInsetPx?: number | undefined;
+  /**
+   * Right padding (px) applied to the scroll viewport so transcript rows clear a right-edge
+   * overlay (e.g. the docked Environment card). The scrollbar stays pinned to the viewport's
+   * far right; only the content is inset.
+   */
+  contentInsetRightPx?: number | undefined;
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
@@ -220,6 +229,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   nowIso,
   expandedWorkGroups,
   onToggleWorkGroup,
+  onOpenAgentActivity,
   onOpenTurnDiff,
   onOpenThread,
   revertTurnCountByUserMessageId,
@@ -246,8 +256,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   workspaceRoot,
   emptyStateContent,
   bottomContentInsetPx,
+  contentInsetRightPx,
 }: MessagesTimelineProps) {
   const normalizedChatFontSizePx = normalizeChatFontSizePx(chatFontSizePx);
+  // Inset rows from the right (overriding the gutter's right padding) without moving the
+  // scroll viewport, so the scrollbar stays pinned to the far right while content clears
+  // any right-edge overlay. Kept stable so LegendList isn't re-rendered on unrelated updates.
+  const listScrollStyle = useMemo(
+    () => (contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined),
+    [contentInsetRightPx],
+  );
   const appTypographyScale = useMemo(
     () => getAppTypographyScale(normalizedChatFontSizePx),
     [normalizedChatFontSizePx],
@@ -497,6 +515,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                     textFontSizePx={normalizedChatFontSizePx}
                     density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
+                    onOpenAgentActivity={onOpenAgentActivity}
                     {...(onOpenThread ? { onOpenThread } : {})}
                   />
                 ))}
@@ -852,6 +871,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               density={
                                 prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"
                               }
+                              onOpenAgentActivity={onOpenAgentActivity}
                               {...(onOpenThread ? { onOpenThread } : {})}
                             />
                           ) : (
@@ -897,6 +917,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           density="compact"
                           fileDiffStatByPath={fileDiffStatByPath}
                           onOpenTurnDiff={onOpenTurnDiff}
+                          onOpenAgentActivity={onOpenAgentActivity}
                           {...(onOpenThread ? { onOpenThread } : {})}
                           {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
                         />
@@ -928,6 +949,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                         textFontSizePx={normalizedChatFontSizePx}
                         density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
+                        onOpenAgentActivity={onOpenAgentActivity}
                         {...(onOpenThread ? { onOpenThread } : {})}
                       />
                     ))}
@@ -1217,8 +1239,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       ListFooterComponent={listFooter}
       className={cn(
         "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
+        ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
         CHAT_COLUMN_GUTTER_CLASS_NAME,
       )}
+      {...(listScrollStyle ? { style: listScrollStyle } : {})}
     />
   );
 });
@@ -2038,6 +2062,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   fileDiffStatByPath?: ReadonlyMap<string, { additions: number; deletions: number }>;
   turnId?: TurnId;
   onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
+  onOpenAgentActivity?: (activityId: string) => void;
   onOpenThread?: (threadId: ThreadId) => void;
 }) {
   const {
@@ -2048,6 +2073,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     fileDiffStatByPath,
     turnId,
     onOpenTurnDiff,
+    onOpenAgentActivity,
     onOpenThread,
   } = props;
   const compact = density === "compact";
@@ -2082,6 +2108,10 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   );
   const subagentSummary = subagentCardSummary(workEntry);
   const subagentMeta = subagentCardMeta(workEntry);
+  const canOpenAgentActivity = Boolean(onOpenAgentActivity) && isAgentActivityWorkEntry(workEntry);
+  const openAgentActivity = canOpenAgentActivity
+    ? () => onOpenAgentActivity?.(workEntry.id)
+    : undefined;
 
   // Use the text font size (matching the UI settings) for tool call rows
   const rowFontSizePx = textFontSizePx;
@@ -2143,11 +2173,11 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         </div>
       ) : showSubagentRows ? (
         <div className="space-y-1.5">
-          <div
-            className={cn(
-              "flex items-center transition-[opacity,translate] duration-200",
-              compact ? "gap-1.5" : "gap-2",
-            )}
+          <AgentActivityOpenSurface
+            canOpen={canOpenAgentActivity}
+            compact={compact}
+            title={hoverText}
+            onOpen={openAgentActivity}
           >
             <span
               className={cn(
@@ -2178,7 +2208,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 </p>
               ) : null}
             </div>
-          </div>
+          </AgentActivityOpenSurface>
           {visibleSubagents.length > 0 || hiddenSubagentCount > 0 ? (
             <div
               className={cn(
@@ -2288,14 +2318,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         </div>
       ) : (
         (() => {
-          const rowContent = (
-            <div
-              className={cn(
-                "flex items-center transition-[opacity,translate] duration-200",
-                compact ? "gap-1.5" : "gap-2",
-              )}
-              title={hoverText}
-            >
+          const rowContentChildren = (
+            <>
               {showIconLeft && (
                 <span
                   className={cn(
@@ -2394,7 +2418,17 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   <EntryIcon style={{ width: rowFontSizePx, height: rowFontSizePx }} />
                 </span>
               )}
-            </div>
+            </>
+          );
+          const rowContent = (
+            <AgentActivityOpenSurface
+              canOpen={canOpenAgentActivity}
+              compact={compact}
+              title={hoverText}
+              onOpen={openAgentActivity}
+            >
+              {rowContentChildren}
+            </AgentActivityOpenSurface>
           );
 
           if (!rawCommand) {
@@ -2414,3 +2448,33 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     </div>
   );
 });
+
+function AgentActivityOpenSurface(props: {
+  canOpen: boolean;
+  children: ReactNode;
+  compact: boolean;
+  onOpen?: (() => void) | undefined;
+  title?: string | undefined;
+}) {
+  const className = cn(
+    "flex w-full items-center text-left transition-[opacity,translate] duration-200",
+    props.compact ? "gap-1.5" : "gap-2",
+    props.canOpen
+      ? "cursor-pointer rounded-md hover:bg-[var(--color-background-button-secondary-hover)]"
+      : "cursor-default",
+  );
+
+  if (props.canOpen) {
+    return (
+      <button type="button" className={className} title={props.title} onClick={props.onOpen}>
+        {props.children}
+      </button>
+    );
+  }
+
+  return (
+    <div className={className} title={props.title}>
+      {props.children}
+    </div>
+  );
+}

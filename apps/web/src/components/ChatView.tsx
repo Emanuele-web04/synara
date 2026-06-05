@@ -213,11 +213,10 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ComposerSendArrowIcon,
-  SteerIcon,
   RefreshCwIcon,
   XIcon,
 } from "~/lib/icons";
-import { QueuedComposerActions } from "./chat/QueuedComposerActions";
+import { ComposerQueuedHeader } from "./chat/ComposerQueuedHeader";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
@@ -299,6 +298,12 @@ import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./Compose
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
 import {
+  ENVIRONMENT_DOCKED_CONTENT_INSET_PX,
+  EnvironmentPanel,
+  type EnvironmentPanelProps,
+} from "./chat/environment/EnvironmentPanel";
+import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
+import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
@@ -309,6 +314,7 @@ import { SidebarHeaderTrigger } from "./ui/sidebar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
+import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { AVAILABLE_PROVIDER_OPTIONS } from "./chat/ProviderModelPicker";
@@ -321,26 +327,21 @@ import {
 import { ComposerPendingApprovalActions } from "./chat/ComposerPendingApprovalActions";
 import { ComposerExtrasMenu } from "./chat/ComposerExtrasMenu";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
-import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
-import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
-import { ComposerPlanFollowUpBanner } from "./chat/ComposerPlanFollowUpBanner";
+import { ComposerInputBanners } from "./chat/ComposerInputBanners";
 import { ComposerVoiceButton } from "./chat/ComposerVoiceButton";
 import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
 import { ComposerSuggestions } from "./chat/ComposerSuggestions";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
-import { ActiveTaskListCard } from "./chat/ActiveTaskListCard";
+import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
 import { getComposerProviderState } from "./chat/composerProviderRegistry";
 import {
   COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME,
   COMPOSER_INPUT_SHELL_CLASS_NAME,
-  COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
   COMPOSER_INPUT_SURFACE_CLASS_NAME,
-  COMPOSER_SURFACE_BORDER_CLASS_NAME,
   COMPOSER_COLUMN_FRAME_CLASS_NAME,
-  COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME,
   COMPOSER_EDITOR_PADDING_CLASS_NAME,
   COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME,
   COMPOSER_FOOTER_ROW_CLASS_NAME,
@@ -348,6 +349,7 @@ import {
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_COLUMN_FRAME_CLASS_NAME,
   CHAT_COLUMN_GUTTER_CLASS_NAME,
+  ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
 } from "./chat/composerPickerStyles";
 import { getComposerTraitSelection } from "./chat/composerTraits";
 import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
@@ -1864,6 +1866,22 @@ export default function ChatView({
         : rawWorkLogEntries,
     [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries, relevantWorkLogThreads],
   );
+  const [openAgentActivityId, setOpenAgentActivityId] = useState<string | null>(null);
+  const agentActivityTimelineState = useMemo(
+    () => deriveAgentActivityTimelineState(workLogEntries),
+    [workLogEntries],
+  );
+  const openAgentActivityDetail = openAgentActivityId
+    ? (agentActivityTimelineState.detailById.get(openAgentActivityId) ?? null)
+    : null;
+  useEffect(() => {
+    setOpenAgentActivityId(null);
+  }, [activeThread?.id]);
+  useEffect(() => {
+    if (openAgentActivityId && !agentActivityTimelineState.detailById.has(openAgentActivityId)) {
+      setOpenAgentActivityId(null);
+    }
+  }, [agentActivityTimelineState.detailById, openAgentActivityId]);
   const pendingApprovals = useMemo(
     () => derivePendingApprovals(threadActivities),
     [threadActivities],
@@ -2282,8 +2300,12 @@ export default function ChatView({
   ]);
   const timelineEntries = useMemo(
     () =>
-      deriveTimelineEntries(timelineMessages, activeThread?.proposedPlans ?? [], workLogEntries),
-    [activeThread?.proposedPlans, timelineMessages, workLogEntries],
+      deriveTimelineEntries(
+        timelineMessages,
+        activeThread?.proposedPlans ?? [],
+        agentActivityTimelineState.timelineWorkEntries,
+      ),
+    [activeThread?.proposedPlans, agentActivityTimelineState.timelineWorkEntries, timelineMessages],
   );
   // Empty top-level threads render the centered landing composer instead of the transcript pane.
   // Home-scoped chats get the global "What should we work on?" copy plus the project picker,
@@ -3442,6 +3464,11 @@ export default function ChatView({
   // The terminal's panel toggle mirrors the right dock's collapse control: it shows
   // or hides the side panel only when this thread already has a pane to show.
   const rightDockOpen = useRightDockStore((store) => selectRightDockState(threadId)(store).open);
+  // The Environment panel replaces the old header diff toggle + footer pickers for normal
+  // threads; disposable (temporary/draft) threads keep the legacy inline controls.
+  const isDisposableThread = useIsDisposableThread(threadId);
+  const environmentEnabled = !isDisposableThread;
+  const [environmentPanelOpen, setEnvironmentPanelOpen] = useState(false);
   const hasRightDockPanes = useRightDockStore(
     (store) => selectRightDockState(threadId)(store).panes.length > 0,
   );
@@ -7333,8 +7360,14 @@ export default function ChatView({
           : null;
 
       if (slashTriggerText === "/" && snapshot.expandedCursor === trigger?.rangeEnd) {
-        clearComposerSlashDraft();
-        return true;
+        // Pressing `/` again on a lone `/` dismisses the picker. Only wipe the
+        // draft when the slash IS the whole prompt; a mid-line slash (e.g. after
+        // an existing chip) must keep surrounding content, so let it type through.
+        if (trigger.rangeStart === 0 && trigger.rangeEnd === snapshot.value.length) {
+          clearComposerSlashDraft();
+          return true;
+        }
+        return false;
       }
       return false;
     }
@@ -7586,6 +7619,36 @@ export default function ChatView({
       : {}),
   };
 
+  // Shared inputs for both Environment panel surfaces (the header Popover when the dock is
+  // open, and the docked right column when it is closed) so the two never drift.
+  const environmentPanelProps: Omit<EnvironmentPanelProps, "open" | "variant"> = {
+    gitCwd: threadWorkspaceCwd,
+    openInCwd: threadWorkspaceCwd,
+    isGitRepo,
+    keybindings,
+    availableEditors,
+    activeThreadId: activeThread.id,
+    showGitActions,
+    diffOpen: resolvedDiffOpen,
+    diffDisabledReason,
+    diffBadgeRefreshIntervalMs: repoDiffBadgeRefreshIntervalMs,
+    branchToolbar: branchToolbarProps,
+    onToggleDiff,
+    onClose: () => setEnvironmentPanelOpen(false),
+  };
+  // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
+  // column is already narrow — right dock open or a split pane (same as header compact mode).
+  const environmentUsesFloatingOverlay = rightDockOpen || surfaceMode === "split";
+  const environmentAppliesContentInset =
+    environmentEnabled && environmentPanelOpen && !environmentUsesFloatingOverlay;
+  const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
+  const environmentHeaderState = environmentEnabled
+    ? {
+        open: environmentPanelOpen,
+        onOpenChange: setEnvironmentPanelOpen,
+      }
+    : null;
+
   // Composer layout keeps the task list and footer actions in one render path so
   // follow-up prompts and normal chat mode stay visually in sync.
   const taskListAboveComposer = Boolean(activeTaskList && !planSidebarOpen);
@@ -7595,20 +7658,14 @@ export default function ChatView({
   const composerHasStackedHeader = taskListAboveComposer || queuedComposerTurns.length > 0;
   const renderActiveTaskListCard = () =>
     activeTaskList && !planSidebarOpen ? (
-      <div className="pointer-events-none w-full">
-        <div
-          ref={activeTaskListCardRef}
-          className={cn("pointer-events-auto", COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME)}
-        >
-          <ActiveTaskListCard
-            activeTaskList={activeTaskList}
-            backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
-            compact={activeTaskListCompact}
-            onCompactChange={setActiveTaskListCompact}
-            onOpenSidebar={() => setPlanSidebarOpen(true)}
-          />
-        </div>
-      </div>
+      <ComposerActiveTaskListCard
+        activeTaskList={activeTaskList}
+        cardRef={activeTaskListCardRef}
+        backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
+        compact={activeTaskListCompact}
+        onCompactChange={setActiveTaskListCompact}
+        onOpenSidebar={() => setPlanSidebarOpen(true)}
+      />
     ) : null;
 
   const composerSection =
@@ -7623,36 +7680,13 @@ export default function ChatView({
           data-chat-pane-scope={paneScopeId}
         >
           <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
-            {queuedComposerTurns.length > 0 ? (
-              <div className={cn("flex flex-col", COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME)}>
-                {queuedComposerTurns.map((queuedTurn, queuedTurnIndex) => (
-                  <div
-                    key={queuedTurn.id}
-                    data-testid="queued-follow-up-row"
-                    className={cn(
-                      "chat-composer-surface flex items-center gap-2 border border-b-0 px-3 pt-2.5 pb-2.5 text-[12px]",
-                      COMPOSER_SURFACE_BORDER_CLASS_NAME,
-                      queuedTurnIndex === 0 && !taskListAboveComposer
-                        ? "chat-composer-stacked-top"
-                        : "rounded-none",
-                    )}
-                  >
-                    <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                      <SteerIcon className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)]" />
-                      <span className="truncate text-[12px] font-medium text-foreground/85">
-                        {queuedTurn.previewText}
-                      </span>
-                    </div>
-                    <QueuedComposerActions
-                      queuedTurn={queuedTurn}
-                      onSteer={onSteerQueuedComposerTurn}
-                      onRemove={removeQueuedComposerTurn}
-                      onEdit={onEditQueuedComposerTurn}
-                    />
-                  </div>
-                ))}
-              </div>
-            ) : null}
+            <ComposerQueuedHeader
+              queuedTurns={queuedComposerTurns}
+              taskListAboveComposer={taskListAboveComposer}
+              onSteer={onSteerQueuedComposerTurn}
+              onRemove={removeQueuedComposerTurn}
+              onEdit={onEditQueuedComposerTurn}
+            />
             <div
               className={cn(
                 COMPOSER_INPUT_SHELL_CLASS_NAME,
@@ -7674,47 +7708,25 @@ export default function ChatView({
                   composerMenuOpen && !isComposerApprovalState && "overflow-visible",
                 )}
               >
-                {activePendingApproval ? (
-                  <div
-                    className={cn(
-                      COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
-                      composerHasStackedHeader && "!rounded-t-none",
-                    )}
-                  >
-                    <ComposerPendingApprovalPanel
-                      approval={activePendingApproval}
-                      pendingCount={pendingApprovals.length}
-                    />
-                  </div>
-                ) : pendingUserInputs.length > 0 ? (
-                  <div
-                    className={cn(
-                      COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
-                      composerHasStackedHeader && "!rounded-t-none",
-                    )}
-                  >
-                    <ComposerPendingUserInputPanel
-                      pendingUserInputs={pendingUserInputs}
-                      respondingRequestIds={respondingUserInputRequestIds}
-                      answers={activePendingDraftAnswers}
-                      questionIndex={activePendingQuestionIndex}
-                      onToggleOption={onToggleActivePendingUserInputOption}
-                      onAdvance={onAdvanceActivePendingUserInput}
-                    />
-                  </div>
-                ) : showPlanFollowUpPrompt && activeProposedPlan ? (
-                  <div
-                    className={cn(
-                      COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
-                      composerHasStackedHeader && "!rounded-t-none",
-                    )}
-                  >
-                    <ComposerPlanFollowUpBanner
-                      key={activeProposedPlan.id}
-                      planTitle={proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null}
-                    />
-                  </div>
-                ) : null}
+                <ComposerInputBanners
+                  roundedTopReset={composerHasStackedHeader}
+                  activeApproval={activePendingApproval}
+                  pendingApprovalCount={pendingApprovals.length}
+                  pendingUserInputs={pendingUserInputs}
+                  respondingUserInputRequestIds={respondingUserInputRequestIds}
+                  pendingUserInputAnswers={activePendingDraftAnswers}
+                  pendingUserInputQuestionIndex={activePendingQuestionIndex}
+                  onToggleUserInputOption={onToggleActivePendingUserInputOption}
+                  onAdvanceUserInput={onAdvanceActivePendingUserInput}
+                  planFollowUp={
+                    showPlanFollowUpPrompt && activeProposedPlan
+                      ? {
+                          id: activeProposedPlan.id,
+                          title: proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null,
+                        }
+                      : null
+                  }
+                />
                 <div
                   className={cn(
                     COMPOSER_EDITOR_PADDING_CLASS_NAME,
@@ -8177,6 +8189,7 @@ export default function ChatView({
           showGitActions={showGitActions}
           diffOpen={resolvedDiffOpen}
           diffDisabledReason={diffDisabledReason}
+          environment={environmentHeaderState}
           surfaceMode={surfaceMode}
           chatLayoutAction={
             surfaceMode === "single" && onSplitSurface
@@ -8288,7 +8301,7 @@ export default function ChatView({
                     </h2>
                   </div>
                   {composerSection}
-                  {isGitRepo ? (
+                  {isGitRepo && !environmentEnabled ? (
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
                       <BranchToolbar {...branchToolbarProps} />
                     </div>
@@ -8315,6 +8328,7 @@ export default function ChatView({
                   <ChatTranscriptPane
                     activeThreadId={activeThread.id}
                     activeTurnId={activeThread.session?.activeTurnId ?? null}
+                    agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
                     isWorking={isWorking}
                     activeTurnInProgress={activeTurnInProgress}
@@ -8348,6 +8362,8 @@ export default function ChatView({
                     onMessagesTouchStart={onMessagesTouchStart}
                     onMessagesTouchMove={onMessagesTouchMove}
                     onMessagesTouchEnd={onMessagesTouchEnd}
+                    onOpenAgentActivity={setOpenAgentActivityId}
+                    onCloseAgentActivityDetail={() => setOpenAgentActivityId(null)}
                     scrollButtonVisible={showScrollToBottom}
                     onScrollToBottom={onScrollToBottom}
                     bottomContentInsetPx={
@@ -8355,19 +8371,34 @@ export default function ChatView({
                         ? activeTaskListCardHeight + 8
                         : undefined
                     }
+                    contentInsetRightPx={
+                      environmentAppliesContentInset
+                        ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX
+                        : undefined
+                    }
                   />
                 </div>
 
                 <div
                   className={cn(
-                    "chat-pane-enter relative z-10 -mt-5 shrink-0 overflow-visible w-full pt-0 sm:pt-0",
+                    "relative z-10 -mt-5 w-full shrink-0 overflow-visible pt-0 sm:pt-0",
+                    ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
                     CHAT_COLUMN_GUTTER_CLASS_NAME,
-                    isGitRepo ? "pb-0.5" : "pb-2 sm:pb-2.5",
+                    // A trailing BranchToolbar only renders for legacy git threads; otherwise the
+                    // composer is the last element, so give it a comfortable bottom margin.
+                    isGitRepo && !environmentEnabled ? "pb-0.5" : "pb-3 sm:pb-4",
                   )}
+                  // Match the transcript's right inset so the composer stays aligned with chat
+                  // content (and clear of the docked Environment overlay).
+                  style={
+                    environmentAppliesContentInset
+                      ? { paddingRight: ENVIRONMENT_DOCKED_CONTENT_INSET_PX }
+                      : undefined
+                  }
                 >
                   {composerSection}
                 </div>
-                {secondaryChromeReady && isGitRepo ? (
+                {secondaryChromeReady && isGitRepo && !environmentEnabled ? (
                   <div className={CHAT_COLUMN_GUTTER_CLASS_NAME}>
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
                       <BranchToolbar {...branchToolbarProps} />
@@ -8413,6 +8444,15 @@ export default function ChatView({
                 }
               />
             </div>
+          ) : null}
+
+          {/* Environment overlay — always mounted so open/close can transition in lockstep with inset. */}
+          {environmentEnabled ? (
+            <EnvironmentPanel
+              {...environmentPanelProps}
+              open={environmentPanelOpen}
+              variant={environmentOverlayVariant}
+            />
           ) : null}
         </div>
         {/* end chat column */}

@@ -2072,6 +2072,159 @@ describe("deriveWorkLogEntries", () => {
     );
   });
 
+  it("preserves the OpenCode task description when the generic completion row collapses", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "opencode-task-started",
+        createdAt: "2026-02-23T00:00:00.000Z",
+        kind: "tool.started",
+        summary: "task started",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "task",
+          data: {
+            tool: "task",
+            toolName: "task",
+            toolCallId: "task-call",
+            callID: "task-call",
+            input: {},
+          },
+        },
+      }),
+      makeActivity({
+        id: "opencode-task-update",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.updated",
+        summary: "Find changelog implementation",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Find changelog implementation",
+          detail: "Find changelog implementation",
+          data: {
+            tool: "task",
+            toolName: "task",
+            toolCallId: "task-call",
+            callID: "task-call",
+            input: {
+              description: "Find changelog implementation",
+              prompt: "Explore the changelog implementation.",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "opencode-task-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "task",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "completed",
+          title: "task",
+          detail: '<task id="task-call" state="completed">...',
+          data: {
+            tool: "task",
+            toolName: "task",
+            toolCallId: "task-call",
+            callID: "task-call",
+            input: {
+              description: "Find changelog implementation",
+              prompt: "Explore the changelog implementation.",
+            },
+            state: {
+              status: "completed",
+              output:
+                '<task id="task-call" state="completed">\n<task_result>\nFull changelog report\nwith file references.\n</task_result>\n</task>',
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toEqual(
+      expect.objectContaining({
+        id: "opencode-task-complete",
+        itemType: "collab_agent_tool_call",
+        toolTitle: "Find changelog implementation",
+        detail: "Full changelog report\nwith file references.",
+        subagentAction: expect.objectContaining({
+          prompt: "Explore the changelog implementation.",
+        }),
+      }),
+    );
+  });
+
+  it("uses the OpenCode task description for generic completion rows that cannot collapse", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "opencode-task-update",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.updated",
+        summary: "Find changelog implementation",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Find changelog implementation",
+          data: {
+            tool: "task",
+            toolName: "task",
+            toolCallId: "task-call",
+            input: {
+              description: "Find changelog implementation",
+              prompt: "Explore the changelog implementation.",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "runtime-error",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "runtime.error",
+        summary: "Provider runtime error",
+        tone: "error",
+      }),
+      makeActivity({
+        id: "opencode-task-complete",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "task",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "failed",
+          title: "task",
+          detail: "Tool execution aborted",
+          data: {
+            tool: "task",
+            toolName: "task",
+            toolCallId: "task-call",
+            input: {
+              description: "Find changelog implementation",
+              prompt: "Explore the changelog implementation.",
+            },
+            state: {
+              title: "Find changelog implementation",
+              status: "error",
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined).at(-1)).toEqual(
+      expect.objectContaining({
+        id: "opencode-task-complete",
+        itemType: "collab_agent_tool_call",
+        toolTitle: "Find changelog implementation",
+        detail: "Tool execution aborted",
+      }),
+    );
+  });
+
   it("uses completed Claude task result content for generic agent task rows", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

@@ -572,10 +572,10 @@ function ProviderAvatarWithTerminal({
 
   const avatarNode = hasHandoff ? (
     <span className={containerClass}>
-      <span className="absolute left-0 top-1/2 inline-flex size-3 -translate-y-1/2 items-center justify-center rounded-full bg-background shadow-xs">
+      <span className="sidebar-icon-chip absolute left-0 top-1/2 inline-flex size-3 -translate-y-1/2 items-center justify-center rounded-full">
         <ProviderIcon provider={handoffSourceProvider!} className="size-2" />
       </span>
-      <span className="absolute right-0 top-1/2 z-10 inline-flex size-3 -translate-y-1/2 items-center justify-center rounded-full bg-background shadow-xs">
+      <span className="sidebar-icon-chip absolute right-0 top-1/2 z-10 inline-flex size-3 -translate-y-1/2 items-center justify-center rounded-full">
         <ProviderIcon provider={provider} className="size-2" />
       </span>
     </span>
@@ -604,7 +604,7 @@ function ProviderAvatarWithTerminal({
             render={
               <span
                 aria-label={badgeTooltip}
-                className="absolute -top-1.5 -right-1.5 inline-flex size-3 min-w-3 items-center justify-center rounded-full bg-background px-px shadow-xs"
+                className="sidebar-icon-chip absolute -top-1.5 -right-1.5 inline-flex size-3 min-w-3 items-center justify-center rounded-full px-px"
               >
                 {terminalCount > 1 ? (
                   <span

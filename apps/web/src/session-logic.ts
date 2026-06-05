@@ -17,7 +17,11 @@ import {
   decodeSubagentReceiverThreadIds,
 } from "@t3tools/shared/subagents";
 import { summarizeToolRawOutput } from "@t3tools/shared/toolOutputSummary";
-import { deriveReadableToolTitle, normalizeCompactToolLabel } from "./lib/toolCallLabel";
+import {
+  deriveReadableToolTitle,
+  isGenericToolTitle,
+  normalizeCompactToolLabel,
+} from "./lib/toolCallLabel";
 import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
 import { stripProposedPlanBlocksFromText } from "./proposedPlan";
 
@@ -788,15 +792,17 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (subagentAction) {
     entry.subagentAction = subagentAction;
   }
-  const readableTitle = deriveReadableToolTitle({
-    title: commandActionDisplay?.title ?? title,
-    fallbackLabel: activity.summary,
-    itemType,
-    requestKind,
-    command: commandPreview.command,
-    payload,
-    isRunning: activity.kind !== "tool.completed",
-  });
+  const readableTitle =
+    extractCollabActionTitle(payload) ??
+    deriveReadableToolTitle({
+      title: commandActionDisplay?.title ?? title,
+      fallbackLabel: activity.summary,
+      itemType,
+      requestKind,
+      command: commandPreview.command,
+      payload,
+      isRunning: activity.kind !== "tool.completed",
+    });
   if (readableTitle) {
     entry.toolTitle = readableTitle;
   }
@@ -842,6 +848,29 @@ function extractCollabTaskOutputDetail(payload: Record<string, unknown> | null):
     const normalized = extractCollabTaskText(candidate);
     if (normalized) {
       return normalized;
+    }
+  }
+  return null;
+}
+
+function extractCollabActionTitle(payload: Record<string, unknown> | null): string | null {
+  if (extractWorkLogItemType(payload) !== "collab_agent_tool_call") {
+    return null;
+  }
+  const item = collabPayloadItem(payload);
+  const input = asRecord(item?.input);
+  const state = asRecord(item?.state);
+  const candidates = [
+    state?.title,
+    item?.title,
+    payload?.title,
+    input?.description,
+    item?.description,
+  ];
+  for (const candidate of candidates) {
+    const title = asTrimmedString(candidate);
+    if (title && !isGenericToolTitle(title)) {
+      return title.length > 120 ? `${title.slice(0, 117).trimEnd()}...` : title;
     }
   }
   return null;
@@ -943,7 +972,7 @@ function mergeDerivedWorkLogEntries(
   const command = next.command ?? previous.command;
   const rawCommand = next.rawCommand ?? previous.rawCommand;
   const preview = next.preview ?? previous.preview;
-  const toolTitle = next.toolTitle ?? previous.toolTitle;
+  const toolTitle = mergeWorkLogToolTitle(previous, next);
   const itemType = next.itemType ?? previous.itemType;
   const requestKind = next.requestKind ?? previous.requestKind;
   const subagents = next.subagents ?? previous.subagents;
@@ -968,6 +997,23 @@ function mergeDerivedWorkLogEntries(
     ...(toolName ? { toolName } : {}),
     ...(toolCallId ? { toolCallId } : {}),
   };
+}
+
+function mergeWorkLogToolTitle(
+  previous: DerivedWorkLogEntry,
+  next: DerivedWorkLogEntry,
+): string | undefined {
+  const previousTitle = previous.toolTitle;
+  const nextTitle = next.toolTitle;
+  if (!previousTitle || !nextTitle) {
+    return nextTitle ?? previousTitle;
+  }
+  const isAgentTask =
+    previous.itemType === "collab_agent_tool_call" || next.itemType === "collab_agent_tool_call";
+  if (isAgentTask && !isGenericToolTitle(previousTitle) && isGenericToolTitle(nextTitle)) {
+    return previousTitle;
+  }
+  return nextTitle;
 }
 
 function mergeChangedFiles(

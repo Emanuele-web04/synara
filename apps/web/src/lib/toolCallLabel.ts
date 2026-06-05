@@ -1,7 +1,7 @@
 // FILE: toolCallLabel.ts
 // Purpose: Normalizes generic tool-call titles and humanizes command executions for timeline rows.
 // Layer: UI utility
-// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, deriveInlineCommandCall, normalizeCompactToolLabel
+// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle
 // Depends on: @t3tools/contracts tool lifecycle item types
 
 import type { ToolLifecycleItemType } from "@t3tools/contracts";
@@ -103,7 +103,7 @@ function humanizeRequestKind(
   return null;
 }
 
-function isGenericToolTitle(value: string): boolean {
+export function isGenericToolTitle(value: string): boolean {
   const normalized = value
     .toLowerCase()
     .replace(/[^a-z0-9]/g, " ")
@@ -114,7 +114,9 @@ function isGenericToolTitle(value: string): boolean {
     normalized === "tool call" ||
     normalized === "dynamic tool call" ||
     normalized === "mcp tool call" ||
+    normalized === "agent task" ||
     normalized === "subagent task" ||
+    normalized === "task" ||
     normalized === "command run" ||
     normalized === "ran command" ||
     normalized === "running command" ||

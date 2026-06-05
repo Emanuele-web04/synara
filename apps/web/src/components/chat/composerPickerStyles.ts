@@ -106,10 +106,12 @@ export const CHAT_COLUMN_FRAME_CLASS_NAME = `mx-auto w-full min-w-0 ${COMPOSER_M
 export const COMPOSER_COLUMN_FRAME_CLASS_NAME = CHAT_COLUMN_FRAME_CLASS_NAME;
 
 /**
- * Narrower centered frame for rows stacked above the composer (queued steer/queue
- * rows, active task list). Keeps the main composer at full column width.
+ * Frame for rows stacked above the composer (queued steer/queue rows, active task
+ * list). Matches the main composer's full column width so the stacked rows sit flush
+ * on top of the input as one continuous rounded surface instead of a narrower,
+ * detached-looking chip.
  */
-export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto w-11/12 min-w-0";
+export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto w-full min-w-0";
 
 /** Opaque base behind the composer shell: the composer overlaps the scrolling
  *  transcript (`-mt-5`), so without a solid backing the frosted surface would let
@@ -171,6 +173,17 @@ export const COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME = `${COMPOSER_PICKER_MEN
  *  Picker border/radius/shadow, but a solid fill: the menu floats over the
  *  transcript, so frosted bg-popover/70 would let chat content bleed through. */
 export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME = `relative overflow-hidden bg-popover text-popover-foreground ${COMPOSER_PICKER_MENU_SURFACE_CHROME_CLASS_NAME}`;
+
+/** Opaque Environment panel card — same rationale as the command menu (overlays transcript). */
+export const ENVIRONMENT_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
+
+/** Slide + inset timing matched to `SIDEBAR_OFFCANVAS_MOTION_CLASS` (right dock / thread sidebar). */
+export const ENVIRONMENT_PANEL_MOTION_CLASS =
+  "transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none";
+
+/** Transcript/composer right inset when the docked Environment card opens. */
+export const ENVIRONMENT_CONTENT_INSET_MOTION_CLASS =
+  "transition-[padding-right] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none";
 
 /** Anchors the command menu above the composer editor without shifting layout. */
 export const COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME =

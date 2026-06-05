@@ -12,7 +12,6 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
-import { useQuery } from "@tanstack/react-query";
 import React, { memo, useEffect, useRef, useState } from "react";
 import { FiGitBranch } from "react-icons/fi";
 import { HiMiniArrowsPointingOut } from "react-icons/hi2";
@@ -38,10 +37,10 @@ import { Toggle } from "../ui/toggle";
 import { useSidebar } from "../ui/sidebar";
 import { cn } from "~/lib/utils";
 import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
+import { useOpenFavoriteEditorShortcut } from "~/hooks/useOpenFavoriteEditorShortcut";
+import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
-import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
-import { summarizePatchStats } from "~/lib/diffRendering";
-import { useRepoDiffScopeStore } from "~/repoDiffScopeStore";
+import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -81,6 +80,10 @@ interface ChatHeaderProps {
   diffDisabledReason?: string | null;
   surfaceMode?: "single" | "split";
   isSidechat?: boolean;
+  // When provided (and the thread is not disposable), the header collapses the
+  // Open-in-editor + git-actions + diff-toggle cluster into one Environment button that
+  // drives the Environment panel; otherwise the legacy cluster is rendered.
+  environment?: EnvironmentToggleState | null;
   chatLayoutAction?: {
     kind: "split" | "maximize";
     label: string;
@@ -142,6 +145,7 @@ export const ChatHeader = memo(function ChatHeader({
   diffDisabledReason = null,
   surfaceMode = "single",
   isSidechat = false,
+  environment = null,
   chatLayoutAction = null,
   changeThreadAction = null,
   onRunProjectScript,
@@ -158,19 +162,22 @@ export const ChatHeader = memo(function ChatHeader({
   const headerRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
   const [openAddActionNonce, setOpenAddActionNonce] = useState(0);
-  const repoDiffScope = useRepoDiffScopeStore((store) => store.scope);
-  // Match the Diff panel source selector so the sidebar badge shows the selected scope.
-  const { data: selectedRepoDiff = null } = useQuery(
-    gitWorkingTreeDiffQueryOptions({
-      cwd: gitCwd,
-      scope: repoDiffScope,
-      enabled: isGitRepo,
-      refetchInterval: diffBadgeRefreshIntervalMs,
-    }),
-  );
-  const diffTotals = summarizePatchStats(selectedRepoDiff?.patch);
-  const showDiffTotals = (diffTotals?.additions ?? 0) > 0 || (diffTotals?.deletions ?? 0) > 0;
+  const {
+    additions: diffAdditions,
+    deletions: diffDeletions,
+    hasChanges: showDiffTotals,
+  } = useRepoDiffTotals({ gitCwd, isGitRepo, refetchInterval: diffBadgeRefreshIntervalMs });
   const isDisposableThread = useIsDisposableThread(activeThreadId);
+
+  // Own the open-favorite editor shortcut here so it survives regardless of which editor UI
+  // is mounted (the legacy Open-in button, the Environment panel's Editor section, or
+  // neither while the panel is closed). The header is always present for a project thread.
+  useOpenFavoriteEditorShortcut({
+    keybindings,
+    availableEditors,
+    openInCwd,
+    enabled: !isDisposableThread && Boolean(activeProjectName),
+  });
 
   const isSplitPane = surfaceMode === "split";
   // Split-chat creation moved to a shortcut only; the header keeps just the inline
@@ -199,6 +206,52 @@ export const ChatHeader = memo(function ChatHeader({
       />
     );
   };
+
+  // The right-side diff toggle (the "open the diff on the right" affordance). It stays in
+  // the header in both layouts — beside the Environment button when that is enabled, and
+  // inside the legacy cluster otherwise — so the familiar right-sidebar control is always a
+  // single click away. Declared once here to avoid duplicating the markup across branches.
+  const diffToggleControl = (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Toggle
+            className={cn(
+              CHAT_HEADER_TOGGLE_CLASS_NAME,
+              showDiffTotals ? null : "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0",
+            )}
+            pressed={diffOpen}
+            onPressedChange={onToggleDiff}
+            aria-label="Toggle diff panel"
+            variant="default"
+            size="xs"
+            disabled={!isGitRepo || (diffDisabledReason !== null && !diffOpen)}
+          >
+            {showDiffTotals ? (
+              <span className="inline-flex items-center gap-1">
+                <span className="font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-success">
+                  +{diffAdditions}
+                </span>
+                <span className="font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-destructive">
+                  -{diffDeletions}
+                </span>
+              </span>
+            ) : null}
+            <SurfaceChipIcon icon={PanelRightCloseIcon} className="size-4" />
+          </Toggle>
+        }
+      />
+      <TooltipPopup side="bottom">
+        {!isGitRepo
+          ? "Diff panel is unavailable because this project is not a git repository."
+          : diffDisabledReason && !diffOpen
+            ? diffDisabledReason
+            : diffToggleShortcutLabel
+              ? `Toggle diff panel (${diffToggleShortcutLabel})`
+              : "Toggle diff panel"}
+      </TooltipPopup>
+    </Tooltip>
+  );
 
   return (
     <div ref={headerRef} className="flex min-w-0 flex-1 items-center gap-2">
@@ -388,65 +441,40 @@ export const ChatHeader = memo(function ChatHeader({
           </Tooltip>
         ) : null}
 
-        {/* Open in editor: dedicated split-button with an editor switcher; the project
-            "Add action" entry lives at the bottom of that same menu. */}
-        {!isDisposableThread && activeProjectName ? (
-          <OpenInPicker
-            keybindings={keybindings}
-            availableEditors={availableEditors}
-            openInCwd={openInCwd}
-            {...(activeProjectScripts
-              ? { onAddAction: () => setOpenAddActionNonce((current) => current + 1) }
-              : {})}
-          />
-        ) : null}
+        {/* Environment: one button consolidating Open-in-editor and git actions into the
+            Environment panel. The right-side diff toggle stays beside it so the familiar
+            "open the diff on the right" control is preserved. Falls back to the legacy split
+            controls for disposable threads (which never surface the panel). */}
+        {environment && !isDisposableThread ? (
+          <>
+            <EnvironmentToggle environment={environment} />
+            {diffToggleControl}
+          </>
+        ) : (
+          <>
+            {/* Open in editor: dedicated split-button with an editor switcher; the project
+                "Add action" entry lives at the bottom of that same menu. */}
+            {!isDisposableThread && activeProjectName ? (
+              <OpenInPicker
+                keybindings={keybindings}
+                availableEditors={availableEditors}
+                openInCwd={openInCwd}
+                {...(activeProjectScripts
+                  ? { onAddAction: () => setOpenAddActionNonce((current) => current + 1) }
+                  : {})}
+              />
+            ) : null}
 
-        {!isDisposableThread && activeProjectName && showGitActions ? (
-          <GitActionsControl
-            gitCwd={gitCwd}
-            activeThreadId={activeThreadId}
-            hideQuickActionLabel={compact}
-          />
-        ) : null}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Toggle
-                className={cn(
-                  CHAT_HEADER_TOGGLE_CLASS_NAME,
-                  showDiffTotals ? null : "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0",
-                )}
-                pressed={diffOpen}
-                onPressedChange={onToggleDiff}
-                aria-label="Toggle diff panel"
-                variant="default"
-                size="xs"
-                disabled={!isGitRepo || (diffDisabledReason !== null && !diffOpen)}
-              >
-                {showDiffTotals ? (
-                  <span className="inline-flex items-center gap-1">
-                    <span className="font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-success">
-                      +{diffTotals?.additions ?? 0}
-                    </span>
-                    <span className="font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-destructive">
-                      -{diffTotals?.deletions ?? 0}
-                    </span>
-                  </span>
-                ) : null}
-                <SurfaceChipIcon icon={PanelRightCloseIcon} className="size-4" />
-              </Toggle>
-            }
-          />
-          <TooltipPopup side="bottom">
-            {!isGitRepo
-              ? "Diff panel is unavailable because this project is not a git repository."
-              : diffDisabledReason && !diffOpen
-                ? diffDisabledReason
-                : diffToggleShortcutLabel
-                  ? `Toggle diff panel (${diffToggleShortcutLabel})`
-                  : "Toggle diff panel"}
-          </TooltipPopup>
-        </Tooltip>
+            {!isDisposableThread && activeProjectName && showGitActions ? (
+              <GitActionsControl
+                gitCwd={gitCwd}
+                activeThreadId={activeThreadId}
+                hideQuickActionLabel={compact}
+              />
+            ) : null}
+            {diffToggleControl}
+          </>
+        )}
       </div>
     </div>
   );

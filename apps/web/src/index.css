@@ -99,6 +99,20 @@
     -webkit-backdrop-filter: var(--app-sidebar-backdrop-filter, none);
   }
 
+  /* Small circular icon badges that sit directly on the sidebar surface inside
+     thread rows — the meta-chip stack, the handoff provider avatar, the terminal
+     count badge. They take the SAME material as the sidebar (translucent or
+     opaque, whatever the shell currently is) so they read as part of it instead
+     of an opaque blob, plus a 1px ring so stacked/overlapping icons stay
+     visually separated. Ring + shadow are one box-shadow so they don't affect
+     layout. */
+  .sidebar-icon-chip {
+    background: var(--app-sidebar-surface, var(--card));
+    box-shadow:
+      0 0 0 1px var(--sidebar-border),
+      0 1px 2px 0 rgb(0 0 0 / 0.05);
+  }
+
   /* ─── Chat card seam (sidebar ↔ chat divider) ─────────────────────────────────
      ONE seam only. Do NOT add a border to the sidebar surface, and do NOT draw a
      divider line on the SidebarRail — either one makes a SECOND vertical line.
