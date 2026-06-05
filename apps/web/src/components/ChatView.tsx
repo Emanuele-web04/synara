@@ -315,6 +315,7 @@ import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationContro
 import { SidebarHeaderTrigger } from "./ui/sidebar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
+import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
@@ -1294,6 +1295,11 @@ export default function ChatView({
     isFocusedPane && !latestTurnSettled && !diffEnvironmentPending && !resolvedDiffOpen
       ? GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS
       : false;
+  const repoDiffTotals = useRepoDiffTotals({
+    gitCwd: threadWorkspaceCwd,
+    isGitRepo,
+    refetchInterval: repoDiffBadgeRefreshIntervalMs,
+  });
   const activeThreadAssociatedWorktree = useMemo(
     () =>
       deriveAssociatedWorktreeMetadata({
@@ -7661,7 +7667,7 @@ export default function ChatView({
     showGitActions,
     diffOpen: resolvedDiffOpen,
     diffDisabledReason,
-    diffBadgeRefreshIntervalMs: repoDiffBadgeRefreshIntervalMs,
+    diffTotals: repoDiffTotals,
     branchToolbar: branchToolbarProps,
     recap: threadRecap,
     onToggleDiff,
@@ -7672,8 +7678,7 @@ export default function ChatView({
   // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
   const environmentUsesFloatingOverlay =
     isTerminalEnvironmentContext || rightDockOpen || surfaceMode === "split";
-  const environmentAppliesContentInset =
-    environmentPanelVisible && !environmentUsesFloatingOverlay;
+  const environmentAppliesContentInset = environmentPanelVisible && !environmentUsesFloatingOverlay;
   const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
   const environmentHeaderState = environmentEnabled
     ? {
@@ -7685,10 +7690,11 @@ export default function ChatView({
   // Composer layout keeps the task list and footer actions in one render path so
   // follow-up prompts and normal chat mode stay visually in sync.
   const taskListAboveComposer = Boolean(activeTaskList && !planSidebarOpen);
-  // When a task card or queued rows sit flush above the composer, the whole stack
-  // must read as one continuous rounded surface: the composer drops its top radius
-  // and the topmost row owns the rounded top so they don't look like separate chips.
-  const composerHasStackedHeader = taskListAboveComposer || queuedComposerTurns.length > 0;
+  // The queued follow-up recap floats as its own detached, rounded panel above the
+  // composer, so only a flush task-list card (when no recap sits between them) makes
+  // the composer drop its top radius to fuse upward. Otherwise the composer stays a
+  // fully rounded surface and does not change shape when rows appear above it.
+  const composerTopFused = taskListAboveComposer && queuedComposerTurns.length === 0;
   const renderActiveTaskListCard = () =>
     activeTaskList && !planSidebarOpen ? (
       <ComposerActiveTaskListCard
@@ -7715,7 +7721,6 @@ export default function ChatView({
           <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
             <ComposerQueuedHeader
               queuedTurns={queuedComposerTurns}
-              taskListAboveComposer={taskListAboveComposer}
               onSteer={onSteerQueuedComposerTurn}
               onRemove={removeQueuedComposerTurn}
               onEdit={onEditQueuedComposerTurn}
@@ -7723,7 +7728,7 @@ export default function ChatView({
             <div
               className={cn(
                 COMPOSER_INPUT_SHELL_CLASS_NAME,
-                composerHasStackedHeader && "!rounded-t-none",
+                composerTopFused && "!rounded-t-none",
                 composerProviderState.composerFrameClassName,
                 composerMenuOpen && !isComposerApprovalState && "overflow-visible",
               )}
@@ -7735,14 +7740,14 @@ export default function ChatView({
               <div
                 className={cn(
                   COMPOSER_INPUT_SURFACE_CLASS_NAME,
-                  composerHasStackedHeader && "!rounded-t-none",
+                  composerTopFused && "!rounded-t-none",
                   isDragOverComposer ? "!bg-[var(--color-background-control)]" : "",
                   composerProviderState.composerSurfaceClassName,
                   composerMenuOpen && !isComposerApprovalState && "overflow-visible",
                 )}
               >
                 <ComposerInputBanners
-                  roundedTopReset={composerHasStackedHeader}
+                  roundedTopReset={composerTopFused}
                   activeApproval={activePendingApproval}
                   pendingApprovalCount={pendingApprovals.length}
                   pendingUserInputs={pendingUserInputs}
@@ -8218,7 +8223,7 @@ export default function ChatView({
           handoffBadgeSourceProvider={handoffBadgeSourceProvider}
           handoffBadgeTargetProvider={handoffBadgeTargetProvider}
           gitCwd={threadWorkspaceCwd}
-          diffBadgeRefreshIntervalMs={repoDiffBadgeRefreshIntervalMs}
+          diffTotals={repoDiffTotals}
           showGitActions={showGitActions}
           diffOpen={resolvedDiffOpen}
           diffDisabledReason={diffDisabledReason}

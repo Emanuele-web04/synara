@@ -33,14 +33,14 @@ export function AssistantSelectionsSummaryChip(props: AssistantSelectionsSummary
               props.onRemove ? "pr-6" : "",
             )}
           >
-            <span className="inline-flex h-7 min-w-0 items-center gap-1.5 rounded-full pl-2.5 pr-2">
+            <span className="inline-flex h-6 min-w-0 items-center gap-1 rounded-full pl-2 pr-1.5">
               <MessageCircleIcon className="size-3.5 shrink-0 text-muted-foreground/90" />
               <span className="truncate">{selectionCountLabel(props.selections.length)}</span>
             </span>
             {props.onRemove ? (
               <button
                 type="button"
-                className="absolute right-0.5 inline-flex size-5 items-center justify-center rounded-full text-[var(--color-text-foreground-tertiary)] transition-all hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
+                className="absolute right-0.5 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded-full text-[var(--color-text-foreground-tertiary)] transition-all hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
                 aria-label="Remove selections"
                 onClick={(event) => {
                   event.preventDefault();

@@ -38,7 +38,7 @@ import { useSidebar } from "../ui/sidebar";
 import { cn } from "~/lib/utils";
 import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
 import { useOpenFavoriteEditorShortcut } from "~/hooks/useOpenFavoriteEditorShortcut";
-import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
+import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
 
@@ -74,7 +74,7 @@ interface ChatHeaderProps {
   handoffBadgeSourceProvider: ProviderKind | null;
   handoffBadgeTargetProvider: ProviderKind | null;
   gitCwd: string | null;
-  diffBadgeRefreshIntervalMs?: number | false;
+  diffTotals: RepoDiffTotals;
   showGitActions?: boolean;
   diffOpen: boolean;
   diffDisabledReason?: string | null;
@@ -139,7 +139,7 @@ export const ChatHeader = memo(function ChatHeader({
   handoffBadgeSourceProvider,
   handoffBadgeTargetProvider,
   gitCwd,
-  diffBadgeRefreshIntervalMs = false,
+  diffTotals,
   showGitActions = true,
   diffOpen,
   diffDisabledReason = null,
@@ -166,7 +166,7 @@ export const ChatHeader = memo(function ChatHeader({
     additions: diffAdditions,
     deletions: diffDeletions,
     hasChanges: showDiffTotals,
-  } = useRepoDiffTotals({ gitCwd, isGitRepo, refetchInterval: diffBadgeRefreshIntervalMs });
+  } = diffTotals;
   const isDisposableThread = useIsDisposableThread(activeThreadId);
 
   // Own the open-favorite editor shortcut here so it survives regardless of which editor UI

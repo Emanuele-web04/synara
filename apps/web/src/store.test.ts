@@ -1,3 +1,7 @@
+// FILE: store.test.ts
+// Purpose: Exercises the web store's pure state transitions for orchestration snapshots/events.
+// Exports: Vitest coverage for thread/project projection, sidebar summaries, and local UI state.
+
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -21,6 +25,7 @@ import {
   collapseProjectsExcept,
   markThreadUnread,
   renameProjectLocally,
+  removeDeletedThreadFromClientState,
   reorderProjects,
   setThreadWorkspace,
   setAllProjectsExpanded,
@@ -2515,6 +2520,55 @@ describe("store read model sync", () => {
     expect(next.sidebarThreadSummaryById["thread-archived"]?.archivedAt).toBe(
       "2026-02-27T00:05:00.000Z",
     );
+  });
+
+  it("removes archived threads when a delete event reaches the hot path", () => {
+    const threadId = ThreadId.makeUnsafe("thread-archived");
+    const initialState = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          archivedAt: "2026-02-27T00:05:00.000Z",
+        }),
+      ),
+    );
+
+    const next = applyOrchestrationEventsHotPath(
+      initialState,
+      [
+        makeDomainEvent("thread.deleted", {
+          threadId,
+          deletedAt: "2026-02-27T00:06:00.000Z",
+        }),
+      ],
+      { updateThreadArray: false },
+    );
+
+    expect(next.threads).toHaveLength(0);
+    expect(next.threadIds).not.toContain(threadId);
+    expect(next.threadShellById?.[threadId]).toBeUndefined();
+    expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
+  });
+
+  it("removes successfully deleted archived threads through the shared client helper", () => {
+    const threadId = ThreadId.makeUnsafe("thread-archived");
+    const initialState = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          archivedAt: "2026-02-27T00:05:00.000Z",
+        }),
+      ),
+    );
+
+    const next = removeDeletedThreadFromClientState(initialState, threadId);
+
+    expect(next.threads).toHaveLength(0);
+    expect(next.threadIds).not.toContain(threadId);
+    expect(next.threadShellById?.[threadId]).toBeUndefined();
+    expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
   });
 
   it("keeps sidebar summaries shell-owned during hot-path thread detail syncs", () => {

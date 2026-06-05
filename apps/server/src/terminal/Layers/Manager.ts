@@ -2355,8 +2355,7 @@ export const TerminalManagerLive = Layer.effect(
       ackOutput: (input) =>
         Effect.tryPromise({
           try: () => runtime.ackOutput(input),
-          catch: (cause) =>
-            terminalErrorFromCause("Failed to acknowledge terminal output", cause),
+          catch: (cause) => terminalErrorFromCause("Failed to acknowledge terminal output", cause),
         }),
       resize: (input) =>
         Effect.tryPromise({

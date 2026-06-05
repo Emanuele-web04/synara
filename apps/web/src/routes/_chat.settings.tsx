@@ -93,6 +93,10 @@ import { useTheme } from "../hooks/useTheme";
 import { CentralIcon } from "../lib/central-icons";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
 import {
+  deleteArchivedThreadFromClient,
+  deleteArchivedThreadsFromClient,
+} from "../lib/archivedThreadDelete";
+import {
   ArchiveIcon,
   ChevronDownIcon,
   DeviceLaptopIcon,
@@ -562,6 +566,10 @@ function SettingsRouteView() {
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const serverWorktreesQuery = useQuery(serverWorktreesQueryOptions());
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
+  const removeDeletedThreadFromClientState = useStore(
+    (store) => store.removeDeletedThreadFromClientState,
+  );
+  const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const threads = useStore(useMemo(() => createAllThreadsSelector(), []));
   const projects = useStore((store) => store.projects);
@@ -1209,13 +1217,12 @@ function SettingsRouteView() {
       }
 
       try {
-        for (const archivedThreadId of linkedArchivedThreadIds) {
-          await api.orchestration.dispatchCommand({
-            type: "thread.delete",
-            commandId: newCommandId(),
-            threadId: archivedThreadId,
-          });
-        }
+        await deleteArchivedThreadsFromClient({
+          api: api.orchestration,
+          threadIds: linkedArchivedThreadIds,
+          removeDeletedThreadFromClientState,
+          syncServerShellSnapshot,
+        });
 
         await removeWorktreeMutation.mutateAsync({
           cwd: input.workspaceRoot,
@@ -1241,7 +1248,12 @@ function SettingsRouteView() {
         });
       }
     },
-    [queryClient, removeWorktreeMutation],
+    [
+      queryClient,
+      removeDeletedThreadFromClientState,
+      removeWorktreeMutation,
+      syncServerShellSnapshot,
+    ],
   );
 
   const unarchiveThread = useCallback(async (threadId: ThreadId) => {
@@ -1277,10 +1289,11 @@ function SettingsRouteView() {
     if (!confirmed) return;
 
     try {
-      await api.orchestration.dispatchCommand({
-        type: "thread.delete",
-        commandId: newCommandId(),
+      await deleteArchivedThreadFromClient({
+        api: api.orchestration,
         threadId,
+        removeDeletedThreadFromClientState,
+        syncServerShellSnapshot,
       });
       toastManager.add({
         type: "success",
@@ -1294,7 +1307,7 @@ function SettingsRouteView() {
         description: error instanceof Error ? error.message : "Unable to delete the thread.",
       });
     }
-  }, []);
+  }, [removeDeletedThreadFromClientState, syncServerShellSnapshot]);
 
   const handleArchivedThreadContextMenu = useCallback(
     async (threadId: ThreadId, threadTitle: string, position: { x: number; y: number }) => {

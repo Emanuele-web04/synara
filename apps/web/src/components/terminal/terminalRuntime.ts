@@ -947,20 +947,14 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
 
               if (match.kind === "url") {
                 void api.shell.openExternal(match.text).catch((error) => {
-                  writeSystemMessage(
-                    terminal,
-                    describeErrorMessage(error, "Unable to open link"),
-                  );
+                  writeSystemMessage(terminal, describeErrorMessage(error, "Unable to open link"));
                 });
                 return;
               }
 
               const target = resolvePathLinkTarget(match.text, entry.cwd);
               void openInPreferredEditor(api, target).catch((error) => {
-                writeSystemMessage(
-                  terminal,
-                  describeErrorMessage(error, "Unable to open path"),
-                );
+                writeSystemMessage(terminal, describeErrorMessage(error, "Unable to open path"));
               });
             },
           })),
@@ -985,10 +979,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
       void api.terminal
         .write({ threadId: entry.threadId, terminalId: entry.terminalId, data })
         .catch((error) =>
-          writeSystemMessage(
-            terminal,
-            describeErrorMessage(error, "Terminal write failed"),
-          ),
+          writeSystemMessage(terminal, describeErrorMessage(error, "Terminal write failed")),
         );
     }),
   );
@@ -1146,10 +1137,7 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
       if (entry.disposed) return;
       entry.opened = false;
       setRuntimeStatus(entry, "error");
-      writeSystemMessage(
-        entry.terminal,
-        describeErrorMessage(error, "Failed to open terminal"),
-      );
+      writeSystemMessage(entry.terminal, describeErrorMessage(error, "Failed to open terminal"));
     });
 }
 

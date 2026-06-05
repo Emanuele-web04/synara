@@ -19,7 +19,7 @@ import BranchToolbar, { type BranchToolbarProps } from "~/components/BranchToolb
 import ChatMarkdown from "~/components/ChatMarkdown";
 import GitActionsControl from "~/components/GitActionsControl";
 import { IconButton } from "~/components/ui/icon-button";
-import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
+import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ChangesIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
@@ -63,8 +63,8 @@ export interface EnvironmentPanelProps {
   diffOpen: boolean;
   /** Non-null when the diff panel cannot be opened (e.g. no repo / no changes yet). */
   diffDisabledReason?: string | null;
-  /** Background refresh cadence for the diff totals badge, or false to fetch once. */
-  diffBadgeRefreshIntervalMs?: number | false;
+  /** Shared diff totals from ChatView so the mounted panel does not duplicate patch parsing. */
+  diffTotals: RepoDiffTotals;
   /** Env/branch picker config — `variant` is supplied by the panel. */
   branchToolbar: Omit<BranchToolbarProps, "variant">;
   /** Compact idle-generated chat memory for the top of the panel. */
@@ -122,18 +122,14 @@ export function EnvironmentPanel({
   showGitActions,
   diffOpen,
   diffDisabledReason = null,
-  diffBadgeRefreshIntervalMs = false,
+  diffTotals,
   branchToolbar,
   recap = null,
   onToggleDiff,
   onClose,
 }: EnvironmentPanelProps) {
   const navigate = useNavigate();
-  const { additions, deletions, hasChanges } = useRepoDiffTotals({
-    gitCwd,
-    isGitRepo,
-    refetchInterval: diffBadgeRefreshIntervalMs,
-  });
+  const { additions, deletions, hasChanges } = diffTotals;
 
   // Disable the Changes row only when the diff cannot be opened *and* is not already open
   // (so an open diff stays toggleable closed even when there are no pending changes).

@@ -2316,6 +2316,11 @@ function removeThreadState(state: AppState, threadId: ThreadId): AppState {
   };
 }
 
+// Removes a successfully deleted thread from every client-side projection immediately.
+export function removeDeletedThreadFromClientState(state: AppState, threadId: ThreadId): AppState {
+  return removeThreadState(state, threadId);
+}
+
 // Drop a project and any thread-scoped state that still points at it.
 function removeProjectState(state: AppState, projectId: Project["id"]): AppState {
   const threadIds = new Set<ThreadId>();
@@ -2989,6 +2994,10 @@ function applyOrchestrationEvent(
         projects: state.projects.filter((project) => project.id !== event.payload.projectId),
       };
     }
+
+    case "thread.deleted":
+      // Deletion is terminal for both active sidebar rows and archived settings rows.
+      return removeThreadState(state, event.payload.threadId);
 
     case "thread.meta-updated":
       return applyThreadUpdate(
@@ -3994,6 +4003,7 @@ interface AppStore extends AppState {
   applyShellEvent: (event: OrchestrationShellStreamEvent) => void;
   applyOrchestrationEvents: (events: ReadonlyArray<OrchestrationEvent>) => void;
   applyOrchestrationEventsHotPath: (events: ReadonlyArray<OrchestrationEvent>) => void;
+  removeDeletedThreadFromClientState: (threadId: ThreadId) => void;
   markThreadVisited: (threadId: ThreadId, visitedAt?: string) => void;
   markThreadUnread: (threadId: ThreadId) => void;
   toggleProject: (projectId: Project["id"]) => void;
@@ -4022,6 +4032,8 @@ export const useStore = create<AppStore>((set) => ({
         updateSidebarSummary: false,
       }),
     ),
+  removeDeletedThreadFromClientState: (threadId) =>
+    set((state) => removeDeletedThreadFromClientState(state, threadId)),
   markThreadVisited: (threadId, visitedAt) =>
     set((state) => markThreadVisited(state, threadId, visitedAt)),
   markThreadUnread: (threadId) => set((state) => markThreadUnread(state, threadId)),

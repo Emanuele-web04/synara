@@ -1,5 +1,6 @@
 # Recap: Thread Recap Panel
-> Generated: 2026-06-05  |  Scope: 20 files
+
+> Generated: 2026-06-05 | Scope: 20 files
 
 ---
 
@@ -11,28 +12,28 @@ The goal was to add a compact, low-cost chat recap inside the new floating right
 
 ## Files Affected
 
-| File | Status | Role |
-|---|---|---|
-| `apps/web/src/hooks/useThreadRecap.ts` | ✅ Created | Idle debounce, persisted per-thread cache hydration, stale-response protection |
-| `apps/web/src/lib/threadRecap.ts` | ✅ Created | Builds compact recap inputs and owns localStorage cache sanitization/pruning |
-| `apps/web/src/lib/threadRecap.test.ts` | ✅ Created | Verifies message-only triggering, delta selection, and persisted-cache behavior |
-| `apps/web/src/components/chat/environment/EnvironmentPanel.tsx` | ✏️ Modified | Renders compact inline Recap text with pending shimmer and 4-line clamp |
-| `apps/web/src/components/ChatView.tsx` | ✏️ Modified | Wires `useThreadRecap` into Environment panel props |
-| `apps/web/src/wsNativeApi.ts` | ✏️ Modified | Adds `server.generateThreadRecap` transport mapping |
-| `packages/contracts/src/server.ts` | ✏️ Modified | Adds recap input/result schemas |
-| `packages/contracts/src/ws.ts` | ✏️ Modified | Adds WebSocket method name and request schema |
-| `packages/contracts/src/rpc.ts` | ✏️ Modified | Adds Effect RPC definition/group entry |
-| `packages/contracts/src/ipc.ts` | ✏️ Modified | Adds NativeApi server method type |
-| `apps/server/src/wsRpc.ts` | ✏️ Modified | Handles recap generation via `TextGeneration` |
-| `apps/server/src/serverLayers.ts` | ✏️ Modified | Exposes `TextGenerationLayerLive` to WebSocket RPC |
-| `apps/server/src/git/textGenerationShared.ts` | ✏️ Modified | Adds recap prompt builder and sanitizer |
-| `apps/server/src/git/Services/TextGeneration.ts` | ✏️ Modified | Extends text-generation service with `generateThreadRecap` |
-| `apps/server/src/git/Layers/ProviderTextGeneration.ts` | ✏️ Modified | Routes recap generation to the selected provider implementation |
-| `apps/server/src/git/Layers/CodexTextGeneration.ts` | ✏️ Modified | Implements Codex recap generation |
-| `apps/server/src/git/Layers/OpenCodeTextGeneration.ts` | ✏️ Modified | Implements OpenCode/Kilo recap generation |
-| `apps/server/src/git/Layers/CursorTextGeneration.ts` | ✏️ Modified | Implements Cursor recap generation |
-| `apps/server/src/git/Layers/ProviderTextGeneration.test.ts` | ✏️ Modified | Updates service double for the new method |
-| `apps/server/src/git/Layers/GitManager.test.ts` | ✏️ Modified | Updates fake text-generation shape |
+| File                                                            | Status      | Role                                                                            |
+| --------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------- |
+| `apps/web/src/hooks/useThreadRecap.ts`                          | ✅ Created  | Idle debounce, persisted per-thread cache hydration, stale-response protection  |
+| `apps/web/src/lib/threadRecap.ts`                               | ✅ Created  | Builds compact recap inputs and owns localStorage cache sanitization/pruning    |
+| `apps/web/src/lib/threadRecap.test.ts`                          | ✅ Created  | Verifies message-only triggering, delta selection, and persisted-cache behavior |
+| `apps/web/src/components/chat/environment/EnvironmentPanel.tsx` | ✏️ Modified | Renders compact inline Recap text with pending shimmer and 4-line clamp         |
+| `apps/web/src/components/ChatView.tsx`                          | ✏️ Modified | Wires `useThreadRecap` into Environment panel props                             |
+| `apps/web/src/wsNativeApi.ts`                                   | ✏️ Modified | Adds `server.generateThreadRecap` transport mapping                             |
+| `packages/contracts/src/server.ts`                              | ✏️ Modified | Adds recap input/result schemas                                                 |
+| `packages/contracts/src/ws.ts`                                  | ✏️ Modified | Adds WebSocket method name and request schema                                   |
+| `packages/contracts/src/rpc.ts`                                 | ✏️ Modified | Adds Effect RPC definition/group entry                                          |
+| `packages/contracts/src/ipc.ts`                                 | ✏️ Modified | Adds NativeApi server method type                                               |
+| `apps/server/src/wsRpc.ts`                                      | ✏️ Modified | Handles recap generation via `TextGeneration`                                   |
+| `apps/server/src/serverLayers.ts`                               | ✏️ Modified | Exposes `TextGenerationLayerLive` to WebSocket RPC                              |
+| `apps/server/src/git/textGenerationShared.ts`                   | ✏️ Modified | Adds recap prompt builder and sanitizer                                         |
+| `apps/server/src/git/Services/TextGeneration.ts`                | ✏️ Modified | Extends text-generation service with `generateThreadRecap`                      |
+| `apps/server/src/git/Layers/ProviderTextGeneration.ts`          | ✏️ Modified | Routes recap generation to the selected provider implementation                 |
+| `apps/server/src/git/Layers/CodexTextGeneration.ts`             | ✏️ Modified | Implements Codex recap generation                                               |
+| `apps/server/src/git/Layers/OpenCodeTextGeneration.ts`          | ✏️ Modified | Implements OpenCode/Kilo recap generation                                       |
+| `apps/server/src/git/Layers/CursorTextGeneration.ts`            | ✏️ Modified | Implements Cursor recap generation                                              |
+| `apps/server/src/git/Layers/ProviderTextGeneration.test.ts`     | ✏️ Modified | Updates service double for the new method                                       |
+| `apps/server/src/git/Layers/GitManager.test.ts`                 | ✏️ Modified | Updates fake text-generation shape                                              |
 
 ---
 

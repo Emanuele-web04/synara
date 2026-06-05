@@ -1,7 +1,8 @@
 // FILE: ComposerQueuedHeader.tsx
-// Purpose: Queued follow-up rows stacked flush above the composer input (each with
-// Steer / Delete / Edit actions). Owns the rounded-top seam so the queue and the
-// input below read as one continuous surface.
+// Purpose: Queued follow-up rows shown as a panel that merges into the top of the
+// composer input (each with Steer / Delete / Edit actions). Rounded only on top with
+// a flat, borderless bottom that fuses flush onto the composer; sits at 11/12 of the
+// composer width while the composer below keeps its own full rounding.
 // Layer: Chat composer UI
 // Exports: ComposerQueuedHeader
 
@@ -10,17 +11,11 @@ import { memo } from "react";
 import type { QueuedComposerTurn } from "../../composerDraftStore";
 import { SteerIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import {
-  COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME,
-  COMPOSER_SURFACE_BORDER_CLASS_NAME,
-} from "./composerPickerStyles";
+import { COMPOSER_SURFACE_BORDER_CLASS_NAME } from "./composerPickerStyles";
 import { QueuedComposerActions } from "./QueuedComposerActions";
 
 interface ComposerQueuedHeaderProps {
   queuedTurns: QueuedComposerTurn[];
-  // When a task-list card already sits above these rows it owns the rounded top, so
-  // the first queued row stays square to keep the stacked surface seamless.
-  taskListAboveComposer: boolean;
   onSteer: (queuedTurn: QueuedComposerTurn) => void;
   onRemove: (queuedTurnId: string) => void;
   onEdit: (queuedTurn: QueuedComposerTurn) => void;
@@ -28,7 +23,6 @@ interface ComposerQueuedHeaderProps {
 
 export const ComposerQueuedHeader = memo(function ComposerQueuedHeader({
   queuedTurns,
-  taskListAboveComposer,
   onSteer,
   onRemove,
   onEdit,
@@ -38,17 +32,19 @@ export const ComposerQueuedHeader = memo(function ComposerQueuedHeader({
   }
 
   return (
-    <div className={cn("flex flex-col", COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME)}>
+    <div
+      className={cn(
+        "chat-composer-surface chat-composer-stacked-top relative z-[1] mx-auto -mb-px flex w-11/12 min-w-0 flex-col overflow-hidden border border-b-0",
+        COMPOSER_SURFACE_BORDER_CLASS_NAME,
+      )}
+    >
       {queuedTurns.map((queuedTurn, queuedTurnIndex) => (
         <div
           key={queuedTurn.id}
           data-testid="queued-follow-up-row"
           className={cn(
-            "chat-composer-surface flex items-center gap-2 border border-b-0 px-3 pt-2.5 pb-2.5 text-[12px]",
-            COMPOSER_SURFACE_BORDER_CLASS_NAME,
-            queuedTurnIndex === 0 && !taskListAboveComposer
-              ? "chat-composer-stacked-top"
-              : "rounded-none",
+            "flex items-center gap-2 px-3 pt-2.5 pb-2.5 text-[12px]",
+            queuedTurnIndex > 0 && `border-t ${COMPOSER_SURFACE_BORDER_CLASS_NAME}`,
           )}
         >
           <div className="flex min-w-0 flex-1 items-center gap-1.5">

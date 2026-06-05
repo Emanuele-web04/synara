@@ -74,9 +74,7 @@ export function resolveDefaultEnvironmentPanelOpen(input: {
   isTerminalPrimarySurface: boolean;
 }): boolean {
   return (
-    input.environmentEnabled &&
-    !input.isCenteredEmptyLanding &&
-    !input.isTerminalPrimarySurface
+    input.environmentEnabled && !input.isCenteredEmptyLanding && !input.isTerminalPrimarySurface
   );
 }
 
