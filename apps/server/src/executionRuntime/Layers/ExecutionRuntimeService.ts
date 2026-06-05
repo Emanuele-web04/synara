@@ -144,6 +144,25 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
   // Fake-only: maps a provisioned instance id to its exact flavor for the
   // flavor-specific reconnect-capability probe.
   const instanceFakeFlavors = new Map<string, FakeRuntimeFlavor>();
+  // Per-instance lifecycle-transition epoch. The suspend/resume cycle deliberately
+  // reuses the same instanceId, but the OrchestrationEngine durably dedupes a
+  // command on its commandId and returns the prior receipt WITHOUT re-deciding or
+  // appending an event. A fixed `state.<status>.<instanceId>` / `stop.<instanceId>`
+  // commandId therefore drops every transition after the first cycle, freezing the
+  // read-model `instance.status`. Bumping this epoch on each suspend and each
+  // resume makes the transition commandId unique per cycle so the event is appended
+  // every time. The state-changed projection is an idempotent last-write-wins upsert
+  // keyed on (threadId, instanceId), so a duplicate transition (e.g. a same-epoch
+  // crash retry) stays harmless. The map is in-memory: after a restart the epoch
+  // resets, but a re-appended transition is still idempotent on the read-model.
+  const lifecycleEpochs = new Map<string, number>();
+  const nextLifecycleEpoch = (instanceId: ExecutionInstanceId): number => {
+    const key = String(instanceId);
+    const next = (lifecycleEpochs.get(key) ?? 0) + 1;
+    lifecycleEpochs.set(key, next);
+    return next;
+  };
+
   // Instances with a live transport (an in-flight turn) this process lifetime.
   // The reconciler reads this through `probeInstance().liveActivity` to skip
   // idle-destroy: stream output is not event-sourced, so `lastActivityAt` freezes
@@ -773,13 +792,19 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
       }
       // Record the stop regardless of provider support so the read-model converges
       // to `stopping`; an unsupported provider simply records the requested state.
-      yield* dispatchRuntimeCommand(threadId, `stop.${instanceId}`, (commandId, createdAt) => ({
-        type: "thread.runtime.stop",
-        commandId,
+      // Epoch-suffix the commandId so repeated suspend/resume cycles on the same
+      // instanceId each append, rather than deduping on the engine receipt.
+      yield* dispatchRuntimeCommand(
         threadId,
-        instanceId,
-        createdAt,
-      })).pipe(Effect.ignore);
+        `stop.${instanceId}.${nextLifecycleEpoch(instanceId)}`,
+        (commandId, createdAt) => ({
+          type: "thread.runtime.stop",
+          commandId,
+          threadId,
+          instanceId,
+          createdAt,
+        }),
+      ).pipe(Effect.ignore);
     });
 
   const snapshot: ExecutionRuntimeServiceShape["snapshot"] = (
@@ -869,7 +894,7 @@ const makeExecutionRuntimeService = Effect.gen(function* () {
   const recordInstanceState: ExecutionRuntimeServiceShape["recordInstanceState"] = (input) =>
     dispatchRuntimeCommand(
       input.threadId,
-      `state.${input.status}.${input.instanceId}`,
+      `state.${input.status}.${input.instanceId}.${nextLifecycleEpoch(input.instanceId)}`,
       (commandId, createdAt) => ({
         type: "thread.runtime.state.record",
         commandId,
