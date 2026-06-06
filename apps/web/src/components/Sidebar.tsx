@@ -16,6 +16,7 @@ import {
   type LucideIcon,
   NewThreadIcon,
   PencilIcon,
+  PinIcon,
   SearchIcon,
   SettingsIcon,
   TerminalIcon,
@@ -59,6 +60,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  MAX_PINNED_PROJECTS,
   type DesktopUpdateState,
   type OrchestrationShellSnapshot,
   PROVIDER_DISPLAY_NAMES,
@@ -193,16 +195,19 @@ import { isNonEmpty as isNonEmptyString } from "effect/String";
 import {
   describeAddProjectError,
   buildProjectThreadTree,
+  derivePinnedProjectIdsForSidebar,
   deriveSidebarProjectData,
   derivePinnedThreadIdsForSidebar,
   extractDuplicateProjectCreateProjectId,
   findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
   getPinnedThreadsForSidebar,
+  orderPinnedProjectsForSidebar,
   getNextVisibleSidebarThreadId,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarEntriesForPreview,
   groupSidebarThreadsByProjectId,
+  isLatestPinnedProjectMutation,
   isLatestPinnedThreadMutation,
   pruneExpandedProjectThreadListsForCollapsedProjects,
   recoverExistingAddProjectTarget,
@@ -264,6 +269,7 @@ import {
 import { THREAD_DRAG_MIME } from "./chat-drop-overlay/ChatPaneDropOverlay";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useThreadActivationController } from "../hooks/useThreadActivationController";
+import { usePinnedProjectsStore } from "../pinnedProjectsStore";
 import { usePinnedThreadsStore } from "../pinnedThreadsStore";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
@@ -312,6 +318,7 @@ type ProjectContextMenuId =
   | "open-in-finder"
   | "copy-path"
   | "rename"
+  | "toggle-pin"
   | "archive-threads"
   | "delete-threads"
   | "delete";
@@ -1176,6 +1183,10 @@ export default function Sidebar() {
   const draftThreadsByThreadId = useComposerDraftStore((store) => store.draftThreadsByThreadId);
   const temporaryThreadIds = useTemporaryThreadStore((store) => store.temporaryThreadIds);
   const clearTemporaryThread = useTemporaryThreadStore((store) => store.clearTemporaryThread);
+  const persistedPinnedProjectIds = usePinnedProjectsStore((store) => store.pinnedProjectIds);
+  const pinProjectLocally = usePinnedProjectsStore((store) => store.pinProject);
+  const unpinProject = usePinnedProjectsStore((store) => store.unpinProject);
+  const prunePinnedProjects = usePinnedProjectsStore((store) => store.prunePinnedProjects);
   const persistedPinnedThreadIds = usePinnedThreadsStore((store) => store.pinnedThreadIds);
   const pinThreadLocally = usePinnedThreadsStore((store) => store.pinThread);
   const unpinThread = usePinnedThreadsStore((store) => store.unpinThread);
@@ -1355,6 +1366,8 @@ export default function Sidebar() {
     new Map<ThreadId, { release: () => void; timeoutId: number }>(),
   );
   const legacyPinMigrationThreadIdsRef = useRef(new Set<ThreadId>());
+  const optimisticPinnedStateByProjectIdRef = useRef(new Map<ProjectId, boolean>());
+  const latestPinnedMutationVersionByProjectIdRef = useRef(new Map<ProjectId, number>());
   const optimisticPinnedStateByThreadIdRef = useRef(new Map<ThreadId, boolean>());
   const latestPinnedMutationVersionByThreadIdRef = useRef(new Map<ThreadId, number>());
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
@@ -1363,6 +1376,9 @@ export default function Sidebar() {
   const [installingDesktopUpdate, setInstallingDesktopUpdate] = useState(false);
   const [optimisticPinnedStateByThreadId, setOptimisticPinnedStateByThreadId] = useState<
     ReadonlyMap<ThreadId, boolean>
+  >(() => new Map());
+  const [optimisticPinnedStateByProjectId, setOptimisticPinnedStateByProjectId] = useState<
+    ReadonlyMap<ProjectId, boolean>
   >(() => new Map());
   // Dedupes the manual-download fallback toast so a single failure surfaced by
   // both the click handler and the install-watchdog push only notifies once.
@@ -1639,6 +1655,152 @@ export default function Sidebar() {
     () => new Map(projects.map((project) => [project.id, project] as const)),
     [projects],
   );
+  const projectByIdRef = useRef(projectById);
+  useEffect(() => {
+    projectByIdRef.current = projectById;
+  }, [projectById]);
+  const setOptimisticProjectPinned = useCallback((projectId: ProjectId, isPinned: boolean) => {
+    optimisticPinnedStateByProjectIdRef.current.set(projectId, isPinned);
+    setOptimisticPinnedStateByProjectId((current) => {
+      if (current.get(projectId) === isPinned) {
+        return current;
+      }
+      const next = new Map(current);
+      next.set(projectId, isPinned);
+      return next;
+    });
+  }, []);
+  const clearOptimisticProjectPinned = useCallback((projectId: ProjectId) => {
+    optimisticPinnedStateByProjectIdRef.current.delete(projectId);
+    setOptimisticPinnedStateByProjectId((current) => {
+      if (!current.has(projectId)) {
+        return current;
+      }
+      const next = new Map(current);
+      next.delete(projectId);
+      return next;
+    });
+  }, []);
+  const dispatchProjectPinnedState = useCallback(
+    async (projectId: ProjectId, isPinned: boolean) => {
+      const api = readNativeApi();
+      if (!api) return;
+      await api.orchestration.dispatchCommand({
+        type: "project.meta.update",
+        commandId: newCommandId(),
+        projectId,
+        isPinned,
+      });
+    },
+    [],
+  );
+  const setProjectPinned = useCallback(
+    async (projectId: ProjectId, isPinned: boolean) => {
+      const api = readNativeApi();
+      if (!api) return;
+      const project = projectByIdRef.current.get(projectId);
+      if (!project || project.kind !== "project") {
+        return;
+      }
+      const requestVersion =
+        (latestPinnedMutationVersionByProjectIdRef.current.get(projectId) ?? 0) + 1;
+      latestPinnedMutationVersionByProjectIdRef.current.set(projectId, requestVersion);
+
+      setOptimisticProjectPinned(projectId, isPinned);
+      if (isPinned) {
+        const accepted = pinProjectLocally(projectId);
+        if (!accepted) {
+          clearOptimisticProjectPinned(projectId);
+          toastManager.add({
+            type: "warning",
+            title: "Project pin limit reached",
+            description: `You can pin up to ${MAX_PINNED_PROJECTS} projects.`,
+          });
+          return;
+        }
+      } else {
+        unpinProject(projectId);
+      }
+
+      try {
+        await dispatchProjectPinnedState(projectId, isPinned);
+      } catch (error) {
+        if (
+          !isLatestPinnedProjectMutation({
+            projectId,
+            requestVersion,
+            latestMutationVersionByProjectId: latestPinnedMutationVersionByProjectIdRef.current,
+          })
+        ) {
+          return;
+        }
+
+        const confirmedPinned = projectByIdRef.current.get(projectId)?.isPinned === true;
+        if (confirmedPinned) {
+          pinProjectLocally(projectId);
+        } else {
+          unpinProject(projectId);
+        }
+        clearOptimisticProjectPinned(projectId);
+        throw error;
+      }
+    },
+    [
+      clearOptimisticProjectPinned,
+      dispatchProjectPinnedState,
+      pinProjectLocally,
+      setOptimisticProjectPinned,
+      unpinProject,
+    ],
+  );
+  const toggleProjectPinned = useCallback(
+    (projectId: ProjectId) => {
+      const optimisticPinned = optimisticPinnedStateByProjectIdRef.current.get(projectId);
+      const locallyPinned = usePinnedProjectsStore.getState().pinnedProjectIds.includes(projectId);
+      const serverPinned = projectByIdRef.current.get(projectId)?.isPinned === true;
+      const isPinned = optimisticPinned ?? (locallyPinned || serverPinned);
+      void setProjectPinned(projectId, !isPinned).catch((error) => {
+        console.error("Failed to update pinned project state", {
+          projectId,
+          error,
+        });
+        toastManager.add({
+          type: "error",
+          title: isPinned ? "Unable to unpin project" : "Unable to pin project",
+          description: error instanceof Error ? error.message : undefined,
+        });
+      });
+    },
+    [setProjectPinned],
+  );
+  useEffect(() => {
+    if (optimisticPinnedStateByProjectId.size === 0) {
+      return;
+    }
+
+    const serverPinnedStateByProjectId = new Map(
+      projects.map((project) => [project.id, project.isPinned === true] as const),
+    );
+    setOptimisticPinnedStateByProjectId((current) => {
+      let next: Map<ProjectId, boolean> | null = null;
+      const confirmedProjectIds: ProjectId[] = [];
+      for (const [projectId, desiredPinned] of current) {
+        const serverPinned = serverPinnedStateByProjectId.get(projectId);
+        if (serverPinned !== undefined && serverPinned !== desiredPinned) {
+          continue;
+        }
+        next ??= new Map(current);
+        next.delete(projectId);
+        confirmedProjectIds.push(projectId);
+      }
+      if (next) {
+        for (const projectId of confirmedProjectIds) {
+          optimisticPinnedStateByProjectIdRef.current.delete(projectId);
+        }
+      }
+      return next ?? current;
+    });
+  }, [optimisticPinnedStateByProjectId, projects]);
   const workspaceRows = useMemo(
     () =>
       workspacePages.map((workspace) => {
@@ -3369,6 +3531,10 @@ export default function Sidebar() {
         setRenamingProjectName(project.localName ?? project.name);
         return;
       }
+      if (clicked === "toggle-pin") {
+        toggleProjectPinned(projectId);
+        return;
+      }
       if (clicked === "archive-threads") {
         await archiveAllThreadsInProject(projectId);
         return;
@@ -3442,6 +3608,7 @@ export default function Sidebar() {
       deleteAllThreadsInProject,
       projectById,
       sidebarThreads,
+      toggleProjectPinned,
     ],
   );
 
@@ -3619,12 +3786,26 @@ export default function Sidebar() {
       }),
     [activeChatPreviewEntry?.rowId, chatThreadListExpanded, visibleChatPreviewEntries],
   );
-  const standardProjects = useMemo(
+  const standardProjectsBase = useMemo(
     () =>
       sortedProjects.filter(
         (project) => project.kind === "project" && !isHomeChatContainerProject(project, homeDir),
       ),
     [homeDir, sortedProjects],
+  );
+  const pinnedProjectIds = useMemo(
+    () =>
+      derivePinnedProjectIdsForSidebar({
+        projects: standardProjectsBase,
+        persistedPinnedProjectIds,
+        optimisticPinnedStateByProjectId,
+      }),
+    [optimisticPinnedStateByProjectId, persistedPinnedProjectIds, standardProjectsBase],
+  );
+  const pinnedProjectIdSet = useMemo(() => new Set(pinnedProjectIds), [pinnedProjectIds]);
+  const standardProjects = useMemo(
+    () => orderPinnedProjectsForSidebar(standardProjectsBase, pinnedProjectIds),
+    [pinnedProjectIds, standardProjectsBase],
   );
   const projectEmptyState = resolveProjectEmptyState({
     projectCount: standardProjects.length,
@@ -3676,6 +3857,13 @@ export default function Sidebar() {
     }
     prunePinnedThreads(sidebarThreads.map((thread) => thread.id));
   }, [prunePinnedThreads, sidebarThreads, threadsHydrated]);
+
+  useEffect(() => {
+    if (!shouldPrunePinnedThreads({ threadsHydrated })) {
+      return;
+    }
+    prunePinnedProjects(standardProjectsBase.map((project) => project.id));
+  }, [prunePinnedProjects, standardProjectsBase, threadsHydrated]);
 
   useEffect(() => {
     if (!threadsHydrated || persistedPinnedThreadIds.length === 0) {
@@ -4716,6 +4904,7 @@ export default function Sidebar() {
     dragHandleProps: SortableProjectHandleProps | null,
   ) {
     const isRenamingProject = renamingProjectId === project.id;
+    const isProjectPinned = pinnedProjectIdSet.has(project.id);
     const projectSidebarData = standardProjectSidebarDataById.get(project.id);
     if (!projectSidebarData) {
       return null;
@@ -4736,7 +4925,7 @@ export default function Sidebar() {
             size="sm"
             className={cn(
               SIDEBAR_HEADER_ROW_CLASS_NAME,
-              "transition-[padding] duration-150 ease-out hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:pr-[4.75rem] group-hover/project-header:text-[var(--sidebar-accent-foreground)] group-focus-within/project-header:pr-[4.75rem]",
+              "transition-[padding] duration-150 ease-out hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:pr-[6.5rem] group-hover/project-header:text-[var(--sidebar-accent-foreground)] group-focus-within/project-header:pr-[6.5rem]",
               isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
             )}
             {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
@@ -4807,6 +4996,12 @@ export default function Sidebar() {
                   <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79">
                     {project.name}
                   </span>
+                  {isProjectPinned ? (
+                    <PinIcon
+                      aria-hidden="true"
+                      className="size-3 shrink-0 text-muted-foreground/48"
+                    />
+                  ) : null}
                   {project.localName ? (
                     <span className="shrink-0 truncate text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/40">
                       {project.folderName}
@@ -4817,6 +5012,19 @@ export default function Sidebar() {
             </div>
           </SidebarMenuButton>
           <SidebarSectionToolbar placement="overlay" revealOnHover>
+            <SidebarIconButton
+              icon={PinIcon}
+              label={isProjectPinned ? `Unpin ${project.name}` : `Pin ${project.name}`}
+              aria-pressed={isProjectPinned}
+              tooltip={isProjectPinned ? "Unpin project" : "Pin project"}
+              tooltipSide="top"
+              className={isProjectPinned ? "text-foreground/80" : undefined}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                toggleProjectPinned(project.id);
+              }}
+            />
             <SidebarIconButton
               icon={TerminalIcon}
               label={`Create new terminal thread in ${project.name}`}
@@ -5591,6 +5799,9 @@ export default function Sidebar() {
   const projectContextMenuHasArchivableThreads = projectContextMenuThreads.some(
     (thread) => thread.archivedAt == null,
   );
+  const projectContextMenuIsPinned = projectContextMenuProject
+    ? pinnedProjectIdSet.has(projectContextMenuProject.id)
+    : false;
 
   return (
     <>
@@ -5958,7 +6169,7 @@ export default function Sidebar() {
                   >
                     <SidebarMenu className="gap-3">
                       <SortableContext
-                        items={sortedProjects.map((project) => project.id)}
+                        items={standardProjects.map((project) => project.id)}
                         strategy={verticalListSortingStrategy}
                       >
                         {standardProjects.map((project) => (
@@ -6209,6 +6420,18 @@ export default function Sidebar() {
               >
                 <ProjectContextMenuIcon icon={PencilIcon} />
                 <span>Edit name</span>
+              </MenuItem>
+              <MenuItem
+                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                onClick={() =>
+                  void handleProjectContextMenuAction(
+                    projectContextMenuState.projectId,
+                    "toggle-pin",
+                  )
+                }
+              >
+                <ProjectContextMenuIcon icon={PinIcon} />
+                <span>{projectContextMenuIsPinned ? "Unpin project" : "Pin project"}</span>
               </MenuItem>
               {projectContextMenuHasArchivableThreads ? (
                 <MenuItem

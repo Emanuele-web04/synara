@@ -14,15 +14,17 @@ import { IconButton } from "./ui/icon-button";
 export function ThreadPinToggleButton({
   pinned,
   presentation,
+  targetLabel = "thread",
   toneClassName,
   onToggle,
 }: {
   pinned: boolean;
   presentation: "overlay" | "inline" | "leading";
+  targetLabel?: string;
   toneClassName?: string;
   onToggle: (event: React.MouseEvent<HTMLButtonElement> | React.MouseEvent) => void;
 }) {
-  const label = pinned ? "Unpin thread" : "Pin thread";
+  const label = `${pinned ? "Unpin" : "Pin"} ${targetLabel}`;
 
   return (
     <IconButton
