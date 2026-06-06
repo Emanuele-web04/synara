@@ -4916,6 +4916,9 @@ export default function Sidebar() {
       hasHiddenThreads,
       isThreadListExpanded,
     } = projectSidebarData;
+    const pinnedProjectSecondaryActionClassName = isProjectPinned
+      ? "md:pointer-events-none md:opacity-0 md:transition-opacity md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-focus-within/project-header:pointer-events-auto md:group-focus-within/project-header:opacity-100"
+      : undefined;
 
     return (
       <div className="group/collapsible">
@@ -4926,6 +4929,7 @@ export default function Sidebar() {
             className={cn(
               SIDEBAR_HEADER_ROW_CLASS_NAME,
               "transition-[padding] duration-150 ease-out hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:pr-[6.5rem] group-hover/project-header:text-[var(--sidebar-accent-foreground)] group-focus-within/project-header:pr-[6.5rem]",
+              isProjectPinned ? "pr-7" : "",
               isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
             )}
             {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
@@ -4996,12 +5000,6 @@ export default function Sidebar() {
                   <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79">
                     {project.name}
                   </span>
-                  {isProjectPinned ? (
-                    <PinIcon
-                      aria-hidden="true"
-                      className="size-3 shrink-0 text-muted-foreground/48"
-                    />
-                  ) : null}
                   {project.localName ? (
                     <span className="shrink-0 truncate text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/40">
                       {project.folderName}
@@ -5011,7 +5009,7 @@ export default function Sidebar() {
               )}
             </div>
           </SidebarMenuButton>
-          <SidebarSectionToolbar placement="overlay" revealOnHover>
+          <SidebarSectionToolbar placement="overlay" revealOnHover visible={isProjectPinned}>
             <SidebarIconButton
               icon={PinIcon}
               label={isProjectPinned ? `Unpin ${project.name}` : `Pin ${project.name}`}
@@ -5034,6 +5032,7 @@ export default function Sidebar() {
                   : "New terminal thread"
               }
               tooltipSide="top"
+              className={pinnedProjectSecondaryActionClassName}
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -5051,6 +5050,7 @@ export default function Sidebar() {
               label={`Create disposable thread in ${project.name}`}
               tooltip="New disposable thread"
               tooltipSide="top"
+              className={pinnedProjectSecondaryActionClassName}
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -5069,6 +5069,7 @@ export default function Sidebar() {
                 newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"
               }
               tooltipSide="top"
+              className={pinnedProjectSecondaryActionClassName}
               data-testid="new-thread-button"
               onClick={(event) => {
                 event.preventDefault();
