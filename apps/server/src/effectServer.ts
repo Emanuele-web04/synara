@@ -15,6 +15,7 @@ import { ServerConfig } from "./config";
 import { patchBunWebSocketCloseEventCompatibility } from "./bunWebSocketCompatibility";
 import { makeEffectHttpRouteLayer } from "./http";
 import { Keybindings } from "./keybindings";
+import { ExecutionRuntimeReconciler } from "./executionRuntime/Services/ExecutionRuntimeReconciler";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper";
@@ -36,6 +37,7 @@ export interface ServerShape {
     | ServerLifecycleEvents
     | OrchestrationReactor
     | ProviderSessionReaper
+    | ExecutionRuntimeReconciler
     | ServerRuntimeStartup
     | ServerSettingsService
     | ThreadDeletionReactor
@@ -59,6 +61,7 @@ export const createEffectServer = Effect.fn(function* () {
   const lifecycleEvents = yield* ServerLifecycleEvents;
   const orchestrationReactor = yield* OrchestrationReactor;
   const providerSessionReaper = yield* ProviderSessionReaper;
+  const executionRuntimeReconciler = yield* ExecutionRuntimeReconciler;
   const runtimeStartup = yield* ServerRuntimeStartup;
   const serverSettings = yield* ServerSettingsService;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
@@ -119,6 +122,7 @@ export const createEffectServer = Effect.fn(function* () {
   yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
   yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);
   yield* Scope.provide(providerSessionReaper.start(), subscriptionsScope);
+  yield* Scope.provide(executionRuntimeReconciler.start(), subscriptionsScope);
   yield* readiness.markOrchestrationSubscriptionsReady;
   yield* readiness.markTerminalSubscriptionsReady;
   yield* runtimeStartup.markCommandReady;

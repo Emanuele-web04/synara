@@ -1,0 +1,28 @@
+name = "synara-runtime-bridge"
+main = "src/workerEntry.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# The bearer secret the Synara server authenticates with. Set via
+# `wrangler secret put BRIDGE_AUTH_TOKEN`; never commit the value.
+# [vars] intentionally omits BRIDGE_AUTH_TOKEN — it is a secret, not a plain var.
+
+[[durable_objects.bindings]]
+name = "RUNTIME_INSTANCES"
+class_name = "RuntimeInstanceDurableObjectBinding"
+
+# The real `workspace` runtime is the @cloudflare/sandbox Durable Object. A live
+# deploy must install the SDK (`npm add @cloudflare/sandbox`), re-export its class
+# from workerEntry.ts (`export { Sandbox } from "@cloudflare/sandbox";`), and
+# uncomment the SANDBOX binding below. Without it, makeRealSandboxRuntimeFactory
+# throws at runtime. The SDK class is not vendored here, so the binding stays
+# commented to keep the package buildable/typecheckable standalone.
+# [[durable_objects.bindings]]
+# name = "SANDBOX"
+# class_name = "Sandbox"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["RuntimeInstanceDurableObjectBinding"]
+# Add "Sandbox" to new_classes in a follow-up migration tag when the SANDBOX
+# binding is enabled for a live deploy.

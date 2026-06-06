@@ -46,7 +46,9 @@ import {
   type BranchNameGenerationInput,
   type ThreadTitleGenerationInput,
 } from "../../git/Services/TextGeneration.ts";
+import { ExecutionRuntimeService } from "../../executionRuntime/Services/ExecutionRuntimeService.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import type { ProviderSessionStartServerOptions } from "../../provider/Services/ProviderAdapter.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
 import {
@@ -66,6 +68,7 @@ type ProviderIntentEvent = Extract<
   OrchestrationEvent,
   {
     type:
+      | "thread.created"
       | "thread.meta-updated"
       | "thread.runtime-mode-set"
       | "thread.turn-queued"
@@ -75,7 +78,8 @@ type ProviderIntentEvent = Extract<
       | "thread.user-input-response-requested"
       | "thread.conversation-rollback-requested"
       | "thread.message-edit-resend-requested"
-      | "thread.session-stop-requested";
+      | "thread.session-stop-requested"
+      | "thread.runtime-action-requested";
   }
 >;
 
@@ -248,6 +252,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const executionRuntimeService = yield* ExecutionRuntimeService;
   const checkpointStore = yield* CheckpointStore;
   const git = yield* GitCore;
   const textGeneration = yield* TextGeneration;
@@ -693,7 +698,62 @@ const make = Effect.gen(function* () {
     }
     const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
-    const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
+    // Provision (or resolve) the execution target before the provider session
+    // starts. For local/worktree threads this returns no cwd override and no
+    // instance, preserving the existing local spawn path exactly. For a remote
+    // target it returns the provisioned root plus an opaque instance id. The
+    // reactor stays provider-agnostic: it reads the resolved cwd and the opaque
+    // instance id, never any provider-specific states or routes.
+    const resolvedTarget = yield* executionRuntimeService
+      .ensureTargetForThread(threadId, thread.runtime)
+      .pipe(
+        Effect.catchTag("RuntimeProvisionFailedError", (error) =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: threadProvider,
+              method: "thread.turn.start",
+              detail: error.message,
+            }),
+          ),
+        ),
+      );
+    const projectedCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
+    const effectiveCwd = resolvedTarget.cwd ?? projectedCwd;
+    // For a remote target, bind a transport factory to this thread's instance so
+    // the provider runs its agent process *inside* the sandbox (and streams back
+    // over that transport) rather than spawning locally. `exec` starts the agent
+    // the provider describes and returns its line transport; the env is left to
+    // the target. Absent for local/worktree threads, so the local path is
+    // untouched.
+    const remoteInstanceId = resolvedTarget.instanceId;
+    const sessionServerOptions: ProviderSessionStartServerOptions | undefined =
+      remoteInstanceId !== null
+        ? {
+            remoteTransport: (spec) =>
+              Effect.runPromise(
+                executionRuntimeService
+                  .exec({
+                    threadId,
+                    instanceId: remoteInstanceId,
+                    role: "agent",
+                    command: spec.command,
+                    args: spec.args,
+                  })
+                  .pipe(Effect.map((handle) => handle.transport)),
+              ).catch((cause: unknown) => {
+                // The Effect→Promise boundary (the manager is a plain class, not
+                // an Effect service) flattens a typed failure/defect into an
+                // opaque rejection. Re-wrap with the instance so a failed remote
+                // start is diagnosable instead of a bare "transport failed".
+                throw new Error(
+                  `Remote runtime exec failed for instance ${remoteInstanceId}: ${
+                    cause instanceof Error ? cause.message : String(cause)
+                  }`,
+                  { cause },
+                );
+              }),
+          }
+        : undefined;
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
       worktreePath: thread.worktreePath,
@@ -715,17 +775,21 @@ const make = Effect.gen(function* () {
       readonly resumeCursor?: unknown;
       readonly provider?: ProviderKind;
     }) =>
-      providerService.startSession(threadId, {
+      providerService.startSession(
         threadId,
-        ...(preferredProvider ? { provider: preferredProvider } : {}),
-        ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-        modelSelection: desiredModelSelection,
-        ...(options?.providerOptions !== undefined
-          ? { providerOptions: options.providerOptions }
-          : {}),
-        ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-        runtimeMode: desiredRuntimeMode,
-      });
+        {
+          threadId,
+          ...(preferredProvider ? { provider: preferredProvider } : {}),
+          ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+          modelSelection: desiredModelSelection,
+          ...(options?.providerOptions !== undefined
+            ? { providerOptions: options.providerOptions }
+            : {}),
+          ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+          runtimeMode: desiredRuntimeMode,
+        },
+        sessionServerOptions,
+      );
 
     const bindSessionToThread = (session: ProviderSession) =>
       setThreadSession({
@@ -807,7 +871,18 @@ const make = Effect.gen(function* () {
       return restartedSession.threadId;
     }
 
-    if (providerService.forkThread && thread.forkSourceThreadId) {
+    // Native provider fork spawns the agent locally, so it cannot back a remote
+    // thread. Skip it for remote targets and start a fresh sandbox session via
+    // `startProviderSession` (which carries `sessionServerOptions`) instead. The
+    // fork's prior conversation is unavailable on the remote agent, so this is a
+    // deliberate, logged degradation rather than a silent local spawn.
+    if (remoteInstanceId !== null && thread.forkSourceThreadId) {
+      yield* Effect.logInfo(
+        "provider command reactor skipping native fork for remote thread; starting a fresh remote session",
+        { threadId, forkSourceThreadId: thread.forkSourceThreadId },
+      );
+    }
+    if (providerService.forkThread && thread.forkSourceThreadId && remoteInstanceId === null) {
       const forked = yield* providerService.forkThread({
         sourceThreadId: thread.forkSourceThreadId,
         threadId,
@@ -1864,9 +1939,44 @@ const make = Effect.gen(function* () {
     });
   });
 
+  // Runtime lifecycle actions dispatched from the panel UI. The reactor stays
+  // provider-agnostic: it routes by the requested action to ExecutionRuntimeService,
+  // which resolves the adapter for the instance's recorded provider.
+  const processRuntimeActionRequested = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.runtime-action-requested" }>,
+  ) {
+    const { threadId, instanceId, action } = event.payload;
+    switch (action) {
+      case "stop":
+        yield* executionRuntimeService.stop(threadId, instanceId);
+        return;
+      case "destroy":
+        yield* executionRuntimeService.destroy(threadId, instanceId);
+        return;
+      case "snapshot":
+        yield* executionRuntimeService.snapshot(threadId, instanceId);
+        return;
+    }
+  });
+
   const processDomainEvent = (event: ProviderIntentEvent) =>
     Effect.gen(function* () {
       switch (event.type) {
+        case "thread.created": {
+          // Honor a `runtimePlan` carried on create/handoff/fork. The reactor
+          // stays provider-agnostic: it hands the plan to the execution-runtime
+          // service, which validates it (rejecting invalid plans pre-provision)
+          // and marks the thread remote. No plan / local / worktree is a no-op,
+          // preserving the existing local spawn path exactly.
+          if (event.payload.runtimePlan == null) {
+            return;
+          }
+          yield* executionRuntimeService.applyRuntimePlan({
+            threadId: event.payload.threadId,
+            plan: event.payload.runtimePlan,
+          });
+          return;
+        }
         case "thread.meta-updated": {
           const thread = yield* resolveThread(event.payload.threadId);
           if (event.payload.modelSelection === undefined) {
@@ -1941,6 +2051,9 @@ const make = Effect.gen(function* () {
         case "thread.session-stop-requested":
           yield* processSessionStopRequested(event);
           return;
+        case "thread.runtime-action-requested":
+          yield* processRuntimeActionRequested(event);
+          return;
       }
     });
 
@@ -1976,6 +2089,7 @@ const make = Effect.gen(function* () {
   const start: ProviderCommandReactorShape["start"] = Effect.all([
     Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
       if (
+        event.type !== "thread.created" &&
         event.type !== "thread.meta-updated" &&
         event.type !== "thread.runtime-mode-set" &&
         event.type !== "thread.turn-queued" &&
@@ -1985,7 +2099,8 @@ const make = Effect.gen(function* () {
         event.type !== "thread.user-input-response-requested" &&
         event.type !== "thread.conversation-rollback-requested" &&
         event.type !== "thread.message-edit-resend-requested" &&
-        event.type !== "thread.session-stop-requested"
+        event.type !== "thread.session-stop-requested" &&
+        event.type !== "thread.runtime-action-requested"
       ) {
         return Effect.void;
       }

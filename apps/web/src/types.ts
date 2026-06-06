@@ -8,6 +8,7 @@ import type {
   TurnDispatchMode,
   OrchestrationLatestTurn,
   OrchestrationThreadPullRequest,
+  OrchestrationThreadRuntime,
   OrchestrationProposedPlanId,
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
@@ -184,6 +185,7 @@ export interface Thread extends ThreadWorkspaceState {
   sidechatSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
+  runtime?: OrchestrationThreadRuntime | null;
   latestUserMessageAt?: string | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
@@ -213,6 +215,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
   sidechatSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
+  runtime?: OrchestrationThreadRuntime | null;
   latestUserMessageAt?: string | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;

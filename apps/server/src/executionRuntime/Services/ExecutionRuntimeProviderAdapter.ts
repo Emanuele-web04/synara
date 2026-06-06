@@ -1,0 +1,190 @@
+/**
+ * ExecutionRuntimeProviderAdapter - the provider-agnostic adapter surface
+ * `ExecutionRuntimeService` consumes to provision instances, run processes, and
+ * tear instances down.
+ *
+ * Every concrete execution-runtime provider (fake-remote today; Daytona, Vercel,
+ * Modal, Cloudflare in later increments) conforms to this shape, so the service
+ * routes by provider through `RuntimeProviderRegistry.getAdapter` without ever
+ * naming a concrete provider. The Effect error and requirement channels match the
+ * fake adapter exactly so the fake conforms through a thin facade rather than a
+ * lossy down-cast. Provider→descriptor resolution stays the registry's job; this
+ * surface is lifecycle-only.
+ *
+ * @module ExecutionRuntimeProviderAdapter
+ */
+import type { Effect } from "effect";
+import type { ChildProcessSpawner } from "effect/unstable/process";
+
+import type {
+  ExecutionInstanceId,
+  RuntimeInstanceSummary,
+  RuntimePlan,
+  ThreadId,
+} from "@t3tools/contracts";
+
+import type {
+  InMemoryTransportController,
+  JsonRpcLineTransport,
+} from "../../provider/process/JsonRpcLineTransport.ts";
+import type { RuntimeInstanceUnknownError, RuntimeRemoteOperationFailedError } from "../Errors.ts";
+import type { RuntimeProcessSpawnInput } from "./RuntimeProcessTransport.ts";
+
+/**
+ * Source repo to clone into a remote instance during provision so the agent runs
+ * with its cwd inside the working tree. Resolved host-side by the service from the
+ * thread's project + branch; absent for `fake`/local provisioning, which shares
+ * the host filesystem and must not clone.
+ */
+export interface ExecutionRuntimeRepoSource {
+  /** Token-less origin URL (`https://github.com/owner/repo.git`). */
+  readonly repoUrl: string;
+  /** Branch to check out after clone. */
+  readonly ref: string;
+  /**
+   * Tokenized clone URL when a host token was resolved; equals `repoUrl` when no
+   * token was needed/available. Carries a secret — never log it.
+   */
+  readonly tokenizedUrl: string;
+  /**
+   * Directory name to clone into, joined by the provider with the instance's
+   * discovered root (e.g. `synara` -> `/root/synara`). The provider records the
+   * resulting absolute path as the instance root so the agent's cwd is the repo.
+   */
+  readonly targetSubdir: string;
+  /**
+   * Opt-in command to run in the clone dir after checkout (`pnpm install ...`, or
+   * `auto` to detect a package manager from a lockfile). Empty/absent skips it.
+   * Best-effort — a failure must not block provisioning or the session.
+   */
+  readonly postCloneCommand?: string;
+}
+
+/** Input for provisioning the instance backing a thread from its resolved plan. */
+export interface ExecutionRuntimeProvisionInput {
+  readonly threadId: ThreadId;
+  readonly plan: RuntimePlan;
+  /**
+   * Repo to clone into the provisioned instance, when the thread is backed by a
+   * project repo and the provider clones into a fresh remote filesystem. Absent
+   * for providers/flavors that share the host filesystem (fake/local).
+   */
+  readonly repoSource?: ExecutionRuntimeRepoSource;
+}
+
+/** Result of provisioning: the recorded instance plus its working-directory root. */
+export interface ExecutionRuntimeProvisionResult {
+  readonly instance: RuntimeInstanceSummary;
+  readonly rootPath: string;
+}
+
+/** A collected fire-and-collect command run inside an instance. */
+export interface ExecutionRuntimeExecCollectInput {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  /** Resolved relative to the instance root; defaults to the root. */
+  readonly cwd?: string | undefined;
+  readonly env?: Record<string, string | undefined> | undefined;
+}
+
+export interface ExecutionRuntimeExecCollectResult {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly code: number | null;
+}
+
+/**
+ * The lifecycle surface a concrete runtime provider exposes. Signatures mirror
+ * the fake adapter (requirement channels included) so any provider plugs in
+ * without the service learning provider-specific error shapes. `provision` and
+ * `createTransport` carry the provider-neutral `RuntimeRemoteOperationFailedError`
+ * so a real provider outage at provision time (auth/quota/5xx/network) reaches
+ * the service as a recoverable typed failure it maps to
+ * `RuntimeProvisionFailedError`, rather than a fiber defect. Providers that
+ * cannot fail at these steps (fake, Modal) conform with a `never` channel.
+ */
+/** A provider's live verdict for an instance: running, resumable, or gone. */
+export type RuntimeLiveness = "alive" | "suspended" | "absent";
+
+export interface ExecutionRuntimeProviderAdapterShape {
+  /** Provision the instance backing a thread, deriving any provider-internal sub-kind from the plan. */
+  readonly provision: (
+    input: ExecutionRuntimeProvisionInput,
+  ) => Effect.Effect<ExecutionRuntimeProvisionResult, RuntimeRemoteOperationFailedError>;
+  /**
+   * Create the line transport for a process inside the instance. When the spawn
+   * input names a runnable command, the provider forwards it into the transport
+   * queues; otherwise it returns a bare scriptable transport the caller drives.
+   */
+  readonly createTransport: (
+    instanceId: ExecutionInstanceId,
+    spawn: RuntimeProcessSpawnInput,
+  ) => Effect.Effect<
+    { readonly transport: JsonRpcLineTransport; readonly controller?: InMemoryTransportController },
+    RuntimeRemoteOperationFailedError,
+    ChildProcessSpawner.ChildProcessSpawner
+  >;
+  /** Fire-and-collect command exec inside an instance, collecting full output. */
+  readonly execCollect: (
+    instanceId: ExecutionInstanceId,
+    input: ExecutionRuntimeExecCollectInput,
+  ) => Effect.Effect<
+    ExecutionRuntimeExecCollectResult,
+    RuntimeInstanceUnknownError,
+    ChildProcessSpawner.ChildProcessSpawner
+  >;
+  /**
+   * Re-write any host-resolved agent credentials into a resumed instance so a
+   * stale (expired) token from a prior session is refreshed before the next turn.
+   * Optional: a provider that injects no host credentials (fake, or one whose
+   * image carries its own auth) leaves this undefined, and the service treats
+   * undefined as unsupported (no-op). Best-effort: it never throws.
+   */
+  readonly reinjectCredentials?: (instanceId: ExecutionInstanceId) => Effect.Effect<void>;
+  /**
+   * Refresh the provider's idle/auto-stop timer for a live instance (the
+   * activity-lease keepalive). The service renews this on a timer while a turn's
+   * transport is alive so the provider does not auto-stop a sandbox under an
+   * active agent. Optional: a provider with no idle auto-stop (fake, or one whose
+   * instance never sleeps) leaves this undefined, and the service treats undefined
+   * as unsupported (no-op). Best-effort: it never throws.
+   */
+  readonly refreshActivity?: (instanceId: ExecutionInstanceId) => Effect.Effect<void>;
+  /** Whether the provider still recognizes a provisioned instance (reconnect probe). */
+  readonly isAlive: (instanceId: ExecutionInstanceId) => Effect.Effect<boolean>;
+  /**
+   * Richer liveness for providers with a cheap resumable rest state: `suspended`
+   * means the provider stopped the instance but its disk survives and `start` can
+   * wake it; `absent` means it is gone. Optional — a provider that only models
+   * recognized/gone leaves this undefined and the service falls back to `isAlive`
+   * (alive/absent, never suspended). Best-effort: it never throws.
+   */
+  readonly livenessProbe?: (instanceId: ExecutionInstanceId) => Effect.Effect<RuntimeLiveness>;
+  /**
+   * Resume a suspended (stopped) instance so the same disk — the agent's cloned
+   * repo, uncommitted edits, installed deps — is reused instead of re-provisioning
+   * fresh. Returns true when the instance is running again, false when it could
+   * not be resumed (e.g. the provider reclaimed it out-of-band) and the caller
+   * should provision a fresh instance. Optional: a provider with no suspend/resume
+   * tier leaves this undefined and the service re-provisions instead.
+   */
+  readonly start?: (instanceId: ExecutionInstanceId) => Effect.Effect<boolean>;
+  /** Tear the instance down and forget it. Idempotent. */
+  readonly destroy: (instanceId: ExecutionInstanceId) => Effect.Effect<void>;
+  /**
+   * Stop the instance without destroying it (filesystem persists), when the
+   * provider supports a stop/suspend operation. Optional: a provider that cannot
+   * stop an instance leaves this undefined, and the service treats undefined as
+   * unsupported (no-op).
+   */
+  readonly stop?: (instanceId: ExecutionInstanceId) => Effect.Effect<void>;
+  /**
+   * Snapshot the instance for later resume, returning the snapshot id when the
+   * provider supports snapshots. Optional: a provider with no snapshot capability
+   * leaves this undefined, and the service treats undefined as unsupported (no-op).
+   */
+  readonly snapshot?: (
+    instanceId: ExecutionInstanceId,
+    label: string | null,
+  ) => Effect.Effect<string | null>;
+}

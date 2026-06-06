@@ -71,9 +71,7 @@ import {
 } from "../rightDockStore.logic";
 import { RightDock } from "../components/chat/RightDock";
 import { DockTerminalPane } from "../components/chat/DockTerminalPane";
-import {
-  CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
-} from "../components/chat/chatHeaderControls";
+import { CHAT_SURFACE_HEADER_ROW_CLASS_NAME } from "../components/chat/chatHeaderControls";
 import { GitPanel } from "../components/chat/GitPanel";
 import { PanelStateMessage } from "../components/chat/PanelStateMessage";
 import {
@@ -570,12 +568,7 @@ function ChatMountSkeleton() {
     >
       {/* Mirrors the real chat shell so route changes paint immediately while ChatView mounts
           on the next frames. */}
-      <div
-        className={cn(
-          CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
-          "gap-3 px-4",
-        )}
-      >
+      <div className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "gap-3 px-4")}>
         <div className="size-5 rounded-full bg-muted" />
         <div className="min-w-0 flex-1 space-y-1.5">
           <div className="h-3.5 w-44 max-w-[48%] rounded-full bg-muted" />

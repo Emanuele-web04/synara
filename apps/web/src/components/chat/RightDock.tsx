@@ -180,12 +180,7 @@ export function RightDock(props: RightDockProps) {
         }}
       >
         <div className="flex h-full min-h-0 w-full flex-col">
-          <div
-            className={cn(
-              CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
-              "gap-1 px-1.5",
-            )}
-          >
+          <div className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "gap-1 px-1.5")}>
             <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
               {props.state.panes.map((pane) => (
                 <RightDockTab

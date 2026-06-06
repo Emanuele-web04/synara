@@ -11,16 +11,29 @@ import {
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import { ProjectKind } from "./project";
 import {
+  ExecutionTargetKind,
+  ExecutionRuntimeProvider,
+  OrchestrationThreadRuntime,
+  RuntimeInstanceStatus,
+  RuntimePlan,
+  RuntimeRole,
+} from "./executionRuntime";
+import {
   ApprovalRequestId,
   CheckpointRef,
   CommandId,
   EventId,
+  ExecutionInstanceId,
   IsoDateTime,
   MessageId,
   NonNegativeInt,
   PositiveInt,
   ProjectId,
   ProviderItemId,
+  RuntimeActivityLeaseId,
+  RuntimeProcessId,
+  RuntimeRouteId,
+  RuntimeSnapshotId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
@@ -47,31 +60,13 @@ export const ORCHESTRATION_WS_CHANNELS = {
   threadEvent: "orchestration.threadEvent",
 } as const;
 
-export const ProviderKind = Schema.Literals([
-  "codex",
-  "claudeAgent",
-  "cursor",
-  "gemini",
-  "grok",
-  "kilo",
-  "opencode",
-  "pi",
-]);
-export type ProviderKind = typeof ProviderKind.Type;
-export const ProviderApprovalPolicy = Schema.Literals([
-  "untrusted",
-  "on-failure",
-  "on-request",
-  "never",
-]);
-export type ProviderApprovalPolicy = typeof ProviderApprovalPolicy.Type;
-export const ProviderSandboxMode = Schema.Literals([
-  "read-only",
-  "workspace-write",
-  "danger-full-access",
-]);
-export type ProviderSandboxMode = typeof ProviderSandboxMode.Type;
-export const DEFAULT_PROVIDER_KIND: ProviderKind = "codex";
+export {
+  ProviderKind,
+  ProviderApprovalPolicy,
+  ProviderSandboxMode,
+  DEFAULT_PROVIDER_KIND,
+} from "./providerKind";
+import { ProviderKind } from "./providerKind";
 
 export const CodexModelSelection = Schema.Struct({
   provider: Schema.Literal("codex"),
@@ -533,6 +528,9 @@ export const OrchestrationThread = Schema.Struct({
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  runtime: Schema.optional(Schema.NullOr(OrchestrationThreadRuntime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   latestUserMessageAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   hasPendingApprovals: Schema.optional(Schema.Boolean),
@@ -595,6 +593,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  runtime: Schema.optional(Schema.NullOr(OrchestrationThreadRuntime)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
@@ -728,6 +729,9 @@ const ThreadCreateCommand = Schema.Struct({
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  runtimePlan: Schema.optional(Schema.NullOr(RuntimePlan)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   createdAt: IsoDateTime,
 });
 
@@ -762,6 +766,9 @@ const ThreadHandoffCreateCommand = Schema.Struct({
   createBranchFlowCompleted: Schema.optional(Schema.Boolean).pipe(
     Schema.withDecodingDefault(() => false),
   ),
+  runtimePlan: Schema.optional(Schema.NullOr(RuntimePlan)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   importedMessages: Schema.Array(ThreadHandoffImportedMessage),
   createdAt: IsoDateTime,
 });
@@ -788,6 +795,9 @@ const ThreadForkCreateCommand = Schema.Struct({
     Schema.withDecodingDefault(() => false),
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
+  runtimePlan: Schema.optional(Schema.NullOr(RuntimePlan)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   importedMessages: Schema.Array(ThreadHandoffImportedMessage),
   createdAt: IsoDateTime,
 });
@@ -984,6 +994,15 @@ const ThreadSessionStopCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadRuntimeActionRequestCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.action"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  action: Schema.Literals(["stop", "destroy", "snapshot"]),
+  instanceId: ExecutionInstanceId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadActivityAppendCommand = Schema.Struct({
   type: Schema.Literal("thread.activity.append"),
   commandId: CommandId,
@@ -1013,6 +1032,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMessageEditAndResendCommand,
   ThreadActivityAppendCommand,
   ThreadSessionStopCommand,
+  ThreadRuntimeActionRequestCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -1038,6 +1058,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMessageEditAndResendCommand,
   ThreadActivityAppendCommand,
   ThreadSessionStopCommand,
+  ThreadRuntimeActionRequestCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
@@ -1117,6 +1138,152 @@ const ThreadConversationRollbackCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// Execution-runtime infra commands. Internal-only (driven by the runtime
+// reactor with stable commandIds so reconnect/crash retries dedupe on the
+// receipt, not the event). No public `runtimePlan` surface lands until a later
+// slice; these are the internal command path for the runtime mechanism.
+//
+// Each command carries the data its event needs. The reactor resolves provider
+// results through `ExecutionRuntimeService` first, then dispatches a command
+// recording the resolved fact — the decider stays provider-agnostic and never
+// invents instance ids or statuses.
+const ThreadRuntimeProvisionCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.provision"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  targetKind: ExecutionTargetKind,
+  provider: ExecutionRuntimeProvider,
+  role: RuntimeRole,
+  createdAt: IsoDateTime,
+});
+
+const ThreadRuntimeInstanceRecordCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.instance.record"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  provider: ExecutionRuntimeProvider,
+  status: RuntimeInstanceStatus,
+  rootPath: Schema.NullOr(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+
+const ThreadRuntimeStateRecordCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.state.record"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  status: RuntimeInstanceStatus,
+  rootPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  failureReason: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  createdAt: IsoDateTime,
+});
+
+const ThreadRuntimeStopCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.stop"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  createdAt: IsoDateTime,
+});
+
+const ThreadRuntimeDestroyCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.destroy"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  createdAt: IsoDateTime,
+});
+
+const ThreadRuntimeProcessStartCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.process.start"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  processId: RuntimeProcessId,
+  role: RuntimeRole,
+  command: Schema.NullOr(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+
+const ThreadRuntimeProcessOutputCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.process.output"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  processId: RuntimeProcessId,
+  stream: Schema.Literals(["stdout", "stderr"]),
+  tail: Schema.String,
+  createdAt: IsoDateTime,
+});
+
+const ThreadRuntimeProcessCompleteCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.process.complete"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  processId: RuntimeProcessId,
+  status: Schema.Literals(["exited", "failed"]),
+  exitCode: Schema.NullOr(Schema.Int),
+  failureReason: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  tail: Schema.optional(Schema.NullOr(Schema.String)),
+  createdAt: IsoDateTime,
+});
+
+const ThreadRuntimeSnapshotCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.snapshot"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  snapshotId: RuntimeSnapshotId,
+  label: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  secretTainted: Schema.optional(Schema.Boolean),
+  createdAt: IsoDateTime,
+});
+
+const ThreadRuntimeExposePortCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.expose-port"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  routeId: RuntimeRouteId,
+  port: PositiveInt,
+  url: Schema.NullOr(TrimmedNonEmptyString),
+  label: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  createdAt: IsoDateTime,
+});
+
+const ThreadRuntimeLeaseAcquireCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.lease.acquire"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  leaseId: RuntimeActivityLeaseId,
+  reason: Schema.Literals(["turn", "terminal", "preview"]),
+  expiresAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  createdAt: IsoDateTime,
+});
+
+const ThreadRuntimeLeaseReleaseCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.lease.release"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  leaseId: RuntimeActivityLeaseId,
+  reason: Schema.Literals(["turn", "terminal", "preview"]),
+  acquiredAt: IsoDateTime,
+  createdAt: IsoDateTime,
+});
+
+const ThreadRuntimeFailCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.fail"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  instanceId: Schema.NullOr(ExecutionInstanceId),
+  failureReason: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessagesImportCommand,
@@ -1129,6 +1296,19 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadConversationRollbackCommand,
   ThreadConversationRollbackCompleteCommand,
   ThreadDispatchQueuedTurnCommand,
+  ThreadRuntimeProvisionCommand,
+  ThreadRuntimeInstanceRecordCommand,
+  ThreadRuntimeStateRecordCommand,
+  ThreadRuntimeStopCommand,
+  ThreadRuntimeDestroyCommand,
+  ThreadRuntimeProcessStartCommand,
+  ThreadRuntimeProcessOutputCommand,
+  ThreadRuntimeProcessCompleteCommand,
+  ThreadRuntimeSnapshotCommand,
+  ThreadRuntimeExposePortCommand,
+  ThreadRuntimeFailCommand,
+  ThreadRuntimeLeaseAcquireCommand,
+  ThreadRuntimeLeaseReleaseCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1162,10 +1342,22 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.conversation-rolled-back",
   "thread.message-edit-resend-requested",
   "thread.session-stop-requested",
+  "thread.runtime-action-requested",
   "thread.session-set",
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
+  "thread.runtime-provision-requested",
+  "thread.runtime-instance-created",
+  "thread.runtime-instance-state-changed",
+  "thread.runtime-process-started",
+  "thread.runtime-process-output",
+  "thread.runtime-process-completed",
+  "thread.runtime-route-exposed",
+  "thread.runtime-snapshot-created",
+  "thread.runtime-lease-renewed",
+  "thread.runtime-destroyed",
+  "thread.runtime-failed",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
@@ -1241,6 +1433,12 @@ export const ThreadCreatedPayload = Schema.Struct({
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  // The requested execution target carried from create/handoff/fork. It is plan
+  // *input*, not thread state: the reactor validates and provisions from it; the
+  // resolved runtime read-model lives on `OrchestrationThread.runtime` instead.
+  runtimePlan: Schema.optional(Schema.NullOr(RuntimePlan)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
   handoff: Schema.NullOr(ThreadHandoff).pipe(Schema.withDecodingDefault(() => null)),
@@ -1402,6 +1600,12 @@ export const ThreadSessionStopRequestedPayload = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadRuntimeActionRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  action: Schema.Literals(["stop", "destroy", "snapshot"]),
+  instanceId: ExecutionInstanceId,
+});
+
 export const ThreadSessionSetPayload = Schema.Struct({
   threadId: ThreadId,
   session: OrchestrationSession,
@@ -1426,6 +1630,124 @@ export const ThreadTurnDiffCompletedPayload = Schema.Struct({
 export const ThreadActivityAppendedPayload = Schema.Struct({
   threadId: ThreadId,
   activity: OrchestrationThreadActivity,
+});
+
+/**
+ * Execution-runtime infra lifecycle payloads. These project into the dedicated
+ * `projection_thread_runtime` + `execution_runtime_*` tables, never onto the
+ * wide `projection_threads` row. `runtime-process-output` is stream-only: it
+ * carries a short tail, not every line (resolved decision #5).
+ */
+export const ThreadRuntimeProvisionRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  targetKind: ExecutionTargetKind,
+  provider: ExecutionRuntimeProvider,
+  role: RuntimeRole,
+  requestedAt: IsoDateTime,
+});
+
+export const ThreadRuntimeInstanceCreatedPayload = Schema.Struct({
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  provider: ExecutionRuntimeProvider,
+  status: RuntimeInstanceStatus,
+  rootPath: Schema.NullOr(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+
+export const ThreadRuntimeInstanceStateChangedPayload = Schema.Struct({
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  status: RuntimeInstanceStatus,
+  rootPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  failureReason: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadRuntimeProcessStartedPayload = Schema.Struct({
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  processId: RuntimeProcessId,
+  role: RuntimeRole,
+  command: Schema.NullOr(TrimmedNonEmptyString),
+  startedAt: IsoDateTime,
+});
+
+export const ThreadRuntimeProcessOutputPayload = Schema.Struct({
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  processId: RuntimeProcessId,
+  stream: Schema.Literals(["stdout", "stderr"]),
+  tail: Schema.String,
+  occurredAt: IsoDateTime,
+});
+
+export const ThreadRuntimeProcessCompletedPayload = Schema.Struct({
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  processId: RuntimeProcessId,
+  status: Schema.Literals(["exited", "failed"]),
+  exitCode: Schema.NullOr(Schema.Int),
+  failureReason: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  tail: Schema.optional(Schema.NullOr(Schema.String)).pipe(Schema.withDecodingDefault(() => null)),
+  exitedAt: IsoDateTime,
+});
+
+export const ThreadRuntimeRouteExposedPayload = Schema.Struct({
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  routeId: RuntimeRouteId,
+  port: PositiveInt,
+  url: Schema.NullOr(TrimmedNonEmptyString),
+  label: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  exposedAt: IsoDateTime,
+});
+
+export const ThreadRuntimeSnapshotCreatedPayload = Schema.Struct({
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  snapshotId: RuntimeSnapshotId,
+  label: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  secretTainted: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  createdAt: IsoDateTime,
+});
+
+export const ThreadRuntimeLeaseRenewedPayload = Schema.Struct({
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  leaseId: RuntimeActivityLeaseId,
+  reason: Schema.Literals(["turn", "terminal", "preview"]),
+  acquiredAt: IsoDateTime,
+  renewedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  expiresAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  released: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+});
+
+export const ThreadRuntimeDestroyedPayload = Schema.Struct({
+  threadId: ThreadId,
+  instanceId: ExecutionInstanceId,
+  destroyedAt: IsoDateTime,
+});
+
+export const ThreadRuntimeFailedPayload = Schema.Struct({
+  threadId: ThreadId,
+  instanceId: Schema.NullOr(ExecutionInstanceId),
+  failureReason: TrimmedNonEmptyString,
+  occurredAt: IsoDateTime,
 });
 
 export const OrchestrationEventMetadata = Schema.Struct({
@@ -1562,6 +1884,11 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-action-requested"),
+    payload: ThreadRuntimeActionRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("thread.session-set"),
     payload: ThreadSessionSetPayload,
   }),
@@ -1579,6 +1906,61 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.activity-appended"),
     payload: ThreadActivityAppendedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-provision-requested"),
+    payload: ThreadRuntimeProvisionRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-instance-created"),
+    payload: ThreadRuntimeInstanceCreatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-instance-state-changed"),
+    payload: ThreadRuntimeInstanceStateChangedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-process-started"),
+    payload: ThreadRuntimeProcessStartedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-process-output"),
+    payload: ThreadRuntimeProcessOutputPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-process-completed"),
+    payload: ThreadRuntimeProcessCompletedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-route-exposed"),
+    payload: ThreadRuntimeRouteExposedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-snapshot-created"),
+    payload: ThreadRuntimeSnapshotCreatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-lease-renewed"),
+    payload: ThreadRuntimeLeaseRenewedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-destroyed"),
+    payload: ThreadRuntimeDestroyedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-failed"),
+    payload: ThreadRuntimeFailedPayload,
   }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;

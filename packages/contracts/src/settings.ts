@@ -72,6 +72,103 @@ export const PiServerProviderSettings = Schema.Struct({
 });
 export type PiServerProviderSettings = typeof PiServerProviderSettings.Type;
 
+/**
+ * Remote sandbox/runtime-provider settings.
+ *
+ * These configure the cloud backends a `remote-runtime` thread can provision on
+ * (Daytona, Vercel Sandbox, Modal, Cloudflare bridge). The server resolves each
+ * provider's credentials at provision time, preferring these settings over the
+ * `process.env` fallback the env resolvers already read; with nothing configured,
+ * behavior is identical to today (env-or-fake).
+ *
+ * Secret-bearing fields (`apiKey`, `token`, `tokenSecret`, `bridgeToken`) follow
+ * the same plaintext `StringSetting` shape the agent providers use for
+ * `serverPassword`. The raw value belongs in `ServerSecretStore` (a 0o600 file
+ * per secret name); this field is the write-only reference the UI patches when a
+ * secret changes and that the resolver pairs with the stored token, so the token
+ * itself is never echoed back to clients.
+ */
+const StringSettingDefaulted = StringSetting.pipe(Schema.withDecodingDefault(() => ""));
+
+export const DaytonaSandboxSettings = Schema.Struct({
+  apiKey: StringSettingDefaulted,
+  apiUrl: StringSettingDefaulted,
+  organizationId: StringSettingDefaulted,
+  target: StringSettingDefaulted,
+  snapshot: StringSettingDefaulted,
+});
+export type DaytonaSandboxSettings = typeof DaytonaSandboxSettings.Type;
+
+export const VercelSandboxSettings = Schema.Struct({
+  token: StringSettingDefaulted,
+  teamId: StringSettingDefaulted,
+  projectId: StringSettingDefaulted,
+  runtime: StringSettingDefaulted,
+});
+export type VercelSandboxSettings = typeof VercelSandboxSettings.Type;
+
+export const ModalSandboxSettings = Schema.Struct({
+  tokenId: StringSettingDefaulted,
+  tokenSecret: StringSettingDefaulted,
+  environment: StringSettingDefaulted,
+});
+export type ModalSandboxSettings = typeof ModalSandboxSettings.Type;
+
+export const CloudflareSandboxSettings = Schema.Struct({
+  bridgeUrl: StringSettingDefaulted,
+  bridgeToken: StringSettingDefaulted,
+});
+export type CloudflareSandboxSettings = typeof CloudflareSandboxSettings.Type;
+
+/**
+ * Workspace-level defaults a new `remote-runtime` thread provisions with. These
+ * moved out of the composer so the chat input stays a target picker, not an infra
+ * form; a per-thread override is intentionally not offered. Stored as strings
+ * (numbers and the boolean ride as text, matching this section's convention) and
+ * parsed into the `RuntimePlan` at thread-create time. Blank means provider
+ * default.
+ */
+export const SandboxRuntimeDefaults = Schema.Struct({
+  cpu: StringSettingDefaulted,
+  memoryMb: StringSettingDefaulted,
+  timeoutSeconds: StringSettingDefaulted,
+  ports: StringSettingDefaulted,
+  persistent: StringSettingDefaulted,
+  /**
+   * Opt-in (the boolean rides as text, like `persistent`): sync the operator's
+   * HTTP Codex MCP servers ("plugins") into a remote sandbox, with their auth
+   * materialized, so a remote agent has the same tools a local one does. Off by
+   * default — enabling sends those credentials to the cloud VM.
+   */
+  syncMcpPlugins: StringSettingDefaulted,
+  /**
+   * Optional comma-separated MCP server-name allowlist applied when
+   * `syncMcpPlugins` is on. Blank syncs every runnable HTTP server; named entries
+   * restrict the sync to those servers. stdio servers are never synced.
+   */
+  mcpAllowlist: StringSettingDefaulted,
+});
+export type SandboxRuntimeDefaults = typeof SandboxRuntimeDefaults.Type;
+
+export const SandboxSettings = Schema.Struct({
+  defaultRemoteProvider: StringSettingDefaulted,
+  /**
+   * Opt-in command run inside the sandbox after the project repo is cloned and
+   * checked out, in the clone dir (e.g. `pnpm install --frozen-lockfile`). Empty
+   * (the default) skips it: most tasks do not need dependencies, and an install
+   * adds minutes to every provision. Set to `auto` to auto-detect a package
+   * manager from a lockfile in the clone dir. Best-effort — a failure is
+   * logged but never blocks the session.
+   */
+  postCloneCommand: StringSettingDefaulted,
+  runtime: SandboxRuntimeDefaults.pipe(Schema.withDecodingDefault(() => ({}))),
+  daytona: DaytonaSandboxSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+  vercel: VercelSandboxSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+  modal: ModalSandboxSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+  cloudflare: CloudflareSandboxSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+});
+export type SandboxSettings = typeof SandboxSettings.Type;
+
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
   defaultThreadEnvMode: ThreadEnvironmentMode.pipe(Schema.withDecodingDefault(() => "local")),
@@ -92,6 +189,7 @@ export const ServerSettings = Schema.Struct({
     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
+  sandboxes: SandboxSettings.pipe(Schema.withDecodingDefault(() => ({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -108,6 +206,52 @@ const ProviderSettingsBasePatch = {
   binaryPath: Schema.optionalKey(StringSetting),
   customModels: Schema.optionalKey(CustomModels),
 };
+
+const SandboxSettingsPatch = Schema.Struct({
+  defaultRemoteProvider: Schema.optionalKey(StringSetting),
+  postCloneCommand: Schema.optionalKey(StringSetting),
+  runtime: Schema.optionalKey(
+    Schema.Struct({
+      cpu: Schema.optionalKey(StringSetting),
+      memoryMb: Schema.optionalKey(StringSetting),
+      timeoutSeconds: Schema.optionalKey(StringSetting),
+      ports: Schema.optionalKey(StringSetting),
+      persistent: Schema.optionalKey(StringSetting),
+      syncMcpPlugins: Schema.optionalKey(StringSetting),
+      mcpAllowlist: Schema.optionalKey(StringSetting),
+    }),
+  ),
+  daytona: Schema.optionalKey(
+    Schema.Struct({
+      apiKey: Schema.optionalKey(StringSetting),
+      apiUrl: Schema.optionalKey(StringSetting),
+      organizationId: Schema.optionalKey(StringSetting),
+      target: Schema.optionalKey(StringSetting),
+      snapshot: Schema.optionalKey(StringSetting),
+    }),
+  ),
+  vercel: Schema.optionalKey(
+    Schema.Struct({
+      token: Schema.optionalKey(StringSetting),
+      teamId: Schema.optionalKey(StringSetting),
+      projectId: Schema.optionalKey(StringSetting),
+      runtime: Schema.optionalKey(StringSetting),
+    }),
+  ),
+  modal: Schema.optionalKey(
+    Schema.Struct({
+      tokenId: Schema.optionalKey(StringSetting),
+      tokenSecret: Schema.optionalKey(StringSetting),
+      environment: Schema.optionalKey(StringSetting),
+    }),
+  ),
+  cloudflare: Schema.optionalKey(
+    Schema.Struct({
+      bridgeUrl: Schema.optionalKey(StringSetting),
+      bridgeToken: Schema.optionalKey(StringSetting),
+    }),
+  ),
+});
 
 export const ServerSettingsPatch = Schema.Struct({
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
@@ -159,6 +303,7 @@ export const ServerSettingsPatch = Schema.Struct({
       ),
     }),
   ),
+  sandboxes: Schema.optionalKey(SandboxSettingsPatch),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

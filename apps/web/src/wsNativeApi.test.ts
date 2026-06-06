@@ -302,6 +302,23 @@ describe("wsNativeApi", () => {
           },
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
         },
+        sandboxes: {
+          defaultRemoteProvider: "",
+          postCloneCommand: "",
+          runtime: {
+            cpu: "",
+            memoryMb: "",
+            timeoutSeconds: "",
+            ports: "",
+            persistent: "",
+            syncMcpPlugins: "",
+            mcpAllowlist: "",
+          },
+          daytona: { apiKey: "", apiUrl: "", organizationId: "", target: "", snapshot: "" },
+          vercel: { token: "", teamId: "", projectId: "", runtime: "" },
+          modal: { tokenId: "", tokenSecret: "", environment: "" },
+          cloudflare: { bridgeUrl: "", bridgeToken: "" },
+        },
       },
     } as const;
     emitPush(WS_CHANNELS.serverSettingsUpdated, payload);

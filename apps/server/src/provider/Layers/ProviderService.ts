@@ -494,7 +494,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         return { adapter: recovered.adapter, threadId: input.threadId, isActive: true } as const;
       });
 
-    const startSession: ProviderServiceShape["startSession"] = (threadId, rawInput) =>
+    const startSession: ProviderServiceShape["startSession"] = (
+      threadId,
+      rawInput,
+      serverOptions,
+    ) =>
       Effect.gen(function* () {
         const parsed = yield* decodeInputOrValidationError({
           operation: "ProviderService.startSession",
@@ -520,13 +524,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             ? readPersistedProviderOptions(persistedBinding.runtimePayload)
             : undefined);
         const adapter = yield* registry.getByProvider(input.provider);
-        const session = yield* adapter.startSession({
-          ...input,
-          ...(effectiveProviderOptions !== undefined
-            ? { providerOptions: effectiveProviderOptions }
-            : {}),
-          ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
-        });
+        const session = yield* adapter.startSession(
+          {
+            ...input,
+            ...(effectiveProviderOptions !== undefined
+              ? { providerOptions: effectiveProviderOptions }
+              : {}),
+            ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
+          },
+          serverOptions,
+        );
 
         if (session.provider !== adapter.provider) {
           return yield* toValidationError(

@@ -860,6 +860,24 @@ export function projectEvent(
         }),
       );
 
+    // Execution-runtime infra events do not mutate the in-memory read model:
+    // `OrchestrationThread.runtime` is hydrated from the dedicated
+    // `projection_thread_runtime` table by ProjectionSnapshotQuery, not from
+    // this projector. They are listed explicitly so a missing projection is a
+    // deliberate choice rather than a silent default fall-through.
+    case "thread.runtime-provision-requested":
+    case "thread.runtime-instance-created":
+    case "thread.runtime-instance-state-changed":
+    case "thread.runtime-process-started":
+    case "thread.runtime-process-output":
+    case "thread.runtime-process-completed":
+    case "thread.runtime-route-exposed":
+    case "thread.runtime-snapshot-created":
+    case "thread.runtime-lease-renewed":
+    case "thread.runtime-destroyed":
+    case "thread.runtime-failed":
+      return Effect.succeed(nextBase);
+
     default:
       return Effect.succeed(nextBase);
   }

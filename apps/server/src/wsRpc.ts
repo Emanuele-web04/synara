@@ -44,6 +44,7 @@ import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
+import { SandboxSecretWriter } from "./executionRuntime/Services/SandboxSecretWriter";
 import { TerminalManager } from "./terminal/Services/Manager";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
@@ -154,7 +155,18 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
       | "thread.session-set"
       | "thread.meta-updated"
       | "thread.archived"
-      | "thread.unarchived";
+      | "thread.unarchived"
+      | "thread.runtime-provision-requested"
+      | "thread.runtime-instance-created"
+      | "thread.runtime-instance-state-changed"
+      | "thread.runtime-process-started"
+      | "thread.runtime-process-output"
+      | "thread.runtime-process-completed"
+      | "thread.runtime-route-exposed"
+      | "thread.runtime-snapshot-created"
+      | "thread.runtime-lease-renewed"
+      | "thread.runtime-destroyed"
+      | "thread.runtime-failed";
   }
 > {
   return (
@@ -167,7 +179,18 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.session-set" ||
     event.type === "thread.meta-updated" ||
     event.type === "thread.archived" ||
-    event.type === "thread.unarchived"
+    event.type === "thread.unarchived" ||
+    event.type === "thread.runtime-provision-requested" ||
+    event.type === "thread.runtime-instance-created" ||
+    event.type === "thread.runtime-instance-state-changed" ||
+    event.type === "thread.runtime-process-started" ||
+    event.type === "thread.runtime-process-output" ||
+    event.type === "thread.runtime-process-completed" ||
+    event.type === "thread.runtime-route-exposed" ||
+    event.type === "thread.runtime-snapshot-created" ||
+    event.type === "thread.runtime-lease-renewed" ||
+    event.type === "thread.runtime-destroyed" ||
+    event.type === "thread.runtime-failed"
   );
 }
 
@@ -193,6 +216,7 @@ export const makeWsRpcLayer = () =>
       const runtimeStartup = yield* ServerRuntimeStartup;
       const serverEnvironment = yield* ServerEnvironment;
       const serverSettings = yield* ServerSettingsService;
+      const sandboxSecretWriter = yield* SandboxSecretWriter;
       const terminalManager = yield* TerminalManager;
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
@@ -585,7 +609,14 @@ export const makeWsRpcLayer = () =>
         [WS_METHODS.serverGetSettings]: () =>
           rpcEffect(serverSettings.getSettings, "Failed to load server settings"),
         [WS_METHODS.serverUpdateSettings]: (input) =>
-          rpcEffect(serverSettings.updateSettings(input), "Failed to update server settings"),
+          rpcEffect(
+            // Route secret-bearing sandbox fields into ServerSecretStore and strip
+            // them from the patch so the raw tokens never reach settings.json.
+            sandboxSecretWriter
+              .persistSecrets(input)
+              .pipe(Effect.flatMap((patch) => serverSettings.updateSettings(patch))),
+            "Failed to update server settings",
+          ),
         [WS_METHODS.serverRefreshProviders]: () =>
           rpcEffect(
             providerHealth.refresh.pipe(Effect.map((providers) => ({ providers }))),

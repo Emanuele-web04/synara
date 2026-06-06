@@ -1,6 +1,8 @@
 import {
   CommandId,
   EventId,
+  type ExecutionInstanceId,
+  type ExecutionRuntimeProvider,
   MessageId,
   type ProjectId,
   ThreadId,
@@ -22,6 +24,8 @@ import {
 } from "../../checkpointing/Utils.ts";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
+import { ExecutionRuntimeService } from "../../executionRuntime/Services/ExecutionRuntimeService.ts";
+import { resolveDiffableRemoteInstance } from "../../executionRuntime/remoteDiffability.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
@@ -101,6 +105,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
   const checkpointStore = yield* CheckpointStore;
+  const executionRuntime = yield* ExecutionRuntimeService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const receiptBus = yield* RuntimeReceiptBus;
@@ -439,6 +444,121 @@ const make = Effect.gen(function* () {
     });
   });
 
+  // Remote-thread counterpart to captureAndDispatchCheckpoint: the agent edited
+  // the sandbox, so there is no host checkpoint to capture or diff. Source the
+  // turn diff from the instance's working tree and emit the same
+  // thread.turn.diff.complete shape the Review UI consumes. The checkpoint ref is
+  // a stable per-turn marker (no host git ref backs it); per-turn boundary
+  // precision and remote restore are follow-ups. Degrades to an empty-but-clean
+  // diff rather than the host "ref unavailable" error if the sandbox diff cannot
+  // be read.
+  const captureAndDispatchRemoteDiff = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly thread: {
+      readonly messages: ReadonlyArray<{
+        readonly id: MessageId;
+        readonly role: string;
+        readonly turnId: TurnId | null;
+      }>;
+    };
+    readonly instanceId: ExecutionInstanceId;
+    readonly workdir: string | undefined;
+    readonly provider: ExecutionRuntimeProvider;
+    readonly turnCount: number;
+    readonly status: "ready" | "missing" | "error";
+    readonly assistantMessageId: MessageId | undefined;
+    readonly createdAt: string;
+  }) {
+    const targetCheckpointRef = checkpointRefForThreadTurn(input.threadId, input.turnCount);
+
+    const workspaceDiff = yield* executionRuntime.workspaceDiff({
+      threadId: input.threadId,
+      instanceId: input.instanceId,
+      workdir: input.workdir,
+      provider: input.provider,
+    });
+
+    if (workspaceDiff.degraded) {
+      yield* Effect.logWarning(
+        `Remote workspace diff unreadable for thread ${input.threadId} instance ${input.instanceId}; Review shows an empty diff (not necessarily a clean tree).`,
+      );
+    }
+
+    const summarized = parseTurnDiffFilesFromUnifiedDiff(workspaceDiff.diff).map((file) => ({
+      path: file.path,
+      kind: "modified" as const,
+      additions: file.additions,
+      deletions: file.deletions,
+    }));
+    // Surface paths git reported as changed but the unified diff omitted (binary
+    // or content-empty), so the Review file list is complete.
+    const summarizedPaths = new Set(summarized.map((file) => file.path));
+    const extraFiles = workspaceDiff.changedPaths
+      .filter((path) => path.length > 0 && !summarizedPaths.has(path))
+      .map((path) => ({ path, kind: "modified" as const, additions: 0, deletions: 0 }));
+    const files = [...summarized, ...extraFiles];
+
+    const assistantMessageId = yield* resolveAssistantMessageIdForTurn({
+      threadId: input.threadId,
+      turnId: input.turnId,
+      assistantMessageId:
+        input.assistantMessageId ??
+        input.thread.messages
+          .toReversed()
+          .find((entry) => entry.role === "assistant" && entry.turnId === input.turnId)?.id,
+    });
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.diff.complete",
+      commandId: serverCommandId("checkpoint-turn-diff-complete-remote"),
+      threadId: input.threadId,
+      turnId: input.turnId,
+      completedAt: input.createdAt,
+      checkpointRef: targetCheckpointRef,
+      status: input.status,
+      files,
+      assistantMessageId,
+      checkpointTurnCount: input.turnCount,
+      createdAt: input.createdAt,
+    });
+    yield* receiptBus.publish({
+      type: "checkpoint.diff.finalized",
+      threadId: input.threadId,
+      turnId: input.turnId,
+      checkpointTurnCount: input.turnCount,
+      checkpointRef: targetCheckpointRef,
+      status: input.status,
+      createdAt: input.createdAt,
+    });
+    yield* receiptBus.publish({
+      type: "turn.processing.quiesced",
+      threadId: input.threadId,
+      turnId: input.turnId,
+      checkpointTurnCount: input.turnCount,
+      createdAt: input.createdAt,
+    });
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: serverCommandId("checkpoint-captured-activity-remote"),
+      threadId: input.threadId,
+      activity: {
+        id: EventId.makeUnsafe(crypto.randomUUID()),
+        tone: "info",
+        kind: "checkpoint.captured",
+        summary: "Checkpoint captured",
+        payload: {
+          turnCount: input.turnCount,
+          status: input.status,
+        },
+        turnId: input.turnId,
+        createdAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+  });
+
   const ensureLegacyBaselineCheckpoint = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly cwd: string;
@@ -501,16 +621,6 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const checkpointCwd = yield* resolveCheckpointCwd({
-      threadId: thread.id,
-      thread,
-      project,
-      preferSessionRuntime: true,
-    });
-    if (!checkpointCwd) {
-      return;
-    }
-
     // If a placeholder checkpoint exists for this turn, reuse its turn count
     // instead of incrementing past it.
     const existingPlaceholder = thread.checkpoints.find(
@@ -523,6 +633,35 @@ const make = Effect.gen(function* () {
     const nextTurnCount = existingPlaceholder
       ? existingPlaceholder.checkpointTurnCount
       : currentTurnCount + 1;
+
+    // Remote thread: the agent edited the sandbox, not the host repo. Source the
+    // turn diff from the instance instead of the host CheckpointStore.
+    const remoteInstance = resolveDiffableRemoteInstance(thread.runtime);
+    if (remoteInstance) {
+      yield* captureAndDispatchRemoteDiff({
+        threadId: thread.id,
+        turnId,
+        thread,
+        instanceId: remoteInstance.instanceId,
+        workdir: remoteInstance.rootPath,
+        provider: remoteInstance.provider,
+        turnCount: nextTurnCount,
+        status: checkpointStatusFromRuntime(event.payload.state),
+        assistantMessageId: undefined,
+        createdAt: event.createdAt,
+      });
+      return;
+    }
+
+    const checkpointCwd = yield* resolveCheckpointCwd({
+      threadId: thread.id,
+      thread,
+      project,
+      preferSessionRuntime: true,
+    });
+    if (!checkpointCwd) {
+      return;
+    }
 
     yield* captureAndDispatchCheckpoint({
       threadId: thread.id,

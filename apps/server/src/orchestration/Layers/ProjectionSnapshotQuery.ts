@@ -28,6 +28,7 @@ import {
   OrchestrationThread,
   type OrchestrationThreadShell,
   type OrchestrationThreadActivity,
+  type OrchestrationThreadRuntime,
   ThreadHandoff,
   ModelSelection,
 } from "@t3tools/contracts";
@@ -50,6 +51,11 @@ import { ProjectionThreadActivity } from "../../persistence/Services/ProjectionT
 import { ProjectionThreadMessage } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlan } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
+import {
+  type ProjectionThreadRuntime,
+  ProjectionThreadRuntimeRepository,
+} from "../../persistence/Services/ProjectionThreadRuntime.ts";
+import { ProjectionThreadRuntimeRepositoryLive } from "../../persistence/Layers/ProjectionThreadRuntime.ts";
 import { ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import {
@@ -351,6 +357,23 @@ function toProjectedSession(row: ProjectionThreadSessionDbRow): OrchestrationSes
   };
 }
 
+function toThreadRuntime(row: ProjectionThreadRuntime): OrchestrationThreadRuntime {
+  return {
+    threadId: row.threadId,
+    targetKind: row.targetKind,
+    provider: row.provider,
+    role: row.role,
+    status: row.status,
+    instance: row.instance,
+    processes: row.processes,
+    routes: row.routes,
+    snapshots: row.snapshots,
+    leases: row.leases,
+    lastActivityAt: row.lastActivityAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 function toProjectedProjectShell(row: ProjectionProjectDbRow): OrchestrationProjectShell {
   return {
     id: row.projectId,
@@ -375,6 +398,7 @@ function toProjectedThreadShell(input: {
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
   >;
   readonly session: OrchestrationSession | null;
+  readonly runtime: OrchestrationThreadRuntime | null;
 }): OrchestrationThreadShell {
   const { threadRow } = input;
   const summary = deriveThreadSummaryMetadata(input);
@@ -400,6 +424,7 @@ function toProjectedThreadShell(input: {
     forkSourceThreadId: threadRow.forkSourceThreadId ?? null,
     sidechatSourceThreadId: threadRow.sidechatSourceThreadId ?? null,
     lastKnownPr: threadRow.lastKnownPr,
+    runtime: input.runtime,
     latestTurn: input.latestTurn,
     latestUserMessageAt: summary.latestUserMessageAt,
     hasPendingApprovals: summary.hasPendingApprovals,
@@ -417,6 +442,7 @@ function toProjectedThreadShellFromStoredSummary(input: {
   readonly threadRow: ProjectionThreadDbRow;
   readonly latestTurn: OrchestrationLatestTurn | null;
   readonly session: OrchestrationSession | null;
+  readonly runtime: OrchestrationThreadRuntime | null;
 }): OrchestrationThreadShell {
   const { threadRow } = input;
   return {
@@ -441,6 +467,7 @@ function toProjectedThreadShellFromStoredSummary(input: {
     forkSourceThreadId: threadRow.forkSourceThreadId ?? null,
     sidechatSourceThreadId: threadRow.sidechatSourceThreadId ?? null,
     lastKnownPr: threadRow.lastKnownPr,
+    runtime: input.runtime,
     latestTurn: input.latestTurn,
     latestUserMessageAt: threadRow.latestUserMessageAt,
     hasPendingApprovals: threadRow.pendingApprovalCount > 0,
@@ -462,6 +489,7 @@ function toProjectedThread(input: {
   readonly activities: ReadonlyArray<OrchestrationThreadActivity>;
   readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
   readonly session: OrchestrationSession | null;
+  readonly runtime: OrchestrationThreadRuntime | null;
 }): OrchestrationThread {
   const { threadRow } = input;
   const summary = deriveThreadSummaryMetadata(input);
@@ -487,6 +515,7 @@ function toProjectedThread(input: {
     forkSourceThreadId: threadRow.forkSourceThreadId,
     sidechatSourceThreadId: threadRow.sidechatSourceThreadId ?? null,
     lastKnownPr: threadRow.lastKnownPr,
+    runtime: input.runtime,
     latestTurn: input.latestTurn,
     createdAt: threadRow.createdAt,
     updatedAt: threadRow.updatedAt,
@@ -538,6 +567,7 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
 
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const projectionThreadRuntimeRepository = yield* ProjectionThreadRuntimeRepository;
 
   const listProjectRows = SqlSchema.findAll({
     Request: Schema.Void,
@@ -1367,12 +1397,19 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ),
           ]);
 
+          const runtimeRows = yield* projectionThreadRuntimeRepository.listReadModels();
+
           const messagesByThread = new Map<string, Array<OrchestrationMessage>>();
           const proposedPlansByThread = new Map<string, Array<OrchestrationProposedPlan>>();
           const activitiesByThread = new Map<string, Array<OrchestrationThreadActivity>>();
           const checkpointsByThread = new Map<string, Array<OrchestrationCheckpointSummary>>();
           const sessionsByThread = new Map<string, OrchestrationSession>();
           const latestTurnByThread = new Map<string, OrchestrationLatestTurn>();
+          const runtimeByThread = new Map<string, OrchestrationThreadRuntime>();
+
+          for (const row of runtimeRows) {
+            runtimeByThread.set(row.threadId, toThreadRuntime(row));
+          }
 
           let updatedAt: string | null = null;
 
@@ -1454,6 +1491,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               activities: activitiesByThread.get(row.threadId) ?? [],
               checkpoints: checkpointsByThread.get(row.threadId) ?? [],
               session: sessionsByThread.get(row.threadId) ?? null,
+              runtime: runtimeByThread.get(row.threadId) ?? null,
             }),
           );
 
@@ -1614,6 +1652,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               activities: [],
               checkpoints: [],
               session: sessionsByThread.get(row.threadId) ?? null,
+              // The command read model is a lightweight decider input (no
+              // messages/activities); runtime is hydrated at the read APIs.
+              runtime: null,
             }),
           );
 
@@ -1700,8 +1741,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ]);
 
+          const runtimeRows = yield* projectionThreadRuntimeRepository.listReadModels();
+
           const sessionsByThread = new Map<string, OrchestrationSession>();
           const latestTurnByThread = new Map<string, OrchestrationLatestTurn>();
+          const runtimeByThread = new Map<string, OrchestrationThreadRuntime>();
+
+          for (const row of runtimeRows) {
+            runtimeByThread.set(row.threadId, toThreadRuntime(row));
+          }
 
           let updatedAt: string | null = null;
 
@@ -1744,6 +1792,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   threadRow: row,
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   session: sessionsByThread.get(row.threadId) ?? null,
+                  runtime: runtimeByThread.get(row.threadId) ?? null,
                 }),
               ),
             updatedAt: updatedAt ?? new Date(0).toISOString(),
@@ -1958,7 +2007,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             return Option.none<OrchestrationThreadShell>();
           }
 
-          const [latestTurnRow, sessionRow] = yield* Effect.all([
+          const [latestTurnRow, sessionRow, runtimeRow] = yield* Effect.all([
             getLatestTurnRowByThread({ threadId }).pipe(
               Effect.mapError(
                 toPersistenceSqlOrDecodeError(
@@ -1975,6 +2024,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ),
               ),
             ),
+            projectionThreadRuntimeRepository.getReadModelByThreadId({ threadId }),
           ]);
 
           return Option.some(
@@ -1987,6 +2037,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               session: Option.match(sessionRow, {
                 onNone: () => null,
                 onSome: (row) => toProjectedSession(row),
+              }),
+              runtime: Option.match(runtimeRow, {
+                onNone: () => null,
+                onSome: (row) => toThreadRuntime(row),
               }),
             }),
           );
@@ -2065,6 +2119,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         checkpointRows,
         latestTurnRow,
         sessionRow,
+        runtimeRow,
       ] = yield* Effect.all([
         listThreadMessageRowsByThread({ threadId }).pipe(
           Effect.mapError(
@@ -2114,6 +2169,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ),
           ),
         ),
+        projectionThreadRuntimeRepository.getReadModelByThreadId({ threadId }),
       ]);
 
       const thread = toProjectedThread({
@@ -2129,6 +2185,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         session: Option.match(sessionRow, {
           onNone: () => null,
           onSome: (row) => toProjectedSession(row),
+        }),
+        runtime: Option.match(runtimeRow, {
+          onNone: () => null,
+          onSome: (row) => toThreadRuntime(row),
         }),
       });
 
@@ -2218,4 +2278,4 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 export const OrchestrationProjectionSnapshotQueryLive = Layer.effect(
   ProjectionSnapshotQuery,
   makeProjectionSnapshotQuery,
-);
+).pipe(Layer.provideMerge(ProjectionThreadRuntimeRepositoryLive));

@@ -7,6 +7,8 @@ import {
 import { Effect, Layer, Option, Schema } from "effect";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { RuntimeWorkspaceDiff } from "../../executionRuntime/Services/RuntimeWorkspaceDiff.ts";
+import { resolveDiffableRemoteInstance } from "../../executionRuntime/remoteDiffability.ts";
 import { CheckpointInvariantError, CheckpointUnavailableError } from "../Errors.ts";
 import {
   checkpointRefForThreadTurn,
@@ -38,6 +40,56 @@ function buildTurnDiffResult(input: {
 const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const checkpointStore = yield* CheckpointStore;
+  const runtimeWorkspaceDiff = yield* RuntimeWorkspaceDiff;
+
+  // A remote-runtime thread's edits land in the sandbox, not the host repo, so
+  // the host CheckpointStore has nothing to diff. Returns the sandbox working-
+  // tree diff for any requested range (v1 has no per-turn sandbox checkpoints, so
+  // every range maps to "current uncommitted changes vs the cloned ref"), or
+  // `null` for a local/worktree thread which keeps the host path. Best-effort: an
+  // unreadable sandbox degrades to an empty diff rather than the host "ref
+  // unavailable" error.
+  const resolveRemoteThreadDiff = (
+    threadId: OrchestrationGetTurnDiffResultType["threadId"],
+    fromTurnCount: number,
+    toTurnCount: number,
+  ) =>
+    Effect.gen(function* () {
+      const threadOption = yield* projectionSnapshotQuery.getThreadDetailById(threadId).pipe(
+        Effect.catchCause((cause) =>
+          // A failed read (DB error) is not "local thread": warn so a remote
+          // thread routed to the host path by a transient failure is visible,
+          // rather than silently returning an empty host diff.
+          Effect.gen(function* () {
+            yield* Effect.logWarning(
+              `Failed to read thread detail for remote diff routing (thread ${threadId}); falling back to host checkpoint path. ${String(cause)}`,
+            );
+            return Option.none();
+          }),
+        ),
+      );
+      const thread = Option.getOrUndefined(threadOption);
+      const remoteInstance = resolveDiffableRemoteInstance(thread?.runtime);
+      if (remoteInstance === null) {
+        return null;
+      }
+      const workspaceDiff = yield* runtimeWorkspaceDiff.read({
+        instanceId: remoteInstance.instanceId,
+        provider: remoteInstance.provider,
+        workdir: remoteInstance.rootPath,
+      });
+      if (workspaceDiff.degraded) {
+        yield* Effect.logWarning(
+          `Remote workspace diff unreadable for thread ${threadId}; Review shows an empty diff (not necessarily a clean tree).`,
+        );
+      }
+      return buildTurnDiffResult({
+        threadId,
+        fromTurnCount,
+        toTurnCount,
+        diff: workspaceDiff.diff,
+      });
+    });
 
   const getTurnDiff: CheckpointDiffQueryShape["getTurnDiff"] = (input) =>
     Effect.gen(function* () {
@@ -58,6 +110,21 @@ const make = Effect.gen(function* () {
           });
         }
         return emptyDiff;
+      }
+
+      const remoteDiff = yield* resolveRemoteThreadDiff(
+        input.threadId,
+        input.fromTurnCount,
+        input.toTurnCount,
+      );
+      if (remoteDiff !== null) {
+        if (!isTurnDiffResult(remoteDiff)) {
+          return yield* new CheckpointInvariantError({
+            operation,
+            detail: "Computed turn diff result does not satisfy contract schema.",
+          });
+        }
+        return remoteDiff;
       }
 
       const threadContext = yield* projectionSnapshotQuery.getThreadCheckpointContext(
@@ -206,6 +273,17 @@ const make = Effect.gen(function* () {
           });
         }
         return emptyDiff satisfies OrchestrationGetFullThreadDiffResult;
+      }
+
+      const remoteDiff = yield* resolveRemoteThreadDiff(input.threadId, 0, input.toTurnCount);
+      if (remoteDiff !== null) {
+        if (!isTurnDiffResult(remoteDiff)) {
+          return yield* new CheckpointInvariantError({
+            operation,
+            detail: "Computed full thread diff result does not satisfy contract schema.",
+          });
+        }
+        return remoteDiff satisfies OrchestrationGetFullThreadDiffResult;
       }
 
       const threadContext = yield* projectionSnapshotQuery.getFullThreadDiffContext(

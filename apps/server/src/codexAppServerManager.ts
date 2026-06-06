@@ -1,10 +1,8 @@
-import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import readline from "node:readline";
 
 import {
   ApprovalRequestId,
@@ -41,15 +39,18 @@ import {
   type ServerVoiceTranscriptionResult,
 } from "@t3tools/contracts";
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@t3tools/shared/model";
-import { Effect, ServiceMap } from "effect";
+import { Deferred, Effect, ServiceMap, Stream } from "effect";
+import type { ChildProcessSpawner } from "effect/unstable/process";
 
-import {
-  formatCodexCliUpgradeMessage,
-  isCodexCliVersionSupported,
-  parseCodexCliVersion,
-} from "./provider/codexCliVersion";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
+import { selectAvailableCodexModel } from "./provider/codexModelSelection.ts";
+import { assertSupportedCodexCliVersion } from "./provider/process/codexCliVersionGate.ts";
+import {
+  makeCodexProcessTransport,
+  type JsonRpcLineTransport,
+  type ProcessExit,
+} from "./provider/process/JsonRpcLineTransport.ts";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 
 type PendingRequestKey = string;
@@ -101,8 +102,7 @@ type CodexSessionApprovalOverride = {
 interface CodexSessionContext {
   session: ProviderSession;
   account: CodexAccountSnapshot;
-  child: ChildProcessWithoutNullStreams;
-  output: readline.Interface;
+  transport: JsonRpcLineTransport;
   pending: Map<PendingRequestKey, PendingRequest>;
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
@@ -205,6 +205,13 @@ export interface CodexAppServerStartSessionInput {
   readonly resumeCursor?: unknown;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
   readonly runtimeMode: RuntimeMode;
+  /**
+   * Per-session transport override for a sandbox-backed thread: starts
+   * `codex app-server` inside the provisioned remote instance and returns its
+   * line transport. Takes precedence over the constructor-level factory. When
+   * absent the manager spawns a local codex process (the default).
+   */
+  readonly createTransport?: CodexTransportFactory;
 }
 
 export interface CodexThreadTurnSnapshot {
@@ -218,10 +225,23 @@ export interface CodexThreadSnapshot {
   cwd?: string | null;
 }
 
-const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
-
 const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
-const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
+const ANSI_BELL_CHAR = String.fromCharCode(7);
+// Strip the full ANSI repertoire a real PTY emits, not just SGR color codes. On
+// the merged Daytona PTY stream codex stdout interleaves with the shell's own
+// control sequences — bracketed-paste toggles (`\e[?2004h`/`l`), cursor/erase
+// CSI (`\e[K`, `\e[J`), keypad-mode two-char escapes (`\e=`, `\e>`), and an
+// OSC window-title (`\e]0;...\a`). A JSON-RPC frame prefixed by any of these
+// would fail the `{`-prefix frame gate (dropped as log noise) or fail
+// `JSON.parse` (silently dropped) — a lost real frame. The three alternatives
+// cover OSC (`\e]...` to BEL or `\e\`), CSI (`\e[` + params + final byte), and
+// the remaining single-/two-char escapes the live daemon was observed to send.
+const ANSI_ESCAPE_REGEX = new RegExp(
+  `${ANSI_ESCAPE_CHAR}\\][^${ANSI_BELL_CHAR}${ANSI_ESCAPE_CHAR}]*(?:${ANSI_BELL_CHAR}|${ANSI_ESCAPE_CHAR}\\\\)` +
+    `|${ANSI_ESCAPE_CHAR}\\[[0-9;?]*[ -/]*[@-~]` +
+    `|${ANSI_ESCAPE_CHAR}[=>()#][0-9A-Za-z]?`,
+  "g",
+);
 const CODEX_STDERR_LOG_REGEX =
   /^\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO|WARN|ERROR)\s+\S+:\s+(.*)$/;
 const BENIGN_ERROR_LOG_SNIPPETS = [
@@ -262,6 +282,14 @@ function isIgnorableCodexProcessLine(rawLine: string): boolean {
     return true;
   }
   return BENIGN_PROCESS_OUTPUT_REGEXES.some((pattern) => pattern.test(line));
+}
+
+// A JSON-RPC frame is a single JSON object, so its first non-whitespace byte is
+// `{`. ANSI escapes are stripped first because a PTY can prefix control codes.
+// Cheap structural gate, not a full parse: it only decides whether a line should
+// reach `JSON.parse` at all or be treated as interleaved process/log output.
+export function isJsonObjectLine(rawLine: string): boolean {
+  return normalizeCodexProcessLine(rawLine).startsWith("{");
 }
 
 function normalizeCodexUserVisibleErrorMessage(rawMessage: string): string {
@@ -532,25 +560,6 @@ export function resolveCodexModelForAccount(
   return CODEX_DEFAULT_MODEL;
 }
 
-/**
- * On Windows with `shell: true`, `child.kill()` only terminates the `cmd.exe`
- * wrapper, leaving the actual command running. Use `taskkill /T` to kill the
- * entire process tree instead.
- */
-function killChildTree(child: ChildProcessWithoutNullStreams): void {
-  if (process.platform === "win32" && child.pid !== undefined) {
-    try {
-      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
-        stdio: "ignore",
-      });
-      return;
-    } catch {
-      // fallback to direct kill
-    }
-  }
-  child.kill();
-}
-
 export function normalizeCodexModelSlug(
   model: string | undefined | null,
   preferredId?: string,
@@ -678,6 +687,25 @@ export interface CodexAppServerManagerEvents {
   event: [event: ProviderEvent];
 }
 
+export interface CodexTransportFactoryInput {
+  readonly binaryPath: string;
+  readonly cwd: string;
+  readonly homePath?: string;
+}
+
+export type CodexTransportFactory = (
+  input: CodexTransportFactoryInput,
+) => Promise<JsonRpcLineTransport>;
+
+export interface CodexAppServerManagerOptions {
+  /**
+   * Overrides the process-spawning transport with a supplied
+   * `JsonRpcLineTransport`. Used by tests to drive the Codex protocol against a
+   * scripted in-memory transport, and reserved for the remote runtime path.
+   */
+  readonly createTransport?: CodexTransportFactory;
+}
+
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
   private readonly discoverySessions = new Map<string, CodexSessionContext>();
@@ -688,9 +716,56 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly modelCache = new Map<string, ProviderListModelsResult>();
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
-  constructor(services?: ServiceMap.ServiceMap<never>) {
+  private readonly services: ServiceMap.ServiceMap<never> | undefined;
+  private readonly transportFactory: CodexTransportFactory | undefined;
+  constructor(services?: ServiceMap.ServiceMap<never>, options?: CodexAppServerManagerOptions) {
     super();
+    this.services = services;
+    this.transportFactory = options?.createTransport;
     this.runPromise = services ? Effect.runPromiseWith(services) : Effect.runPromise;
+  }
+
+  // The production services map carries `ChildProcessSpawner`; its type is erased
+  // to `never`, so transport effects are run through the same map with their
+  // requirement cast away. Tests that never spawn (the protocol-level harnesses)
+  // do not exercise this path.
+  private runTransportEffect<A>(
+    effect: Effect.Effect<A, never, ChildProcessSpawner.ChildProcessSpawner>,
+  ): Promise<A> {
+    const erased = effect as unknown as Effect.Effect<A, never>;
+    return (this.services ? Effect.runPromiseWith(this.services) : Effect.runPromise)(erased);
+  }
+
+  private async createTransport(
+    input: CodexTransportFactoryInput,
+    perSessionFactory?: CodexTransportFactory,
+  ): Promise<JsonRpcLineTransport> {
+    const factory = perSessionFactory ?? this.transportFactory;
+    if (factory) {
+      return factory(input);
+    }
+    const env = buildCodexProcessEnv(input.homePath ? { homePath: input.homePath } : {});
+    return this.runTransportEffect(
+      makeCodexProcessTransport({
+        command: input.binaryPath,
+        args: ["app-server"],
+        cwd: input.cwd,
+        env,
+        shell: process.platform === "win32",
+      }),
+    );
+  }
+
+  private async isContextAlive(context: CodexSessionContext): Promise<boolean> {
+    return this.runTransportEffect(context.transport.isAlive);
+  }
+
+  // `stopSession`/`stopDiscoverySession` keep their synchronous signatures (the
+  // call sites and tests are sync), so transport teardown is fired and the
+  // promise is swallowed. `close` kills the process tree and interrupts the
+  // pump fibers via its scope finalizers.
+  private closeTransport(context: CodexSessionContext): void {
+    void this.runPromise(context.transport.close).catch(() => {});
   }
 
   async startSession(input: CodexAppServerStartSessionInput): Promise<ProviderSession> {
@@ -724,16 +799,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        hasSuppliedTransport: input.createTransport !== undefined,
       });
-      const child = spawn(codexBinaryPath, ["app-server"], {
-        cwd: resolvedCwd,
-        env: buildCodexProcessEnv({
+      const transport = await this.createTransport(
+        {
+          binaryPath: codexBinaryPath,
+          cwd: resolvedCwd,
           ...(codexHomePath ? { homePath: codexHomePath } : {}),
-        }),
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: process.platform === "win32",
-      });
-      const output = readline.createInterface({ input: child.stdout });
+        },
+        input.createTransport,
+      );
 
       context = {
         session,
@@ -742,8 +817,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           planType: null,
           sparkEnabled: true,
         },
-        child,
-        output,
+        transport,
         pending: new Map(),
         pendingApprovals: new Map(),
         pendingUserInputs: new Map(),
@@ -762,9 +836,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
 
       this.writeMessage(context, { method: "initialized" });
+      let advertisedModelSlugs: ReadonlyArray<string> = [];
       try {
         const modelListResponse = await this.sendRequest(context, "model/list", {});
         console.log("codex model/list response", modelListResponse);
+        advertisedModelSlugs = this.parseModelListResponse(modelListResponse).map(
+          (model) => model.slug,
+        );
       } catch (error) {
         console.log("codex model/list failed", error);
       }
@@ -785,8 +863,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         normalizeCodexModelSlug(input.model),
         context.account,
       );
+      // Remote-only: a sandbox codex may advertise a different model catalog than
+      // the host, so a request it does not recognize would wedge the turn. Resolve
+      // against what the sandbox actually advertised, falling back to the product
+      // default. The local path is untouched (the gate skips it), so it stays
+      // byte-for-byte unchanged.
+      const effectiveModel =
+        input.createTransport !== undefined
+          ? this.selectSandboxCodexModel(normalizedModel, advertisedModelSlugs, {
+              threadId,
+            })
+          : (normalizedModel ?? null);
       const sessionOverrides = {
-        model: normalizedModel ?? null,
+        model: effectiveModel,
         ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
         cwd: resolvedCwd,
         ...mapCodexRuntimeMode(input.runtimeMode ?? "full-access"),
@@ -1343,15 +1432,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      const child = spawn(codexBinaryPath, ["app-server"], {
+      const transport = await this.createTransport({
+        binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: buildCodexProcessEnv({
-          ...(codexHomePath ? { homePath: codexHomePath } : {}),
-        }),
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: process.platform === "win32",
+        ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      const output = readline.createInterface({ input: child.stdout });
 
       context = {
         session,
@@ -1360,8 +1445,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           planType: null,
           sparkEnabled: true,
         },
-        child,
-        output,
+        transport,
         pending: new Map(),
         pendingApprovals: new Map(),
         pendingUserInputs: new Map(),
@@ -1637,11 +1721,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context.pendingApprovals.clear();
     context.pendingUserInputs.clear();
 
-    context.output.close();
-
-    if (!context.child.killed) {
-      killChildTree(context.child);
-    }
+    this.closeTransport(context);
 
     this.updateSession(context, {
       status: "closed",
@@ -1861,8 +1941,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       for (const activeSession of this.sessions.values()) {
         if (
           !activeSession.stopping &&
-          !activeSession.child.killed &&
-          activeSession.session.cwd === normalizedCwd
+          activeSession.session.cwd === normalizedCwd &&
+          (await this.isContextAlive(activeSession))
         ) {
           return activeSession;
         }
@@ -1917,7 +1997,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private async getOrCreateDiscoverySession(cwd: string): Promise<CodexSessionContext> {
     const normalizedCwd = cwd.trim() || process.cwd();
     const existing = this.discoverySessions.get(normalizedCwd);
-    if (existing && !existing.stopping && !existing.child.killed) {
+    if (existing && !existing.stopping && (await this.isContextAlive(existing))) {
       this.scheduleDiscoverySessionIdleStop(normalizedCwd);
       return existing;
     }
@@ -1927,13 +2007,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       binaryPath: "codex",
       cwd: normalizedCwd,
     });
-    const child = spawn("codex", ["app-server"], {
+    const transport = await this.createTransport({
+      binaryPath: "codex",
       cwd: normalizedCwd,
-      env: buildCodexProcessEnv(),
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: process.platform === "win32",
     });
-    const output = readline.createInterface({ input: child.stdout });
     const context: CodexSessionContext = {
       session: {
         provider: "codex",
@@ -1950,8 +2027,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         planType: null,
         sparkEnabled: true,
       },
-      child,
-      output,
+      transport,
       pending: new Map(),
       pendingApprovals: new Map(),
       pendingUserInputs: new Map(),
@@ -2028,51 +2104,31 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       pending.reject(new Error("Discovery session stopped before request completed."));
     }
     context.pending.clear();
-    context.output.close();
-
-    if (!context.child.killed) {
-      killChildTree(context.child);
-    }
+    this.closeTransport(context);
 
     this.discoverySessions.delete(discoveryKey);
   }
 
   private attachProcessListeners(context: CodexSessionContext): void {
-    context.output.on("line", (line) => {
+    const onInboundLine = (line: string) => {
       if (context.stopping || isIgnorableCodexProcessLine(line)) {
         return;
       }
       this.handleStdoutLine(context, line);
-    });
+    };
 
-    context.child.stderr.on("data", (chunk: Buffer) => {
+    const onStderrLine = (line: string) => {
       if (context.stopping) {
         return;
       }
-      const raw = chunk.toString();
-      const lines = raw.split(/\r?\n/g);
-      for (const rawLine of lines) {
-        const classified = classifyCodexStderrLine(rawLine);
-        if (!classified) {
-          continue;
-        }
-
-        this.emitErrorEvent(context, "process/stderr", classified.message);
+      const classified = classifyCodexStderrLine(line);
+      if (!classified) {
+        return;
       }
-    });
+      this.emitErrorEvent(context, "process/stderr", classified.message);
+    };
 
-    context.child.on("error", (error) => {
-      const message = normalizeCodexUserVisibleErrorMessage(
-        error.message || "codex app-server process errored.",
-      );
-      this.updateSession(context, {
-        status: "error",
-        lastError: message,
-      });
-      this.emitErrorEvent(context, "process/error", message);
-    });
-
-    context.child.on("exit", (code, signal) => {
+    const onExit = ({ code, signal }: ProcessExit) => {
       if (context.stopping) {
         return;
       }
@@ -2092,7 +2148,21 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       } else {
         this.sessions.delete(context.session.threadId);
       }
-    });
+    };
+
+    void this.runPromise(
+      Stream.runForEach(context.transport.inbound, (line) =>
+        Effect.sync(() => onInboundLine(line)),
+      ).pipe(Effect.ignore),
+    );
+    void this.runPromise(
+      Stream.runForEach(context.transport.stderr, (line) =>
+        Effect.sync(() => onStderrLine(line)),
+      ).pipe(Effect.ignore),
+    );
+    void this.runPromise(
+      Deferred.await(context.transport.exit).pipe(Effect.map((status) => onExit(status))),
+    );
   }
 
   private handleStdoutLine(context: CodexSessionContext, line: string): void {
@@ -2100,15 +2170,36 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
 
+    // A line whose first non-whitespace char is not `{` is not a JSON-RPC frame:
+    // it is codex process/log output. On a remote PTY transport stdout and stderr
+    // are merged, so codex's own log lines are interleaved into this inbound
+    // stream rather than arriving on the (empty) stderr side channel. Route them
+    // through the stderr classifier — emitting `process/stderr` only for
+    // ERROR-level codex logs — to restore the local-transport split where such
+    // lines were warnings, never a user-visible `protocol/parseError` flood.
+    if (!isJsonObjectLine(line)) {
+      const classified = classifyCodexStderrLine(line);
+      if (classified) {
+        this.emitErrorEvent(context, "process/stderr", classified.message);
+      }
+      return;
+    }
+
+    // Parse the ANSI-stripped line, not the raw one: on the merged PTY stream a
+    // real frame can carry non-SGR ANSI (bracketed-paste, OSC) that `JSON.parse`
+    // rejects. `isJsonObjectLine` gated on the stripped form, so parsing must use
+    // the same normalization or a stripped-but-real frame is silently dropped.
+    const normalizedLine = normalizeCodexProcessLine(line);
     let parsed: unknown;
     try {
-      parsed = JSON.parse(line);
+      parsed = JSON.parse(normalizedLine);
     } catch {
-      this.emitErrorEvent(
-        context,
-        "protocol/parseError",
-        "Received invalid JSON from codex app-server.",
-      );
+      // The frame gate already filtered non-JSON log noise; a line that looks
+      // like a JSON object yet fails to parse is a rare malformed frame. Keep it
+      // out of the user-visible error channel — log at debug and drop it.
+      if (process.env.SYNARA_DEBUG_CODEX_TRANSPORT === "1") {
+        console.debug("[codex] dropped unparseable inbound frame", line);
+      }
       return;
     }
 
@@ -2470,12 +2561,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private writeMessage(context: CodexSessionContext, message: unknown): void {
-    const encoded = JSON.stringify(message);
-    if (!context.child.stdin.writable) {
-      throw new Error("Cannot write to codex app-server stdin.");
-    }
-
-    context.child.stdin.write(`${encoded}\n`);
+    void this.runPromise(
+      context.transport.send(message).pipe(
+        Effect.catchTag("TransportClosedError", (error) =>
+          Effect.sync(() => {
+            if (!context.stopping) {
+              this.emitErrorEvent(context, "process/error", error.detail);
+            }
+          }),
+        ),
+      ),
+    );
   }
 
   private emitLifecycleEvent(context: CodexSessionContext, method: string, message: string): void {
@@ -2561,8 +2657,41 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     readonly binaryPath: string;
     readonly cwd: string;
     readonly homePath?: string;
+    readonly hasSuppliedTransport?: boolean;
   }): void {
+    // The CLI version gate runs `codex --version` against this host, so it only
+    // applies to the local-process transport. A supplied transport (in-memory
+    // test fake, or a remote sandbox runtime) has no local binary to probe —
+    // whether supplied at construction or per session.
+    if (this.transportFactory || input.hasSuppliedTransport) {
+      return;
+    }
     assertSupportedCodexCliVersion(input);
+  }
+
+  // Resolve the model to send to a sandbox-backed codex against the catalog it
+  // advertised via `model/list`. Falls back to the product default when the
+  // request is absent from the catalog so a mismatch degrades to a working model
+  // instead of wedging the turn (g32). An empty catalog trusts the request.
+  private selectSandboxCodexModel(
+    requested: string | undefined,
+    available: ReadonlyArray<string>,
+    context: { readonly threadId: string },
+  ): string | null {
+    const selection = selectAvailableCodexModel({
+      requested,
+      available,
+      preferredFallback: CODEX_DEFAULT_MODEL,
+    });
+    if (selection.fellBack) {
+      console.log("codex model fallback (sandbox catalog mismatch)", {
+        threadId: context.threadId,
+        requested: requested ?? null,
+        selected: selection.model,
+        available,
+      });
+    }
+    return selection.model;
   }
 
   private updateSession(context: CodexSessionContext, updates: Partial<ProviderSession>): void {
@@ -2867,7 +2996,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private findLatestReviewTurnId(snapshot: CodexThreadSnapshot): TurnId | undefined {
     const latestReviewTurn = [...snapshot.turns]
-      .reverse()
+      .toReversed()
       .find((turn) => this.turnHasReviewItem(turn, "entered"));
     return latestReviewTurn?.id;
   }
@@ -3286,50 +3415,6 @@ function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
     ...(options.binaryPath ? { binaryPath: options.binaryPath } : {}),
     ...(options.homePath ? { homePath: options.homePath } : {}),
   };
-}
-
-function assertSupportedCodexCliVersion(input: {
-  readonly binaryPath: string;
-  readonly cwd: string;
-  readonly homePath?: string;
-}): void {
-  const result = spawnSync(input.binaryPath, ["--version"], {
-    cwd: input.cwd,
-    env: buildCodexProcessEnv({
-      ...(input.homePath ? { homePath: input.homePath } : {}),
-    }),
-    encoding: "utf8",
-    shell: process.platform === "win32",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
-    maxBuffer: 1024 * 1024,
-  });
-
-  if (result.error) {
-    const lower = result.error.message.toLowerCase();
-    if (
-      lower.includes("enoent") ||
-      lower.includes("command not found") ||
-      lower.includes("not found")
-    ) {
-      throw new Error(`Codex CLI (${input.binaryPath}) is not installed or not executable.`);
-    }
-    throw new Error(
-      `Failed to execute Codex CLI version check: ${result.error.message || String(result.error)}`,
-    );
-  }
-
-  const stdout = result.stdout ?? "";
-  const stderr = result.stderr ?? "";
-  if (result.status !== 0) {
-    const detail = stderr.trim() || stdout.trim() || `Command exited with code ${result.status}.`;
-    throw new Error(`Codex CLI version check failed. ${detail}`);
-  }
-
-  const parsedVersion = parseCodexCliVersion(`${stdout}\n${stderr}`);
-  if (parsedVersion && !isCodexCliVersionSupported(parsedVersion)) {
-    throw new Error(formatCodexCliUpgradeMessage(parsedVersion));
-  }
 }
 
 function readResumeCursorThreadId(resumeCursor: unknown): string | undefined {

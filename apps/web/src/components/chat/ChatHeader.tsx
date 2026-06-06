@@ -5,6 +5,7 @@
 
 import {
   type EditorId,
+  type OrchestrationThreadRuntime,
   type ProjectScript,
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
@@ -39,6 +40,7 @@ import { useSidebar } from "../ui/sidebar";
 import { cn } from "~/lib/utils";
 import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
 import { ProviderIcon } from "../ProviderIcon";
+import { RuntimeStatusChip } from "./RuntimeStatusChip";
 import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
 import { summarizePatchStats } from "~/lib/diffRendering";
 import { useRepoDiffScopeStore } from "~/repoDiffScopeStore";
@@ -55,6 +57,7 @@ interface ChatHeaderProps {
   activeThreadTitle: string;
   activeThreadEntryPoint: ThreadPrimarySurface;
   activeProvider: ProviderKind;
+  activeThreadRuntime?: OrchestrationThreadRuntime | null;
   activeProjectName: string | undefined;
   threadBreadcrumbs: ReadonlyArray<{
     threadId: ThreadId;
@@ -119,6 +122,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadTitle,
   activeThreadEntryPoint,
   activeProvider,
+  activeThreadRuntime = null,
   activeProjectName,
   threadBreadcrumbs,
   hideHandoffControls = false,
@@ -299,6 +303,11 @@ export const ChatHeader = memo(function ChatHeader({
                   <TooltipPopup side="bottom">{handoffBadgeLabel}</TooltipPopup>
                 </Tooltip>
               ) : null}
+              <RuntimeStatusChip
+                runtime={activeThreadRuntime}
+                threadId={activeThreadId}
+                className="hidden sm:inline-flex"
+              />
             </div>
           </div>
         </div>

@@ -485,7 +485,6 @@ export function PluginLibrary() {
       provider: selectedProvider,
       cwd: discoveryCwd,
       threadId: providerThreadId,
-      query: selectedTab === "skills" ? deferredSkillSearch : "",
       enabled: selectedTab === "skills" && canListSkills && discoveryCwd !== null,
     }),
   );
@@ -512,11 +511,17 @@ export function PluginLibrary() {
     [pluginEntries],
   );
 
+  // Precompute search blobs once per list so typing only does a substring test.
+  const searchablePluginEntries = useMemo(
+    () =>
+      installedPluginEntries.map((entry) => ({ entry, blob: buildPluginSearchBlob(entry.plugin) })),
+    [installedPluginEntries],
+  );
   const filteredPluginEntries = useMemo(() => {
     const q = normalizeProviderDiscoveryText(deferredPluginSearch);
     if (!q) return installedPluginEntries;
-    return installedPluginEntries.filter((e) => buildPluginSearchBlob(e.plugin).includes(q));
-  }, [deferredPluginSearch, installedPluginEntries]);
+    return searchablePluginEntries.filter(({ blob }) => blob.includes(q)).map(({ entry }) => entry);
+  }, [deferredPluginSearch, installedPluginEntries, searchablePluginEntries]);
 
   const marketplaceSections = useMemo(() => {
     const map = new Map<string, { title: string; entries: PluginEntry[] }>();
@@ -538,11 +543,17 @@ export function PluginLibrary() {
     }));
   }, [filteredPluginEntries]);
 
+  const searchableDiscoveredSkills = useMemo(
+    () => discoveredSkills.map((skill) => ({ skill, blob: buildSkillSearchBlob(skill) })),
+    [discoveredSkills],
+  );
   const filteredSkills = useMemo(() => {
     const q = normalizeProviderDiscoveryText(deferredSkillSearch);
     if (!q) return discoveredSkills;
-    return discoveredSkills.filter((s) => buildSkillSearchBlob(s).includes(q));
-  }, [deferredSkillSearch, discoveredSkills]);
+    return searchableDiscoveredSkills
+      .filter(({ blob }) => blob.includes(q))
+      .map(({ skill }) => skill);
+  }, [deferredSkillSearch, discoveredSkills, searchableDiscoveredSkills]);
 
   // ── Render ───────────────────────────────────────────────────────────────
 

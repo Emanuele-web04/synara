@@ -235,12 +235,15 @@ import {
   resolveTerminalCloseTitle,
 } from "~/lib/terminalCloseConfirmation";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
+import { buildRuntimePlanFromDefaults } from "~/lib/runtimePresentation";
+import { clearRuntimePlanDraft, readRuntimePlanDraft } from "~/runtimePlanDraftStore";
 import {
   getAppModelOptions,
   getCustomBinaryPathForProvider,
   getCustomModelsByProvider,
   getProviderStartOptions,
   resolveAppModelSelection,
+  runtimePlanDefaultsFromSettings,
   useAppSettings,
 } from "../appSettings";
 import { resolveTerminalNewAction } from "../lib/terminalNewAction";
@@ -2357,10 +2360,6 @@ export default function ChatView({
     composerCommandPicker === null &&
     isMentionTrigger &&
     isLocalFolderMentionQuery(mentionTriggerQuery);
-  const skillTriggerQuery =
-    composerTrigger?.kind === "skill" || composerTrigger?.kind === "slash-command"
-      ? composerTrigger.query
-      : "";
   const isSkillTrigger = composerTriggerKind === "skill";
   const [debouncedPathQuery, composerPathQueryDebouncer] = useDebouncedValue(
     mentionTriggerQuery,
@@ -2382,10 +2381,6 @@ export default function ChatView({
       cwd: composerSkillCwd,
       threadId,
       agentDir: selectedProvider === "pi" ? settings.piAgentDir || null : null,
-      query:
-        composerTriggerKind === "slash-command" || composerTriggerKind === "slash-model"
-          ? (composerTrigger?.query ?? "")
-          : "",
       enabled:
         (composerTriggerKind === "slash-command" || composerTriggerKind === "slash-model") &&
         supportsNativeSlashCommandDiscovery(providerComposerCapabilitiesQuery.data) &&
@@ -2400,7 +2395,6 @@ export default function ChatView({
       cwd: composerSkillCwd,
       threadId,
       agentDir: selectedProvider === "pi" ? settings.piAgentDir || null : null,
-      query: skillTriggerQuery,
       enabled:
         (isSkillTrigger || composerTriggerKind === "slash-command" || selectedProvider === "pi") &&
         canDiscoverProviderSkills &&
@@ -5716,6 +5710,16 @@ export default function ChatView({
       );
 
       if (isLocalDraftThread) {
+        // Remote execution target is an explicit opt-in: a null plan keeps the
+        // create command identical to today's local/worktree behavior. When the
+        // draft opted in, the plan is assembled from the Sandboxes settings
+        // defaults — the composer no longer carries per-thread runtime config.
+        const runtimePlan = readRuntimePlanDraft(threadIdForSend).enabled
+          ? buildRuntimePlanFromDefaults(
+              runtimePlanDefaultsFromSettings(settings),
+              selectedProviderForSend,
+            )
+          : null;
         await promoteThreadCreate(
           {
             type: "thread.create",
@@ -5730,10 +5734,12 @@ export default function ChatView({
             branch: nextThreadBranch,
             worktreePath: nextThreadWorktreePath,
             lastKnownPr: activeThread.lastKnownPr ?? null,
+            ...(runtimePlan ? { runtimePlan } : {}),
             createdAt: activeThread.createdAt,
           },
           api,
         );
+        clearRuntimePlanDraft(threadIdForSend);
         if (targetProjectKindForSend === "chat") {
           await api.orchestration.dispatchCommand({
             type: "project.meta.update",
@@ -7414,9 +7420,7 @@ export default function ChatView({
         )}
       >
         {!isElectron && (
-          <header
-            className={cn(CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, "px-3 py-2 md:hidden")}
-          >
+          <header className={cn(CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, "px-3 py-2 md:hidden")}>
             <div className="flex items-center gap-2">
               <SidebarHeaderTrigger className="size-7 shrink-0" />
               <span className="text-sm font-medium text-[var(--color-text-foreground)]">
@@ -8078,6 +8082,7 @@ export default function ChatView({
           activeThreadTitle={activeThreadDisplayTitle}
           activeThreadEntryPoint={terminalState.entryPoint}
           activeProvider={activeThread.session?.provider ?? activeThread.modelSelection.provider}
+          activeThreadRuntime={activeThread.runtime ?? null}
           activeProjectName={activeProjectDisplayName}
           threadBreadcrumbs={threadBreadcrumbs}
           isSidechat={Boolean(activeThread.sidechatSourceThreadId)}
