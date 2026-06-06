@@ -38,6 +38,8 @@ const STATIC_KEYBINDING_COMMANDS = [
   "chat.newCursor",
   "chat.newGemini",
   "chat.split",
+  "view.recent.next",
+  "view.recent.previous",
   "thread.jump.1",
   "thread.jump.2",
   "thread.jump.3",

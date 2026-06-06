@@ -54,6 +54,21 @@ function modShortcut(
   };
 }
 
+function ctrlShortcut(
+  key: string,
+  overrides: Partial<Omit<KeybindingShortcut, "key">> = {},
+): KeybindingShortcut {
+  return {
+    key,
+    metaKey: false,
+    ctrlKey: true,
+    shiftKey: false,
+    altKey: false,
+    modKey: false,
+    ...overrides,
+  };
+}
+
 function whenIdentifier(name: string): KeybindingWhenNode {
   return { type: "identifier", name };
 }
@@ -191,6 +206,16 @@ const DEFAULT_BINDINGS = compile([
   {
     shortcut: modShortcut("g", { altKey: true }),
     command: "chat.newGemini",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: ctrlShortcut("tab"),
+    command: "view.recent.next",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: ctrlShortcut("tab", { shiftKey: true }),
+    command: "view.recent.previous",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
@@ -430,6 +455,38 @@ describe("split/new/close terminal shortcuts", () => {
     assert.isFalse(
       isTerminalNewShortcut(event({ key: "m", ctrlKey: true }), keybindings, {
         platform: "Linux",
+      }),
+    );
+  });
+});
+
+describe("recent view shortcuts", () => {
+  it("resolves Ctrl+Tab outside terminal focus", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "Tab", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "view.recent.next",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "Tab", ctrlKey: true, shiftKey: true }),
+        DEFAULT_BINDINGS,
+        {
+          platform: "MacIntel",
+          context: { terminalFocus: false },
+        },
+      ),
+      "view.recent.previous",
+    );
+  });
+
+  it("does not resolve Ctrl+Tab while a terminal has focus", () => {
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "Tab", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
       }),
     );
   });

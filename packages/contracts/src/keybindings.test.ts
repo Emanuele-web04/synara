@@ -148,6 +148,18 @@ it.effect("parses keybinding rules", () =>
       command: "chat.visible.previous",
     });
     assert.strictEqual(parsedVisiblePrevious.command, "chat.visible.previous");
+
+    const parsedRecentNext = yield* decode(KeybindingRule, {
+      key: "ctrl+tab",
+      command: "view.recent.next",
+    });
+    assert.strictEqual(parsedRecentNext.command, "view.recent.next");
+
+    const parsedRecentPrevious = yield* decode(KeybindingRule, {
+      key: "ctrl+shift+tab",
+      command: "view.recent.previous",
+    });
+    assert.strictEqual(parsedRecentPrevious.command, "view.recent.previous");
   }),
 );
 

@@ -271,6 +271,7 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useThreadActivationController } from "../hooks/useThreadActivationController";
 import { usePinnedProjectsStore } from "../pinnedProjectsStore";
 import { usePinnedThreadsStore } from "../pinnedThreadsStore";
+import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
 import type {
@@ -303,7 +304,6 @@ const EMPTY_THREAD_JUMP_LABELS = new Map<ThreadId, string>();
 const EMPTY_SHORTCUT_PARTS: readonly string[] = [];
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
-const THREAD_INTENT_PREWARM_RELEASE_MS = 10_000;
 const ADD_PROJECT_EXISTING_SYNC_ERROR =
   "This folder is already linked, but the existing project has not synced into the sidebar yet. Try again in a moment.";
 const DebugFeatureFlagsMenu = import.meta.env.DEV
@@ -1362,9 +1362,6 @@ export default function Sidebar() {
   const renamingProjectInputRef = useRef<HTMLInputElement | null>(null);
   const dragInProgressRef = useRef(false);
   const suppressProjectClickAfterDragRef = useRef(false);
-  const intentThreadRetentionByIdRef = useRef(
-    new Map<ThreadId, { release: () => void; timeoutId: number }>(),
-  );
   const legacyPinMigrationThreadIdsRef = useRef(new Set<ThreadId>());
   const optimisticPinnedStateByProjectIdRef = useRef(new Map<ProjectId, boolean>());
   const latestPinnedMutationVersionByProjectIdRef = useRef(new Map<ProjectId, number>());
@@ -2573,34 +2570,7 @@ export default function Sidebar() {
     [openRenameThreadDialog],
   );
 
-  const prewarmThreadDetailForIntent = useCallback((threadId: ThreadId) => {
-    const previous = intentThreadRetentionByIdRef.current.get(threadId);
-    if (previous) {
-      window.clearTimeout(previous.timeoutId);
-      previous.release();
-    }
-
-    const release = retainThreadDetailSubscription(threadId);
-    const timeoutId = window.setTimeout(() => {
-      const current = intentThreadRetentionByIdRef.current.get(threadId);
-      if (!current || current.release !== release) return;
-      current.release();
-      intentThreadRetentionByIdRef.current.delete(threadId);
-    }, THREAD_INTENT_PREWARM_RELEASE_MS);
-
-    intentThreadRetentionByIdRef.current.set(threadId, { release, timeoutId });
-  }, []);
-
-  useEffect(
-    () => () => {
-      for (const entry of intentThreadRetentionByIdRef.current.values()) {
-        window.clearTimeout(entry.timeoutId);
-        entry.release();
-      }
-      intentThreadRetentionByIdRef.current.clear();
-    },
-    [],
-  );
+  const { prewarmThreadDetail: prewarmThreadDetailForIntent } = useThreadDetailPrewarm();
 
   const primeThreadActivation = useCallback(
     (event: ReactPointerEvent<HTMLElement>, threadId: ThreadId) => {
