@@ -1,0 +1,134 @@
+// FILE: recentViews.logic.test.ts
+// Purpose: Verifies Ctrl+Tab recent-view MRU behavior without rendering React.
+// Layer: UI state logic test
+
+import { describe, expect, it } from "vitest";
+import { ThreadId } from "@t3tools/contracts";
+import {
+  deriveCurrentRecentView,
+  pruneRecentViews,
+  recentViewKey,
+  resolveRecentViewNavigationIndex,
+  upsertRecentView,
+  type RecentView,
+} from "./recentViews.logic";
+
+function threadId(value: string): ThreadId {
+  return ThreadId.makeUnsafe(value);
+}
+
+describe("recent view MRU logic", () => {
+  it("moves reopened views to the front and caps the list at five", () => {
+    const recentViews = ["thread-1", "thread-2", "thread-3", "thread-4", "thread-5"].map((id) => ({
+      kind: "thread" as const,
+      threadId: threadId(id),
+    }));
+
+    const reopened = upsertRecentView(recentViews, {
+      kind: "thread",
+      threadId: threadId("thread-3"),
+    });
+    expect(reopened.map(recentViewKey)).toEqual([
+      "thread:thread-3",
+      "thread:thread-1",
+      "thread:thread-2",
+      "thread:thread-4",
+      "thread:thread-5",
+    ]);
+
+    const withSixth = upsertRecentView(reopened, {
+      kind: "workspace",
+      workspaceId: "workspace-1",
+    });
+    expect(withSixth.map(recentViewKey)).toEqual([
+      "workspace:workspace-1",
+      "thread:thread-3",
+      "thread:thread-1",
+      "thread:thread-2",
+      "thread:thread-4",
+    ]);
+  });
+
+  it("prunes deleted views and downgrades missing split views to plain threads", () => {
+    const recentViews: RecentView[] = [
+      { kind: "thread", threadId: threadId("thread-1"), splitViewId: "split-missing" },
+      { kind: "thread", threadId: threadId("thread-deleted") },
+      { kind: "workspace", workspaceId: "workspace-deleted" },
+      { kind: "plugins" },
+    ];
+
+    const pruned = pruneRecentViews(recentViews, {
+      availableThreadIds: new Set([threadId("thread-1")]),
+      availableWorkspaceIds: new Set(["workspace-1"]),
+      availableSplitViewIds: new Set(["split-1"]),
+    });
+
+    expect(pruned).toEqual([
+      { kind: "thread", threadId: threadId("thread-1") },
+      { kind: "plugins" },
+    ]);
+  });
+
+  it("downgrades split views that no longer contain the saved thread", () => {
+    const pruned = pruneRecentViews(
+      [{ kind: "thread", threadId: threadId("thread-1"), splitViewId: "split-1" }],
+      {
+        availableThreadIds: new Set([threadId("thread-1"), threadId("thread-2")]),
+        availableWorkspaceIds: new Set(),
+        availableSplitViewIds: new Set(["split-1"]),
+        threadIdsBySplitViewId: new Map([["split-1", new Set([threadId("thread-2")])]]),
+      },
+    );
+
+    expect(pruned).toEqual([{ kind: "thread", threadId: threadId("thread-1") }]);
+  });
+
+  it("selects the previous MRU entry on the first forward cycle", () => {
+    const recentViews: RecentView[] = [
+      { kind: "thread", threadId: threadId("thread-current") },
+      { kind: "settings" },
+      { kind: "workspace", workspaceId: "workspace-1" },
+    ];
+
+    expect(
+      resolveRecentViewNavigationIndex({
+        recentViews,
+        currentView: recentViews[0] ?? null,
+        direction: "next",
+      }),
+    ).toBe(1);
+    expect(
+      resolveRecentViewNavigationIndex({
+        recentViews,
+        currentView: recentViews[0] ?? null,
+        selectedKey: recentViewKey(recentViews[1] as RecentView),
+        direction: "previous",
+      }),
+    ).toBe(0);
+  });
+
+  it("derives only primary route views", () => {
+    expect(
+      deriveCurrentRecentView({
+        pathname: "/thread-1",
+        routeThreadId: threadId("thread-1"),
+        activeThreadId: threadId("thread-focused"),
+        routeWorkspaceId: null,
+        splitViewId: "split-1",
+      }),
+    ).toEqual({
+      kind: "thread",
+      threadId: threadId("thread-focused"),
+      splitViewId: "split-1",
+    });
+
+    expect(
+      deriveCurrentRecentView({
+        pathname: "/",
+        routeThreadId: null,
+        activeThreadId: null,
+        routeWorkspaceId: null,
+      }),
+    ).toBeNull();
+  });
+});
