@@ -1,3 +1,8 @@
+// FILE: ActiveTaskListCard.tsx
+// Purpose: Renders the active plan/task activity panel used above the composer.
+// Layer: Chat composer UI
+// Exports: ActiveTaskListCard
+
 import { memo } from "react";
 import {
   PiArrowsInSimple,
@@ -20,6 +25,7 @@ interface ActiveTaskListCardProps {
   onOpenSidebar: () => void;
 }
 
+// Maps task state to the compact status glyph shown in the activity list.
 function taskStatusIcon(status: ActiveTaskListState["tasks"][number]["status"]) {
   if (status === "completed") {
     return <CheckIcon className="size-3" />;

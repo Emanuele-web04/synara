@@ -262,6 +262,54 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  it.effect("accepts synced composer picker keybindings without startup issues", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* fs.writeFileString(
+        keybindingsConfigPath,
+        JSON.stringify([
+          { key: "mod+shift+m", command: "modelPicker.toggle" },
+          { key: "mod+shift+e", command: "effortPicker.toggle" },
+        ]),
+      );
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+
+      assert.deepEqual(configState.issues, []);
+      assert.isTrue(
+        configState.keybindings.some(
+          (entry) => entry.command === "modelPicker.toggle" && entry.shortcut.key === "m",
+        ),
+      );
+      assert.isTrue(
+        configState.keybindings.some(
+          (entry) => entry.command === "traitsPicker.toggle" && entry.shortcut.key === "e",
+        ),
+      );
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isTrue(
+        persisted.some(
+          (entry) => entry.key === "mod+shift+m" && entry.command === "modelPicker.toggle",
+        ),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) => entry.key === "mod+shift+e" && entry.command === "traitsPicker.toggle",
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect(
     "upserts missing default keybindings on startup without overriding existing command rules",
     () =>

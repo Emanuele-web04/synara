@@ -107,11 +107,10 @@ export const COMPOSER_COLUMN_FRAME_CLASS_NAME = CHAT_COLUMN_FRAME_CLASS_NAME;
 
 /**
  * Frame for rows stacked above the composer (queued steer/queue rows, active task
- * list). Matches the main composer's full column width so the stacked rows sit flush
- * on top of the input as one continuous rounded surface instead of a narrower,
- * detached-looking chip.
+ * list). Keeps stacked activity on the same 11/12-width rail as queued rows so
+ * the composer input can remain a distinct, fully rounded surface underneath.
  */
-export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto w-full min-w-0";
+export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-11/12 min-w-0";
 
 /** Opaque base behind the composer shell: the composer overlaps the scrolling
  *  transcript (`-mt-5`), so without a solid backing the frosted surface would let
@@ -172,7 +171,8 @@ export const COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME = `${COMPOSER_PICKER_MEN
 /** Opaque floating panel for the slash/mention command menu and @local browser.
  *  Picker border/radius/shadow, but a solid fill: the menu floats over the
  *  transcript, so frosted bg-popover/70 would let chat content bleed through. */
-export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME = `relative overflow-hidden bg-popover text-popover-foreground ${COMPOSER_PICKER_MENU_SURFACE_CHROME_CLASS_NAME}`;
+export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME =
+  "relative overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground";
 
 /** Opaque Environment panel card — same rationale as the command menu (overlays transcript). */
 export const ENVIRONMENT_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
@@ -189,13 +189,16 @@ export const ENVIRONMENT_CONTENT_INSET_MOTION_CLASS =
 export const COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME =
   "pointer-events-auto absolute inset-x-0 bottom-full z-20 mb-2 overflow-visible px-1 pt-2";
 
-/** Default command menu row — transparent until hover or keyboard highlight. */
+/** Default command menu row — transparent until hover or keyboard highlight.
+ *  Highlight tints the surface darker (button-secondary), matching every other
+ *  composer picker. The `elevated-secondary-opaque` token lightens toward white,
+ *  which is invisible on the near-white popover surface, so it is not used here. */
 export const COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME =
-  "flex cursor-pointer select-none items-center gap-2 rounded-full px-2.5 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary-opaque)] data-highlighted:bg-[var(--color-background-elevated-secondary-opaque)]";
+  "flex cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] data-highlighted:bg-[var(--color-background-button-secondary-hover)]";
 
 /** Active command menu row — keyboard-selected pill fill. */
 export const COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME =
-  "bg-[var(--color-background-elevated-secondary-opaque)] text-[var(--color-text-foreground)]";
+  "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]";
 
 export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME = `chat-composer-surface-banner border-b ${COMPOSER_SURFACE_BORDER_CLASS_NAME} bg-[var(--color-background-elevated-secondary)]`;
 
@@ -215,8 +218,9 @@ export const COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME = "min-h-[2lh]";
 /** Lexical wraps lines in `<p>` nodes; reset default margins so text sits flush above the footer. */
 export const COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME = "[&_p]:m-0";
 /** Shared padding around the composer prompt editor. */
-export const COMPOSER_EDITOR_PADDING_CLASS_NAME = "relative px-3.5 pt-3.5 pb-2";
+export const COMPOSER_EDITOR_PADDING_CLASS_NAME = "relative pl-3 pr-3.5 pt-3 pb-2";
 /** Bottom bar row — flush to the composer shell edges. */
-export const COMPOSER_FOOTER_ROW_CLASS_NAME = "flex items-center justify-between px-2 pb-1.5";
+export const COMPOSER_FOOTER_ROW_CLASS_NAME =
+  "flex items-center justify-between pl-1.5 pr-2 pb-1.5";
 export const COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME =
-  "flex items-center justify-end gap-2 px-2 pb-1.5";
+  "flex items-center justify-end gap-2 pl-1.5 pr-2 pb-1.5";

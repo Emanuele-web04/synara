@@ -668,6 +668,10 @@ function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: Threa
     event.type === "thread.conversation-rolled-back" ||
     event.type === "thread.session-set" ||
     event.type === "thread.meta-updated" ||
+    event.type === "thread.pinned-message-added" ||
+    event.type === "thread.pinned-message-removed" ||
+    event.type === "thread.pinned-message-done-set" ||
+    event.type === "thread.pinned-message-label-set" ||
     event.type === "thread.archived" ||
     event.type === "thread.unarchived"
   );

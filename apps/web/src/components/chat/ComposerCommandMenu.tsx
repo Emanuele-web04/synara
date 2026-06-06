@@ -424,8 +424,8 @@ const SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
   subagents: BotIcon,
 };
 
-function commandMenuSlashGlyph(command: string): ReactNode {
-  const Icon = SLASH_COMMAND_ICONS[command] ?? TerminalIcon;
+function commandMenuSlashGlyph(command: string, fallback: LucideIcon): ReactNode {
+  const Icon = SLASH_COMMAND_ICONS[command] ?? fallback;
   return <Icon className={COMPOSER_COMMAND_ITEM_GLYPH_CLASSNAME} />;
 }
 
@@ -458,8 +458,12 @@ function commandMenuItemGlyph(item: ComposerCommandItem, theme: "light" | "dark"
         <GitBranchIcon className={cls} />
       );
     case "slash-command":
+      return commandMenuSlashGlyph(item.command, TerminalIcon);
     case "provider-native-command":
-      return commandMenuSlashGlyph(item.command);
+      // Provider native commands surface skills (e.g. Claude exposes skills as
+      // slash commands), so default to the skill block glyph used for skill
+      // tokens in the composer/timeline — named commands still keep their icon.
+      return commandMenuSlashGlyph(item.command, SkillCubeIcon);
     case "model":
       return <BrainIcon className={cls} />;
     case "agent":

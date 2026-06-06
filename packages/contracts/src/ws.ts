@@ -25,6 +25,7 @@ import {
   GitCheckoutInput,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
+  GitHubRepositoryInput,
   GitHandoffThreadInput,
   GitPreparePullRequestThreadInput,
   GitCreateWorktreeInput,
@@ -105,6 +106,7 @@ export const WS_METHODS = {
 
   // Git methods
   gitPull: "git.pull",
+  gitGithubRepository: "git.githubRepository",
   gitStatus: "git.status",
   gitReadWorkingTreeDiff: "git.readWorkingTreeDiff",
   gitSummarizeDiff: "git.summarizeDiff",
@@ -225,6 +227,7 @@ const WebSocketRequestBody = Schema.Union([
 
   // Git methods
   tagRequestBody(WS_METHODS.gitPull, GitPullInput),
+  tagRequestBody(WS_METHODS.gitGithubRepository, GitHubRepositoryInput),
   tagRequestBody(WS_METHODS.gitStatus, GitStatusInput),
   tagRequestBody(WS_METHODS.gitReadWorkingTreeDiff, GitReadWorkingTreeDiffInput),
   tagRequestBody(WS_METHODS.gitSummarizeDiff, GitSummarizeDiffInput),

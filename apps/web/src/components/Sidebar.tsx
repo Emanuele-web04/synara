@@ -3159,12 +3159,8 @@ export default function Sidebar() {
               cwd: threadWorkspacePath,
             });
           }
-          // For existing PTYs we deliberately skip api.terminal.open: the
-          // server would otherwise tear down and respawn the shell whenever
-          // the requested cwd differs from the session's recorded cwd, which
-          // would silently kill any state the user already has set up (env
-          // vars, shell history, etc.). Writing `cd` instead navigates in
-          // place inside the live shell.
+          // Existing PTYs keep their launch cwd/env on reattach; writing `cd`
+          // navigates in place without replacing shell state.
           await api.terminal.write({
             threadId,
             terminalId: targetTerminalId,

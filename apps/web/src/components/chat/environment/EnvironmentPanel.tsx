@@ -8,7 +8,13 @@
 //          use floating overlay only. The card surface and content are identical either way.
 // Layer: Environment panel container
 
-import type { EditorId, ResolvedKeybindingsConfig, ThreadId } from "@t3tools/contracts";
+import type {
+  EditorId,
+  MessageId,
+  PinnedMessage,
+  ResolvedKeybindingsConfig,
+  ThreadId,
+} from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 
 import {
@@ -20,13 +26,16 @@ import ChatMarkdown from "~/components/ChatMarkdown";
 import GitActionsControl from "~/components/GitActionsControl";
 import { IconButton } from "~/components/ui/icon-button";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
-import { ChangesIcon, SettingsIcon } from "~/lib/icons";
+import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import { EnvironmentEditorSection } from "./EnvironmentEditorSection";
+import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
+import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "./environmentPanelStyles";
 import {
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
+  EnvironmentCollapsibleSection,
   EnvironmentPanelTitle,
   EnvironmentRow,
   EnvironmentSectionLabel,
@@ -53,6 +62,10 @@ export interface EnvironmentPanelProps {
   variant: "docked" | "floating";
   gitCwd: string | null;
   openInCwd: string | null;
+  githubRepository?: {
+    readonly nameWithOwner: string;
+    readonly url: string;
+  } | null;
   isGitRepo: boolean;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
@@ -73,8 +86,26 @@ export interface EnvironmentPanelProps {
     readonly status: "idle" | "pending" | "error";
     readonly updatedAt: string | null;
   } | null;
+  /** Per-thread pinned-message checklist (server-synced). */
+  pinnedMessages: readonly PinnedMessage[];
+  /** Live text of pinned messages still present in the transcript (for labels/availability). */
+  pinnedMessageTextById: ReadonlyMap<MessageId, string>;
+  /** Per-thread freeform scratchpad notes (server-synced). */
+  notes: string;
   /** Toggle the Diff panel/route (same handler the header diff toggle used). */
   onToggleDiff: () => void;
+  /** Open the repository URL in the in-app browser panel. */
+  onOpenGithubRepository?: (url: string) => void;
+  /** Scroll the transcript to a pinned message. */
+  onJumpToPinnedMessage: (messageId: MessageId) => void;
+  /** Toggle a pinned message's done state (strikethrough; stays pinned). */
+  onTogglePinnedMessageDone: (messageId: MessageId) => void;
+  /** Remove a message from the pinned checklist. */
+  onUnpinMessage: (messageId: MessageId) => void;
+  /** Set (`null` clears to auto) a pinned message's label. */
+  onRenamePinnedMessage: (messageId: MessageId, label: string | null) => void;
+  /** Persist updated notes for the given thread (bound per section instance, not the active thread). */
+  onNotesChange: (threadId: ThreadId, notes: string) => Promise<void>;
   /** Dismiss the panel overlay — invoked after actions that open the dock. */
   onClose: () => void;
 }
@@ -89,24 +120,25 @@ function EnvironmentRecapSection({
   markdownCwd: string | undefined;
 }) {
   return (
-    <div className="flex flex-col gap-1.5 pb-2.5 pt-1">
-      <EnvironmentSectionLabel>Recap</EnvironmentSectionLabel>
-      {recap.text ? (
-        <div className="px-2">
-          <ChatMarkdown
-            text={recap.text}
-            cwd={markdownCwd}
-            isStreaming={false}
-            className={ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME}
-          />
-        </div>
-      ) : (
-        <div className="flex flex-col gap-1.5 px-2" aria-hidden>
-          <div className="h-2.5 w-full rounded bg-[var(--color-background-button-secondary-hover)]/45 motion-safe:animate-pulse" />
-          <div className="h-2.5 w-4/5 rounded bg-[var(--color-background-button-secondary-hover)]/35 motion-safe:animate-pulse" />
-        </div>
-      )}
-    </div>
+    <EnvironmentCollapsibleSection label="Recap">
+      <div className="flex flex-col gap-1.5 pb-1.5">
+        {recap.text ? (
+          <div className="px-2">
+            <ChatMarkdown
+              text={recap.text}
+              cwd={markdownCwd}
+              isStreaming={false}
+              className={ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME}
+            />
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1.5 px-2" aria-hidden>
+            <div className="h-2.5 w-full rounded bg-[var(--color-background-button-secondary-hover)]/45 motion-safe:animate-pulse" />
+            <div className="h-2.5 w-4/5 rounded bg-[var(--color-background-button-secondary-hover)]/35 motion-safe:animate-pulse" />
+          </div>
+        )}
+      </div>
+    </EnvironmentCollapsibleSection>
   );
 }
 
@@ -115,6 +147,7 @@ export function EnvironmentPanel({
   variant,
   gitCwd,
   openInCwd,
+  githubRepository = null,
   isGitRepo,
   keybindings,
   availableEditors,
@@ -125,7 +158,16 @@ export function EnvironmentPanel({
   diffTotals,
   branchToolbar,
   recap = null,
+  pinnedMessages,
+  pinnedMessageTextById,
+  notes,
   onToggleDiff,
+  onOpenGithubRepository,
+  onJumpToPinnedMessage,
+  onTogglePinnedMessageDone,
+  onUnpinMessage,
+  onRenamePinnedMessage,
+  onNotesChange,
   onClose,
 }: EnvironmentPanelProps) {
   const navigate = useNavigate();
@@ -178,6 +220,26 @@ export function EnvironmentPanel({
 
       <div className={PANEL_DIVIDER_CLASS_NAME} />
 
+      {githubRepository && onOpenGithubRepository ? (
+        <>
+          <div className="flex flex-col gap-0.5">
+            <EnvironmentSectionLabel>Repository</EnvironmentSectionLabel>
+            <EnvironmentRow
+              icon={<GitHubIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+              label={<span className="truncate">{githubRepository.nameWithOwner}</span>}
+              trailing={
+                <ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />
+              }
+              onClick={() => {
+                onOpenGithubRepository(githubRepository.url);
+                onClose();
+              }}
+            />
+          </div>
+          <div className={PANEL_DIVIDER_CLASS_NAME} />
+        </>
+      ) : null}
+
       <EnvironmentEditorSection
         keybindings={keybindings}
         availableEditors={availableEditors}
@@ -188,6 +250,32 @@ export function EnvironmentPanel({
         <>
           <div className={PANEL_DIVIDER_CLASS_NAME} />
           <EnvironmentRecapSection recap={recap} markdownCwd={markdownCwd} />
+        </>
+      ) : null}
+
+      {pinnedMessages.length > 0 ? (
+        <>
+          <div className={PANEL_DIVIDER_CLASS_NAME} />
+          <EnvironmentPinnedSection
+            pins={pinnedMessages}
+            messageTextById={pinnedMessageTextById}
+            onJump={onJumpToPinnedMessage}
+            onToggleDone={onTogglePinnedMessageDone}
+            onUnpin={onUnpinMessage}
+            onRename={onRenamePinnedMessage}
+          />
+        </>
+      ) : null}
+
+      {activeThreadId ? (
+        <>
+          <div className={PANEL_DIVIDER_CLASS_NAME} />
+          <EnvironmentNotesSection
+            key={activeThreadId}
+            threadId={activeThreadId}
+            notes={notes}
+            onChange={onNotesChange}
+          />
         </>
       ) : null}
     </div>

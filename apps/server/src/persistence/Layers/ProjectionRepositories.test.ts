@@ -93,6 +93,8 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         lastKnownPr: null,
         latestTurnId: null,
         handoff: null,
+        pinnedMessages: null,
+        notes: null,
         latestUserMessageAt: null,
         pendingApprovalCount: 0,
         pendingUserInputCount: 0,

@@ -26,6 +26,8 @@ const STATIC_KEYBINDING_COMMANDS = [
   "terminal.workspace.chat",
   "browser.toggle",
   "diff.toggle",
+  "modelPicker.toggle",
+  "traitsPicker.toggle",
   "chat.new",
   "chat.newLatestProject",
   "chat.newChat",

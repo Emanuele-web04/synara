@@ -106,6 +106,16 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Open the current conversation in a second pane.",
   },
   {
+    command: "modelPicker.toggle",
+    label: "Model picker",
+    description: "Open the composer provider and model picker.",
+  },
+  {
+    command: "traitsPicker.toggle",
+    label: "Reasoning picker",
+    description: "Open the composer reasoning and trait controls.",
+  },
+  {
     command: "terminal.toggle",
     label: "Toggle terminal",
     description: "Show or hide the terminal surface for the active thread.",

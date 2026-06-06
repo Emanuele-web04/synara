@@ -1043,7 +1043,19 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const runtimeEnvChanged =
         JSON.stringify(currentRuntimeEnv) !== JSON.stringify(nextRuntimeEnv);
 
-      if (existing.cwd !== input.cwd || runtimeEnvChanged) {
+      if (existing.process) {
+        // A renderer reattach/reconcile is not an explicit restart; keep the live
+        // PTY's original cwd/env so UI drift cannot SIGTERM a running agent.
+        if (existing.cwd !== input.cwd || runtimeEnvChanged) {
+          this.logger.warn("ignoring terminal open cwd/env change for running session", {
+            threadId: existing.threadId,
+            terminalId: existing.terminalId,
+            currentCwd: existing.cwd,
+            requestedCwd: input.cwd,
+            runtimeEnvChanged,
+          });
+        }
+      } else if (existing.cwd !== input.cwd || runtimeEnvChanged) {
         this.stopProcess(existing);
         existing.cwd = input.cwd;
         existing.runtimeEnv = nextRuntimeEnv;
@@ -1061,7 +1073,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           existing.terminalId,
           existing.history.toString(),
         );
-      } else if (currentRuntimeEnv !== nextRuntimeEnv) {
+      } else if (runtimeEnvChanged) {
         existing.runtimeEnv = nextRuntimeEnv;
       }
 

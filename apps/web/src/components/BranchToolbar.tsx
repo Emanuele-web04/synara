@@ -3,10 +3,10 @@
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
 import type { ThreadId, RuntimeMode } from "@t3tools/contracts";
 import { LuSplit } from "react-icons/lu";
-import { ChevronDownIcon, ChevronRightIcon, HandoffIcon } from "~/lib/icons";
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, HandoffIcon } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAppSettings } from "~/appSettings";
 
 import { newCommandId, cn } from "../lib/utils";
@@ -42,14 +42,56 @@ import {
 } from "./chat/environment/EnvironmentRow";
 import type { ContextWindowSnapshot } from "../lib/contextWindow";
 import { ProviderUsagePanelContent } from "./ProviderUsagePanelContent";
+import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { Button } from "./ui/button";
-import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "./ui/collapsible";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import { Collapsible, CollapsiblePanel } from "./ui/collapsible";
+import {
+  Menu,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "./ui/menu";
 import type { ThreadWorkspacePatch } from "../types";
 
 function WorktreeGlyph({ className }: { className?: string }) {
   return <LuSplit className={cn("rotate-90", className)} />;
+}
+
+/** Leading glyph treatment shared by every "Continue in" menu row (16px, muted). */
+const ENV_MENU_ICON_CLASS_NAME = "size-3.5 text-muted-foreground";
+
+/**
+ * One row of the "Continue in" menu: `[glyph] [label …grows] [✓ when selected]`.
+ * Centralizes the icon/label/check treatment so the local, worktree, and handoff
+ * entries stay on one grid instead of repeating the same class strings per row.
+ */
+function ContinueInMenuItem({
+  icon,
+  label,
+  selected = false,
+  disabled = false,
+  onSelect,
+}: {
+  icon: ReactNode;
+  label: ReactNode;
+  selected?: boolean;
+  disabled?: boolean;
+  onSelect?: () => void;
+}) {
+  return (
+    <MenuItem disabled={disabled} {...(onSelect ? { onClick: onSelect } : {})}>
+      {icon}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {selected ? (
+        <CheckIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground)]" />
+      ) : null}
+    </MenuItem>
+  );
 }
 
 export interface BranchToolbarProps {
@@ -308,7 +350,7 @@ export default function BranchToolbar({
 
   const envGlyph = (className: string) =>
     environmentPresentation.mode === "local" ? (
-      <CentralIcon name="macbook" className={className} />
+      <CentralIcon name="macbook-air" className={className} />
     ) : (
       <WorktreeGlyph className={className} />
     );
@@ -324,12 +366,17 @@ export default function BranchToolbar({
     >
       <div className={isPanel ? "flex flex-col gap-0.5" : "flex items-center gap-2"}>
         {showEnvPicker ? (
-          <Popover open={envPickerOpen} onOpenChange={setEnvPickerOpen}>
-            <PopoverTrigger
-              className={
-                isPanel
-                  ? ENVIRONMENT_ROW_CLASS_NAME
-                  : "inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
+          <Menu open={envPickerOpen} onOpenChange={setEnvPickerOpen}>
+            <MenuTrigger
+              render={
+                <button
+                  type="button"
+                  className={
+                    isPanel
+                      ? ENVIRONMENT_ROW_CLASS_NAME
+                      : "inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
+                  }
+                />
               }
             >
               {isPanel ? (
@@ -345,152 +392,87 @@ export default function BranchToolbar({
                   <ChevronDownIcon className="size-3 opacity-60" />
                 </>
               )}
-            </PopoverTrigger>
-            <PopoverPopup
+            </MenuTrigger>
+            <ComposerPickerMenuPopup
               align="start"
               side={isPanel ? "bottom" : "top"}
               sideOffset={6}
-              className="w-56 [&_[data-slot=popover-viewport]]:py-0 [&_[data-slot=popover-viewport]]:[--viewport-inline-padding:0px]"
+              className="w-60 min-w-60"
             >
-              <div className="py-1.5">
-                <p className="px-3 pb-1 pt-1 text-[11px] font-medium text-[var(--color-text-foreground-secondary)]">
-                  Continue in
-                </p>
+              <MenuGroup>
+                <MenuGroupLabel>Continue in</MenuGroupLabel>
                 {environmentPresentation.mode === "local" ? (
-                  <div className="flex w-full items-center gap-2 px-3 py-1.5 text-sm">
-                    <CentralIcon
-                      name="macbook"
-                      className="size-4 text-[var(--color-text-foreground-secondary)]"
-                    />
-                    <span>{environmentPresentation.localOptionLabel}</span>
-                    <svg
-                      className="ml-auto size-4 text-[var(--color-text-foreground)]"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  </div>
+                  <ContinueInMenuItem
+                    icon={<CentralIcon name="macbook-air" className={ENV_MENU_ICON_CLASS_NAME} />}
+                    label={environmentPresentation.localOptionLabel}
+                    selected
+                  />
                 ) : (
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-elevated-secondary)]"
-                    onClick={() => {
-                      setEnvPickerOpen(false);
-                      onEnvModeChange("local");
-                    }}
-                  >
-                    <CentralIcon
-                      name="macbook"
-                      className="size-4 text-[var(--color-text-foreground-secondary)]"
-                    />
-                    <span>{environmentPresentation.localOptionLabel}</span>
-                  </button>
+                  <ContinueInMenuItem
+                    icon={<CentralIcon name="macbook-air" className={ENV_MENU_ICON_CLASS_NAME} />}
+                    label={environmentPresentation.localOptionLabel}
+                    onSelect={() => onEnvModeChange("local")}
+                  />
                 )}
                 {canSwitchToWorktree ? (
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-elevated-secondary)]"
-                    onClick={() => {
-                      setEnvPickerOpen(false);
-                      onEnvModeChange("worktree");
-                    }}
-                  >
-                    <WorktreeGlyph className="size-4 text-[var(--color-text-foreground-secondary)]" />
-                    <span>New worktree</span>
-                  </button>
+                  <ContinueInMenuItem
+                    icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
+                    label="New worktree"
+                    onSelect={() => onEnvModeChange("worktree")}
+                  />
                 ) : null}
                 {effectiveEnvMode === "worktree" && !canHandoffToLocal ? (
-                  <div className="flex w-full items-center gap-2 px-3 py-1.5 text-sm">
-                    <WorktreeGlyph className="size-4 text-[var(--color-text-foreground-secondary)]" />
-                    <span>{environmentPresentation.worktreeOptionLabel}</span>
-                    <svg
-                      className="ml-auto size-4 text-[var(--color-text-foreground)]"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  </div>
+                  <ContinueInMenuItem
+                    icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
+                    label={environmentPresentation.worktreeOptionLabel}
+                    selected
+                  />
                 ) : null}
                 {canHandoffToWorktree && onHandoffToWorktree ? (
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] disabled:pointer-events-none disabled:opacity-50"
+                  <ContinueInMenuItem
+                    icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
+                    label="Hand off to new worktree"
                     disabled={handoffBusy}
-                    onClick={() => {
-                      setEnvPickerOpen(false);
-                      onHandoffToWorktree();
-                    }}
-                  >
-                    <WorktreeGlyph className="size-4 text-[var(--color-text-foreground-secondary)]" />
-                    <span>Hand off to new worktree</span>
-                  </button>
+                    onSelect={() => onHandoffToWorktree()}
+                  />
                 ) : null}
                 {canHandoffToLocal && onHandoffToLocal ? (
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] disabled:pointer-events-none disabled:opacity-50"
+                  <ContinueInMenuItem
+                    icon={<HandoffIcon className={ENV_MENU_ICON_CLASS_NAME} />}
+                    label="Hand off to local"
                     disabled={handoffBusy}
-                    onClick={() => {
-                      setEnvPickerOpen(false);
-                      onHandoffToLocal();
-                    }}
-                  >
-                    <HandoffIcon className="size-4 text-[var(--color-text-foreground-secondary)]" />
-                    <span>Hand off to local</span>
-                  </button>
+                    onSelect={() => onHandoffToLocal()}
+                  />
                 ) : null}
-              </div>
+              </MenuGroup>
 
-              <div className="mx-3 border-t border-[color:var(--color-border-light)]" />
+              <MenuSeparator />
 
-              <div className="py-1.5">
-                <Collapsible open={rateLimitsOpen} onOpenChange={setRateLimitsOpen}>
-                  <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-elevated-secondary)]">
-                    <svg
-                      className="size-4 text-[var(--color-text-foreground-secondary)]"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <circle cx="12" cy="12" r="10" />
-                      <polyline points="12 6 12 12 16 14" />
-                    </svg>
-                    <span>Rate limits remaining</span>
-                    <ChevronRightIcon
-                      className={cn(
-                        "ml-auto size-3.5 text-[var(--color-text-foreground-secondary)] transition-transform duration-150",
-                        rateLimitsOpen && "rotate-90",
-                      )}
-                    />
-                  </CollapsibleTrigger>
-                  <CollapsiblePanel>
-                    <ProviderUsagePanelContent
-                      provider={activeProvider}
-                      rateLimits={usageSummary.rateLimits}
-                      usageLines={usageSummary.usageLines}
-                      isLoading={usageSummary.isLoading}
-                      learnMoreHref={usageSummary.learnMoreHref}
-                      showTitle={false}
-                      className="px-3 pb-1 pt-1"
-                    />
-                  </CollapsiblePanel>
-                </Collapsible>
-              </div>
-            </PopoverPopup>
-          </Popover>
+              <Collapsible open={rateLimitsOpen} onOpenChange={setRateLimitsOpen}>
+                <MenuItem closeOnClick={false} onClick={() => setRateLimitsOpen((open) => !open)}>
+                  <CentralIcon name="clock" className="size-3.5 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate">Rate limits remaining</span>
+                  <ChevronRightIcon
+                    className={cn(
+                      "size-3.5 shrink-0 text-[var(--color-text-foreground-secondary)] transition-transform duration-150",
+                      rateLimitsOpen && "rotate-90",
+                    )}
+                  />
+                </MenuItem>
+                <CollapsiblePanel>
+                  <ProviderUsagePanelContent
+                    provider={activeProvider}
+                    rateLimits={usageSummary.rateLimits}
+                    usageLines={usageSummary.usageLines}
+                    isLoading={usageSummary.isLoading}
+                    learnMoreHref={usageSummary.learnMoreHref}
+                    showTitle={false}
+                    className="px-2 pb-1 pt-1"
+                  />
+                </CollapsiblePanel>
+              </Collapsible>
+            </ComposerPickerMenuPopup>
+          </Menu>
         ) : isPanel ? (
           <div className={cn(ENVIRONMENT_ROW_CLASS_NAME, "cursor-default hover:bg-transparent")}>
             <EnvironmentRowBody

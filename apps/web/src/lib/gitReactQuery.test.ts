@@ -4,6 +4,7 @@ import {
   GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
   gitQueryKeys,
   gitWorkingTreeDiffQueryOptions,
+  invalidateGitQueries,
   invalidateGitQueriesForCwds,
   gitMutationKeys,
   gitPreparePullRequestThreadMutationOptions,
@@ -52,11 +53,34 @@ describe("git mutation options", () => {
 });
 
 describe("git query invalidation", () => {
+  it("invalidates all git query families for broad refreshes", async () => {
+    const queryClient = new QueryClient();
+    const cwd = "/repo/all";
+    const keys = [
+      gitQueryKeys.githubRepository(cwd),
+      gitQueryKeys.status(cwd),
+      gitQueryKeys.branches(cwd),
+      gitQueryKeys.workingTreeDiff(cwd, "workingTree"),
+      ["git", "pull-request", cwd, "https://example.test/pr/1"] as const,
+    ];
+
+    for (const key of keys) {
+      queryClient.setQueryData(key, {});
+    }
+
+    await invalidateGitQueries(queryClient);
+
+    for (const key of keys) {
+      expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+    }
+  });
+
   it("invalidates only queries for the affected cwd", async () => {
     const queryClient = new QueryClient();
     const cwdA = "/repo/a";
     const cwdB = "/repo/b";
     const cwdAKeys = [
+      gitQueryKeys.githubRepository(cwdA),
       gitQueryKeys.status(cwdA),
       gitQueryKeys.branches(cwdA),
       gitQueryKeys.workingTreeDiff(cwdA, "workingTree"),
@@ -64,6 +88,7 @@ describe("git query invalidation", () => {
       ["git", "pull-request", cwdA, "https://example.test/pr/1"] as const,
     ];
     const cwdBKeys = [
+      gitQueryKeys.githubRepository(cwdB),
       gitQueryKeys.status(cwdB),
       gitQueryKeys.branches(cwdB),
       gitQueryKeys.workingTreeDiff(cwdB, "workingTree"),

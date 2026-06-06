@@ -1026,6 +1026,168 @@ describe("store pure functions", () => {
     expect(next.threads[0]?.createBranchFlowCompleted).toBe(true);
   });
 
+  it("preserves pinnedMessages and notes through the normalized read-model projection", () => {
+    // Regression: the normalized ThreadShell projection used to omit pinnedMessages/notes, so a
+    // read-model sync would reconstruct the thread without them — pins clicked in the sidebar
+    // never surfaced in the Environment panel. `next.threads[0]` reads back through
+    // getThreadsFromState (the shell projection), so this asserts the fields survive the round trip.
+    const messageId = MessageId.makeUnsafe("assistant-pin-1");
+    const pinnedMessages = [
+      { messageId, label: null, done: false, pinnedAt: "2026-02-27T00:01:00.000Z" },
+    ];
+    const next = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          pinnedMessages,
+          notes: "remember to rerun typecheck",
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.pinnedMessages).toEqual(pinnedMessages);
+    expect(next.threads[0]?.notes).toBe("remember to rerun typecheck");
+  });
+
+  it("surfaces pinnedMessages and notes from a live thread.meta-updated event", () => {
+    const initialState = makeState(makeThread());
+    const messageId = MessageId.makeUnsafe("assistant-pin-2");
+    const pinnedMessages = [
+      {
+        messageId,
+        label: "Check the migration",
+        done: false,
+        pinnedAt: "2026-02-27T00:02:00.000Z",
+      },
+    ];
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.meta-updated", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        pinnedMessages,
+        notes: "scratch",
+        updatedAt: "2026-02-27T00:02:00.000Z",
+      }),
+    ]);
+
+    expect(next.threads[0]?.pinnedMessages).toEqual(pinnedMessages);
+    expect(next.threads[0]?.notes).toBe("scratch");
+  });
+
+  it("applies live pinned-message operation events without replacing the whole list", () => {
+    const initialState = makeState(makeThread());
+    const firstMessageId = MessageId.makeUnsafe("assistant-pin-op-1");
+    const secondMessageId = MessageId.makeUnsafe("assistant-pin-op-2");
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.pinned-message-added", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        pin: {
+          messageId: firstMessageId,
+          label: null,
+          done: false,
+          pinnedAt: "2026-02-27T00:03:00.000Z",
+        },
+        updatedAt: "2026-02-27T00:03:00.000Z",
+      }),
+      makeDomainEvent("thread.pinned-message-added", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        pin: {
+          messageId: secondMessageId,
+          label: null,
+          done: false,
+          pinnedAt: "2026-02-27T00:03:05.000Z",
+        },
+        updatedAt: "2026-02-27T00:03:05.000Z",
+      }),
+      makeDomainEvent("thread.pinned-message-done-set", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: firstMessageId,
+        done: true,
+        updatedAt: "2026-02-27T00:03:10.000Z",
+      }),
+      makeDomainEvent("thread.pinned-message-label-set", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: firstMessageId,
+        label: "Follow up",
+        updatedAt: "2026-02-27T00:03:15.000Z",
+      }),
+      makeDomainEvent("thread.pinned-message-removed", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: secondMessageId,
+        updatedAt: "2026-02-27T00:03:20.000Z",
+      }),
+    ]);
+
+    expect(next.threads[0]?.pinnedMessages).toEqual([
+      {
+        messageId: firstMessageId,
+        label: "Follow up",
+        done: true,
+        pinnedAt: "2026-02-27T00:03:00.000Z",
+      },
+    ]);
+    expect(next.threads[0]?.updatedAt).toBe("2026-02-27T00:03:20.000Z");
+  });
+
+  it("does not let a sidebar shell upsert clobber pinnedMessages/notes from the detail path", () => {
+    // The sidebar shell snapshot/event does not carry pinnedMessages or notes. A shell upsert must
+    // preserve the values resolved from the thread-detail path rather than clearing them.
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = MessageId.makeUnsafe("assistant-pin-3");
+    const pinnedMessages = [
+      { messageId, label: null, done: true, pinnedAt: "2026-02-27T00:03:00.000Z" },
+    ];
+    const initialState = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          pinnedMessages,
+          notes: "keep me",
+        }),
+      ),
+    );
+
+    const next = applyShellEvent(initialState, {
+      kind: "thread-upserted",
+      sequence: 2,
+      thread: {
+        id: threadId,
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        associatedWorktreePath: null,
+        associatedWorktreeBranch: null,
+        associatedWorktreeRef: null,
+        createBranchFlowCompleted: false,
+        parentThreadId: null,
+        subagentAgentId: null,
+        subagentNickname: null,
+        subagentRole: null,
+        forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
+        lastKnownPr: null,
+        latestTurn: null,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:05:00.000Z",
+        archivedAt: null,
+        handoff: null,
+        session: null,
+      },
+    });
+
+    expect(next.threads[0]?.pinnedMessages).toEqual(pinnedMessages);
+    expect(next.threads[0]?.notes).toBe("keep me");
+  });
+
   it("updates turn diffs and latest turn immediately from live events", () => {
     const initialState = makeState(
       makeThread({

@@ -26,7 +26,7 @@ import { ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { ServerConfig } from "./config";
-import { GitCore } from "./git/Services/GitCore";
+import { GitCore, type GitCoreShape } from "./git/Services/GitCore";
 import { GitManager } from "./git/Services/GitManager";
 import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
 import { TextGeneration } from "./git/Services/TextGeneration";
@@ -59,6 +59,108 @@ interface ProcessTableRow {
   readonly virtualSizeBytes: number;
   readonly command: string;
   readonly args: string;
+}
+
+// Normalizes supported GitHub remote URL forms into `owner/repo` for browser-panel links.
+function parseGitHubRepositoryNameWithOwnerFromRemoteUrl(url: string | null): string | null {
+  const trimmed = url?.trim() ?? "";
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  const match =
+    /^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/github\.com\/|git:\/\/github\.com\/)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/i.exec(
+      trimmed,
+    );
+  const repositoryNameWithOwner = match?.[1]?.trim() ?? "";
+  return repositoryNameWithOwner.length > 0 ? repositoryNameWithOwner : null;
+}
+
+function normalizeGitRemoteName(value: string | null): string | null {
+  const normalized = value?.trim() ?? "";
+  return normalized.length > 0 && normalized !== "." ? normalized : null;
+}
+
+function uniqueRemoteCandidates(candidates: ReadonlyArray<string | null>): string[] {
+  const unique = new Set<string>();
+  for (const candidate of candidates) {
+    const normalized = normalizeGitRemoteName(candidate);
+    if (normalized) {
+      unique.add(normalized);
+    }
+  }
+  return [...unique];
+}
+
+function readGitStdoutOrNull(
+  git: GitCoreShape,
+  cwd: string,
+  operation: string,
+  args: ReadonlyArray<string>,
+) {
+  return git
+    .execute({
+      operation,
+      cwd,
+      args,
+      allowNonZeroExit: true,
+      maxOutputBytes: 16_384,
+    })
+    .pipe(
+      Effect.map((result) => {
+        if (result.code !== 0) {
+          return null;
+        }
+        const trimmed = result.stdout.trim();
+        return trimmed.length > 0 ? trimmed : null;
+      }),
+      Effect.catch(() => Effect.succeed(null)),
+    );
+}
+
+function parseGitRemoteNames(stdout: string | null): string[] {
+  if (!stdout) {
+    return [];
+  }
+  return stdout
+    .split(/\r?\n/g)
+    .map((line) => normalizeGitRemoteName(line))
+    .filter((remoteName): remoteName is string => remoteName !== null);
+}
+
+// Resolves the GitHub repository link from Git config without running the full status path.
+function resolveGitHubRepository(git: GitCoreShape, cwd: string) {
+  return Effect.gen(function* () {
+    const branch = yield* readGitStdoutOrNull(git, cwd, "WsRpc.githubRepository.currentBranch", [
+      "branch",
+      "--show-current",
+    ]);
+    const remoteNames = parseGitRemoteNames(
+      yield* readGitStdoutOrNull(git, cwd, "WsRpc.githubRepository.remotes", ["remote"]),
+    );
+    const branchRemote = branch ? yield* git.readConfigValue(cwd, `branch.${branch}.remote`) : null;
+    const pushDefaultRemote = yield* git.readConfigValue(cwd, "remote.pushDefault");
+
+    for (const remoteName of uniqueRemoteCandidates([
+      branchRemote,
+      pushDefaultRemote,
+      "origin",
+      ...remoteNames,
+    ])) {
+      const remoteUrl = yield* git.readConfigValue(cwd, `remote.${remoteName}.url`);
+      const nameWithOwner = parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
+      if (nameWithOwner) {
+        return {
+          repository: {
+            nameWithOwner,
+            url: `https://github.com/${nameWithOwner}`,
+          },
+        };
+      }
+    }
+
+    return { repository: null };
+  });
 }
 
 function truncateDiagnosticText(value: string, limit: number): string {
@@ -154,6 +256,10 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
       | "thread.conversation-rolled-back"
       | "thread.session-set"
       | "thread.meta-updated"
+      | "thread.pinned-message-added"
+      | "thread.pinned-message-removed"
+      | "thread.pinned-message-done-set"
+      | "thread.pinned-message-label-set"
       | "thread.archived"
       | "thread.unarchived";
   }
@@ -167,6 +273,10 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.conversation-rolled-back" ||
     event.type === "thread.session-set" ||
     event.type === "thread.meta-updated" ||
+    event.type === "thread.pinned-message-added" ||
+    event.type === "thread.pinned-message-removed" ||
+    event.type === "thread.pinned-message-done-set" ||
+    event.type === "thread.pinned-message-label-set" ||
     event.type === "thread.archived" ||
     event.type === "thread.unarchived"
   );
@@ -449,6 +559,8 @@ export const makeWsRpcLayer = () =>
         [WS_METHODS.shellOpenInEditor]: (input) =>
           rpcEffect(open.openInEditor(input), "Failed to open editor"),
 
+        [WS_METHODS.gitGithubRepository]: (input) =>
+          rpcEffect(resolveGitHubRepository(git, input.cwd), "Failed to resolve GitHub repository"),
         [WS_METHODS.gitStatus]: (input) =>
           rpcEffect(gitStatusBroadcaster.getStatus(input), "Failed to read git status"),
         [WS_METHODS.gitReadWorkingTreeDiff]: (input) =>

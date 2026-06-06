@@ -114,6 +114,16 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     whenAst: whenNotTerminalFocus,
   },
   {
+    command: "modelPicker.toggle",
+    shortcut: commandShortcut("m", { shiftKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "traitsPicker.toggle",
+    shortcut: commandShortcut("e", { shiftKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
     command: "thread.jump.1",
     shortcut: commandShortcut("1"),
     whenAst: whenThreadJumpAvailable,

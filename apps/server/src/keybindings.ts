@@ -84,6 +84,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+2", command: "terminal.workspace.chat", when: "terminalWorkspaceOpen" },
   { key: "mod+shift+b", command: "browser.toggle", when: "!terminalFocus" },
   { key: "mod+d", command: "diff.toggle", when: "!terminalFocus" },
+  { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
+  { key: "mod+shift+e", command: "traitsPicker.toggle", when: "!terminalFocus" },
   { key: "mod+n", command: "chat.new", when: "!terminalFocus" },
   { key: "mod+shift+n", command: "chat.newLatestProject", when: "!terminalFocus" },
   { key: "mod+alt+n", command: "chat.newChat", when: "!terminalFocus" },
@@ -483,10 +485,16 @@ function invalidEntryIssue(index: number, detail: string): ServerConfigIssue {
 
 const LEGACY_KEYBINDING_COMMAND_ALIASES = {
   "commandPalette.toggle": "sidebar.search",
+  "composer.effortPicker.toggle": "traitsPicker.toggle",
+  "composer.modelPicker.toggle": "modelPicker.toggle",
+  "effortPicker.toggle": "traitsPicker.toggle",
+  "reasoningPicker.toggle": "traitsPicker.toggle",
   "thread.previous": "chat.visible.previous",
   "thread.next": "chat.visible.next",
 } as const satisfies Record<string, KeybindingRule["command"]>;
 
+// Cross-device configs can lag behind command renames; normalize known aliases
+// before schema validation so stale synced files do not become warning toasts.
 function normalizeLegacyKeybindingEntry(entry: unknown): {
   readonly entry: unknown;
   readonly migrated: boolean;

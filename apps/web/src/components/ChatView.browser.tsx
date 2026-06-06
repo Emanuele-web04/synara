@@ -981,6 +981,24 @@ function dispatchComposerPickerShortcut(target: EventTarget, key: "m" | "e"): vo
   );
 }
 
+function dispatchConfiguredShortcut(
+  target: EventTarget,
+  input: { key: string; shiftKey?: boolean; altKey?: boolean },
+): void {
+  const useMetaForMod = isMacPlatform(navigator.platform);
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: input.key,
+      shiftKey: input.shiftKey ?? false,
+      altKey: input.altKey ?? false,
+      metaKey: useMetaForMod,
+      ctrlKey: !useMetaForMod,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+}
+
 async function triggerChatNewShortcutUntilPath(
   router: ReturnType<typeof getRouter>,
   predicate: (pathname: string) => boolean,
@@ -1884,6 +1902,48 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const composerEditor = await waitForComposerEditor();
       composerEditor.focus();
       dispatchComposerPickerShortcut(composerEditor, "m");
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("Codex");
+        expect(text).toContain("Claude");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens the composer model picker from a configured keybinding", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-model-picker-configured-shortcut" as MessageId,
+        targetText: "configured model picker shortcut",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "modelPicker.toggle",
+              shortcut: {
+                key: "m",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: true,
+                modKey: true,
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      dispatchConfiguredShortcut(composerEditor, { key: "m", altKey: true });
 
       await vi.waitFor(() => {
         const text = document.body.textContent ?? "";
@@ -3109,12 +3169,24 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const taskListCard = document.querySelector<HTMLElement>(
         '[data-testid="active-task-list-card"]',
       );
+      const composerShell = document.querySelector<HTMLElement>(
+        'form[data-chat-composer-form="true"] .chat-composer-shell',
+      );
       expect(transcriptPane).not.toBeNull();
       expect(taskListCard).not.toBeNull();
+      expect(composerShell).not.toBeNull();
       expect(transcriptPane!.getBoundingClientRect().bottom).toBeGreaterThan(
         taskListCard!.getBoundingClientRect().top + 1,
       );
-      expect(taskListCard!.getBoundingClientRect().width).toBeLessThan(window.innerWidth);
+      // Active plan activity shares the queued-follow-up rail: 11/12 composer width,
+      // centered, with the composer retaining its own rounded top corners.
+      const taskRect = taskListCard!.getBoundingClientRect();
+      const composerRect = composerShell!.getBoundingClientRect();
+      expect(Math.abs(taskRect.width - (composerRect.width * 11) / 12)).toBeLessThanOrEqual(2);
+      expect(
+        Math.abs(taskRect.left + taskRect.width / 2 - (composerRect.left + composerRect.width / 2)),
+      ).toBeLessThanOrEqual(1);
+      expect(parseFloat(getComputedStyle(composerShell!).borderTopLeftRadius)).toBeGreaterThan(0);
 
       const openPlanButton = await waitForElement(
         () => document.querySelector<HTMLButtonElement>('button[title="Collapse plan"]'),

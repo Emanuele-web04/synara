@@ -16,6 +16,12 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { resolveThreadBranchRegressionGuard } from "@t3tools/shared/git";
+import {
+  addPinnedMessage,
+  removePinnedMessage,
+  setPinnedMessageDone,
+  setPinnedMessageLabel,
+} from "@t3tools/shared/pinnedMessages";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
 import { create } from "zustand";
@@ -274,6 +280,11 @@ function updateThread(
   return changed ? next : threads;
 }
 
+function resolveEventUpdatedAt(thread: Thread, updatedAt: string): string {
+  const currentUpdatedAt = thread.updatedAt ?? thread.createdAt;
+  return currentUpdatedAt > updatedAt ? currentUpdatedAt : updatedAt;
+}
+
 function sourceProposedPlansEqual(
   left: Thread["pendingSourceProposedPlan"],
   right: Thread["pendingSourceProposedPlan"],
@@ -383,6 +394,8 @@ function threadShellsEqual(left: ThreadShell | undefined, right: ThreadShell): b
     (left.sidechatSourceThreadId ?? null) === (right.sidechatSourceThreadId ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     (left.handoff ?? null) === (right.handoff ?? null) &&
+    deepEqualJson(left.pinnedMessages ?? null, right.pinnedMessages ?? null) &&
+    (left.notes ?? "") === (right.notes ?? "") &&
     left.latestUserMessageAt === right.latestUserMessageAt &&
     left.hasPendingApprovals === right.hasPendingApprovals &&
     left.hasPendingUserInput === right.hasPendingUserInput &&
@@ -428,6 +441,8 @@ function toThreadShell(thread: Thread): ThreadShell {
     sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
     handoff: thread.handoff ?? null,
+    ...(thread.pinnedMessages !== undefined ? { pinnedMessages: thread.pinnedMessages } : {}),
+    ...(thread.notes !== undefined ? { notes: thread.notes } : {}),
     ...(thread.latestUserMessageAt !== undefined
       ? { latestUserMessageAt: thread.latestUserMessageAt }
       : {}),
@@ -1521,6 +1536,12 @@ function normalizeThreadFromReadModel(
     deepEqualJson(previous.lastKnownPr, incoming.lastKnownPr)
       ? previous.lastKnownPr
       : (incoming.lastKnownPr ?? null);
+  const pinnedMessages =
+    previous?.pinnedMessages &&
+    deepEqualJson(previous.pinnedMessages, incoming.pinnedMessages ?? null)
+      ? previous.pinnedMessages
+      : (incoming.pinnedMessages as Thread["pinnedMessages"]);
+  const notes = incoming.notes;
   const turnDiffSummaries = normalizeTurnDiffSummaries(
     incoming.checkpoints,
     previous?.turnDiffSummaries,
@@ -1603,6 +1624,8 @@ function normalizeThreadFromReadModel(
     (previous.sidechatSourceThreadId ?? null) === (incoming.sidechatSourceThreadId ?? null) &&
     deepEqualJson(previous.lastKnownPr ?? null, lastKnownPr) &&
     (previous.handoff ?? null) === handoff &&
+    previous.pinnedMessages === pinnedMessages &&
+    previous.notes === notes &&
     previous.turnDiffSummaries === turnDiffSummaries &&
     previous.activities === activities
   ) {
@@ -1643,6 +1666,8 @@ function normalizeThreadFromReadModel(
     sidechatSourceThreadId: incoming.sidechatSourceThreadId ?? null,
     lastKnownPr,
     handoff,
+    ...(pinnedMessages !== undefined ? { pinnedMessages } : {}),
+    ...(notes !== undefined ? { notes } : {}),
     ...(resolvedLatestUserMessageAt !== undefined
       ? { latestUserMessageAt: resolvedLatestUserMessageAt }
       : {}),
@@ -1733,6 +1758,10 @@ function normalizeThreadShellSnapshot(
     sidechatSourceThreadId: incoming.sidechatSourceThreadId ?? null,
     lastKnownPr,
     handoff,
+    // The sidebar shell snapshot/event does not carry pinned messages or notes, so keep the
+    // values resolved from the thread-detail path instead of clobbering them with `undefined`.
+    ...(previous?.pinnedMessages !== undefined ? { pinnedMessages: previous.pinnedMessages } : {}),
+    ...(previous?.notes !== undefined ? { notes: previous.notes } : {}),
     ...(incoming.latestUserMessageAt !== undefined
       ? { latestUserMessageAt: incoming.latestUserMessageAt ?? null }
       : {}),
@@ -3075,6 +3104,9 @@ function applyOrchestrationEvent(
               deepEqualJson(event.payload.lastKnownPr ?? null, thread.lastKnownPr ?? null)) &&
             (event.payload.handoff === undefined ||
               (event.payload.handoff ?? null) === (thread.handoff ?? null)) &&
+            (event.payload.pinnedMessages === undefined ||
+              deepEqualJson(event.payload.pinnedMessages, thread.pinnedMessages ?? null)) &&
+            (event.payload.notes === undefined || event.payload.notes === (thread.notes ?? "")) &&
             nextUpdatedAt === thread.updatedAt
           ) {
             return thread;
@@ -3108,6 +3140,14 @@ function applyOrchestrationEvent(
               ? { lastKnownPr: event.payload.lastKnownPr }
               : {}),
             ...(event.payload.handoff !== undefined ? { handoff: event.payload.handoff } : {}),
+            ...(event.payload.pinnedMessages !== undefined
+              ? {
+                  pinnedMessages: event.payload.pinnedMessages as NonNullable<
+                    Thread["pinnedMessages"]
+                  >,
+                }
+              : {}),
+            ...(event.payload.notes !== undefined ? { notes: event.payload.notes } : {}),
             updatedAt: nextUpdatedAt,
             ...(cwdChanged ? { session: null } : {}),
           };
@@ -3118,6 +3158,93 @@ function applyOrchestrationEvent(
             options?.updateThreadArray !== false || event.payload.title !== undefined,
           updateSidebarSummary: true,
         },
+      );
+
+    case "thread.pinned-message-added":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const pinnedMessages = addPinnedMessage(thread.pinnedMessages, event.payload.pin);
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
+          if (thread.pinnedMessages === pinnedMessages && thread.updatedAt === updatedAt) {
+            return thread;
+          }
+          return {
+            ...thread,
+            pinnedMessages,
+            updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: false },
+      );
+
+    case "thread.pinned-message-removed":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const pinnedMessages = removePinnedMessage(
+            thread.pinnedMessages,
+            event.payload.messageId,
+          );
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
+          if (thread.pinnedMessages === pinnedMessages && thread.updatedAt === updatedAt) {
+            return thread;
+          }
+          return {
+            ...thread,
+            pinnedMessages,
+            updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: false },
+      );
+
+    case "thread.pinned-message-done-set":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const pinnedMessages = setPinnedMessageDone(
+            thread.pinnedMessages,
+            event.payload.messageId,
+            event.payload.done,
+          );
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
+          if (thread.pinnedMessages === pinnedMessages && thread.updatedAt === updatedAt) {
+            return thread;
+          }
+          return {
+            ...thread,
+            pinnedMessages,
+            updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: false },
+      );
+
+    case "thread.pinned-message-label-set":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const pinnedMessages = setPinnedMessageLabel(
+            thread.pinnedMessages,
+            event.payload.messageId,
+            event.payload.label,
+          );
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
+          if (thread.pinnedMessages === pinnedMessages && thread.updatedAt === updatedAt) {
+            return thread;
+          }
+          return {
+            ...thread,
+            pinnedMessages,
+            updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: false },
       );
 
     case "thread.message-sent":

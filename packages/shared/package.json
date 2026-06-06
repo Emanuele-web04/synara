@@ -72,6 +72,10 @@
       "types": "./src/threadSummary.ts",
       "import": "./src/threadSummary.ts"
     },
+    "./pinnedMessages": {
+      "types": "./src/pinnedMessages.ts",
+      "import": "./src/pinnedMessages.ts"
+    },
     "./threadWorkspace": {
       "types": "./src/threadWorkspace.ts",
       "import": "./src/threadWorkspace.ts"

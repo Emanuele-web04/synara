@@ -5,6 +5,12 @@ import {
   OrchestrationSession,
   OrchestrationThread,
 } from "@t3tools/contracts";
+import {
+  addPinnedMessage,
+  removePinnedMessage,
+  setPinnedMessageDone,
+  setPinnedMessageLabel,
+} from "@t3tools/shared/pinnedMessages";
 import { Effect, Schema } from "effect";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
@@ -19,6 +25,10 @@ import {
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
+  ThreadPinnedMessageAddedPayload,
+  ThreadPinnedMessageDoneSetPayload,
+  ThreadPinnedMessageLabelSetPayload,
+  ThreadPinnedMessageRemovedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadConversationRolledBackPayload,
   ThreadRuntimeModeSetPayload,
@@ -422,6 +432,101 @@ export function projectEvent(
               ...(payload.subagentRole !== undefined ? { subagentRole: payload.subagentRole } : {}),
               ...(payload.lastKnownPr !== undefined ? { lastKnownPr: payload.lastKnownPr } : {}),
               ...(payload.handoff !== undefined ? { handoff: payload.handoff } : {}),
+              ...(payload.pinnedMessages !== undefined
+                ? { pinnedMessages: payload.pinnedMessages }
+                : {}),
+              ...(payload.notes !== undefined ? { notes: payload.notes } : {}),
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.pinned-message-added":
+      return decodeForEvent(
+        ThreadPinnedMessageAddedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const existingThread =
+            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              pinnedMessages: addPinnedMessage(existingThread?.pinnedMessages, payload.pin),
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.pinned-message-removed":
+      return decodeForEvent(
+        ThreadPinnedMessageRemovedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const existingThread =
+            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              pinnedMessages: removePinnedMessage(
+                existingThread?.pinnedMessages,
+                payload.messageId,
+              ),
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.pinned-message-done-set":
+      return decodeForEvent(
+        ThreadPinnedMessageDoneSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const existingThread =
+            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              pinnedMessages: setPinnedMessageDone(
+                existingThread?.pinnedMessages,
+                payload.messageId,
+                payload.done,
+              ),
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.pinned-message-label-set":
+      return decodeForEvent(
+        ThreadPinnedMessageLabelSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const existingThread =
+            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              pinnedMessages: setPinnedMessageLabel(
+                existingThread?.pinnedMessages,
+                payload.messageId,
+                payload.label,
+              ),
               updatedAt: payload.updatedAt,
             }),
           };

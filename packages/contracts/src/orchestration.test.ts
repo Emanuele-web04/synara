@@ -18,6 +18,7 @@ import {
   OrchestrationProposedPlan,
   OrchestrationSession,
   ProjectCreateCommand,
+  THREAD_NOTES_MAX_CHARS,
   ThreadMetaUpdatedPayload,
   ThreadTurnStartCommand,
   ThreadCreatedPayload,
@@ -442,6 +443,59 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.modelSelection?.provider, "claudeAgent");
+  }),
+);
+
+it.effect("decodes pinned-message commands and events", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeClientOrchestrationCommand({
+      type: "thread.pinned-message.label.set",
+      commandId: "cmd-pin-label",
+      threadId: "thread-1",
+      messageId: "message-1",
+      label: "Review this",
+    });
+    assert.strictEqual(command.type, "thread.pinned-message.label.set");
+
+    const event = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-pin-added",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.pinned-message-added",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-pin-add",
+      causationEventId: null,
+      correlationId: "cmd-pin-add",
+      metadata: {},
+      payload: {
+        threadId: "thread-1",
+        pin: {
+          messageId: "message-1",
+          label: null,
+          done: false,
+          pinnedAt: "2026-01-01T00:00:00.000Z",
+        },
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    assert.strictEqual(event.type, "thread.pinned-message-added");
+  }),
+);
+
+it.effect("rejects oversized thread notes payloads", () =>
+  Effect.gen(function* () {
+    const failed = yield* decodeThreadMetaUpdatedPayload({
+      threadId: "thread-1",
+      notes: "x".repeat(THREAD_NOTES_MAX_CHARS + 1),
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }).pipe(
+      Effect.match({
+        onFailure: () => true,
+        onSuccess: () => false,
+      }),
+    );
+    assert.strictEqual(failed, true);
   }),
 );
 

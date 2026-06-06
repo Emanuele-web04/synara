@@ -22,6 +22,7 @@ export const GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS = 4_000;
 
 export const gitQueryKeys = {
   all: ["git"] as const,
+  githubRepository: (cwd: string | null) => ["git", "github-repository", cwd] as const,
   status: (cwd: string | null) => ["git", "status", cwd] as const,
   branches: (cwd: string | null) => ["git", "branches", cwd] as const,
   workingTreeDiff: (
@@ -60,6 +61,7 @@ export const gitMutationKeys = {
 
 export function invalidateGitQueries(queryClient: QueryClient) {
   return Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["git", "github-repository"] as const }),
     queryClient.invalidateQueries({ queryKey: ["git", "status"] as const }),
     queryClient.invalidateQueries({ queryKey: ["git", "branches"] as const }),
     queryClient.invalidateQueries({ queryKey: ["git", "working-tree-diff"] as const }),
@@ -72,6 +74,7 @@ export function invalidateGitQueriesForCwds(queryClient: QueryClient, cwds: Iter
   const uniqueCwds = [...new Set([...cwds].filter((cwd) => cwd.length > 0))];
   return Promise.all(
     uniqueCwds.flatMap((cwd) => [
+      queryClient.invalidateQueries({ queryKey: gitQueryKeys.githubRepository(cwd) }),
       queryClient.invalidateQueries({ queryKey: gitQueryKeys.status(cwd) }),
       queryClient.invalidateQueries({ queryKey: gitQueryKeys.branches(cwd) }),
       queryClient.invalidateQueries({ queryKey: ["git", "working-tree-diff", cwd] as const }),
@@ -93,6 +96,21 @@ export function gitStatusQueryOptions(cwd: string | null) {
     refetchOnWindowFocus: true,
     refetchOnReconnect: "always",
     refetchInterval: GIT_STATUS_REFETCH_INTERVAL_MS,
+  });
+}
+
+export function gitGithubRepositoryQueryOptions(cwd: string | null, enabled = true) {
+  return queryOptions({
+    queryKey: gitQueryKeys.githubRepository(cwd),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!cwd) throw new Error("GitHub repository is unavailable.");
+      return api.git.githubRepository({ cwd });
+    },
+    enabled: enabled && cwd !== null,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
   });
 }
 

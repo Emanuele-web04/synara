@@ -829,7 +829,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("h-px flex-1 bg-border");
   });
 
-  it("folds work log summaries into the next assistant message footer", async () => {
+  it("folds work log summaries above the next assistant message footer", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -879,7 +879,9 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain(
+    expect(markup).toContain(formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale"));
+    expect(markup).toContain("Worked for 1.0s");
+    expect(markup).not.toContain(
       `${formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale")} • 1.0s`,
     );
     expect(markup).not.toContain("Work log");

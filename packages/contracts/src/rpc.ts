@@ -12,6 +12,8 @@ import {
   GitCreateDetachedWorktreeResult,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
+  GitHubRepositoryInput,
+  GitHubRepositoryResult,
   GitHandoffThreadInput,
   GitHandoffThreadResult,
   GitInitInput,
@@ -260,6 +262,12 @@ export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
 export const WsGitStatusRpc = Rpc.make(WS_METHODS.gitStatus, {
   payload: GitStatusInput,
   success: GitStatusResult,
+  error: WsRpcError,
+});
+
+export const WsGitGithubRepositoryRpc = Rpc.make(WS_METHODS.gitGithubRepository, {
+  payload: GitHubRepositoryInput,
+  success: GitHubRepositoryResult,
   error: WsRpcError,
 });
 
@@ -610,6 +618,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsWriteFileRpc,
   WsFilesystemBrowseRpc,
   WsShellOpenInEditorRpc,
+  WsGitGithubRepositoryRpc,
   WsGitStatusRpc,
   WsGitReadWorkingTreeDiffRpc,
   WsGitSummarizeDiffRpc,

@@ -19,7 +19,7 @@ import {
   type RefObject,
   type ReactNode,
 } from "react";
-import { deriveTimelineEntries, formatElapsed } from "../../session-logic";
+import { deriveTimelineEntries } from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import {
@@ -34,9 +34,10 @@ import {
   type LucideIcon,
   McpIcon,
   NewThreadIcon,
-  QueueArrow,
+  PinIcon,
   SkillCubeIcon,
   SquarePenIcon,
+  SteerIcon,
   TerminalIcon,
   Undo2Icon,
   ZapIcon,
@@ -125,6 +126,16 @@ const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
 const MIN_BOTTOM_CONTENT_INSET_PX = 64;
 const MESSAGE_HOVER_REVEAL_CLASS_NAME =
   "opacity-0 transition-opacity pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto";
+// How long a jumped-to message keeps its highlight tint before fading back out.
+const JUMP_HIGHLIGHT_DURATION_MS = 1200;
+
+/**
+ * Imperative handle the transcript exposes so the Environment panel's pinned-message
+ * checklist can scroll the virtualized list to (and briefly flash) a specific message.
+ */
+export interface MessagesTimelineController {
+  scrollToMessage: (messageId: MessageId) => void;
+}
 
 const AgentTaskIcon: LucideIcon = (props) => (
   <RiRobot3Line className={props.className} style={props.style} />
@@ -159,7 +170,7 @@ function UserDispatchModeChip({
         hasLeadingMedia ? "mb-3" : "mb-1.5",
       )}
     >
-      <QueueArrow className="size-3 shrink-0 text-muted-foreground/75" />
+      <SteerIcon className="size-3 shrink-0 text-muted-foreground/75" />
       <span>Steering conversation</span>
     </div>
   );
@@ -178,6 +189,12 @@ interface MessagesTimelineProps {
   followLiveOutput?: boolean;
   emptyStateContent?: ReactNode;
   listRef?: RefObject<LegendListRef | null>;
+  /** Receives the scroll-to-message controller so the Environment panel can jump to a pin. */
+  controllerRef?: RefObject<MessagesTimelineController | null>;
+  /** Message ids currently pinned for the active thread (drives the footer pin toggle state). */
+  pinnedMessageIds?: ReadonlySet<MessageId>;
+  /** Toggle a message's pinned state from the assistant footer. */
+  onTogglePinMessage?: (messageId: MessageId) => void;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso?: string;
@@ -224,6 +241,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   activeTurnStartedAt,
   followLiveOutput = false,
   listRef,
+  controllerRef,
+  pinnedMessageIds,
+  onTogglePinMessage,
   timelineEntries,
   turnDiffSummaryByAssistantMessageId,
   nowIso,
@@ -315,6 +335,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const [editingUserMessageId, setEditingUserMessageId] = useState<MessageId | null>(null);
   const [submittingEditedUserMessageId, setSubmittingEditedUserMessageId] =
     useState<MessageId | null>(null);
+  // Transient highlight applied to a message jumped-to from the pinned-message checklist.
+  const [highlightedMessageId, setHighlightedMessageId] = useState<MessageId | null>(null);
   const timelineExtraData = useMemo(
     () => ({
       editingUserMessageId,
@@ -322,6 +344,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedFileChangesByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
+      highlightedMessageId,
+      pinnedMessageIds,
       submittingEditedUserMessageId,
     }),
     [
@@ -330,6 +354,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedFileChangesByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
+      highlightedMessageId,
+      pinnedMessageIds,
       submittingEditedUserMessageId,
     ],
   );
@@ -363,6 +389,55 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  // Latest rows kept in a ref so the imperative scroll controller can look up a message's
+  // index lazily without re-installing the controller on every transcript change.
+  const rowsRef = useRef(rows);
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
+  const jumpHighlightTimeoutRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (jumpHighlightTimeoutRef.current !== null) {
+        window.clearTimeout(jumpHighlightTimeoutRef.current);
+      }
+    },
+    [],
+  );
+  useEffect(() => {
+    if (!controllerRef) {
+      return;
+    }
+    const controller: MessagesTimelineController = {
+      scrollToMessage: (messageId) => {
+        const index = rowsRef.current.findIndex(
+          (row) => row.kind === "message" && row.message.id === messageId,
+        );
+        if (index < 0) {
+          return;
+        }
+        void resolvedListRef.current?.scrollToIndex({
+          index,
+          animated: true,
+          viewPosition: 0.2,
+        });
+        setHighlightedMessageId(messageId);
+        if (jumpHighlightTimeoutRef.current !== null) {
+          window.clearTimeout(jumpHighlightTimeoutRef.current);
+        }
+        jumpHighlightTimeoutRef.current = window.setTimeout(() => {
+          setHighlightedMessageId(null);
+          jumpHighlightTimeoutRef.current = null;
+        }, JUMP_HIGHLIGHT_DURATION_MS);
+      },
+    };
+    controllerRef.current = controller;
+    return () => {
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+      }
+    };
+  }, [controllerRef, resolvedListRef]);
   const tailContentRowId = useMemo(() => {
     for (let index = rows.length - 1; index >= 0; index -= 1) {
       const row = rows[index]!;
@@ -482,11 +557,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     <div
       className={cn(
         CHAT_COLUMN_FRAME_CLASS_NAME,
-        "px-1",
+        "px-1 transition-colors duration-500",
         row.kind === "work" || (row.kind === "message" && row.message.role === "assistant")
           ? "pb-2"
           : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
+        row.kind === "message" && row.message.id === highlightedMessageId
+          ? "rounded-xl bg-[var(--color-background-elevated-secondary)]"
+          : null,
       )}
       data-timeline-row-kind={row.kind}
       data-message-id={row.kind === "message" ? row.message.id : undefined}
@@ -750,6 +828,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             showCopyButton: row.showAssistantCopyButton,
             streaming: row.assistantCopyStreaming,
           });
+          const messagePinned = pinnedMessageIds?.has(row.message.id) ?? false;
+          // Offer the pin toggle wherever copy is offered (a complete, terminal answer);
+          // keep it visible for an already-pinned message so it can always be unpinned.
+          const showPinToggle =
+            Boolean(onTogglePinMessage) && (assistantCopyState.visible || messagePinned);
           const turnSummary = row.assistantTurnDiffSummary;
           const fileDiffStatByPath = new Map(
             (turnSummary?.files ?? []).map((file) => [
@@ -782,40 +865,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               (workEntry) =>
                 isFileChangeWorkEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) > 0,
             );
-          const assistantMeta = row.message.streaming ? (
-            nowIso ? (
-              [
-                formatMessageMeta(
-                  row.message.createdAt,
-                  formatElapsed(row.durationStart, nowIso),
-                  timestampFormat,
-                ),
-                inlineWorkSummary,
-              ]
-                .filter((value): value is string => Boolean(value))
-                .join(" • ")
-            ) : (
-              <>
-                <LiveMessageMeta
-                  createdAt={row.message.createdAt}
-                  durationStart={row.durationStart}
-                  timestampFormat={timestampFormat}
-                />
-                {inlineWorkSummary ? <> • {inlineWorkSummary}</> : null}
-              </>
-            )
-          ) : (
-            [
-              formatMessageMeta(
-                row.message.createdAt,
-                formatElapsed(row.durationStart, row.message.completedAt),
-                timestampFormat,
-              ),
-              inlineWorkSummary,
-            ]
-              .filter((value): value is string => Boolean(value))
-              .join(" • ")
-          );
+          const assistantMeta = [
+            formatShortTimestamp(row.message.createdAt, timestampFormat),
+            inlineWorkSummary,
+          ]
+            .filter((value): value is string => Boolean(value))
+            .join(" • ");
           const collapsedTurnItems = row.collapsedTurnItems;
           const hasCollapsedWork = Boolean(collapsedTurnItems && collapsedTurnItems.length > 0);
           const isCollapsedWorkExpanded = hasCollapsedWork
@@ -998,6 +1053,23 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground/45"
                   style={chatMessageFooterStyle}
                 >
+                  {showPinToggle ? (
+                    // Pin sits at the left edge of the footer, before the copy action. It stays
+                    // visible when pinned so it reads as a persistent "this is pinned" marker; an
+                    // unpinned message only reveals it on hover, like the other footer actions.
+                    // Same Central pin glyph in both states — persistence signals the pinned state.
+                    <MessageActionButton
+                      label={messagePinned ? "Unpin message" : "Pin message"}
+                      tooltip={messagePinned ? "Unpin from panel" : "Pin to panel"}
+                      aria-pressed={messagePinned}
+                      className={
+                        messagePinned ? "text-muted-foreground/80" : MESSAGE_HOVER_REVEAL_CLASS_NAME
+                      }
+                      onClick={() => onTogglePinMessage?.(row.message.id)}
+                    >
+                      <PinIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                    </MessageActionButton>
+                  ) : null}
                   {assistantCopyState.visible ? (
                     <MessageCopyButton
                       text={assistantCopyState.text ?? ""}
@@ -1287,38 +1359,6 @@ function WorkingTimer({ createdAt }: { createdAt: string }) {
   return <span ref={textRef}>{initialText}</span>;
 }
 
-function LiveMessageMeta({
-  createdAt,
-  durationStart,
-  timestampFormat,
-}: {
-  createdAt: string;
-  durationStart: string;
-  timestampFormat: TimestampFormat;
-}) {
-  const textRef = useRef<HTMLSpanElement>(null);
-  const initialText = formatLiveMessageMetaNow(createdAt, durationStart, timestampFormat);
-
-  useEffect(() => {
-    const updateText = () => {
-      if (textRef.current) {
-        textRef.current.textContent = formatLiveMessageMetaNow(
-          createdAt,
-          durationStart,
-          timestampFormat,
-        );
-      }
-    };
-    updateText();
-    const id = window.setInterval(updateText, 1000);
-    return () => {
-      window.clearInterval(id);
-    };
-  }, [createdAt, durationStart, timestampFormat]);
-
-  return <span ref={textRef}>{initialText}</span>;
-}
-
 function formatWorkingTimer(startIso: string, endIso: string): string | null {
   const startedAtMs = Date.parse(startIso);
   const endedAtMs = Date.parse(endIso);
@@ -1344,27 +1384,6 @@ function formatWorkingTimer(startIso: string, endIso: string): string | null {
 
 function formatWorkingTimerNow(startIso: string): string {
   return formatWorkingTimer(startIso, new Date().toISOString()) ?? "0s";
-}
-
-function formatLiveMessageMetaNow(
-  createdAt: string,
-  durationStart: string,
-  timestampFormat: TimestampFormat,
-): string {
-  return formatMessageMeta(
-    createdAt,
-    formatElapsed(durationStart, new Date().toISOString()),
-    timestampFormat,
-  );
-}
-
-function formatMessageMeta(
-  createdAt: string,
-  duration: string | null,
-  timestampFormat: TimestampFormat,
-): string {
-  if (!duration) return formatShortTimestamp(createdAt, timestampFormat);
-  return `${formatShortTimestamp(createdAt, timestampFormat)} • ${duration}`;
 }
 
 function formatInlineWorkSummary(_groupedEntries: TimelineWorkEntry[]): string | null {
