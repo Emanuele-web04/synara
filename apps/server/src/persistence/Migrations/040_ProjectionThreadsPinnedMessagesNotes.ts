@@ -7,24 +7,22 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { columnExists } from "./schemaHelpers.ts";
+
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  yield* sql`
-    ALTER TABLE projection_threads
-    ADD COLUMN pinned_messages_json TEXT
-  `.pipe(
-    Effect.catchTag("SqlError", (error) =>
-      String(error).includes("duplicate column name") ? Effect.void : Effect.fail(error),
-    ),
-  );
+  if (!(yield* columnExists(sql, "projection_threads", "pinned_messages_json"))) {
+    yield* sql`
+      ALTER TABLE projection_threads
+      ADD COLUMN pinned_messages_json TEXT
+    `;
+  }
 
-  yield* sql`
-    ALTER TABLE projection_threads
-    ADD COLUMN notes TEXT
-  `.pipe(
-    Effect.catchTag("SqlError", (error) =>
-      String(error).includes("duplicate column name") ? Effect.void : Effect.fail(error),
-    ),
-  );
+  if (!(yield* columnExists(sql, "projection_threads", "notes"))) {
+    yield* sql`
+      ALTER TABLE projection_threads
+      ADD COLUMN notes TEXT
+    `;
+  }
 });
