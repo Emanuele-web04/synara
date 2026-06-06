@@ -1,0 +1,717 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Northstar Studio - Browser Editor Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #172026;
+        --muted: #66737d;
+        --paper: #fbfaf7;
+        --surface: #ffffff;
+        --line: #d8ded7;
+        --blue: #2f6df6;
+        --green: #107c5d;
+        --coral: #ed745f;
+        --sun: #f2c94c;
+        --shadow: 0 24px 70px rgba(23, 32, 38, 0.14);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      .page {
+        min-height: 100vh;
+        overflow-x: hidden;
+      }
+
+      .nav {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        height: 68px;
+        padding: 0 clamp(20px, 5vw, 72px);
+        border-bottom: 1px solid rgba(216, 222, 215, 0.74);
+        background: rgba(251, 250, 247, 0.86);
+        backdrop-filter: blur(18px);
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 11px;
+        font-weight: 760;
+        letter-spacing: 0;
+      }
+
+      .brand-mark {
+        display: grid;
+        width: 32px;
+        height: 32px;
+        place-items: center;
+        border-radius: 8px;
+        background: var(--ink);
+        color: white;
+        font-size: 14px;
+      }
+
+      .nav-links {
+        display: flex;
+        align-items: center;
+        gap: clamp(14px, 2vw, 28px);
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .nav-links a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .nav-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .button {
+        display: inline-flex;
+        min-height: 40px;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        padding: 0 16px;
+        background: var(--ink);
+        color: white;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0;
+        text-decoration: none;
+      }
+
+      .button.secondary {
+        border-color: var(--line);
+        background: rgba(255, 255, 255, 0.66);
+        color: var(--ink);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 0.92fr) minmax(420px, 1.08fr);
+        gap: clamp(34px, 6vw, 82px);
+        align-items: center;
+        min-height: calc(100vh - 68px);
+        padding: clamp(44px, 7vw, 92px) clamp(20px, 5vw, 72px) 72px;
+      }
+
+      .hero-copy {
+        max-width: 680px;
+      }
+
+      h1 {
+        margin: 0;
+        color: var(--ink);
+        font-size: clamp(48px, 7vw, 86px);
+        font-weight: 780;
+        letter-spacing: 0;
+        line-height: 0.96;
+      }
+
+      .hero-copy p {
+        max-width: 560px;
+        margin: 24px 0 0;
+        color: var(--muted);
+        font-size: clamp(17px, 2vw, 20px);
+        line-height: 1.58;
+      }
+
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 30px;
+      }
+
+      .hero-proof {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        max-width: 520px;
+        margin-top: 42px;
+      }
+
+      .proof-item {
+        border-top: 1px solid var(--line);
+        padding-top: 14px;
+      }
+
+      .proof-value {
+        display: block;
+        font-size: 22px;
+        font-weight: 760;
+      }
+
+      .proof-label {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .product-scene {
+        position: relative;
+        min-height: 570px;
+      }
+
+      .scene-card {
+        position: absolute;
+        overflow: hidden;
+        border: 1px solid rgba(216, 222, 215, 0.9);
+        border-radius: 16px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .dashboard {
+        inset: 24px 0 auto 38px;
+        width: min(620px, 100%);
+        height: 410px;
+      }
+
+      .dashboard-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 58px;
+        padding: 0 20px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .window-controls {
+        display: flex;
+        gap: 7px;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: var(--coral);
+      }
+
+      .dot:nth-child(2) {
+        background: var(--sun);
+      }
+
+      .dot:nth-child(3) {
+        background: var(--green);
+      }
+
+      .dashboard-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        padding: 20px;
+      }
+
+      .metric-panel {
+        min-height: 142px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 16px;
+        background: #f7f9f7;
+      }
+
+      .metric-panel strong {
+        display: block;
+        font-size: 28px;
+        letter-spacing: 0;
+      }
+
+      .metric-panel span {
+        display: block;
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .bars {
+        display: flex;
+        align-items: end;
+        gap: 7px;
+        height: 70px;
+        margin-top: 16px;
+      }
+
+      .bars i {
+        display: block;
+        flex: 1;
+        min-width: 10px;
+        border-radius: 5px 5px 2px 2px;
+        background: var(--blue);
+      }
+
+      .bars i:nth-child(2n) {
+        background: var(--green);
+      }
+
+      .callout {
+        right: 10px;
+        bottom: 54px;
+        width: 282px;
+        padding: 18px;
+      }
+
+      .callout h3 {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      .callout p {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .media-strip {
+        left: 0;
+        bottom: 0;
+        display: grid;
+        width: 390px;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 10px;
+        padding: 12px;
+      }
+
+      .photo {
+        min-height: 142px;
+        border-radius: 12px;
+        background:
+          linear-gradient(135deg, rgba(47, 109, 246, 0.22), transparent),
+          linear-gradient(45deg, #24443c, #9dc8b6);
+      }
+
+      .quote {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        border-radius: 12px;
+        background: #172026;
+        padding: 14px;
+        color: white;
+        font-size: 13px;
+        line-height: 1.35;
+      }
+
+      .section {
+        padding: 78px clamp(20px, 5vw, 72px);
+      }
+
+      .section-header {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 30px;
+        margin-bottom: 28px;
+      }
+
+      .section h2 {
+        max-width: 720px;
+        margin: 0;
+        font-size: clamp(32px, 4vw, 54px);
+        line-height: 1.04;
+        letter-spacing: 0;
+      }
+
+      .section-header p {
+        max-width: 420px;
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .feature {
+        min-height: 230px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--surface);
+        padding: 22px;
+      }
+
+      .feature-icon {
+        display: grid;
+        width: 42px;
+        height: 42px;
+        place-items: center;
+        border-radius: 10px;
+        background: #e9f1ff;
+        color: var(--blue);
+        font-weight: 800;
+      }
+
+      .feature h3 {
+        margin: 26px 0 9px;
+        font-size: 20px;
+      }
+
+      .feature p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .pricing-band {
+        display: grid;
+        grid-template-columns: minmax(0, 0.92fr) minmax(320px, 0.58fr);
+        gap: 22px;
+        align-items: stretch;
+        padding-top: 20px;
+      }
+
+      .pricing-copy {
+        border-radius: 18px;
+        background: #172026;
+        color: white;
+        padding: clamp(28px, 5vw, 54px);
+      }
+
+      .pricing-copy h2 {
+        color: white;
+      }
+
+      .pricing-copy p {
+        max-width: 580px;
+        color: rgba(255, 255, 255, 0.72);
+        line-height: 1.55;
+      }
+
+      .pricing-card {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: var(--surface);
+        padding: 28px;
+        box-shadow: var(--shadow);
+      }
+
+      .price {
+        margin: 22px 0;
+        font-size: 44px;
+        font-weight: 780;
+        letter-spacing: 0;
+      }
+
+      .price span {
+        color: var(--muted);
+        font-size: 15px;
+        font-weight: 500;
+      }
+
+      .checklist {
+        display: grid;
+        gap: 11px;
+        margin: 24px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .checklist li {
+        display: flex;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .checklist li::before {
+        content: "";
+        width: 9px;
+        height: 9px;
+        margin-top: 5px;
+        border-radius: 999px;
+        background: var(--green);
+      }
+
+      .footer {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        padding: 30px clamp(20px, 5vw, 72px) 46px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      @media (max-width: 980px) {
+        .nav-links {
+          display: none;
+        }
+
+        .hero,
+        .pricing-band {
+          grid-template-columns: 1fr;
+        }
+
+        .hero {
+          min-height: auto;
+        }
+
+        .product-scene {
+          min-height: 520px;
+        }
+
+        .feature-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .nav {
+          height: auto;
+          min-height: 64px;
+        }
+
+        .nav-actions .button.secondary {
+          display: none;
+        }
+
+        .hero-proof {
+          grid-template-columns: 1fr;
+        }
+
+        .product-scene {
+          min-height: 610px;
+        }
+
+        .dashboard,
+        .callout,
+        .media-strip {
+          position: relative;
+          inset: auto;
+          width: 100%;
+          margin-bottom: 14px;
+        }
+
+        .dashboard {
+          height: auto;
+        }
+
+        .dashboard-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .section-header,
+        .footer {
+          flex-direction: column;
+          align-items: start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <nav class="nav" data-editable="navigation">
+        <div class="brand" aria-label="Northstar Studio">
+          <span class="brand-mark">N</span>
+          <span>Northstar Studio</span>
+        </div>
+        <div class="nav-links">
+          <a href="#platform">Platform</a>
+          <a href="#workflow">Workflow</a>
+          <a href="#pricing">Pricing</a>
+        </div>
+        <div class="nav-actions">
+          <a class="button secondary" href="#pricing">View pricing</a>
+          <a class="button" href="#workflow">Book demo</a>
+        </div>
+      </nav>
+
+      <main>
+        <section class="hero" data-editable="hero">
+          <div class="hero-copy">
+            <h1>Launch experiments without losing the plot.</h1>
+            <p>
+              Northstar Studio gives growth teams one calm workspace for landing pages,
+              campaign briefs, analytics, and review notes.
+            </p>
+            <div class="hero-actions">
+              <a class="button" href="#pricing">Start free</a>
+              <a class="button secondary" href="#platform">Explore platform</a>
+            </div>
+            <div class="hero-proof" aria-label="Customer proof">
+              <div class="proof-item">
+                <span class="proof-value">42%</span>
+                <span class="proof-label">faster campaign review cycles</span>
+              </div>
+              <div class="proof-item">
+                <span class="proof-value">3.8x</span>
+                <span class="proof-label">more variant coverage per launch</span>
+              </div>
+              <div class="proof-item">
+                <span class="proof-value">18k</span>
+                <span class="proof-label">monthly assets shipped by teams</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="product-scene" aria-label="Product preview">
+            <div class="scene-card dashboard" data-editable="dashboard-preview">
+              <div class="dashboard-top">
+                <div class="window-controls" aria-hidden="true">
+                  <span class="dot"></span>
+                  <span class="dot"></span>
+                  <span class="dot"></span>
+                </div>
+                <strong>Launch dashboard</strong>
+              </div>
+              <div class="dashboard-grid">
+                <div class="metric-panel">
+                  <strong>86</strong>
+                  <span>active creative variants</span>
+                  <div class="bars" aria-hidden="true">
+                    <i style="height: 35%"></i>
+                    <i style="height: 72%"></i>
+                    <i style="height: 50%"></i>
+                    <i style="height: 88%"></i>
+                    <i style="height: 62%"></i>
+                  </div>
+                </div>
+                <div class="metric-panel">
+                  <strong>12</strong>
+                  <span>reviews ready for approval</span>
+                  <div class="bars" aria-hidden="true">
+                    <i style="height: 58%"></i>
+                    <i style="height: 44%"></i>
+                    <i style="height: 80%"></i>
+                    <i style="height: 38%"></i>
+                    <i style="height: 68%"></i>
+                  </div>
+                </div>
+                <div class="metric-panel">
+                  <strong>9.4</strong>
+                  <span>message clarity score</span>
+                  <div class="bars" aria-hidden="true">
+                    <i style="height: 70%"></i>
+                    <i style="height: 64%"></i>
+                    <i style="height: 86%"></i>
+                    <i style="height: 74%"></i>
+                    <i style="height: 92%"></i>
+                  </div>
+                </div>
+                <div class="metric-panel">
+                  <strong>31%</strong>
+                  <span>lift from refreshed hero copy</span>
+                  <div class="bars" aria-hidden="true">
+                    <i style="height: 42%"></i>
+                    <i style="height: 54%"></i>
+                    <i style="height: 65%"></i>
+                    <i style="height: 76%"></i>
+                    <i style="height: 84%"></i>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="scene-card callout" data-editable="review-callout">
+              <h3>Review notes stay attached.</h3>
+              <p>Every suggested change points back to the exact block, metric, or asset.</p>
+            </div>
+
+            <div class="scene-card media-strip" data-editable="media-strip">
+              <div class="photo" aria-label="Campaign image placeholder"></div>
+              <div class="quote">
+                <span>"The team finally reviews campaigns in one place."</span>
+                <strong>Marin Lee, VP Growth</strong>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="platform" class="section" data-editable="features">
+          <div class="section-header">
+            <h2>Everything a launch page needs before it meets the world.</h2>
+            <p>
+              Draft, compare, and refine the work without switching between docs,
+              dashboards, and scattered screenshots.
+            </p>
+          </div>
+          <div class="feature-grid">
+            <article class="feature" data-editable="feature-card">
+              <div class="feature-icon">1</div>
+              <h3>Composable page blocks</h3>
+              <p>Swap hero, proof, pricing, and FAQ sections while preserving brand rhythm.</p>
+            </article>
+            <article class="feature" data-editable="feature-card">
+              <div class="feature-icon">2</div>
+              <h3>Variant memory</h3>
+              <p>Keep rejected concepts nearby so good ideas can return when the angle changes.</p>
+            </article>
+            <article class="feature" data-editable="feature-card">
+              <div class="feature-icon">3</div>
+              <h3>Reviewer context</h3>
+              <p>Attach notes to live elements instead of sending vague screenshot comments.</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="pricing" class="section" data-editable="pricing">
+          <div class="pricing-band">
+            <div class="pricing-copy">
+              <h2>One workspace for the messy middle of launch work.</h2>
+              <p>
+                Use this mock page to test browser inspection, drawing, and prompt attachment
+                flows. Change copy, move cards, recolor buttons, or ask the agent to redesign a
+                section.
+              </p>
+            </div>
+            <aside class="pricing-card" aria-label="Starter plan">
+              <h3>Studio Starter</h3>
+              <div class="price">$29 <span>per seat</span></div>
+              <a class="button" href="#workflow">Try the workflow</a>
+              <ul class="checklist">
+                <li>Unlimited landing page drafts</li>
+                <li>Inline review context</li>
+                <li>Campaign analytics snapshot</li>
+                <li>Shared brand component library</li>
+              </ul>
+            </aside>
+          </div>
+        </section>
+      </main>
+
+      <footer id="workflow" class="footer" data-editable="footer">
+        <span>Northstar Studio demo page</span>
+        <span>Built for Synara browser editor testing</span>
+      </footer>
+    </div>
+  </body>
+</html>

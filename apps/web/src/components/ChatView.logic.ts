@@ -444,6 +444,7 @@ export function cloneComposerImageForRetry(
 export function deriveComposerSendState(options: {
   prompt: string;
   imageCount: number;
+  browserContextCount?: number;
   assistantSelectionCount: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
 }): {
@@ -463,6 +464,7 @@ export function deriveComposerSendState(options: {
     hasSendableContent:
       trimmedPrompt.length > 0 ||
       options.imageCount > 0 ||
+      (options.browserContextCount ?? 0) > 0 ||
       options.assistantSelectionCount > 0 ||
       sendableTerminalContexts.length > 0,
   };

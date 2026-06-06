@@ -54,6 +54,11 @@ import {
   TerminalRestartInput,
   TerminalWriteInput,
 } from "./terminal";
+import {
+  PreviewRuntimeEvent,
+  PreviewRuntimeInput,
+  PreviewStartInput,
+} from "./preview";
 import { KeybindingRule } from "./keybindings";
 import {
   ProjectListDirectoriesInput,
@@ -134,6 +139,12 @@ export const WS_METHODS = {
   terminalRestart: "terminal.restart",
   terminalClose: "terminal.close",
 
+  // Preview runtime methods
+  previewGetState: "preview.getState",
+  previewStart: "preview.start",
+  previewStop: "preview.stop",
+  previewRestart: "preview.restart",
+
   // Server meta
   serverGetConfig: "server.getConfig",
   serverGetEnvironment: "server.getEnvironment",
@@ -153,6 +164,7 @@ export const WS_METHODS = {
 
   // Streaming subscriptions
   subscribeTerminalEvents: "terminal.subscribeEvents",
+  subscribePreviewEvents: "preview.subscribeEvents",
   subscribeOrchestrationDomainEvents: "orchestration.subscribeDomainEvents",
   subscribeGitActionProgress: "git.subscribeActionProgress",
 
@@ -177,6 +189,7 @@ export const WS_CHANNELS = {
   serverConfigUpdated: "server.configUpdated",
   serverProviderStatusesUpdated: "server.providerStatusesUpdated",
   serverSettingsUpdated: "server.settingsUpdated",
+  previewEvent: "preview.event",
 } as const;
 
 // -- Tagged Union of all request body schemas ─────────────────────────
@@ -253,6 +266,12 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.terminalRestart, TerminalRestartInput),
   tagRequestBody(WS_METHODS.terminalClose, TerminalCloseInput),
 
+  // Preview runtime methods
+  tagRequestBody(WS_METHODS.previewGetState, PreviewRuntimeInput),
+  tagRequestBody(WS_METHODS.previewStart, PreviewStartInput),
+  tagRequestBody(WS_METHODS.previewStop, PreviewRuntimeInput),
+  tagRequestBody(WS_METHODS.previewRestart, PreviewStartInput),
+
   // Server meta
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverGetEnvironment, Schema.Struct({})),
@@ -314,6 +333,7 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.serverSettingsUpdated]: typeof ServerSettingsUpdatedPayload.Type;
   readonly [WS_CHANNELS.gitActionProgress]: typeof GitActionProgressEvent.Type;
   readonly [WS_CHANNELS.terminalEvent]: typeof TerminalEvent.Type;
+  readonly [WS_CHANNELS.previewEvent]: typeof PreviewRuntimeEvent.Type;
   readonly [ORCHESTRATION_WS_CHANNELS.domainEvent]: OrchestrationEvent;
   readonly [ORCHESTRATION_WS_CHANNELS.shellEvent]: OrchestrationShellStreamItem;
   readonly [ORCHESTRATION_WS_CHANNELS.threadEvent]: OrchestrationThreadStreamItem;
@@ -355,6 +375,7 @@ export const WsPushGitActionProgress = makeWsPushSchema(
   GitActionProgressEvent,
 );
 export const WsPushTerminalEvent = makeWsPushSchema(WS_CHANNELS.terminalEvent, TerminalEvent);
+export const WsPushPreviewEvent = makeWsPushSchema(WS_CHANNELS.previewEvent, PreviewRuntimeEvent);
 export const WsPushOrchestrationDomainEvent = makeWsPushSchema(
   ORCHESTRATION_WS_CHANNELS.domainEvent,
   OrchestrationEvent,
@@ -376,6 +397,7 @@ export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.serverProviderStatusesUpdated,
   WS_CHANNELS.serverSettingsUpdated,
   WS_CHANNELS.terminalEvent,
+  WS_CHANNELS.previewEvent,
   ORCHESTRATION_WS_CHANNELS.domainEvent,
   ORCHESTRATION_WS_CHANNELS.shellEvent,
   ORCHESTRATION_WS_CHANNELS.threadEvent,
@@ -390,6 +412,7 @@ export const WsPush = Schema.Union([
   WsPushServerSettingsUpdated,
   WsPushGitActionProgress,
   WsPushTerminalEvent,
+  WsPushPreviewEvent,
   WsPushOrchestrationDomainEvent,
   WsPushOrchestrationShellEvent,
   WsPushOrchestrationThreadEvent,

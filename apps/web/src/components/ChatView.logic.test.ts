@@ -349,7 +349,20 @@ describe("deriveComposerSendState", () => {
     const state = deriveComposerSendState({
       prompt: "",
       imageCount: 0,
+      browserContextCount: 0,
       assistantSelectionCount: 1,
+      terminalContexts: [],
+    });
+
+    expect(state.hasSendableContent).toBe(true);
+  });
+
+  it("treats browser selection context as sendable content", () => {
+    const state = deriveComposerSendState({
+      prompt: "",
+      imageCount: 0,
+      browserContextCount: 1,
+      assistantSelectionCount: 0,
       terminalContexts: [],
     });
 

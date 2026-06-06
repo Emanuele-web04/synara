@@ -21,6 +21,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
+  type PreviewRuntimeEvent,
   type ServerProviderStatusesUpdatedPayload,
   type ServerLifecycleStreamEvent,
   type ServerSettingsUpdatedPayload,
@@ -67,6 +68,7 @@ function omitNullUserInputAnswers(
   };
 }
 const terminalEventListeners = new Set<(payload: TerminalEvent) => void>();
+const previewEventListeners = new Set<(payload: PreviewRuntimeEvent) => void>();
 const orchestrationDomainEventListeners = new Set<(payload: OrchestrationEvent) => void>();
 const orchestrationShellEventListeners = new Set<(payload: OrchestrationShellStreamItem) => void>();
 const orchestrationThreadEventListeners = new Set<
@@ -389,6 +391,16 @@ export function createWsNativeApi(): NativeApi {
       }
     }
   });
+  transport.subscribe(WS_CHANNELS.previewEvent, (message) => {
+    const payload = message.data;
+    for (const listener of previewEventListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) => {
     const payload = message.data;
     for (const listener of orchestrationDomainEventListeners) {
@@ -457,6 +469,19 @@ export function createWsNativeApi(): NativeApi {
         terminalEventListeners.add(callback);
         return () => {
           terminalEventListeners.delete(callback);
+        };
+      },
+    },
+    preview: {
+      getState: (input) => transport.request(WS_METHODS.previewGetState, input),
+      start: (input) => transport.request(WS_METHODS.previewStart, input, { timeoutMs: null }),
+      stop: (input) => transport.request(WS_METHODS.previewStop, input),
+      restart: (input) =>
+        transport.request(WS_METHODS.previewRestart, input, { timeoutMs: null }),
+      onState: (callback) => {
+        previewEventListeners.add(callback);
+        return () => {
+          previewEventListeners.delete(callback);
         };
       },
     },

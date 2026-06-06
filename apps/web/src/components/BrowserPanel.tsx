@@ -6,11 +6,20 @@
 // Note: raw <button>s for autocomplete-suggestion rows and tab-title activate
 // regions are intentional — list-row and tab semantics, not shadcn Buttons.
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useStore } from "zustand";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import { useStore as useZustandStore } from "zustand";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  type BrowserCaptureScreenshotResult,
   type ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -19,31 +28,57 @@ import {
   CameraIcon,
   CopyIcon,
   EllipsisIcon,
+  EraserIcon,
   ExternalLinkIcon,
+  EyeIcon,
   GlobeIcon,
   LoaderCircleIcon,
+  PencilIcon,
+  PlayIcon,
   type LucideIcon,
   PlusIcon,
   RefreshCwIcon,
+  StopIcon,
+  TextIcon,
+  Undo2Icon,
   XIcon,
 } from "~/lib/icons";
 
 import { readNativeApi } from "~/nativeApi";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
 import { PANEL_RESIZE_OVERLAY_SYNC_EVENT } from "~/lib/panelResize";
-import { cn } from "~/lib/utils";
+import { cn, randomUUID } from "~/lib/utils";
 
 import {
   useBrowserStateStore,
   selectThreadBrowserHistory,
   selectThreadBrowserState,
 } from "../browserStateStore";
-import { useComposerDraftStore } from "../composerDraftStore";
+import {
+  type ComposerBrowserContextAttachment,
+  useComposerDraftStore,
+} from "../composerDraftStore";
+import { useStore as useAppStore } from "../store";
+import { selectPreviewState, usePreviewStateStore } from "../previewStateStore";
 import { anchoredToastManager } from "./ui/toast";
 import {
   composerImageFromBrowserScreenshot,
   screenshotAttachmentName,
 } from "../lib/browserPromptContext";
+import {
+  buildBrowserDrawingPromptBlock,
+  buildBrowserSelectionPromptBlock,
+  cdpElementContextExpression,
+  isBrowserElementEditorContext,
+  readBrowserElementContextFromDocumentAtPoint,
+  removeBrowserAnnotationContextPrompt,
+  type BrowserAnnotationArrow,
+  type BrowserAnnotationArrowHandle,
+  type BrowserDrawingPoint,
+  type BrowserDrawingStroke,
+  type BrowserElementEditorContext,
+  type BrowserTextAnnotation,
+} from "../lib/browserEditorContext";
 import {
   browserAddressDisplayValue,
   buildBrowserAddressSuggestions,
@@ -113,6 +148,7 @@ const NATIVE_BROWSER_NON_OBSCURING_OVERLAY_SELECTOR = [
   "[data-slot='toast-viewport']",
   "[data-slot='toast-viewport-anchored']",
   "[data-slot='toast-positioner']",
+  "[data-browser-editor-overlay='true']",
 ].join(", ");
 
 interface BrowserViewportPerfCounters {
@@ -131,6 +167,56 @@ interface BrowserViewportPerfCounters {
 interface BrowserWebviewElement extends HTMLElement {
   getWebContentsId?: () => number;
 }
+
+type BrowserEditorMode = "browse" | "inspect" | "draw" | "text";
+
+interface BrowserInspectHoverBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  label: string;
+}
+
+interface RuntimeEvaluateResult {
+  result?: {
+    value?: unknown;
+  };
+}
+
+const BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME =
+  "inline-flex h-7 items-center justify-center rounded-md px-2 text-[11px] font-medium text-muted-foreground hover:bg-background/80 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 data-[active=true]:bg-background data-[active=true]:text-foreground";
+const BROWSER_DRAWING_CONTRAST_STROKE_COLOR = "#ffffff";
+const BROWSER_DRAWING_GRADIENT_COLOR_SETS = [
+  ["#ff2d55", "#ffcc00", "#00e5ff", "#7c3aed", "#39ff14"],
+  ["#00e5ff", "#39ff14", "#ffcc00", "#ff2d55", "#7c3aed"],
+  ["#ffcc00", "#7c3aed", "#ff2d55", "#39ff14", "#00e5ff"],
+] as const;
+const BROWSER_ANNOTATION_ARROW_HANDLES = [
+  "top-left",
+  "top",
+  "top-right",
+  "right",
+  "bottom-right",
+  "bottom",
+  "bottom-left",
+  "left",
+] as const satisfies readonly BrowserAnnotationArrowHandle[];
+const BROWSER_DRAWING_CONTRAST_STROKE_WIDTH = 6;
+const BROWSER_DRAWING_GRADIENT_STROKE_WIDTH = 3.5;
+const BROWSER_DRAWING_GLINT_STROKE_WIDTH = 1;
+const BROWSER_TEXT_ANNOTATION_BOX_WIDTH = 188;
+const BROWSER_TEXT_ANNOTATION_BOX_HEIGHT = 30;
+const BROWSER_TEXT_ANNOTATION_OFFSET_X = 10;
+const BROWSER_TEXT_ANNOTATION_OFFSET_Y = -34;
+const BROWSER_ARROW_MIN_LENGTH = 8;
+const BROWSER_ANNOTATION_ARROW_HEAD_LENGTH = 11;
+const BROWSER_ANNOTATION_ARROW_HEAD_ANGLE = Math.PI / 7;
+const BROWSER_ANNOTATION_ATTACHMENT_SOURCE = "browser-annotation";
+const BROWSER_ANNOTATION_SCREENSHOT_NAME = "browser-annotation-context.png";
+const BROWSER_ANNOTATION_SCREENSHOT_DEBOUNCE_MS = 450;
+const BROWSER_ANNOTATION_SCREENSHOT_MAX_DIMENSION = 4096;
+const BROWSER_FALLBACK_CAPTURE_MAX_NODES = 4_000;
 
 const VIEWPORT_TRANSITION_PROPERTIES = new Set([
   "transform",
@@ -176,6 +262,953 @@ function ignoreBrowserBoundsSyncError(): void {
   // Bounds sync is best-effort plumbing between the React shell and the native
   // browser surface. Avoid surfacing transient geometry-sync failures as user-facing
   // browser errors because they do not reflect page navigation health.
+}
+
+function formatPreviewActionError(error: unknown): string {
+  return error instanceof Error && error.message.length > 0
+    ? error.message
+    : "Couldn't complete that preview action.";
+}
+
+function pointFromOverlayEvent(
+  event: ReactMouseEvent<HTMLElement> | ReactPointerEvent<HTMLElement>,
+): BrowserDrawingPoint {
+  const rect = event.currentTarget.getBoundingClientRect();
+  return {
+    x: Math.max(0, Math.min(rect.width, event.clientX - rect.left)),
+    y: Math.max(0, Math.min(rect.height, event.clientY - rect.top)),
+  };
+}
+
+function pointFromOverlayClientPoint(
+  overlay: HTMLElement | null,
+  clientX: number,
+  clientY: number,
+): BrowserDrawingPoint {
+  const rect = overlay?.getBoundingClientRect();
+  if (!rect) {
+    return { x: 0, y: 0 };
+  }
+  return {
+    x: Math.max(0, Math.min(rect.width, clientX - rect.left)),
+    y: Math.max(0, Math.min(rect.height, clientY - rect.top)),
+  };
+}
+
+function textAnnotationBoxPosition(annotation: BrowserTextAnnotation): BrowserDrawingPoint {
+  return {
+    x: annotation.boxX ?? Math.max(8, annotation.x + BROWSER_TEXT_ANNOTATION_OFFSET_X),
+    y: annotation.boxY ?? Math.max(8, annotation.y + BROWSER_TEXT_ANNOTATION_OFFSET_Y),
+  };
+}
+
+function clampTextAnnotationBoxPosition(
+  position: BrowserDrawingPoint,
+  overlay: HTMLElement | null,
+): BrowserDrawingPoint {
+  const rect = overlay?.getBoundingClientRect();
+  const maxX = rect ? Math.max(8, rect.width - BROWSER_TEXT_ANNOTATION_BOX_WIDTH - 8) : position.x;
+  const maxY = rect ? Math.max(8, rect.height - BROWSER_TEXT_ANNOTATION_BOX_HEIGHT - 8) : position.y;
+  return {
+    x: Math.max(8, Math.min(maxX, position.x)),
+    y: Math.max(8, Math.min(maxY, position.y)),
+  };
+}
+
+function textAnnotationHandlePoint(
+  annotation: BrowserTextAnnotation,
+  handle: BrowserAnnotationArrowHandle,
+): BrowserDrawingPoint {
+  const position = textAnnotationBoxPosition(annotation);
+  const left = position.x;
+  const top = position.y;
+  const centerX = left + BROWSER_TEXT_ANNOTATION_BOX_WIDTH / 2;
+  const centerY = top + BROWSER_TEXT_ANNOTATION_BOX_HEIGHT / 2;
+  const right = left + BROWSER_TEXT_ANNOTATION_BOX_WIDTH;
+  const bottom = top + BROWSER_TEXT_ANNOTATION_BOX_HEIGHT;
+  switch (handle) {
+    case "top-left":
+      return { x: left, y: top };
+    case "top":
+      return { x: centerX, y: top };
+    case "top-right":
+      return { x: right, y: top };
+    case "right":
+      return { x: right, y: centerY };
+    case "bottom-right":
+      return { x: right, y: bottom };
+    case "bottom":
+      return { x: centerX, y: bottom };
+    case "bottom-left":
+      return { x: left, y: bottom };
+    case "left":
+      return { x: left, y: centerY };
+  }
+  return { x: centerX, y: centerY };
+}
+
+function browserAnnotationArrowLength(arrow: BrowserAnnotationArrow): number {
+  return Math.hypot(arrow.to.x - arrow.from.x, arrow.to.y - arrow.from.y);
+}
+
+function isBrowserAnnotationDeleteEvent(event: KeyboardEvent): boolean {
+  if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+    return false;
+  }
+  if (event.key !== "Delete" && event.key !== "Backspace") {
+    return false;
+  }
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return true;
+  }
+  return (
+    target.closest("input, textarea, select, [contenteditable='true'], [contenteditable='']") ===
+    null
+  );
+}
+
+function browserAnnotationArrowHeadPoints(
+  arrow: BrowserAnnotationArrow,
+  headLength = BROWSER_ANNOTATION_ARROW_HEAD_LENGTH,
+): { left: BrowserDrawingPoint; right: BrowserDrawingPoint } {
+  const angle = Math.atan2(arrow.to.y - arrow.from.y, arrow.to.x - arrow.from.x);
+  return {
+    left: {
+      x: arrow.to.x - headLength * Math.cos(angle - BROWSER_ANNOTATION_ARROW_HEAD_ANGLE),
+      y: arrow.to.y - headLength * Math.sin(angle - BROWSER_ANNOTATION_ARROW_HEAD_ANGLE),
+    },
+    right: {
+      x: arrow.to.x - headLength * Math.cos(angle + BROWSER_ANNOTATION_ARROW_HEAD_ANGLE),
+      y: arrow.to.y - headLength * Math.sin(angle + BROWSER_ANNOTATION_ARROW_HEAD_ANGLE),
+    },
+  };
+}
+
+function resolveBrowserAnnotationArrowSource(
+  arrow: BrowserAnnotationArrow,
+  textAnnotations: BrowserTextAnnotation[],
+): BrowserAnnotationArrow {
+  if (!arrow.sourceTextAnnotationId || !arrow.sourceHandle) {
+    return arrow;
+  }
+  const sourceAnnotation = textAnnotations.find(
+    (annotation) => annotation.id === arrow.sourceTextAnnotationId,
+  );
+  if (!sourceAnnotation) {
+    return arrow;
+  }
+  return {
+    ...arrow,
+    from: textAnnotationHandlePoint(sourceAnnotation, arrow.sourceHandle),
+  };
+}
+
+function resolveBrowserAnnotationArrowSources(
+  arrows: BrowserAnnotationArrow[],
+  textAnnotations: BrowserTextAnnotation[],
+): BrowserAnnotationArrow[] {
+  return arrows.map((arrow) => resolveBrowserAnnotationArrowSource(arrow, textAnnotations));
+}
+
+function drawCanvasAnnotationArrowPath(
+  context: CanvasRenderingContext2D,
+  input: {
+    fromX: number;
+    fromY: number;
+    toX: number;
+    toY: number;
+    headLength: number;
+  },
+): void {
+  const angle = Math.atan2(input.toY - input.fromY, input.toX - input.fromX);
+  context.beginPath();
+  context.moveTo(input.fromX, input.fromY);
+  context.lineTo(input.toX, input.toY);
+  context.moveTo(input.toX, input.toY);
+  context.lineTo(
+    input.toX - input.headLength * Math.cos(angle - BROWSER_ANNOTATION_ARROW_HEAD_ANGLE),
+    input.toY - input.headLength * Math.sin(angle - BROWSER_ANNOTATION_ARROW_HEAD_ANGLE),
+  );
+  context.moveTo(input.toX, input.toY);
+  context.lineTo(
+    input.toX - input.headLength * Math.cos(angle + BROWSER_ANNOTATION_ARROW_HEAD_ANGLE),
+    input.toY - input.headLength * Math.sin(angle + BROWSER_ANNOTATION_ARROW_HEAD_ANGLE),
+  );
+}
+
+function svgFragmentId(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, "-");
+}
+
+function gradientColorsForStroke(index: number): readonly string[] {
+  return BROWSER_DRAWING_GRADIENT_COLOR_SETS[index % BROWSER_DRAWING_GRADIENT_COLOR_SETS.length]!;
+}
+
+function closedGradientColors(colors: readonly string[]): string {
+  const firstColor = colors[0];
+  return firstColor ? [...colors, firstColor].join(";") : "";
+}
+
+function shiftedClosedGradientColors(colors: readonly string[], shift: number): string {
+  return closedGradientColors(colors.map((_, index) => colors[(index + shift) % colors.length]!));
+}
+
+function drawingStrokePoints(stroke: BrowserDrawingStroke): string {
+  return stroke.points.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" ");
+}
+
+function revokeComposerImagePreviewUrl(previewUrl: string): void {
+  if (previewUrl.startsWith("blob:")) {
+    URL.revokeObjectURL(previewUrl);
+  }
+}
+
+function bytesFromBase64(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function imageFromBytes(bytes: Uint8Array, mimeType: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Couldn't read the browser screenshot."));
+    };
+    image.src = url;
+  });
+}
+
+function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("Couldn't encode the annotated browser screenshot."));
+        return;
+      }
+      resolve(blob);
+    }, "image/png");
+  });
+}
+
+async function blobToBytes(blob: Blob): Promise<Uint8Array> {
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+function screenshotResultFromBytes(input: {
+  bytes: Uint8Array;
+  name: string;
+}): BrowserCaptureScreenshotResult {
+  return {
+    name: input.name,
+    mimeType: "image/png",
+    sizeBytes: input.bytes.byteLength,
+    bytes: input.bytes,
+  };
+}
+
+interface BrowserPageScreenshot {
+  screenshot: BrowserCaptureScreenshotResult;
+  documentWidth: number;
+  documentHeight: number;
+  scrollX: number;
+  scrollY: number;
+}
+
+interface CdpLayoutMetricsResult {
+  cssContentSize?: {
+    width?: number;
+    height?: number;
+  };
+  contentSize?: {
+    width?: number;
+    height?: number;
+  };
+  visualViewport?: {
+    pageX?: number;
+    pageY?: number;
+  };
+}
+
+interface CdpCaptureScreenshotResult {
+  data?: unknown;
+}
+
+function readPositiveNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function pageMetricsFromCdp(value: unknown): {
+  documentWidth: number | null;
+  documentHeight: number | null;
+  scrollX: number;
+  scrollY: number;
+} {
+  const metrics = value as CdpLayoutMetricsResult | null;
+  return {
+    documentWidth:
+      readPositiveNumber(metrics?.cssContentSize?.width) ??
+      readPositiveNumber(metrics?.contentSize?.width),
+    documentHeight:
+      readPositiveNumber(metrics?.cssContentSize?.height) ??
+      readPositiveNumber(metrics?.contentSize?.height),
+    scrollX: readPositiveNumber(metrics?.visualViewport?.pageX) ?? 0,
+    scrollY: readPositiveNumber(metrics?.visualViewport?.pageY) ?? 0,
+  };
+}
+
+function fallbackDocumentPageMetrics(input: {
+  document: Document;
+  window: Window;
+}): {
+  documentWidth: number;
+  documentHeight: number;
+  scrollX: number;
+  scrollY: number;
+} {
+  const element = input.document.documentElement;
+  const body = input.document.body;
+  return {
+    documentWidth: Math.ceil(
+      Math.max(element.scrollWidth, element.clientWidth, body?.scrollWidth ?? 0),
+    ),
+    documentHeight: Math.ceil(
+      Math.max(element.scrollHeight, element.clientHeight, body?.scrollHeight ?? 0),
+    ),
+    scrollX: input.window.scrollX,
+    scrollY: input.window.scrollY,
+  };
+}
+
+function resolveFallbackCaptureDocument(frame: HTMLIFrameElement): {
+  document: Document;
+  window: Window;
+  cleanup: () => void;
+} {
+  if (frame.contentDocument && frame.contentWindow) {
+    return {
+      document: frame.contentDocument,
+      window: frame.contentWindow,
+      cleanup: () => {},
+    };
+  }
+
+  throw new Error(
+    "Fallback annotation screenshots need a same-origin page. Use the desktop browser for cross-origin pages.",
+  );
+}
+
+function cssColorHasPaint(value: string): boolean {
+  if (!value || value === "transparent") {
+    return false;
+  }
+  const normalized = value.replace(/\s+/g, "").toLowerCase();
+  return (
+    !normalized.endsWith(",0)") &&
+    !normalized.endsWith("/0)") &&
+    !normalized.endsWith("/0")
+  );
+}
+
+function parseCssPixel(value: string): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function fallbackCanvasRect(input: {
+  rect: DOMRect;
+  window: Window;
+}): { x: number; y: number; width: number; height: number } {
+  return {
+    x: input.rect.left + input.window.scrollX,
+    y: input.rect.top + input.window.scrollY,
+    width: input.rect.width,
+    height: input.rect.height,
+  };
+}
+
+function roundedCanvasPath(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  const nextRadius = Math.max(0, Math.min(radius, width / 2, height / 2));
+  context.beginPath();
+  if ("roundRect" in context) {
+    context.roundRect(x, y, width, height, nextRadius);
+    return;
+  }
+  context.moveTo(x + nextRadius, y);
+  context.lineTo(x + width - nextRadius, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + nextRadius);
+  context.lineTo(x + width, y + height - nextRadius);
+  context.quadraticCurveTo(x + width, y + height, x + width - nextRadius, y + height);
+  context.lineTo(x + nextRadius, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - nextRadius);
+  context.lineTo(x, y + nextRadius);
+  context.quadraticCurveTo(x, y, x + nextRadius, y);
+}
+
+function fillFallbackRect(
+  context: CanvasRenderingContext2D,
+  rect: { x: number; y: number; width: number; height: number },
+  radius: number,
+  color: string,
+): void {
+  context.save();
+  context.fillStyle = color;
+  roundedCanvasPath(context, rect.x, rect.y, rect.width, rect.height, radius);
+  context.fill();
+  context.restore();
+}
+
+function strokeFallbackRect(
+  context: CanvasRenderingContext2D,
+  rect: { x: number; y: number; width: number; height: number },
+  radius: number,
+  width: number,
+  color: string,
+): void {
+  if (width <= 0 || !cssColorHasPaint(color)) {
+    return;
+  }
+  context.save();
+  context.strokeStyle = color;
+  context.lineWidth = width;
+  roundedCanvasPath(
+    context,
+    rect.x + width / 2,
+    rect.y + width / 2,
+    Math.max(0, rect.width - width),
+    Math.max(0, rect.height - width),
+    Math.max(0, radius - width / 2),
+  );
+  context.stroke();
+  context.restore();
+}
+
+function elementLooksRenderable(style: CSSStyleDeclaration, rect: DOMRect): boolean {
+  return (
+    style.display !== "none" &&
+    style.visibility !== "hidden" &&
+    style.visibility !== "collapse" &&
+    Number.parseFloat(style.opacity || "1") > 0 &&
+    rect.width > 0 &&
+    rect.height > 0
+  );
+}
+
+function fallbackElementShouldBeSkipped(element: Element): boolean {
+  return [
+    "AREA",
+    "BASE",
+    "BR",
+    "HEAD",
+    "LINK",
+    "META",
+    "NOSCRIPT",
+    "SCRIPT",
+    "STYLE",
+    "TEMPLATE",
+    "TITLE",
+  ].includes(element.tagName);
+}
+
+function drawFallbackElementBox(input: {
+  context: CanvasRenderingContext2D;
+  element: Element;
+  window: Window;
+}): void {
+  if (fallbackElementShouldBeSkipped(input.element)) {
+    return;
+  }
+  const style = input.window.getComputedStyle(input.element);
+  const rect = input.element.getBoundingClientRect();
+  if (!elementLooksRenderable(style, rect)) {
+    return;
+  }
+  const canvasRect = fallbackCanvasRect({ rect, window: input.window });
+  const radius = parseCssPixel(style.borderTopLeftRadius);
+  const backgroundColor = style.backgroundColor;
+  if (cssColorHasPaint(backgroundColor)) {
+    fillFallbackRect(input.context, canvasRect, radius, backgroundColor);
+  }
+
+  const borderWidth = Math.max(
+    parseCssPixel(style.borderTopWidth),
+    parseCssPixel(style.borderRightWidth),
+    parseCssPixel(style.borderBottomWidth),
+    parseCssPixel(style.borderLeftWidth),
+  );
+  const borderColor = style.borderTopColor || style.borderColor;
+  strokeFallbackRect(input.context, canvasRect, radius, borderWidth, borderColor);
+
+  const ownerWindow = input.element.ownerDocument.defaultView;
+  if (
+    ownerWindow &&
+    input.element instanceof ownerWindow.HTMLImageElement &&
+    input.element.complete &&
+    input.element.naturalWidth > 0
+  ) {
+    try {
+      const imageUrl = new URL(input.element.currentSrc || input.element.src, ownerWindow.location.href);
+      const canDrawImage =
+        imageUrl.origin === ownerWindow.location.origin ||
+        imageUrl.protocol === "data:" ||
+        imageUrl.protocol === "blob:";
+      if (canDrawImage) {
+        input.context.drawImage(input.element, canvasRect.x, canvasRect.y, canvasRect.width, canvasRect.height);
+      }
+    } catch {
+      // Ignore decorative image failures; the fallback painter must remain exportable.
+    }
+  }
+}
+
+function cssFontForText(style: CSSStyleDeclaration): string {
+  return [
+    style.fontStyle || "normal",
+    style.fontVariant || "normal",
+    style.fontWeight || "400",
+    style.fontSize || "16px",
+    style.fontFamily || "sans-serif",
+  ].join(" ");
+}
+
+function transformFallbackText(text: string, transform: string): string {
+  if (transform === "uppercase") {
+    return text.toUpperCase();
+  }
+  if (transform === "lowercase") {
+    return text.toLowerCase();
+  }
+  if (transform === "capitalize") {
+    return text.replace(/\b\p{L}/gu, (character) => character.toUpperCase());
+  }
+  return text;
+}
+
+function drawFallbackTextNode(input: {
+  context: CanvasRenderingContext2D;
+  node: Text;
+  window: Window;
+}): void {
+  const rawText = input.node.nodeValue ?? "";
+  const normalizedText = rawText.replace(/\s+/g, " ").trim();
+  const parent = input.node.parentElement;
+  if (!normalizedText || !parent || fallbackElementShouldBeSkipped(parent)) {
+    return;
+  }
+
+  const style = input.window.getComputedStyle(parent);
+  const parentRect = parent.getBoundingClientRect();
+  if (!elementLooksRenderable(style, parentRect) || !cssColorHasPaint(style.color)) {
+    return;
+  }
+
+  const range = input.node.ownerDocument.createRange();
+  range.selectNodeContents(input.node);
+  const rects = Array.from(range.getClientRects()).filter(
+    (rect) => rect.width > 0 && rect.height > 0,
+  );
+  range.detach();
+  if (rects.length === 0) {
+    return;
+  }
+
+  input.context.save();
+  input.context.font = cssFontForText(style);
+  input.context.fillStyle = style.color;
+  input.context.textBaseline = "alphabetic";
+
+  const words = transformFallbackText(normalizedText, style.textTransform).split(/\s+/);
+  let wordIndex = 0;
+  for (const rect of rects) {
+    if (wordIndex >= words.length) {
+      break;
+    }
+    const canvasRect = fallbackCanvasRect({ rect, window: input.window });
+    const maxWidth = Math.max(0, canvasRect.width + 2);
+    let line = "";
+    while (wordIndex < words.length) {
+      const nextWord = words[wordIndex]!;
+      const candidate = line ? `${line} ${nextWord}` : nextWord;
+      if (line && input.context.measureText(candidate).width > maxWidth) {
+        break;
+      }
+      line = candidate;
+      wordIndex += 1;
+      if (input.context.measureText(line).width >= maxWidth) {
+        break;
+      }
+    }
+    if (!line) {
+      continue;
+    }
+    const fontSize = parseCssPixel(style.fontSize) || Math.max(10, canvasRect.height * 0.72);
+    const baselineY = canvasRect.y + Math.min(canvasRect.height - 1, (canvasRect.height + fontSize) / 2);
+    input.context.fillText(line, canvasRect.x, baselineY, maxWidth);
+  }
+
+  input.context.restore();
+}
+
+function drawFallbackDomNode(input: {
+  context: CanvasRenderingContext2D;
+  node: Node;
+  window: Window;
+  visited: { count: number };
+}): void {
+  if (input.visited.count > BROWSER_FALLBACK_CAPTURE_MAX_NODES) {
+    return;
+  }
+  input.visited.count += 1;
+
+  if (input.node.nodeType === Node.TEXT_NODE) {
+    drawFallbackTextNode({
+      context: input.context,
+      node: input.node as Text,
+      window: input.window,
+    });
+    return;
+  }
+
+  if (input.node.nodeType !== Node.ELEMENT_NODE) {
+    return;
+  }
+
+  const element = input.node as Element;
+  drawFallbackElementBox({
+    context: input.context,
+    element,
+    window: input.window,
+  });
+
+  for (const child of Array.from(element.childNodes)) {
+    drawFallbackDomNode({
+      context: input.context,
+      node: child,
+      window: input.window,
+      visited: input.visited,
+    });
+  }
+}
+
+function fallbackPageBackground(document: Document, window: Window): string {
+  const bodyColor = document.body ? window.getComputedStyle(document.body).backgroundColor : "";
+  if (cssColorHasPaint(bodyColor)) {
+    return bodyColor;
+  }
+  const rootColor = window.getComputedStyle(document.documentElement).backgroundColor;
+  return cssColorHasPaint(rootColor) ? rootColor : "#ffffff";
+}
+
+async function captureFallbackFramePageScreenshot(
+  frame: HTMLIFrameElement,
+): Promise<BrowserPageScreenshot> {
+  const captureDocument = resolveFallbackCaptureDocument(frame);
+  try {
+    const metrics = fallbackDocumentPageMetrics(captureDocument);
+    const fitScale = Math.min(
+      1,
+      BROWSER_ANNOTATION_SCREENSHOT_MAX_DIMENSION / metrics.documentWidth,
+      BROWSER_ANNOTATION_SCREENSHOT_MAX_DIMENSION / metrics.documentHeight,
+    );
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(metrics.documentWidth * fitScale));
+    canvas.height = Math.max(1, Math.round(metrics.documentHeight * fitScale));
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Couldn't compose the fallback page screenshot.");
+    }
+
+    context.save();
+    context.scale(fitScale, fitScale);
+    context.fillStyle = fallbackPageBackground(captureDocument.document, captureDocument.window);
+    context.fillRect(0, 0, metrics.documentWidth, metrics.documentHeight);
+    drawFallbackDomNode({
+      context,
+      node: captureDocument.document.documentElement,
+      window: captureDocument.window,
+      visited: { count: 0 },
+    });
+    context.restore();
+
+    const bytes = await blobToBytes(await canvasToPngBlob(canvas));
+    return {
+      screenshot: screenshotResultFromBytes({
+        bytes,
+        name: BROWSER_ANNOTATION_SCREENSHOT_NAME,
+      }),
+      ...metrics,
+    };
+  } finally {
+    captureDocument.cleanup();
+  }
+}
+
+function drawCanvasPolyline(
+  context: CanvasRenderingContext2D,
+  stroke: BrowserDrawingStroke,
+  input: {
+    offsetX: number;
+    offsetY: number;
+    scaleX: number;
+    scaleY: number;
+  },
+): void {
+  const firstPoint = stroke.points[0];
+  if (!firstPoint || stroke.points.length < 2) {
+    return;
+  }
+  context.beginPath();
+  context.moveTo((firstPoint.x + input.offsetX) * input.scaleX, (firstPoint.y + input.offsetY) * input.scaleY);
+  for (const point of stroke.points.slice(1)) {
+    context.lineTo((point.x + input.offsetX) * input.scaleX, (point.y + input.offsetY) * input.scaleY);
+  }
+}
+
+function drawCanvasTextAnnotation(
+  context: CanvasRenderingContext2D,
+  annotation: BrowserTextAnnotation,
+  input: {
+    offsetX: number;
+    offsetY: number;
+    scaleX: number;
+    scaleY: number;
+    fitScale: number;
+  },
+): void {
+  const text = annotation.text.trim();
+  if (text.length === 0) {
+    return;
+  }
+  const anchorX = (annotation.x + input.offsetX) * input.scaleX;
+  const anchorY = (annotation.y + input.offsetY) * input.scaleY;
+  const fontSize = Math.max(12, 15 * input.fitScale);
+  const paddingX = Math.max(8, 10 * input.fitScale);
+  const radius = Math.max(6, 7 * input.fitScale);
+  const boxPosition = textAnnotationBoxPosition(annotation);
+  const boxWidth = BROWSER_TEXT_ANNOTATION_BOX_WIDTH * input.scaleX;
+  const boxHeight = BROWSER_TEXT_ANNOTATION_BOX_HEIGHT * input.scaleY;
+  const boxX = (boxPosition.x + input.offsetX) * input.scaleX;
+  const boxY = (boxPosition.y + input.offsetY) * input.scaleY;
+
+  context.save();
+  context.font = `700 ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
+
+  context.globalCompositeOperation = "source-over";
+  context.fillStyle = "rgba(15, 23, 42, 0.92)";
+  roundedCanvasPath(context, boxX, boxY, boxWidth, boxHeight, radius);
+  context.fill();
+  context.strokeStyle = "rgba(255, 255, 255, 0.86)";
+  context.lineWidth = Math.max(1, 1.5 * input.fitScale);
+  context.stroke();
+
+  context.fillStyle = "#ffffff";
+  context.textBaseline = "middle";
+  context.fillText(text, boxX + paddingX, boxY + boxHeight / 2, Math.max(24, boxWidth - paddingX * 2));
+
+  context.globalCompositeOperation = "difference";
+  context.fillStyle = "#ffffff";
+  context.beginPath();
+  context.arc(anchorX, anchorY, Math.max(4, 4.5 * input.fitScale), 0, Math.PI * 2);
+  context.fill();
+  context.restore();
+}
+
+function drawCanvasAnnotationArrow(
+  context: CanvasRenderingContext2D,
+  arrow: BrowserAnnotationArrow,
+  input: {
+    offsetX: number;
+    offsetY: number;
+    scaleX: number;
+    scaleY: number;
+    fitScale: number;
+    gradientIndex: number;
+  },
+): void {
+  if (browserAnnotationArrowLength(arrow) < BROWSER_ARROW_MIN_LENGTH) {
+    return;
+  }
+  const fromX = (arrow.from.x + input.offsetX) * input.scaleX;
+  const fromY = (arrow.from.y + input.offsetY) * input.scaleY;
+  const toX = (arrow.to.x + input.offsetX) * input.scaleX;
+  const toY = (arrow.to.y + input.offsetY) * input.scaleY;
+  const headLength = Math.max(7, BROWSER_ANNOTATION_ARROW_HEAD_LENGTH * input.fitScale);
+  const colors = gradientColorsForStroke(input.gradientIndex);
+  const gradient = context.createLinearGradient(fromX, fromY, toX || fromX + 1, toY || fromY + 1);
+  colors.forEach((color, colorIndex) => {
+    gradient.addColorStop(colors.length === 1 ? 0 : colorIndex / (colors.length - 1), color);
+  });
+
+  context.save();
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.globalCompositeOperation = "difference";
+  context.strokeStyle = "#ffffff";
+  context.lineWidth = Math.max(2, BROWSER_DRAWING_CONTRAST_STROKE_WIDTH * input.fitScale);
+  drawCanvasAnnotationArrowPath(context, { fromX, fromY, toX, toY, headLength });
+  context.stroke();
+  context.restore();
+
+  context.save();
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.globalCompositeOperation = "source-over";
+  context.strokeStyle = gradient;
+  context.lineWidth = Math.max(1.5, BROWSER_DRAWING_GRADIENT_STROKE_WIDTH * input.fitScale);
+  drawCanvasAnnotationArrowPath(context, { fromX, fromY, toX, toY, headLength });
+  context.stroke();
+  context.restore();
+
+  context.save();
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.globalCompositeOperation = "difference";
+  context.strokeStyle = "#ffffff";
+  context.lineWidth = Math.max(1, BROWSER_DRAWING_GLINT_STROKE_WIDTH * input.fitScale);
+  context.globalAlpha = 0.72;
+  drawCanvasAnnotationArrowPath(context, { fromX, fromY, toX, toY, headLength });
+  context.stroke();
+  context.restore();
+}
+
+async function composeAnnotatedBrowserScreenshot(input: {
+  page: BrowserPageScreenshot;
+  strokes: BrowserDrawingStroke[];
+  textAnnotations: BrowserTextAnnotation[];
+  arrows: BrowserAnnotationArrow[];
+  selectedBox: BrowserInspectHoverBox | null;
+}): Promise<BrowserCaptureScreenshotResult> {
+  const pageImage = await imageFromBytes(input.page.screenshot.bytes, input.page.screenshot.mimeType);
+  const fitScale = Math.min(
+    1,
+    BROWSER_ANNOTATION_SCREENSHOT_MAX_DIMENSION / pageImage.naturalWidth,
+    BROWSER_ANNOTATION_SCREENSHOT_MAX_DIMENSION / pageImage.naturalHeight,
+  );
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(pageImage.naturalWidth * fitScale));
+  canvas.height = Math.max(1, Math.round(pageImage.naturalHeight * fitScale));
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Couldn't compose the annotated browser screenshot.");
+  }
+
+  context.drawImage(pageImage, 0, 0, canvas.width, canvas.height);
+  const cssWidth = input.page.documentWidth || pageImage.naturalWidth;
+  const cssHeight = input.page.documentHeight || pageImage.naturalHeight;
+  const scaleX = canvas.width / cssWidth;
+  const scaleY = canvas.height / cssHeight;
+  const offsetX = input.page.scrollX;
+  const offsetY = input.page.scrollY;
+
+  if (input.selectedBox) {
+    const boxX = (input.selectedBox.x + offsetX) * scaleX;
+    const boxY = (input.selectedBox.y + offsetY) * scaleY;
+    const boxWidth = input.selectedBox.width * scaleX;
+    const boxHeight = input.selectedBox.height * scaleY;
+    context.save();
+    context.fillStyle = "rgba(34, 211, 238, 0.24)";
+    context.strokeStyle = "rgba(8, 145, 178, 0.95)";
+    context.lineWidth = Math.max(1, 1.5 * fitScale);
+    context.fillRect(boxX, boxY, boxWidth, boxHeight);
+    context.strokeRect(boxX, boxY, boxWidth, boxHeight);
+    context.globalCompositeOperation = "difference";
+    context.strokeStyle = "#ffffff";
+    context.lineWidth = Math.max(2, 3 * fitScale);
+    context.strokeRect(boxX, boxY, boxWidth, boxHeight);
+    context.restore();
+  }
+
+  for (const [strokeIndex, stroke] of input.strokes.entries()) {
+    if (stroke.points.length < 2) {
+      continue;
+    }
+    const colors = gradientColorsForStroke(strokeIndex);
+    const pointXs = stroke.points.map((point) => (point.x + offsetX) * scaleX);
+    const pointYs = stroke.points.map((point) => (point.y + offsetY) * scaleY);
+    const minX = Math.min(...pointXs);
+    const maxX = Math.max(...pointXs);
+    const minY = Math.min(...pointYs);
+    const maxY = Math.max(...pointYs);
+    const gradient = context.createLinearGradient(minX, minY, maxX || minX + 1, maxY || minY + 1);
+    colors.forEach((color, colorIndex) => {
+      gradient.addColorStop(colors.length === 1 ? 0 : colorIndex / (colors.length - 1), color);
+    });
+
+    context.save();
+    drawCanvasPolyline(context, stroke, { offsetX, offsetY, scaleX, scaleY });
+    context.globalCompositeOperation = "difference";
+    context.strokeStyle = BROWSER_DRAWING_CONTRAST_STROKE_COLOR;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.lineWidth = Math.max(2, BROWSER_DRAWING_CONTRAST_STROKE_WIDTH * fitScale);
+    context.stroke();
+    context.restore();
+
+    context.save();
+    drawCanvasPolyline(context, stroke, { offsetX, offsetY, scaleX, scaleY });
+    context.globalCompositeOperation = "source-over";
+    context.strokeStyle = gradient;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.lineWidth = Math.max(1.5, BROWSER_DRAWING_GRADIENT_STROKE_WIDTH * fitScale);
+    context.stroke();
+    context.restore();
+
+    context.save();
+    drawCanvasPolyline(context, stroke, { offsetX, offsetY, scaleX, scaleY });
+    context.globalCompositeOperation = "difference";
+    context.strokeStyle = BROWSER_DRAWING_CONTRAST_STROKE_COLOR;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.lineWidth = Math.max(1, BROWSER_DRAWING_GLINT_STROKE_WIDTH * fitScale);
+    context.globalAlpha = 0.72;
+    context.stroke();
+    context.restore();
+  }
+
+  for (const [arrowIndex, arrow] of input.arrows.entries()) {
+    drawCanvasAnnotationArrow(context, arrow, {
+      offsetX,
+      offsetY,
+      scaleX,
+      scaleY,
+      fitScale,
+      gradientIndex: input.strokes.length + arrowIndex,
+    });
+  }
+
+  for (const annotation of input.textAnnotations) {
+    drawCanvasTextAnnotation(context, annotation, {
+      offsetX,
+      offsetY,
+      scaleX,
+      scaleY,
+      fitScale,
+    });
+  }
+
+  const bytes = await blobToBytes(await canvasToPngBlob(canvas));
+  return screenshotResultFromBytes({
+    bytes,
+    name: BROWSER_ANNOTATION_SCREENSHOT_NAME,
+  });
 }
 
 function setBrowserWebviewOverlayOcclusion(
@@ -361,19 +1394,44 @@ export function BrowserPanel({
 }: BrowserPanelProps) {
   const api = readNativeApi();
   const isLiveRuntime = runtimeMode === "live";
-  const threadBrowserState = useStore(useBrowserStateStore, selectThreadBrowserState(threadId));
-  const recentHistory = useStore(useBrowserStateStore, selectThreadBrowserHistory(threadId));
+  const threadBrowserState = useZustandStore(
+    useBrowserStateStore,
+    selectThreadBrowserState(threadId),
+  );
+  const recentHistory = useZustandStore(
+    useBrowserStateStore,
+    selectThreadBrowserHistory(threadId),
+  );
   const upsertThreadState = useBrowserStateStore((store) => store.upsertThreadState);
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const composerDraftImageCount = useComposerDraftStore(
     (store) => store.draftsByThreadId[threadId]?.images.length ?? 0,
   );
+  const browserAnnotationAttachment = useComposerDraftStore(
+    (store) =>
+      store.draftsByThreadId[threadId]?.images.find(
+        (image) => image.source === BROWSER_ANNOTATION_ATTACHMENT_SOURCE,
+      ) ?? null,
+  );
   const composerDraftAssistantSelectionCount = useComposerDraftStore(
     (store) => store.draftsByThreadId[threadId]?.assistantSelections.length ?? 0,
   );
+  const activeThread = useAppStore(
+    (store) => store.threads.find((thread) => thread.id === threadId) ?? null,
+  );
+  const activeProject = useAppStore((store) =>
+    activeThread
+      ? (store.projects.find((project) => project.id === activeThread.projectId) ?? null)
+      : null,
+  );
+  const activeProjectId = activeProject?.id ?? null;
+  const previewCwd = activeThread?.worktreePath ?? activeProject?.cwd ?? null;
+  const previewState = usePreviewStateStore(selectPreviewState(previewCwd));
+  const upsertPreviewState = usePreviewStateStore((store) => store.upsertState);
   const addressInputRef = useRef<HTMLInputElement>(null);
   const browserTabsBarRef = useRef<HTMLDivElement>(null);
   const browserViewportRef = useRef<HTMLDivElement>(null);
+  const browserFallbackFrameRef = useRef<HTMLIFrameElement>(null);
   const browserWebviewRef = useRef<BrowserWebviewElement | null>(null);
   const browserWebviewTabIdRef = useRef<string | null>(null);
   const browserWebviewAttachKeyRef = useRef<string | null>(null);
@@ -387,6 +1445,38 @@ export function BrowserPanel({
   const isAddressEditingRef = useRef(false);
   const resizeFrameRef = useRef<number | null>(null);
   const boundsBurstFrameRef = useRef<number | null>(null);
+  const inspectFrameRef = useRef<number | null>(null);
+  const inspectPointRef = useRef<{ x: number; y: number } | null>(null);
+  const activeDrawStrokeIdRef = useRef<string | null>(null);
+  const drawStrokesRef = useRef<BrowserDrawingStroke[]>([]);
+  const textAnnotationsRef = useRef<BrowserTextAnnotation[]>([]);
+  const annotationArrowsRef = useRef<BrowserAnnotationArrow[]>([]);
+  const selectedElementContextRef = useRef<BrowserElementEditorContext | null>(null);
+  const browserEditorOverlayRef = useRef<HTMLDivElement>(null);
+  const textAnnotationInputRef = useRef<HTMLInputElement>(null);
+  const editTextAnnotationInputRef = useRef<HTMLInputElement>(null);
+  const textAnnotationDragRef = useRef<{
+    id: string;
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    startBoxX: number;
+    startBoxY: number;
+    pendingBoxX: number;
+    pendingBoxY: number;
+    frameId: number | null;
+  } | null>(null);
+  const arrowDraftDragRef = useRef<{ id: string; pointerId: number } | null>(null);
+  const arrowTargetDragRef = useRef<{ id: string; pointerId: number } | null>(null);
+  const annotationArrowDraftRef = useRef<BrowserAnnotationArrow | null>(null);
+  const textAnnotationEditCancelledRef = useRef(false);
+  const textAnnotationHoverHideTimeoutRef = useRef<number | null>(null);
+  const annotationArrowHoverHideTimeoutRef = useRef<number | null>(null);
+  const annotationUpdateTimeoutRef = useRef<number | null>(null);
+  const annotationUpdateRequestIdRef = useRef(0);
+  const annotationStateInitializedRef = useRef(false);
+  const previewAutoStartedCwdRef = useRef<string | null>(null);
+  const previewPendingNavigationUrlRef = useRef<string | null>(null);
   const burstFramesRemainingRef = useRef(0);
   const burstStableFramesRef = useRef(0);
   const perfCountersRef = useRef<BrowserViewportPerfCounters>({
@@ -405,6 +1495,32 @@ export function BrowserPanel({
   const [isAddressFocused, setIsAddressFocused] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [editorMode, setEditorMode] = useState<BrowserEditorMode>("browse");
+  const [inspectHoverBox, setInspectHoverBox] = useState<BrowserInspectHoverBox | null>(null);
+  const [drawStrokes, setDrawStrokes] = useState<BrowserDrawingStroke[]>([]);
+  const [textAnnotations, setTextAnnotations] = useState<BrowserTextAnnotation[]>([]);
+  const [annotationArrows, setAnnotationArrows] = useState<BrowserAnnotationArrow[]>([]);
+  const [annotationArrowDraft, setAnnotationArrowDraft] =
+    useState<BrowserAnnotationArrow | null>(null);
+  const [selectedTextAnnotationId, setSelectedTextAnnotationId] = useState<string | null>(null);
+  const [hoveredTextAnnotationId, setHoveredTextAnnotationId] = useState<string | null>(null);
+  const [hoveredAnnotationArrowId, setHoveredAnnotationArrowId] = useState<string | null>(null);
+  const [draggingTextAnnotationId, setDraggingTextAnnotationId] = useState<string | null>(null);
+  const [editingTextAnnotationId, setEditingTextAnnotationId] = useState<string | null>(null);
+  const [editingTextAnnotationValue, setEditingTextAnnotationValue] = useState("");
+  const [textAnnotationDraft, setTextAnnotationDraft] = useState<BrowserTextAnnotation | null>(
+    null,
+  );
+  const [selectedElementContext, setSelectedElementContext] =
+    useState<BrowserElementEditorContext | null>(null);
+  const [autoAttachAnnotationScreenshot, setAutoAttachAnnotationScreenshot] = useState(true);
+  const [, setAnnotationAttachmentStatus] = useState<
+    "idle" | "capturing" | "attached" | "error"
+  >("idle");
+  const [previewActionPending, setPreviewActionPending] = useState(false);
+  const hasNativeBrowserBridge =
+    typeof window !== "undefined" && window.desktopBridge !== undefined;
+  const canUseNativeBrowserSurface = isLiveRuntime && hasNativeBrowserBridge;
   const runtimeReady = isLiveRuntime ? workspaceReady : true;
   const activeTab =
     threadBrowserState?.tabs.find((tab) => tab.id === threadBrowserState.activeTabId) ??
@@ -451,6 +1567,467 @@ export function BrowserPanel({
     }
   }, []);
 
+  const navigateBrowserToPreviewUrl = useCallback(
+    async (url: string) => {
+      if (!api) {
+        return;
+      }
+      if (activeTab) {
+        const state = await api.browser.navigate({
+          threadId,
+          tabId: activeTab.id,
+          url,
+        });
+        upsertThreadState(state);
+        return;
+      }
+      const state = await api.browser.open({ threadId, initialUrl: url });
+      upsertThreadState(state);
+    },
+    [activeTab, api, threadId, upsertThreadState],
+  );
+
+  const startPreview = useCallback(
+    async (options: { autoNavigate?: boolean; silentIfUnavailable?: boolean } = {}) => {
+      if (!api || !previewCwd) {
+        return null;
+      }
+      setPreviewActionPending(true);
+      try {
+        const state = await api.preview.start({
+          threadId,
+          cwd: previewCwd,
+          ...(activeProjectId ? { projectId: activeProjectId } : {}),
+        });
+        upsertPreviewState(state);
+        setLocalError(null);
+        if (options.autoNavigate !== false && state.url) {
+          previewPendingNavigationUrlRef.current = state.url;
+          await navigateBrowserToPreviewUrl(state.url);
+        }
+        return state;
+      } catch (error) {
+        const message = formatPreviewActionError(error);
+        const shouldSuppressUnavailableError =
+          options.silentIfUnavailable === true &&
+          message.includes("No package.json preview script found");
+        if (!shouldSuppressUnavailableError) {
+          setLocalError(message);
+        }
+        return null;
+      } finally {
+        setPreviewActionPending(false);
+      }
+    },
+    [activeProjectId, api, navigateBrowserToPreviewUrl, previewCwd, threadId, upsertPreviewState],
+  );
+
+  const stopPreview = useCallback(async () => {
+    if (!api || !previewCwd) {
+      return;
+    }
+    setPreviewActionPending(true);
+    try {
+      const state = await api.preview.stop({
+        threadId,
+        cwd: previewCwd,
+        ...(activeProjectId ? { projectId: activeProjectId } : {}),
+      });
+      upsertPreviewState(state);
+      setLocalError(null);
+    } catch (error) {
+      setLocalError(formatPreviewActionError(error));
+    } finally {
+      setPreviewActionPending(false);
+    }
+  }, [activeProjectId, api, previewCwd, threadId, upsertPreviewState]);
+
+  const restartPreview = useCallback(async () => {
+    if (!api || !previewCwd) {
+      return;
+    }
+    setPreviewActionPending(true);
+    try {
+      const state = await api.preview.restart({
+        threadId,
+        cwd: previewCwd,
+        ...(activeProjectId ? { projectId: activeProjectId } : {}),
+      });
+      upsertPreviewState(state);
+      setLocalError(null);
+      if (state.url) {
+        previewPendingNavigationUrlRef.current = state.url;
+        await navigateBrowserToPreviewUrl(state.url);
+      }
+    } catch (error) {
+      setLocalError(formatPreviewActionError(error));
+    } finally {
+      setPreviewActionPending(false);
+    }
+  }, [activeProjectId, api, navigateBrowserToPreviewUrl, previewCwd, threadId, upsertPreviewState]);
+
+  const clearBrowserAnnotationContext = useCallback(() => {
+    annotationUpdateRequestIdRef.current += 1;
+    if (annotationUpdateTimeoutRef.current !== null) {
+      window.clearTimeout(annotationUpdateTimeoutRef.current);
+      annotationUpdateTimeoutRef.current = null;
+    }
+    const draftStore = useComposerDraftStore.getState();
+    const currentDraft = draftStore.draftsByThreadId[threadId];
+    for (const image of currentDraft?.images ?? []) {
+      if (image.source === BROWSER_ANNOTATION_ATTACHMENT_SOURCE) {
+        draftStore.removeImage(threadId, image.id);
+      }
+    }
+    draftStore.clearBrowserContexts(threadId);
+    draftStore.setPrompt(
+      threadId,
+      removeBrowserAnnotationContextPrompt(currentDraft?.prompt ?? ""),
+    );
+    setAnnotationAttachmentStatus("idle");
+  }, [threadId]);
+
+  const captureBrowserPageScreenshot = useCallback(async (): Promise<BrowserPageScreenshot> => {
+    if (!api || !activeTab) {
+      throw new Error("No browser tab is available to capture.");
+    }
+
+    if (hasNativeBrowserBridge) {
+      try {
+        const metricsResponse = await api.browser.executeCdp({
+          threadId,
+          tabId: activeTab.id,
+          method: "Page.getLayoutMetrics",
+        });
+        const metrics = pageMetricsFromCdp(metricsResponse);
+        const viewportRect = browserViewportRef.current?.getBoundingClientRect();
+        const documentWidth =
+          metrics.documentWidth ?? Math.ceil(viewportRect?.width ?? window.innerWidth);
+        const documentHeight =
+          metrics.documentHeight ?? Math.ceil(viewportRect?.height ?? window.innerHeight);
+        const captureResponse = (await api.browser.executeCdp({
+          threadId,
+          tabId: activeTab.id,
+          method: "Page.captureScreenshot",
+          params: {
+            format: "png",
+            fromSurface: true,
+            captureBeyondViewport: true,
+            clip: {
+              x: 0,
+              y: 0,
+              width: documentWidth,
+              height: documentHeight,
+              scale: 1,
+            },
+          },
+        })) as CdpCaptureScreenshotResult;
+        if (typeof captureResponse.data !== "string" || captureResponse.data.length === 0) {
+          throw new Error("CDP did not return screenshot data.");
+        }
+        return {
+          screenshot: screenshotResultFromBytes({
+            bytes: bytesFromBase64(captureResponse.data),
+            name: BROWSER_ANNOTATION_SCREENSHOT_NAME,
+          }),
+          documentWidth,
+          documentHeight,
+          scrollX: metrics.scrollX,
+          scrollY: metrics.scrollY,
+        };
+      } catch {
+        const viewportScreenshot = await api.browser.captureScreenshot({
+          threadId,
+          tabId: activeTab.id,
+        });
+        const viewportRect = browserViewportRef.current?.getBoundingClientRect();
+        return {
+          screenshot: {
+            ...viewportScreenshot,
+            name: BROWSER_ANNOTATION_SCREENSHOT_NAME,
+          },
+          documentWidth: viewportRect?.width ?? window.innerWidth,
+          documentHeight: viewportRect?.height ?? window.innerHeight,
+          scrollX: 0,
+          scrollY: 0,
+        };
+      }
+    }
+
+    const frame = browserFallbackFrameRef.current;
+    if (!frame) {
+      throw new Error("No browser fallback frame is available to capture.");
+    }
+    return captureFallbackFramePageScreenshot(frame);
+  }, [activeTab, api, hasNativeBrowserBridge, threadId]);
+
+  const updateBrowserAnnotationAttachment = useCallback(async () => {
+    const requestId = annotationUpdateRequestIdRef.current + 1;
+    annotationUpdateRequestIdRef.current = requestId;
+    if (annotationUpdateTimeoutRef.current !== null) {
+      window.clearTimeout(annotationUpdateTimeoutRef.current);
+      annotationUpdateTimeoutRef.current = null;
+    }
+
+    const usableStrokes = drawStrokesRef.current.filter((stroke) => stroke.points.length > 1);
+    const usableTextAnnotations = textAnnotationsRef.current.filter(
+      (annotation) => annotation.text.trim().length > 0,
+    );
+    const usableArrows = resolveBrowserAnnotationArrowSources(
+      annotationArrowsRef.current,
+      usableTextAnnotations,
+    ).filter((arrow) => browserAnnotationArrowLength(arrow) >= BROWSER_ARROW_MIN_LENGTH);
+    const selectedContext = selectedElementContextRef.current;
+    const hasVisualAnnotations =
+      usableStrokes.length > 0 || usableTextAnnotations.length > 0 || usableArrows.length > 0;
+    if (!hasVisualAnnotations && !selectedContext) {
+      clearBrowserAnnotationContext();
+      return;
+    }
+
+    const draftStore = useComposerDraftStore.getState();
+    const currentDraft = draftStore.draftsByThreadId[threadId];
+    const existingAnnotationImages = (currentDraft?.images ?? []).filter(
+      (image) => image.source === BROWSER_ANNOTATION_ATTACHMENT_SOURCE,
+    );
+    if (!hasVisualAnnotations && selectedContext) {
+      for (const image of existingAnnotationImages) {
+        draftStore.removeImage(threadId, image.id);
+      }
+      draftStore.clearBrowserContexts(threadId);
+      const promptBlock = buildBrowserSelectionPromptBlock(selectedContext);
+      const context = {
+        id: randomUUID(),
+        type: "browser-context",
+        source: "browser-selection",
+        promptBlock,
+        title: selectedContext.title || activeTab?.title || "Browser selection",
+        url: selectedContext.url || activeTab?.lastCommittedUrl || activeTab?.url || BROWSER_BLANK_URL,
+        strokeCount: 0,
+        textCount: 0,
+        ...(selectedContext.selector ? { selectedSelector: selectedContext.selector } : {}),
+      } satisfies ComposerBrowserContextAttachment;
+      draftStore.addBrowserContext(threadId, context);
+      draftStore.setPrompt(
+        threadId,
+        removeBrowserAnnotationContextPrompt(currentDraft?.prompt ?? ""),
+      );
+      setAnnotationAttachmentStatus("attached");
+      setLocalError(null);
+      return;
+    }
+    if (!api || !activeTab) {
+      return;
+    }
+    const effectiveAttachmentCount =
+      (currentDraft?.images.length ?? 0) -
+      existingAnnotationImages.length +
+      composerDraftAssistantSelectionCount;
+    if (
+      existingAnnotationImages.length === 0 &&
+      effectiveAttachmentCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS
+    ) {
+      setLocalError(
+        `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
+      );
+      setAnnotationAttachmentStatus("error");
+      return;
+    }
+
+    setAnnotationAttachmentStatus("capturing");
+    try {
+      const page = await captureBrowserPageScreenshot();
+      const selectedBox = selectedContext
+        ? {
+            x: selectedContext.rect.x,
+            y: selectedContext.rect.y,
+            width: selectedContext.rect.width,
+            height: selectedContext.rect.height,
+            label: selectedContext.selector || selectedContext.tagName.toLowerCase(),
+          }
+        : null;
+      const annotatedScreenshot = await composeAnnotatedBrowserScreenshot({
+        page,
+        strokes: usableStrokes,
+        textAnnotations: usableTextAnnotations,
+        arrows: usableArrows,
+        selectedBox,
+      });
+      if (annotatedScreenshot.sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+        setLocalError(
+          `'${BROWSER_ANNOTATION_SCREENSHOT_NAME}' exceeds the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`,
+        );
+        setAnnotationAttachmentStatus("error");
+        return;
+      }
+      const viewportRect = browserViewportRef.current?.getBoundingClientRect();
+      const annotationUrl = activeTab.lastCommittedUrl ?? activeTab.url ?? BROWSER_BLANK_URL;
+      const annotationTitle = activeTab.title ?? "";
+      const metadataBlock = buildBrowserDrawingPromptBlock({
+        source: BROWSER_ANNOTATION_ATTACHMENT_SOURCE,
+        url: annotationUrl,
+        title: annotationTitle,
+        viewport: {
+          width: viewportRect?.width ?? 0,
+          height: viewportRect?.height ?? 0,
+          devicePixelRatio: window.devicePixelRatio,
+        },
+        document: {
+          width: page.documentWidth,
+          height: page.documentHeight,
+        },
+        scroll: {
+          x: page.scrollX,
+          y: page.scrollY,
+        },
+        selectedSelector: selectedContext?.selector ?? null,
+        selectedElement: selectedContext,
+        strokes: usableStrokes,
+        textAnnotations: usableTextAnnotations,
+        arrows: usableArrows,
+      });
+      const image = composerImageFromBrowserScreenshot(annotatedScreenshot, {
+        name: BROWSER_ANNOTATION_SCREENSHOT_NAME,
+        source: BROWSER_ANNOTATION_ATTACHMENT_SOURCE,
+        browserAnnotation: {
+          promptBlock: metadataBlock,
+          title: annotationTitle,
+          url: annotationUrl,
+          strokeCount: usableStrokes.length,
+          textCount: usableTextAnnotations.length,
+          arrowCount: usableArrows.length,
+          ...(selectedContext?.selector ? { selectedSelector: selectedContext.selector } : {}),
+        },
+      });
+      if (annotationUpdateRequestIdRef.current !== requestId) {
+        revokeComposerImagePreviewUrl(image.previewUrl);
+        return;
+      }
+
+      const latestStore = useComposerDraftStore.getState();
+      const latestDraft = latestStore.draftsByThreadId[threadId];
+      latestStore.clearBrowserContexts(threadId);
+      for (const existingImage of latestDraft?.images ?? []) {
+        if (existingImage.source === BROWSER_ANNOTATION_ATTACHMENT_SOURCE) {
+          latestStore.removeImage(threadId, existingImage.id);
+        }
+      }
+      latestStore.addImage(threadId, image);
+      latestStore.setPrompt(
+        threadId,
+        removeBrowserAnnotationContextPrompt(latestDraft?.prompt ?? ""),
+      );
+      setAnnotationAttachmentStatus("attached");
+      setLocalError(null);
+    } catch (error) {
+      setAnnotationAttachmentStatus("error");
+      const message =
+        error instanceof Error && error.message.length > 0
+          ? error.message
+          : (formatBrowserActionError(error) ?? "Couldn't attach the live editor context.");
+      setLocalError(message);
+    }
+  }, [
+    activeTab,
+    api,
+    captureBrowserPageScreenshot,
+    clearBrowserAnnotationContext,
+    composerDraftAssistantSelectionCount,
+    threadId,
+  ]);
+
+  const scheduleBrowserAnnotationAttachmentUpdate = useCallback(
+    (delay = BROWSER_ANNOTATION_SCREENSHOT_DEBOUNCE_MS) => {
+      if (!autoAttachAnnotationScreenshot) {
+        return;
+      }
+      if (annotationUpdateTimeoutRef.current !== null) {
+        window.clearTimeout(annotationUpdateTimeoutRef.current);
+      }
+      annotationUpdateTimeoutRef.current = window.setTimeout(() => {
+        annotationUpdateTimeoutRef.current = null;
+        void updateBrowserAnnotationAttachment();
+      }, delay);
+    },
+    [autoAttachAnnotationScreenshot, updateBrowserAnnotationAttachment],
+  );
+
+  const readElementContextAtPoint = useCallback(
+    async (point: BrowserDrawingPoint): Promise<BrowserElementEditorContext | null> => {
+      if (!api || !activeTab) {
+        return null;
+      }
+      if (!hasNativeBrowserBridge) {
+        const frame = browserFallbackFrameRef.current;
+        if (!frame) {
+          return null;
+        }
+        try {
+          const frameDocument = frame.contentDocument;
+          if (!frameDocument) {
+            return null;
+          }
+          return readBrowserElementContextFromDocumentAtPoint({
+            document: frameDocument,
+            point,
+          });
+        } catch {
+          setLocalError(
+            "Inspect needs the desktop app for cross-origin pages. Same-origin mock pages still work here.",
+          );
+          return null;
+        }
+      }
+      const response = (await api.browser.executeCdp({
+        threadId,
+        tabId: activeTab.id,
+        method: "Runtime.evaluate",
+        params: {
+          expression: cdpElementContextExpression(point.x, point.y),
+          returnByValue: true,
+          awaitPromise: false,
+        },
+      })) as RuntimeEvaluateResult;
+      const value = response.result?.value;
+      return isBrowserElementEditorContext(value) ? value : null;
+    },
+    [activeTab, api, hasNativeBrowserBridge, threadId],
+  );
+
+  const scheduleInspectHover = useCallback(
+    (point: BrowserDrawingPoint) => {
+      inspectPointRef.current = point;
+      if (inspectFrameRef.current !== null) {
+        return;
+      }
+      inspectFrameRef.current = window.requestAnimationFrame(() => {
+        inspectFrameRef.current = null;
+        const nextPoint = inspectPointRef.current;
+        if (!nextPoint || editorMode !== "inspect") {
+          return;
+        }
+        void readElementContextAtPoint(nextPoint)
+          .then((context) => {
+            if (!context) {
+              setInspectHoverBox(null);
+              return;
+            }
+            setInspectHoverBox({
+              x: context.rect.x,
+              y: context.rect.y,
+              width: context.rect.width,
+              height: context.rect.height,
+              label: context.selector || context.tagName.toLowerCase(),
+            });
+          })
+          .catch(() => {
+            setInspectHoverBox(null);
+          });
+      });
+    },
+    [editorMode, readElementContextAtPoint],
+  );
+
   useEffect(() => {
     if (!api || !isLiveRuntime) {
       return;
@@ -460,6 +2037,44 @@ export function BrowserPanel({
       upsertThreadState(state);
     });
   }, [api, isLiveRuntime, upsertThreadState]);
+
+  useEffect(() => {
+    if (!api || !isLiveRuntime) {
+      return;
+    }
+
+    return api.preview.onState((event) => {
+      upsertPreviewState(event.state);
+    });
+  }, [api, isLiveRuntime, upsertPreviewState]);
+
+  useEffect(() => {
+    if (!api || !isLiveRuntime || !previewCwd) {
+      return;
+    }
+
+    let cancelled = false;
+    void api.preview
+      .getState({
+        threadId,
+        cwd: previewCwd,
+        ...(activeProjectId ? { projectId: activeProjectId } : {}),
+      })
+      .then((state) => {
+        if (!cancelled) {
+          upsertPreviewState(state);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLocalError("Couldn't read preview state.");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProjectId, api, isLiveRuntime, previewCwd, threadId, upsertPreviewState]);
 
   useEffect(() => {
     if (!api || !isLiveRuntime) {
@@ -489,6 +2104,194 @@ export function BrowserPanel({
   }, [api, isLiveRuntime, runBrowserAction, threadId, upsertThreadState]);
 
   useEffect(() => {
+    if (
+      !api ||
+      !isLiveRuntime ||
+      !workspaceReady ||
+      !previewCwd ||
+      previewAutoStartedCwdRef.current === previewCwd
+    ) {
+      return;
+    }
+    const status = previewState?.status ?? "idle";
+    if (status !== "idle" && status !== "stopped") {
+      return;
+    }
+
+    previewAutoStartedCwdRef.current = previewCwd;
+    void startPreview({ autoNavigate: true, silentIfUnavailable: true });
+  }, [api, isLiveRuntime, previewCwd, previewState?.status, startPreview, workspaceReady]);
+
+  useEffect(() => {
+    const requestedUrl = previewPendingNavigationUrlRef.current;
+    if (
+      !requestedUrl ||
+      !previewState?.url ||
+      previewState.status !== "running" ||
+      previewState.url !== requestedUrl ||
+      !isLiveRuntime ||
+      !workspaceReady
+    ) {
+      return;
+    }
+
+    previewPendingNavigationUrlRef.current = null;
+    void navigateBrowserToPreviewUrl(requestedUrl);
+  }, [
+    isLiveRuntime,
+    navigateBrowserToPreviewUrl,
+    previewState?.status,
+    previewState?.url,
+    workspaceReady,
+  ]);
+
+  useEffect(() => {
+    if (editorMode !== "inspect") {
+      setInspectHoverBox(null);
+    }
+    if (editorMode !== "draw") {
+      activeDrawStrokeIdRef.current = null;
+    }
+  }, [editorMode]);
+
+  useEffect(() => {
+    drawStrokesRef.current = drawStrokes;
+    textAnnotationsRef.current = textAnnotations;
+    annotationArrowsRef.current = annotationArrows;
+    selectedElementContextRef.current = selectedElementContext;
+    if (!annotationStateInitializedRef.current) {
+      annotationStateInitializedRef.current = true;
+      return;
+    }
+    scheduleBrowserAnnotationAttachmentUpdate();
+  }, [
+    annotationArrows,
+    drawStrokes,
+    scheduleBrowserAnnotationAttachmentUpdate,
+    selectedElementContext,
+    textAnnotations,
+  ]);
+
+  useLayoutEffect(() => {
+    if (!textAnnotationDraft) {
+      return;
+    }
+    textAnnotationInputRef.current?.focus();
+  }, [textAnnotationDraft]);
+
+  useLayoutEffect(() => {
+    if (!editingTextAnnotationId) {
+      return;
+    }
+    editTextAnnotationInputRef.current?.focus();
+    editTextAnnotationInputRef.current?.select();
+  }, [editingTextAnnotationId]);
+
+  useEffect(() => {
+    if (
+      autoAttachAnnotationScreenshot &&
+      (drawStrokesRef.current.some((stroke) => stroke.points.length > 1) ||
+        selectedElementContextRef.current !== null ||
+        textAnnotationsRef.current.length > 0 ||
+        annotationArrowsRef.current.length > 0)
+    ) {
+      scheduleBrowserAnnotationAttachmentUpdate(0);
+    }
+  }, [autoAttachAnnotationScreenshot, scheduleBrowserAnnotationAttachmentUpdate]);
+
+  useEffect(() => {
+    if (
+      !autoAttachAnnotationScreenshot ||
+      (!drawStrokesRef.current.some((stroke) => stroke.points.length > 1) &&
+        selectedElementContextRef.current === null &&
+        textAnnotationsRef.current.length === 0 &&
+        annotationArrowsRef.current.length === 0)
+    ) {
+      return;
+    }
+    scheduleBrowserAnnotationAttachmentUpdate();
+  }, [
+    activeTab?.id,
+    activeTab?.lastCommittedUrl,
+    activeTab?.url,
+    autoAttachAnnotationScreenshot,
+    scheduleBrowserAnnotationAttachmentUpdate,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (textAnnotationHoverHideTimeoutRef.current !== null) {
+        window.clearTimeout(textAnnotationHoverHideTimeoutRef.current);
+        textAnnotationHoverHideTimeoutRef.current = null;
+      }
+      if (annotationArrowHoverHideTimeoutRef.current !== null) {
+        window.clearTimeout(annotationArrowHoverHideTimeoutRef.current);
+        annotationArrowHoverHideTimeoutRef.current = null;
+      }
+      if (inspectFrameRef.current !== null) {
+        window.cancelAnimationFrame(inspectFrameRef.current);
+        inspectFrameRef.current = null;
+      }
+      if (annotationUpdateTimeoutRef.current !== null) {
+        window.clearTimeout(annotationUpdateTimeoutRef.current);
+        annotationUpdateTimeoutRef.current = null;
+      }
+      annotationUpdateRequestIdRef.current += 1;
+    };
+  }, []);
+
+  const syncFallbackFrameLoad = useCallback(() => {
+    if (canUseNativeBrowserSurface || !threadBrowserState || !activeTab) {
+      return;
+    }
+
+    const frame = browserFallbackFrameRef.current;
+    let nextUrl = activeTab.url;
+    let nextTitle = activeTab.title;
+    try {
+      const frameWindow = frame?.contentWindow;
+      const frameDocument = frame?.contentDocument;
+      nextUrl = frameWindow?.location.href ?? nextUrl;
+      nextTitle = frameDocument?.title || nextTitle || nextUrl;
+    } catch {
+      nextTitle = activeTab.title || activeTab.url;
+    }
+
+    const nextTabs = threadBrowserState.tabs.map((tab) =>
+      tab.id === activeTab.id
+        ? {
+            ...tab,
+            url: nextUrl,
+            title: nextTitle,
+            lastCommittedUrl: nextUrl,
+            isLoading: false,
+            lastError: null,
+            status: "live" as const,
+          }
+        : tab,
+    );
+    const nextActiveTab = nextTabs.find((tab) => tab.id === activeTab.id);
+    if (
+      !nextActiveTab ||
+      (nextActiveTab.url === activeTab.url &&
+        nextActiveTab.title === activeTab.title &&
+        nextActiveTab.lastCommittedUrl === activeTab.lastCommittedUrl &&
+        nextActiveTab.isLoading === activeTab.isLoading &&
+        nextActiveTab.lastError === activeTab.lastError &&
+        nextActiveTab.status === activeTab.status)
+    ) {
+      return;
+    }
+
+    upsertThreadState({
+      ...threadBrowserState,
+      version: threadBrowserState.version + 1,
+      tabs: nextTabs,
+      lastError: null,
+    });
+  }, [activeTab, canUseNativeBrowserSurface, threadBrowserState, upsertThreadState]);
+
+  useEffect(() => {
     const activeTabId = activeTab?.id ?? null;
     const nextDisplayValue = browserAddressDisplayValue(activeTab);
     const decision = resolveBrowserAddressSync({
@@ -516,7 +2319,7 @@ export function BrowserPanel({
   }, [activeTab]);
 
   useLayoutEffect(() => {
-    if (!api || !isLiveRuntime || !workspaceReady || !activeTab) {
+    if (!api || !canUseNativeBrowserSurface || !workspaceReady || !activeTab) {
       return;
     }
 
@@ -588,7 +2391,7 @@ export function BrowserPanel({
   }, [
     activeTab,
     api,
-    isLiveRuntime,
+    canUseNativeBrowserSurface,
     runBrowserAction,
     threadId,
     upsertThreadState,
@@ -778,7 +2581,7 @@ export function BrowserPanel({
       burstFramesRemainingRef.current = 0;
       burstStableFramesRef.current = 0;
     };
-  }, [api, isLiveRuntime, threadId]);
+  }, [api, canUseNativeBrowserSurface, threadId]);
 
   const onSubmitAddress = useCallback(() => {
     if (!ensureLiveRuntime()) {
@@ -976,6 +2779,886 @@ export function BrowserPanel({
     },
     [api, ensureLiveRuntime, onClosePanel, runBrowserAction, threadId, upsertThreadState],
   );
+
+  const onInspectPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (editorMode !== "inspect") {
+        return;
+      }
+      scheduleInspectHover(pointFromOverlayEvent(event));
+    },
+    [editorMode, scheduleInspectHover],
+  );
+
+  const onInspectClick = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (editorMode !== "inspect") {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const point = pointFromOverlayEvent(event);
+      void readElementContextAtPoint(point)
+        .then((context) => {
+          if (!context) {
+            setLocalError("No inspectable element found at that point.");
+            return;
+          }
+          selectedElementContextRef.current = context;
+          setSelectedElementContext(context);
+          scheduleBrowserAnnotationAttachmentUpdate(0);
+          setLocalError(null);
+        })
+        .catch((error) => {
+          setLocalError(formatBrowserActionError(error));
+        });
+    },
+    [editorMode, readElementContextAtPoint, scheduleBrowserAnnotationAttachmentUpdate],
+  );
+
+  const commitTextAnnotationDraft = useCallback(
+    (draft = textAnnotationDraft) => {
+      if (!draft) {
+        return;
+      }
+      setTextAnnotationDraft(null);
+      const text = draft.text.trim();
+      if (text.length === 0) {
+        return;
+      }
+      const annotation = { ...draft, text };
+      setTextAnnotations((current) => {
+        const next = [...current, annotation];
+        textAnnotationsRef.current = next;
+        return next;
+      });
+      scheduleBrowserAnnotationAttachmentUpdate(0);
+    },
+    [scheduleBrowserAnnotationAttachmentUpdate, textAnnotationDraft],
+  );
+
+  const onTextAnnotationClick = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (editorMode !== "text") {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      commitTextAnnotationDraft();
+      setTextAnnotationDraft({
+        id: crypto.randomUUID(),
+        ...pointFromOverlayEvent(event),
+        text: "",
+      });
+    },
+    [commitTextAnnotationDraft, editorMode],
+  );
+
+  const clearTextAnnotationHoverHideTimeout = useCallback(() => {
+    if (textAnnotationHoverHideTimeoutRef.current === null) {
+      return;
+    }
+    window.clearTimeout(textAnnotationHoverHideTimeoutRef.current);
+    textAnnotationHoverHideTimeoutRef.current = null;
+  }, []);
+
+  const showTextAnnotationControls = useCallback(
+    (annotationId: string) => {
+      clearTextAnnotationHoverHideTimeout();
+      setHoveredTextAnnotationId((current) => (current === annotationId ? current : annotationId));
+    },
+    [clearTextAnnotationHoverHideTimeout],
+  );
+
+  const scheduleHideTextAnnotationControls = useCallback(
+    (annotationId: string) => {
+      clearTextAnnotationHoverHideTimeout();
+      textAnnotationHoverHideTimeoutRef.current = window.setTimeout(() => {
+        textAnnotationHoverHideTimeoutRef.current = null;
+        setHoveredTextAnnotationId((current) => (current === annotationId ? null : current));
+      }, 140);
+    },
+    [clearTextAnnotationHoverHideTimeout],
+  );
+
+  const clearAnnotationArrowHoverHideTimeout = useCallback(() => {
+    if (annotationArrowHoverHideTimeoutRef.current === null) {
+      return;
+    }
+    window.clearTimeout(annotationArrowHoverHideTimeoutRef.current);
+    annotationArrowHoverHideTimeoutRef.current = null;
+  }, []);
+
+  const showAnnotationArrowControls = useCallback(
+    (arrowId: string) => {
+      clearAnnotationArrowHoverHideTimeout();
+      setHoveredAnnotationArrowId((current) => (current === arrowId ? current : arrowId));
+    },
+    [clearAnnotationArrowHoverHideTimeout],
+  );
+
+  const scheduleHideAnnotationArrowControls = useCallback(
+    (arrowId: string) => {
+      clearAnnotationArrowHoverHideTimeout();
+      annotationArrowHoverHideTimeoutRef.current = window.setTimeout(() => {
+        annotationArrowHoverHideTimeoutRef.current = null;
+        setHoveredAnnotationArrowId((current) => (current === arrowId ? null : current));
+      }, 140);
+    },
+    [clearAnnotationArrowHoverHideTimeout],
+  );
+
+  const moveTextAnnotationBox = useCallback(
+    (annotationId: string, position: BrowserDrawingPoint) => {
+      const previousAnnotation = textAnnotationsRef.current.find(
+        (annotation) => annotation.id === annotationId,
+      );
+      if (!previousAnnotation) {
+        return;
+      }
+      const previousPosition = textAnnotationBoxPosition(previousAnnotation);
+      if (
+        Math.abs(position.x - previousPosition.x) < 0.25 &&
+        Math.abs(position.y - previousPosition.y) < 0.25
+      ) {
+        return;
+      }
+      const updatedAnnotations = textAnnotationsRef.current.map((annotation) =>
+        annotation.id === annotationId
+          ? { ...annotation, boxX: position.x, boxY: position.y }
+          : annotation,
+      );
+      const movedAnnotation = updatedAnnotations.find(
+        (annotation) => annotation.id === annotationId,
+      );
+      textAnnotationsRef.current = updatedAnnotations;
+      setTextAnnotations(updatedAnnotations);
+
+      if (!movedAnnotation || annotationArrowsRef.current.length === 0) {
+        return;
+      }
+
+      const deltaX = position.x - previousPosition.x;
+      const deltaY = position.y - previousPosition.y;
+      let didMoveArrow = false;
+      const updatedArrows = annotationArrowsRef.current.map((arrow) => {
+        if (arrow.sourceTextAnnotationId !== annotationId) {
+          return arrow;
+        }
+        didMoveArrow = true;
+        if (arrow.sourceHandle) {
+          return {
+            ...arrow,
+            from: textAnnotationHandlePoint(movedAnnotation, arrow.sourceHandle),
+          };
+        }
+        return {
+          ...arrow,
+          from: {
+            x: arrow.from.x + deltaX,
+            y: arrow.from.y + deltaY,
+          },
+        };
+      });
+      const draftArrow = annotationArrowDraftRef.current;
+      if (draftArrow?.sourceTextAnnotationId === annotationId) {
+        const updatedDraft =
+          draftArrow.sourceHandle !== undefined
+            ? {
+                ...draftArrow,
+                from: textAnnotationHandlePoint(movedAnnotation, draftArrow.sourceHandle),
+              }
+            : {
+                ...draftArrow,
+                from: {
+                  x: draftArrow.from.x + deltaX,
+                  y: draftArrow.from.y + deltaY,
+                },
+              };
+        annotationArrowDraftRef.current = updatedDraft;
+        setAnnotationArrowDraft(updatedDraft);
+      }
+      if (!didMoveArrow) {
+        return;
+      }
+      annotationArrowsRef.current = updatedArrows;
+      setAnnotationArrows(updatedArrows);
+    },
+    [],
+  );
+
+  const scheduleTextAnnotationDragPosition = useCallback(
+    (
+      drag: NonNullable<typeof textAnnotationDragRef.current>,
+      position: BrowserDrawingPoint,
+    ) => {
+      drag.pendingBoxX = position.x;
+      drag.pendingBoxY = position.y;
+      if (drag.frameId !== null) {
+        return;
+      }
+      drag.frameId = window.requestAnimationFrame(() => {
+        const activeDrag = textAnnotationDragRef.current;
+        if (!activeDrag || activeDrag.id !== drag.id) {
+          return;
+        }
+        activeDrag.frameId = null;
+        moveTextAnnotationBox(activeDrag.id, {
+          x: activeDrag.pendingBoxX,
+          y: activeDrag.pendingBoxY,
+        });
+      });
+    },
+    [moveTextAnnotationBox],
+  );
+
+  const beginTextAnnotationEdit = useCallback(
+    (annotation: BrowserTextAnnotation, event: ReactMouseEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      commitTextAnnotationDraft();
+      textAnnotationEditCancelledRef.current = false;
+      setSelectedTextAnnotationId(annotation.id);
+      setEditingTextAnnotationId(annotation.id);
+      setEditingTextAnnotationValue(annotation.text);
+    },
+    [commitTextAnnotationDraft],
+  );
+
+  const cancelTextAnnotationEdit = useCallback(() => {
+    textAnnotationEditCancelledRef.current = true;
+    setEditingTextAnnotationId(null);
+    setEditingTextAnnotationValue("");
+  }, []);
+
+  const commitTextAnnotationEdit = useCallback(() => {
+    const annotationId = editingTextAnnotationId;
+    if (!annotationId) {
+      return;
+    }
+    if (textAnnotationEditCancelledRef.current) {
+      textAnnotationEditCancelledRef.current = false;
+      return;
+    }
+
+    const text = editingTextAnnotationValue.trim();
+    setEditingTextAnnotationId(null);
+    setEditingTextAnnotationValue("");
+
+    if (text.length === 0) {
+      const updatedAnnotations = textAnnotationsRef.current.filter(
+        (annotation) => annotation.id !== annotationId,
+      );
+      const updatedArrows = annotationArrowsRef.current.filter(
+        (arrow) => arrow.sourceTextAnnotationId !== annotationId,
+      );
+      textAnnotationsRef.current = updatedAnnotations;
+      annotationArrowsRef.current = updatedArrows;
+      setTextAnnotations(updatedAnnotations);
+      setAnnotationArrows(updatedArrows);
+      setSelectedTextAnnotationId((current) => (current === annotationId ? null : current));
+      scheduleBrowserAnnotationAttachmentUpdate(0);
+      return;
+    }
+
+    const previousAnnotation = textAnnotationsRef.current.find(
+      (annotation) => annotation.id === annotationId,
+    );
+    if (previousAnnotation?.text === text) {
+      return;
+    }
+    const updatedAnnotations = textAnnotationsRef.current.map((annotation) =>
+      annotation.id === annotationId ? { ...annotation, text } : annotation,
+    );
+    textAnnotationsRef.current = updatedAnnotations;
+    setTextAnnotations(updatedAnnotations);
+    scheduleBrowserAnnotationAttachmentUpdate(0);
+  }, [
+    editingTextAnnotationId,
+    editingTextAnnotationValue,
+    scheduleBrowserAnnotationAttachmentUpdate,
+  ]);
+
+  const beginTextAnnotationDrag = useCallback(
+    (annotation: BrowserTextAnnotation, event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      commitTextAnnotationDraft();
+      setSelectedTextAnnotationId(annotation.id);
+      const boxPosition = textAnnotationBoxPosition(annotation);
+      textAnnotationDragRef.current = {
+        id: annotation.id,
+        pointerId: event.pointerId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startBoxX: boxPosition.x,
+        startBoxY: boxPosition.y,
+        pendingBoxX: boxPosition.x,
+        pendingBoxY: boxPosition.y,
+        frameId: null,
+      };
+      setDraggingTextAnnotationId(annotation.id);
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    [commitTextAnnotationDraft],
+  );
+
+  const moveTextAnnotationDrag = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const drag = textAnnotationDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) {
+        return;
+      }
+      event.preventDefault();
+      const next = clampTextAnnotationBoxPosition(
+        {
+          x: drag.startBoxX + event.clientX - drag.startClientX,
+          y: drag.startBoxY + event.clientY - drag.startClientY,
+        },
+        browserEditorOverlayRef.current,
+      );
+      scheduleTextAnnotationDragPosition(drag, next);
+    },
+    [scheduleTextAnnotationDragPosition],
+  );
+
+  const finishTextAnnotationDrag = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const drag = textAnnotationDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const next = clampTextAnnotationBoxPosition(
+        {
+          x: drag.startBoxX + event.clientX - drag.startClientX,
+          y: drag.startBoxY + event.clientY - drag.startClientY,
+        },
+        browserEditorOverlayRef.current,
+      );
+      if (drag.frameId !== null) {
+        window.cancelAnimationFrame(drag.frameId);
+      }
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      textAnnotationDragRef.current = null;
+      setDraggingTextAnnotationId(null);
+      moveTextAnnotationBox(drag.id, next);
+      if (
+        Math.abs(next.x - drag.startBoxX) >= 0.5 ||
+        Math.abs(next.y - drag.startBoxY) >= 0.5
+      ) {
+        scheduleBrowserAnnotationAttachmentUpdate(0);
+      }
+    },
+    [moveTextAnnotationBox, scheduleBrowserAnnotationAttachmentUpdate],
+  );
+
+  const updateAnnotationArrowDraftTarget = useCallback((clientX: number, clientY: number) => {
+    const point = pointFromOverlayClientPoint(browserEditorOverlayRef.current, clientX, clientY);
+    setAnnotationArrowDraft((current) => {
+      const next = current ? { ...current, to: point } : current;
+      annotationArrowDraftRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const beginAnnotationArrowDraft = useCallback(
+    (
+      annotation: BrowserTextAnnotation,
+      handle: BrowserAnnotationArrowHandle,
+      event: ReactPointerEvent<HTMLDivElement>,
+    ) => {
+      if (event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const from = textAnnotationHandlePoint(annotation, handle);
+      const id = crypto.randomUUID();
+      const arrow = {
+        id,
+        from,
+        to: pointFromOverlayClientPoint(browserEditorOverlayRef.current, event.clientX, event.clientY),
+        sourceTextAnnotationId: annotation.id,
+        sourceHandle: handle,
+      } satisfies BrowserAnnotationArrow;
+      setSelectedTextAnnotationId(annotation.id);
+      arrowDraftDragRef.current = { id, pointerId: event.pointerId };
+      annotationArrowDraftRef.current = arrow;
+      setAnnotationArrowDraft(arrow);
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    [],
+  );
+
+  const moveAnnotationArrowDraft = useCallback(
+    (event: ReactPointerEvent<Element>) => {
+      const drag = arrowDraftDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) {
+        return;
+      }
+      event.preventDefault();
+      updateAnnotationArrowDraftTarget(event.clientX, event.clientY);
+    },
+    [updateAnnotationArrowDraftTarget],
+  );
+
+  const finishAnnotationArrowDraft = useCallback((event: ReactPointerEvent<Element>) => {
+    const drag = arrowDraftDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    arrowDraftDragRef.current = null;
+    const draft = annotationArrowDraftRef.current;
+    annotationArrowDraftRef.current = null;
+    setAnnotationArrowDraft(null);
+    if (draft && draft.id === drag.id && browserAnnotationArrowLength(draft) >= BROWSER_ARROW_MIN_LENGTH) {
+      setAnnotationArrows((existing) => {
+        const next = [...existing, draft];
+        annotationArrowsRef.current = next;
+        return next;
+      });
+    }
+  }, []);
+
+  const beginAnnotationArrowTargetDrag = useCallback(
+    (arrow: BrowserAnnotationArrow, event: ReactPointerEvent<SVGCircleElement>) => {
+      if (event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      setSelectedTextAnnotationId(arrow.sourceTextAnnotationId ?? null);
+      arrowTargetDragRef.current = { id: arrow.id, pointerId: event.pointerId };
+      annotationArrowDraftRef.current = arrow;
+      setAnnotationArrowDraft(arrow);
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    [],
+  );
+
+  const moveAnnotationArrowTargetDrag = useCallback(
+    (event: ReactPointerEvent<Element>) => {
+      const drag = arrowTargetDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) {
+        return;
+      }
+      event.preventDefault();
+      updateAnnotationArrowDraftTarget(event.clientX, event.clientY);
+    },
+    [updateAnnotationArrowDraftTarget],
+  );
+
+  const finishAnnotationArrowTargetDrag = useCallback((event: ReactPointerEvent<Element>) => {
+    const drag = arrowTargetDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    arrowTargetDragRef.current = null;
+    const draft = annotationArrowDraftRef.current;
+    annotationArrowDraftRef.current = null;
+    setAnnotationArrowDraft(null);
+    if (draft && draft.id === drag.id && browserAnnotationArrowLength(draft) >= BROWSER_ARROW_MIN_LENGTH) {
+      setAnnotationArrows((existing) => {
+        const next = existing.map((arrow) => (arrow.id === draft.id ? draft : arrow));
+        annotationArrowsRef.current = next;
+        return next;
+      });
+    }
+  }, []);
+
+  const deleteTextAnnotationById = useCallback(
+    (annotationId: string): boolean => {
+      if (!textAnnotationsRef.current.some((annotation) => annotation.id === annotationId)) {
+        return false;
+      }
+
+      const activeTextAnnotationDrag = textAnnotationDragRef.current;
+      if (activeTextAnnotationDrag?.id === annotationId) {
+        if (activeTextAnnotationDrag.frameId !== null) {
+          window.cancelAnimationFrame(activeTextAnnotationDrag.frameId);
+        }
+        textAnnotationDragRef.current = null;
+        setDraggingTextAnnotationId(null);
+      }
+
+      if (annotationArrowDraftRef.current?.sourceTextAnnotationId === annotationId) {
+        annotationArrowDraftRef.current = null;
+        arrowDraftDragRef.current = null;
+        arrowTargetDragRef.current = null;
+        setAnnotationArrowDraft(null);
+      }
+
+      const nextTextAnnotations = textAnnotationsRef.current.filter(
+        (annotation) => annotation.id !== annotationId,
+      );
+      const removedArrowIds = new Set(
+        annotationArrowsRef.current
+          .filter((arrow) => arrow.sourceTextAnnotationId === annotationId)
+          .map((arrow) => arrow.id),
+      );
+      const nextAnnotationArrows = annotationArrowsRef.current.filter(
+        (arrow) => arrow.sourceTextAnnotationId !== annotationId,
+      );
+
+      textAnnotationsRef.current = nextTextAnnotations;
+      annotationArrowsRef.current = nextAnnotationArrows;
+      setTextAnnotations(nextTextAnnotations);
+      setAnnotationArrows(nextAnnotationArrows);
+      setSelectedTextAnnotationId((current) => (current === annotationId ? null : current));
+      setHoveredTextAnnotationId((current) => (current === annotationId ? null : current));
+      setEditingTextAnnotationId((current) => (current === annotationId ? null : current));
+      setHoveredAnnotationArrowId((current) =>
+        current && removedArrowIds.has(current) ? null : current,
+      );
+      scheduleBrowserAnnotationAttachmentUpdate(0);
+      return true;
+    },
+    [scheduleBrowserAnnotationAttachmentUpdate],
+  );
+
+  useEffect(() => {
+    if (
+      !isLiveRuntime ||
+      !workspaceReady ||
+      editorMode === "browse" ||
+      !selectedTextAnnotationId ||
+      editingTextAnnotationId ||
+      textAnnotationDraft
+    ) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isBrowserAnnotationDeleteEvent(event)) {
+        return;
+      }
+      if (!deleteTextAnnotationById(selectedTextAnnotationId)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [
+    deleteTextAnnotationById,
+    editingTextAnnotationId,
+    editorMode,
+    isLiveRuntime,
+    selectedTextAnnotationId,
+    textAnnotationDraft,
+    workspaceReady,
+  ]);
+
+  const onBrowserEditorOverlayClick = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (editorMode === "inspect") {
+        onInspectClick(event);
+        return;
+      }
+      if (editorMode === "text") {
+        onTextAnnotationClick(event);
+      }
+    },
+    [editorMode, onInspectClick, onTextAnnotationClick],
+  );
+
+  const onDrawPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (editorMode !== "draw" || event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      const strokeId = crypto.randomUUID();
+      activeDrawStrokeIdRef.current = strokeId;
+      const point = pointFromOverlayEvent(event);
+      setDrawStrokes((current) => {
+        const next = [...current, { id: strokeId, points: [point] }];
+        drawStrokesRef.current = next;
+        return next;
+      });
+    },
+    [editorMode],
+  );
+
+  const onDrawPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (editorMode !== "draw") {
+        return;
+      }
+      const strokeId = activeDrawStrokeIdRef.current;
+      if (!strokeId) {
+        return;
+      }
+      event.preventDefault();
+      const point = pointFromOverlayEvent(event);
+      setDrawStrokes((current) => {
+        const next = current.map((stroke) =>
+          stroke.id === strokeId
+            ? {
+                ...stroke,
+                points: [...stroke.points, point],
+              }
+            : stroke,
+        );
+        drawStrokesRef.current = next;
+        return next;
+      });
+    },
+    [editorMode],
+  );
+
+  const onDrawPointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (!activeDrawStrokeIdRef.current) {
+        return;
+      }
+      event.preventDefault();
+      activeDrawStrokeIdRef.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      scheduleBrowserAnnotationAttachmentUpdate(0);
+    },
+    [scheduleBrowserAnnotationAttachmentUpdate],
+  );
+
+  const onBrowserEditorOverlayPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (textAnnotationDragRef.current) {
+        moveTextAnnotationDrag(event);
+        return;
+      }
+      if (arrowDraftDragRef.current) {
+        moveAnnotationArrowDraft(event);
+        return;
+      }
+      if (arrowTargetDragRef.current) {
+        moveAnnotationArrowTargetDrag(event);
+        return;
+      }
+      if (editorMode === "inspect") {
+        onInspectPointerMove(event);
+        return;
+      }
+      if (editorMode === "draw") {
+        onDrawPointerMove(event);
+      }
+    },
+    [
+      editorMode,
+      moveAnnotationArrowDraft,
+      moveAnnotationArrowTargetDrag,
+      moveTextAnnotationDrag,
+      onDrawPointerMove,
+      onInspectPointerMove,
+    ],
+  );
+
+  const onBrowserEditorOverlayPointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (textAnnotationDragRef.current) {
+        finishTextAnnotationDrag(event);
+        return;
+      }
+      if (arrowDraftDragRef.current) {
+        finishAnnotationArrowDraft(event);
+        return;
+      }
+      if (arrowTargetDragRef.current) {
+        finishAnnotationArrowTargetDrag(event);
+        return;
+      }
+      onDrawPointerUp(event);
+    },
+    [
+      finishAnnotationArrowDraft,
+      finishAnnotationArrowTargetDrag,
+      finishTextAnnotationDrag,
+      onDrawPointerUp,
+    ],
+  );
+
+  const clearDrawingAnnotations = useCallback(() => {
+    activeDrawStrokeIdRef.current = null;
+    drawStrokesRef.current = [];
+    textAnnotationsRef.current = [];
+    annotationArrowsRef.current = [];
+    annotationArrowDraftRef.current = null;
+    arrowDraftDragRef.current = null;
+    arrowTargetDragRef.current = null;
+    clearTextAnnotationHoverHideTimeout();
+    clearAnnotationArrowHoverHideTimeout();
+    const activeTextAnnotationDrag = textAnnotationDragRef.current;
+    if (activeTextAnnotationDrag?.frameId !== null && activeTextAnnotationDrag?.frameId !== undefined) {
+      window.cancelAnimationFrame(activeTextAnnotationDrag.frameId);
+    }
+    textAnnotationDragRef.current = null;
+    selectedElementContextRef.current = null;
+    setDrawStrokes([]);
+    setTextAnnotations([]);
+    setAnnotationArrows([]);
+    setAnnotationArrowDraft(null);
+    setSelectedTextAnnotationId(null);
+    setHoveredTextAnnotationId(null);
+    setHoveredAnnotationArrowId(null);
+    setDraggingTextAnnotationId(null);
+    setEditingTextAnnotationId(null);
+    setEditingTextAnnotationValue("");
+    setTextAnnotationDraft(null);
+    setSelectedElementContext(null);
+    clearBrowserAnnotationContext();
+    setLocalError(null);
+  }, [
+    clearAnnotationArrowHoverHideTimeout,
+    clearBrowserAnnotationContext,
+    clearTextAnnotationHoverHideTimeout,
+  ]);
+
+  const undoLastDrawingStroke = useCallback(() => {
+    activeDrawStrokeIdRef.current = null;
+    if (annotationArrowsRef.current.length > 0) {
+      const removedArrowId = annotationArrowsRef.current.at(-1)?.id ?? null;
+      setAnnotationArrows((current) => {
+        const next = current.slice(0, -1);
+        annotationArrowsRef.current = next;
+        return next;
+      });
+      if (removedArrowId) {
+        setHoveredAnnotationArrowId((current) => (current === removedArrowId ? null : current));
+      }
+    } else if (drawStrokesRef.current.some((stroke) => stroke.points.length > 1)) {
+      setDrawStrokes((current) => {
+        const next = current.slice(0, -1);
+        drawStrokesRef.current = next;
+        return next;
+      });
+    } else {
+      const removedTextAnnotationId = textAnnotationsRef.current.at(-1)?.id ?? null;
+      setTextAnnotations((current) => {
+        const next = current.slice(0, -1);
+        textAnnotationsRef.current = next;
+        return next;
+      });
+      if (removedTextAnnotationId) {
+        setSelectedTextAnnotationId((current) =>
+          current === removedTextAnnotationId ? null : current,
+        );
+        setEditingTextAnnotationId((current) =>
+          current === removedTextAnnotationId ? null : current,
+        );
+        setHoveredTextAnnotationId((current) =>
+          current === removedTextAnnotationId ? null : current,
+        );
+        setAnnotationArrows((current) => {
+          const next = current.filter(
+            (arrow) => arrow.sourceTextAnnotationId !== removedTextAnnotationId,
+          );
+          annotationArrowsRef.current = next;
+          return next;
+        });
+      }
+    }
+    scheduleBrowserAnnotationAttachmentUpdate(0);
+  }, [scheduleBrowserAnnotationAttachmentUpdate]);
+
+  const addDrawingToPrompt = useCallback(() => {
+    const usableStrokes = drawStrokesRef.current.filter((stroke) => stroke.points.length > 1);
+    if (
+      usableStrokes.length === 0 &&
+      textAnnotationsRef.current.length === 0 &&
+      annotationArrowsRef.current.length === 0 &&
+      !selectedElementContextRef.current
+    ) {
+      setLocalError("Annotate the page before adding live editor context.");
+      return;
+    }
+    void updateBrowserAnnotationAttachment();
+    toastManager.add({
+      type: "success",
+      title: "Live editor context attached",
+    });
+    setLocalError(null);
+  }, [updateBrowserAnnotationAttachment]);
+
+  const usableDrawStrokeCount = drawStrokes.filter((stroke) => stroke.points.length > 1).length;
+  const hasTextAnnotations = textAnnotations.length > 0;
+  const hasAnnotationArrows = annotationArrows.length > 0;
+  const canUndoAnnotation = usableDrawStrokeCount > 0 || hasTextAnnotations || hasAnnotationArrows;
+  const hasBrowserAnnotation =
+    usableDrawStrokeCount > 0 ||
+    hasTextAnnotations ||
+    hasAnnotationArrows ||
+    selectedElementContext !== null;
+  const visibleAnnotationBox =
+    editorMode === "inspect" && inspectHoverBox
+      ? inspectHoverBox
+      : selectedElementContext
+        ? {
+            x: selectedElementContext.rect.x,
+            y: selectedElementContext.rect.y,
+            width: selectedElementContext.rect.width,
+            height: selectedElementContext.rect.height,
+            label: selectedElementContext.selector || selectedElementContext.tagName.toLowerCase(),
+          }
+        : null;
+  const visibleAnnotationArrows = resolveBrowserAnnotationArrowSources(
+    [
+      ...annotationArrows.filter(
+        (arrow) => !annotationArrowDraft || arrow.id !== annotationArrowDraft.id,
+      ),
+      ...(annotationArrowDraft ? [annotationArrowDraft] : []),
+    ],
+    textAnnotations,
+  );
+  const previewStatusLabel =
+    previewState?.status === "running"
+      ? "Preview running"
+      : previewState?.status === "starting"
+        ? "Starting preview"
+        : previewState?.status === "error"
+          ? "Preview error"
+          : previewState?.status === "stopped"
+            ? "Preview stopped"
+            : "Preview";
+  const previewIsRunning = previewState?.status === "running";
+  const previewIsStarting = previewState?.status === "starting";
+  const previewCanStart =
+    Boolean(previewCwd) && !previewActionPending && !previewIsRunning && !previewIsStarting;
+  const previewCanStop = Boolean(previewCwd) && !previewActionPending && previewIsRunning;
+  const previewCanRestart = Boolean(previewCwd) && !previewActionPending && Boolean(previewState);
+  const browserEditorOverlayEnabled = isLiveRuntime && workspaceReady && editorMode !== "browse";
+  const fallbackDemoUrl =
+    typeof window === "undefined"
+      ? BROWSER_BLANK_URL
+      : new URL("/browser-editor-demo/index.html", window.location.origin).toString();
+  const shouldShowFallbackDemoPrompt =
+    import.meta.env.DEV &&
+    !canUseNativeBrowserSurface &&
+    activeTab !== null &&
+    (activeTab.url === BROWSER_BLANK_URL || activeTab.lastCommittedUrl === BROWSER_BLANK_URL);
 
   const header = (
     <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -1197,74 +3880,266 @@ export function BrowserPanel({
       <div className="flex min-h-0 flex-1 flex-col">
         <div
           ref={browserTabsBarRef}
-          className="flex items-center gap-2 border-b border-border px-2 py-1.5"
+          className="border-b border-border px-2 py-1.5"
         >
-          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-            {threadBrowserState?.tabs.map((tab) => {
-              const isActive = tab.id === activeTab?.id;
-              return (
-                <div
-                  key={tab.id}
-                  className={cn(
-                    "group flex h-8 min-w-0 max-w-[14rem] items-center rounded-md border px-2 text-left text-xs transition-colors",
-                    isActive
-                      ? "border-border/70 text-foreground"
-                      : "border-transparent text-muted-foreground hover:border-border/50 hover:text-foreground",
-                    tab.status === "suspended" ? "opacity-75" : "",
-                  )}
-                >
-                  <span className="mr-2 flex size-4 shrink-0 items-center justify-center rounded-sm">
-                    {tab.faviconUrl ? (
-                      <img alt="" src={tab.faviconUrl} className="size-3 rounded-[2px]" />
-                    ) : (
-                      <GlobeIcon className="size-3 text-muted-foreground" />
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+              {threadBrowserState?.tabs.map((tab) => {
+                const isActive = tab.id === activeTab?.id;
+                return (
+                  <div
+                    key={tab.id}
+                    className={cn(
+                      "group flex h-8 min-w-0 max-w-[14rem] items-center rounded-md border px-2 text-left text-xs transition-colors",
+                      isActive
+                        ? "border-border/70 text-foreground"
+                        : "border-transparent text-muted-foreground hover:border-border/50 hover:text-foreground",
+                      tab.status === "suspended" ? "opacity-75" : "",
                     )}
-                  </span>
+                  >
+                    <span className="mr-2 flex size-4 shrink-0 items-center justify-center rounded-sm">
+                      {tab.faviconUrl ? (
+                        <img alt="" src={tab.faviconUrl} className="size-3 rounded-[2px]" />
+                      ) : (
+                        <GlobeIcon className="size-3 text-muted-foreground" />
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      className="min-w-0 flex-1 truncate text-left"
+                      onClick={() => {
+                        if (!ensureLiveRuntime()) return;
+                        if (!api) return;
+                        void runBrowserAction(() =>
+                          api.browser.selectTab({ threadId, tabId: tab.id }),
+                        ).then((state) => {
+                          if (state) {
+                            upsertThreadState(state);
+                          }
+                        });
+                      }}
+                    >
+                      {tab.title || "Untitled"}
+                    </button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      className={closeButtonClassName(isActive)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onCloseTab(tab.id);
+                      }}
+                    >
+                      <XIcon className="size-3" />
+                      <span className="sr-only">Close tab</span>
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+            {!hasNativeBrowserBridge ? (
+              <div
+                className="max-w-[12rem] shrink-0 truncate rounded-full border border-border/60 bg-background/80 px-2.5 py-1 text-[11px] leading-none text-muted-foreground"
+                title="Web fallback: browse and draw work here; inspect works for same-origin pages. Use Synara desktop for full CDP automation."
+              >
+                Web fallback
+              </div>
+            ) : null}
+            {browserChromeStatus ? (
+              <div
+                className={cn(
+                  "max-w-[13rem] shrink-0 truncate rounded-full border px-2.5 py-1 text-[11px] leading-none sm:max-w-[16rem]",
+                  browserChromeStatus.tone === "error"
+                    ? "border-destructive/25 bg-destructive/8 text-destructive"
+                    : "border-border/60 bg-background/80 text-muted-foreground",
+                )}
+                title={browserChromeStatus.label}
+              >
+                {browserChromeStatus.label}
+              </div>
+            ) : null}
+          </div>
+          {isLiveRuntime || previewCwd ? (
+            <div className="mt-1.5 flex min-w-0 items-center gap-1 overflow-x-auto">
+              {isLiveRuntime ? (
+                <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-border/60 bg-background/60 p-0.5">
                   <button
                     type="button"
-                    className="min-w-0 flex-1 truncate text-left"
+                    className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
+                    data-active={editorMode === "browse"}
+                    title="Browse"
                     onClick={() => {
-                      if (!ensureLiveRuntime()) return;
-                      if (!api) return;
-                      void runBrowserAction(() =>
-                        api.browser.selectTab({ threadId, tabId: tab.id }),
-                      ).then((state) => {
-                        if (state) {
-                          upsertThreadState(state);
-                        }
-                      });
+                      setEditorMode("browse");
                     }}
                   >
-                    {tab.title || "Untitled"}
+                    <GlobeIcon className="size-3.5" />
+                    <span className="sr-only">Browse</span>
                   </button>
+                  <button
+                    type="button"
+                    className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
+                    data-active={editorMode === "inspect"}
+                    title="Inspect"
+                    onClick={() => {
+                      setEditorMode("inspect");
+                    }}
+                  >
+                    <EyeIcon className="size-3.5" />
+                    <span className="sr-only">Inspect</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
+                    data-active={editorMode === "draw"}
+                    title="Draw"
+                    onClick={() => {
+                      setEditorMode("draw");
+                    }}
+                  >
+                    <PencilIcon className="size-3.5" />
+                    <span className="sr-only">Draw</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
+                    data-active={editorMode === "text"}
+                    title="Text annotation"
+                    onClick={() => {
+                      setEditorMode("text");
+                    }}
+                  >
+                    <TextIcon className="size-3.5" />
+                    <span className="sr-only">Text annotation</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
+                    disabled={!canUndoAnnotation}
+                    title="Undo annotation"
+                    onClick={undoLastDrawingStroke}
+                  >
+                    <Undo2Icon className="size-3.5" />
+                    <span className="sr-only">Undo annotation</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
+                    disabled={!hasBrowserAnnotation}
+                    title="Clear annotation"
+                    onClick={clearDrawingAnnotations}
+                  >
+                    <EraserIcon className="size-3.5" />
+                    <span className="sr-only">Clear annotation</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME, "gap-1.5")}
+                    aria-pressed={autoAttachAnnotationScreenshot}
+                    aria-label={autoAttachAnnotationScreenshot ? "AUTO camera" : "MANUAL camera"}
+                    title={
+                      autoAttachAnnotationScreenshot
+                        ? "Switch annotation capture to manual"
+                        : "Switch annotation capture to auto"
+                    }
+                    onClick={() => {
+                      setAutoAttachAnnotationScreenshot((current) => !current);
+                    }}
+                  >
+                    <span className="text-[10px] font-semibold uppercase">
+                      {autoAttachAnnotationScreenshot ? "AUTO" : "MANUAL"}
+                    </span>
+                    <CameraIcon className="size-3.5" />
+                  </button>
+                  {!autoAttachAnnotationScreenshot ? (
+                    <button
+                      type="button"
+                      className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
+                      disabled={!hasBrowserAnnotation}
+                      title="Attach live editor context"
+                      onClick={addDrawingToPrompt}
+                    >
+                      <PlusIcon className="size-3.5" />
+                      <span className="sr-only">Attach live editor context</span>
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+              {previewCwd ? (
+                <div className="flex shrink-0 items-center gap-1 rounded-md border border-border/60 bg-background/60 px-1 py-0.5">
+                  <span
+                    className={cn(
+                      "max-w-28 truncate px-1.5 text-[11px] text-muted-foreground",
+                      previewState?.status === "error" ? "text-destructive" : "",
+                    )}
+                    title={previewState?.lastError ?? previewState?.url ?? previewCwd}
+                  >
+                    {previewStatusLabel}
+                  </span>
                   <Button
                     type="button"
                     variant="ghost"
                     size="icon-sm"
-                    className={closeButtonClassName(isActive)}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onCloseTab(tab.id);
+                    className="size-6"
+                    disabled={!previewCanStart}
+                    title="Start preview"
+                    onClick={() => {
+                      void startPreview({ autoNavigate: true });
                     }}
                   >
-                    <XIcon className="size-3" />
-                    <span className="sr-only">Close tab</span>
+                    {previewActionPending || previewIsStarting ? (
+                      <LoaderCircleIcon className="size-3 animate-spin" />
+                    ) : (
+                      <PlayIcon className="size-3" />
+                    )}
+                    <span className="sr-only">Start preview</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="size-6"
+                    disabled={!previewCanStop}
+                    title="Stop preview"
+                    onClick={() => {
+                      void stopPreview();
+                    }}
+                  >
+                    <StopIcon className="size-3" />
+                    <span className="sr-only">Stop preview</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="size-6"
+                    disabled={!previewCanRestart}
+                    title="Restart preview"
+                    onClick={() => {
+                      void restartPreview();
+                    }}
+                  >
+                    <RefreshCwIcon className="size-3" />
+                    <span className="sr-only">Restart preview</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="size-6"
+                    disabled={!previewState?.url}
+                    title="Open preview"
+                    onClick={() => {
+                      if (previewState?.url) {
+                        void navigateBrowserToPreviewUrl(previewState.url);
+                      }
+                    }}
+                  >
+                    <ExternalLinkIcon className="size-3" />
+                    <span className="sr-only">Open preview</span>
                   </Button>
                 </div>
-              );
-            })}
-          </div>
-          {browserChromeStatus ? (
-            <div
-              className={cn(
-                "max-w-[13rem] shrink-0 truncate rounded-full border px-2.5 py-1 text-[11px] leading-none sm:max-w-[16rem]",
-                browserChromeStatus.tone === "error"
-                  ? "border-destructive/25 bg-destructive/8 text-destructive"
-                  : "border-border/60 bg-background/80 text-muted-foreground",
-              )}
-              title={browserChromeStatus.label}
-            >
-              {browserChromeStatus.label}
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -1280,7 +4155,613 @@ export function BrowserPanel({
             </div>
           ) : null}
           {isLiveRuntime ? (
-            <div ref={browserViewportRef} className="absolute inset-0 bg-transparent" />
+            <div ref={browserViewportRef} className="absolute inset-0 bg-transparent">
+              {!canUseNativeBrowserSurface && activeTab ? (
+                <iframe
+                  ref={browserFallbackFrameRef}
+                  key={activeTab.id}
+                  title={activeTab.title || "Browser preview"}
+                  src={activeTab.lastCommittedUrl ?? activeTab.url ?? BROWSER_BLANK_URL}
+                  className="absolute inset-0 h-full w-full border-0 bg-white"
+                  onLoad={syncFallbackFrameLoad}
+                />
+              ) : null}
+              {shouldShowFallbackDemoPrompt ? (
+                <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/92 p-6 text-center backdrop-blur-sm">
+                  <div className="max-w-sm rounded-lg border border-border/70 bg-card p-5 shadow-sm">
+                    <GlobeIcon className="mx-auto mb-3 size-8 text-muted-foreground" />
+                    <p className="text-sm font-medium text-foreground">Browser fallback ready</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      Open the mock landing page to test browse, inspect, and draw in the web
+                      fallback.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="default"
+                      size="sm"
+                      className="mt-4"
+                      onClick={() => {
+                        void navigateBrowserToPreviewUrl(fallbackDemoUrl);
+                      }}
+                    >
+                      Open demo page
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+              {!canUseNativeBrowserSurface && !activeTab ? (
+                <div className="absolute inset-0 flex items-center justify-center bg-background p-6 text-center">
+                  <div className="max-w-sm">
+                    <GlobeIcon className="mx-auto mb-3 size-8 text-muted-foreground" />
+                    <p className="text-sm font-medium text-foreground">No browser tab open</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Enter a URL or start a preview to open a page here.
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+              {browserEditorOverlayEnabled ? (
+                <div
+                  ref={browserEditorOverlayRef}
+                  data-browser-editor-overlay="true"
+                  className={cn(
+                    "absolute inset-0 z-20 select-none",
+                    editorMode === "text" ? "cursor-text" : "cursor-crosshair",
+                  )}
+                  onPointerMove={onBrowserEditorOverlayPointerMove}
+                  onPointerDown={onDrawPointerDown}
+                  onPointerUp={onBrowserEditorOverlayPointerUp}
+                  onPointerCancel={onBrowserEditorOverlayPointerUp}
+                  onClick={onBrowserEditorOverlayClick}
+                >
+                  {visibleAnnotationBox ? (
+                    <>
+                      <div
+                        className="pointer-events-none absolute rounded-[2px] border border-cyan-200/90 bg-cyan-300/[0.24] shadow-[inset_0_0_0_1px_rgba(8,145,178,0.62),0_0_0_1px_rgba(0,0,0,0.5),0_0_24px_rgba(34,211,238,0.42)]"
+                        style={{
+                          left: visibleAnnotationBox.x,
+                          top: visibleAnnotationBox.y,
+                          width: visibleAnnotationBox.width,
+                          height: visibleAnnotationBox.height,
+                        }}
+                      />
+                      <div
+                        className="pointer-events-none absolute rounded-[2px] border-2 border-white bg-white/[0.18] shadow-[0_0_0_1px_rgba(255,255,255,0.85)] mix-blend-difference"
+                        style={{
+                          left: visibleAnnotationBox.x,
+                          top: visibleAnnotationBox.y,
+                          width: visibleAnnotationBox.width,
+                          height: visibleAnnotationBox.height,
+                        }}
+                      />
+                      <div
+                        className="pointer-events-none absolute max-w-72 truncate rounded border border-cyan-200/75 bg-black/[0.88] px-2 py-1 text-[11px] font-medium text-white shadow-[0_0_0_1px_rgba(255,255,255,0.24),0_8px_20px_rgba(0,0,0,0.32)]"
+                        style={{
+                          left: Math.max(8, visibleAnnotationBox.x),
+                          top: Math.max(8, visibleAnnotationBox.y - 28),
+                        }}
+                      >
+                        {visibleAnnotationBox.label}
+                      </div>
+                    </>
+                  ) : null}
+                  {drawStrokes.length > 0 ? (
+                    <svg
+                      className="pointer-events-none absolute inset-0 h-full w-full"
+                      aria-hidden="true"
+                    >
+                      <defs>
+                        {drawStrokes.map((stroke, strokeIndex) => {
+                          const gradientId = `browser-drawing-gradient-${svgFragmentId(threadId)}-${svgFragmentId(stroke.id)}`;
+                          const colors = gradientColorsForStroke(strokeIndex);
+
+                          return (
+                            <linearGradient
+                              key={gradientId}
+                              id={gradientId}
+                              x1="0%"
+                              y1="0%"
+                              x2="100%"
+                              y2="100%"
+                            >
+                              <animateTransform
+                                attributeName="gradientTransform"
+                                type="rotate"
+                                values="0 0.5 0.5;360 0.5 0.5"
+                                dur="12s"
+                                repeatCount="indefinite"
+                              />
+                              <stop offset="0%" stopColor={colors[0]!}>
+                                <animate
+                                  attributeName="stop-color"
+                                  values={shiftedClosedGradientColors(colors, 0)}
+                                  dur="8s"
+                                  begin={`${strokeIndex * 0.13}s`}
+                                  repeatCount="indefinite"
+                                />
+                              </stop>
+                              <stop offset="24%" stopColor={colors[1]!}>
+                                <animate
+                                  attributeName="stop-color"
+                                  values={shiftedClosedGradientColors(colors, 1)}
+                                  dur="8s"
+                                  begin={`${strokeIndex * 0.13}s`}
+                                  repeatCount="indefinite"
+                                />
+                              </stop>
+                              <stop offset="48%" stopColor={colors[2]!}>
+                                <animate
+                                  attributeName="stop-color"
+                                  values={shiftedClosedGradientColors(colors, 2)}
+                                  dur="8s"
+                                  begin={`${strokeIndex * 0.13}s`}
+                                  repeatCount="indefinite"
+                                />
+                              </stop>
+                              <stop offset="72%" stopColor={colors[3]!}>
+                                <animate
+                                  attributeName="stop-color"
+                                  values={shiftedClosedGradientColors(colors, 3)}
+                                  dur="8s"
+                                  begin={`${strokeIndex * 0.13}s`}
+                                  repeatCount="indefinite"
+                                />
+                              </stop>
+                              <stop offset="100%" stopColor={colors[4]!}>
+                                <animate
+                                  attributeName="stop-color"
+                                  values={shiftedClosedGradientColors(colors, 4)}
+                                  dur="8s"
+                                  begin={`${strokeIndex * 0.13}s`}
+                                  repeatCount="indefinite"
+                                />
+                              </stop>
+                            </linearGradient>
+                          );
+                        })}
+                      </defs>
+                      {drawStrokes.map((stroke) => {
+                        const points = drawingStrokePoints(stroke);
+                        const gradientId = `browser-drawing-gradient-${svgFragmentId(threadId)}-${svgFragmentId(stroke.id)}`;
+
+                        return (
+                          <g key={stroke.id}>
+                            <polyline
+                              className="mix-blend-difference"
+                              fill="none"
+                              points={points}
+                              stroke={BROWSER_DRAWING_CONTRAST_STROKE_COLOR}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={BROWSER_DRAWING_CONTRAST_STROKE_WIDTH}
+                              opacity="0.94"
+                            />
+                            <polyline
+                              fill="none"
+                              points={points}
+                              stroke={`url(#${gradientId})`}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={BROWSER_DRAWING_GRADIENT_STROKE_WIDTH}
+                            />
+                            <polyline
+                              className="mix-blend-difference"
+                              fill="none"
+                              points={points}
+                              stroke={BROWSER_DRAWING_CONTRAST_STROKE_COLOR}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={BROWSER_DRAWING_GLINT_STROKE_WIDTH}
+                              opacity="0.72"
+                            />
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  ) : null}
+                  {visibleAnnotationArrows.length > 0 ? (
+                    <svg className="absolute inset-0 h-full w-full" aria-hidden="true">
+                      <defs>
+                        {visibleAnnotationArrows.map((arrow, arrowIndex) => {
+                          const gradientId = `browser-annotation-arrow-gradient-${svgFragmentId(threadId)}-${svgFragmentId(arrow.id)}`;
+                          const colors = gradientColorsForStroke(drawStrokes.length + arrowIndex);
+
+                          return (
+                            <linearGradient
+                              key={gradientId}
+                              id={gradientId}
+                              x1="0%"
+                              y1="0%"
+                              x2="100%"
+                              y2="100%"
+                            >
+                              <animateTransform
+                                attributeName="gradientTransform"
+                                type="rotate"
+                                values="0 0.5 0.5;360 0.5 0.5"
+                                dur="12s"
+                                repeatCount="indefinite"
+                              />
+                              <stop offset="0%" stopColor={colors[0]!}>
+                                <animate
+                                  attributeName="stop-color"
+                                  values={shiftedClosedGradientColors(colors, 0)}
+                                  dur="8s"
+                                  begin={`${arrowIndex * 0.13}s`}
+                                  repeatCount="indefinite"
+                                />
+                              </stop>
+                              <stop offset="24%" stopColor={colors[1]!}>
+                                <animate
+                                  attributeName="stop-color"
+                                  values={shiftedClosedGradientColors(colors, 1)}
+                                  dur="8s"
+                                  begin={`${arrowIndex * 0.13}s`}
+                                  repeatCount="indefinite"
+                                />
+                              </stop>
+                              <stop offset="48%" stopColor={colors[2]!}>
+                                <animate
+                                  attributeName="stop-color"
+                                  values={shiftedClosedGradientColors(colors, 2)}
+                                  dur="8s"
+                                  begin={`${arrowIndex * 0.13}s`}
+                                  repeatCount="indefinite"
+                                />
+                              </stop>
+                              <stop offset="72%" stopColor={colors[3]!}>
+                                <animate
+                                  attributeName="stop-color"
+                                  values={shiftedClosedGradientColors(colors, 3)}
+                                  dur="8s"
+                                  begin={`${arrowIndex * 0.13}s`}
+                                  repeatCount="indefinite"
+                                />
+                              </stop>
+                              <stop offset="100%" stopColor={colors[4]!}>
+                                <animate
+                                  attributeName="stop-color"
+                                  values={shiftedClosedGradientColors(colors, 4)}
+                                  dur="8s"
+                                  begin={`${arrowIndex * 0.13}s`}
+                                  repeatCount="indefinite"
+                                />
+                              </stop>
+                            </linearGradient>
+                          );
+                        })}
+                      </defs>
+                      {visibleAnnotationArrows.map((arrow) => {
+                        const showTargetHandle =
+                          arrow.id === annotationArrowDraft?.id ||
+                          hoveredAnnotationArrowId === arrow.id ||
+                          (arrow.sourceTextAnnotationId !== undefined &&
+                            hoveredTextAnnotationId === arrow.sourceTextAnnotationId);
+                        const gradientId = `browser-annotation-arrow-gradient-${svgFragmentId(threadId)}-${svgFragmentId(arrow.id)}`;
+                        const head = browserAnnotationArrowHeadPoints(arrow);
+                        const segments = [
+                          {
+                            x1: arrow.from.x,
+                            y1: arrow.from.y,
+                            x2: arrow.to.x,
+                            y2: arrow.to.y,
+                          },
+                          {
+                            x1: arrow.to.x,
+                            y1: arrow.to.y,
+                            x2: head.left.x,
+                            y2: head.left.y,
+                          },
+                          {
+                            x1: arrow.to.x,
+                            y1: arrow.to.y,
+                            x2: head.right.x,
+                            y2: head.right.y,
+                          },
+                        ];
+                        return (
+                          <g key={arrow.id}>
+                            <line
+                              x1={arrow.from.x}
+                              y1={arrow.from.y}
+                              x2={arrow.to.x}
+                              y2={arrow.to.y}
+                              stroke="transparent"
+                              strokeLinecap="round"
+                              strokeWidth="14"
+                              pointerEvents="stroke"
+                              onPointerEnter={() => {
+                                showAnnotationArrowControls(arrow.id);
+                              }}
+                              onPointerMove={(event) => {
+                                showAnnotationArrowControls(arrow.id);
+                                moveAnnotationArrowTargetDrag(event);
+                              }}
+                              onPointerLeave={() => {
+                                scheduleHideAnnotationArrowControls(arrow.id);
+                              }}
+                              onMouseEnter={() => {
+                                showAnnotationArrowControls(arrow.id);
+                              }}
+                              onMouseMove={() => {
+                                showAnnotationArrowControls(arrow.id);
+                              }}
+                              onMouseLeave={() => {
+                                scheduleHideAnnotationArrowControls(arrow.id);
+                              }}
+                            />
+                            {segments.map((segment, segmentIndex) => (
+                              <line
+                                key={`contrast-${segmentIndex}`}
+                                className="pointer-events-none mix-blend-difference"
+                                x1={segment.x1}
+                                y1={segment.y1}
+                                x2={segment.x2}
+                                y2={segment.y2}
+                                stroke="#ffffff"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={BROWSER_DRAWING_CONTRAST_STROKE_WIDTH}
+                                opacity="0.94"
+                              />
+                            ))}
+                            {segments.map((segment, segmentIndex) => (
+                              <line
+                                key={`gradient-${segmentIndex}`}
+                                className="pointer-events-none"
+                                x1={segment.x1}
+                                y1={segment.y1}
+                                x2={segment.x2}
+                                y2={segment.y2}
+                                stroke={`url(#${gradientId})`}
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={BROWSER_DRAWING_GRADIENT_STROKE_WIDTH}
+                              />
+                            ))}
+                            {segments.map((segment, segmentIndex) => (
+                              <line
+                                key={`glint-${segmentIndex}`}
+                                className="pointer-events-none mix-blend-difference"
+                                x1={segment.x1}
+                                y1={segment.y1}
+                                x2={segment.x2}
+                                y2={segment.y2}
+                                stroke="#ffffff"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={BROWSER_DRAWING_GLINT_STROKE_WIDTH}
+                                opacity="0.72"
+                              />
+                            ))}
+                            <circle
+                              className={cn(
+                                "cursor-crosshair fill-black/80 stroke-cyan-200 transition-opacity duration-150 ease-out",
+                                showTargetHandle
+                                  ? "pointer-events-auto opacity-100"
+                                  : "pointer-events-none opacity-0",
+                              )}
+                              cx={arrow.to.x}
+                              cy={arrow.to.y}
+                              r="5"
+                              strokeWidth="1.5"
+                              onPointerEnter={() => {
+                                showAnnotationArrowControls(arrow.id);
+                              }}
+                              onPointerMove={() => {
+                                showAnnotationArrowControls(arrow.id);
+                              }}
+                              onPointerLeave={() => {
+                                scheduleHideAnnotationArrowControls(arrow.id);
+                              }}
+                              onMouseEnter={() => {
+                                showAnnotationArrowControls(arrow.id);
+                              }}
+                              onMouseMove={() => {
+                                showAnnotationArrowControls(arrow.id);
+                              }}
+                              onMouseLeave={() => {
+                                scheduleHideAnnotationArrowControls(arrow.id);
+                              }}
+                              onPointerDown={(event) =>
+                                beginAnnotationArrowTargetDrag(arrow, event)
+                              }
+                              onPointerUp={finishAnnotationArrowTargetDrag}
+                              onPointerCancel={finishAnnotationArrowTargetDrag}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                              }}
+                            />
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  ) : null}
+                  {textAnnotations.map((annotation) => {
+                    const boxPosition = textAnnotationBoxPosition(annotation);
+                    const isSelected = selectedTextAnnotationId === annotation.id;
+                    const isEditing = editingTextAnnotationId === annotation.id;
+                    const showSourceHandles =
+                      !isEditing &&
+                      (hoveredTextAnnotationId === annotation.id ||
+                        draggingTextAnnotationId === annotation.id ||
+                        annotationArrowDraft?.sourceTextAnnotationId === annotation.id);
+
+                    return (
+                      <div key={annotation.id} className="pointer-events-none absolute inset-0">
+                        <div
+                          className="group pointer-events-auto absolute"
+                          style={{
+                            left: boxPosition.x,
+                            top: boxPosition.y,
+                            width: BROWSER_TEXT_ANNOTATION_BOX_WIDTH,
+                            height: BROWSER_TEXT_ANNOTATION_BOX_HEIGHT,
+                          }}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                          }}
+                        >
+                          <div
+                            className={cn(
+                              "h-full w-full truncate rounded-md border border-white/80 bg-slate-950/90 px-2.5 py-1.5 text-xs font-semibold leading-snug text-white shadow-[0_0_0_1px_rgba(0,0,0,0.35),0_8px_20px_rgba(0,0,0,0.26)]",
+                              isEditing
+                                ? "cursor-text ring-2 ring-cyan-300/80"
+                                : "cursor-grab active:cursor-grabbing",
+                              isSelected && !isEditing ? "ring-2 ring-cyan-300/80" : "",
+                            )}
+                            onDoubleClick={(event) => beginTextAnnotationEdit(annotation, event)}
+                            onPointerEnter={() => {
+                              showTextAnnotationControls(annotation.id);
+                            }}
+                            onPointerLeave={() => {
+                              scheduleHideTextAnnotationControls(annotation.id);
+                            }}
+                            onMouseEnter={() => {
+                              showTextAnnotationControls(annotation.id);
+                            }}
+                            onMouseMove={() => {
+                              showTextAnnotationControls(annotation.id);
+                            }}
+                            onMouseLeave={() => {
+                              scheduleHideTextAnnotationControls(annotation.id);
+                            }}
+                            onPointerDown={(event) => {
+                              if (isEditing) {
+                                event.stopPropagation();
+                                return;
+                              }
+                              beginTextAnnotationDrag(annotation, event);
+                            }}
+                            onPointerMove={(event) => {
+                              showTextAnnotationControls(annotation.id);
+                              moveTextAnnotationDrag(event);
+                            }}
+                            onPointerUp={finishTextAnnotationDrag}
+                            onPointerCancel={finishTextAnnotationDrag}
+                          >
+                            {isEditing ? (
+                              <input
+                                ref={editTextAnnotationInputRef}
+                                value={editingTextAnnotationValue}
+                                className="h-full w-full bg-transparent p-0 text-xs font-semibold text-white outline-none"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                }}
+                                onDoubleClick={(event) => {
+                                  event.stopPropagation();
+                                }}
+                                onPointerDown={(event) => {
+                                  event.stopPropagation();
+                                }}
+                                onChange={(event) => {
+                                  setEditingTextAnnotationValue(event.currentTarget.value);
+                                }}
+                                onBlur={commitTextAnnotationEdit}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    commitTextAnnotationEdit();
+                                  } else if (event.key === "Escape") {
+                                    event.preventDefault();
+                                    cancelTextAnnotationEdit();
+                                  }
+                                }}
+                              />
+                            ) : (
+                              annotation.text
+                            )}
+                          </div>
+                          {isSelected
+                            ? BROWSER_ANNOTATION_ARROW_HANDLES.map((handle) => {
+                                const point = textAnnotationHandlePoint(annotation, handle);
+                                return (
+                                  <div
+                                    key={handle}
+                                    className={cn(
+                                      "absolute z-10 flex size-5 -translate-x-1/2 -translate-y-1/2 cursor-crosshair items-center justify-center rounded-full transition-[opacity,transform] duration-150 ease-out hover:scale-110",
+                                      showSourceHandles
+                                        ? "pointer-events-auto opacity-100"
+                                        : "pointer-events-none opacity-0",
+                                    )}
+                                    style={{
+                                      left: point.x - boxPosition.x,
+                                      top: point.y - boxPosition.y,
+                                    }}
+                                    title={`Draw arrow from ${handle}`}
+                                    onPointerEnter={() => {
+                                      showTextAnnotationControls(annotation.id);
+                                    }}
+                                    onPointerMove={(event) => {
+                                      showTextAnnotationControls(annotation.id);
+                                      moveAnnotationArrowDraft(event);
+                                    }}
+                                    onPointerLeave={() => {
+                                      scheduleHideTextAnnotationControls(annotation.id);
+                                    }}
+                                    onMouseEnter={() => {
+                                      showTextAnnotationControls(annotation.id);
+                                    }}
+                                    onMouseMove={() => {
+                                      showTextAnnotationControls(annotation.id);
+                                    }}
+                                    onMouseLeave={() => {
+                                      scheduleHideTextAnnotationControls(annotation.id);
+                                    }}
+                                    onPointerDown={(event) =>
+                                      beginAnnotationArrowDraft(annotation, handle, event)
+                                    }
+                                    onPointerUp={finishAnnotationArrowDraft}
+                                    onPointerCancel={finishAnnotationArrowDraft}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                    }}
+                                  >
+                                    <span className="size-1.5 rounded-full border border-cyan-100/90 bg-black/90 shadow-[0_0_0_1px_rgba(0,0,0,0.55),0_0_10px_rgba(34,211,238,0.55)]" />
+                                  </div>
+                                );
+                              })
+                            : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {textAnnotationDraft ? (
+                    <input
+                      ref={textAnnotationInputRef}
+                      value={textAnnotationDraft.text}
+                      className="absolute z-10 h-8 w-64 rounded-md border border-white/80 bg-slate-950/92 px-2.5 text-xs font-semibold text-white shadow-[0_0_0_1px_rgba(0,0,0,0.35),0_8px_20px_rgba(0,0,0,0.28)] outline-none placeholder:text-white/55 focus:ring-2 focus:ring-cyan-300/70"
+                      placeholder="Add note"
+                      style={{
+                        left: Math.max(8, textAnnotationDraft.x + 10),
+                        top: Math.max(8, textAnnotationDraft.y - 34),
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                      }}
+                      onPointerDown={(event) => {
+                        event.stopPropagation();
+                      }}
+                      onChange={(event) => {
+                        const text = event.currentTarget.value;
+                        setTextAnnotationDraft((current) => (current ? { ...current, text } : current));
+                      }}
+                      onBlur={() => {
+                        commitTextAnnotationDraft();
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          commitTextAnnotationDraft();
+                        } else if (event.key === "Escape") {
+                          event.preventDefault();
+                          setTextAnnotationDraft(null);
+                        }
+                      }}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>

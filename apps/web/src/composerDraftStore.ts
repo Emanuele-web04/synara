@@ -88,18 +88,51 @@ if (typeof window !== "undefined") {
   });
 }
 
+export const PersistedBrowserAnnotationContext = Schema.Struct({
+  promptBlock: Schema.String,
+  title: Schema.String,
+  url: Schema.String,
+  strokeCount: Schema.Number,
+  textCount: Schema.Number,
+  arrowCount: Schema.optionalKey(Schema.Number),
+  selectedSelector: Schema.optionalKey(Schema.String),
+});
+export type PersistedBrowserAnnotationContext = typeof PersistedBrowserAnnotationContext.Type;
+export const PersistedComposerBrowserContextAttachment = Schema.Struct({
+  id: Schema.String,
+  source: Schema.Literal("browser-selection"),
+  promptBlock: Schema.String,
+  title: Schema.String,
+  url: Schema.String,
+  strokeCount: Schema.Number,
+  textCount: Schema.Number,
+  arrowCount: Schema.optionalKey(Schema.Number),
+  selectedSelector: Schema.optionalKey(Schema.String),
+});
+export type PersistedComposerBrowserContextAttachment =
+  typeof PersistedComposerBrowserContextAttachment.Type;
+
 export const PersistedComposerImageAttachment = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
   mimeType: Schema.String,
   sizeBytes: Schema.Number,
   dataUrl: Schema.String,
+  source: Schema.optionalKey(Schema.Literal("browser-annotation")),
+  browserAnnotation: Schema.optionalKey(PersistedBrowserAnnotationContext),
 });
 export type PersistedComposerImageAttachment = typeof PersistedComposerImageAttachment.Type;
+export type ComposerImageAttachmentSource = "browser-annotation";
+export type ComposerBrowserAnnotationContext = PersistedBrowserAnnotationContext;
+export type ComposerBrowserContextAttachment = PersistedComposerBrowserContextAttachment & {
+  type: "browser-context";
+};
 
 export interface ComposerImageAttachment extends Omit<ChatImageAttachment, "previewUrl"> {
   previewUrl: string;
   file: File;
+  source?: ComposerImageAttachmentSource;
+  browserAnnotation?: ComposerBrowserAnnotationContext;
 }
 
 export type ComposerAssistantSelectionAttachment = ChatAssistantSelectionAttachment;
@@ -111,6 +144,7 @@ export interface QueuedComposerChatTurn {
   previewText: string;
   prompt: string;
   images: ComposerImageAttachment[];
+  browserContexts: ComposerBrowserContextAttachment[];
   assistantSelections: ComposerAssistantSelectionAttachment[];
   terminalContexts: TerminalContextDraft[];
   skills: ProviderSkillReference[];
@@ -172,6 +206,7 @@ const PersistedQueuedComposerChatTurn = Schema.Struct({
   previewText: Schema.String,
   prompt: Schema.String,
   images: Schema.Array(PersistedComposerImageAttachment),
+  browserContexts: Schema.optionalKey(Schema.Array(PersistedComposerBrowserContextAttachment)),
   assistantSelections: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
@@ -220,6 +255,7 @@ type PersistedQueuedComposerTurn = typeof PersistedQueuedComposerTurn.Type;
 const PersistedComposerThreadDraftState = Schema.Struct({
   prompt: Schema.String,
   attachments: Schema.Array(PersistedComposerImageAttachment),
+  browserContexts: Schema.optionalKey(Schema.Array(PersistedComposerBrowserContextAttachment)),
   assistantSelections: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
@@ -314,6 +350,7 @@ const PersistedComposerDraftStoreStorage = Schema.Struct({
 export interface ComposerThreadDraftState {
   prompt: string;
   images: ComposerImageAttachment[];
+  browserContexts: ComposerBrowserContextAttachment[];
   nonPersistedImageIds: string[];
   persistedAttachments: PersistedComposerImageAttachment[];
   assistantSelections: ComposerAssistantSelectionAttachment[];
@@ -422,6 +459,9 @@ export interface ComposerDraftStoreState {
   addImage: (threadId: ThreadId, image: ComposerImageAttachment) => void;
   addImages: (threadId: ThreadId, images: ComposerImageAttachment[]) => void;
   removeImage: (threadId: ThreadId, imageId: string) => void;
+  addBrowserContext: (threadId: ThreadId, context: ComposerBrowserContextAttachment) => void;
+  removeBrowserContext: (threadId: ThreadId, contextId: string) => void;
+  clearBrowserContexts: (threadId: ThreadId) => void;
   addAssistantSelection: (
     threadId: ThreadId,
     selection: ComposerAssistantSelectionAttachment,
@@ -530,11 +570,13 @@ function projectIdFromDraftThreadMappingKey(key: string): ProjectId {
 }
 
 const EMPTY_IMAGES: ComposerImageAttachment[] = [];
+const EMPTY_BROWSER_CONTEXTS: ComposerBrowserContextAttachment[] = [];
 const EMPTY_IDS: string[] = [];
 const EMPTY_PERSISTED_ATTACHMENTS: PersistedComposerImageAttachment[] = [];
 const EMPTY_TERMINAL_CONTEXTS: TerminalContextDraft[] = [];
 const EMPTY_QUEUED_TURNS: QueuedComposerTurn[] = [];
 Object.freeze(EMPTY_IMAGES);
+Object.freeze(EMPTY_BROWSER_CONTEXTS);
 Object.freeze(EMPTY_IDS);
 Object.freeze(EMPTY_PERSISTED_ATTACHMENTS);
 Object.freeze(EMPTY_QUEUED_TURNS);
@@ -544,6 +586,7 @@ const EMPTY_MODEL_SELECTION_BY_PROVIDER: Partial<Record<ProviderKind, ModelSelec
 const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   prompt: "",
   images: EMPTY_IMAGES,
+  browserContexts: EMPTY_BROWSER_CONTEXTS,
   nonPersistedImageIds: EMPTY_IDS,
   persistedAttachments: EMPTY_PERSISTED_ATTACHMENTS,
   assistantSelections: [],
@@ -559,6 +602,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
   return {
     prompt: "",
     images: [],
+    browserContexts: [],
     nonPersistedImageIds: [],
     persistedAttachments: [],
     assistantSelections: [],
@@ -568,6 +612,49 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     activeProvider: null,
     runtimeMode: null,
     interactionMode: null,
+  };
+}
+
+function normalizeComposerThreadDraftRuntimeState(
+  draft: ComposerThreadDraftState | undefined,
+): ComposerThreadDraftState {
+  if (!draft) {
+    return EMPTY_THREAD_DRAFT;
+  }
+  if (
+    typeof draft.prompt === "string" &&
+    Array.isArray(draft.images) &&
+    Array.isArray(draft.browserContexts) &&
+    Array.isArray(draft.nonPersistedImageIds) &&
+    Array.isArray(draft.persistedAttachments) &&
+    Array.isArray(draft.assistantSelections) &&
+    Array.isArray(draft.terminalContexts) &&
+    Array.isArray(draft.queuedTurns) &&
+    draft.modelSelectionByProvider &&
+    typeof draft.modelSelectionByProvider === "object"
+  ) {
+    return draft;
+  }
+  return {
+    prompt: typeof draft.prompt === "string" ? draft.prompt : "",
+    images: Array.isArray(draft.images) ? draft.images : [],
+    browserContexts: Array.isArray(draft.browserContexts) ? draft.browserContexts : [],
+    nonPersistedImageIds: Array.isArray(draft.nonPersistedImageIds)
+      ? draft.nonPersistedImageIds
+      : [],
+    persistedAttachments: Array.isArray(draft.persistedAttachments)
+      ? draft.persistedAttachments
+      : [],
+    assistantSelections: Array.isArray(draft.assistantSelections) ? draft.assistantSelections : [],
+    terminalContexts: Array.isArray(draft.terminalContexts) ? draft.terminalContexts : [],
+    queuedTurns: Array.isArray(draft.queuedTurns) ? draft.queuedTurns : [],
+    modelSelectionByProvider:
+      draft.modelSelectionByProvider && typeof draft.modelSelectionByProvider === "object"
+        ? draft.modelSelectionByProvider
+        : {},
+    activeProvider: draft.activeProvider ?? null,
+    runtimeMode: draft.runtimeMode ?? null,
+    interactionMode: draft.interactionMode ?? null,
   };
 }
 
@@ -585,6 +672,10 @@ function assistantSelectionDedupKey(
   selection: Pick<ComposerAssistantSelectionAttachment, "assistantMessageId" | "text">,
 ): string {
   return `${selection.assistantMessageId}\u0000${selection.text}`;
+}
+
+function browserContextDedupKey(context: ComposerBrowserContextAttachment): string {
+  return `${context.source}\u0000${context.url}\u0000${context.selectedSelector ?? ""}\u0000${context.promptBlock}`;
 }
 
 function normalizeAssistantSelection(
@@ -685,6 +776,7 @@ function buildTransferredComposerDraft(input: {
   return {
     ...base,
     prompt: sourceDraft.prompt,
+    browserContexts: [...sourceDraft.browserContexts],
     assistantSelections: normalizeAssistantSelections(sourceDraft.assistantSelections),
     terminalContexts: normalizeTerminalContextsForThread(
       targetThreadId,
@@ -697,6 +789,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
   return (
     draft.prompt.length === 0 &&
     draft.images.length === 0 &&
+    draft.browserContexts.length === 0 &&
     draft.persistedAttachments.length === 0 &&
     draft.assistantSelections.length === 0 &&
     draft.terminalContexts.length === 0 &&
@@ -1293,6 +1386,8 @@ function normalizePersistedAttachment(value: unknown): PersistedComposerImageAtt
   const mimeType = candidate.mimeType;
   const sizeBytes = candidate.sizeBytes;
   const dataUrl = candidate.dataUrl;
+  const source = candidate.source === "browser-annotation" ? candidate.source : undefined;
+  const browserAnnotation = normalizeBrowserAnnotationContext(candidate.browserAnnotation);
   if (
     typeof id !== "string" ||
     typeof name !== "string" ||
@@ -1311,7 +1406,96 @@ function normalizePersistedAttachment(value: unknown): PersistedComposerImageAtt
     mimeType,
     sizeBytes,
     dataUrl,
+    ...(source ? { source } : {}),
+    ...(browserAnnotation ? { browserAnnotation } : {}),
   };
+}
+
+function normalizeBrowserAnnotationContext(value: unknown): ComposerBrowserAnnotationContext | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  const promptBlock = candidate.promptBlock;
+  const title = candidate.title;
+  const url = candidate.url;
+  const strokeCount = candidate.strokeCount;
+  const textCount = candidate.textCount;
+  const arrowCount = candidate.arrowCount;
+  const selectedSelector = candidate.selectedSelector;
+  if (
+    typeof promptBlock !== "string" ||
+    promptBlock.length === 0 ||
+    typeof title !== "string" ||
+    typeof url !== "string" ||
+    typeof strokeCount !== "number" ||
+    !Number.isFinite(strokeCount) ||
+    typeof textCount !== "number" ||
+    !Number.isFinite(textCount)
+  ) {
+    return null;
+  }
+  return {
+    promptBlock,
+    title,
+    url,
+    strokeCount,
+    textCount,
+    ...(typeof arrowCount === "number" && Number.isFinite(arrowCount) && arrowCount > 0
+      ? { arrowCount }
+      : {}),
+    ...(typeof selectedSelector === "string" && selectedSelector.length > 0
+      ? { selectedSelector }
+      : {}),
+  };
+}
+
+function normalizePersistedBrowserContextAttachment(
+  value: unknown,
+): PersistedComposerBrowserContextAttachment | null {
+  const context = normalizeBrowserAnnotationContext(value);
+  if (!context || !value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  const id = candidate.id;
+  const source = candidate.source;
+  if (typeof id !== "string" || id.length === 0 || source !== "browser-selection") {
+    return null;
+  }
+  return {
+    id,
+    source,
+    ...context,
+  };
+}
+
+function normalizePersistedBrowserContextAttachments(
+  value: unknown,
+): PersistedComposerBrowserContextAttachment[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const existingIds = new Set<string>();
+  const contexts: PersistedComposerBrowserContextAttachment[] = [];
+  for (const entry of value) {
+    const normalized = normalizePersistedBrowserContextAttachment(entry);
+    if (!normalized || existingIds.has(normalized.id)) {
+      continue;
+    }
+    contexts.push(normalized);
+    existingIds.add(normalized.id);
+  }
+  return contexts;
+}
+
+function hydrateBrowserContextsFromPersisted(
+  value: ReadonlyArray<PersistedComposerBrowserContextAttachment> | undefined,
+): ComposerBrowserContextAttachment[] {
+  return (value ?? []).map((context) => ({
+    type: "browser-context",
+    ...context,
+  }));
 }
 
 function normalizePersistedTerminalContextDraft(
@@ -1384,6 +1568,8 @@ function persistImageAttachmentFromDataUrl(input: {
   mimeType: string;
   sizeBytes: number;
   dataUrl: string;
+  source?: ComposerImageAttachmentSource;
+  browserAnnotation?: ComposerBrowserAnnotationContext;
 }): PersistedComposerImageAttachment | null {
   return normalizePersistedAttachment(input);
 }
@@ -1401,6 +1587,8 @@ function persistQueuedComposerImages(
       mimeType: image.mimeType,
       sizeBytes: image.sizeBytes,
       dataUrl: image.previewUrl,
+      ...(image.source ? { source: image.source } : {}),
+      ...(image.browserAnnotation ? { browserAnnotation: image.browserAnnotation } : {}),
     });
     return normalized ? [normalized] : [];
   });
@@ -1467,6 +1655,9 @@ function normalizePersistedQueuedTurns(
             return normalized ? [normalized] : [];
           })
         : [];
+      const browserContexts = normalizePersistedBrowserContextAttachments(
+        candidate.browserContexts,
+      );
       const terminalContexts = Array.isArray(candidate.terminalContexts)
         ? candidate.terminalContexts.flatMap((context) => {
             const normalized = normalizePersistedQueuedTerminalContextDraft(context);
@@ -1497,6 +1688,7 @@ function normalizePersistedQueuedTurns(
         previewText,
         prompt,
         images,
+        browserContexts,
         terminalContexts,
         skills: [...skills],
         mentions: [...mentions],
@@ -1698,6 +1890,9 @@ function normalizePersistedDraftsByThreadId(
           return normalized ? [normalized] : [];
         })
       : [];
+    const browserContexts = normalizePersistedBrowserContextAttachments(
+      draftCandidate.browserContexts,
+    );
     const terminalContexts = Array.isArray(draftCandidate.terminalContexts)
       ? draftCandidate.terminalContexts.flatMap((entry) => {
           const normalized = normalizePersistedTerminalContextDraft(entry);
@@ -1771,6 +1966,7 @@ function normalizePersistedDraftsByThreadId(
     if (
       promptCandidate.length === 0 &&
       attachments.length === 0 &&
+      browserContexts.length === 0 &&
       terminalContexts.length === 0 &&
       !hasQueuedTurns &&
       !hasModelData &&
@@ -1782,6 +1978,7 @@ function normalizePersistedDraftsByThreadId(
     nextDraftsByThreadId[threadId as ThreadId] = {
       prompt,
       attachments,
+      ...(browserContexts.length > 0 ? { browserContexts } : {}),
       ...(terminalContexts.length > 0 ? { terminalContexts } : {}),
       ...(hasQueuedTurns ? { queuedTurns: normalizedQueuedTurns } : {}),
       ...(hasModelData ? { modelSelectionByProvider, activeProvider } : {}),
@@ -1863,6 +2060,23 @@ function partializeComposerDraftStoreState(
           previewText: queuedTurn.previewText,
           prompt: queuedTurn.prompt,
           images,
+          ...(queuedTurn.browserContexts.length > 0
+            ? {
+                browserContexts: queuedTurn.browserContexts.map((context) => ({
+                  id: context.id,
+                  source: context.source,
+                  promptBlock: context.promptBlock,
+                  title: context.title,
+                  url: context.url,
+                  strokeCount: context.strokeCount,
+                  textCount: context.textCount,
+                  ...(context.arrowCount ? { arrowCount: context.arrowCount } : {}),
+                  ...(context.selectedSelector
+                    ? { selectedSelector: context.selectedSelector }
+                    : {}),
+                })),
+              }
+            : {}),
           assistantSelections: queuedTurn.assistantSelections.map((selection) => ({
             id: selection.id,
             assistantMessageId: selection.assistantMessageId,
@@ -1916,6 +2130,7 @@ function partializeComposerDraftStoreState(
     if (
       draft.prompt.length === 0 &&
       draft.persistedAttachments.length === 0 &&
+      draft.browserContexts.length === 0 &&
       draft.assistantSelections.length === 0 &&
       draft.terminalContexts.length === 0 &&
       !hasQueuedTurns &&
@@ -1928,6 +2143,21 @@ function partializeComposerDraftStoreState(
     const persistedDraft: DeepMutable<PersistedComposerThreadDraftState> = {
       prompt: draft.prompt,
       attachments: draft.persistedAttachments,
+      ...(draft.browserContexts.length > 0
+        ? {
+            browserContexts: draft.browserContexts.map((context) => ({
+              id: context.id,
+              source: context.source,
+              promptBlock: context.promptBlock,
+              title: context.title,
+              url: context.url,
+              strokeCount: context.strokeCount,
+              textCount: context.textCount,
+              ...(context.arrowCount ? { arrowCount: context.arrowCount } : {}),
+              ...(context.selectedSelector ? { selectedSelector: context.selectedSelector } : {}),
+            })),
+          }
+        : {}),
       ...(draft.assistantSelections.length > 0
         ? {
             assistantSelections: draft.assistantSelections.map((selection) => ({
@@ -2147,6 +2377,10 @@ function hydrateImagesFromPersisted(
         sizeBytes: attachment.sizeBytes,
         previewUrl: attachment.dataUrl,
         file,
+        ...(attachment.source ? { source: attachment.source } : {}),
+        ...(attachment.browserAnnotation
+          ? { browserAnnotation: attachment.browserAnnotation }
+          : {}),
       } satisfies ComposerImageAttachment,
     ];
   });
@@ -2164,6 +2398,7 @@ function hydrateQueuedTurnsFromPersisted(
       return {
         ...queuedTurn,
         images: hydrateImagesFromPersisted(queuedTurn.images),
+        browserContexts: hydrateBrowserContextsFromPersisted(queuedTurn.browserContexts),
         assistantSelections: normalizeAssistantSelections(queuedTurn.assistantSelections ?? []),
         terminalContexts: normalizeTerminalContextsForThread(threadId, queuedTurn.terminalContexts),
         skills: [...queuedTurn.skills],
@@ -2186,6 +2421,7 @@ function toHydratedThreadDraft(
   return {
     prompt: persistedDraft.prompt,
     images: hydrateImagesFromPersisted(persistedDraft.attachments),
+    browserContexts: hydrateBrowserContextsFromPersisted(persistedDraft.browserContexts),
     nonPersistedImageIds: [],
     persistedAttachments: [...persistedDraft.attachments],
     assistantSelections: normalizeAssistantSelections(persistedDraft.assistantSelections ?? []),
@@ -3087,6 +3323,72 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           return { draftsByThreadId: nextDraftsByThreadId };
         });
       },
+      addBrowserContext: (threadId, context) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+          const existingIds = new Set(existing.browserContexts.map((entry) => entry.id));
+          const existingDedupKeys = new Set(existing.browserContexts.map(browserContextDedupKey));
+          if (existingIds.has(context.id) || existingDedupKeys.has(browserContextDedupKey(context))) {
+            return state;
+          }
+          return {
+            draftsByThreadId: {
+              ...state.draftsByThreadId,
+              [threadId]: {
+                ...existing,
+                browserContexts: [...existing.browserContexts, context],
+              },
+            },
+          };
+        });
+      },
+      removeBrowserContext: (threadId, contextId) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const current = state.draftsByThreadId[threadId];
+          if (!current) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...current,
+            browserContexts: current.browserContexts.filter((context) => context.id !== contextId),
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
+      clearBrowserContexts: (threadId) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const current = state.draftsByThreadId[threadId];
+          if (!current || current.browserContexts.length === 0) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...current,
+            browserContexts: [],
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
       addAssistantSelection: (threadId, selection) => {
         if (threadId.length === 0) {
           return false;
@@ -3377,6 +3679,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             ...current,
             prompt: "",
             images: [],
+            browserContexts: [],
             nonPersistedImageIds: [],
             persistedAttachments: [],
             assistantSelections: [],
@@ -3421,7 +3724,9 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
 );
 
 export function useComposerThreadDraft(threadId: ThreadId): ComposerThreadDraftState {
-  return useComposerDraftStore((state) => state.draftsByThreadId[threadId] ?? EMPTY_THREAD_DRAFT);
+  return useComposerDraftStore((state) =>
+    normalizeComposerThreadDraftRuntimeState(state.draftsByThreadId[threadId]),
+  );
 }
 
 export function useEffectiveComposerModelState(input: {

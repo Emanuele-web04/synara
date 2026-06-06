@@ -41,6 +41,7 @@ import {
   IconEdit,
   IconInfoCircle,
   IconLayoutDistributeHorizontal,
+  IconLetterT,
   IconListCheck,
   IconListDetails,
   IconLoader2,
@@ -48,6 +49,7 @@ import {
   IconLockOpen,
   IconMaximize,
   IconMinimize,
+  IconMinus,
   IconDeviceLaptop,
   IconMessageCircle,
   IconMoon,
@@ -175,6 +177,7 @@ export const LockIcon = adaptIcon(IconLock);
 export const LockOpenIcon = adaptIcon(IconLockOpen);
 export const Maximize2 = adaptIcon(IconMaximize);
 export const Minimize2 = adaptIcon(IconMinimize);
+export const MinusIcon = adaptIcon(IconMinus);
 export const MessageCircleIcon = adaptIcon(IconMessageCircle);
 export const MicIcon: LucideIcon = centralIconWrapper("microphone");
 export const SidebarHiddenLeftWideIcon = centralIconWrapper("sidebar-hidden-left-wide");
@@ -215,6 +218,7 @@ export const DisposableThreadIcon: LucideIcon = (props) => (
 export const TerminalIcon = centralIconWrapper("console");
 export const TerminalSquare = centralIconWrapper("console");
 export const TerminalSquareIcon = centralIconWrapper("console");
+export const TextIcon = adaptIcon(IconLetterT);
 export const TextWrapIcon = adaptIcon(IconTextWrap);
 export const Trash2 = adaptIcon(IconTrash);
 export const TriangleAlertIcon = adaptIcon(IconAlertTriangle);

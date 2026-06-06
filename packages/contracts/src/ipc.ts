@@ -123,6 +123,12 @@ import type {
   ProviderReadPluginResult,
 } from "./providerDiscovery";
 import type { ProviderCompactThreadInput } from "./provider";
+import type {
+  PreviewRuntimeEvent,
+  PreviewRuntimeInput,
+  PreviewRuntimeState,
+  PreviewStartInput,
+} from "./preview";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -341,6 +347,13 @@ export interface NativeApi {
     restart: (input: TerminalRestartInput) => Promise<TerminalSessionSnapshot>;
     close: (input: TerminalCloseInput) => Promise<void>;
     onEvent: (callback: (event: TerminalEvent) => void) => () => void;
+  };
+  preview: {
+    getState: (input: PreviewRuntimeInput) => Promise<PreviewRuntimeState>;
+    start: (input: PreviewStartInput) => Promise<PreviewRuntimeState>;
+    stop: (input: PreviewRuntimeInput) => Promise<PreviewRuntimeState>;
+    restart: (input: PreviewStartInput) => Promise<PreviewRuntimeState>;
+    onState: (callback: (event: PreviewRuntimeEvent) => void) => () => void;
   };
   projects: {
     listDirectories: (input: ProjectListDirectoriesInput) => Promise<ProjectListDirectoriesResult>;

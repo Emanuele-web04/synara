@@ -14,6 +14,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
+  type PreviewRuntimeEvent,
   type ServerConfigStreamEvent,
   type ServerLifecycleStreamEvent,
   type ServerProviderStatusesUpdatedPayload,
@@ -405,6 +406,13 @@ export class WsTransport {
             (event: TerminalEvent) => this.emit(WS_CHANNELS.terminalEvent, event),
             restartChannel,
           );
+        } else if (channel === WS_CHANNELS.previewEvent) {
+          this.startStream(
+            "preview.events",
+            client[WS_METHODS.subscribePreviewEvents]({}),
+            (event: PreviewRuntimeEvent) => this.emit(WS_CHANNELS.previewEvent, event),
+            restartChannel,
+          );
         } else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent) {
           this.startStream(
             "orchestration.domain",
@@ -430,6 +438,7 @@ export class WsTransport {
       this.stopStream("server.providers");
     else if (channel === WS_CHANNELS.serverSettingsUpdated) this.stopStream("server.settings");
     else if (channel === WS_CHANNELS.terminalEvent) this.stopStream("terminal.events");
+    else if (channel === WS_CHANNELS.previewEvent) this.stopStream("preview.events");
     else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent)
       this.stopStream("orchestration.domain");
   }

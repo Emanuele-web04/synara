@@ -54,6 +54,12 @@ import {
 } from "./orchestration";
 import { ProviderCompactThreadInput } from "./provider";
 import {
+  PreviewRuntimeEvent,
+  PreviewRuntimeInput,
+  PreviewRuntimeState,
+  PreviewStartInput,
+} from "./preview";
+import {
   ProviderGetComposerCapabilitiesInput,
   ProviderComposerCapabilities,
   ProviderListAgentsInput,
@@ -431,6 +437,37 @@ export const WsSubscribeTerminalEventsRpc = Rpc.make(WS_METHODS.subscribeTermina
   stream: true,
 });
 
+export const WsPreviewGetStateRpc = Rpc.make(WS_METHODS.previewGetState, {
+  payload: PreviewRuntimeInput,
+  success: PreviewRuntimeState,
+  error: WsRpcError,
+});
+
+export const WsPreviewStartRpc = Rpc.make(WS_METHODS.previewStart, {
+  payload: PreviewStartInput,
+  success: PreviewRuntimeState,
+  error: WsRpcError,
+});
+
+export const WsPreviewStopRpc = Rpc.make(WS_METHODS.previewStop, {
+  payload: PreviewRuntimeInput,
+  success: PreviewRuntimeState,
+  error: WsRpcError,
+});
+
+export const WsPreviewRestartRpc = Rpc.make(WS_METHODS.previewRestart, {
+  payload: PreviewStartInput,
+  success: PreviewRuntimeState,
+  error: WsRpcError,
+});
+
+export const WsSubscribePreviewEventsRpc = Rpc.make(WS_METHODS.subscribePreviewEvents, {
+  payload: Schema.Struct({}),
+  success: PreviewRuntimeEvent,
+  error: WsRpcError,
+  stream: true,
+});
+
 export const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
   payload: Schema.Struct({}),
   success: ServerConfig,
@@ -631,6 +668,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsTerminalRestartRpc,
   WsTerminalCloseRpc,
   WsSubscribeTerminalEventsRpc,
+  WsPreviewGetStateRpc,
+  WsPreviewStartRpc,
+  WsPreviewStopRpc,
+  WsPreviewRestartRpc,
+  WsSubscribePreviewEventsRpc,
   WsServerGetConfigRpc,
   WsServerGetEnvironmentRpc,
   WsServerGetSettingsRpc,

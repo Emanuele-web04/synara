@@ -80,6 +80,22 @@ it.effect("accepts git.preparePullRequestThread requests", () =>
   }),
 );
 
+it.effect("accepts preview.start requests", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WebSocketRequest, {
+      id: "req-preview-1",
+      body: {
+        _tag: WS_METHODS.previewStart,
+        threadId: "thread-1",
+        projectId: "project-1",
+        cwd: "/repo",
+        preferredPort: 5173,
+      },
+    });
+    assert.strictEqual(parsed.body._tag, WS_METHODS.previewStart);
+  }),
+);
+
 it.effect("accepts typed websocket push envelopes with sequence", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(WsResponse, {
@@ -123,6 +139,40 @@ it.effect("accepts git.actionProgress push envelopes", () =>
     }
 
     assert.strictEqual(parsed.channel, WS_CHANNELS.gitActionProgress);
+  }),
+);
+
+it.effect("accepts preview state push envelopes", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WsResponse, {
+      type: "push",
+      sequence: 4,
+      channel: WS_CHANNELS.previewEvent,
+      data: {
+        type: "state",
+        state: {
+          id: "preview-1",
+          threadId: "thread-1",
+          projectId: "project-1",
+          cwd: "/repo",
+          status: "running",
+          url: "http://127.0.0.1:5173/",
+          port: 5173,
+          command: "bun run dev -- --host 127.0.0.1 --port 5173 --strictPort",
+          terminalId: "preview-1",
+          ownedBySynara: true,
+          lastError: null,
+          startedAt: "2026-06-05T00:00:00.000Z",
+          updatedAt: "2026-06-05T00:00:01.000Z",
+        },
+      },
+    });
+
+    if (!("type" in parsed) || parsed.type !== "push") {
+      assert.fail("expected websocket response to decode as a push envelope");
+    }
+
+    assert.strictEqual(parsed.channel, WS_CHANNELS.previewEvent);
   }),
 );
 

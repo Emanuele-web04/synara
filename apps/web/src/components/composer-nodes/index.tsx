@@ -6,6 +6,7 @@
  * - ComposerSkillNode: Skill mentions ($skill or /skill)
  * - ComposerAgentMentionNode: Agent mentions (@alias(task))
  * - ComposerTerminalContextNode: Terminal context blocks
+ * - ComposerBrowserContextNode: Browser editor element/drawing context blocks
  */
 
 import {
@@ -26,6 +27,8 @@ import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
 } from "~/lib/terminalContext";
+import type { BrowserEditorPromptContextSummary } from "~/lib/browserEditorContext";
+import { EyeIcon, PencilIcon } from "~/lib/icons";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
 import { basenameOfPath } from "~/file-icons";
 import { createCentralIconElement } from "~/lib/central-icons";
@@ -40,6 +43,7 @@ import {
 } from "../composerInlineChip";
 import { ComposerPendingTerminalContextChip } from "../chat/ComposerPendingTerminalContexts";
 import { createMentionChipIconElement, type MentionChipKind } from "../chat/MentionChipIcon";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 // ── Serialized Types ──────────────────────────────────────────────────
 
@@ -76,6 +80,15 @@ export type SerializedComposerTerminalContextNode = Spread<
   {
     context: TerminalContextDraft;
     type: "composer-terminal-context";
+    version: 1;
+  },
+  SerializedLexicalNode
+>;
+
+export type SerializedComposerBrowserContextNode = Spread<
+  {
+    context: BrowserEditorPromptContextSummary;
+    type: "composer-browser-context";
     version: 1;
   },
   SerializedLexicalNode
@@ -470,12 +483,105 @@ export function $createComposerTerminalContextNode(
   return $applyNodeReplacement(new ComposerTerminalContextNode(context));
 }
 
+// ── ComposerBrowserContextNode ────────────────────────────────────────
+
+function ComposerBrowserContextDecorator(props: { context: BrowserEditorPromptContextSummary }) {
+  const { context } = props;
+  const Icon = context.kind === "element" ? EyeIcon : PencilIcon;
+  const tooltipLines = [
+    context.label,
+    context.detail,
+    context.title ? `Title: ${context.title}` : null,
+    context.url ? `URL: ${context.url}` : null,
+  ].filter((line): line is string => Boolean(line));
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            className="inline-flex max-w-full select-none items-center gap-1 rounded-md border border-[color:var(--color-border-light)] bg-[var(--sidebar-accent-active)] px-1.5 py-0.5 align-middle text-[11px] font-medium leading-tight text-[var(--color-text-foreground)]"
+            data-browser-context-chip="true"
+          >
+            <Icon className="size-3.5 shrink-0 opacity-85" />
+            <span className="truncate">{context.label}</span>
+          </span>
+        }
+      />
+      <TooltipPopup side="top" className="max-w-96 whitespace-pre-wrap leading-tight">
+        {tooltipLines.join("\n")}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+export class ComposerBrowserContextNode extends DecoratorNode<ReactElement> {
+  __context: BrowserEditorPromptContextSummary;
+
+  static override getType(): string {
+    return "composer-browser-context";
+  }
+
+  static override clone(node: ComposerBrowserContextNode): ComposerBrowserContextNode {
+    return new ComposerBrowserContextNode(node.__context, node.__key);
+  }
+
+  static override importJSON(
+    serializedNode: SerializedComposerBrowserContextNode,
+  ): ComposerBrowserContextNode {
+    return $createComposerBrowserContextNode(serializedNode.context);
+  }
+
+  constructor(context: BrowserEditorPromptContextSummary, key?: NodeKey) {
+    super(key);
+    this.__context = context;
+  }
+
+  override exportJSON(): SerializedComposerBrowserContextNode {
+    return {
+      ...super.exportJSON(),
+      context: this.__context,
+      type: "composer-browser-context",
+      version: 1,
+    };
+  }
+
+  override createDOM(): HTMLElement {
+    const dom = document.createElement("span");
+    dom.className = "inline-flex max-w-full align-middle leading-none";
+    return dom;
+  }
+
+  override updateDOM(): false {
+    return false;
+  }
+
+  override getTextContent(): string {
+    return this.__context.block;
+  }
+
+  override isInline(): true {
+    return true;
+  }
+
+  override decorate(): ReactElement {
+    return <ComposerBrowserContextDecorator context={this.__context} />;
+  }
+}
+
+export function $createComposerBrowserContextNode(
+  context: BrowserEditorPromptContextSummary,
+): ComposerBrowserContextNode {
+  return $applyNodeReplacement(new ComposerBrowserContextNode(context));
+}
+
 // ── Type Guards & Utilities ───────────────────────────────────────────
 
 export type ComposerInlineTokenNode =
   | ComposerMentionNode
   | ComposerSkillNode
   | ComposerTerminalContextNode
+  | ComposerBrowserContextNode
   | ComposerAgentMentionNode;
 
 export function isComposerInlineTokenNode(
@@ -485,6 +591,7 @@ export function isComposerInlineTokenNode(
     candidate instanceof ComposerMentionNode ||
     candidate instanceof ComposerSkillNode ||
     candidate instanceof ComposerTerminalContextNode ||
+    candidate instanceof ComposerBrowserContextNode ||
     candidate instanceof ComposerAgentMentionNode
   );
 }
@@ -494,5 +601,6 @@ export const COMPOSER_NODE_CLASSES = [
   ComposerMentionNode,
   ComposerSkillNode,
   ComposerTerminalContextNode,
+  ComposerBrowserContextNode,
   ComposerAgentMentionNode,
 ] as const;

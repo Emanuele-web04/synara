@@ -39,6 +39,7 @@ import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryS
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
+import { PreviewRuntimeManager } from "./preview/PreviewRuntimeManager";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
@@ -196,6 +197,10 @@ export const makeWsRpcLayer = () =>
       const terminalManager = yield* TerminalManager;
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
+      const previewRuntimeManager = new PreviewRuntimeManager(terminalManager);
+      yield* terminalManager.subscribe((event) => {
+        previewRuntimeManager.handleTerminalEvent(event);
+      });
 
       const canonicalizeProjectWorkspaceRoot = Effect.fnUntraced(function* (
         workspaceRoot: string,
@@ -574,6 +579,23 @@ export const makeWsRpcLayer = () =>
           Stream.callback((queue) =>
             Effect.gen(function* () {
               const unsubscribe = yield* terminalManager.subscribe((event) => {
+                Effect.runFork(Queue.offer(queue, event).pipe(Effect.asVoid));
+              });
+              yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+            }),
+          ),
+        [WS_METHODS.previewGetState]: (input) =>
+          rpcEffect(previewRuntimeManager.getState(input), "Failed to read preview state"),
+        [WS_METHODS.previewStart]: (input) =>
+          rpcEffect(previewRuntimeManager.start(input), "Failed to start preview"),
+        [WS_METHODS.previewStop]: (input) =>
+          rpcEffect(previewRuntimeManager.stop(input), "Failed to stop preview"),
+        [WS_METHODS.previewRestart]: (input) =>
+          rpcEffect(previewRuntimeManager.restart(input), "Failed to restart preview"),
+        [WS_METHODS.subscribePreviewEvents]: () =>
+          Stream.callback((queue) =>
+            Effect.gen(function* () {
+              const unsubscribe = previewRuntimeManager.subscribe((event) => {
                 Effect.runFork(Queue.offer(queue, event).pipe(Effect.asVoid));
               });
               yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));

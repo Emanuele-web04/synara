@@ -19,7 +19,14 @@ import { HiMiniArrowsPointingOut } from "react-icons/hi2";
 import { TbExchange } from "react-icons/tb";
 import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
-import { ArrowRightIcon, HandoffIcon, PanelRightCloseIcon, TerminalIcon, XIcon } from "~/lib/icons";
+import {
+  ArrowRightIcon,
+  GlobeIcon,
+  HandoffIcon,
+  PanelRightCloseIcon,
+  TerminalIcon,
+  XIcon,
+} from "~/lib/icons";
 import {
   CHAT_HEADER_TOGGLE_CLASS_NAME,
   ChatHeaderButton,
@@ -78,7 +85,9 @@ interface ChatHeaderProps {
   diffBadgeRefreshIntervalMs?: number | false;
   showGitActions?: boolean;
   diffOpen: boolean;
+  browserOpen: boolean;
   diffDisabledReason?: string | null;
+  browserToggleShortcutLabel: string | null;
   surfaceMode?: "single" | "split";
   isSidechat?: boolean;
   chatLayoutAction?: {
@@ -96,6 +105,7 @@ interface ChatHeaderProps {
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleDiff: () => void;
+  onToggleBrowser: () => void;
   onCreateHandoff: (targetProvider: ProviderKind) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
   onRenameThread: () => void;
@@ -139,7 +149,9 @@ export const ChatHeader = memo(function ChatHeader({
   diffBadgeRefreshIntervalMs = false,
   showGitActions = true,
   diffOpen,
+  browserOpen,
   diffDisabledReason = null,
+  browserToggleShortcutLabel,
   surfaceMode = "single",
   isSidechat = false,
   chatLayoutAction = null,
@@ -149,6 +161,7 @@ export const ChatHeader = memo(function ChatHeader({
   onUpdateProjectScript,
   onDeleteProjectScript,
   onToggleDiff,
+  onToggleBrowser,
   onCreateHandoff,
   onNavigateToThread,
   onRenameThread,
@@ -408,6 +421,27 @@ export const ChatHeader = memo(function ChatHeader({
             hideQuickActionLabel={compact}
           />
         ) : null}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Toggle
+                className={cn(CHAT_HEADER_TOGGLE_CLASS_NAME, "!size-7 [&_svg]:mx-0")}
+                pressed={browserOpen}
+                onPressedChange={onToggleBrowser}
+                aria-label="Toggle browser panel"
+                variant="default"
+                size="xs"
+              >
+                <SurfaceChipIcon icon={GlobeIcon} className="size-4" />
+              </Toggle>
+            }
+          />
+          <TooltipPopup side="bottom">
+            {browserToggleShortcutLabel
+              ? `Toggle browser panel (${browserToggleShortcutLabel})`
+              : "Toggle browser panel"}
+          </TooltipPopup>
+        </Tooltip>
         <Tooltip>
           <TooltipTrigger
             render={

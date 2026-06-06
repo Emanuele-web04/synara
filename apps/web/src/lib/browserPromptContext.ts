@@ -5,7 +5,11 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 
-import type { ComposerImageAttachment } from "../composerDraftStore";
+import type {
+  ComposerBrowserAnnotationContext,
+  ComposerImageAttachment,
+  ComposerImageAttachmentSource,
+} from "../composerDraftStore";
 
 const EXPLICIT_COMPUTER_USE_PATTERNS = [
   "computer use",
@@ -73,20 +77,28 @@ export function screenshotAttachmentName(input: BrowserCaptureScreenshotResult):
   return input.name.trim().length > 0 ? input.name : `browser-${Date.now()}.png`;
 }
 
-function fileFromBrowserScreenshot(screenshot: BrowserCaptureScreenshotResult): File {
+function fileFromBrowserScreenshot(
+  screenshot: BrowserCaptureScreenshotResult,
+  name = screenshotAttachmentName(screenshot),
+): File {
   if (screenshot.bytes.byteLength === 0) {
     throw new Error("Browser screenshot is empty.");
   }
   const bytes = new Uint8Array(screenshot.bytes);
-  return new File([bytes], screenshotAttachmentName(screenshot), {
+  return new File([bytes], name, {
     type: screenshot.mimeType,
   });
 }
 
 export function composerImageFromBrowserScreenshot(
   screenshot: BrowserCaptureScreenshotResult,
+  options: {
+    name?: string;
+    source?: ComposerImageAttachmentSource;
+    browserAnnotation?: ComposerBrowserAnnotationContext;
+  } = {},
 ): ComposerImageAttachment {
-  const file = fileFromBrowserScreenshot(screenshot);
+  const file = fileFromBrowserScreenshot(screenshot, options.name);
   const previewUrl = URL.createObjectURL(file);
   return {
     type: "image",
@@ -96,6 +108,8 @@ export function composerImageFromBrowserScreenshot(
     sizeBytes: screenshot.sizeBytes,
     previewUrl,
     file,
+    ...(options.source ? { source: options.source } : {}),
+    ...(options.browserAnnotation ? { browserAnnotation: options.browserAnnotation } : {}),
   };
 }
 

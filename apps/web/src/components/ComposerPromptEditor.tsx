@@ -67,12 +67,13 @@ import {
   ComposerSkillNode,
   ComposerAgentMentionNode,
   ComposerTerminalContextNode,
+  ComposerBrowserContextNode,
   $createComposerMentionNode,
   $createComposerSkillNode,
   $createComposerAgentMentionNode,
   $createComposerTerminalContextNode,
+  $createComposerBrowserContextNode,
   isComposerInlineTokenNode,
-  COMPOSER_NODE_CLASSES,
   type ComposerInlineTokenNode,
 } from "./composer-nodes";
 
@@ -449,6 +450,10 @@ function $setComposerEditorPrompt(
       if (segment.context) {
         paragraph.append($createComposerTerminalContextNode(segment.context));
       }
+      continue;
+    }
+    if (segment.type === "browser-context") {
+      paragraph.append($createComposerBrowserContextNode(segment.context));
       continue;
     }
     if (segment.type === "agent-mention") {
@@ -1031,6 +1036,7 @@ export const ComposerPromptEditor = forwardRef<
         ComposerMentionNode,
         ComposerSkillNode,
         ComposerTerminalContextNode,
+        ComposerBrowserContextNode,
         ComposerAgentMentionNode,
       ],
       editorState: () => {
