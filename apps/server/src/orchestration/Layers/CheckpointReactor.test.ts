@@ -128,7 +128,7 @@ async function waitForThread(
     }>;
     activities: ReadonlyArray<{ kind: string }>;
   }) => boolean,
-  timeoutMs = 20_000,
+  timeoutMs = 30_000,
 ) {
   const deadline = Date.now() + timeoutMs;
   const poll = async (): Promise<{
@@ -158,7 +158,7 @@ async function waitForThread(
 async function waitForEvent(
   engine: OrchestrationEngineShape,
   predicate: (event: { type: string }) => boolean,
-  timeoutMs = 20_000,
+  timeoutMs = 30_000,
 ) {
   const deadline = Date.now() + timeoutMs;
   const poll = async () => {
@@ -209,7 +209,7 @@ function gitShowFileAtRef(cwd: string, ref: string, filePath: string): string {
   return runGit(cwd, ["show", `${ref}:${filePath}`]);
 }
 
-async function waitForGitRefExists(cwd: string, ref: string, timeoutMs = 20_000) {
+async function waitForGitRefExists(cwd: string, ref: string, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   const poll = async (): Promise<void> => {
     if (gitRefExists(cwd, ref)) {

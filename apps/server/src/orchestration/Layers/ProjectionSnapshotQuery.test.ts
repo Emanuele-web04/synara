@@ -301,6 +301,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           createdAt: "2026-02-24T00:00:00.000Z",
           updatedAt: "2026-02-24T00:00:01.000Z",
           deletedAt: null,
+          isPinned: false,
         },
       ]);
       assert.deepEqual(snapshot.threads, [

@@ -816,7 +816,6 @@ it.live("reverts to an earlier checkpoint and trims checkpoint projections + git
           entry.latestTurn?.turnId === "turn-2" &&
           entry.checkpoints.length === 2 &&
           entry.activities.some((activity) => activity.turnId === "turn-2"),
-        8000,
       );
 
       yield* harness.engine.dispatch({

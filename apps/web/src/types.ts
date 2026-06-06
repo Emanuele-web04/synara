@@ -133,6 +133,7 @@ export interface Project {
   cwd: string;
   defaultModelSelection: ModelSelection | null;
   expanded: boolean;
+  isPinned?: boolean;
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
   scripts: ProjectScript[];

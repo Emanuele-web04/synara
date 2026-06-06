@@ -270,6 +270,67 @@ describe("decider project scripts", () => {
     expect((event.payload as { scripts?: unknown[] }).scripts).toEqual(scripts);
   });
 
+  it("rejects pinning more than three active projects", async () => {
+    const now = new Date().toISOString();
+    let readModel = createEmptyReadModel(now);
+
+    for (const index of [1, 2, 3, 4]) {
+      readModel = await Effect.runPromise(
+        projectEvent(readModel, {
+          sequence: index,
+          eventId: asEventId(`evt-project-pin-${index}`),
+          aggregateKind: "project",
+          aggregateId: asProjectId(`project-pin-${index}`),
+          type: "project.created",
+          occurredAt: now,
+          commandId: CommandId.makeUnsafe(`cmd-project-pin-${index}`),
+          causationEventId: null,
+          correlationId: CommandId.makeUnsafe(`cmd-project-pin-${index}`),
+          metadata: {},
+          payload: {
+            projectId: asProjectId(`project-pin-${index}`),
+            title: `Project Pin ${index}`,
+            workspaceRoot: `/tmp/project-pin-${index}`,
+            defaultModelSelection: null,
+            scripts: [],
+            isPinned: index <= 3,
+            createdAt: now,
+            updatedAt: now,
+          },
+        }),
+      );
+    }
+
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          command: {
+            type: "project.meta.update",
+            commandId: CommandId.makeUnsafe("cmd-project-pin-fourth"),
+            projectId: asProjectId("project-pin-4"),
+            isPinned: true,
+          },
+          readModel,
+        }),
+      ),
+    ).rejects.toThrow("Only 3 projects can be pinned at once.");
+
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "project.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-project-repin-existing"),
+          projectId: asProjectId("project-pin-1"),
+          isPinned: true,
+        },
+        readModel,
+      }),
+    );
+
+    const event = Array.isArray(result) ? result[0] : result;
+    expect(event.type).toBe("project.meta-updated");
+  });
+
   it("emits user message and turn-start-requested events for thread.turn.start", async () => {
     const now = new Date().toISOString();
     const initial = createEmptyReadModel(now);

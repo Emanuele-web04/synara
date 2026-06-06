@@ -270,6 +270,7 @@ it.effect("decodes historical project.created payloads with a default provider",
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.defaultModelSelection?.provider, "codex");
+    assert.strictEqual(parsed.isPinned, false);
   }),
 );
 
@@ -281,9 +282,11 @@ it.effect("decodes project.meta-updated payloads with explicit default provider"
         provider: "claudeAgent",
         model: "claude-opus-4-6",
       },
+      isPinned: true,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.defaultModelSelection?.provider, "claudeAgent");
+    assert.strictEqual(parsed.isPinned, true);
   }),
 );
 

@@ -633,6 +633,7 @@ function normalizeProjectFromReadModel(
     previous.cwd === incoming.workspaceRoot &&
     previous.defaultModelSelection === defaultModelSelection &&
     previous.expanded === expanded &&
+    (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
     previous.createdAt === incoming.createdAt &&
     previous.updatedAt === incoming.updatedAt &&
     previous.scripts === scripts
@@ -650,6 +651,7 @@ function normalizeProjectFromReadModel(
     cwd: incoming.workspaceRoot,
     defaultModelSelection,
     expanded,
+    isPinned: incoming.isPinned ?? false,
     createdAt: incoming.createdAt,
     updatedAt: incoming.updatedAt,
     scripts,
@@ -685,6 +687,7 @@ function normalizeProjectFromShell(
     previous.cwd === incoming.workspaceRoot &&
     previous.defaultModelSelection === defaultModelSelection &&
     previous.expanded === expanded &&
+    (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
     previous.createdAt === incoming.createdAt &&
     previous.updatedAt === incoming.updatedAt &&
     previous.scripts === scripts
@@ -702,6 +705,7 @@ function normalizeProjectFromShell(
     cwd: incoming.workspaceRoot,
     defaultModelSelection,
     expanded,
+    isPinned: incoming.isPinned ?? false,
     createdAt: incoming.createdAt,
     updatedAt: incoming.updatedAt,
     scripts,
@@ -2983,6 +2987,7 @@ function applyOrchestrationEvent(
         workspaceRoot: event.payload.workspaceRoot,
         defaultModelSelection: event.payload.defaultModelSelection,
         scripts: event.payload.scripts,
+        isPinned: event.payload.isPinned ?? false,
         createdAt: event.payload.createdAt,
         updatedAt: event.payload.updatedAt,
         deletedAt: null,
@@ -3005,6 +3010,7 @@ function applyOrchestrationEvent(
             ? event.payload.defaultModelSelection
             : existingProject.defaultModelSelection,
         scripts: event.payload.scripts ?? existingProject.scripts,
+        isPinned: event.payload.isPinned ?? existingProject.isPinned ?? false,
         createdAt: existingProject.createdAt ?? event.payload.updatedAt,
         updatedAt: event.payload.updatedAt,
         deletedAt: null,

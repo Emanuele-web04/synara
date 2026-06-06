@@ -3,7 +3,11 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
 } from "@t3tools/contracts";
-import { PINNED_MESSAGES_MAX_COUNT, TurnId } from "@t3tools/contracts";
+import {
+  MAX_PINNED_PROJECTS,
+  PINNED_MESSAGES_MAX_COUNT,
+  TurnId,
+} from "@t3tools/contracts";
 import {
   deriveAssociatedWorktreeMetadata,
   deriveAssociatedWorktreeMetadataPatch,
@@ -69,6 +73,71 @@ function omitNullUserInputAnswers(
 ) {
   return Object.fromEntries(
     Object.entries(command.answers).filter(([, answer]) => answer !== null && answer !== undefined),
+  );
+}
+
+function countPinnedProjects(
+  readModel: OrchestrationReadModel,
+  options?: { readonly excludeProjectIds?: ReadonlySet<string> },
+): number {
+  return readModel.projects.filter(
+    (project) =>
+      project.deletedAt === null &&
+      project.kind === "project" &&
+      project.isPinned === true &&
+      !options?.excludeProjectIds?.has(project.id),
+  ).length;
+}
+
+function validateProjectPinLimit(input: {
+  readonly command: Extract<
+    OrchestrationCommand,
+    { type: "project.create" | "project.meta.update" }
+  >;
+  readonly readModel: OrchestrationReadModel;
+  readonly projectId: OrchestrationEvent["aggregateId"];
+  readonly nextKind: "project" | "chat";
+  readonly nextDeletedAt?: string | null;
+  readonly wasPinned?: boolean;
+  readonly staleProjectIds?: ReadonlySet<string>;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  if (input.command.isPinned !== true) {
+    return Effect.void;
+  }
+
+  if (input.nextKind !== "project") {
+    return Effect.fail(
+      new OrchestrationCommandInvariantError({
+        commandType: input.command.type,
+        detail: `Only projects can be pinned.`,
+      }),
+    );
+  }
+
+  if (input.nextDeletedAt !== undefined && input.nextDeletedAt !== null) {
+    return Effect.fail(
+      new OrchestrationCommandInvariantError({
+        commandType: input.command.type,
+        detail: `Deleted project '${input.projectId}' cannot be pinned.`,
+      }),
+    );
+  }
+
+  if (input.wasPinned === true) {
+    return Effect.void;
+  }
+
+  const excludeProjectIds = new Set<string>([input.projectId, ...(input.staleProjectIds ?? [])]);
+  const pinnedProjectCount = countPinnedProjects(input.readModel, { excludeProjectIds });
+  if (pinnedProjectCount < MAX_PINNED_PROJECTS) {
+    return Effect.void;
+  }
+
+  return Effect.fail(
+    new OrchestrationCommandInvariantError({
+      commandType: input.command.type,
+      detail: `Only ${MAX_PINNED_PROJECTS} projects can be pinned at once.`,
+    }),
   );
 }
 
@@ -152,12 +221,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         projectId: command.projectId,
       });
       const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      const staleProjects: Array<OrchestrationReadModel["projects"][number]> = [];
       if ((command.kind ?? "project") === "project") {
         const existingProjects = listActiveProjectsByWorkspaceRoot(
           readModel,
           command.workspaceRoot,
         );
-        const staleProjects: Array<(typeof existingProjects)[number]> = [];
         for (const existingProject of existingProjects) {
           const remainingThreads = listThreadsByProjectId(readModel, existingProject.id).filter(
             (thread) => thread.deletedAt === null,
@@ -189,6 +258,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           });
         }
       }
+      yield* validateProjectPinLimit({
+        command,
+        readModel,
+        projectId: command.projectId,
+        nextKind: command.kind ?? "project",
+        staleProjectIds: new Set(staleProjects.map((project) => project.id)),
+      });
 
       events.push({
         ...withEventBase({
@@ -205,6 +281,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           workspaceRoot: command.workspaceRoot,
           defaultModelSelection: command.defaultModelSelection ?? null,
           scripts: [],
+          isPinned: command.isPinned,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -213,7 +290,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "project.meta.update": {
-      yield* requireProject({
+      const existingProject = yield* requireProject({
         readModel,
         command,
         projectId: command.projectId,
@@ -226,6 +303,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           excludeProjectId: command.projectId,
         });
       }
+      yield* validateProjectPinLimit({
+        command,
+        readModel,
+        projectId: command.projectId,
+        nextKind: command.kind ?? existingProject.kind ?? "project",
+        nextDeletedAt: existingProject.deletedAt,
+        wasPinned: existingProject.isPinned === true,
+      });
       const occurredAt = nowIso();
       return {
         ...withEventBase({
@@ -244,6 +329,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { defaultModelSelection: command.defaultModelSelection }
             : {}),
           ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
+          ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
           updatedAt: occurredAt,
         },
       };
