@@ -13,6 +13,7 @@ import {
   type RuntimeMode,
   type ThreadEnvironmentMode,
   type ThreadId,
+  type ThreadWorkspaceContext,
 } from "@t3tools/contracts";
 import {
   type ComposerThreadDraftState,
@@ -25,6 +26,8 @@ import { DEFAULT_INTERACTION_MODE, type ThreadPrimarySurface } from "../types";
 export interface NewThreadOptions {
   branch?: string | null;
   worktreePath?: string | null;
+  workspaceContexts?: ThreadWorkspaceContext[];
+  activeWorkspaceContextId?: string | null;
   envMode?: DraftThreadEnvMode;
   entryPoint?: ThreadPrimarySurface;
   temporary?: boolean;
@@ -39,6 +42,8 @@ interface ActiveThreadSnapshot {
   interactionMode: ProviderInteractionMode;
   envMode?: ThreadEnvironmentMode | undefined;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
+  workspaceContexts?: ThreadWorkspaceContext[];
+  activeWorkspaceContextId?: string | null;
 }
 
 export interface DraftReusePlanStored {
@@ -78,6 +83,8 @@ export interface TerminalThreadCreationState {
   modelSelection: ModelSelection;
   runtimeMode: RuntimeMode;
   worktreePath: string | null;
+  workspaceContexts: ThreadWorkspaceContext[];
+  activeWorkspaceContextId: string | null;
 }
 
 // Normalize the currently active server thread into a stable snapshot for pure helpers.
@@ -90,6 +97,8 @@ export function createActiveThreadSnapshot(
         runtimeMode: RuntimeMode;
         envMode?: ThreadEnvironmentMode | undefined;
         lastKnownPr?: OrchestrationThreadPullRequest | null;
+        workspaceContexts?: ThreadWorkspaceContext[];
+        activeWorkspaceContextId?: string | null;
       }
     | null
     | undefined,
@@ -105,6 +114,8 @@ export function createActiveThreadSnapshot(
     interactionMode: activeThread.interactionMode,
     envMode: activeThread.envMode,
     lastKnownPr: activeThread.lastKnownPr ?? null,
+    workspaceContexts: activeThread.workspaceContexts ?? [],
+    activeWorkspaceContextId: activeThread.activeWorkspaceContextId ?? null,
   };
 }
 
@@ -124,6 +135,8 @@ export function createActiveDraftThreadSnapshot(
     entryPoint: activeDraftThread.entryPoint,
     branch: activeDraftThread.branch,
     worktreePath: activeDraftThread.worktreePath,
+    workspaceContexts: activeDraftThread.workspaceContexts ?? [],
+    activeWorkspaceContextId: activeDraftThread.activeWorkspaceContextId ?? null,
     lastKnownPr: activeDraftThread.lastKnownPr ?? null,
     envMode: activeDraftThread.envMode,
     ...(activeDraftThread.isTemporary ? { isTemporary: true } : {}),
@@ -172,6 +185,8 @@ export function createFreshDraftThreadSeed(input: {
     createdAt: input.createdAt,
     branch: input.options?.branch ?? null,
     worktreePath: input.options?.worktreePath ?? null,
+    workspaceContexts: input.options?.workspaceContexts ?? [],
+    activeWorkspaceContextId: input.options?.activeWorkspaceContextId ?? null,
     envMode: input.options?.envMode ?? "local",
     runtimeMode: DEFAULT_RUNTIME_MODE,
     entryPoint: input.entryPoint,
@@ -184,6 +199,8 @@ export function hasDraftContextOverrides(options?: NewThreadOptions): boolean {
   return (
     options?.branch !== undefined ||
     options?.worktreePath !== undefined ||
+    options?.workspaceContexts !== undefined ||
+    options?.activeWorkspaceContextId !== undefined ||
     options?.envMode !== undefined
   );
 }
@@ -197,6 +214,8 @@ export function buildDraftThreadContextPatch(
   entryPoint: ThreadPrimarySurface;
   envMode?: DraftThreadEnvMode;
   worktreePath?: string | null;
+  workspaceContexts?: ThreadWorkspaceContext[];
+  activeWorkspaceContextId?: string | null;
 } | null {
   if (!hasDraftContextOverrides(options)) {
     return null;
@@ -207,6 +226,12 @@ export function buildDraftThreadContextPatch(
     ...(options?.branch !== undefined ? { branch: options.branch ?? null } : {}),
     ...(options?.worktreePath !== undefined || shouldClearWorktreeForLocalMode
       ? { worktreePath: options?.worktreePath ?? null }
+      : {}),
+    ...(options?.workspaceContexts !== undefined
+      ? { workspaceContexts: options.workspaceContexts }
+      : {}),
+    ...(options?.activeWorkspaceContextId !== undefined
+      ? { activeWorkspaceContextId: options.activeWorkspaceContextId ?? null }
       : {}),
     ...(options?.envMode !== undefined ? { envMode: options.envMode } : {}),
     entryPoint,
@@ -299,5 +324,17 @@ export function resolveTerminalThreadCreationState(
       }
       return input.draftThread?.worktreePath ?? null;
     })(),
+    workspaceContexts:
+      input.options?.workspaceContexts ??
+      input.draftThread?.workspaceContexts ??
+      (input.activeDraftThread?.projectId === input.projectId
+        ? (input.activeDraftThread.workspaceContexts ?? [])
+        : (input.activeThread?.workspaceContexts ?? [])),
+    activeWorkspaceContextId:
+      input.options?.activeWorkspaceContextId ??
+      input.draftThread?.activeWorkspaceContextId ??
+      (input.activeDraftThread?.projectId === input.projectId
+        ? (input.activeDraftThread.activeWorkspaceContextId ?? null)
+        : (input.activeThread?.activeWorkspaceContextId ?? null)),
   };
 }

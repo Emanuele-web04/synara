@@ -1250,6 +1250,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           status: "ready",
           runtimeMode: input.runtimeMode,
           cwd,
+          workspaceContexts: input.workspaceContexts ?? [],
+          activeWorkspaceContextId: input.activeWorkspaceContextId ?? null,
           threadId: input.threadId,
           createdAt: now,
           updatedAt: now,
@@ -1825,6 +1827,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        workspaceContexts: "prompt-fallback",
         supportsSkillMentions: true,
         supportsSkillDiscovery: true,
         supportsNativeSlashCommandDiscovery: true,

@@ -4,6 +4,7 @@ import {
   isPendingThreadWorktree,
   resolveThreadBranchSourceCwd,
   resolveThreadEnvironmentMode,
+  resolveThreadWorkspaceCwds,
   resolveThreadWorkspaceCwd,
   resolveThreadWorkspaceState,
 } from "./threadEnvironment";
@@ -84,5 +85,50 @@ describe("resolveThreadBranchSourceCwd", () => {
         worktreePath: null,
       }),
     ).toBe("/repo");
+  });
+});
+
+describe("resolveThreadWorkspaceCwds", () => {
+  it("marks the active workspace context as primary and resolves every cwd", () => {
+    const contexts = resolveThreadWorkspaceCwds({
+      projectId: "project-a" as never,
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      activeWorkspaceContextId: "project-b",
+      workspaceContexts: [
+        {
+          id: "primary",
+          projectId: "project-a" as never,
+          label: "Repo A",
+          role: "context",
+          accessMode: "read-write",
+          cwd: null,
+          envMode: "local",
+          branch: null,
+          worktreePath: null,
+        },
+        {
+          id: "project-b",
+          projectId: "project-b" as never,
+          label: "Repo B",
+          role: "primary",
+          accessMode: "read-write",
+          cwd: null,
+          envMode: "worktree",
+          branch: "feature",
+          worktreePath: "/repo-b/.worktrees/feature",
+        },
+      ],
+      projects: [
+        { id: "project-a" as never, workspaceRoot: "/repo-a", kind: "project" },
+        { id: "project-b" as never, workspaceRoot: "/repo-b", kind: "project" },
+      ],
+    });
+
+    expect(contexts.map((entry) => [entry.context.id, entry.cwd, entry.primary])).toEqual([
+      ["primary", "/repo-a", false],
+      ["project-b", "/repo-b/.worktrees/feature", true],
+    ]);
   });
 });

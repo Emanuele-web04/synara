@@ -12,7 +12,12 @@ import {
   ProjectionThreadRepository,
   type ProjectionThreadRepositoryShape,
 } from "../Services/ProjectionThreads.ts";
-import { ModelSelection, OrchestrationThreadPullRequest, ThreadHandoff } from "@t3tools/contracts";
+import {
+  ModelSelection,
+  OrchestrationThreadPullRequest,
+  ThreadHandoff,
+  ThreadWorkspaceContext,
+} from "@t3tools/contracts";
 
 const SqliteBoolean = Schema.Number.pipe(
   Schema.decodeTo(Schema.Boolean, {
@@ -28,6 +33,12 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
     modelSelection: Schema.fromJsonString(ModelSelection),
+    workspaceContexts: Schema.NullOr(Schema.fromJsonString(Schema.Array(ThreadWorkspaceContext))).pipe(
+      Schema.decodeTo(Schema.Array(ThreadWorkspaceContext), {
+        decode: SchemaGetter.transform((value) => value ?? []),
+        encode: SchemaGetter.transform((value) => value),
+      }),
+    ),
   }),
 );
 type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
@@ -49,6 +60,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           env_mode,
           branch,
           worktree_path,
+          workspace_contexts_json,
+          active_workspace_context_id,
           associated_worktree_path,
           associated_worktree_branch,
           associated_worktree_ref,
@@ -82,6 +95,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.envMode},
           ${row.branch},
           ${row.worktreePath},
+          ${JSON.stringify(row.workspaceContexts)},
+          ${row.activeWorkspaceContextId},
           ${row.associatedWorktreePath},
           ${row.associatedWorktreeBranch},
           ${row.associatedWorktreeRef},
@@ -115,6 +130,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           env_mode = excluded.env_mode,
           branch = excluded.branch,
           worktree_path = excluded.worktree_path,
+          workspace_contexts_json = excluded.workspace_contexts_json,
+          active_workspace_context_id = excluded.active_workspace_context_id,
           associated_worktree_path = excluded.associated_worktree_path,
           associated_worktree_branch = excluded.associated_worktree_branch,
           associated_worktree_ref = excluded.associated_worktree_ref,
@@ -155,6 +172,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           env_mode AS "envMode",
           branch,
           worktree_path AS "worktreePath",
+          workspace_contexts_json AS "workspaceContexts",
+          active_workspace_context_id AS "activeWorkspaceContextId",
           associated_worktree_path AS "associatedWorktreePath",
           associated_worktree_branch AS "associatedWorktreeBranch",
           associated_worktree_ref AS "associatedWorktreeRef",
@@ -197,6 +216,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           env_mode AS "envMode",
           branch,
           worktree_path AS "worktreePath",
+          workspace_contexts_json AS "workspaceContexts",
+          active_workspace_context_id AS "activeWorkspaceContextId",
           associated_worktree_path AS "associatedWorktreePath",
           associated_worktree_branch AS "associatedWorktreeBranch",
           associated_worktree_ref AS "associatedWorktreeRef",

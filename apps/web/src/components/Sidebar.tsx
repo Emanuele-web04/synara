@@ -2305,6 +2305,8 @@ export default function Sidebar() {
           }),
           branch: null,
           worktreePath: null,
+          workspaceContexts: [],
+          activeWorkspaceContextId: null,
           createdAt,
         });
         createdThread = true;

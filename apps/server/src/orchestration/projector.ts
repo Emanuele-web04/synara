@@ -300,6 +300,8 @@ export function projectEvent(
             envMode: payload.envMode,
             branch: payload.branch,
             worktreePath: payload.worktreePath,
+            workspaceContexts: payload.workspaceContexts,
+            activeWorkspaceContextId: payload.activeWorkspaceContextId,
             associatedWorktreePath: payload.associatedWorktreePath,
             associatedWorktreeBranch: payload.associatedWorktreeBranch,
             associatedWorktreeRef: payload.associatedWorktreeRef,
@@ -397,6 +399,12 @@ export function projectEvent(
               ...(payload.envMode !== undefined ? { envMode: payload.envMode } : {}),
               ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
               ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+              ...(payload.workspaceContexts !== undefined
+                ? { workspaceContexts: payload.workspaceContexts }
+                : {}),
+              ...(payload.activeWorkspaceContextId !== undefined
+                ? { activeWorkspaceContextId: payload.activeWorkspaceContextId }
+                : {}),
               ...(payload.associatedWorktreePath !== undefined
                 ? { associatedWorktreePath: payload.associatedWorktreePath }
                 : {}),

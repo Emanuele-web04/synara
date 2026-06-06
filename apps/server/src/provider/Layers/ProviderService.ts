@@ -112,6 +112,8 @@ function toRuntimePayloadFromSession(
 ): Record<string, unknown> {
   return {
     cwd: session.cwd ?? null,
+    workspaceContexts: session.workspaceContexts ?? [],
+    activeWorkspaceContextId: session.activeWorkspaceContextId ?? null,
     model: session.model ?? null,
     activeTurnId: session.activeTurnId ?? null,
     lastError: session.lastError ?? null,

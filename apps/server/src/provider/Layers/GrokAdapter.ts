@@ -1060,6 +1060,8 @@ export function makeGrokAdapter(
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
+            workspaceContexts: input.workspaceContexts ?? [],
+            activeWorkspaceContextId: input.activeWorkspaceContextId ?? null,
             model: grokModelSelection?.model,
             threadId: input.threadId,
             resumeCursor: {
@@ -1683,6 +1685,7 @@ export function makeGrokAdapter(
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "restart-session",
+        workspaceContexts: "prompt-fallback",
       },
       startSession,
       sendTurn,

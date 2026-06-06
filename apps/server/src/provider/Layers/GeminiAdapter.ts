@@ -804,6 +804,8 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     runtimeMode: ProviderSession["runtimeMode"];
     runtimeModeId: string;
     cwd: string;
+    workspaceContexts?: ProviderSessionStartInput["workspaceContexts"];
+    activeWorkspaceContextId?: ProviderSessionStartInput["activeWorkspaceContextId"];
     binaryPath: string;
     child: ChildProcessWithoutNullStreams;
     turns?: ReadonlyArray<GeminiStoredTurn>;
@@ -817,6 +819,8 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
         status: "connecting",
         runtimeMode: input.runtimeMode,
         cwd: input.cwd,
+        workspaceContexts: input.workspaceContexts ?? [],
+        activeWorkspaceContextId: input.activeWorkspaceContextId ?? null,
         threadId: input.threadId,
         createdAt: now,
         updatedAt: now,
@@ -2132,6 +2136,8 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
         runtimeMode: input.runtimeMode,
         runtimeModeId,
         cwd,
+        workspaceContexts: input.workspaceContexts,
+        activeWorkspaceContextId: input.activeWorkspaceContextId,
         binaryPath,
         child,
         turns: resumeTurns,
@@ -2464,6 +2470,8 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
         runtimeMode: context.session.runtimeMode,
         runtimeModeId: context.runtimeModeId,
         cwd,
+        workspaceContexts: context.session.workspaceContexts,
+        activeWorkspaceContextId: context.session.activeWorkspaceContextId,
         binaryPath: context.binaryPath,
         child,
         turns: nextTurns,
@@ -2557,6 +2565,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      workspaceContexts: "prompt-fallback",
       supportsSkillMentions: false,
       supportsSkillDiscovery: false,
       supportsNativeSlashCommandDiscovery: false,

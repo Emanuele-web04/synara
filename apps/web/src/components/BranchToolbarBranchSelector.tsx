@@ -83,6 +83,7 @@ interface BranchToolbarBranchSelectorProps {
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
   variant?: BranchSelectorVariant;
+  menuSide?: "top" | "bottom";
 }
 
 type StashDiscardDialogState = {
@@ -372,8 +373,10 @@ export function BranchToolbarBranchSelector({
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
   variant = "toolbar",
+  menuSide,
 }: BranchToolbarBranchSelectorProps) {
   const isPanel = variant === "panel";
+  const popupSide = menuSide ?? (isPanel ? "bottom" : "top");
   const queryClient = useQueryClient();
   const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false);
   const [isCreateBranchDialogOpen, setIsCreateBranchDialogOpen] = useState(false);
@@ -854,7 +857,7 @@ export function BranchToolbarBranchSelector({
           </>
         )}
       </ComboboxTrigger>
-      <ComboboxPopup align="end" side={isPanel ? "bottom" : "top"} className="w-80">
+      <ComboboxPopup align="end" side={popupSide} className="w-80">
         <div className="border-b p-1">
           <ComboboxInput
             className="rounded-xl border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] shadow-none before:hidden has-focus-visible:border-[color:var(--color-border-focus)] has-focus-visible:ring-0 [&_input]:font-sans"

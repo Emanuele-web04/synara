@@ -28,6 +28,7 @@ import {
   OrchestrationThreadActivity,
   ProviderInteractionMode,
   RuntimeMode,
+  type ThreadWorkspaceContext,
 } from "@t3tools/contracts";
 import {
   applyClaudePromptEffortPrefix,
@@ -192,7 +193,9 @@ import {
   DEFAULT_THREAD_TERMINAL_ID,
   MAX_TERMINALS_PER_GROUP,
   type ChatMessage,
+  type Project,
   type Thread,
+  type ThreadWorkspacePatch,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
 import { useThreadWorkspaceHandoff } from "../hooks/useThreadWorkspaceHandoff";
@@ -358,6 +361,8 @@ import {
 import { getComposerTraitSelection } from "./chat/composerTraits";
 import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { ProjectPicker } from "./chat/ProjectPicker";
+import { WorkspaceContextsBar } from "./chat/WorkspaceContextsBar";
+import { updateThreadWorkspaceContext } from "../lib/workspaceContextLogic";
 import { FolderClosed } from "./FolderClosed";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
@@ -862,6 +867,37 @@ interface ChatViewProps {
   onCloseThreadPane?: () => void;
 }
 
+function buildThreadPrimaryWorkspaceContext(input: {
+  thread: Thread;
+  project: Project;
+}): ThreadWorkspaceContext {
+  return {
+    id: "primary",
+    projectId: input.thread.projectId,
+    label: input.project.name || input.project.folderName,
+    role: "primary",
+    accessMode: "read-write",
+    cwd: input.thread.worktreePath ?? input.project.cwd,
+    envMode: input.thread.envMode ?? "local",
+    branch: input.thread.branch,
+    worktreePath: input.thread.worktreePath,
+  };
+}
+
+function buildProjectWorkspaceContext(project: Project): ThreadWorkspaceContext {
+  return {
+    id: `project:${project.id}`,
+    projectId: project.id,
+    label: project.name || project.folderName,
+    role: "context",
+    accessMode: "read-write",
+    cwd: project.cwd,
+    envMode: "local",
+    branch: null,
+    worktreePath: null,
+  };
+}
+
 export default function ChatView({
   threadId,
   paneScopeId = "single",
@@ -1263,6 +1299,7 @@ export default function ChatView({
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
+  const workspaceContextProjects = useStore((store) => store.projects);
   const homeDir = useWorkspaceStore((state) => state.homeDir);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const isHomeChatContainer = isHomeChatContainerProject(activeProject, homeDir);
@@ -1272,6 +1309,135 @@ export default function ChatView({
   const isChatProject = isHomeChatContainer;
   const activeProjectScripts =
     activeProject?.kind === "project" ? activeProject.scripts : undefined;
+  const workspaceContexts = useMemo(() => {
+    if (!activeThread || !activeProject) return [];
+    const existingContexts = activeThread.workspaceContexts ?? [];
+    if (existingContexts.length > 0) {
+      const primaryContext = buildThreadPrimaryWorkspaceContext({
+        thread: activeThread,
+        project: activeProject,
+      });
+      return existingContexts.map((context) =>
+        context.id === primaryContext.id || context.role === "primary"
+          ? {
+              ...context,
+              ...primaryContext,
+              label: context.label ?? primaryContext.label,
+            }
+          : context,
+      );
+    }
+    return [buildThreadPrimaryWorkspaceContext({ thread: activeThread, project: activeProject })];
+  }, [activeProject, activeThread]);
+  const activeWorkspaceContextId =
+    activeThread?.activeWorkspaceContextId ?? workspaceContexts[0]?.id ?? null;
+  const persistWorkspaceContexts = useCallback(
+    async (contexts: ThreadWorkspaceContext[], activeContextId: string | null) => {
+      if (!activeThread) return;
+      if (isLocalDraftThread) {
+        setDraftThreadContext(threadId, {
+          workspaceContexts: contexts,
+          activeWorkspaceContextId: activeContextId,
+        });
+        return;
+      }
+      const api = readNativeApi();
+      if (!api) return;
+      await api.orchestration.dispatchCommand({
+        type: "thread.meta.update",
+        commandId: newCommandId(),
+        threadId: activeThread.id,
+        workspaceContexts: contexts,
+        activeWorkspaceContextId: activeContextId,
+      });
+    },
+    [activeThread, isLocalDraftThread, setDraftThreadContext, threadId],
+  );
+  const handleAddWorkspaceContext = useCallback(
+    (projectId: ProjectId) => {
+      const project = workspaceContextProjects.find((entry) => entry.id === projectId);
+      if (!project || !activeThread || !activeProject) return;
+      const currentContexts =
+        workspaceContexts.length > 0
+          ? workspaceContexts
+          : [buildThreadPrimaryWorkspaceContext({ thread: activeThread, project: activeProject })];
+      if (currentContexts.some((context) => context.projectId === project.id)) return;
+      void persistWorkspaceContexts(
+        [...currentContexts, buildProjectWorkspaceContext(project)],
+        activeWorkspaceContextId,
+      );
+    },
+    [
+      activeProject,
+      activeThread,
+      activeWorkspaceContextId,
+      persistWorkspaceContexts,
+      workspaceContextProjects,
+      workspaceContexts,
+    ],
+  );
+  const handleRemoveWorkspaceContext = useCallback(
+    (contextId: string) => {
+      if (!activeThread || !activeProject) return;
+      const currentContexts =
+        workspaceContexts.length > 0
+          ? workspaceContexts
+          : [buildThreadPrimaryWorkspaceContext({ thread: activeThread, project: activeProject })];
+      const nextContexts = currentContexts.filter((context) => context.id !== contextId);
+      const nextActiveContextId =
+        activeWorkspaceContextId === contextId
+          ? (nextContexts.find((context) => context.id === "primary")?.id ??
+            nextContexts[0]?.id ??
+            null)
+          : activeWorkspaceContextId;
+      void persistWorkspaceContexts(nextContexts, nextActiveContextId);
+    },
+    [
+      activeProject,
+      activeThread,
+      activeWorkspaceContextId,
+      persistWorkspaceContexts,
+      workspaceContexts,
+    ],
+  );
+  const handleMakeWorkspaceContextPrimary = useCallback(
+    (contextId: string) => {
+      void persistWorkspaceContexts(
+        workspaceContexts.map((context) => ({
+          ...context,
+          role: context.id === contextId ? "primary" : "context",
+        })),
+        contextId,
+      );
+    },
+    [persistWorkspaceContexts, workspaceContexts],
+  );
+  const handleUpdateWorkspaceContext = useCallback(
+    (
+      contextId: string,
+      patch: Pick<ThreadWorkspacePatch, "branch" | "worktreePath" | "envMode">,
+    ) => {
+      const project = workspaceContextProjects.find((entry) =>
+        workspaceContexts.some(
+          (context) => context.id === contextId && context.projectId === entry.id,
+        ),
+      );
+      if (!project) return;
+      const nextContexts = updateThreadWorkspaceContext(
+        workspaceContexts,
+        contextId,
+        project.cwd,
+        patch,
+      );
+      void persistWorkspaceContexts(nextContexts, activeWorkspaceContextId);
+    },
+    [
+      activeWorkspaceContextId,
+      persistWorkspaceContexts,
+      workspaceContextProjects,
+      workspaceContexts,
+    ],
+  );
   const threadLineageThreads = useStore(
     useMemo(() => createThreadLineageSelector(activeThread?.id ?? null), [activeThread?.id]),
   );
@@ -5861,6 +6027,8 @@ export default function ChatView({
             envMode: nextThreadEnvMode,
             branch: nextThreadBranch,
             worktreePath: nextThreadWorktreePath,
+            workspaceContexts: activeThread.workspaceContexts ?? [],
+            activeWorkspaceContextId: activeThread.activeWorkspaceContextId ?? null,
             lastKnownPr: activeThread.lastKnownPr ?? null,
             createdAt: activeThread.createdAt,
           },
@@ -6569,6 +6737,8 @@ export default function ChatView({
         envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
         branch: activeThread.branch,
         worktreePath: activeThread.worktreePath,
+        workspaceContexts: activeThread.workspaceContexts ?? [],
+        activeWorkspaceContextId: activeThread.activeWorkspaceContextId ?? null,
         lastKnownPr: activeThread.lastKnownPr ?? null,
         associatedWorktreePath: activeThreadAssociatedWorktree.associatedWorktreePath,
         associatedWorktreeBranch: activeThreadAssociatedWorktree.associatedWorktreeBranch,
@@ -7609,6 +7779,8 @@ export default function ChatView({
             envMode: activeThread.envMode ?? "local",
             branch: activeThread.branch,
             worktreePath: activeThread.worktreePath,
+            workspaceContexts: activeThread.workspaceContexts ?? [],
+            activeWorkspaceContextId: activeThread.activeWorkspaceContextId ?? null,
             ...(activeThread.lastKnownPr !== undefined
               ? { lastKnownPr: activeThread.lastKnownPr }
               : {}),
@@ -8289,6 +8461,18 @@ export default function ChatView({
           {...(onCloseThreadPane ? { onCloseThreadPane } : {})}
         />
       </header>
+
+      {activeThread && activeProject ? (
+        <WorkspaceContextsBar
+          projects={workspaceContextProjects}
+          contexts={workspaceContexts}
+          activeContextId={activeWorkspaceContextId}
+          onAddProjectContext={handleAddWorkspaceContext}
+          onRemoveContext={handleRemoveWorkspaceContext}
+          onMakePrimary={handleMakeWorkspaceContextPrimary}
+          onUpdateContext={handleUpdateWorkspaceContext}
+        />
+      ) : null}
 
       <RenameThreadDialog
         open={renameDialogOpen}

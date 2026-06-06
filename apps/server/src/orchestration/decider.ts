@@ -305,6 +305,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           envMode: command.envMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          workspaceContexts: command.workspaceContexts,
+          activeWorkspaceContextId: command.activeWorkspaceContextId,
           ...deriveCommandAssociatedWorktreeMetadata({
             branch: command.branch,
             worktreePath: command.worktreePath,
@@ -386,6 +388,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           envMode: command.envMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          workspaceContexts: command.workspaceContexts,
+          activeWorkspaceContextId: command.activeWorkspaceContextId,
           ...deriveCommandAssociatedWorktreeMetadata({
             branch: command.branch,
             worktreePath: command.worktreePath,
@@ -490,6 +494,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           envMode: command.envMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          workspaceContexts: command.workspaceContexts,
+          activeWorkspaceContextId: command.activeWorkspaceContextId,
           ...deriveCommandAssociatedWorktreeMetadata({
             branch: command.branch,
             worktreePath: command.worktreePath,
@@ -634,6 +640,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.envMode !== undefined ? { envMode: command.envMode } : {}),
           ...(command.branch !== undefined ? { branch: command.branch } : {}),
           ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+          ...(command.workspaceContexts !== undefined
+            ? { workspaceContexts: command.workspaceContexts }
+            : {}),
+          ...(command.activeWorkspaceContextId !== undefined
+            ? { activeWorkspaceContextId: command.activeWorkspaceContextId }
+            : {}),
           ...deriveCommandAssociatedWorktreeMetadataPatch({
             ...(command.branch !== undefined ? { branch: command.branch } : {}),
             ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),

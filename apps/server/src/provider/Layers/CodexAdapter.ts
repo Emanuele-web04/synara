@@ -1583,6 +1583,8 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         threadId: input.threadId,
         provider: "codex",
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+        workspaceContexts: input.workspaceContexts,
+        activeWorkspaceContextId: input.activeWorkspaceContextId,
         ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
         runtimeMode: input.runtimeMode,
@@ -1999,6 +2001,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        workspaceContexts: "native",
         supportsSkillMentions: true,
         supportsSkillDiscovery: true,
         supportsNativeSlashCommandDiscovery: false,

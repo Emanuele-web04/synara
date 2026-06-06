@@ -24,6 +24,7 @@ import {
   ProviderStartOptions,
   RuntimeMode,
   ThreadId,
+  ThreadWorkspaceContext,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Equal from "effect/Equal";
@@ -288,6 +289,8 @@ const PersistedDraftThreadState = Schema.Struct({
   entryPoint: DraftThreadEntryPointSchema.pipe(Schema.withDecodingDefault(() => "chat")),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
+  workspaceContexts: Schema.optionalKey(Schema.Array(ThreadWorkspaceContext)),
+  activeWorkspaceContextId: Schema.optionalKey(Schema.NullOr(Schema.String)),
   lastKnownPr: Schema.optionalKey(Schema.NullOr(OrchestrationThreadPullRequest)),
   envMode: DraftThreadEnvModeSchema,
   isTemporary: Schema.optionalKey(Schema.Boolean),
@@ -333,6 +336,8 @@ export interface DraftThreadState {
   entryPoint: ThreadPrimarySurface;
   branch: string | null;
   worktreePath: string | null;
+  workspaceContexts?: ThreadWorkspaceContext[];
+  activeWorkspaceContextId?: string | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   envMode: DraftThreadEnvMode;
   isTemporary?: boolean;
@@ -360,6 +365,8 @@ export interface ComposerDraftStoreState {
     options?: {
       branch?: string | null;
       worktreePath?: string | null;
+      workspaceContexts?: ThreadWorkspaceContext[];
+      activeWorkspaceContextId?: string | null;
       lastKnownPr?: OrchestrationThreadPullRequest | null;
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
@@ -374,6 +381,8 @@ export interface ComposerDraftStoreState {
     options: {
       branch?: string | null;
       worktreePath?: string | null;
+      workspaceContexts?: ThreadWorkspaceContext[];
+      activeWorkspaceContextId?: string | null;
       lastKnownPr?: OrchestrationThreadPullRequest | null;
       projectId?: ProjectId;
       createdAt?: string;
@@ -1555,6 +1564,15 @@ function normalizeDraftThreadEntryPoint(value: unknown, fallback: ThreadPrimaryS
   return value === "terminal" || value === "chat" ? value : fallback;
 }
 
+function normalizeDraftWorkspaceContexts(value: unknown): ThreadWorkspaceContext[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  try {
+    return Schema.decodeUnknownSync(Schema.Array(ThreadWorkspaceContext))(value);
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizePersistedDraftThreads(
   rawDraftThreadsByThreadId: unknown,
   rawProjectDraftThreadIdByProjectId: unknown,
@@ -1592,6 +1610,15 @@ function normalizePersistedDraftThreads(
         }
       }
       const normalizedWorktreePath = typeof worktreePath === "string" ? worktreePath : null;
+      const workspaceContexts = normalizeDraftWorkspaceContexts(
+        candidateDraftThread.workspaceContexts,
+      );
+      const activeWorkspaceContextId =
+        typeof candidateDraftThread.activeWorkspaceContextId === "string"
+          ? candidateDraftThread.activeWorkspaceContextId
+          : candidateDraftThread.activeWorkspaceContextId === null
+            ? null
+            : undefined;
       const isTemporary = candidateDraftThread.isTemporary === true ? true : undefined;
       const promotedTo =
         typeof candidateDraftThread.promotedTo === "string" &&
@@ -1620,6 +1647,8 @@ function normalizePersistedDraftThreads(
         entryPoint: normalizeDraftThreadEntryPoint(candidateDraftThread.entryPoint),
         branch: typeof branch === "string" ? branch : null,
         worktreePath: normalizedWorktreePath,
+        ...(workspaceContexts !== undefined ? { workspaceContexts } : {}),
+        ...(activeWorkspaceContextId !== undefined ? { activeWorkspaceContextId } : {}),
         ...(lastKnownPr ? { lastKnownPr } : {}),
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         ...(isTemporary ? { isTemporary: true } : {}),
@@ -2263,6 +2292,14 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
               : options?.isTemporary === false
                 ? false
                 : existingThread?.isTemporary === true;
+          const nextWorkspaceContexts =
+            options?.workspaceContexts === undefined
+              ? (existingThread?.workspaceContexts ?? [])
+              : options.workspaceContexts;
+          const nextActiveWorkspaceContextId =
+            options?.activeWorkspaceContextId === undefined
+              ? (existingThread?.activeWorkspaceContextId ?? null)
+              : (options.activeWorkspaceContextId ?? null);
           const nextPromotedTo = existingThread?.promotedTo;
           const nextDraftThread: DraftThreadState = {
             projectId,
@@ -2279,6 +2316,8 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
                 ? (existingThread?.branch ?? null)
                 : (options.branch ?? null),
             worktreePath: nextWorktreePath,
+            workspaceContexts: nextWorkspaceContexts,
+            activeWorkspaceContextId: nextActiveWorkspaceContextId,
             lastKnownPr:
               options?.lastKnownPr === undefined
                 ? (existingThread?.lastKnownPr ?? null)
@@ -2299,6 +2338,9 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             existingThread.entryPoint === nextDraftThread.entryPoint &&
             existingThread.branch === nextDraftThread.branch &&
             existingThread.worktreePath === nextDraftThread.worktreePath &&
+            Equal.equals(existingThread.workspaceContexts ?? [], nextDraftThread.workspaceContexts ?? []) &&
+            (existingThread.activeWorkspaceContextId ?? null) ===
+              (nextDraftThread.activeWorkspaceContextId ?? null) &&
             Equal.equals(existingThread.lastKnownPr ?? null, nextDraftThread.lastKnownPr ?? null) &&
             existingThread.envMode === nextDraftThread.envMode &&
             (existingThread.isTemporary === true) === (nextDraftThread.isTemporary === true) &&
@@ -2361,6 +2403,14 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
               : options.isTemporary === false
                 ? false
                 : existing.isTemporary === true;
+          const nextWorkspaceContexts =
+            options.workspaceContexts === undefined
+              ? (existing.workspaceContexts ?? [])
+              : options.workspaceContexts;
+          const nextActiveWorkspaceContextId =
+            options.activeWorkspaceContextId === undefined
+              ? (existing.activeWorkspaceContextId ?? null)
+              : (options.activeWorkspaceContextId ?? null);
           const nextPromotedTo = existing.promotedTo;
           const nextDraftThread: DraftThreadState = {
             projectId: nextProjectId,
@@ -2373,6 +2423,8 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             entryPoint: nextEntryPoint,
             branch: options.branch === undefined ? existing.branch : (options.branch ?? null),
             worktreePath: nextWorktreePath,
+            workspaceContexts: nextWorkspaceContexts,
+            activeWorkspaceContextId: nextActiveWorkspaceContextId,
             lastKnownPr:
               options.lastKnownPr === undefined
                 ? (existing.lastKnownPr ?? null)
@@ -2390,6 +2442,9 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             nextDraftThread.entryPoint === existing.entryPoint &&
             nextDraftThread.branch === existing.branch &&
             nextDraftThread.worktreePath === existing.worktreePath &&
+            Equal.equals(nextDraftThread.workspaceContexts ?? [], existing.workspaceContexts ?? []) &&
+            (nextDraftThread.activeWorkspaceContextId ?? null) ===
+              (existing.activeWorkspaceContextId ?? null) &&
             Equal.equals(nextDraftThread.lastKnownPr ?? null, existing.lastKnownPr ?? null) &&
             nextDraftThread.envMode === existing.envMode &&
             (nextDraftThread.isTemporary === true) === (existing.isTemporary === true) &&

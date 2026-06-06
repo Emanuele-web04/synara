@@ -92,6 +92,8 @@ export function useThreadHandoff() {
         envMode: thread.envMode ?? (thread.worktreePath ? "worktree" : "local"),
         branch: thread.branch,
         worktreePath: thread.worktreePath,
+        workspaceContexts: thread.workspaceContexts ?? [],
+        activeWorkspaceContextId: thread.activeWorkspaceContextId ?? null,
         associatedWorktreePath: thread.associatedWorktreePath ?? thread.worktreePath ?? null,
         associatedWorktreeBranch: thread.associatedWorktreeBranch ?? thread.branch ?? null,
         associatedWorktreeRef:

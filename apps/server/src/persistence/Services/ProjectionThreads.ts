@@ -17,6 +17,7 @@ import {
   RuntimeMode,
   ThreadEnvironmentMode,
   ThreadId,
+  ThreadWorkspaceContext,
   TurnId,
 } from "@t3tools/contracts";
 import { Option, Schema, ServiceMap } from "effect";
@@ -34,6 +35,12 @@ export const ProjectionThread = Schema.Struct({
   envMode: ThreadEnvironmentMode,
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
+  workspaceContexts: Schema.optional(Schema.Array(ThreadWorkspaceContext)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
+  activeWorkspaceContextId: Schema.optional(Schema.NullOr(Schema.String)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   associatedWorktreePath: Schema.NullOr(Schema.String),
   associatedWorktreeBranch: Schema.NullOr(Schema.String),
   associatedWorktreeRef: Schema.NullOr(Schema.String),

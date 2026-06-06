@@ -110,6 +110,8 @@ export function buildLocalDraftThread(
     envMode: draftThread.envMode,
     branch: draftThread.branch,
     worktreePath: draftThread.worktreePath,
+    workspaceContexts: draftThread.workspaceContexts ?? [],
+    activeWorkspaceContextId: draftThread.activeWorkspaceContextId ?? null,
     lastKnownPr: draftThread.lastKnownPr ?? null,
     handoff: null,
     turnDiffSummaries: [],

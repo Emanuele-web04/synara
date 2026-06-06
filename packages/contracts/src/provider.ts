@@ -21,6 +21,7 @@ import {
   ProviderReviewTarget,
   ProviderSandboxMode,
   ProviderStartOptions,
+  ThreadWorkspaceContext,
   ProviderUserInputAnswers,
   RuntimeMode,
 } from "./orchestration";
@@ -39,6 +40,12 @@ export const ProviderSession = Schema.Struct({
   status: ProviderSessionStatus,
   runtimeMode: RuntimeMode,
   cwd: Schema.optional(TrimmedNonEmptyString),
+  workspaceContexts: Schema.optional(Schema.Array(ThreadWorkspaceContext)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
+  activeWorkspaceContextId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   model: Schema.optional(TrimmedNonEmptyString),
   threadId: ThreadId,
   resumeCursor: Schema.optional(Schema.Unknown),
@@ -53,6 +60,12 @@ export const ProviderSessionStartInput = Schema.Struct({
   threadId: ThreadId,
   provider: Schema.optional(ProviderKind),
   cwd: Schema.optional(TrimmedNonEmptyString),
+  workspaceContexts: Schema.optional(Schema.Array(ThreadWorkspaceContext)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
+  activeWorkspaceContextId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
@@ -84,6 +97,12 @@ export const ProviderForkThreadInput = Schema.Struct({
   threadId: ThreadId,
   sourceResumeCursor: Schema.optional(Schema.Unknown),
   cwd: Schema.optional(TrimmedNonEmptyString),
+  workspaceContexts: Schema.optional(Schema.Array(ThreadWorkspaceContext)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
+  activeWorkspaceContextId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   runtimeMode: RuntimeMode,

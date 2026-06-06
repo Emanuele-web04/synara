@@ -18,7 +18,14 @@ import { HiMiniArrowsPointingOut } from "react-icons/hi2";
 import { TbExchange } from "react-icons/tb";
 import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
-import { ArrowRightIcon, HandoffIcon, PanelRightCloseIcon, TerminalIcon, XIcon } from "~/lib/icons";
+import {
+  ArrowRightIcon,
+  HandoffIcon,
+  PanelRightCloseIcon,
+  SquareSplitVertical,
+  TerminalIcon,
+  XIcon,
+} from "~/lib/icons";
 import {
   CHAT_HEADER_TOGGLE_CLASS_NAME,
   ChatHeaderButton,
@@ -180,9 +187,7 @@ export const ChatHeader = memo(function ChatHeader({
   });
 
   const isSplitPane = surfaceMode === "split";
-  // Split-chat creation moved to a shortcut only; the header keeps just the inline
-  // "maximize" affordance for an already-split focused pane.
-  const inlineChatLayoutAction = chatLayoutAction?.kind === "maximize" ? chatLayoutAction : null;
+  const inlineChatLayoutAction = chatLayoutAction;
   const threadIconKind = resolveChatHeaderThreadIconKind(activeThreadEntryPoint, activeThreadTitle);
   const showSidechatTitleChip = isSidechat && compact;
 
@@ -415,11 +420,19 @@ export const ChatHeader = memo(function ChatHeader({
                   label={inlineChatLayoutAction.label}
                   onClick={inlineChatLayoutAction.onClick}
                 >
-                  <HiMiniArrowsPointingOut className="size-3.5" />
+                  {inlineChatLayoutAction.kind === "split" ? (
+                    <SquareSplitVertical className="size-3.5" />
+                  ) : (
+                    <HiMiniArrowsPointingOut className="size-3.5" />
+                  )}
                 </ChatHeaderIconButton>
               }
             />
-            <TooltipPopup side="bottom">{inlineChatLayoutAction.label}</TooltipPopup>
+            <TooltipPopup side="bottom">
+              {inlineChatLayoutAction.shortcutLabel
+                ? `${inlineChatLayoutAction.label} (${inlineChatLayoutAction.shortcutLabel})`
+                : inlineChatLayoutAction.label}
+            </TooltipPopup>
           </Tooltip>
         ) : null}
 

@@ -79,6 +79,7 @@ import {
   getRightDockPaneMeta,
 } from "../components/chat/rightDockPaneMeta";
 import { type DockPaneRuntimeMode } from "../lib/dockPaneActivation";
+import { createFreshDraftThreadSeed } from "../lib/threadBootstrap";
 import {
   canComposerHandlePanelWidth,
   createPanelResizeOverlay,
@@ -87,6 +88,7 @@ import {
 import { getSidechatCreator } from "../lib/sidechatCreatorRegistry";
 import { toastManager } from "../components/ui/toast";
 import { useStore } from "../store";
+import { DEFAULT_INTERACTION_MODE } from "../types";
 import {
   createAllThreadsSelector,
   createSidebarThreadSummariesSelector,
@@ -111,6 +113,7 @@ import {
   resolveToggledChatPanelPatch,
 } from "./-chatThreadRoute.logic";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
+import { newThreadId } from "../lib/utils";
 import {
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
@@ -332,6 +335,31 @@ function normalizeSingleSearchFromPane(
     };
   }
   return {};
+}
+
+function createFreshSplitDraftThread(projectId: ProjectId): ThreadIdType {
+  const threadId = newThreadId();
+  const draftThread = {
+    projectId,
+    interactionMode: DEFAULT_INTERACTION_MODE,
+    ...createFreshDraftThreadSeed({
+      createdAt: new Date().toISOString(),
+      entryPoint: "chat",
+      options: {
+        fresh: true,
+        envMode: "local",
+        worktreePath: null,
+      },
+    }),
+  };
+  useComposerDraftStore.setState((state) => ({
+    draftThreadsByThreadId: {
+      ...state.draftThreadsByThreadId,
+      [threadId]: draftThread,
+    },
+  }));
+  useComposerDraftStore.getState().applyStickyState(threadId);
+  return threadId;
 }
 
 function SplitPaneEmptyState(props: {
@@ -1328,7 +1356,6 @@ function SingleChatSurface(props: {
   projectId: ProjectId | null;
 }) {
   const navigate = useNavigate();
-  const createSplitView = useSplitViewStore((store) => store.createFromThread);
   const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const dockState = useRightDockStore(selectRightDockState(props.threadId));
   const openPane = useRightDockStore((store) => store.openPane);
@@ -1387,19 +1414,23 @@ function SingleChatSurface(props: {
 
   const handleSplitSurface = useCallback(() => {
     if (!props.projectId) return;
-    const splitViewId = createSplitView({
+    const splitThreadId = createFreshSplitDraftThread(props.projectId);
+    const splitViewId = createSplitViewFromDrop({
       sourceThreadId: props.threadId,
       ownerProjectId: props.projectId,
+      droppedThreadId: splitThreadId,
+      direction: "vertical",
+      side: "second",
     });
     startTransition(() => {
       void navigate({
         to: "/$threadId",
-        params: { threadId: props.threadId },
+        params: { threadId: splitThreadId },
         replace: true,
         search: () => ({ splitViewId }),
       });
     });
-  }, [createSplitView, navigate, props.projectId, props.threadId]);
+  }, [createSplitViewFromDrop, navigate, props.projectId, props.threadId]);
 
   const handleDropThread = useCallback(
     (payload: { threadId: ThreadIdType; direction: SplitDirection; side: SplitDropSide }) => {

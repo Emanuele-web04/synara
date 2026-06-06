@@ -416,6 +416,8 @@ function toThreadShell(thread: Thread): ThreadShell {
     envMode: thread.envMode,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
+    workspaceContexts: thread.workspaceContexts ?? [],
+    activeWorkspaceContextId: thread.activeWorkspaceContextId ?? null,
     associatedWorktreePath: thread.associatedWorktreePath ?? null,
     associatedWorktreeBranch: thread.associatedWorktreeBranch ?? null,
     associatedWorktreeRef: thread.associatedWorktreeRef ?? null,
@@ -1541,6 +1543,8 @@ function normalizeThreadFromReadModel(
       ? incoming.hasActionableProposedPlan
       : undefined;
   const nextWorktreePath = incoming.worktreePath;
+  const nextWorkspaceContexts = incoming.workspaceContexts ?? [];
+  const nextActiveWorkspaceContextId = incoming.activeWorkspaceContextId ?? null;
   const nextAssociatedWorktreePath = incoming.associatedWorktreePath ?? null;
   const nextAssociatedWorktreeBranch = incoming.associatedWorktreeBranch ?? null;
   const nextAssociatedWorktreeRef = incoming.associatedWorktreeRef ?? null;
@@ -1591,6 +1595,8 @@ function normalizeThreadFromReadModel(
     previous.envMode === (incoming.envMode ?? "local") &&
     previous.branch === resolvedBranch &&
     previous.worktreePath === nextWorktreePath &&
+    deepEqualJson(previous.workspaceContexts ?? [], nextWorkspaceContexts) &&
+    (previous.activeWorkspaceContextId ?? null) === nextActiveWorkspaceContextId &&
     (previous.associatedWorktreePath ?? null) === nextAssociatedWorktreePath &&
     (previous.associatedWorktreeBranch ?? null) === nextAssociatedWorktreeBranch &&
     (previous.associatedWorktreeRef ?? null) === nextAssociatedWorktreeRef &&
@@ -1635,6 +1641,8 @@ function normalizeThreadFromReadModel(
     envMode: incoming.envMode ?? "local",
     branch: resolvedBranch,
     worktreePath: nextWorktreePath,
+    workspaceContexts: nextWorkspaceContexts,
+    activeWorkspaceContextId: nextActiveWorkspaceContextId,
     associatedWorktreePath: nextAssociatedWorktreePath,
     associatedWorktreeBranch: nextAssociatedWorktreeBranch,
     associatedWorktreeRef: nextAssociatedWorktreeRef,
@@ -1684,6 +1692,8 @@ function normalizeThreadShellSnapshot(
   const error = normalizeThreadErrorMessage(incoming.session?.lastError);
   const lastVisitedAt = previous?.lastVisitedAt ?? incoming.updatedAt;
   const nextWorktreePath = incoming.worktreePath;
+  const nextWorkspaceContexts = incoming.workspaceContexts ?? [];
+  const nextActiveWorkspaceContextId = incoming.activeWorkspaceContextId ?? null;
   const nextAssociatedWorktreePath = incoming.associatedWorktreePath ?? null;
   const nextAssociatedWorktreeBranch = incoming.associatedWorktreeBranch ?? null;
   const nextAssociatedWorktreeRef = incoming.associatedWorktreeRef ?? null;
@@ -1721,6 +1731,8 @@ function normalizeThreadShellSnapshot(
     envMode: incoming.envMode ?? "local",
     branch: resolvedBranch,
     worktreePath: nextWorktreePath,
+    workspaceContexts: nextWorkspaceContexts,
+    activeWorkspaceContextId: nextActiveWorkspaceContextId,
     associatedWorktreePath: nextAssociatedWorktreePath,
     associatedWorktreeBranch: nextAssociatedWorktreeBranch,
     associatedWorktreeRef: nextAssociatedWorktreeRef,
@@ -2008,6 +2020,8 @@ function sidebarThreadSummariesEqual(
     left.envMode === right.envMode &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath &&
+    deepEqualJson(left.workspaceContexts ?? [], right.workspaceContexts ?? []) &&
+    (left.activeWorkspaceContextId ?? null) === (right.activeWorkspaceContextId ?? null) &&
     left.session === right.session &&
     left.createdAt === right.createdAt &&
     (left.archivedAt ?? null) === (right.archivedAt ?? null) &&
@@ -2047,6 +2061,8 @@ function buildSidebarThreadSummary(
     envMode: thread.envMode,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
+    workspaceContexts: thread.workspaceContexts ?? [],
+    activeWorkspaceContextId: thread.activeWorkspaceContextId ?? null,
     session: thread.session,
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt ?? null,
@@ -3019,6 +3035,14 @@ function applyOrchestrationEvent(
             event.payload.worktreePath !== undefined
               ? event.payload.worktreePath
               : thread.worktreePath;
+          const nextWorkspaceContexts =
+            event.payload.workspaceContexts !== undefined
+              ? event.payload.workspaceContexts
+              : (thread.workspaceContexts ?? []);
+          const nextActiveWorkspaceContextId =
+            event.payload.activeWorkspaceContextId !== undefined
+              ? (event.payload.activeWorkspaceContextId ?? null)
+              : (thread.activeWorkspaceContextId ?? null);
           const nextAssociatedWorktreePath =
             event.payload.associatedWorktreePath !== undefined
               ? event.payload.associatedWorktreePath
@@ -3057,6 +3081,8 @@ function applyOrchestrationEvent(
             (event.payload.envMode === undefined || event.payload.envMode === thread.envMode) &&
             nextBranch === thread.branch &&
             nextWorktreePath === thread.worktreePath &&
+            deepEqualJson(nextWorkspaceContexts, thread.workspaceContexts ?? []) &&
+            nextActiveWorkspaceContextId === (thread.activeWorkspaceContextId ?? null) &&
             nextAssociatedWorktreePath === (thread.associatedWorktreePath ?? null) &&
             nextAssociatedWorktreeBranch === (thread.associatedWorktreeBranch ?? null) &&
             nextAssociatedWorktreeRef === (thread.associatedWorktreeRef ?? null) &&
@@ -3087,6 +3113,8 @@ function applyOrchestrationEvent(
             ...(event.payload.envMode !== undefined ? { envMode: event.payload.envMode } : {}),
             branch: nextBranch,
             worktreePath: nextWorktreePath,
+            workspaceContexts: nextWorkspaceContexts,
+            activeWorkspaceContextId: nextActiveWorkspaceContextId,
             associatedWorktreePath: nextAssociatedWorktreePath,
             associatedWorktreeBranch: nextAssociatedWorktreeBranch,
             associatedWorktreeRef: nextAssociatedWorktreeRef,

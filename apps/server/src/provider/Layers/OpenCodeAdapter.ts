@@ -3632,6 +3632,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd: directory,
+            workspaceContexts: input.workspaceContexts ?? [],
+            activeWorkspaceContextId: input.activeWorkspaceContextId ?? null,
             ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
             threadId: input.threadId,
             resumeCursor: { openCodeSessionId: started.openCodeSessionId },
@@ -4334,6 +4336,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         provider,
         capabilities: {
           sessionModelSwitch: "in-session",
+          workspaceContexts: "prompt-fallback",
           supportsRuntimeModelList: true,
           supportsNativeSlashCommandDiscovery: provider === "opencode",
         },

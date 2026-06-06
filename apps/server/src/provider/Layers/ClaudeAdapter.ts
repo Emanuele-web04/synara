@@ -3347,6 +3347,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           status: "ready",
           runtimeMode: input.runtimeMode,
           ...(input.cwd ? { cwd: input.cwd } : {}),
+          workspaceContexts: input.workspaceContexts ?? [],
+          activeWorkspaceContextId: input.activeWorkspaceContextId ?? null,
           ...(modelSelection?.model ? { model: modelSelection.model } : {}),
           ...(threadId ? { threadId } : {}),
           resumeCursor: {
@@ -3831,6 +3833,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        workspaceContexts: "prompt-fallback",
         supportsSkillMentions: false,
         supportsSkillDiscovery: false,
         supportsNativeSlashCommandDiscovery: true,

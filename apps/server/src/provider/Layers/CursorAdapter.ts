@@ -848,6 +848,8 @@ export function makeCursorAdapter(
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
+            workspaceContexts: input.workspaceContexts ?? [],
+            activeWorkspaceContextId: input.activeWorkspaceContextId ?? null,
             model: cursorModelSelection?.model,
             threadId: input.threadId,
             resumeCursor: {
@@ -1460,6 +1462,7 @@ export function makeCursorAdapter(
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        workspaceContexts: "prompt-fallback",
         supportsRuntimeModelList: true,
       },
       startSession,

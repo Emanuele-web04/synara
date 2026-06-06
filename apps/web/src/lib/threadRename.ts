@@ -11,6 +11,7 @@ import {
   type ProviderInteractionMode,
   type RuntimeMode,
   type ThreadId,
+  type ThreadWorkspaceContext,
 } from "@t3tools/contracts";
 import { type DraftThreadEnvMode } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
@@ -32,6 +33,8 @@ export async function dispatchThreadRename(input: {
         envMode: DraftThreadEnvMode;
         branch: string | null;
         worktreePath: string | null;
+        workspaceContexts?: ThreadWorkspaceContext[];
+        activeWorkspaceContextId?: string | null;
         lastKnownPr?: OrchestrationThreadPullRequest | null;
         createdAt: string;
       }
@@ -64,6 +67,8 @@ export async function dispatchThreadRename(input: {
         envMode: input.createIfMissing.envMode,
         branch: input.createIfMissing.branch,
         worktreePath: input.createIfMissing.worktreePath,
+        workspaceContexts: input.createIfMissing.workspaceContexts ?? [],
+        activeWorkspaceContextId: input.createIfMissing.activeWorkspaceContextId ?? null,
         ...(input.createIfMissing.lastKnownPr !== undefined
           ? { lastKnownPr: input.createIfMissing.lastKnownPr }
           : {}),

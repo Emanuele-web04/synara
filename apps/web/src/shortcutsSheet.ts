@@ -103,7 +103,7 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
   {
     command: "chat.split",
     label: "Split chat",
-    description: "Open the current conversation in a second pane.",
+    description: "Open a fresh agent below the current conversation.",
   },
   {
     command: "terminal.toggle",

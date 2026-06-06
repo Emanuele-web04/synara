@@ -23,6 +23,7 @@ import type {
   ProjectKind,
   RuntimeMode,
   ThreadEnvironmentMode,
+  ThreadWorkspaceContext,
 } from "@t3tools/contracts";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
@@ -141,6 +142,8 @@ export interface ThreadWorkspaceState {
   envMode?: ThreadEnvironmentMode | undefined;
   branch: string | null;
   worktreePath: string | null;
+  workspaceContexts?: ThreadWorkspaceContext[];
+  activeWorkspaceContextId?: string | null;
   associatedWorktreePath?: string | null;
   associatedWorktreeBranch?: string | null;
   associatedWorktreeRef?: string | null;
@@ -151,6 +154,8 @@ export interface ThreadWorkspacePatch {
   envMode?: ThreadEnvironmentMode | undefined;
   branch?: string | null;
   worktreePath?: string | null;
+  workspaceContexts?: ThreadWorkspaceContext[];
+  activeWorkspaceContextId?: string | null;
   associatedWorktreePath?: string | null;
   associatedWorktreeBranch?: string | null;
   associatedWorktreeRef?: string | null;

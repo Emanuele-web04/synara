@@ -164,6 +164,8 @@ export function useHandleNewThread() {
             envMode: creationState.envMode,
             branch: creationState.branch,
             worktreePath: creationState.worktreePath,
+            workspaceContexts: creationState.workspaceContexts,
+            activeWorkspaceContextId: creationState.activeWorkspaceContextId,
             lastKnownPr: creationState.lastKnownPr,
             createdAt: new Date().toISOString(),
           },

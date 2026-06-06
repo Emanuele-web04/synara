@@ -605,6 +605,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             envMode: event.payload.envMode ?? "local",
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
+            workspaceContexts: event.payload.workspaceContexts ?? [],
+            activeWorkspaceContextId: event.payload.activeWorkspaceContextId ?? null,
             associatedWorktreePath: event.payload.associatedWorktreePath ?? null,
             associatedWorktreeBranch: event.payload.associatedWorktreeBranch ?? null,
             associatedWorktreeRef: event.payload.associatedWorktreeRef ?? null,
@@ -654,6 +656,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...(event.payload.branch !== undefined ? { branch: event.payload.branch } : {}),
             ...(event.payload.worktreePath !== undefined
               ? { worktreePath: event.payload.worktreePath }
+              : {}),
+            ...(event.payload.workspaceContexts !== undefined
+              ? { workspaceContexts: event.payload.workspaceContexts }
+              : {}),
+            ...(event.payload.activeWorkspaceContextId !== undefined
+              ? { activeWorkspaceContextId: event.payload.activeWorkspaceContextId }
               : {}),
             ...(event.payload.associatedWorktreePath !== undefined
               ? { associatedWorktreePath: event.payload.associatedWorktreePath }

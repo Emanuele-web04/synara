@@ -239,6 +239,30 @@ export const ThreadHandoffBootstrapStatus = Schema.Literals(["pending", "complet
 export type ThreadHandoffBootstrapStatus = typeof ThreadHandoffBootstrapStatus.Type;
 export const ThreadEnvironmentMode = Schema.Literals(["local", "worktree"]);
 export type ThreadEnvironmentMode = typeof ThreadEnvironmentMode.Type;
+export const ThreadWorkspaceContextRole = Schema.Literals(["primary", "context"]);
+export type ThreadWorkspaceContextRole = typeof ThreadWorkspaceContextRole.Type;
+export const ThreadWorkspaceContextAccessMode = Schema.Literals(["read-write", "read-only"]);
+export type ThreadWorkspaceContextAccessMode = typeof ThreadWorkspaceContextAccessMode.Type;
+export const ThreadWorkspaceContext = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  projectId: ProjectId,
+  label: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  role: Schema.optional(ThreadWorkspaceContextRole).pipe(
+    Schema.withDecodingDefault(() => "context"),
+  ),
+  accessMode: Schema.optional(ThreadWorkspaceContextAccessMode).pipe(
+    Schema.withDecodingDefault(() => "read-write"),
+  ),
+  cwd: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  envMode: Schema.optional(ThreadEnvironmentMode).pipe(Schema.withDecodingDefault(() => "local")),
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ThreadWorkspaceContext = typeof ThreadWorkspaceContext.Type;
 
 export const OrchestrationMessageSource = Schema.Literals([
   "native",
@@ -502,6 +526,12 @@ export const OrchestrationThread = Schema.Struct({
   envMode: Schema.optional(ThreadEnvironmentMode).pipe(Schema.withDecodingDefault(() => "local")),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  workspaceContexts: Schema.optional(Schema.Array(ThreadWorkspaceContext)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
+  activeWorkspaceContextId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   associatedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -566,6 +596,12 @@ export const OrchestrationThreadShell = Schema.Struct({
   envMode: Schema.optional(ThreadEnvironmentMode).pipe(Schema.withDecodingDefault(() => "local")),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  workspaceContexts: Schema.optional(Schema.Array(ThreadWorkspaceContext)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
+  activeWorkspaceContextId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   associatedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -707,6 +743,12 @@ const ThreadCreateCommand = Schema.Struct({
   envMode: Schema.optional(ThreadEnvironmentMode).pipe(Schema.withDecodingDefault(() => "local")),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  workspaceContexts: Schema.optional(Schema.Array(ThreadWorkspaceContext)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
+  activeWorkspaceContextId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   associatedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   associatedWorktreeBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   associatedWorktreeRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -757,6 +799,12 @@ const ThreadHandoffCreateCommand = Schema.Struct({
   envMode: Schema.optional(ThreadEnvironmentMode).pipe(Schema.withDecodingDefault(() => "local")),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  workspaceContexts: Schema.optional(Schema.Array(ThreadWorkspaceContext)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
+  activeWorkspaceContextId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   associatedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   associatedWorktreeBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   associatedWorktreeRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -782,6 +830,12 @@ const ThreadForkCreateCommand = Schema.Struct({
   envMode: Schema.optional(ThreadEnvironmentMode).pipe(Schema.withDecodingDefault(() => "local")),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  workspaceContexts: Schema.optional(Schema.Array(ThreadWorkspaceContext)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
+  activeWorkspaceContextId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   associatedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   associatedWorktreeBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   associatedWorktreeRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -820,6 +874,8 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   envMode: Schema.optional(ThreadEnvironmentMode),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  workspaceContexts: Schema.optional(Schema.Array(ThreadWorkspaceContext)),
+  activeWorkspaceContextId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   associatedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   associatedWorktreeBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   associatedWorktreeRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -1212,6 +1268,12 @@ export const ThreadCreatedPayload = Schema.Struct({
   envMode: Schema.optional(ThreadEnvironmentMode).pipe(Schema.withDecodingDefault(() => "local")),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  workspaceContexts: Schema.optional(Schema.Array(ThreadWorkspaceContext)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
+  activeWorkspaceContextId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   associatedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -1276,6 +1338,8 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   envMode: Schema.optional(ThreadEnvironmentMode),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  workspaceContexts: Schema.optional(Schema.Array(ThreadWorkspaceContext)),
+  activeWorkspaceContextId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   associatedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   associatedWorktreeBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   associatedWorktreeRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),

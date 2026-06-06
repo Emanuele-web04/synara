@@ -31,7 +31,10 @@ import {
   resolveTailUserMessageEditTarget,
 } from "@t3tools/shared/conversationEdit";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
-import { resolveThreadWorkspaceState } from "@t3tools/shared/threadEnvironment";
+import {
+  resolveThreadWorkspaceCwds,
+  resolveThreadWorkspaceState,
+} from "@t3tools/shared/threadEnvironment";
 
 import {
   checkpointRefForThreadMessageStart,
@@ -161,6 +164,36 @@ const SIDECHAT_BOUNDARY_INSTRUCTION =
 
 function wrapSidechatInput(messageText: string): string {
   return `<sidechat_boundary>\n${SIDECHAT_BOUNDARY_INSTRUCTION}\n</sidechat_boundary>\n\n<latest_user_message>\n${messageText}\n</latest_user_message>`;
+}
+
+function escapeWorkspaceContextAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function buildWorkspaceContextPreamble(
+  contexts: ReadonlyArray<{
+    readonly context: OrchestrationThread["workspaceContexts"][number];
+    readonly cwd: string | null;
+    readonly primary: boolean;
+  }>,
+): string | null {
+  if (contexts.length <= 1) {
+    return null;
+  }
+  const lines = contexts.map((entry, index) => {
+    const label = escapeWorkspaceContextAttribute(entry.context.label ?? entry.context.projectId);
+    const role = entry.primary ? "primary" : "context";
+    const cwd = escapeWorkspaceContextAttribute(entry.cwd ?? entry.context.cwd ?? "(unresolved)");
+    const branch = entry.context.branch
+      ? ` branch="${escapeWorkspaceContextAttribute(entry.context.branch)}"`
+      : "";
+    return `<workspace index="${index + 1}" id="${escapeWorkspaceContextAttribute(entry.context.id)}" role="${role}" label="${label}" cwd="${cwd}"${branch} />`;
+  });
+  return `<workspace_contexts>\n${lines.join("\n")}\n</workspace_contexts>`;
 }
 
 function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
@@ -298,6 +331,42 @@ const make = Effect.gen(function* () {
     return resolveThreadWorkspaceCwd({
       thread,
       projects: [project],
+    });
+  });
+  const resolveProjectedThreadWorkspaceContexts = Effect.fnUntraced(function* (
+    thread: Pick<
+      OrchestrationThread,
+      | "projectId"
+      | "envMode"
+      | "branch"
+      | "worktreePath"
+      | "workspaceContexts"
+      | "activeWorkspaceContextId"
+    >,
+  ) {
+    const projectIds = new Set([
+      thread.projectId,
+      ...thread.workspaceContexts.map((context) => context.projectId),
+    ]);
+    const projects: OrchestrationProjectShell[] = [];
+    for (const projectId of projectIds) {
+      const project = Option.getOrUndefined(
+        yield* projectionSnapshotQuery
+          .getProjectShellById(projectId)
+          .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+      );
+      if (project) {
+        projects.push(project);
+      }
+    }
+    return resolveThreadWorkspaceCwds({
+      projectId: thread.projectId,
+      envMode: thread.envMode,
+      branch: thread.branch,
+      worktreePath: thread.worktreePath,
+      workspaceContexts: thread.workspaceContexts,
+      activeWorkspaceContextId: thread.activeWorkspaceContextId,
+      projects,
     });
   });
   const queuedTurnStartsByThread = new Map<
@@ -700,7 +769,15 @@ const make = Effect.gen(function* () {
     }
     const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
-    const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
+    const resolvedWorkspaceContexts = yield* resolveProjectedThreadWorkspaceContexts(thread);
+    const effectiveCwd =
+      resolvedWorkspaceContexts.find((entry) => entry.primary)?.cwd ??
+      (yield* resolveProjectedThreadWorkspaceCwd(thread));
+    const providerWorkspaceContexts = resolvedWorkspaceContexts.map((entry) => entry.context);
+    const activeWorkspaceContextId =
+      resolvedWorkspaceContexts.find((entry) => entry.primary)?.context.id ??
+      thread.activeWorkspaceContextId ??
+      null;
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
       worktreePath: thread.worktreePath,
@@ -726,6 +803,8 @@ const make = Effect.gen(function* () {
         threadId,
         ...(preferredProvider ? { provider: preferredProvider } : {}),
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+        workspaceContexts: providerWorkspaceContexts,
+        activeWorkspaceContextId,
         modelSelection: desiredModelSelection,
         ...(options?.providerOptions !== undefined
           ? { providerOptions: options.providerOptions }
@@ -772,12 +851,17 @@ const make = Effect.gen(function* () {
         (currentProvider === "claudeAgent" || currentProvider === "grok") &&
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
+      const shouldRestartForWorkspaceContextChange = !Equal.equals(
+        activeSession?.workspaceContexts ?? [],
+        providerWorkspaceContexts,
+      );
 
       if (
         !runtimeModeChanged &&
         !providerChanged &&
         !shouldRestartForModelChange &&
-        !shouldRestartForModelSelectionChange
+        !shouldRestartForModelSelectionChange &&
+        !shouldRestartForWorkspaceContextChange
       ) {
         return existingSessionThreadId;
       }
@@ -798,6 +882,7 @@ const make = Effect.gen(function* () {
         modelChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
+        shouldRestartForWorkspaceContextChange,
         hasResumeCursor: resumeCursor !== undefined,
       });
       const restartedSession = yield* startProviderSession(
@@ -819,6 +904,8 @@ const make = Effect.gen(function* () {
         sourceThreadId: thread.forkSourceThreadId,
         threadId,
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+        workspaceContexts: providerWorkspaceContexts,
+        activeWorkspaceContextId,
         modelSelection: desiredModelSelection,
         ...(options?.providerOptions !== undefined
           ? { providerOptions: options.providerOptions }
@@ -833,6 +920,8 @@ const make = Effect.gen(function* () {
             status: "ready",
             runtimeMode: desiredRuntimeMode,
             ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+            workspaceContexts: providerWorkspaceContexts,
+            activeWorkspaceContextId,
             model: desiredModelSelection.model,
             threadId,
             ...(forked.resumeCursor !== undefined ? { resumeCursor: forked.resumeCursor } : {}),
@@ -926,13 +1015,19 @@ const make = Effect.gen(function* () {
     const boundaryMessageText = thread.sidechatSourceThreadId
       ? wrapSidechatInput(input.messageText)
       : input.messageText;
-    const providerInput = handoffBootstrapText
+    const workspaceContextPreamble = buildWorkspaceContextPreamble(
+      yield* resolveProjectedThreadWorkspaceContexts(thread),
+    );
+    const providerInputBase = handoffBootstrapText
       ? `<handoff_context>\n${handoffBootstrapText}\n</handoff_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
       : sidechatBootstrapText
         ? `<sidechat_context>\n${sidechatBootstrapText}\n</sidechat_context>\n\n${boundaryMessageText}`
         : priorTranscriptBootstrapText
           ? `<thread_context>\n${priorTranscriptBootstrapText}\n</thread_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
           : boundaryMessageText;
+    const providerInput = workspaceContextPreamble
+      ? `${workspaceContextPreamble}\n\n${providerInputBase}`
+      : providerInputBase;
     const normalizedInput = toNonEmptyProviderInput(
       normalizeSkillMentionTextForProvider({
         provider: selectedProvider as ProviderKind,
@@ -1054,9 +1149,12 @@ const make = Effect.gen(function* () {
                     availableBootstrapChars,
                   )
                 : null;
-            const retryProviderInput = retryBootstrapText
+            const retryProviderInputBase = retryBootstrapText
               ? `<thread_context>\n${retryBootstrapText}\n</thread_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
               : boundaryMessageText;
+            const retryProviderInput = workspaceContextPreamble
+              ? `${workspaceContextPreamble}\n\n${retryProviderInputBase}`
+              : retryProviderInputBase;
             const retryNormalizedInput = toNonEmptyProviderInput(
               normalizeSkillMentionTextForProvider({
                 provider: selectedProvider as ProviderKind,

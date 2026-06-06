@@ -200,6 +200,8 @@ export interface CodexAppServerStartSessionInput {
   readonly threadId: ThreadId;
   readonly provider?: "codex";
   readonly cwd?: string;
+  readonly workspaceContexts?: ProviderSessionStartInput["workspaceContexts"];
+  readonly activeWorkspaceContextId?: ProviderSessionStartInput["activeWorkspaceContextId"];
   readonly model?: string;
   readonly serviceTier?: string;
   readonly resumeCursor?: unknown;
@@ -712,6 +714,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         runtimeMode: input.runtimeMode,
         model: normalizeCodexModelSlug(input.model),
         cwd: resolvedCwd,
+        workspaceContexts: input.workspaceContexts ?? [],
+        activeWorkspaceContextId: input.activeWorkspaceContextId ?? null,
         threadId,
         createdAt: now,
         updatedAt: now,
@@ -1325,6 +1329,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
             ? normalizeCodexModelSlug(input.modelSelection.model)
             : undefined,
         cwd: resolvedCwd,
+        workspaceContexts: input.workspaceContexts ?? [],
+        activeWorkspaceContextId: input.activeWorkspaceContextId ?? null,
         threadId,
         createdAt: now,
         updatedAt: now,

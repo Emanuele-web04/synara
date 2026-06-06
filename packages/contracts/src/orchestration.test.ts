@@ -13,6 +13,7 @@ import {
   OrchestrationGetTurnDiffInput,
   OrchestrationLatestTurn,
   OrchestrationReadModel,
+  OrchestrationThread,
   ProjectCreatedPayload,
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
@@ -36,6 +37,7 @@ const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
   ThreadTurnStartRequestedPayload,
 );
 const decodeOrchestrationLatestTurn = Schema.decodeUnknownEffect(OrchestrationLatestTurn);
+const decodeOrchestrationThread = Schema.decodeUnknownEffect(OrchestrationThread);
 const decodeOrchestrationProposedPlan = Schema.decodeUnknownEffect(OrchestrationProposedPlan);
 const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSession);
 const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPayload);
@@ -154,6 +156,55 @@ it.effect("preserves Pi model selections through the JSON codec", () =>
       provider: "pi",
       model: "openai/gpt-5.5",
     });
+  }),
+);
+
+it.effect("decodes legacy scalar workspace threads with empty context defaults", () =>
+  Effect.gen(function* () {
+    const decoded = yield* decodeOrchestrationThread({
+      id: "thread-legacy",
+      projectId: "project-legacy",
+      title: "Legacy thread",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5.5",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      associatedWorktreePath: null,
+      associatedWorktreeBranch: null,
+      associatedWorktreeRef: null,
+      createBranchFlowCompleted: false,
+      isPinned: false,
+      parentThreadId: null,
+      subagentAgentId: null,
+      subagentNickname: null,
+      subagentRole: null,
+      forkSourceThreadId: null,
+      sidechatSourceThreadId: null,
+      lastKnownPr: null,
+      latestTurn: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      archivedAt: null,
+      deletedAt: null,
+      handoff: null,
+      latestUserMessageAt: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+      messages: [],
+      proposedPlans: [],
+      activities: [],
+      checkpoints: [],
+      session: null,
+    });
+
+    assert.deepStrictEqual(decoded.workspaceContexts, []);
+    assert.strictEqual(decoded.activeWorkspaceContextId, null);
   }),
 );
 

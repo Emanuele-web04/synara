@@ -42,6 +42,7 @@ import type { Effect } from "effect";
 import type { Stream } from "effect";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "restart-session" | "unsupported";
+export type ProviderWorkspaceContextMode = "native" | "prompt-fallback" | "unsupported";
 
 export interface ProviderAdapterCapabilities {
   /**
@@ -55,6 +56,7 @@ export interface ProviderAdapterCapabilities {
   readonly supportsPluginDiscovery?: boolean;
   readonly supportsRuntimeModelList?: boolean;
   readonly supportsTurnSteering?: boolean;
+  readonly workspaceContexts?: ProviderWorkspaceContextMode;
 }
 
 export interface ProviderThreadTurnSnapshot {
