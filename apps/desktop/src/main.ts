@@ -46,6 +46,10 @@ import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { shouldAllowMediaPermissionRequest } from "./mediaPermissions";
+import {
+  installResumableUpdateDownloader,
+  type ResumableDownloaderTarget,
+} from "./resumableUpdateDownload";
 import { ServerListeningDetector } from "./serverListeningDetector";
 import { syncShellEnvironment } from "./syncShellEnvironment";
 import {
@@ -1771,7 +1775,22 @@ function configureAutoUpdater(): void {
   autoUpdater.allowDowngrade = false;
   // The feed is pinned to an exact release tag before each check, so blockmap
   // differential downloads can be used without racing a moving "latest" target.
+  // Kept enabled for its bandwidth savings: the resumable downloader below makes
+  // both the full and the differential paths stall-proof.
   autoUpdater.disableDifferentialDownload = false;
+  // electron-updater has no working idle timeout on macOS (its socket timeout is
+  // wired to a `socket` event Electron's net.request never emits) and never
+  // resumes from a byte offset. installResumableUpdateDownloader replaces the
+  // full-download transfer with a stall-aware, resumable one AND installs a real
+  // idle timeout on the differential/metadata request paths (a stalled
+  // differential fetch then aborts quickly and falls back to the resumable full
+  // download), so an intermittent CDN stall becomes a brief reconnect instead of
+  // a multi-minute hang on any path.
+  if (!installResumableUpdateDownloader(autoUpdater as unknown as ResumableDownloaderTarget)) {
+    console.warn(
+      "[desktop-updater] Could not install resumable update downloader; falling back to default transfer.",
+    );
+  }
   let lastLoggedDownloadMilestone = -1;
 
   if (isArm64HostRunningIntelBuild(desktopRuntimeInfo)) {

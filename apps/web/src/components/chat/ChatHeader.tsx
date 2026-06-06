@@ -301,7 +301,7 @@ export const ChatHeader = memo(function ChatHeader({
                     }
                   >
                     {threadIconKind === "terminal" ? (
-                      <TerminalIcon className="size-3.5 text-teal-600/85" />
+                      <TerminalIcon className="size-3.5 text-[var(--color-text-accent)]" />
                     ) : (
                       renderProviderIcon(activeProvider, "size-3.5")
                     )}

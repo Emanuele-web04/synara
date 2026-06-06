@@ -479,14 +479,15 @@ function resolveWorktreeBadgeLabel(
 }
 
 type ThreadMetaChip = {
-  id: "handoff" | "fork" | "sidechat" | "worktree";
+  id: "handoff" | "fork" | "worktree";
   tooltip: string;
   icon: ReactNode;
 };
 
 /**
  * Back-to-front order: first = behind, last = in front.
- * Priority lowest -> highest: handoff -> fork/sidechat -> worktree.
+ * Priority lowest -> highest: handoff -> fork -> worktree. Sidechats skip fork/disposable
+ * badges because the "Sidechat:" title already identifies them.
  */
 function resolveThreadRowMetaChips(input: {
   thread: Pick<
@@ -501,6 +502,7 @@ function resolveThreadRowMetaChips(input: {
   handoffShownInAvatar?: boolean;
 }): ThreadMetaChip[] {
   const chips: ThreadMetaChip[] = [];
+  const isSidechatThread = Boolean(input.thread.sidechatSourceThreadId);
 
   const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(input.thread);
   if (input.includeHandoffBadge && !input.handoffShownInAvatar && handoffBadgeLabel) {
@@ -511,7 +513,7 @@ function resolveThreadRowMetaChips(input: {
     });
   }
 
-  if (input.thread.forkSourceThreadId) {
+  if (input.thread.forkSourceThreadId && !isSidechatThread) {
     chips.push({
       id: "fork",
       tooltip: "Forked thread",
@@ -522,14 +524,6 @@ function resolveThreadRowMetaChips(input: {
           className="text-emerald-600 dark:text-emerald-300/90"
         />
       ),
-    });
-  }
-
-  if (input.thread.sidechatSourceThreadId) {
-    chips.push({
-      id: "sidechat",
-      tooltip: "Sidechat",
-      icon: <DisposableThreadIcon className="text-sky-600 dark:text-sky-300/90" />,
     });
   }
 
@@ -4315,7 +4309,11 @@ export default function Sidebar() {
           }}
         >
           {threadEntryPoint === "terminal" ? (
-            <SidebarGlyph icon={TerminalIcon} variant="chrome" className="text-teal-600/85" />
+            <SidebarGlyph
+              icon={TerminalIcon}
+              variant="chrome"
+              className="text-[var(--color-text-accent)]"
+            />
           ) : showThreadProviderAvatar ? (
             <ProviderAvatarWithTerminal
               provider={thread.session?.provider ?? thread.modelSelection.provider}
@@ -4552,7 +4550,11 @@ export default function Sidebar() {
               />
             </span>
           ) : threadEntryPoint === "terminal" ? (
-            <SidebarGlyph icon={TerminalIcon} variant="chrome" className="text-teal-600/85" />
+            <SidebarGlyph
+              icon={TerminalIcon}
+              variant="chrome"
+              className="text-[var(--color-text-accent)]"
+            />
           ) : showThreadProviderAvatar ? (
             <ProviderAvatarWithTerminal
               provider={thread.session?.provider ?? thread.modelSelection.provider}
@@ -4662,7 +4664,7 @@ export default function Sidebar() {
                 )}
               </button>
             ) : null}
-            {showCompactMeta && isDisposableThread ? (
+            {showCompactMeta && isDisposableThread && !thread.sidechatSourceThreadId ? (
               <Tooltip>
                 <TooltipTrigger
                   render={
