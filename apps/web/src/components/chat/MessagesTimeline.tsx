@@ -3,7 +3,12 @@
 // Layer: Web chat presentation component
 // Exports: MessagesTimeline
 
-import { type MessageId, ThreadId, type TurnId } from "@t3tools/contracts";
+import {
+  type MessageId,
+  type ProviderMentionReference,
+  ThreadId,
+  type TurnId,
+} from "@t3tools/contracts";
 import { resolveLatestTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
@@ -658,7 +663,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const bubbleIsChipOnly =
             showUserText &&
             terminalContexts.length === 0 &&
-            hasOnlyInlineSkillChips(userMessagePreview.text);
+            hasOnlyInlineSkillChips(userMessagePreview.text, row.message.mentions ?? []);
           const canRevertAgentWork = typeof row.revertTurnCount === "number";
           const isEditingThisMessage = editingUserMessageId === row.message.id;
           const isSubmittingThisEdit = submittingEditedUserMessageId === row.message.id;
@@ -728,6 +733,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   >
                     <UserMessageBody
                       text={userMessagePreview.text}
+                      mentionReferences={row.message.mentions ?? []}
                       terminalContexts={terminalContexts}
                       chatTypographyStyle={userMessageTypographyStyle}
                       resolvedTheme={resolvedTheme}
@@ -1465,8 +1471,9 @@ function renderUserMessageInlineText(
   text: string,
   keyPrefix: string,
   resolvedTheme: "light" | "dark",
+  mentionReferences: ReadonlyArray<ProviderMentionReference> = [],
 ): ReactNode[] {
-  return splitPromptIntoDisplaySegments(text).flatMap((segment, index) => {
+  return splitPromptIntoDisplaySegments(text, mentionReferences).flatMap((segment, index) => {
     const key = `${keyPrefix}:${index}`;
     if (segment.type === "text") {
       return segment.text.length > 0 ? [<span key={`${key}:text`}>{segment.text}</span>] : [];
@@ -1479,6 +1486,7 @@ function renderUserMessageInlineText(
         <UserMessageInlineMentionChip
           key={`${key}:mention`}
           path={segment.path}
+          kind={segment.kind}
           resolvedTheme={resolvedTheme}
         />,
       ];
@@ -1498,19 +1506,23 @@ function renderUserMessageInlineText(
 
 const UserMessageInlineMentionChip = memo(function UserMessageInlineMentionChip(props: {
   path: string;
+  kind?: "path" | "plugin";
   resolvedTheme: "light" | "dark";
 }) {
   const label = basenameOfPath(props.path);
   return (
     <span className={COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME} title={props.path}>
-      <MentionChipIcon path={props.path} theme={props.resolvedTheme} />
+      <MentionChipIcon path={props.path} kind={props.kind} theme={props.resolvedTheme} />
       <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>{label}</span>
     </span>
   );
 });
 
-function hasOnlyInlineSkillChips(text: string): boolean {
-  const segments = splitPromptIntoDisplaySegments(text);
+function hasOnlyInlineSkillChips(
+  text: string,
+  mentionReferences: ReadonlyArray<ProviderMentionReference> = [],
+): boolean {
+  const segments = splitPromptIntoDisplaySegments(text, mentionReferences);
   let skillCount = 0;
 
   for (const segment of segments) {
@@ -1624,6 +1636,7 @@ const UserMessageEditForm = memo(function UserMessageEditForm(props: {
 
 const UserMessageBody = memo(function UserMessageBody(props: {
   text: string;
+  mentionReferences: ReadonlyArray<ProviderMentionReference>;
   terminalContexts: ParsedTerminalContextEntry[];
   chatTypographyStyle: CSSProperties;
   resolvedTheme: "light" | "dark";
@@ -1652,6 +1665,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
               props.text.slice(cursor, matchIndex),
               `user-terminal-context-inline-before:${context.header}:${cursor}`,
               props.resolvedTheme,
+              props.mentionReferences,
             ),
           );
         }
@@ -1671,6 +1685,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
               props.text.slice(cursor),
               `user-message-terminal-context-inline-rest:${cursor}`,
               props.resolvedTheme,
+              props.mentionReferences,
             ),
           );
         }
@@ -1706,6 +1721,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
           props.text,
           "user-message-terminal-context-inline-text",
           props.resolvedTheme,
+          props.mentionReferences,
         ),
       );
     } else if (inlinePrefix.length === 0) {
@@ -1726,7 +1742,10 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     return null;
   }
 
-  if (props.terminalContexts.length === 0 && hasOnlyInlineSkillChips(props.text)) {
+  if (
+    props.terminalContexts.length === 0 &&
+    hasOnlyInlineSkillChips(props.text, props.mentionReferences)
+  ) {
     return (
       <div
         className="flex max-w-full min-w-0 items-center leading-none text-foreground [&>span]:translate-y-0"
@@ -1736,6 +1755,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
           props.text,
           "user-message-inline-chip-only",
           props.resolvedTheme,
+          props.mentionReferences,
         )}
       </div>
     );
@@ -1746,7 +1766,12 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       className="block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui text-foreground"
       style={props.chatTypographyStyle}
     >
-      {renderUserMessageInlineText(props.text, "user-message-inline", props.resolvedTheme)}
+      {renderUserMessageInlineText(
+        props.text,
+        "user-message-inline",
+        props.resolvedTheme,
+        props.mentionReferences,
+      )}
     </div>
   );
 });

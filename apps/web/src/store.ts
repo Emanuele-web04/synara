@@ -533,6 +533,28 @@ function arraysShallowEqual<T>(
   return true;
 }
 
+function providerReferenceArraysEqual(
+  left:
+    | ReadonlyArray<Pick<NonNullable<ChatMessage["mentions"]>[number], "name" | "path">>
+    | undefined,
+  right: ReadonlyArray<Pick<NonNullable<ChatMessage["mentions"]>[number], "name" | "path">>,
+): boolean {
+  if (!left || left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    const leftReference = left[index];
+    const rightReference = right[index];
+    if (
+      leftReference?.name !== rightReference?.name ||
+      leftReference?.path !== rightReference?.path
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function recordsShallowEqual<T>(left: Record<string, T>, right: Record<string, T>): boolean {
   const leftKeys = Object.keys(left);
   const rightKeys = Object.keys(right);
@@ -813,6 +835,10 @@ function normalizeChatMessage(
   previous: ChatMessage | undefined,
 ): ChatMessage {
   const attachments = normalizeChatAttachments(incoming.attachments, previous?.attachments);
+  const skills = incoming.skills ?? [];
+  const mentions = incoming.mentions ?? [];
+  const previousSkills = previous?.skills ?? [];
+  const previousMentions = previous?.mentions ?? [];
   const completedAt = incoming.streaming ? undefined : incoming.updatedAt;
   if (
     previous &&
@@ -824,7 +850,9 @@ function normalizeChatMessage(
     previous.streaming === incoming.streaming &&
     previous.source === incoming.source &&
     previous.completedAt === completedAt &&
-    previous.attachments === attachments
+    previous.attachments === attachments &&
+    providerReferenceArraysEqual(previousSkills, skills) &&
+    providerReferenceArraysEqual(previousMentions, mentions)
   ) {
     return previous;
   }
@@ -840,6 +868,8 @@ function normalizeChatMessage(
     source: incoming.source,
     ...(completedAt ? { completedAt } : {}),
     ...(attachments ? { attachments } : {}),
+    ...(skills.length > 0 ? { skills: [...skills] } : {}),
+    ...(mentions.length > 0 ? { mentions: [...mentions] } : {}),
   };
 }
 
@@ -891,6 +921,8 @@ function readModelMessageFromChatMessage(
     createdAt: message.createdAt,
     updatedAt: message.completedAt ?? message.createdAt,
     attachments: readModelAttachmentsFromChatMessage(message.attachments),
+    ...(message.skills && message.skills.length > 0 ? { skills: message.skills } : {}),
+    ...(message.mentions && message.mentions.length > 0 ? { mentions: message.mentions } : {}),
   };
 }
 
@@ -961,6 +993,12 @@ function mergeReadModelMessagesWithLiveHotPath(
       streaming: previousMessage.streaming,
       updatedAt: previousMessage.completedAt ?? incomingMessage.updatedAt,
       attachments: readModelAttachmentsFromChatMessage(previousMessage.attachments),
+      ...(previousMessage.skills && previousMessage.skills.length > 0
+        ? { skills: previousMessage.skills }
+        : {}),
+      ...(previousMessage.mentions && previousMessage.mentions.length > 0
+        ? { mentions: previousMessage.mentions }
+        : {}),
     });
   }
 

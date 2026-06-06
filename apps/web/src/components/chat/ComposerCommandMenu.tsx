@@ -25,7 +25,7 @@ import {
   type LucideIcon,
   MessageCircleIcon,
   Minimize2,
-  PlugIcon,
+  PluginIcon,
   SkillCubeIcon,
   TerminalIcon,
   WorktreeIcon,
@@ -469,7 +469,7 @@ function commandMenuItemGlyph(item: ComposerCommandItem, theme: "light" | "dark"
     case "agent":
       return <BotIcon className={cls} />;
     case "plugin":
-      return <PlugIcon className={cls} />;
+      return <PluginIcon className={cls} />;
     case "skill":
       return <SkillCubeIcon className={cls} />;
     default:

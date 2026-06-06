@@ -136,4 +136,27 @@ describe("splitPromptIntoDisplaySegments", () => {
       { type: "mention", path: "/Users/test/Application Support" },
     ]);
   });
+
+  it("uses explicit mention references instead of inferring plugins from plain @text", () => {
+    expect(splitPromptIntoDisplaySegments("Use @linear")).toEqual([
+      { type: "text", text: "Use " },
+      { type: "mention", path: "linear" },
+    ]);
+    expect(
+      splitPromptIntoDisplaySegments("Use @linear", [
+        { name: "linear", path: "plugin://linear@openai-curated" },
+      ]),
+    ).toEqual([
+      { type: "text", text: "Use " },
+      { type: "mention", path: "linear", kind: "plugin" },
+    ]);
+    expect(
+      splitPromptIntoDisplaySegments("Use @linear", [
+        { name: "Linear Plugin", path: "plugin://linear@openai-curated" },
+      ]),
+    ).toEqual([
+      { type: "text", text: "Use " },
+      { type: "mention", path: "linear", kind: "plugin" },
+    ]);
+  });
 });

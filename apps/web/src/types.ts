@@ -18,6 +18,8 @@ import type {
   ProjectId,
   TurnId,
   MessageId,
+  ProviderMentionReference,
+  ProviderSkillReference,
   ProviderKind,
   CheckpointRef,
   ProviderInteractionMode,
@@ -88,6 +90,8 @@ export interface ChatMessage {
   role: "user" | "assistant" | "system";
   text: string;
   attachments?: ChatAttachment[];
+  skills?: ProviderSkillReference[];
+  mentions?: ProviderMentionReference[];
   dispatchMode?: TurnDispatchMode;
   turnId?: TurnId | null;
   createdAt: string;

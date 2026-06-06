@@ -1,8 +1,7 @@
 // FILE: MentionChipIcon.tsx
-// Purpose: Shared icon renderer for file/folder mention chips. Picks between
-//          the outlined folder glyph and the Central file-type icon so the
-//          composer Lexical chip (DOM) and the sent-message chip (React)
-//          stay in sync.
+// Purpose: Shared icon renderer for mention chips. Keeps file, folder, and
+//          plugin glyphs identical between Lexical composer chips and React
+//          sent-message chips.
 // Layer: UI shared component/helper
 // Exports: MentionChipIcon, createMentionChipIconElement
 
@@ -10,7 +9,7 @@ import { memo } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { getFileIconName, inferEntryKindFromPath } from "~/file-icons";
 import { createCentralIconElement } from "~/lib/central-icons";
-import { FileIcon, PlugIcon } from "~/lib/icons";
+import { FileIcon, PluginIcon } from "~/lib/icons";
 import { COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME } from "../composerInlineChip";
 import { FolderClosed } from "../FolderClosed";
 import { FileEntryIcon } from "./FileEntryIcon";
@@ -21,8 +20,8 @@ const FOLDER_CLOSED_ICON_SVG = renderToStaticMarkup(
 const FILE_ICON_SVG = renderToStaticMarkup(
   <FileIcon aria-hidden="true" className={COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME} />,
 );
-const PLUG_ICON_SVG = renderToStaticMarkup(
-  <PlugIcon aria-hidden="true" className={COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME} />,
+const PLUGIN_ICON_SVG = renderToStaticMarkup(
+  <PluginIcon aria-hidden="true" className={COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME} />,
 );
 
 export type MentionChipKind = "path" | "plugin";
@@ -50,7 +49,7 @@ export const MentionChipIcon = memo(function MentionChipIcon(props: {
 }) {
   const className = props.className ?? COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME;
   if (props.kind === "plugin" || props.path.startsWith("plugin://")) {
-    return <PlugIcon className={className} />;
+    return <PluginIcon className={className} />;
   }
   const kind = inferEntryKindFromPath(props.path);
   if (kind === "directory") {
@@ -69,7 +68,7 @@ export function createMentionChipIconElement(
   className: string = COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME,
 ): HTMLElement {
   if (kind === "plugin" || path.startsWith("plugin://")) {
-    return createStaticIconSpan(PLUG_ICON_SVG, className);
+    return createStaticIconSpan(PLUGIN_ICON_SVG, className);
   }
   if (inferEntryKindFromPath(path) === "directory") {
     return createStaticIconSpan(FOLDER_CLOSED_ICON_SVG, className);

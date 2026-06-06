@@ -50,7 +50,7 @@ import {
   CircleAlertIcon,
   HammerIcon,
   ListChecksIcon,
-  PlugIcon,
+  PluginIcon,
   SearchIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -210,7 +210,7 @@ function PluginGlyph({ plugin }: { plugin: ProviderPluginDescriptor }) {
       className="inline-flex size-11 shrink-0 items-center justify-center rounded-[14px]"
       style={style}
     >
-      <PlugIcon className="size-5 text-white/80" />
+      <PluginIcon className="size-5 text-white/80" />
     </span>
   );
 }

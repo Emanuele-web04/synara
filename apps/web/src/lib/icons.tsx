@@ -164,7 +164,7 @@ export const GlobeIcon = adaptIcon(IconWorld);
 export const McpIcon: LucideIcon = (props) => (
   <VscMcp className={props.className} style={props.style} />
 );
-export const PlugIcon: LucideIcon = centralIconWrapper("plugin-1");
+export const PluginIcon: LucideIcon = centralIconWrapper("puzzle");
 export const HammerIcon = adaptIcon(IconTool);
 export const InfoIcon = adaptIcon(IconInfoCircle);
 export const ListChecksIcon = adaptIcon(IconListCheck);

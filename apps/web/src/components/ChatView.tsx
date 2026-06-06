@@ -85,7 +85,8 @@ import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 import {
   formatComposerMentionToken,
-  createComposerMentionTokenRegex,
+  filterPromptProviderMentionReferences,
+  filterPromptSkillReferences,
 } from "~/lib/composerMentions";
 import { getLocalFolderBrowseRootPath, isLocalFolderMentionQuery } from "~/lib/localFolderMentions";
 import {
@@ -610,10 +611,6 @@ function warnVoiceGuard(event: string, details?: Record<string, unknown>) {
   console.warn(`[voice] ${event}`);
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string {
   if (provider === "claudeAgent") {
     const withoutContextSuffix = slug.replace(/\[[^\]]+\]$/u, "");
@@ -701,102 +698,6 @@ function mergeDynamicModelOptions(input: {
 function skillMentionPrefix(provider: string): string {
   if (provider === "pi") return "/skill:";
   return "/";
-}
-
-function promptIncludesSkillMention(prompt: string, skillName: string, provider: string): boolean {
-  const escapedSkillName = escapeRegExp(skillName);
-  const prefixes = provider === "pi" ? ["/skill:"] : ["/", "$"];
-  return prefixes.some((prefix) => {
-    const pattern = new RegExp(`(^|\\s)${escapeRegExp(prefix)}${escapedSkillName}(?=\\s|$)`, "i");
-    return pattern.test(prompt);
-  });
-}
-
-const PROMPT_MENTION_NAME_REGEX = createComposerMentionTokenRegex({
-  includeTrailingTokenAtEnd: true,
-});
-
-function collectPromptMentionNames(prompt: string): string[] {
-  const names: string[] = [];
-  for (const match of prompt.matchAll(PROMPT_MENTION_NAME_REGEX)) {
-    const mentionName = (match[2] ?? match[3] ?? "").trim();
-    if (mentionName.length > 0) {
-      names.push(mentionName);
-    }
-  }
-  return names;
-}
-
-function normalizeMentionNameKey(name: string): string {
-  return name.trim().toLowerCase();
-}
-
-function resolvePromptPluginMentions(params: {
-  prompt: string;
-  existingMentions: ReadonlyArray<ProviderMentionReference>;
-  providerPlugins: ReadonlyArray<ComposerPluginSuggestion>;
-}): ProviderMentionReference[] {
-  const promptMentionNames = collectPromptMentionNames(params.prompt);
-  if (promptMentionNames.length === 0) {
-    return [];
-  }
-
-  const uniquePromptMentionNames: string[] = [];
-  const seenPromptMentionNames = new Set<string>();
-  for (const mentionName of promptMentionNames) {
-    const key = normalizeMentionNameKey(mentionName);
-    if (seenPromptMentionNames.has(key)) {
-      continue;
-    }
-    seenPromptMentionNames.add(key);
-    uniquePromptMentionNames.push(mentionName);
-  }
-
-  const existingMentionsByName = new Map<string, ProviderMentionReference[]>();
-  for (const mention of params.existingMentions) {
-    const key = normalizeMentionNameKey(mention.name);
-    const bucket = existingMentionsByName.get(key);
-    if (bucket) {
-      bucket.push(mention);
-    } else {
-      existingMentionsByName.set(key, [mention]);
-    }
-  }
-
-  const providerMentionsByName = new Map<string, ProviderMentionReference[]>();
-  for (const suggestion of params.providerPlugins) {
-    const key = normalizeMentionNameKey(suggestion.plugin.name);
-    const bucket = providerMentionsByName.get(key);
-    if (bucket) {
-      bucket.push(suggestion.mention);
-    } else {
-      providerMentionsByName.set(key, [suggestion.mention]);
-    }
-  }
-
-  const resolvedMentions: ProviderMentionReference[] = [];
-  const seenPaths = new Set<string>();
-
-  for (const mentionName of uniquePromptMentionNames) {
-    const key = normalizeMentionNameKey(mentionName);
-    const existingMention = (existingMentionsByName.get(key) ?? []).find(
-      (candidate) => !seenPaths.has(candidate.path),
-    );
-    if (existingMention) {
-      seenPaths.add(existingMention.path);
-      resolvedMentions.push(existingMention);
-      continue;
-    }
-
-    const discoveredMentions = providerMentionsByName.get(key) ?? [];
-    if (discoveredMentions.length === 1) {
-      const discoveredMention = discoveredMentions[0]!;
-      seenPaths.add(discoveredMention.path);
-      resolvedMentions.push(discoveredMention);
-    }
-  }
-
-  return resolvedMentions;
 }
 
 const providerMentionReferencesEqual = (
@@ -911,6 +812,8 @@ export default function ChatView({
   const composerImages = composerDraft.images;
   const composerAssistantSelections = composerDraft.assistantSelections;
   const composerTerminalContexts = composerDraft.terminalContexts;
+  const composerSkills = composerDraft.skills;
+  const composerMentions = composerDraft.mentions;
   const queuedComposerTurns = composerDraft.queuedTurns;
   const {
     isRecording: isVoiceRecording,
@@ -967,6 +870,8 @@ export default function ChatView({
   const setComposerDraftTerminalContexts = useComposerDraftStore(
     (store) => store.setTerminalContexts,
   );
+  const setComposerDraftSkills = useComposerDraftStore((store) => store.setSkills);
+  const setComposerDraftMentions = useComposerDraftStore((store) => store.setMentions);
   const clearComposerDraftPersistedAttachments = useComposerDraftStore(
     (store) => store.clearPersistedAttachments,
   );
@@ -1049,11 +954,44 @@ export default function ChatView({
     detectComposerTrigger(prompt, prompt.length),
   );
   const [selectedComposerSkills, setSelectedComposerSkills] = useState<ProviderSkillReference[]>(
-    [],
+    () => composerSkills,
   );
   const [selectedComposerMentions, setSelectedComposerMentions] = useState<
     ProviderMentionReference[]
-  >([]);
+  >(() => composerMentions);
+  const selectedComposerSkillsRef = useRef<ProviderSkillReference[]>(selectedComposerSkills);
+  const selectedComposerMentionsRef =
+    useRef<ProviderMentionReference[]>(selectedComposerMentions);
+  selectedComposerSkillsRef.current = selectedComposerSkills;
+  selectedComposerMentionsRef.current = selectedComposerMentions;
+  const updateSelectedComposerSkills = useCallback(
+    (
+      next:
+        | ProviderSkillReference[]
+        | ((existing: ProviderSkillReference[]) => ProviderSkillReference[]),
+    ) => {
+      const existing = selectedComposerSkillsRef.current;
+      const resolved = typeof next === "function" ? next(existing) : next;
+      selectedComposerSkillsRef.current = resolved;
+      setSelectedComposerSkills(resolved);
+      setComposerDraftSkills(threadId, resolved);
+    },
+    [setComposerDraftSkills, threadId],
+  );
+  const updateSelectedComposerMentions = useCallback(
+    (
+      next:
+        | ProviderMentionReference[]
+        | ((existing: ProviderMentionReference[]) => ProviderMentionReference[]),
+    ) => {
+      const existing = selectedComposerMentionsRef.current;
+      const resolved = typeof next === "function" ? next(existing) : next;
+      selectedComposerMentionsRef.current = resolved;
+      setSelectedComposerMentions(resolved);
+      setComposerDraftMentions(threadId, resolved);
+    },
+    [setComposerDraftMentions, threadId],
+  );
   const [lastInvokedScriptByProjectId, setLastInvokedScriptByProjectId] = useLocalStorage(
     LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
     {},
@@ -1457,6 +1395,10 @@ export default function ChatView({
     : null;
   const selectedProvider: ProviderKind =
     lockedProvider ?? selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
+  const previousSelectedProviderRef = useRef<{
+    threadId: ThreadId;
+    provider: ProviderKind;
+  } | null>(null);
   const voiceTranscriptionRequestIdRef = useRef(0);
   const voiceThreadIdRef = useRef(threadId);
   const voiceProviderRef = useRef<ProviderKind>(selectedProvider);
@@ -4412,28 +4354,48 @@ export default function ChatView({
     setComposerCursor((existing) => clampCollapsedComposerCursor(prompt, existing));
   }, [prompt]);
 
-  useEffect(() => {
-    setSelectedComposerSkills((existing) =>
-      existing.filter((skill) => promptIncludesSkillMention(prompt, skill.name, selectedProvider)),
-    );
-  }, [prompt, selectedProvider]);
+  useLayoutEffect(() => {
+    updateSelectedComposerSkills(composerSkills);
+    updateSelectedComposerMentions(composerMentions);
+  }, [
+    composerMentions,
+    composerSkills,
+    threadId,
+    updateSelectedComposerMentions,
+    updateSelectedComposerSkills,
+  ]);
 
   useEffect(() => {
-    setSelectedComposerMentions((existing) => {
-      const nextMentions = resolvePromptPluginMentions({
-        prompt,
-        existingMentions: existing,
-        providerPlugins,
-      });
+    updateSelectedComposerSkills((existing) =>
+      filterPromptSkillReferences(prompt, existing, selectedProvider),
+    );
+  }, [prompt, selectedProvider, updateSelectedComposerSkills]);
+
+  useEffect(() => {
+    updateSelectedComposerMentions((existing) => {
+      const nextMentions = filterPromptProviderMentionReferences(prompt, existing);
       return providerMentionReferencesEqual(existing, nextMentions) ? existing : nextMentions;
     });
-  }, [prompt, providerPlugins]);
+  }, [prompt, updateSelectedComposerMentions]);
 
-  // Clear selected skills when switching providers — skills are provider-specific.
+  // Provider references are provider-specific; keep draft restores from looking like manual switches.
   useEffect(() => {
-    setSelectedComposerSkills([]);
-    setSelectedComposerMentions([]);
-  }, [selectedProvider]);
+    const previous = previousSelectedProviderRef.current;
+    previousSelectedProviderRef.current = {
+      threadId,
+      provider: selectedProvider,
+    };
+    if (!previous || previous.threadId !== threadId || previous.provider === selectedProvider) {
+      return;
+    }
+    updateSelectedComposerSkills([]);
+    updateSelectedComposerMentions([]);
+  }, [
+    selectedProvider,
+    threadId,
+    updateSelectedComposerMentions,
+    updateSelectedComposerSkills,
+  ]);
 
   useLayoutEffect(() => {
     // ChatView stays mounted across thread switches, so clear thread-local overlays before paint.
@@ -4463,8 +4425,6 @@ export default function ChatView({
     setComposerHighlightedItemId(null);
     setComposerCursor(collapseExpandedComposerCursor(promptRef.current, promptRef.current.length));
     setComposerTrigger(detectComposerTrigger(promptRef.current, promptRef.current.length));
-    setSelectedComposerSkills([]);
-    setSelectedComposerMentions([]);
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
     setExpandedImage(null);
@@ -5332,13 +5292,13 @@ export default function ChatView({
     (threadId: ThreadId) => {
       promptRef.current = "";
       clearComposerDraftContent(threadId);
-      setSelectedComposerSkills([]);
-      setSelectedComposerMentions([]);
+      updateSelectedComposerSkills([]);
+      updateSelectedComposerMentions([]);
       setComposerHighlightedItemId(null);
       setComposerCursor(0);
       setComposerTrigger(null);
     },
-    [clearComposerDraftContent],
+    [clearComposerDraftContent, updateSelectedComposerMentions, updateSelectedComposerSkills],
   );
 
   const restoreQueuedTurnToComposer = useCallback(
@@ -5370,11 +5330,11 @@ export default function ChatView({
         if (queuedTurn.terminalContexts.length > 0) {
           addComposerTerminalContextsToDraft(queuedTurn.terminalContexts);
         }
-        setSelectedComposerSkills(queuedTurn.skills);
-        setSelectedComposerMentions(queuedTurn.mentions);
+        updateSelectedComposerSkills(queuedTurn.skills);
+        updateSelectedComposerMentions(queuedTurn.mentions);
       } else {
-        setSelectedComposerSkills([]);
-        setSelectedComposerMentions([]);
+        updateSelectedComposerSkills([]);
+        updateSelectedComposerMentions([]);
       }
       setComposerDraftModelSelection(activeThread.id, queuedTurn.modelSelection);
       setComposerDraftRuntimeMode(activeThread.id, queuedTurn.runtimeMode);
@@ -5395,6 +5355,8 @@ export default function ChatView({
       setComposerDraftModelSelection,
       setComposerDraftPrompt,
       setComposerDraftRuntimeMode,
+      updateSelectedComposerMentions,
+      updateSelectedComposerSkills,
     ],
   );
 
@@ -5467,8 +5429,10 @@ export default function ChatView({
       queuedChatTurn?.assistantSelections ?? composerAssistantSelections;
     const composerTerminalContextsForSend =
       queuedChatTurn?.terminalContexts ?? composerTerminalContexts;
-    const selectedComposerSkillsForSend = queuedChatTurn?.skills ?? selectedComposerSkills;
-    const selectedComposerMentionsForSend = queuedChatTurn?.mentions ?? selectedComposerMentions;
+    const selectedComposerSkillsForSend =
+      queuedChatTurn?.skills ?? selectedComposerSkillsRef.current;
+    const selectedComposerMentionsForSend =
+      queuedChatTurn?.mentions ?? selectedComposerMentionsRef.current;
     const selectedProviderForSend = queuedChatTurn?.selectedProvider ?? selectedProvider;
     const selectedModelForSend = queuedChatTurn?.selectedModel ?? selectedModel;
     const selectedPromptEffortForSend =
@@ -5770,14 +5734,15 @@ export default function ChatView({
       effort: selectedPromptEffortForSend,
       text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
     });
-    const mentionedSkillsForSend = selectedComposerSkillsForSend.filter((skill) =>
-      promptIncludesSkillMention(outgoingMessageText, skill.name, selectedProviderForSend),
+    const mentionedSkillsForSend = filterPromptSkillReferences(
+      outgoingMessageText,
+      selectedComposerSkillsForSend,
+      selectedProviderForSend,
     );
-    const mentionedPluginMentionsForSend = resolvePromptPluginMentions({
-      prompt: outgoingMessageText,
-      existingMentions: selectedComposerMentionsForSend,
-      providerPlugins,
-    });
+    const mentionedPluginMentionsForSend = filterPromptProviderMentionReferences(
+      outgoingMessageText,
+      selectedComposerMentionsForSend,
+    );
     const turnAttachmentsPromise = Promise.all([
       ...composerAssistantSelectionsSnapshot.map((selection) =>
         Promise.resolve({
@@ -5813,6 +5778,10 @@ export default function ChatView({
         text: outgoingMessageText,
         dispatchMode,
         ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+        ...(mentionedSkillsForSend.length > 0 ? { skills: mentionedSkillsForSend } : {}),
+        ...(mentionedPluginMentionsForSend.length > 0
+          ? { mentions: mentionedPluginMentionsForSend }
+          : {}),
         createdAt: messageCreatedAt,
         streaming: false,
         source: "native",
@@ -6041,8 +6010,8 @@ export default function ChatView({
           addComposerAssistantSelectionToDraft(selection);
         }
         addComposerTerminalContextsToDraft(composerTerminalContextsSnapshot);
-        setSelectedComposerSkills(composerSkillsSnapshot);
-        setSelectedComposerMentions(composerMentionsSnapshot);
+        updateSelectedComposerSkills(composerSkillsSnapshot);
+        updateSelectedComposerMentions(composerMentionsSnapshot);
         setComposerTrigger(detectComposerTrigger(promptForSend, promptForSend.length));
       }
       setThreadError(
@@ -7300,7 +7269,7 @@ export default function ChatView({
           trigger,
           base: `${skillMentionPrefix(selectedProvider)}${item.skill.name} `,
           onApplied: () => {
-            setSelectedComposerSkills((existing) => {
+            updateSelectedComposerSkills((existing) => {
               const nextSkill = {
                 name: item.skill.name,
                 path: item.skill.path,
@@ -7319,9 +7288,9 @@ export default function ChatView({
         applyComposerTriggerReplacement({
           snapshot,
           trigger,
-          base: `@${item.label} `,
+          base: `${formatComposerMentionToken(item.mention.name)} `,
           onApplied: () => {
-            setSelectedComposerMentions((existing) => {
+            updateSelectedComposerMentions((existing) => {
               const nextMention = item.mention;
               const nextWithoutSameName = existing.filter(
                 (mention) => mention.name !== nextMention.name,
@@ -7358,8 +7327,8 @@ export default function ChatView({
       setComposerCommandPicker,
       localFolderBrowseRootPath,
       selectedProvider,
-      setSelectedComposerMentions,
-      setSelectedComposerSkills,
+      updateSelectedComposerMentions,
+      updateSelectedComposerSkills,
       resolveActiveComposerTrigger,
     ],
   );

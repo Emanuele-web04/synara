@@ -276,6 +276,34 @@ describe("store pure functions", () => {
     expect(next.threads[0]?.branch).toBe("feature/semantic-branch");
   });
 
+  it("preserves message mention references from read-model snapshots", () => {
+    const next = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          messages: [
+            {
+              id: MessageId.makeUnsafe("message-with-plugin-mention"),
+              role: "user",
+              text: "Use @linear",
+              attachments: [],
+              mentions: [{ name: "linear", path: "plugin://linear@openai-curated" }],
+              turnId: null,
+              streaming: false,
+              source: "native",
+              createdAt: "2026-02-27T00:00:00.000Z",
+              updatedAt: "2026-02-27T00:00:00.000Z",
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.messages[0]?.mentions).toEqual([
+      { name: "linear", path: "plugin://linear@openai-curated" },
+    ]);
+  });
+
   it("does not regress a semantic branch when local workspace patches only report a temp branch", () => {
     const state = makeState(
       makeThread({

@@ -4916,9 +4916,9 @@ export default function Sidebar() {
       hasHiddenThreads,
       isThreadListExpanded,
     } = projectSidebarData;
-    const pinnedProjectSecondaryActionClassName = isProjectPinned
-      ? "md:pointer-events-none md:opacity-0 md:transition-opacity md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-focus-within/project-header:pointer-events-auto md:group-focus-within/project-header:opacity-100"
-      : undefined;
+    const projectFolderIconClassName = isProjectPinned
+      ? "opacity-0"
+      : "transition-opacity md:group-hover/project-header:opacity-0 md:group-has-[:focus-visible]/project-header:opacity-0";
 
     return (
       <div className="group/collapsible">
@@ -4928,8 +4928,7 @@ export default function Sidebar() {
             size="sm"
             className={cn(
               SIDEBAR_HEADER_ROW_CLASS_NAME,
-              "transition-[padding] duration-150 ease-out hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:pr-[6.5rem] group-hover/project-header:text-[var(--sidebar-accent-foreground)] group-focus-within/project-header:pr-[6.5rem]",
-              isProjectPinned ? "pr-7" : "",
+              "transition-[padding] duration-150 ease-out hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:pr-[4.75rem] group-hover/project-header:text-[var(--sidebar-accent-foreground)] focus-visible:pr-[4.75rem]",
               isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
             )}
             {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
@@ -4945,7 +4944,7 @@ export default function Sidebar() {
               });
             }}
           >
-            <SidebarLeadingIcon size="sm">
+            <SidebarLeadingIcon size="sm" className={projectFolderIconClassName}>
               <ProjectSidebarIcon cwd={project.cwd} expanded={project.expanded} />
               {projectStatus ? (
                 <span
@@ -5009,20 +5008,30 @@ export default function Sidebar() {
               )}
             </div>
           </SidebarMenuButton>
-          <SidebarSectionToolbar placement="overlay" revealOnHover visible={isProjectPinned}>
-            <SidebarIconButton
-              icon={PinIcon}
-              label={isProjectPinned ? `Unpin ${project.name}` : `Pin ${project.name}`}
-              aria-pressed={isProjectPinned}
-              tooltip={isProjectPinned ? "Unpin project" : "Pin project"}
-              tooltipSide="top"
-              className={isProjectPinned ? "text-foreground/80" : undefined}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                toggleProjectPinned(project.id);
-              }}
-            />
+          <button
+            type="button"
+            aria-label={isProjectPinned ? `Unpin ${project.name}` : `Pin ${project.name}`}
+            aria-pressed={isProjectPinned}
+            title={isProjectPinned ? `Unpin ${project.name}` : `Pin ${project.name}`}
+            className={cn(
+              "sidebar-icon-button absolute left-2 top-1/2 z-20 inline-flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm text-muted-foreground/62 transition-opacity hover:text-foreground/82 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
+              isProjectPinned
+                ? "pointer-events-auto opacity-100"
+                : "pointer-events-none opacity-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-has-[:focus-visible]/project-header:pointer-events-auto md:group-has-[:focus-visible]/project-header:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+            )}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              toggleProjectPinned(project.id);
+            }}
+          >
+            <PinIcon className="size-3.5" />
+          </button>
+          <SidebarSectionToolbar placement="overlay" revealOnHover>
             <SidebarIconButton
               icon={TerminalIcon}
               label={`Create new terminal thread in ${project.name}`}
@@ -5032,7 +5041,6 @@ export default function Sidebar() {
                   : "New terminal thread"
               }
               tooltipSide="top"
-              className={pinnedProjectSecondaryActionClassName}
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -5050,7 +5058,6 @@ export default function Sidebar() {
               label={`Create disposable thread in ${project.name}`}
               tooltip="New disposable thread"
               tooltipSide="top"
-              className={pinnedProjectSecondaryActionClassName}
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -5069,7 +5076,6 @@ export default function Sidebar() {
                 newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"
               }
               tooltipSide="top"
-              className={pinnedProjectSecondaryActionClassName}
               data-testid="new-thread-button"
               onClick={(event) => {
                 event.preventDefault();

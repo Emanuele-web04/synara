@@ -201,6 +201,98 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("group-hover:opacity-100");
   });
 
+  it("keeps user-bubble file and folder mention icons from being overridden by plugin names", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const baseProps = {
+      hasMessages: true,
+      isWorking: false,
+      activeTurnInProgress: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      nowIso: "2026-03-17T19:12:30.000Z",
+      expandedWorkGroups: {},
+      onToggleWorkGroup: () => {},
+      onOpenTurnDiff: () => {},
+      revertTurnCountByUserMessageId: new Map(),
+      onRevertUserMessage: () => {},
+      isRevertingCheckpoint: false,
+      onImageExpand: () => {},
+      markdownCwd: undefined,
+      resolvedTheme: "light" as const,
+      timestampFormat: "locale" as const,
+      workspaceRoot: undefined,
+    };
+
+    const folderMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...baseProps}
+        timelineEntries={[
+          {
+            id: "entry-folder-mention",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-folder-mention"),
+              role: "user",
+              text: "Use @linear",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(folderMarkup).toContain("/central-icons-reversed/folder-2.svg");
+    expect(folderMarkup).not.toContain("/central-icons-reversed/puzzle.svg");
+
+    const tsxMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...baseProps}
+        timelineEntries={[
+          {
+            id: "entry-tsx-file-mention",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-tsx-file-mention"),
+              role: "user",
+              text: "Use @src/App.tsx",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(tsxMarkup).toContain("/central-icons-reversed/react.svg");
+    expect(tsxMarkup).not.toContain("/central-icons-reversed/folder-2.svg");
+
+    const pluginMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...baseProps}
+        timelineEntries={[
+          {
+            id: "entry-plugin-mention",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-plugin-mention"),
+              role: "user",
+              text: "Use @linear",
+              mentions: [{ name: "linear", path: "plugin://linear@openai-curated" }],
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(pluginMarkup).toContain("/central-icons-reversed/puzzle.svg");
+  });
+
   it("renders edit beside copy for user messages", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(

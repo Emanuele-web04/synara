@@ -98,7 +98,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "synara",
     label: "Providers",
     description: "Choose visible providers, review CLI installs, and update provider tools.",
-    icon: "plugin-1",
+    icon: "puzzle",
     eyebrow: "Picker visibility",
   },
   {
