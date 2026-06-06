@@ -26,6 +26,8 @@ export type SandboxAppSettingsKey =
   | "sandboxRuntimeTimeoutSeconds"
   | "sandboxRuntimePorts"
   | "sandboxRuntimePersistent"
+  | "sandboxRuntimeSyncMcpPlugins"
+  | "sandboxRuntimeMcpAllowlist"
   | "sandboxDaytonaApiKey"
   | "sandboxDaytonaApiUrl"
   | "sandboxDaytonaOrganizationId"
@@ -219,13 +221,22 @@ export const SANDBOX_PROVIDER_DESCRIPTORS: ReadonlyArray<SandboxProviderDescript
  */
 export const SANDBOX_RUNTIME_FIELDS: ReadonlyArray<{
   readonly appKey: SandboxAppSettingsKey;
-  readonly serverField: "cpu" | "memoryMb" | "timeoutSeconds" | "ports" | "persistent";
+  readonly serverField:
+    | "cpu"
+    | "memoryMb"
+    | "timeoutSeconds"
+    | "ports"
+    | "persistent"
+    | "syncMcpPlugins"
+    | "mcpAllowlist";
 }> = [
   { appKey: "sandboxRuntimeCpu", serverField: "cpu" },
   { appKey: "sandboxRuntimeMemoryMb", serverField: "memoryMb" },
   { appKey: "sandboxRuntimeTimeoutSeconds", serverField: "timeoutSeconds" },
   { appKey: "sandboxRuntimePorts", serverField: "ports" },
   { appKey: "sandboxRuntimePersistent", serverField: "persistent" },
+  { appKey: "sandboxRuntimeSyncMcpPlugins", serverField: "syncMcpPlugins" },
+  { appKey: "sandboxRuntimeMcpAllowlist", serverField: "mcpAllowlist" },
 ];
 
 /** Every flat sandbox AppSettings key, in declaration order. */

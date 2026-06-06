@@ -11,6 +11,7 @@ import { FAKE_RUNTIME_DESCRIPTORS } from "./executionRuntime/Layers/fakeDescript
 import { FakeRuntimeProviderAdapterLive } from "./executionRuntime/Layers/FakeRuntimeProviderAdapter";
 import { BUILT_IN_RUNTIME_DESCRIPTORS } from "./executionRuntime/Layers/descriptors";
 import { makeRuntimeProviderRegistryWithAdaptersLive } from "./executionRuntime/Layers/RuntimeProviderRegistry";
+import { CodexMcpPluginSourceLive } from "./executionRuntime/Layers/CodexMcpPluginSource";
 import { DAYTONA_RUNTIME_DESCRIPTOR } from "./executionRuntime/providers/daytona/descriptor";
 import { makeDaytonaRuntimeAdapterLayer } from "./executionRuntime/providers/daytona/runtimeLayer";
 import { VERCEL_SANDBOX_DESCRIPTOR } from "./executionRuntime/providers/vercelSandbox/descriptor";
@@ -101,6 +102,13 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provide(ServerSettingsLive),
     Layer.provide(ServerSecretStoreLive),
   );
+  // The Daytona adapter inherits the operator's HTTP MCP servers ("plugins") into
+  // a remote sandbox when the opt-in `syncMcpPlugins` setting is on. This source
+  // reads that setting and the host config live, so a change applies on the next
+  // provision/resume with no restart, the same way the credential overlay does.
+  const codexMcpPluginSourceLayer = CodexMcpPluginSourceLive.pipe(
+    Layer.provide(ServerSettingsLive),
+  );
   const runtimeProviderRegistryLayer = makeRuntimeProviderRegistryWithAdaptersLive({
     descriptors: [
       ...BUILT_IN_RUNTIME_DESCRIPTORS,
@@ -117,6 +125,7 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provide(modalRuntimeAdapterLayer),
     Layer.provide(cloudflareRuntimeAdapterLayer),
     Layer.provide(runtimeProviderCredentialsLayer),
+    Layer.provide(codexMcpPluginSourceLayer),
   );
   // Provider-agnostic remote working-tree diff: routes `git` inside an instance
   // through the provider's exec channel (resolved by provider from the registry).

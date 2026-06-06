@@ -15,15 +15,19 @@
  *
  * @module daytona/runtimeLayer
  */
-import { Layer } from "effect";
+import { Effect, Layer } from "effect";
 
 import {
   buildPerProvisionClientLayer,
   type RuntimeProviderEnvOptions,
 } from "../../providerCredentialLayer.ts";
 import type { RuntimeProviderCredentials } from "../../Services/RuntimeProviderCredentials.ts";
-import { DaytonaRuntimeAdapter } from "./DaytonaRuntimeAdapter.ts";
-import { makeDaytonaRuntimeAdapterServiceLive } from "./DaytonaRuntimeAdapter.ts";
+import { CodexMcpPluginSource } from "../../Services/CodexMcpPluginSource.ts";
+import {
+  DaytonaRuntimeAdapter,
+  makeDaytonaRuntimeAdapterEffect,
+  makeDaytonaRuntimeAdapterServiceLive,
+} from "./DaytonaRuntimeAdapter.ts";
 import { DaytonaSandboxClient } from "./DaytonaSandboxClient.ts";
 import {
   makeDispatchingDaytonaSandboxClient,
@@ -86,16 +90,33 @@ export function makeDaytonaRuntimeAdapterLayer(options: {
 }): Layer.Layer<DaytonaRuntimeAdapter, never, DaytonaClientServices>;
 export function makeDaytonaRuntimeAdapterLayer(
   options?: DaytonaRuntimeLayerOptions,
-): Layer.Layer<DaytonaRuntimeAdapter, never, DaytonaClientServices | RuntimeProviderCredentials>;
+): Layer.Layer<
+  DaytonaRuntimeAdapter,
+  never,
+  DaytonaClientServices | RuntimeProviderCredentials | CodexMcpPluginSource
+>;
 export function makeDaytonaRuntimeAdapterLayer(
   options?: DaytonaRuntimeLayerOptions,
-): Layer.Layer<DaytonaRuntimeAdapter, never, DaytonaClientServices | RuntimeProviderCredentials> {
+): Layer.Layer<
+  DaytonaRuntimeAdapter,
+  never,
+  DaytonaClientServices | RuntimeProviderCredentials | CodexMcpPluginSource
+> {
   // Thread the override env (when present) into the adapter so the host Codex
   // auth used for sandbox injection is resolved from the same env that selects
   // the real-vs-fake client; production passes the merged settings/secrets env.
+  // The production path also binds the codex MCP-plugin source so a remote agent
+  // inherits the operator's HTTP MCP servers; the test override path leaves it
+  // unbound (sync disabled), keeping the contract suite free of that service.
   const adapterLayer =
     options?.env === undefined
-      ? makeDaytonaRuntimeAdapterServiceLive()
+      ? Layer.effect(
+          DaytonaRuntimeAdapter,
+          Effect.gen(function* () {
+            const mcpSource = yield* CodexMcpPluginSource;
+            return yield* makeDaytonaRuntimeAdapterEffect({ resolveMcpPlugins: mcpSource.resolve });
+          }),
+        )
       : makeDaytonaRuntimeAdapterServiceLive({ env: options.env });
   return adapterLayer.pipe(Layer.provide(makeDaytonaSandboxClientLayer(options)));
 }

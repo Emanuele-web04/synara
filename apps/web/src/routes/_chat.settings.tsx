@@ -3100,6 +3100,62 @@ function SettingsRouteView() {
             />
           }
         />
+        <SettingsRow
+          title="Sync Codex MCP plugins"
+          description="Inject your local Codex HTTP MCP servers (and their resolved auth) into a remote sandbox, so a remote agent has the same tools a local one does. Off by default — enabling sends those credentials to the cloud VM. stdio servers are never synced."
+          resetAction={
+            settings.sandboxRuntimeSyncMcpPlugins !== defaults.sandboxRuntimeSyncMcpPlugins ? (
+              <SettingResetButton
+                label="MCP plugin sync"
+                onClick={() =>
+                  updateSettings({
+                    sandboxRuntimeSyncMcpPlugins: defaults.sandboxRuntimeSyncMcpPlugins,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sandboxRuntimeSyncMcpPlugins === "true"}
+              onCheckedChange={(checked) =>
+                updateSettings({ sandboxRuntimeSyncMcpPlugins: checked ? "true" : "false" })
+              }
+              aria-label="Sync Codex MCP plugins"
+            />
+          }
+        />
+        {settings.sandboxRuntimeSyncMcpPlugins === "true" ? (
+          <SettingsRow
+            title="MCP plugin allowlist"
+            description="Optional comma-separated MCP server names to sync. Blank syncs every runnable HTTP server."
+            resetAction={
+              settings.sandboxRuntimeMcpAllowlist !== defaults.sandboxRuntimeMcpAllowlist ? (
+                <SettingResetButton
+                  label="MCP allowlist"
+                  onClick={() =>
+                    updateSettings({
+                      sandboxRuntimeMcpAllowlist: defaults.sandboxRuntimeMcpAllowlist,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Input
+                className="w-full"
+                type="text"
+                value={settings.sandboxRuntimeMcpAllowlist}
+                onChange={(event) =>
+                  updateSettings({ sandboxRuntimeMcpAllowlist: event.target.value })
+                }
+                placeholder="exa, novu"
+                spellCheck={false}
+                aria-label="MCP plugin allowlist"
+              />
+            }
+          />
+        ) : null}
       </SettingsSection>
 
       {SANDBOX_PROVIDER_DESCRIPTORS.map((provider) => (

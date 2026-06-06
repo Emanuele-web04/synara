@@ -28,6 +28,7 @@ import {
   type DaytonaExecInput,
   type DaytonaSandboxClientShape,
 } from "./DaytonaSandboxClient.ts";
+import type { SandboxCodexMcpServer } from "../../codexMcpBootstrap.ts";
 
 const makeRuntime = () =>
   ManagedRuntime.make(
@@ -447,6 +448,136 @@ describe("DaytonaRuntimeAdapter codex auth injection", () => {
         exec.args.some((arg) => arg.includes('"$HOME/.codex/auth.json"')),
     );
     expect(authRewrite).toBeDefined();
+  });
+});
+
+describe("DaytonaRuntimeAdapter codex MCP plugin injection", () => {
+  const tempDirs: string[] = [];
+  const recordedExecs: DaytonaExecInput[] = [];
+
+  const makeRecordingClientLayer = (isRemote: boolean) =>
+    Layer.succeed(DaytonaSandboxClient, {
+      isRemoteSandbox: () => isRemote,
+      create: () => Effect.succeed({ id: "sb-mcp", status: "running", rootPath: "/work" }),
+      exec: (_sandboxId, input) =>
+        Effect.sync(() => {
+          recordedExecs.push(input);
+          if (input.command === "pwd") {
+            return { stdout: "/work\n", stderr: "", exitCode: 0 };
+          }
+          if (input.command === "codex" && input.args[0] === "--version") {
+            return { stdout: "codex-cli 0.50.0\n", stderr: "", exitCode: 0 };
+          }
+          return { stdout: "ok\n", stderr: "", exitCode: 0 };
+        }),
+      startSession: () => Effect.die("unused" as never),
+      exposePort: () => Effect.die("unused" as never),
+      snapshot: () => Effect.succeed({ snapshotId: "snap-rec" }),
+      refreshActivity: () => Effect.void,
+      stop: () => Effect.void,
+      getStatus: () => Effect.succeed(null),
+      destroy: () => Effect.void,
+    } satisfies DaytonaSandboxClientShape);
+
+  const makeCodexHome = (): string => {
+    const home = mkdtempSync(path.join(tmpdir(), "codex-home-mcp-"));
+    tempDirs.push(home);
+    writeFileSync(path.join(home, "auth.json"), '{"tokens":{"access_token":"abc"}}', "utf8");
+    return home;
+  };
+
+  const mcpServers: ReadonlyArray<SandboxCodexMcpServer> = [
+    { name: "novu", url: "https://novu.test/mcp", httpHeaders: { Authorization: "Bearer s3cret" } },
+  ];
+
+  const mcpExec = () =>
+    recordedExecs.find(
+      (exec) =>
+        exec.command === "bash" && exec.args.some((arg) => arg.includes("codex-mcp-injected")),
+    );
+
+  afterEach(() => {
+    recordedExecs.length = 0;
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("injects resolved MCP servers into the sandbox config during provision", async () => {
+    const runtime = ManagedRuntime.make(
+      makeDaytonaRuntimeAdapterServiceLive({
+        env: { CODEX_HOME: makeCodexHome() },
+        resolveMcpPlugins: Effect.succeed(mcpServers),
+      }).pipe(
+        Layer.provide(makeRecordingClientLayer(true)),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    );
+    try {
+      await runtime.runPromise(
+        Effect.flatMap(DaytonaRuntimeAdapter.asEffect(), (adapter) =>
+          adapter.provision({ threadId: "t-mcp", ports: [], snapshotId: null }),
+        ),
+      );
+    } finally {
+      await runtime.dispose();
+    }
+    const exec = mcpExec();
+    expect(exec).toBeDefined();
+    // The bearer token rides as the opaque base64 block, never the visible script.
+    expect(exec?.args[1]).not.toContain("s3cret");
+    const decoded = Buffer.from(exec?.args[2] as string, "base64").toString("utf8");
+    expect(decoded).toContain("Bearer s3cret");
+    expect(decoded).toContain("[mcp_servers.novu]");
+  });
+
+  it("does not inject any MCP block when no plugins resolve (default off)", async () => {
+    const runtime = ManagedRuntime.make(
+      makeDaytonaRuntimeAdapterServiceLive({ env: { CODEX_HOME: makeCodexHome() } }).pipe(
+        Layer.provide(makeRecordingClientLayer(true)),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    );
+    try {
+      await runtime.runPromise(
+        Effect.flatMap(DaytonaRuntimeAdapter.asEffect(), (adapter) =>
+          adapter.provision({ threadId: "t-mcp-off", ports: [], snapshotId: null }),
+        ),
+      );
+    } finally {
+      await runtime.dispose();
+    }
+    expect(mcpExec()).toBeUndefined();
+  });
+
+  it("re-injects MCP plugins on resume (fresh tokens)", async () => {
+    const runtime = ManagedRuntime.make(
+      makeDaytonaRuntimeAdapterServiceLive({
+        env: { CODEX_HOME: makeCodexHome() },
+        resolveMcpPlugins: Effect.succeed(mcpServers),
+      }).pipe(
+        Layer.provide(makeRecordingClientLayer(true)),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    );
+    try {
+      await runtime.runPromise(
+        Effect.flatMap(DaytonaRuntimeAdapter.asEffect(), (adapter) =>
+          Effect.gen(function* () {
+            const context = yield* adapter.provision({
+              threadId: "t-mcp-resume",
+              ports: [],
+              snapshotId: null,
+            });
+            recordedExecs.length = 0;
+            yield* adapter.reinjectCredentials(context.instance.id);
+          }),
+        ),
+      );
+    } finally {
+      await runtime.dispose();
+    }
+    expect(mcpExec()).toBeDefined();
   });
 });
 

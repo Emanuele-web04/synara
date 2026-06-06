@@ -42,6 +42,7 @@ import {
   resolveOperatorCodexAuth,
   resolveOperatorCodexInstructions,
 } from "../../codexAuthBootstrap.ts";
+import { buildCodexMcpConfigCommand, type SandboxCodexMcpServer } from "../../codexMcpBootstrap.ts";
 import { buildGitCloneCommand, buildPostCloneCommand } from "../../gitWorkspaceBootstrap.ts";
 import { redactSecrets } from "../../Layers/redactCredentials.ts";
 import type { RuntimeProcessSpawnInput } from "../../Services/RuntimeProcessTransport.ts";
@@ -201,12 +202,21 @@ export interface DaytonaRuntimeAdapterOptions {
    * with no `auth.json`) to assert the injection path without a real login.
    */
   readonly env?: NodeJS.ProcessEnv;
+  /**
+   * Resolves the Codex MCP servers ("plugins") to inject into a remote sandbox,
+   * re-read on every injection (provision and resume). Defaults to "none", so the
+   * adapter stays settings-agnostic; the production layer binds a source that
+   * reads live settings + host state. Never fails — it degrades to no plugins.
+   */
+  readonly resolveMcpPlugins?: Effect.Effect<ReadonlyArray<SandboxCodexMcpServer>>;
 }
 
 const makeDaytonaRuntimeAdapter = (options: DaytonaRuntimeAdapterOptions = {}) =>
   Effect.gen(function* () {
     const client = yield* DaytonaSandboxClient;
     const hostEnv = options.env ?? process.env;
+    const resolveMcpPlugins =
+      options.resolveMcpPlugins ?? Effect.succeed<ReadonlyArray<SandboxCodexMcpServer>>([]);
     // Sandbox id is the durable provider id; the contract `ExecutionInstanceId` is
     // the same string, so reconnect after restart works off the persisted id alone.
     const sandboxRoots = new Map<string, string>();
@@ -296,7 +306,17 @@ const makeDaytonaRuntimeAdapter = (options: DaytonaRuntimeAdapterOptions = {}) =
             .exec(sandboxId, buildCodexInstructionsInjectionCommand(instructions))
             .pipe(Effect.ignore);
         }
-        // Auth bytes now live on the sandbox FS: forbid snapshotting it.
+        // Sync the operator's HTTP MCP servers ("plugins") with their auth
+        // materialized, so a remote agent has the same tools a local one does.
+        // Re-applied on resume (fresh tokens); empty when the opt-in setting is
+        // off, so it is a no-op by default. Best-effort like the writes above.
+        const mcpServers = yield* resolveMcpPlugins.pipe(
+          Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<SandboxCodexMcpServer>)),
+        );
+        if (mcpServers.length > 0) {
+          yield* client.exec(sandboxId, buildCodexMcpConfigCommand(mcpServers)).pipe(Effect.ignore);
+        }
+        // Auth/plugin bytes now live on the sandbox FS: forbid snapshotting it.
         secretTainted.add(sandboxId);
       });
 

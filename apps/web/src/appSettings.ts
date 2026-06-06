@@ -183,6 +183,8 @@ export const AppSettingsSchema = Schema.Struct({
   sandboxRuntimeTimeoutSeconds: SandboxStringSetting,
   sandboxRuntimePorts: SandboxStringSetting,
   sandboxRuntimePersistent: SandboxStringSetting,
+  sandboxRuntimeSyncMcpPlugins: SandboxStringSetting,
+  sandboxRuntimeMcpAllowlist: SandboxStringSetting,
   sandboxDaytonaApiKey: SandboxStringSetting,
   sandboxDaytonaApiUrl: SandboxStringSetting,
   sandboxDaytonaOrganizationId: SandboxStringSetting,

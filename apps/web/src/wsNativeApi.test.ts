@@ -305,7 +305,15 @@ describe("wsNativeApi", () => {
         sandboxes: {
           defaultRemoteProvider: "",
           postCloneCommand: "",
-          runtime: { cpu: "", memoryMb: "", timeoutSeconds: "", ports: "", persistent: "" },
+          runtime: {
+            cpu: "",
+            memoryMb: "",
+            timeoutSeconds: "",
+            ports: "",
+            persistent: "",
+            syncMcpPlugins: "",
+            mcpAllowlist: "",
+          },
           daytona: { apiKey: "", apiUrl: "", organizationId: "", target: "", snapshot: "" },
           vercel: { token: "", teamId: "", projectId: "", runtime: "" },
           modal: { tokenId: "", tokenSecret: "", environment: "" },

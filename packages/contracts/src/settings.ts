@@ -134,6 +134,19 @@ export const SandboxRuntimeDefaults = Schema.Struct({
   timeoutSeconds: StringSettingDefaulted,
   ports: StringSettingDefaulted,
   persistent: StringSettingDefaulted,
+  /**
+   * Opt-in (the boolean rides as text, like `persistent`): sync the operator's
+   * HTTP Codex MCP servers ("plugins") into a remote sandbox, with their auth
+   * materialized, so a remote agent has the same tools a local one does. Off by
+   * default — enabling sends those credentials to the cloud VM.
+   */
+  syncMcpPlugins: StringSettingDefaulted,
+  /**
+   * Optional comma-separated MCP server-name allowlist applied when
+   * `syncMcpPlugins` is on. Blank syncs every runnable HTTP server; named entries
+   * restrict the sync to those servers. stdio servers are never synced.
+   */
+  mcpAllowlist: StringSettingDefaulted,
 });
 export type SandboxRuntimeDefaults = typeof SandboxRuntimeDefaults.Type;
 
@@ -204,6 +217,8 @@ const SandboxSettingsPatch = Schema.Struct({
       timeoutSeconds: Schema.optionalKey(StringSetting),
       ports: Schema.optionalKey(StringSetting),
       persistent: Schema.optionalKey(StringSetting),
+      syncMcpPlugins: Schema.optionalKey(StringSetting),
+      mcpAllowlist: Schema.optionalKey(StringSetting),
     }),
   ),
   daytona: Schema.optionalKey(
