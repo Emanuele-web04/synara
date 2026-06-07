@@ -109,7 +109,6 @@ import {
   maybeResolveBrowserPromptAttachment,
   type BrowserPromptAttachmentResolution,
 } from "../lib/browserPromptContext";
-import { deriveComposerSuggestions, type ComposerSuggestion } from "../lib/composerSuggestions";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
@@ -345,8 +344,6 @@ import { ComposerInputBanners } from "./chat/ComposerInputBanners";
 import { ComposerVoiceButton } from "./chat/ComposerVoiceButton";
 import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
-import { ComposerSuggestions } from "./chat/ComposerSuggestions";
-import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
 import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
@@ -369,7 +366,11 @@ import { getComposerTraitSelection } from "./chat/composerTraits";
 import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { ProjectPicker } from "./chat/ProjectPicker";
 import { WorkspaceContextsBar } from "./chat/WorkspaceContextsBar";
-import { updateThreadWorkspaceContext } from "../lib/workspaceContextLogic";
+import {
+  buildProjectWorkspaceContext,
+  hasWorkspaceContextSignature,
+  updateThreadWorkspaceContext,
+} from "../lib/workspaceContextLogic";
 import { FolderClosed } from "./FolderClosed";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
@@ -442,11 +443,6 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_PROVIDER_NATIVE_COMMANDS: ProviderNativeCommandDescriptor[] = [];
 const EMPTY_PROVIDER_SKILLS: ProviderSkillDescriptor[] = [];
-const EMPTY_COMPOSER_SUGGESTIONS: ComposerSuggestion[] = [];
-const EMPTY_SUGGESTION_SOURCE_THREADS: Thread[] = [];
-const selectEmptyComposerSuggestionThreads: ReturnType<typeof createAllThreadsSelector> = () =>
-  EMPTY_SUGGESTION_SOURCE_THREADS;
-
 function revokeBlobPreviewUrlsAfterPaint(previewUrls: readonly string[]): void {
   if (previewUrls.length === 0 || typeof window === "undefined") {
     return;
@@ -791,20 +787,6 @@ function buildThreadPrimaryWorkspaceContext(input: {
     envMode: input.thread.envMode ?? "local",
     branch: input.thread.branch,
     worktreePath: input.thread.worktreePath,
-  };
-}
-
-function buildProjectWorkspaceContext(project: Project): ThreadWorkspaceContext {
-  return {
-    id: `project:${project.id}`,
-    projectId: project.id,
-    label: project.name || project.folderName,
-    role: "context",
-    accessMode: "read-write",
-    cwd: project.cwd,
-    envMode: "local",
-    branch: null,
-    worktreePath: null,
   };
 }
 
@@ -1309,11 +1291,23 @@ export default function ChatView({
         workspaceContexts.length > 0
           ? workspaceContexts
           : [buildThreadPrimaryWorkspaceContext({ thread: activeThread, project: activeProject })];
-      if (currentContexts.some((context) => context.projectId === project.id)) return;
-      void persistWorkspaceContexts(
-        [...currentContexts, buildProjectWorkspaceContext(project)],
-        activeWorkspaceContextId,
-      );
+      const nextContext = buildProjectWorkspaceContext({
+        project: {
+          id: project.id,
+          name: project.name,
+          folderName: project.folderName,
+          cwd: project.cwd,
+        },
+      });
+      if (hasWorkspaceContextSignature(currentContexts, nextContext)) {
+        toastManager.add({
+          type: "info",
+          title: "Context already attached",
+          description: "That folder and branch combination is already in this chat.",
+        });
+        return;
+      }
+      void persistWorkspaceContexts([...currentContexts, nextContext], activeWorkspaceContextId);
     },
     [
       activeProject,
@@ -1324,6 +1318,69 @@ export default function ChatView({
       workspaceContexts,
     ],
   );
+  const handleAddWorkspaceBranchContext = useCallback(
+    (
+      projectId: ProjectId,
+      patch: Pick<ThreadWorkspacePatch, "branch" | "worktreePath" | "envMode">,
+    ) => {
+      const project = workspaceContextProjects.find((entry) => entry.id === projectId);
+      if (!project || !activeThread || !activeProject) return;
+      const currentContexts =
+        workspaceContexts.length > 0
+          ? workspaceContexts
+          : [buildThreadPrimaryWorkspaceContext({ thread: activeThread, project: activeProject })];
+      const nextContext = buildProjectWorkspaceContext({
+        project: {
+          id: project.id,
+          name: project.name,
+          folderName: project.folderName,
+          cwd: project.cwd,
+        },
+        branch: patch.branch ?? null,
+        worktreePath: patch.worktreePath ?? null,
+        ...(patch.envMode !== undefined ? { envMode: patch.envMode } : {}),
+      });
+      if (hasWorkspaceContextSignature(currentContexts, nextContext)) {
+        toastManager.add({
+          type: "info",
+          title: "Branch already attached",
+          description: "That branch is already available as context in this chat.",
+        });
+        return;
+      }
+      void persistWorkspaceContexts([...currentContexts, nextContext], activeWorkspaceContextId);
+    },
+    [
+      activeProject,
+      activeThread,
+      activeWorkspaceContextId,
+      persistWorkspaceContexts,
+      workspaceContextProjects,
+      workspaceContexts,
+    ],
+  );
+  const handleBrowseFolderForContext = useCallback(async () => {
+    const api = readNativeApi();
+    if (!api || !activeThread || !activeProject) return;
+    const pickedPath = await api.dialogs.pickFolder();
+    if (!pickedPath) return;
+    const normalizePath = (path: string) => path.replace(/[\\/]+$/, "");
+    const normalizedPick = normalizePath(pickedPath);
+    const existingProject = workspaceContextProjects.find(
+      (project) =>
+        project.kind === "project" && normalizePath(project.cwd) === normalizedPick,
+    );
+    if (existingProject) {
+      handleAddWorkspaceContext(existingProject.id);
+      return;
+    }
+    toastManager.add({
+      type: "info",
+      title: "Folder not in sidebar",
+      description:
+        "Add this folder to the sidebar first (left panel → +), then attach it here as context.",
+    });
+  }, [activeProject, activeThread, handleAddWorkspaceContext, workspaceContextProjects]);
   const handleRemoveWorkspaceContext = useCallback(
     (contextId: string) => {
       if (!activeThread || !activeProject) return;
@@ -1377,11 +1434,49 @@ export default function ChatView({
         project.cwd,
         patch,
       );
+      const updatedContext = nextContexts.find((context) => context.id === contextId);
+      if (
+        updatedContext &&
+        hasWorkspaceContextSignature(nextContexts, updatedContext, contextId)
+      ) {
+        toastManager.add({
+          type: "info",
+          title: "Branch already attached",
+          description: "Another context chip already uses that branch or worktree.",
+        });
+        return;
+      }
+      const isPrimaryContext =
+        contextId === "primary" ||
+        workspaceContexts.find((context) => context.id === contextId)?.role === "primary";
+      if (isPrimaryContext && activeThread) {
+        if (isLocalDraftThread) {
+          setDraftThreadContext(threadId, patch);
+        } else {
+          setStoreThreadWorkspace(activeThread.id, patch);
+          const api = readNativeApi();
+          if (api) {
+            void api.orchestration.dispatchCommand({
+              type: "thread.meta.update",
+              commandId: newCommandId(),
+              threadId: activeThread.id,
+              ...(patch.branch !== undefined ? { branch: patch.branch } : {}),
+              ...(patch.worktreePath !== undefined ? { worktreePath: patch.worktreePath } : {}),
+              ...(patch.envMode !== undefined ? { envMode: patch.envMode } : {}),
+            });
+          }
+        }
+      }
       void persistWorkspaceContexts(nextContexts, activeWorkspaceContextId);
     },
     [
+      activeThread,
       activeWorkspaceContextId,
+      isLocalDraftThread,
       persistWorkspaceContexts,
+      setDraftThreadContext,
+      setStoreThreadWorkspace,
+      threadId,
       workspaceContextProjects,
       workspaceContexts,
     ],
@@ -3226,68 +3321,6 @@ export default function ChatView({
       focusComposer();
     });
   }, [focusComposer]);
-  // Context gate is intentionally prompt-independent so the suggestion list stays
-  // mounted while the user types — that lets us animate it closed instead of an
-  // abrupt unmount (which jolted the centered composer).
-  const shouldPrepareComposerSuggestions =
-    settings.enableComposerSuggestions &&
-    isLocalDraftThread &&
-    isCenteredEmptyLanding &&
-    draftThread?.entryPoint !== "terminal" &&
-    composerImages.length === 0 &&
-    composerAssistantSelections.length === 0 &&
-    composerTerminalContexts.length === 0 &&
-    queuedComposerTurns.length === 0 &&
-    !composerMenuOpen &&
-    !isComposerApprovalState &&
-    pendingUserInputs.length === 0 &&
-    !showPlanFollowUpPrompt;
-
-  const selectComposerSuggestionThreads = useMemo(() => {
-    if (!shouldPrepareComposerSuggestions) {
-      return selectEmptyComposerSuggestionThreads;
-    }
-    return createAllThreadsSelector();
-  }, [shouldPrepareComposerSuggestions]);
-  const projectSuggestionSourceThreads = useStore(selectComposerSuggestionThreads);
-  const composerSuggestions = useMemo(() => {
-    // Suggestions belong only to brand-new empty chats; existing threads should not scan history.
-    if (!shouldPrepareComposerSuggestions) {
-      return EMPTY_COMPOSER_SUGGESTIONS;
-    }
-    return deriveComposerSuggestions({
-      activeThreadId,
-      project: activeProject,
-      threads: projectSuggestionSourceThreads,
-    });
-  }, [
-    activeProject,
-    activeThreadId,
-    projectSuggestionSourceThreads,
-    shouldPrepareComposerSuggestions,
-  ]);
-  // Suggestions stay open for the whole eligible empty-landing context, even
-  // while the user types, so they remain a persistent pick list rather than a
-  // transient empty-prompt hint.
-  const showComposerSuggestions =
-    shouldPrepareComposerSuggestions && composerSuggestions.length > 0;
-  const composerSuggestionsOpen = showComposerSuggestions;
-  const onSelectComposerSuggestion = useCallback(
-    (suggestion: ComposerSuggestion) => {
-      // Append the picked prompt as a quoted block instead of replacing the
-      // composer, so clicking accumulates onto whatever is already typed.
-      const quotedPrompt = `"${suggestion.prompt}"`;
-      const current = promptRef.current;
-      const separator = current.length === 0 ? "" : /\s$/.test(current) ? "" : " ";
-      const nextPrompt = `${current}${separator}${quotedPrompt}`;
-      promptRef.current = nextPrompt;
-      setPrompt(nextPrompt);
-      setComposerCursor(collapseExpandedComposerCursor(nextPrompt, nextPrompt.length));
-      setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
-      scheduleComposerFocus();
-    },
-    [scheduleComposerFocus, setPrompt],
-  );
   useEffect(() => {
     if (!secondaryChromeReady || !pendingComposerFocusRef.current) return;
     const frame = window.requestAnimationFrame(() => {
@@ -7865,31 +7898,54 @@ export default function ChatView({
         <span className="min-w-0 truncate">{activeProjectDisplayName}</span>
       </span>
     ) : null;
-  const emptyLandingControls =
+  const hasEmptyLandingControls =
     isCenteredEmptyLanding &&
-    (isEmptyChatLanding || emptyLandingProjectChip || showEmptyLandingBranchToolbar) ? (
+    (isEmptyChatLanding || emptyLandingProjectChip || showEmptyLandingBranchToolbar);
+  const hasComposerContextControls = Boolean(activeThread && activeProject);
+  const composerBelowControls =
+    hasEmptyLandingControls || hasComposerContextControls ? (
       <div
         className={cn(
           "chat-composer-shell relative mt-0 flex flex-wrap items-center gap-x-2 gap-y-1 !rounded-t-none !rounded-b-[var(--composer-radius)] bg-[color-mix(in_srgb,var(--color-background-elevated-secondary)_76%,var(--color-background-surface)_24%)] px-2 pb-1.5 pt-2 shadow-[0_18px_36px_-26px_rgba(0,0,0,0.78)] before:pointer-events-none before:absolute before:inset-x-0 before:-top-3 before:h-3 before:bg-inherit before:content-['']",
           COMPOSER_COLUMN_FRAME_CLASS_NAME,
         )}
       >
-        {isEmptyChatLanding ? (
-          <ProjectPicker
-            align="start"
-            side="top"
-            showResetToHome={Boolean(resolvedThreadWorktreePath)}
-            selectedWorkspaceRoot={resolvedThreadWorktreePath}
-            onSelectWorkspaceRoot={handleSelectWorkspaceRoot}
-            onResetToHome={handleResetWorkspaceToHome}
-          />
-        ) : (
-          emptyLandingProjectChip
-        )}
-        {showEmptyLandingBranchToolbar ? (
-          <BranchToolbar
-            {...branchToolbarProps}
-            className="mx-0 !w-auto min-w-0 shrink-0 !justify-start !px-0 !pb-0 !pt-0"
+        {hasEmptyLandingControls ? (
+          <>
+            {isEmptyChatLanding ? (
+              <ProjectPicker
+                align="start"
+                side="top"
+                showResetToHome={Boolean(resolvedThreadWorktreePath)}
+                selectedWorkspaceRoot={resolvedThreadWorktreePath}
+                onSelectWorkspaceRoot={handleSelectWorkspaceRoot}
+                onResetToHome={handleResetWorkspaceToHome}
+              />
+            ) : (
+              emptyLandingProjectChip
+            )}
+            {showEmptyLandingBranchToolbar ? (
+              <BranchToolbar
+                {...branchToolbarProps}
+                className="mx-0 !w-auto min-w-0 shrink-0 !justify-start !px-0 !pb-0 !pt-0"
+              />
+            ) : null}
+          </>
+        ) : null}
+        {hasComposerContextControls ? (
+          <WorkspaceContextsBar
+            projects={workspaceContextProjects}
+            contexts={workspaceContexts}
+            activeContextId={activeWorkspaceContextId}
+            hidePrimaryChip={isEmptyChatLanding}
+            onBrowseFolder={() => {
+              void handleBrowseFolderForContext();
+            }}
+            onAddProjectContext={handleAddWorkspaceContext}
+            onAddBranchContext={handleAddWorkspaceBranchContext}
+            onRemoveContext={handleRemoveWorkspaceContext}
+            onMakePrimary={handleMakeWorkspaceContextPrimary}
+            onUpdateContext={handleUpdateWorkspaceContext}
           />
         ) : null}
       </div>
@@ -8391,7 +8447,7 @@ export default function ChatView({
             </div>
           </div>
         </form>
-        {emptyLandingControls}
+        {composerBelowControls}
       </>
     ) : (
       <div
@@ -8492,18 +8548,6 @@ export default function ChatView({
         />
       </header>
 
-      {activeThread && activeProject ? (
-        <WorkspaceContextsBar
-          projects={workspaceContextProjects}
-          contexts={workspaceContexts}
-          activeContextId={activeWorkspaceContextId}
-          onAddProjectContext={handleAddWorkspaceContext}
-          onRemoveContext={handleRemoveWorkspaceContext}
-          onMakePrimary={handleMakeWorkspaceContextPrimary}
-          onUpdateContext={handleUpdateWorkspaceContext}
-        />
-      ) : null}
-
       <RenameThreadDialog
         open={renameDialogOpen}
         currentTitle={activeThread.title}
@@ -8581,18 +8625,6 @@ export default function ChatView({
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
                       <BranchToolbar {...branchToolbarProps} />
                     </div>
-                  ) : null}
-                  {showComposerSuggestions ? (
-                    <DisclosureRegion
-                      open={composerSuggestionsOpen}
-                      className={COMPOSER_COLUMN_FRAME_CLASS_NAME}
-                      contentClassName="pt-5"
-                    >
-                      <ComposerSuggestions
-                        suggestions={composerSuggestions}
-                        onSelectSuggestion={onSelectComposerSuggestion}
-                      />
-                    </DisclosureRegion>
                   ) : null}
                 </div>
               </div>

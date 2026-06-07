@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 
 import treeKill from "tree-kill";
@@ -982,9 +983,10 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   }
 
   async open(raw: TerminalOpenInput): Promise<TerminalSessionSnapshot> {
-    const input = decodeTerminalOpenInput(raw);
+    const decoded = decodeTerminalOpenInput(raw);
+    const cwd = await this.resolveValidCwd(decoded.cwd);
+    const input = { ...decoded, cwd };
     return this.runWithThreadLock(input.threadId, async () => {
-      await this.assertValidCwd(input.cwd);
 
       const sessionKey = toSessionKey(input.threadId, input.terminalId);
       const existing = this.sessions.get(sessionKey);
@@ -1182,9 +1184,10 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   }
 
   async restart(raw: TerminalRestartInput): Promise<TerminalSessionSnapshot> {
-    const input = decodeTerminalRestartInput(raw);
+    const decoded = decodeTerminalRestartInput(raw);
+    const cwd = await this.resolveValidCwd(decoded.cwd);
+    const input = { ...decoded, cwd };
     return this.runWithThreadLock(input.threadId, async () => {
-      await this.assertValidCwd(input.cwd);
 
       const sessionKey = toSessionKey(input.threadId, input.terminalId);
       let session = this.sessions.get(sessionKey);
@@ -2219,6 +2222,28 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     if (!stats.isDirectory()) {
       throw new Error(`Terminal cwd is not a directory: ${cwd}`);
     }
+  }
+
+  private async resolveValidCwd(requestedCwd: string): Promise<string> {
+    const candidates = [requestedCwd, homedir(), process.cwd()].filter(
+      (value, index, array) => value.trim().length > 0 && array.indexOf(value) === index,
+    );
+
+    for (const candidate of candidates) {
+      try {
+        await this.assertValidCwd(candidate);
+        if (candidate !== requestedCwd) {
+          console.warn(
+            `[terminal] cwd does not exist: ${requestedCwd}; falling back to ${candidate}`,
+          );
+        }
+        return candidate;
+      } catch {
+        continue;
+      }
+    }
+
+    throw new Error(`Terminal cwd does not exist: ${requestedCwd}`);
   }
 
   private async closeSession(

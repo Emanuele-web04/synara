@@ -8,6 +8,7 @@
  */
 import { spawn } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { extname, join } from "node:path";
 
 import { EDITORS, type EditorId } from "@t3tools/contracts";
@@ -293,15 +294,43 @@ export const resolveEditorLaunch = Effect.fnUntraced(function* (
   return { command: fileManagerCommandForPlatform(platform), args: [input.cwd] };
 });
 
+export const CROSSUSAGE_LAUNCH_COMMAND = "usage";
+
+const CROSSUSAGE_APPIMAGE_ARGS = ["--no-sandbox"] as const;
+
+export function resolveCrossUsageDetachedLaunch(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): EditorLaunch {
+  const candidates = [
+    env.CROSSUSAGE_APPIMAGE?.trim(),
+    join(homedir(), "Main/AI-tools/Crossusage.AppImage"),
+  ].filter((value): value is string => Boolean(value));
+
+  for (const command of candidates) {
+    if (isCommandAvailable(command, { platform, env })) {
+      return { command, args: [...CROSSUSAGE_APPIMAGE_ARGS] };
+    }
+  }
+
+  // Interactive login shell loads ~/.bashrc aliases such as `usage`.
+  return { command: "bash", args: ["-lic", CROSSUSAGE_LAUNCH_COMMAND] };
+}
+
 export function resolveDetachedShellLaunch(
   command: string,
   platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
 ): EditorLaunch {
   if (platform === "win32") {
     return { command: "cmd.exe", args: ["/c", command] };
   }
 
-  return { command: "bash", args: ["-lc", command] };
+  if (command.trim() === CROSSUSAGE_LAUNCH_COMMAND) {
+    return resolveCrossUsageDetachedLaunch(env, platform);
+  }
+
+  return { command: "bash", args: ["-lic", command] };
 }
 
 export const launchDetached = (launch: EditorLaunch) =>

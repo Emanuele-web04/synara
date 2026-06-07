@@ -1,12 +1,15 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { assertSuccess } from "@effect/vitest/utils";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { FileSystem, Path, Effect } from "effect";
 
 import {
   isCommandAvailable,
   launchDetached,
   resolveAvailableEditors,
+  resolveCrossUsageDetachedLaunch,
   resolveDetachedShellLaunch,
   resolveEditorLaunch,
 } from "./open";
@@ -261,11 +264,41 @@ it.layer(NodeServices.layer)("resolveAvailableEditors", (it) => {
   );
 });
 
-it("resolveDetachedShellLaunch uses a login shell on Unix", () => {
-  assert.deepEqual(resolveDetachedShellLaunch("usage", "linux"), {
+it("resolveDetachedShellLaunch launches CrossUsage directly when the AppImage exists", () => {
+  const launch = resolveDetachedShellLaunch("usage", "linux");
+  const appImagePath = join(homedir(), "Main/AI-tools/Crossusage.AppImage");
+  if (isCommandAvailable(appImagePath, { platform: "linux" })) {
+    assert.deepEqual(launch, {
+      command: appImagePath,
+      args: ["--no-sandbox"],
+    });
+    return;
+  }
+
+  assert.deepEqual(launch, {
     command: "bash",
-    args: ["-lc", "usage"],
+    args: ["-lic", "usage"],
   });
+});
+
+it.layer(NodeServices.layer)("resolveCrossUsageDetachedLaunch prefers CROSSUSAGE_APPIMAGE", (it) => {
+  it.effect("uses an executable path from CROSSUSAGE_APPIMAGE", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const appImagePath = path.join(yield* fs.makeTempDirectoryScoped(), "Crossusage.AppImage");
+      yield* fs.writeFileString(appImagePath, "#!/bin/sh\nexit 0\n");
+      yield* fs.chmod(appImagePath, 0o755);
+
+      assert.deepEqual(
+        resolveCrossUsageDetachedLaunch({ CROSSUSAGE_APPIMAGE: appImagePath }, "linux"),
+        {
+          command: appImagePath,
+          args: ["--no-sandbox"],
+        },
+      );
+    }),
+  );
 });
 
 it("resolveDetachedShellLaunch uses cmd on Windows", () => {

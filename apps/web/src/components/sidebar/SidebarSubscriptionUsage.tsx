@@ -6,6 +6,7 @@ import { memo, useCallback, useMemo, useState, type MouseEvent } from "react";
 import { HiOutlineChartBarSquare } from "react-icons/hi2";
 
 import { ProviderIcon } from "~/components/ProviderIcon";
+import { toastManager } from "~/components/ui/toast";
 import { SidebarSectionToolbar } from "~/components/SidebarSectionToolbar";
 import { SidebarGlyph } from "~/components/sidebarGlyphs";
 import { SidebarLeadingIcon } from "~/components/SidebarLeadingIcon";
@@ -141,8 +142,13 @@ export function SidebarSubscriptionUsage({ className }: { className?: string | u
           void queryClient.invalidateQueries({ queryKey: openUsageQueryKeys.providers });
           scheduleUsageRefetches();
         })
-        .catch(() => {
-          // CrossUsage may already be running; still refetch in case the API is up.
+        .catch((error: unknown) => {
+          toastManager.add({
+            title: "Could not start CrossUsage",
+            description:
+              error instanceof Error ? error.message : "Failed to run the usage launcher.",
+            type: "error",
+          });
           void queryClient.invalidateQueries({ queryKey: openUsageQueryKeys.providers });
           scheduleUsageRefetches();
         })

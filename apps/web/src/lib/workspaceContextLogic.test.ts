@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { patchThreadWorkspaceContext, updateThreadWorkspaceContext } from "./workspaceContextLogic";
+import {
+  buildProjectWorkspaceContext,
+  hasWorkspaceContextSignature,
+  patchThreadWorkspaceContext,
+  updateThreadWorkspaceContext,
+  workspaceContextSignature,
+} from "./workspaceContextLogic";
 
 describe("workspaceContextLogic", () => {
   const baseContext = {
@@ -41,5 +47,47 @@ describe("workspaceContextLogic", () => {
     });
     expect(next[0]?.branch).toBe("main");
     expect(next[1]?.branch).toBe("develop");
+  });
+
+  it("builds distinct ids for two branches in the same repo", () => {
+    const project = {
+      id: "repo-a" as const,
+      name: "Repo A",
+      folderName: "repo-a",
+      cwd: "/repos/a",
+    };
+    const main = buildProjectWorkspaceContext({ project, branch: "main" });
+    const feature = buildProjectWorkspaceContext({ project, branch: "feature/x" });
+    expect(main.id).not.toBe(feature.id);
+    expect(workspaceContextSignature(main)).not.toBe(workspaceContextSignature(feature));
+  });
+
+  it("detects duplicate branch signatures within a context set", () => {
+    const project = {
+      id: "repo-a" as const,
+      name: "Repo A",
+      folderName: "repo-a",
+      cwd: "/repos/a",
+    };
+    const contexts = [
+      buildProjectWorkspaceContext({ project, branch: "main" }),
+      buildProjectWorkspaceContext({ project, branch: "feature/x" }),
+    ];
+    expect(
+      hasWorkspaceContextSignature(contexts, {
+        projectId: project.id,
+        envMode: "local",
+        branch: "main",
+        worktreePath: null,
+      }),
+    ).toBe(true);
+    expect(
+      hasWorkspaceContextSignature(contexts, {
+        projectId: project.id,
+        envMode: "local",
+        branch: "develop",
+        worktreePath: null,
+      }),
+    ).toBe(false);
   });
 });
