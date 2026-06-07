@@ -1,6 +1,6 @@
 // FILE: DiffPanel.logic.ts
 // Purpose: Resolve the thread context the diff panel should use across server-backed and local draft chats.
-// Exports: resolveDiffPanelThread
+// Exports: resolveDiffPanelThread, resolveDiffSelectAllArmed
 // Depends on: ChatView.logic draft-thread normalization.
 
 import { DEFAULT_MODEL_BY_PROVIDER, type ModelSelection, type ThreadId } from "@t3tools/contracts";
@@ -32,4 +32,26 @@ export function resolveDiffPanelThread(input: {
     },
     null,
   );
+}
+
+// Tracks a select-all-then-copy gesture so the copy handler can swap in the full serialized diff; the diff renders into shadow DOM, so the native copy event never reaches the viewport.
+export function resolveDiffSelectAllArmed(
+  previous: boolean,
+  event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey">,
+  isWithinDiffViewport: boolean,
+): boolean {
+  const key = event.key.toLowerCase();
+  const hasShortcutModifier = event.metaKey || event.ctrlKey;
+
+  if (hasShortcutModifier && key === "a") {
+    return isWithinDiffViewport;
+  }
+  if (hasShortcutModifier && key === "c") {
+    return previous;
+  }
+  // Bare modifier keydowns precede the shortcut key, so they don't count as a new selection.
+  if (key === "meta" || key === "control" || key === "shift" || key === "alt") {
+    return previous;
+  }
+  return false;
 }
