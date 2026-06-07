@@ -22,6 +22,76 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.1.4",
+    date: "Jun 7",
+    features: [
+      {
+        id: "workspace-pinning-depth",
+        title: "Important work can stay pinned",
+        description:
+          "Projects, threads, and specific transcript messages can now be pinned so the context you keep returning to stays close at hand across sessions.",
+        details:
+          "Pin state is now projected through the orchestration model, stored in dedicated persistence columns, reconciled for older databases, and shared with focused client stores so sidebar ordering, project rows, and thread detail all agree after reloads.",
+      },
+      {
+        id: "environment-memory",
+        title: "Thread context has a memory shelf",
+        description:
+          "The environment panel now carries pinned messages and editable notes, giving long-running chats a durable place for decisions, constraints, and useful references.",
+        details:
+          "Pinned message actions round-trip through server commands and snapshots, while thread notes autosave through the same projected thread detail path. This keeps the side panel useful without turning the transcript itself into a scratchpad.",
+      },
+      {
+        id: "recent-view-switcher",
+        title: "Jump between recent views faster",
+        description:
+          "A new recent-view switcher lets you move through recent chats, terminals, and workspace surfaces with keyboard-first navigation and visible keycap hints.",
+        details:
+          "Recent views are tracked in a dedicated store, activated through shared route logic, and covered by browser and unit tests so switching does not lose terminal/workspace state or collide with existing global shortcuts.",
+      },
+      {
+        id: "composer-mentions-drafts",
+        title: "Composer references behave better",
+        description:
+          "Mention chips, draft restoration, queued composer headers, picker sizing, and empty-chat controls were cleaned up so references stay readable while you build prompts.",
+        details:
+          "Mention parsing now has shared helpers and tests, composer drafts keep stronger thread/project references, and compact controls use consistent iconography across the empty state and active chat surface.",
+      },
+      {
+        id: "resumable-desktop-updates",
+        title: "Desktop updates can resume",
+        description:
+          "The desktop updater now has resumable download infrastructure with coverage for partial files, retries, checksum-style state, and release browser test fixes.",
+        details:
+          "The update downloader writes through a dedicated resumable path, validates persisted metadata, handles interrupted ranges, and is tested separately from the Electron main process wiring so future updater changes have a sturdier base.",
+      },
+      {
+        id: "git-action-guardrails",
+        title: "Git actions know when pull is available",
+        description:
+          "Git action controls now surface pull availability more accurately and avoid offering branch actions that cannot safely run for the current repository state.",
+        details:
+          "The Git core contract, broadcaster, React query helpers, and UI control logic now carry pull availability together, so action buttons line up with upstream/behind checks instead of guessing locally in the component.",
+      },
+      {
+        id: "claude-terminal-reliability",
+        title: "Runtime failures are easier to survive",
+        description:
+          "External Claude shutdowns, terminal cleanup, websocket RPC errors, and provider session recovery picked up extra guards for reconnects and interrupted work.",
+        details:
+          "Claude SIGTERM from outside Synara is treated as a benign suspend path, terminal process cleanup has stronger tests, and websocket RPC failure handling is less likely to leave the UI believing a request is still in flight.",
+      },
+      {
+        id: "migration-and-release-hardening",
+        title: "Migrations and release checks got sharper",
+        description:
+          "Pinned-state migrations, snapshot projection tests, browser release tests, shortcut tests, and shared pinning logic were expanded to keep this deeper state model predictable.",
+        details:
+          "New migrations cover pinned messages, thread notes, and project pins; legacy pinned-thread reconciliation was tightened; and the release suite now exercises the new state through contracts, server projection, shared helpers, and web UI logic.",
+      },
+    ],
+  },
+  {
     version: "0.1.3",
     date: "Jun 5",
     features: [
