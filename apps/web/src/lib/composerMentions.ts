@@ -3,10 +3,7 @@
 // Layer: Web composer helper
 // Exports: mention token formatters plus regex helpers used by composer parsing and prompt sync.
 
-import type {
-  ProviderMentionReference,
-  ProviderSkillReference,
-} from "@t3tools/contracts";
+import type { ProviderMentionReference, ProviderSkillReference } from "@t3tools/contracts";
 
 export function createComposerMentionTokenRegex(options: {
   includeTrailingTokenAtEnd: boolean;
@@ -40,10 +37,7 @@ export function promptIncludesSkillMention(
   const escapedSkillName = escapeRegExp(skillName);
   const prefixes = provider === "pi" ? ["/skill:"] : ["/", "$"];
   return prefixes.some((prefix) => {
-    const pattern = new RegExp(
-      `(^|\\s)${escapeRegExp(prefix)}${escapedSkillName}(?=\\s|$)`,
-      "i",
-    );
+    const pattern = new RegExp(`(^|\\s)${escapeRegExp(prefix)}${escapedSkillName}(?=\\s|$)`, "i");
     return pattern.test(prompt);
   });
 }
@@ -91,7 +85,9 @@ export function providerMentionMatchesToken(
   token: string,
 ): boolean {
   const normalizedToken = normalizeMentionNameKey(token);
-  return normalizedToken.length > 0 && collectProviderMentionTokenKeys(mention).has(normalizedToken);
+  return (
+    normalizedToken.length > 0 && collectProviderMentionTokenKeys(mention).has(normalizedToken)
+  );
 }
 
 const PROMPT_MENTION_NAME_REGEX = createComposerMentionTokenRegex({

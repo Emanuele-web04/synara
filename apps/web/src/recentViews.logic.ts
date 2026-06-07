@@ -3,7 +3,7 @@
 // Layer: UI state logic
 // Exports: recent view types plus MRU update, pruning, and display derivation helpers
 
-import type { ProjectId, ThreadId } from "@t3tools/contracts";
+import type { ProjectId, ProviderKind, ThreadId } from "@t3tools/contracts";
 import type { Project, SidebarThreadSummary } from "./types";
 
 export const MAX_RECENT_VIEWS = 5;
@@ -36,6 +36,7 @@ export interface RecentViewDisplayEntry {
   isPinned: boolean;
   isSplit: boolean;
   isTerminal: boolean;
+  provider?: ProviderKind | undefined;
 }
 
 export interface RecentViewWorkspaceSummary {
@@ -238,8 +239,10 @@ export function buildRecentViewDisplayEntries(input: {
 
     switch (view.kind) {
       case "thread": {
-        const thread = input.threadsById[view.threadId] ?? input.draftThreadsById?.[view.threadId];
+        const summary = input.threadsById[view.threadId];
+        const thread = summary ?? input.draftThreadsById?.[view.threadId];
         const projectName = thread ? projectNameById.get(thread.projectId) : null;
+        const provider = summary?.modelSelection.provider;
         const title = normalizeOptionalId(thread?.title) ?? "New chat";
         const subtitleParts = [
           projectName ?? "Chat",
@@ -248,6 +251,7 @@ export function buildRecentViewDisplayEntries(input: {
         ].filter((part): part is string => Boolean(part));
         return {
           ...base,
+          provider,
           title,
           subtitle: subtitleParts.join(" · "),
           isPinned: pinnedThreadIds.has(view.threadId) || Boolean(thread?.isPinned),

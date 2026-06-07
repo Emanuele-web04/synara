@@ -20,10 +20,7 @@ describe("composer mention reference filtering", () => {
     const githubPlugin = { name: "github", path: "plugin://github@openai-curated" };
 
     expect(
-      filterPromptProviderMentionReferences("Open @Things please", [
-        thingsPlugin,
-        githubPlugin,
-      ]),
+      filterPromptProviderMentionReferences("Open @Things please", [thingsPlugin, githubPlugin]),
     ).toEqual([thingsPlugin]);
   });
 
@@ -38,17 +35,15 @@ describe("composer mention reference filtering", () => {
   it("matches quoted plugin mention tokens when the plugin name contains whitespace", () => {
     const plugin = { name: "Google Drive", path: "plugin://google-drive@openai-curated" };
 
-    expect(
-      filterPromptProviderMentionReferences('Use @"Google Drive" please', [plugin]),
-    ).toEqual([plugin]);
+    expect(filterPromptProviderMentionReferences('Use @"Google Drive" please', [plugin])).toEqual([
+      plugin,
+    ]);
   });
 
   it("matches plugin mention tokens from plugin:// paths when display names differ", () => {
     const plugin = { name: "Linear Plugin", path: "plugin://linear@openai-curated" };
 
-    expect(filterPromptProviderMentionReferences("Use @linear please", [plugin])).toEqual([
-      plugin,
-    ]);
+    expect(filterPromptProviderMentionReferences("Use @linear please", [plugin])).toEqual([plugin]);
   });
 
   it("keeps selected slash and dollar skills only when their prompt token remains", () => {

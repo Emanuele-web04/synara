@@ -321,6 +321,7 @@ import { SidebarHeaderTrigger } from "./ui/sidebar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
+import { useIsMobile } from "~/hooks/useMediaQuery";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import type { MessagesTimelineController } from "./chat/MessagesTimeline";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
@@ -960,8 +961,7 @@ export default function ChatView({
     ProviderMentionReference[]
   >(() => composerMentions);
   const selectedComposerSkillsRef = useRef<ProviderSkillReference[]>(selectedComposerSkills);
-  const selectedComposerMentionsRef =
-    useRef<ProviderMentionReference[]>(selectedComposerMentions);
+  const selectedComposerMentionsRef = useRef<ProviderMentionReference[]>(selectedComposerMentions);
   selectedComposerSkillsRef.current = selectedComposerSkills;
   selectedComposerMentionsRef.current = selectedComposerMentions;
   const updateSelectedComposerSkills = useCallback(
@@ -3487,6 +3487,7 @@ export default function ChatView({
   // The terminal's panel toggle mirrors the right dock's collapse control: it shows
   // or hides the side panel only when this thread already has a pane to show.
   const rightDockOpen = useRightDockStore((store) => selectRightDockState(threadId)(store).open);
+  const isMobileViewport = useIsMobile();
   // The Environment panel replaces the old header diff toggle + footer pickers for normal
   // threads; disposable (temporary/draft) threads keep the legacy inline controls.
   const isDisposableThread = useIsDisposableThread(threadId);
@@ -4390,12 +4391,7 @@ export default function ChatView({
     }
     updateSelectedComposerSkills([]);
     updateSelectedComposerMentions([]);
-  }, [
-    selectedProvider,
-    threadId,
-    updateSelectedComposerMentions,
-    updateSelectedComposerSkills,
-  ]);
+  }, [selectedProvider, threadId, updateSelectedComposerMentions, updateSelectedComposerSkills]);
 
   useLayoutEffect(() => {
     // ChatView stays mounted across thread switches, so clear thread-local overlays before paint.
@@ -7759,7 +7755,7 @@ export default function ChatView({
   // column is already narrow — right dock open or a split pane (same as header compact mode).
   // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
   const environmentUsesFloatingOverlay =
-    isTerminalEnvironmentContext || rightDockOpen || surfaceMode === "split";
+    isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
   const environmentAppliesContentInset = environmentPanelVisible && !environmentUsesFloatingOverlay;
   const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
   const environmentHeaderState = environmentEnabled

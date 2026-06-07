@@ -3,11 +3,7 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
 } from "@t3tools/contracts";
-import {
-  MAX_PINNED_PROJECTS,
-  PINNED_MESSAGES_MAX_COUNT,
-  TurnId,
-} from "@t3tools/contracts";
+import { MAX_PINNED_PROJECTS, PINNED_MESSAGES_MAX_COUNT, TurnId } from "@t3tools/contracts";
 import {
   deriveAssociatedWorktreeMetadata,
   deriveAssociatedWorktreeMetadataPatch,
