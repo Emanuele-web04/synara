@@ -379,6 +379,7 @@ import {
 import {
   ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS,
   appendVoiceTranscriptToPrompt,
+  buildComposerMenuSelectionKey,
   describeVoiceRecordingStartError,
   isVoiceAuthExpiredMessage,
   sanitizeVoiceErrorMessage,
@@ -2664,6 +2665,24 @@ export default function ChatView({
     normalComposerMenuItems,
   ]);
   const composerMenuOpen = Boolean(composerTrigger || composerCommandPicker);
+  const composerMenuSelectionKey = useMemo(
+    () =>
+      buildComposerMenuSelectionKey({
+        menuOpen: composerMenuOpen,
+        picker: composerCommandPicker,
+        triggerKind: effectiveComposerTriggerKind,
+        triggerQuery: effectiveComposerTrigger?.query ?? "",
+        items: composerMenuItems,
+      }),
+    [
+      composerCommandPicker,
+      composerMenuItems,
+      composerMenuOpen,
+      effectiveComposerTrigger?.query,
+      effectiveComposerTriggerKind,
+    ],
+  );
+  const firstComposerMenuItemId = composerMenuItems[0]?.id ?? null;
   const activeComposerMenuItem = useMemo(
     () =>
       composerMenuItems.find((item) => item.id === composerHighlightedItemId) ??
@@ -4309,16 +4328,14 @@ export default function ChatView({
   }, [activeThread?.id]);
 
   useEffect(() => {
-    if (!composerMenuOpen) {
+    if (!composerMenuOpen || composerMenuSelectionKey === null) {
       setComposerHighlightedItemId(null);
       return;
     }
-    setComposerHighlightedItemId((existing) =>
-      existing && composerMenuItems.some((item) => item.id === existing)
-        ? existing
-        : (composerMenuItems[0]?.id ?? null),
-    );
-  }, [composerMenuItems, composerMenuOpen]);
+    // Query/order changes reset Enter/Tab to the ranked first row; identical
+    // recomputes do not override a highlight moved by arrow keys or pointer.
+    setComposerHighlightedItemId(firstComposerMenuItemId);
+  }, [composerMenuOpen, composerMenuSelectionKey, firstComposerMenuItemId]);
 
   useEffect(() => {
     setIsRevertingCheckpoint(false);

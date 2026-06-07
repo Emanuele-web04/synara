@@ -740,6 +740,17 @@ label:has(> select#reasoning-effort) select {
   text-underline-offset: 0.18em;
 }
 
+.chat-markdown a.chat-markdown__file-link {
+  font-weight: 500;
+}
+
+.chat-markdown a.chat-markdown__file-link .chat-markdown__file-link-icon {
+  width: 1em;
+  height: 1em;
+  margin-right: 0.3em;
+  vertical-align: -0.15em;
+}
+
 .chat-markdown blockquote {
   border-left: 2px solid var(--border);
   padding-left: 0.8rem;

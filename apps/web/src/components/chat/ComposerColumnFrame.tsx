@@ -51,7 +51,7 @@ export const ComposerColumnFrame = memo(function ComposerColumnFrame({
 
 interface ComposerStackedHeaderFrameProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
-  ref?: Ref<HTMLDivElement>;
+  ref?: Ref<HTMLDivElement> | undefined;
   /** Lets clicks pass through the side margins to the transcript underneath. */
   passthroughSideMargins?: boolean;
 }

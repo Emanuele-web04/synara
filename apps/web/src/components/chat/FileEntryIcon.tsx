@@ -11,7 +11,10 @@ import { FolderClosed } from "../FolderClosed";
 export const FileEntryIcon = memo(function FileEntryIcon(props: {
   pathValue: string;
   kind: "file" | "directory";
-  theme: "light" | "dark";
+  // Vestigial: Central icons are `currentColor` glyphs, so theme no longer
+  // affects icon selection. Optional so theme-less surfaces (e.g. markdown
+  // file links, code-block headers) can reuse this same primitive.
+  theme?: "light" | "dark" | undefined;
   className?: string;
 }) {
   // Match the look of the local filepath picker: directories always render the

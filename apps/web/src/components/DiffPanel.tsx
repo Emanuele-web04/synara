@@ -402,10 +402,7 @@ export default function DiffPanel({
   // separately via the themed row key and buildDiffPanelUnsafeCSS (cached per
   // theme). Keeping `resolvedTheme` out of the parse cache scope and these deps
   // avoids re-parsing the whole patch on every light/dark toggle.
-  const renderablePatch = useMemo(
-    () => getRenderablePatch(activeReviewPatch),
-    [activeReviewPatch],
-  );
+  const renderablePatch = useMemo(() => getRenderablePatch(activeReviewPatch), [activeReviewPatch]);
   const renderableFiles = useMemo(() => {
     if (!renderablePatch || renderablePatch.kind !== "files") {
       return [];

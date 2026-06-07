@@ -31,8 +31,8 @@ import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { fnv1a32 } from "../lib/diffRendering";
 import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeFence";
-import { getFileIconName } from "../file-icons";
-import { CentralIcon } from "~/lib/central-icons";
+import { cn } from "~/lib/utils";
+import { FileEntryIcon } from "./chat/FileEntryIcon";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
 import { LRUCache } from "../lib/lruCache";
 import { useTheme } from "../hooks/useTheme";
@@ -519,8 +519,9 @@ function CodeBlockHeaderTitle({ fence }: { fence: CodeFenceInfo }) {
   if (fence.isFileReference && fence.fileName) {
     return (
       <span className="chat-markdown-codeblock__file" title={fence.filePath ?? fence.fileName}>
-        <CentralIcon
-          name={getFileIconName(fence.filePath ?? fence.fileName)}
+        <FileEntryIcon
+          pathValue={fence.filePath ?? fence.fileName}
+          kind="file"
           className="chat-markdown-codeblock__file-icon"
         />
         <span className="chat-markdown-codeblock__file-name">{fence.fileName}</span>
@@ -687,16 +688,27 @@ function ChatMarkdown({
   }, []);
   const markdownComponents = useMemo<Components>(
     () => ({
-      a({ node: _node, href, ...props }) {
+      a({ node: _node, href, children, className, ...props }) {
         const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
         const targetPath = resolveMarkdownFileLinkTarget(restoredHref, cwd);
         if (!targetPath) {
-          return <a {...props} href={restoredHref} target="_blank" rel="noopener noreferrer" />;
+          return (
+            <a
+              {...props}
+              className={className}
+              href={restoredHref}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {children}
+            </a>
+          );
         }
 
         return (
           <a
             {...props}
+            className={cn("chat-markdown__file-link", className)}
             href={restoredHref}
             onClick={(event) => {
               event.preventDefault();
@@ -708,7 +720,14 @@ function ChatMarkdown({
                 console.warn("Native API not found. Unable to open file in editor.");
               }
             }}
-          />
+          >
+            <FileEntryIcon
+              pathValue={targetPath}
+              kind="file"
+              className="chat-markdown__file-link-icon"
+            />
+            {children}
+          </a>
         );
       },
       pre({ node: _node, children, ...props }) {

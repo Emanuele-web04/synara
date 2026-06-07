@@ -67,6 +67,22 @@ export function shouldRenderProviderHealthBanner(input: {
   return input.threadEntryPoint === "chat" && !input.terminalWorkspaceTerminalTabActive;
 }
 
+export function buildComposerMenuSelectionKey(input: {
+  menuOpen: boolean;
+  picker: string | null;
+  triggerKind: string | null;
+  triggerQuery: string;
+  items: readonly { id: string }[];
+}): string | null {
+  if (!input.menuOpen) {
+    return null;
+  }
+  const sourceKey = input.picker
+    ? `picker:${input.picker}`
+    : `trigger:${input.triggerKind ?? "none"}:${input.triggerQuery}`;
+  return `${sourceKey}\u001f${input.items.map((item) => item.id).join("\u001e")}`;
+}
+
 // Default-open policy for the Environment panel; render-time visibility is resolved separately.
 export function resolveDefaultEnvironmentPanelOpen(input: {
   environmentEnabled: boolean;

@@ -615,6 +615,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                     textFontSizePx={normalizedChatFontSizePx}
                     density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
+                    markdownCwd={markdownCwd}
+                    onImageExpand={onImageExpand}
                     {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                     {...(onOpenThread ? { onOpenThread } : {})}
                   />
@@ -949,6 +951,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               density={
                                 prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"
                               }
+                              markdownCwd={markdownCwd}
+                              onImageExpand={onImageExpand}
                               {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                               {...(onOpenThread ? { onOpenThread } : {})}
                             />
@@ -994,6 +998,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           textFontSizePx={normalizedChatFontSizePx}
                           density="compact"
                           fileDiffStatByPath={fileDiffStatByPath}
+                          markdownCwd={markdownCwd}
+                          onImageExpand={onImageExpand}
                           onOpenTurnDiff={onOpenTurnDiff}
                           {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                           {...(onOpenThread ? { onOpenThread } : {})}
@@ -1027,6 +1033,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                         textFontSizePx={normalizedChatFontSizePx}
                         density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
+                        markdownCwd={markdownCwd}
+                        onImageExpand={onImageExpand}
                         {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                         {...(onOpenThread ? { onOpenThread } : {})}
                       />
@@ -2159,6 +2167,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   textFontSizePx?: number;
   density?: "default" | "compact";
   fileDiffStatByPath?: ReadonlyMap<string, { additions: number; deletions: number }>;
+  markdownCwd: string | undefined;
+  onImageExpand: (preview: ExpandedImagePreview) => void;
   turnId?: TurnId;
   onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
   onOpenAgentActivity?: (activityId: string) => void;
@@ -2170,6 +2180,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     textFontSizePx = chatMetaFontSizePx,
     density = "default",
     fileDiffStatByPath,
+    markdownCwd,
+    onImageExpand,
     turnId,
     onOpenTurnDiff,
     onOpenAgentActivity,
@@ -2195,7 +2207,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     Boolean(preview) &&
     normalizeWorkDisplayText(heading) !== normalizeWorkDisplayText(preview ?? "");
   const rawCommand = workEntry.rawCommand ?? workEntry.command;
-  const hoverText = rawCommand ?? displayText;
+  const hoverText = rawCommand ?? (showInlineAgentTaskPreview ? heading : displayText);
   const changedFiles = workEntry.changedFiles ?? [];
   const showEditedRows = isFileChangeWorkEntry(workEntry) && changedFiles.length > 0;
   const showSubagentRows =
@@ -2438,17 +2450,18 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                     >
                       {heading}
                     </p>
-                    <p
-                      className="text-muted-foreground/42"
+                    <ChatMarkdown
+                      text={preview ?? ""}
+                      cwd={markdownCwd}
+                      isStreaming={false}
+                      className="leading-relaxed"
                       style={{
+                        color: "color-mix(in srgb, var(--muted-foreground) 72%, transparent)",
                         fontSize: `${Math.max(11, rowFontSizePx - 1)}px`,
                         lineHeight: compact ? "18px" : "19px",
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-word",
                       }}
-                    >
-                      {preview}
-                    </p>
+                      onImageExpand={onImageExpand}
+                    />
                   </div>
                 ) : (
                   <p
