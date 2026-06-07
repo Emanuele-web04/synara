@@ -1,3 +1,9 @@
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createServer, request as httpRequest, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -7,8 +13,11 @@ import {
   computeRetryDelayMs,
   DEFAULT_RESUMABLE_DOWNLOAD_CONFIG,
   installIdleTimeout,
+  installResumableUpdateDownloader,
   isCrossOrigin,
   parseContentRangeTotal,
+  type ResumableDownloaderTarget,
+  type UpdaterHttpExecutorLike,
   selectSha512Encoding,
   shouldGiveUp,
 } from "./resumableUpdateDownload";
@@ -373,3 +382,179 @@ describe("shouldGiveUp", () => {
     ).toBe(true);
   });
 });
+
+// End-to-end integration: a real loopback HTTP server, the real Electron-style
+// request shape (node's http ClientRequest/IncomingMessage match it structurally),
+// and the real installResumableUpdateDownloader wiring. These prove the behaviour
+// the pure helpers can only imply: the downloader actually resumes from a byte
+// offset after a mid-stream drop and verifies the published checksum.
+describe("installResumableUpdateDownloader (integration)", () => {
+  // Deterministic 256 KiB payload so resume offsets are reproducible.
+  const payload = Buffer.alloc(256 * 1024);
+  for (let i = 0; i < payload.length; i += 1) {
+    payload[i] = i % 251;
+  }
+  const payloadSha512Base64 = createHash("sha512").update(payload).digest("base64");
+
+  let tempDir: string;
+  let server: Server | null = null;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "resumable-dl-"));
+  });
+  afterEach(async () => {
+    if (server) {
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
+      server = null;
+    }
+    await rm(tempDir, { force: true, recursive: true });
+  });
+
+  // node's http request/response are structurally compatible with the Electron
+  // net shapes the downloader expects (on data/end/error/aborted, pause/resume,
+  // statusCode/headers; on error/abort/close, end, abort). This adapter is the
+  // executor.createRequest the real updater would provide. The unused Electron
+  // `redirect` event is simply never emitted by node, which is fine for the
+  // same-origin loopback transfer under test.
+  function makeExecutor(baseUrl: URL): UpdaterHttpExecutorLike {
+    return {
+      createRequest: (
+        options: Parameters<UpdaterHttpExecutorLike["createRequest"]>[0],
+        callback: Parameters<UpdaterHttpExecutorLike["createRequest"]>[1],
+      ) =>
+        httpRequest(
+          {
+            protocol: baseUrl.protocol,
+            hostname: baseUrl.hostname,
+            port: baseUrl.port,
+            path: String(options.path ?? "/"),
+            method: "GET",
+            headers: (options.headers ?? {}) as Record<string, string>,
+          },
+          (res) => callback(res as never),
+        ) as unknown as ReturnType<UpdaterHttpExecutorLike["createRequest"]>,
+      download: () => {
+        throw new Error("download must be replaced by installResumableUpdateDownloader");
+      },
+    };
+  }
+
+  function makeCancellationToken() {
+    return {
+      cancelled: false,
+      createPromise<T>(
+        executor: (
+          resolve: (value: T) => void,
+          reject: (error: Error) => void,
+          onCancel: (handler: () => void) => void,
+        ) => void,
+      ): Promise<T> {
+        return new Promise<T>((resolve, reject) => {
+          executor(resolve, reject, () => {});
+        });
+      },
+    };
+  }
+
+  it("returns false when the executor is not yet available", () => {
+    expect(installResumableUpdateDownloader({ httpExecutor: null })).toBe(false);
+  });
+
+  it("resumes from the on-disk offset after a mid-stream drop and verifies sha512", async () => {
+    let fullRequests = 0;
+    let rangeRequests = 0;
+    server = createServer((req, res) => {
+      const range = req.headers["range"];
+      if (typeof range === "string") {
+        rangeRequests += 1;
+        const start = Number(range.match(/bytes=(\d+)-/)?.[1] ?? "0");
+        const slice = payload.subarray(start);
+        res.writeHead(206, {
+          "Content-Type": "application/octet-stream",
+          "Content-Length": String(slice.length),
+          "Content-Range": `bytes ${start}-${payload.length - 1}/${payload.length}`,
+        });
+        res.end(slice);
+        return;
+      }
+      // First connection: deliver a clean prefix, then sever the socket so the
+      // client must resume from wherever it got to (the core stall scenario).
+      fullRequests += 1;
+      res.writeHead(200, {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": String(payload.length),
+      });
+      res.write(payload.subarray(0, payload.length / 2), () => {
+        // FIN after flush: the prefix is delivered, then the stream ends early.
+        res.socket?.end();
+      });
+    });
+    const baseUrl = await listen(server);
+
+    const updater: ResumableDownloaderTarget = { httpExecutor: makeExecutor(baseUrl) };
+    const installed = installResumableUpdateDownloader(
+      updater,
+      { idleTimeoutMs: 2_000, progressThrottleMs: 0 },
+      silentLogger(),
+    );
+    expect(installed).toBe(true);
+
+    const destination = join(tempDir, "update.zip");
+    const progressPercents: number[] = [];
+    const returned = await updater.httpExecutor!.download(baseUrl, destination, {
+      headers: {},
+      cancellationToken: makeCancellationToken(),
+      sha512: payloadSha512Base64,
+      onProgress: (info) => progressPercents.push(info.percent),
+    });
+
+    expect(returned).toBe(destination);
+    // The downloaded file is byte-for-byte the published payload...
+    const downloaded = await readFile(destination);
+    expect(downloaded.equals(payload)).toBe(true);
+    // ...assembled across one dropped attempt + at least one ranged resume.
+    expect(fullRequests).toBe(1);
+    expect(rangeRequests).toBeGreaterThanOrEqual(1);
+    expect(progressPercents.at(-1)).toBe(100);
+  });
+
+  it("rejects and re-downloads once when the checksum does not match", async () => {
+    let requests = 0;
+    server = createServer((req, res) => {
+      requests += 1;
+      res.writeHead(200, {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": String(payload.length),
+      });
+      res.end(payload);
+    });
+    const baseUrl = await listen(server);
+
+    const updater: ResumableDownloaderTarget = { httpExecutor: makeExecutor(baseUrl) };
+    installResumableUpdateDownloader(updater, { progressThrottleMs: 0 }, silentLogger());
+
+    const destination = join(tempDir, "update.zip");
+    await expect(
+      updater.httpExecutor!.download(baseUrl, destination, {
+        headers: {},
+        cancellationToken: makeCancellationToken(),
+        sha512: createHash("sha512").update("not-the-payload").digest("base64"),
+      }),
+    ).rejects.toThrow(/checksum mismatch/i);
+    // Verifies the bad bytes were discarded and re-fetched from zero exactly once.
+    expect(requests).toBe(2);
+  });
+});
+
+function silentLogger() {
+  return { info: () => {}, warn: () => {}, error: () => {} };
+}
+
+function listen(server: Server): Promise<URL> {
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address() as AddressInfo;
+      resolve(new URL(`http://127.0.0.1:${address.port}/update.zip`));
+    });
+  });
+}

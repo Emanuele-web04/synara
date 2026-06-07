@@ -223,6 +223,7 @@ import {
   XIcon,
 } from "~/lib/icons";
 import { ComposerQueuedHeader } from "./chat/ComposerQueuedHeader";
+import { ComposerLiveChangesHeader } from "./chat/ComposerLiveChangesHeader";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
@@ -346,6 +347,7 @@ import { ComposerSuggestions } from "./chat/ComposerSuggestions";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
 import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
+import { ComposerColumnFrame } from "./chat/ComposerColumnFrame";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
 import { getComposerProviderState } from "./chat/composerProviderRegistry";
 import {
@@ -2907,6 +2909,27 @@ export default function ChatView({
       },
     });
   }, [diffEnvironmentPending, diffOpen, navigate, onToggleDiffPanel, threadId]);
+  // Open-only diff action (no toggle): used by affordances like the live-changes
+  // "Review" strip where a second click should never close an already-open panel.
+  const onOpenDiff = useCallback(() => {
+    if (diffEnvironmentPending || resolvedDiffOpen) {
+      return;
+    }
+    if (onToggleDiffPanel) {
+      onToggleDiffPanel();
+      return;
+    }
+    void navigate({
+      to: "/$threadId",
+      params: { threadId },
+      replace: true,
+      search: (previous) => ({
+        ...stripDiffSearchParams(previous),
+        panel: "diff",
+        diff: "1",
+      }),
+    });
+  }, [diffEnvironmentPending, navigate, onToggleDiffPanel, resolvedDiffOpen, threadId]);
   const onToggleBrowser = useCallback(() => {
     if (onToggleBrowserPanel) {
       onToggleBrowserPanel();
@@ -7782,7 +7805,6 @@ export default function ChatView({
   const composerSection =
     secondaryChromeReady && shouldRenderChatPaneContent ? (
       <>
-        {renderActiveTaskListCard()}
         <form
           ref={composerFormRef}
           onSubmit={onSend}
@@ -7790,7 +7812,16 @@ export default function ChatView({
           data-chat-composer-form="true"
           data-chat-pane-scope={paneScopeId}
         >
-          <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
+          <ComposerColumnFrame>
+            {!latestTurnSettled && repoDiffTotals.fileCount > 0 ? (
+              <ComposerLiveChangesHeader
+                fileCount={repoDiffTotals.fileCount}
+                additions={repoDiffTotals.additions}
+                deletions={repoDiffTotals.deletions}
+                onReview={onOpenDiff}
+              />
+            ) : null}
+            {renderActiveTaskListCard()}
             <ComposerQueuedHeader
               queuedTurns={queuedComposerTurns}
               onSteer={onSteerQueuedComposerTurn}
@@ -8217,7 +8248,7 @@ export default function ChatView({
                 )}
               </div>
             </div>
-          </div>
+          </ComposerColumnFrame>
         </form>
         {emptyLandingControls}
       </>

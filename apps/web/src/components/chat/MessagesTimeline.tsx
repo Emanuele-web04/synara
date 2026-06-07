@@ -10,6 +10,7 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { resolveLatestTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
+import { pluralize } from "@t3tools/shared/text";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
   memo,
@@ -52,6 +53,7 @@ import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImage
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesTree } from "./ChangedFilesTree";
 import { DiffStatLabel } from "./DiffStatLabel";
+import { ReviewChangesButton } from "./ReviewChangesButton";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { MentionChipIcon } from "./MentionChipIcon";
 import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
@@ -126,6 +128,9 @@ import { RiRobot3Line } from "react-icons/ri";
 import { deriveUserMessagePreviewState } from "./userMessagePreview";
 
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
+// Changed-files list in the per-turn card is capped so large turns stay compact;
+// the rest are revealed via an inline "Show more" row.
+const MAX_VISIBLE_CHANGED_FILES = 5;
 // The composer overlaps the transcript by design, so the list needs extra tail
 // space beyond the overlap to keep final cards from sitting flush against it.
 const MIN_BOTTOM_CONTENT_INSET_PX = 64;
@@ -334,6 +339,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const [expandedFileChangesByTurnId, setExpandedFileChangesByTurnId] = useState<
     Record<string, boolean>
   >({});
+  // Tracks which turns have their changed-files list expanded past MAX_VISIBLE_CHANGED_FILES.
+  const [expandedFileListByTurnId, setExpandedFileListByTurnId] = useState<Record<string, boolean>>(
+    {},
+  );
   const [expandedUserMessagesById, setExpandedUserMessagesById] = useState<Record<string, boolean>>(
     {},
   );
@@ -347,6 +356,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       editingUserMessageId,
       expandedCollapsedWork,
       expandedFileChangesByTurnId,
+      expandedFileListByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
       highlightedMessageId,
@@ -357,6 +367,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       editingUserMessageId,
       expandedCollapsedWork,
       expandedFileChangesByTurnId,
+      expandedFileListByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
       highlightedMessageId,
@@ -528,6 +539,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     setExpandedFileChangesByTurnId((current) => ({
       ...current,
       [turnId]: !(current[turnId] ?? true),
+    }));
+  }, []);
+  const toggleFileListExpanded = useCallback((turnId: TurnId) => {
+    setExpandedFileListByTurnId((current) => ({
+      ...current,
+      [turnId]: !(current[turnId] ?? false),
     }));
   }, []);
   const cancelUserMessageEdit = useCallback(() => {
@@ -1092,6 +1109,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   if (checkpointFiles.length === 0) return null;
                   const fileChangesExpanded =
                     expandedFileChangesByTurnId[turnSummary.turnId] ?? true;
+                  const fileListExpanded = expandedFileListByTurnId[turnSummary.turnId] ?? false;
                   const correspondingUserMessageId = userMessageIdByAssistantMessageId.get(
                     row.message.id,
                   );
@@ -1106,12 +1124,52 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     (sum, file) => sum + (file.deletions ?? 0),
                     0,
                   );
-                  const editedFilesLabel =
-                    checkpointFiles.length === 1
-                      ? "Edited 1 file"
-                      : `Edited ${checkpointFiles.length} files`;
+                  const editedFilesLabel = `Edited ${checkpointFiles.length} ${pluralize(
+                    checkpointFiles.length,
+                    "file",
+                  )}`;
+                  const firstCheckpointFiles = checkpointFiles.slice(0, MAX_VISIBLE_CHANGED_FILES);
+                  const overflowCheckpointFiles = checkpointFiles.slice(MAX_VISIBLE_CHANGED_FILES);
+                  const renderCheckpointFileRow = (
+                    file: (typeof checkpointFiles)[number],
+                    withFirstReset: boolean,
+                  ) => (
+                    <button
+                      key={file.path}
+                      type="button"
+                      className={cn(
+                        "group/file-row flex w-full items-center gap-2 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2.5 text-left transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-transparent dark:hover:bg-transparent",
+                        withFirstReset && "first:border-t-0",
+                      )}
+                      onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
+                    >
+                      <FileEntryIcon
+                        pathValue={file.path}
+                        kind="file"
+                        theme={resolvedTheme}
+                        className="size-4 shrink-0 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80"
+                      />
+                      <span
+                        className="font-system-ui truncate font-normal text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
+                        style={{ fontSize: chatTypographyStyle.fontSize }}
+                      >
+                        {file.path}
+                      </span>
+                      {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
+                        <span
+                          className="font-system-ui ml-auto shrink-0 tabular-nums"
+                          style={{ fontSize: chatTypographyStyle.fontSize }}
+                        >
+                          <DiffStatLabel
+                            additions={file.additions ?? 0}
+                            deletions={file.deletions ?? 0}
+                          />
+                        </span>
+                      )}
+                    </button>
+                  );
                   return (
-                    <div className="mt-1 mb-4 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)]">
+                    <div className="mt-1 mb-4 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
                       <div
                         className={cn(
                           "flex items-center justify-between gap-3 bg-[var(--app-user-message-background)] px-3 py-1.5",
@@ -1153,14 +1211,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               <Undo2Icon className="size-3" />
                             </button>
                           )}
-                          <button
-                            type="button"
-                            className="rounded-md border border-[color:var(--color-border-light)] px-2.5 py-0.5 text-foreground/90 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground"
+                          <ReviewChangesButton
                             style={{ fontSize: chatTypographyStyle.fontSize }}
                             onClick={() => onOpenTurnDiff(turnSummary.turnId)}
-                          >
-                            Review
-                          </button>
+                          />
                           <button
                             type="button"
                             className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground/80"
@@ -1199,40 +1253,37 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                             />
                           </div>
                         ) : (
-                          checkpointFiles.map((file) => (
-                            <button
-                              key={file.path}
-                              type="button"
-                              className="group/file-row flex w-full items-center gap-2 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2.5 text-left first:border-t-0 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-transparent dark:hover:bg-transparent"
-                              onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
-                            >
-                              <FileEntryIcon
-                                pathValue={file.path}
-                                kind="file"
-                                theme={resolvedTheme}
-                                className="size-4 shrink-0 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80"
-                              />
-                              <span
-                                className="font-system-ui truncate font-normal text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
-                                style={{
-                                  fontSize: chatTypographyStyle.fontSize,
-                                }}
+                          <>
+                            {firstCheckpointFiles.map((file) =>
+                              renderCheckpointFileRow(file, true),
+                            )}
+                            {overflowCheckpointFiles.length > 0 ? (
+                              <DisclosureRegion open={fileListExpanded}>
+                                {overflowCheckpointFiles.map((file) =>
+                                  renderCheckpointFileRow(file, false),
+                                )}
+                              </DisclosureRegion>
+                            ) : null}
+                            {overflowCheckpointFiles.length > 0 ? (
+                              <button
+                                type="button"
+                                className="flex w-full items-center justify-start gap-1.5 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2 font-system-ui font-normal text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground"
+                                style={{ fontSize: chatTypographyStyle.fontSize }}
+                                aria-expanded={fileListExpanded}
+                                onClick={() => toggleFileListExpanded(turnSummary.turnId)}
                               >
-                                {file.path}
-                              </span>
-                              {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
-                                <span
-                                  className="font-system-ui ml-auto shrink-0 tabular-nums"
-                                  style={{ fontSize: chatTypographyStyle.fontSize }}
-                                >
-                                  <DiffStatLabel
-                                    additions={file.additions ?? 0}
-                                    deletions={file.deletions ?? 0}
-                                  />
+                                <DisclosureChevron open={fileListExpanded} />
+                                <span>
+                                  {fileListExpanded
+                                    ? "Show less"
+                                    : `Show ${overflowCheckpointFiles.length} more ${pluralize(
+                                        overflowCheckpointFiles.length,
+                                        "file",
+                                      )}`}
                                 </span>
-                              )}
-                            </button>
-                          ))
+                              </button>
+                            ) : null}
+                          </>
                         )}
                       </DisclosureRegion>
                     </div>

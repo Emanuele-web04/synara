@@ -109,6 +109,9 @@ export const COMPOSER_COLUMN_FRAME_CLASS_NAME = CHAT_COLUMN_FRAME_CLASS_NAME;
  * Frame for rows stacked above the composer (queued steer/queue rows, active task
  * list). Keeps stacked activity on the same 11/12-width rail as queued rows so
  * the composer input can remain a distinct, fully rounded surface underneath.
+ *
+ * Prefer ComposerStackedHeaderFrame inside ComposerColumnFrame instead of using
+ * this token directly so stacked panels stay relative to the composer column.
  */
 export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-11/12 min-w-0";
 

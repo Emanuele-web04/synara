@@ -8,9 +8,8 @@
 import { memo, type RefObject } from "react";
 
 import type { ActiveTaskListState } from "../../session-logic";
-import { cn } from "~/lib/utils";
 import { ActiveTaskListCard } from "./ActiveTaskListCard";
-import { COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME } from "./composerPickerStyles";
+import { ComposerStackedHeaderFrame } from "./ComposerColumnFrame";
 
 interface ComposerActiveTaskListCardProps {
   activeTaskList: ActiveTaskListState;
@@ -31,19 +30,14 @@ export const ComposerActiveTaskListCard = memo(function ComposerActiveTaskListCa
   onOpenSidebar,
 }: ComposerActiveTaskListCardProps) {
   return (
-    <div className="pointer-events-none w-full">
-      <div
-        ref={cardRef}
-        className={cn("pointer-events-auto", COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME)}
-      >
-        <ActiveTaskListCard
-          activeTaskList={activeTaskList}
-          backgroundTaskCount={backgroundTaskCount}
-          compact={compact}
-          onCompactChange={onCompactChange}
-          onOpenSidebar={onOpenSidebar}
-        />
-      </div>
-    </div>
+    <ComposerStackedHeaderFrame ref={cardRef} passthroughSideMargins>
+      <ActiveTaskListCard
+        activeTaskList={activeTaskList}
+        backgroundTaskCount={backgroundTaskCount}
+        compact={compact}
+        onCompactChange={onCompactChange}
+        onOpenSidebar={onOpenSidebar}
+      />
+    </ComposerStackedHeaderFrame>
   );
 });

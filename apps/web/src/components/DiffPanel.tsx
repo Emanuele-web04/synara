@@ -49,7 +49,7 @@ import {
   resolveDiffCopyText,
   resolveFileDiffPath,
   sortFileDiffsByPath,
-  summarizePatchStats,
+  summarizePatchTotals,
 } from "../lib/diffRendering";
 import { resolveDiffEnvironmentState } from "../lib/threadEnvironment";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
@@ -357,7 +357,7 @@ export default function DiffPanel({
     }
     return sortFileDiffsByPath(renderablePatch.files);
   }, [renderablePatch]);
-  const totalPatchStat = useMemo(() => summarizePatchStats(repoPatch), [repoPatch]);
+  const totalPatchStat = useMemo(() => summarizePatchTotals(repoPatch), [repoPatch]);
 
   useEffect(() => {
     if (diffOpen && !previousDiffOpenRef.current) {

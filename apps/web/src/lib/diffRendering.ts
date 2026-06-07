@@ -252,10 +252,10 @@ export function summarizeFileDiffStats(files: ReadonlyArray<FileDiffMetadata>): 
   );
 }
 
-export function summarizePatchStats(
+export function summarizePatchTotals(
   patch: string | undefined,
-): { additions: number; deletions: number } | null {
+): { additions: number; deletions: number; fileCount: number } | null {
   const renderable = getRenderablePatch(patch, "diff-panel:stats");
   if (renderable?.kind !== "files") return null;
-  return summarizeFileDiffStats(renderable.files);
+  return { ...summarizeFileDiffStats(renderable.files), fileCount: renderable.files.length };
 }

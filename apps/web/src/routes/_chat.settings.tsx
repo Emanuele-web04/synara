@@ -13,6 +13,7 @@ import {
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
+import { pluralize } from "@t3tools/shared/text";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   closestCenter,
@@ -1201,7 +1202,7 @@ function SettingsRouteView() {
           ? [
               `Delete worktree "${displayName}"?`,
               "",
-              `${linkedActiveThreadCount} active and ${linkedArchivedThreadIds.length} archived conversation${linkedConversationCount === 1 ? " is" : "s are"} linked to this worktree.`,
+              `${linkedActiveThreadCount} active and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedConversationCount, "conversation is", "conversations are")} linked to this worktree.`,
               linkedArchivedThreadIds.length > 0
                 ? "Archived conversations will be deleted first."
                 : "Deleting it can break reopening those chats in the same workspace.",
@@ -1237,7 +1238,7 @@ function SettingsRouteView() {
           title: "Worktree deleted",
           description:
             linkedArchivedThreadIds.length > 0
-              ? `${displayName} was removed and ${linkedArchivedThreadIds.length} archived conversation${linkedArchivedThreadIds.length === 1 ? "" : "s"} were deleted.`
+              ? `${displayName} was removed and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedArchivedThreadIds.length, "conversation")} were deleted.`
               : `${displayName} was removed.`,
         });
       } catch (error) {
@@ -2321,7 +2322,7 @@ function SettingsRouteView() {
           description="Drag providers into your preferred picker order and hide the ones you don't use. The provider you're currently using on a thread always stays visible."
           status={
             hiddenProviderCount > 0
-              ? `${hiddenProviderCount} provider${hiddenProviderCount === 1 ? "" : "s"} hidden`
+              ? `${hiddenProviderCount} ${pluralize(hiddenProviderCount, "provider")} hidden`
               : isProviderOrderDirty
                 ? "Custom order"
                 : "All providers visible"
@@ -2384,7 +2385,7 @@ function SettingsRouteView() {
           description="Update installed provider tools that Synara can safely update."
           status={
             outdatedProviderCount > 0
-              ? `${outdatedProviderCount} update${outdatedProviderCount === 1 ? "" : "s"} available`
+              ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
               : "No provider updates detected"
           }
         >
@@ -2459,7 +2460,7 @@ function SettingsRouteView() {
           description="Review provider versions and update tools. Open a row only when you need binary overrides."
           status={
             outdatedProviderCount > 0
-              ? `${outdatedProviderCount} update${outdatedProviderCount === 1 ? "" : "s"} available`
+              ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
               : "No provider updates detected"
           }
           resetAction={

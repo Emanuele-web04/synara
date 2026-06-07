@@ -11,10 +11,8 @@ import { memo } from "react";
 import type { QueuedComposerTurn } from "../../composerDraftStore";
 import { SteerIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import {
-  COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME,
-  COMPOSER_SURFACE_BORDER_CLASS_NAME,
-} from "./composerPickerStyles";
+import { ComposerStackedHeaderFrame } from "./ComposerColumnFrame";
+import { COMPOSER_SURFACE_BORDER_CLASS_NAME } from "./composerPickerStyles";
 import { QueuedComposerActions } from "./QueuedComposerActions";
 
 interface ComposerQueuedHeaderProps {
@@ -35,10 +33,9 @@ export const ComposerQueuedHeader = memo(function ComposerQueuedHeader({
   }
 
   return (
-    <div
+    <ComposerStackedHeaderFrame
       className={cn(
         "chat-composer-surface chat-composer-stacked-top relative z-[1] flex flex-col overflow-hidden border border-b-0",
-        COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME,
         COMPOSER_SURFACE_BORDER_CLASS_NAME,
       )}
     >
@@ -65,6 +62,6 @@ export const ComposerQueuedHeader = memo(function ComposerQueuedHeader({
           />
         </div>
       ))}
-    </div>
+    </ComposerStackedHeaderFrame>
   );
 });

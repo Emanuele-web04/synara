@@ -17,6 +17,7 @@ import {
   decodeSubagentReceiverThreadIds,
 } from "@t3tools/shared/subagents";
 import { summarizeToolRawOutput } from "@t3tools/shared/toolOutputSummary";
+import { pluralize } from "@t3tools/shared/text";
 import {
   deriveReadableToolTitle,
   isGenericToolTitle,
@@ -1144,7 +1145,7 @@ function inferSubagentActionTool(item: Record<string, unknown> | null): string |
 function summarizeSubagentAction(tool: string, count: number): string {
   const normalizedTool = normalizeCollabIdentifier(tool) ?? "";
   const effectiveCount = Math.max(1, count);
-  const noun = effectiveCount === 1 ? "agent" : "agents";
+  const noun = pluralize(effectiveCount, "agent");
   switch (normalizedTool) {
     case "spawnagent":
       return `Spawning ${effectiveCount} ${noun}`;
@@ -1156,7 +1157,7 @@ function summarizeSubagentAction(tool: string, count: number): string {
     case "resumeagent":
       return `Resuming ${effectiveCount} ${noun}`;
     case "sendinput":
-      return effectiveCount === 1 ? "Updating agent" : "Updating agents";
+      return `Updating ${pluralize(effectiveCount, "agent")}`;
     default:
       return effectiveCount === 1 ? "Agent activity" : `Agent activity (${effectiveCount})`;
   }

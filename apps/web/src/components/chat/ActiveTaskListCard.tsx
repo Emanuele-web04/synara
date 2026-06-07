@@ -3,6 +3,7 @@
 // Layer: Chat composer UI
 // Exports: ActiveTaskListCard
 
+import { pluralize } from "@t3tools/shared/text";
 import { memo } from "react";
 import {
   PiArrowsInSimple,
@@ -139,7 +140,7 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
               <div className="flex min-w-0 items-center gap-1.5">
                 <BotIcon className="size-3 shrink-0" />
                 <span className="truncate">
-                  {backgroundTaskCount} background agent{backgroundTaskCount === 1 ? "" : "s"}
+                  {backgroundTaskCount} background {pluralize(backgroundTaskCount, "agent")}
                 </span>
               </div>
             </div>

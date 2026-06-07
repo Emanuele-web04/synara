@@ -9,6 +9,7 @@ import {
   type ServerProviderStatus,
 } from "@t3tools/contracts";
 import { defaultTerminalTitleForCliKind } from "@t3tools/shared/terminalThreads";
+import { pluralize } from "@t3tools/shared/text";
 import {
   Outlet,
   createRootRouteWithContext,
@@ -331,7 +332,7 @@ function ProviderUpdateNotifications() {
               : "Some provider updates failed",
           description:
             manualCommands.length > 0
-              ? `${failureLines}\n\nCopy the command${manualCommands.length === 1 ? "" : "s"} below to update manually in a terminal.`
+              ? `${failureLines}\n\nCopy the ${pluralize(manualCommands.length, "command")} below to update manually in a terminal.`
               : failureLines,
           data: {
             onClose: dismissProgressToast,
@@ -389,7 +390,7 @@ function ProviderUpdateNotifications() {
     const description =
       outdatedProviders.length === 1
         ? `${providerName} has a newer version available.`
-        : `${providerName} and ${additionalCount} more provider${additionalCount === 1 ? "" : "s"} have newer versions available.`;
+        : `${providerName} and ${additionalCount} more ${pluralize(additionalCount, "provider")} have newer versions available.`;
 
     let toastId!: ProviderUpdateToastId;
     const closeTrackedPrompt = () => {

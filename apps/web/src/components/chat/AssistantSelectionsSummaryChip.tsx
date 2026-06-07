@@ -2,6 +2,8 @@
 // Purpose: Renders the compact assistant-selection count chip used in composer and user bubbles.
 // Layer: Chat attachment presentation
 
+import { pluralize } from "@t3tools/shared/text";
+
 import { MessageCircleIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { type ChatAssistantSelectionAttachment } from "../../types";
@@ -14,7 +16,7 @@ interface AssistantSelectionsSummaryChipProps {
 }
 
 function selectionCountLabel(count: number): string {
-  return `${count} selection${count === 1 ? "" : "s"}`;
+  return `${count} ${pluralize(count, "selection")}`;
 }
 
 export function AssistantSelectionsSummaryChip(props: AssistantSelectionsSummaryChipProps) {

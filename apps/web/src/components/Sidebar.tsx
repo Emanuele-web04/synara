@@ -72,6 +72,7 @@ import {
 } from "@t3tools/contracts";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { getDefaultModel } from "@t3tools/shared/model";
+import { pluralize } from "@t3tools/shared/text";
 import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
@@ -562,7 +563,7 @@ function ProviderAvatarWithTerminal({
   const showBadge = terminalCount > 1 || terminalStatus !== null;
   const badgeTooltip =
     terminalCount > 1
-      ? `${terminalCount} terminal${terminalCount === 1 ? "" : "s"} open`
+      ? `${terminalCount} ${pluralize(terminalCount, "terminal")} open`
       : (terminalStatus?.label ?? "Terminal open");
   const badgeColorClass = terminalStatus?.colorClass ?? "text-muted-foreground/55";
 
@@ -2954,13 +2955,13 @@ export default function Sidebar() {
       // `appSettings.confirmThreadArchive` (default `false`) is scoped to
       // single-thread archiving where the user explicitly picked one row.
       const archiveLines = [
-        `Archive ${archivableThreads.length} thread${archivableThreads.length === 1 ? "" : "s"} in "${project.name}"?`,
+        `Archive ${archivableThreads.length} ${pluralize(archivableThreads.length, "thread")} in "${project.name}"?`,
         "Archived threads are hidden from the sidebar but can be restored later.",
       ];
       if (runningCount > 0) {
         archiveLines.push(
           "",
-          `${runningCount} running thread${runningCount === 1 ? " is" : "s are"} currently active and will be skipped.`,
+          `${runningCount} running ${pluralize(runningCount, "thread is", "threads are")} currently active and will be skipped.`,
         );
       }
       const archiveConfirmed = api
@@ -2990,14 +2991,14 @@ export default function Sidebar() {
       if (archivedCount > 0) {
         const skippedDescription =
           runningCount > 0
-            ? ` Skipped ${runningCount} running thread${runningCount === 1 ? "" : "s"}.`
+            ? ` Skipped ${runningCount} running ${pluralize(runningCount, "thread")}.`
             : "";
         toastManager.add({
           type: failureCount > 0 ? "warning" : "success",
           title: archivedCount === 1 ? "Thread archived" : `Archived ${archivedCount} threads`,
           description:
             failureCount > 0
-              ? `Failed to archive ${failureCount} thread${failureCount === 1 ? "" : "s"}.${skippedDescription}`
+              ? `Failed to archive ${failureCount} ${pluralize(failureCount, "thread")}.${skippedDescription}`
               : runningCount > 0
                 ? skippedDescription.trim()
                 : `"${project.name}" cleared.`,
@@ -3006,7 +3007,7 @@ export default function Sidebar() {
         toastManager.add({
           type: "error",
           title: "Failed to archive threads",
-          description: `Could not archive ${failureCount} thread${failureCount === 1 ? "" : "s"} in "${project.name}".`,
+          description: `Could not archive ${failureCount} ${pluralize(failureCount, "thread")} in "${project.name}".`,
         });
       }
     },
@@ -3060,7 +3061,7 @@ export default function Sidebar() {
       const deleteConfirmationMessage =
         options?.confirmMessage === undefined
           ? [
-              `Delete ${projectThreads.length} thread${projectThreads.length === 1 ? "" : "s"} in "${project.name}"?`,
+              `Delete ${projectThreads.length} ${pluralize(projectThreads.length, "thread")} in "${project.name}"?`,
               "This permanently clears conversation history for these threads.",
             ].join("\n")
           : options.confirmMessage;
@@ -3101,14 +3102,14 @@ export default function Sidebar() {
             title: deletedCount === 1 ? "Thread deleted" : `Deleted ${deletedCount} threads`,
             description:
               failureCount > 0
-                ? `Failed to delete ${failureCount} thread${failureCount === 1 ? "" : "s"}.`
+                ? `Failed to delete ${failureCount} ${pluralize(failureCount, "thread")}.`
                 : `"${project.name}" cleared.`,
           });
         } else if (failureCount > 0) {
           toastManager.add({
             type: "error",
             title: "Failed to delete threads",
-            description: `Could not delete ${failureCount} thread${failureCount === 1 ? "" : "s"} in "${project.name}".`,
+            description: `Could not delete ${failureCount} ${pluralize(failureCount, "thread")} in "${project.name}".`,
           });
         }
       }
@@ -3378,7 +3379,7 @@ export default function Sidebar() {
         if (appSettings.confirmThreadArchive) {
           const confirmed = await api.dialogs.confirm(
             [
-              `Archive ${count} thread${count === 1 ? "" : "s"}?`,
+              `Archive ${count} ${pluralize(count, "thread")}?`,
               "Archived threads are hidden from the sidebar but can be restored later.",
             ].join("\n"),
           );
@@ -3397,7 +3398,7 @@ export default function Sidebar() {
       if (appSettings.confirmThreadDelete) {
         const confirmed = await api.dialogs.confirm(
           [
-            `Delete ${count} thread${count === 1 ? "" : "s"}?`,
+            `Delete ${count} ${pluralize(count, "thread")}?`,
             "This permanently clears conversation history for these threads.",
           ].join("\n"),
         );
@@ -3520,7 +3521,7 @@ export default function Sidebar() {
         projectThreads.length > 0
           ? [
               `Remove project "${project.name}"?`,
-              `This will delete ${projectThreads.length} thread${projectThreads.length === 1 ? "" : "s"} in this folder and remove the project.`,
+              `This will delete ${projectThreads.length} ${pluralize(projectThreads.length, "thread")} in this folder and remove the project.`,
             ].join("\n")
           : `Remove project "${project.name}"?`,
       );
@@ -3541,7 +3542,7 @@ export default function Sidebar() {
           toastManager.add({
             type: "error",
             title: `Failed to remove "${project.name}"`,
-            description: `Could not delete ${deletionResult.failureCount} thread${deletionResult.failureCount === 1 ? "" : "s"} in "${project.name}".`,
+            description: `Could not delete ${deletionResult.failureCount} ${pluralize(deletionResult.failureCount, "thread")} in "${project.name}".`,
           });
           return;
         }
@@ -3557,7 +3558,7 @@ export default function Sidebar() {
           title: `Removed "${project.name}"`,
           description:
             deletionResult.deletedCount > 0
-              ? `Deleted ${deletionResult.deletedCount} thread${deletionResult.deletedCount === 1 ? "" : "s"} and removed the project.`
+              ? `Deleted ${deletionResult.deletedCount} ${pluralize(deletionResult.deletedCount, "thread")} and removed the project.`
               : "Project removed.",
         });
       } catch (error) {
@@ -4606,7 +4607,7 @@ export default function Sidebar() {
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
     // Untouched draft chat threads are intentionally text-only until they get a real title.
     const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
-    const childCountLabel = `${childCount} subagent${childCount === 1 ? "" : "s"}`;
+    const childCountLabel = `${childCount} ${pluralize(childCount, "subagent")}`;
     const toggleButtonClassName = isHighlighted
       ? "border-[color:var(--color-border)] bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
       : "border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground-secondary)] hover:border-[color:var(--color-border)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]";
@@ -5468,7 +5469,7 @@ export default function Sidebar() {
   const desktopUpdateButtonHasSecondaryLabel =
     desktopUpdateButtonPresentation.secondaryLabel !== null;
   const desktopUpdateRowButtonClasses = cn(
-    "inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md px-2 font-system-ui text-[length:var(--app-font-size-ui,12px)] font-medium leading-none text-white transition-colors",
+    "inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-full px-3 font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] font-medium leading-none text-white transition-colors",
     desktopUpdateButtonHasSecondaryLabel && "min-h-7 py-1",
     desktopUpdateButtonInteractivityClasses,
     desktopUpdateButtonClasses,

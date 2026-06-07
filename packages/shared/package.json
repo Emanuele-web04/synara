@@ -96,6 +96,10 @@
       "types": "./src/path.ts",
       "import": "./src/path.ts"
     },
+    "./text": {
+      "types": "./src/text.ts",
+      "import": "./src/text.ts"
+    },
     "./toolOutputSummary": {
       "types": "./src/toolOutputSummary.ts",
       "import": "./src/toolOutputSummary.ts"

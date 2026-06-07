@@ -2,6 +2,7 @@
 // Purpose: Render per-workspace terminal layout settings with visual preset previews.
 // Layer: Workspace UI controls
 
+import { pluralize } from "@t3tools/shared/text";
 import { CheckIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import {
@@ -138,7 +139,7 @@ export default function WorkspaceSettingsSheet(props: {
                     <div className="mt-3 flex items-center justify-between gap-2">
                       <div className="text-sm font-medium text-foreground">{preset.title}</div>
                       <div className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                        {preset.slotCount} pane{preset.slotCount === 1 ? "" : "s"}
+                        {preset.slotCount} {pluralize(preset.slotCount, "pane")}
                       </div>
                     </div>
                     <div className="mt-1 text-xs leading-5 text-muted-foreground">

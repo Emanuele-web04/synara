@@ -4,6 +4,7 @@
 // Depends on: agentActivity.logic and ChatMarkdown
 
 import { ThreadId } from "@t3tools/contracts";
+import { pluralize } from "@t3tools/shared/text";
 import { memo, useMemo, type CSSProperties, type ReactNode } from "react";
 import { BotIcon, ChevronLeftIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -108,7 +109,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
                   {detail.title}
                 </h2>
                 <span className="rounded-full border border-border/45 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/56">
-                  {detail.entries.length === 1 ? "1 update" : `${detail.entries.length} updates`}
+                  {`${detail.entries.length} ${pluralize(detail.entries.length, "update")}`}
                 </span>
               </div>
               {detail.summary ? (
