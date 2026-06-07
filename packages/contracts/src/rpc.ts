@@ -3,6 +3,7 @@ import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import { OpenInEditorInput } from "./editor";
+import { RunDetachedShellCommandInput } from "./shell";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import {
   GitCheckoutInput,
@@ -253,6 +254,12 @@ export const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
 
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
   payload: OpenInEditorInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsShellRunDetachedCommandRpc = Rpc.make(WS_METHODS.shellRunDetachedCommand, {
+  payload: RunDetachedShellCommandInput,
   success: Schema.Void,
   error: WsRpcError,
 });
@@ -610,6 +617,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsWriteFileRpc,
   WsFilesystemBrowseRpc,
   WsShellOpenInEditorRpc,
+  WsShellRunDetachedCommandRpc,
   WsGitStatusRpc,
   WsGitReadWorkingTreeDiffRpc,
   WsGitSummarizeDiffRpc,

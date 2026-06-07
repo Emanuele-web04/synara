@@ -27,6 +27,10 @@ export interface OpenInEditorInput {
   readonly editor: EditorId;
 }
 
+export interface RunDetachedShellCommandInput {
+  readonly command: string;
+}
+
 interface EditorLaunch {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
@@ -245,6 +249,13 @@ export interface OpenShape {
    * Launches the editor as a detached process so server startup is not blocked.
    */
   readonly openInEditor: (input: OpenInEditorInput) => Effect.Effect<void, OpenError>;
+
+  /**
+   * Run a shell command as a detached process (login shell on Unix).
+   */
+  readonly runDetachedShellCommand: (
+    input: RunDetachedShellCommandInput,
+  ) => Effect.Effect<void, OpenError>;
 }
 
 /**
@@ -281,6 +292,17 @@ export const resolveEditorLaunch = Effect.fnUntraced(function* (
 
   return { command: fileManagerCommandForPlatform(platform), args: [input.cwd] };
 });
+
+export function resolveDetachedShellLaunch(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+): EditorLaunch {
+  if (platform === "win32") {
+    return { command: "cmd.exe", args: ["/c", command] };
+  }
+
+  return { command: "bash", args: ["-lc", command] };
+}
 
 export const launchDetached = (launch: EditorLaunch) =>
   Effect.gen(function* () {
@@ -327,6 +349,8 @@ const make = Effect.gen(function* () {
         catch: (cause) => new OpenError({ message: "Browser auto-open failed", cause }),
       }),
     openInEditor: (input) => Effect.flatMap(resolveEditorLaunch(input), launchDetached),
+    runDetachedShellCommand: (input) =>
+      launchDetached(resolveDetachedShellLaunch(input.command)),
   } satisfies OpenShape;
 });
 

@@ -62,7 +62,10 @@ function toUsedPercent(line: OpenUsageProgressLine): number | undefined {
 function toProviderKind(providerId: string | undefined): ProviderKind | null {
   if (providerId === "codex") return "codex";
   if (providerId === "claude") return "claudeAgent";
+  if (providerId === "cursor") return "cursor";
   if (providerId === "gemini") return "gemini";
+  if (providerId === "grok") return "grok";
+  if (providerId === "opencode-go") return "opencode";
   return null;
 }
 
@@ -71,7 +74,10 @@ export function openUsageProviderIdForProvider(
 ): string | null {
   if (provider === "codex") return "codex";
   if (provider === "claudeAgent") return "claude";
+  if (provider === "cursor") return "cursor";
   if (provider === "gemini") return "gemini";
+  if (provider === "grok") return "grok";
+  if (provider === "opencode") return "opencode-go";
   return null;
 }
 

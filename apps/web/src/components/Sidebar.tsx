@@ -252,6 +252,7 @@ import {
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
+import { SidebarSubscriptionUsage } from "./sidebar/SidebarSubscriptionUsage";
 import { SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME } from "./chat/composerPickerStyles";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import {
@@ -6014,6 +6015,7 @@ export default function Sidebar() {
       </SidebarContent>
 
       <SidebarFooter className="gap-2 p-2 font-system-ui">
+        {!isOnSettings ? <SidebarSubscriptionUsage /> : null}
         {!isOnSettings && chatsSectionVisible ? (
           <div className="group/collapsible">
             <div className="group/project-header relative">

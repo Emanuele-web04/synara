@@ -58,6 +58,7 @@ const testLayer = Layer.mergeAll(
   Layer.succeed(Open, {
     openBrowser: (_target: string) => Effect.void,
     openInEditor: () => Effect.void,
+    runDetachedShellCommand: () => Effect.void,
   } satisfies OpenShape),
   AnalyticsService.layerTest,
   FetchHttpClient.layer,

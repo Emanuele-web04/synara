@@ -732,6 +732,7 @@ function EventRouter() {
   const workspacePagesRef = useRef(workspacePages);
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
+  const keybindingsWarningToastShownRef = useRef(false);
   const routeVisibleThreadIdsRef = useRef(visibleThreadIds);
   const visibleThreadIdsRef = useRef(subscribedThreadIds);
   const reconcileThreadSubscriptionsRef = useRef<
@@ -1143,8 +1144,13 @@ function EventRouter() {
       if (!subscribed) return;
       const issue = payload.issues.find((entry) => entry.kind.startsWith("keybindings."));
       if (!issue) {
+        keybindingsWarningToastShownRef.current = false;
         return;
       }
+      if (keybindingsWarningToastShownRef.current) {
+        return;
+      }
+      keybindingsWarningToastShownRef.current = true;
 
       toastManager.add({
         type: "warning",

@@ -357,6 +357,7 @@ export interface NativeApi {
   };
   shell: {
     openInEditor: (cwd: string, editor: EditorId) => Promise<void>;
+    runDetachedCommand: (command: string) => Promise<void>;
     openExternal: (url: string) => Promise<void>;
     showInFolder: (path: string) => Promise<void>;
   };

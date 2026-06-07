@@ -14,6 +14,7 @@ export * from "./settings";
 export * from "./git";
 export * from "./orchestration";
 export * from "./editor";
+export * from "./shell";
 export * from "./environment";
 export * from "./project";
 export * from "./filesystem";

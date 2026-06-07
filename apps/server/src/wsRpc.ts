@@ -448,6 +448,8 @@ export const makeWsRpcLayer = () =>
           rpcEffect(workspaceEntries.browse(input), "Failed to browse filesystem"),
         [WS_METHODS.shellOpenInEditor]: (input) =>
           rpcEffect(open.openInEditor(input), "Failed to open editor"),
+        [WS_METHODS.shellRunDetachedCommand]: (input) =>
+          rpcEffect(open.runDetachedShellCommand(input), "Failed to run shell command"),
 
         [WS_METHODS.gitStatus]: (input) =>
           rpcEffect(gitStatusBroadcaster.getStatus(input), "Failed to read git status"),

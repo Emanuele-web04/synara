@@ -7,6 +7,7 @@ import {
   isCommandAvailable,
   launchDetached,
   resolveAvailableEditors,
+  resolveDetachedShellLaunch,
   resolveEditorLaunch,
 } from "./open";
 
@@ -258,4 +259,18 @@ it.layer(NodeServices.layer)("resolveAvailableEditors", (it) => {
       assert.deepEqual(editors, ["cursor", "vscode-insiders", "zed", "file-manager"]);
     }),
   );
+});
+
+it("resolveDetachedShellLaunch uses a login shell on Unix", () => {
+  assert.deepEqual(resolveDetachedShellLaunch("usage", "linux"), {
+    command: "bash",
+    args: ["-lc", "usage"],
+  });
+});
+
+it("resolveDetachedShellLaunch uses cmd on Windows", () => {
+  assert.deepEqual(resolveDetachedShellLaunch("usage", "win32"), {
+    command: "cmd.exe",
+    args: ["/c", "usage"],
+  });
 });
