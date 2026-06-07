@@ -8,7 +8,6 @@ import {
   type ServerConfig,
   type ThreadId,
   type WsWelcomePayload,
-  WS_CHANNELS,
   WS_METHODS,
 } from "@t3tools/contracts";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
@@ -20,6 +19,15 @@ import { render } from "vitest-browser-react";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { getRouter } from "../router";
 import { useStore } from "../store";
+import {
+  createShellSnapshotFromReadModel,
+  flattenEffectRpcRequestPayload,
+  readEffectRpcClientMessage,
+  sendEffectRpcChunk,
+  sendEffectRpcExit,
+  type EffectRpcWebSocketClient,
+} from "../test/effectRpcWebSocketMock";
+import { resetWsNativeApiForTest } from "../wsNativeApi";
 
 const THREAD_ID = "thread-kb-toast-test" as ThreadId;
 const PROJECT_ID = "project-1" as ProjectId;
@@ -32,8 +40,8 @@ interface TestFixture {
 }
 
 let fixture: TestFixture;
-let wsClient: { send: (data: string) => void } | null = null;
-let pushSequence = 1;
+let wsClient: EffectRpcWebSocketClient | null = null;
+let serverConfigStreamRequestId: string | null = null;
 
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
@@ -138,7 +146,20 @@ function buildFixture(): TestFixture {
   };
 }
 
+function getThreadDetailFromFixtureSnapshot(
+  threadId: ThreadId,
+): OrchestrationReadModel["threads"][number] {
+  const thread = fixture.snapshot.threads.find((entry) => entry.id === threadId);
+  if (!thread) {
+    throw new Error(`Missing thread fixture for ${threadId}`);
+  }
+  return thread;
+}
+
 function resolveWsRpc(tag: string): unknown {
+  if (tag === ORCHESTRATION_WS_METHODS.getShellSnapshot) {
+    return createShellSnapshotFromReadModel(fixture.snapshot);
+  }
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
   }
@@ -172,51 +193,84 @@ function resolveWsRpc(tag: string): unknown {
 const worker = setupWorker(
   wsLink.addEventListener("connection", ({ client }) => {
     wsClient = client;
-    pushSequence = 1;
-    client.send(
-      JSON.stringify({
-        type: "push",
-        sequence: pushSequence++,
-        channel: WS_CHANNELS.serverWelcome,
-        data: fixture.welcome,
-      }),
-    );
+    serverConfigStreamRequestId = null;
     client.addEventListener("message", (event) => {
       const rawData = event.data;
       if (typeof rawData !== "string") return;
-      let request: { id: string; body: { _tag: string; [key: string]: unknown } };
-      try {
-        request = JSON.parse(rawData);
-      } catch {
+      const parsed = readEffectRpcClientMessage(client, rawData);
+      if (parsed.kind !== "request") return;
+
+      const requestBody = flattenEffectRpcRequestPayload(
+        parsed.request.tag,
+        parsed.request.payload,
+      );
+      const method = requestBody._tag;
+      if (method === WS_METHODS.subscribeServerLifecycle) {
+        sendEffectRpcChunk(client, parsed.request.id, {
+          type: "welcome",
+          payload: fixture.welcome,
+        });
         return;
       }
-      const method = request.body?._tag;
-      if (typeof method !== "string") return;
-      client.send(
-        JSON.stringify({
-          id: request.id,
-          result: resolveWsRpc(method),
-        }),
-      );
+      if (method === WS_METHODS.subscribeServerConfig) {
+        serverConfigStreamRequestId = parsed.request.id;
+        sendEffectRpcChunk(client, parsed.request.id, {
+          type: "snapshot",
+          config: fixture.serverConfig,
+        });
+        return;
+      }
+      if (method === ORCHESTRATION_WS_METHODS.subscribeShell) {
+        sendEffectRpcChunk(client, parsed.request.id, {
+          kind: "snapshot",
+          snapshot: createShellSnapshotFromReadModel(fixture.snapshot),
+        });
+        return;
+      }
+      if (method === ORCHESTRATION_WS_METHODS.subscribeThread && "threadId" in requestBody) {
+        const threadId = requestBody.threadId as ThreadId;
+        sendEffectRpcChunk(client, parsed.request.id, {
+          kind: "snapshot",
+          snapshot: {
+            snapshotSequence: fixture.snapshot.snapshotSequence,
+            thread: getThreadDetailFromFixtureSnapshot(threadId),
+          },
+        });
+        return;
+      }
+      if (
+        method === WS_METHODS.subscribeServerProviderStatuses ||
+        method === WS_METHODS.subscribeServerSettings ||
+        method === WS_METHODS.subscribeTerminalEvents ||
+        method === WS_METHODS.subscribeOrchestrationDomainEvents
+      ) {
+        return;
+      }
+      sendEffectRpcExit(client, parsed.request.id, resolveWsRpc(method));
     });
   }),
   http.get("*/attachments/:attachmentId", () => new HttpResponse(null, { status: 204 })),
   http.get("*/api/project-favicon", () => new HttpResponse(null, { status: 204 })),
 );
 
-function sendServerConfigUpdatedPush(issues: Array<{ kind: string; message: string }>) {
+async function sendServerConfigUpdatedPush(
+  issues: Array<{ kind: string; message: string }>,
+): Promise<void> {
   if (!wsClient) throw new Error("WebSocket client not connected");
-  wsClient.send(
-    JSON.stringify({
-      type: "push",
-      sequence: pushSequence++,
-      channel: WS_CHANNELS.serverConfigUpdated,
-      data: {
-        issues,
-        providers: fixture.serverConfig.providers,
-      },
-    }),
+  await vi.waitFor(
+    () => {
+      expect(serverConfigStreamRequestId).toBeTruthy();
+    },
+    { timeout: 4_000, interval: 16 },
   );
+  if (!serverConfigStreamRequestId) return;
+  sendEffectRpcChunk(wsClient, serverConfigStreamRequestId, {
+    type: "configUpdated",
+    payload: {
+      issues,
+      providers: fixture.serverConfig.providers,
+    },
+  });
 }
 
 function queryToastTitles(): string[] {
@@ -304,9 +358,10 @@ describe("Keybindings update toast", () => {
   });
 
   beforeEach(() => {
+    resetWsNativeApiForTest();
     localStorage.clear();
     document.body.innerHTML = "";
-    pushSequence = 1;
+    serverConfigStreamRequestId = null;
     useComposerDraftStore.setState({
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
@@ -321,6 +376,7 @@ describe("Keybindings update toast", () => {
   });
 
   afterEach(() => {
+    resetWsNativeApiForTest();
     document.body.innerHTML = "";
   });
 
@@ -328,10 +384,10 @@ describe("Keybindings update toast", () => {
     const mounted = await mountApp();
 
     try {
-      sendServerConfigUpdatedPush([]);
+      await sendServerConfigUpdatedPush([]);
       await waitForNoToast("Keybindings updated");
 
-      sendServerConfigUpdatedPush([]);
+      await sendServerConfigUpdatedPush([]);
       await waitForNoToast("Keybindings updated");
     } finally {
       await mounted.cleanup();
@@ -342,7 +398,7 @@ describe("Keybindings update toast", () => {
     const mounted = await mountApp();
 
     try {
-      sendServerConfigUpdatedPush([
+      await sendServerConfigUpdatedPush([
         { kind: "keybindings.malformed-config", message: "Expected JSON array" },
       ]);
       await waitForToast("Invalid keybindings configuration");
@@ -355,7 +411,7 @@ describe("Keybindings update toast", () => {
     const mounted = await mountApp();
 
     try {
-      sendServerConfigUpdatedPush([]);
+      await sendServerConfigUpdatedPush([]);
       await waitForNoToast("Keybindings updated");
 
       // Remount the app — onServerConfigUpdated replays the cached value

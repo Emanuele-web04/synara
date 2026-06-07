@@ -75,10 +75,7 @@ const testLayer = Layer.mergeAll(
   NodeServices.layer,
 );
 
-const runCli = (
-  args: ReadonlyArray<string>,
-  env: Record<string, string> = {},
-) => {
+const runCli = (args: ReadonlyArray<string>, env: Record<string, string> = {}) => {
   const program = Command.runWith(t3Cli, { version: "0.0.0-test" })(args).pipe(
     Effect.provide(
       ConfigProvider.layer(

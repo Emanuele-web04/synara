@@ -1486,8 +1486,8 @@ function renderUserMessageInlineText(
         <UserMessageInlineMentionChip
           key={`${key}:mention`}
           path={segment.path}
-          kind={segment.kind}
           resolvedTheme={resolvedTheme}
+          {...(segment.kind ? { kind: segment.kind } : {})}
         />,
       ];
     }
@@ -1512,7 +1512,11 @@ const UserMessageInlineMentionChip = memo(function UserMessageInlineMentionChip(
   const label = basenameOfPath(props.path);
   return (
     <span className={COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME} title={props.path}>
-      <MentionChipIcon path={props.path} kind={props.kind} theme={props.resolvedTheme} />
+      <MentionChipIcon
+        path={props.path}
+        theme={props.resolvedTheme}
+        {...(props.kind ? { kind: props.kind } : {})}
+      />
       <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>{label}</span>
     </span>
   );

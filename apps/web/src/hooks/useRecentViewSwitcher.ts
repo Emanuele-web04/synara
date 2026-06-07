@@ -58,8 +58,9 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
     select: (params) => (typeof params.workspaceId === "string" ? params.workspaceId : null),
   });
   const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
-  const [recentSwitcherState, setRecentSwitcherState] =
-    useState<RecentViewSwitcherState | null>(null);
+  const [recentSwitcherState, setRecentSwitcherState] = useState<RecentViewSwitcherState | null>(
+    null,
+  );
   const recentViews = useRecentViewsStore((state) => state.recentViews);
   const recordRecentView = useRecentViewsStore((state) => state.recordRecentView);
   const pruneRecentViewsStore = useRecentViewsStore((state) => state.pruneRecentViews);
@@ -74,16 +75,13 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
   const threadsHydrated = useStore((state) => state.threadsHydrated);
   const routeSplitViewId =
     typeof routeSearch.splitViewId === "string" ? routeSearch.splitViewId : undefined;
-  const settingsSection =
-    typeof routeSearch.section === "string" ? routeSearch.section : undefined;
+  const settingsSection = typeof routeSearch.section === "string" ? routeSearch.section : undefined;
   const currentRecentView = useMemo(
     () =>
       deriveCurrentRecentView({
         pathname,
         routeThreadId,
-        activeThreadId: routeThreadId
-          ? (input.activeContextThreadId ?? routeThreadId)
-          : null,
+        activeThreadId: routeThreadId ? (input.activeContextThreadId ?? routeThreadId) : null,
         routeWorkspaceId,
         splitViewId: routeSplitViewId,
         settingsSection,
@@ -265,8 +263,7 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
           void navigate({
             to: "/$threadId",
             params: { threadId: view.threadId },
-            search: () =>
-              splitActivation ? { splitViewId: splitActivation.splitViewId } : {},
+            search: () => (splitActivation ? { splitViewId: splitActivation.splitViewId } : {}),
           });
           return;
         }

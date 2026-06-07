@@ -815,6 +815,25 @@ export function createWsNativeApi(): NativeApi {
   return api;
 }
 
+// Browser-mode tests mount full app roots repeatedly in one page; reset the
+// singleton so each test gets a fresh WebSocket stream and cached push state.
+export function resetWsNativeApiForTest(): void {
+  instance?.transport.dispose();
+  instance = null;
+  welcomeListeners.clear();
+  serverConfigUpdatedListeners.clear();
+  serverProviderStatusesUpdatedListeners.clear();
+  serverMaintenanceUpdatedListeners.clear();
+  serverSettingsUpdatedListeners.clear();
+  gitActionProgressListeners.clear();
+  terminalEventListeners.clear();
+  orchestrationDomainEventListeners.clear();
+  orchestrationShellEventListeners.clear();
+  orchestrationThreadEventListeners.clear();
+  fallbackBrowserStateListeners.clear();
+  fallbackBrowserStates.clear();
+}
+
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     instance?.transport.dispose();

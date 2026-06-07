@@ -31,6 +31,8 @@ async function mountMenu(props?: {
     persistedAttachments: [],
     assistantSelections: [],
     terminalContexts: [],
+    skills: [],
+    mentions: [],
     queuedTurns: [],
     modelSelectionByProvider: {
       [provider]: {
