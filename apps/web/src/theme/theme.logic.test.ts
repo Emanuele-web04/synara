@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_CHROME_THEME_BY_VARIANT,
   DEFAULT_THEME_STATE,
   buildResolvedThemeTokens,
   buildThemeCssVariables,
@@ -292,11 +293,21 @@ describe("buildThemeCssVariables", () => {
     expect(cssVariables.variables["--codex-base-accent"]).toBe("#606acc");
     expect(cssVariables.variables["--background"]).toBe("#0d0d0f");
     expect(cssVariables.variables["--card"]).toBe("#151517");
-    expect(cssVariables.variables["--sidebar-accent"]).toBe(
-      cssVariables.variables["--sidebar-accent-active"],
-    );
+    expect(cssVariables.variables["--composer-surface"]).toBe("rgb(27, 27, 29)");
+    expect(cssVariables.variables["--composer-surface"]).not.toBe(cssVariables.variables["--card"]);
+    expect(cssVariables.variables["--sidebar-accent"]).toBe("rgba(227, 228, 230, 0.058)");
+    expect(cssVariables.variables["--sidebar-accent-active"]).toBe("rgba(227, 228, 230, 0.058)");
     expect(cssVariables.variables["--theme-font-ui-family"]).toBe("Inter");
     expect(cssVariables.variables["--theme-font-code-family"]).toBe('"Jetbrains Mono"');
+    expect(cssVariables.variables["--vscode-terminal-ansiBlue"]).toBe("#606acc");
+    expect(cssVariables.variables["--vscode-terminal-ansiGreen"]).toBe("#56a554");
+    expect(cssVariables.variables["--vscode-terminal-ansiMagenta"]).toBe("#c2a1ff");
+    expect(cssVariables.variables["--vscode-terminal-ansiRed"]).toBe("#ff7e78");
+    expect(cssVariables.variables["--vscode-terminal-foreground"]).toBe("#e3e4e6");
+    expect(cssVariables.variables["--color-token-terminal-ansi-blue"]).toBe("#606acc");
+    expect(cssVariables.variables["--color-token-terminal-ansi-green"]).toBe("#56a554");
+    expect(cssVariables.variables["--color-token-terminal-ansi-magenta"]).toBe("#c2a1ff");
+    expect(cssVariables.variables["--color-token-terminal-ansi-red"]).toBe("#ff7e78");
   });
 
   it("exposes a structured derived-token surface for retrieving non-stored colors", () => {
@@ -313,11 +324,59 @@ describe("buildThemeCssVariables", () => {
     expect(tokens.computed.panel).toBe("#151517");
     expect(tokens.derived.textForegroundSecondary).toBe("rgba(227, 228, 230, 0.645)");
     expect(tokens.derived.buttonSecondaryBackground).toBe("rgba(227, 228, 230, 0.039)");
-    expect(tokens.aliases["--color-token-side-bar-background"]).toBe("#0d0d0f");
+    expect(tokens.derived.iconAccent).toBe("rgb(143, 150, 219)");
+    // Dark primary button label is the surface color (dark) on the white (ink) button.
+    expect(tokens.derived.textButtonPrimary).toBe("#0f0f11");
+    expect(tokens.derived.buttonPrimaryBackground).toBe("#e3e4e6");
+    // Codex maps the sidebar token to the PRIMARY surface (same as main-surface-primary),
+    // not the darker under-surface; mirror that so the sidebar color matches Codex.
+    expect(tokens.aliases["--color-token-side-bar-background"]).toBe("#0f0f11");
     expect(tokens.aliases["--color-token-list-hover-background"]).toBe(
-      tokens.derived.buttonSecondaryBackground,
+      tokens.derived.buttonSecondaryBackgroundHover,
     );
-    expect(tokens.aliases["--color-token-input-background"]).toBe("rgba(36, 36, 38, 0.96)");
+    expect(tokens.aliases["--color-token-dropdown-background"]).toBe(
+      tokens.derived.controlBackgroundOpaque,
+    );
+    expect(tokens.aliases["--color-token-main-surface-primary"]).toBe("#0f0f11");
+    expect(tokens.aliases["--color-token-input-background"]).toBe("rgba(27, 27, 29, 0.96)");
+    expect(tokens.aliases["--color-token-terminal-background"]).toBe("#0f0f11");
+    expect(tokens.aliases["--color-token-terminal-foreground"]).toBe("#e3e4e6");
+    expect(tokens.aliases["--color-token-terminal-ansi-black"]).toBe(
+      tokens.derived.textForegroundTertiary,
+    );
+    expect(tokens.aliases["--color-token-terminal-ansi-bright-black"]).toBe(
+      tokens.derived.textForegroundSecondary,
+    );
+    expect(tokens.aliases["--color-token-terminal-ansi-yellow"]).toBe("#f5b44a");
+  });
+
+  it("matches Codex's default dark chrome composer/dropdown control color", () => {
+    const tokens = buildResolvedThemeTokens(
+      {
+        codeThemeId: "codex",
+        theme: DEFAULT_CHROME_THEME_BY_VARIANT.dark,
+      },
+      "dark",
+    );
+
+    expect(tokens.derived.controlBackgroundOpaque).toBe("rgb(45, 45, 45)");
+    expect(tokens.aliases["--color-token-dropdown-background"]).toBe("rgb(45, 45, 45)");
+  });
+
+  it("matches Codex's light composer surface token path", () => {
+    const cssVariables = buildThemeCssVariables(
+      {
+        codeThemeId: "absolutely",
+        theme: getCodeThemeSeed("absolutely", "light"),
+      },
+      "light",
+      { electron: true },
+    );
+
+    expect(cssVariables.variables["--composer-surface"]).toBe(
+      "color-mix(in oklab, var(--color-background-control) 90%, transparent)",
+    );
+    expect(cssVariables.variables["--color-background-control"]).toBe("rgba(250, 250, 248, 0.96)");
   });
 
   it("uses the light-theme foreground color for the primary button background", () => {
@@ -332,5 +391,41 @@ describe("buildThemeCssVariables", () => {
     expect(tokens.derived.buttonPrimaryBackground).toBe(DEFAULT_THEME_STATE.chromeThemes.light.ink);
     expect(tokens.derived.textButtonPrimary).toBe(DEFAULT_THEME_STATE.chromeThemes.light.surface);
     expect(tokens.derived.textButtonPrimary).not.toBe(tokens.derived.buttonPrimaryBackground);
+  });
+
+  it("uses the dark-theme foreground color for the primary button background", () => {
+    const tokens = buildResolvedThemeTokens(
+      {
+        codeThemeId: "codex",
+        theme: DEFAULT_THEME_STATE.chromeThemes.dark,
+      },
+      "dark",
+    );
+
+    // Dark mode mirrors light mode's high-contrast primary: bg = ink (white),
+    // label = surface (dark), so the primary action reads as a filled button.
+    expect(tokens.derived.buttonPrimaryBackground).toBe(DEFAULT_THEME_STATE.chromeThemes.dark.ink);
+    expect(tokens.derived.textButtonPrimary).toBe(DEFAULT_THEME_STATE.chromeThemes.dark.surface);
+    expect(tokens.derived.textButtonPrimary).not.toBe(tokens.derived.buttonPrimaryBackground);
+  });
+
+  it("shares the user message bubble background with the chat code-block surface", () => {
+    const pack = {
+      codeThemeId: "custom-light",
+      theme: {
+        ...DEFAULT_THEME_STATE.chromeThemes.light,
+        ink: "#2d2d2b",
+        surface: "#f8f8f6",
+      },
+    };
+    const tokens = buildResolvedThemeTokens(pack, "light");
+    const cssVariables = buildThemeCssVariables(pack, "light");
+
+    expect(cssVariables.variables["--app-user-message-background"]).toBe(
+      tokens.derived.buttonSecondaryBackground,
+    );
+    expect(cssVariables.variables["--app-chat-code-surface"]).toBe(
+      cssVariables.variables["--app-user-message-background"],
+    );
   });
 });

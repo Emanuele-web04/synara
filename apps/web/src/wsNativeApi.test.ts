@@ -1,4 +1,10 @@
+// FILE: wsNativeApi.test.ts
+// Purpose: Verifies the WebSocket-backed NativeApi adapter and push listener fanout.
+// Layer: Web transport tests
+// Depends on: wsTransport mock plus contracts channel constants.
+
 import {
+  ApprovalRequestId,
   CommandId,
   type ContextMenuItem,
   EventId,
@@ -54,6 +60,9 @@ vi.mock("./wsTransport", () => {
     WsTransport: class MockWsTransport {
       request = requestMock;
       subscribe = subscribeMock;
+      onStateChange() {
+        return () => undefined;
+      }
       getLatestPush(channel: string) {
         return latestPushByChannel.get(channel) ?? null;
       }
@@ -284,6 +293,7 @@ describe("wsNativeApi", () => {
           claudeAgent: { enabled: true, binaryPath: "claude", launchArgs: "", customModels: [] },
           cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },
           gemini: { enabled: true, binaryPath: "gemini", customModels: [] },
+          grok: { enabled: true, binaryPath: "grok", customModels: [] },
           kilo: {
             enabled: true,
             binaryPath: "kilo",
@@ -296,6 +306,7 @@ describe("wsNativeApi", () => {
             binaryPath: "opencode",
             serverUrl: "",
             serverPassword: "",
+            experimentalWebSockets: false,
             customModels: [],
           },
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
@@ -403,6 +414,46 @@ describe("wsNativeApi", () => {
 
     expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.dispatchCommand, {
       command,
+    });
+  });
+
+  it("forwards terminal output ACKs to the websocket transport", async () => {
+    requestMock.mockResolvedValue(undefined);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    const input = { threadId: "thread-1", terminalId: "default", bytes: 4096 };
+    await api.terminal.ackOutput(input);
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.terminalAckOutput, input);
+  });
+
+  it("omits null user-input answers before dispatching to orchestration", async () => {
+    requestMock.mockResolvedValue(undefined);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+
+    const command = {
+      type: "thread.user-input.respond",
+      commandId: CommandId.makeUnsafe("cmd-user-input-null"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      requestId: ApprovalRequestId.makeUnsafe("request-1"),
+      answers: {
+        Language: null,
+        Runtime: "Bun",
+      },
+      createdAt: "2026-02-24T00:00:00.000Z",
+    } as const;
+    await api.orchestration.dispatchCommand(command);
+
+    expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      command: {
+        ...command,
+        answers: {
+          Runtime: "Bun",
+        },
+      },
     });
   });
 

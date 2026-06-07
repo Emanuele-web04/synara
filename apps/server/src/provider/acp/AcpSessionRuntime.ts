@@ -44,7 +44,11 @@ export interface AcpSessionRuntimeOptions {
     readonly name: string;
     readonly version: string;
   };
-  readonly authMethodId: string;
+  readonly authMethodId?: string;
+  readonly resolveAuthMethodId?: (
+    initializeResult: EffectAcpSchema.InitializeResponse,
+  ) => Effect.Effect<string, EffectAcpErrors.AcpError>;
+  readonly authenticateMeta?: Record<string, unknown>;
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly protocolLogging?: {
     readonly logIncoming?: boolean;
@@ -376,9 +380,22 @@ const makeAcpSessionRuntime = (
         initializePayload,
         acp.agent.initialize(initializePayload),
       );
+      const authMethodId =
+        options.resolveAuthMethodId !== undefined
+          ? yield* options.resolveAuthMethodId(initializeResult)
+          : options.authMethodId;
+
+      if (!authMethodId) {
+        return yield* new EffectAcpErrors.AcpRequestError({
+          code: -32602,
+          errorMessage: "ACP agent did not provide an authentication method.",
+          data: { authMethods: initializeResult.authMethods ?? [] },
+        });
+      }
 
       const authenticatePayload = {
-        methodId: options.authMethodId,
+        methodId: authMethodId,
+        ...(options.authenticateMeta ? { _meta: options.authenticateMeta } : {}),
       } satisfies EffectAcpSchema.AuthenticateRequest;
 
       yield* runLoggedRequest(

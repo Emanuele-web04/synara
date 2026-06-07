@@ -1,6 +1,7 @@
 import type {
   GitReadWorkingTreeDiffInput,
   GitStackedAction,
+  NativeApi,
   ProviderStartOptions,
 } from "@t3tools/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
@@ -8,14 +9,20 @@ import { ensureNativeApi } from "../nativeApi";
 import { buildPatchCacheKey } from "./diffRendering";
 
 const GIT_STATUS_STALE_TIME_MS = 30_000;
-const GIT_STATUS_REFETCH_INTERVAL_MS = 60_000;
+// Freshness is driven primarily by event-based invalidation (turn lifecycle +
+// file-change domain events in __root.tsx) plus refetchOnWindowFocus/reconnect.
+// The periodic timers are only a safety net for out-of-band edits while the tab
+// stays focused, so they run at a relaxed cadence instead of every minute.
+const GIT_STATUS_REFETCH_INTERVAL_MS = 300_000;
 const GIT_BRANCHES_STALE_TIME_MS = 15_000;
-const GIT_BRANCHES_REFETCH_INTERVAL_MS = 60_000;
+const GIT_BRANCHES_REFETCH_INTERVAL_MS = 300_000;
 const GIT_DIFF_SUMMARY_GC_TIME_MS = 30 * 60_000;
 const GIT_WORKING_TREE_DIFF_STALE_TIME_MS = 5_000;
+export const GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS = 4_000;
 
 export const gitQueryKeys = {
   all: ["git"] as const,
+  githubRepository: (cwd: string | null) => ["git", "github-repository", cwd] as const,
   status: (cwd: string | null) => ["git", "status", cwd] as const,
   branches: (cwd: string | null) => ["git", "branches", cwd] as const,
   workingTreeDiff: (
@@ -48,15 +55,32 @@ export const gitMutationKeys = {
   preparePullRequestThread: (cwd: string | null) =>
     ["git", "mutation", "prepare-pull-request-thread", cwd] as const,
   handoffThread: (cwd: string | null) => ["git", "mutation", "handoff-thread", cwd] as const,
+  stageFiles: (cwd: string | null) => ["git", "mutation", "stage-files", cwd] as const,
+  unstageFiles: (cwd: string | null) => ["git", "mutation", "unstage-files", cwd] as const,
 };
 
 export function invalidateGitQueries(queryClient: QueryClient) {
   return Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["git", "github-repository"] as const }),
     queryClient.invalidateQueries({ queryKey: ["git", "status"] as const }),
     queryClient.invalidateQueries({ queryKey: ["git", "branches"] as const }),
     queryClient.invalidateQueries({ queryKey: ["git", "working-tree-diff"] as const }),
     queryClient.invalidateQueries({ queryKey: ["git", "pull-request"] as const }),
   ]);
+}
+
+// Scope live file-change invalidations so unrelated project/worktree git caches stay warm.
+export function invalidateGitQueriesForCwds(queryClient: QueryClient, cwds: Iterable<string>) {
+  const uniqueCwds = [...new Set([...cwds].filter((cwd) => cwd.length > 0))];
+  return Promise.all(
+    uniqueCwds.flatMap((cwd) => [
+      queryClient.invalidateQueries({ queryKey: gitQueryKeys.githubRepository(cwd) }),
+      queryClient.invalidateQueries({ queryKey: gitQueryKeys.status(cwd) }),
+      queryClient.invalidateQueries({ queryKey: gitQueryKeys.branches(cwd) }),
+      queryClient.invalidateQueries({ queryKey: ["git", "working-tree-diff", cwd] as const }),
+      queryClient.invalidateQueries({ queryKey: ["git", "pull-request", cwd] as const }),
+    ]),
+  );
 }
 
 export function gitStatusQueryOptions(cwd: string | null) {
@@ -72,6 +96,21 @@ export function gitStatusQueryOptions(cwd: string | null) {
     refetchOnWindowFocus: true,
     refetchOnReconnect: "always",
     refetchInterval: GIT_STATUS_REFETCH_INTERVAL_MS,
+  });
+}
+
+export function gitGithubRepositoryQueryOptions(cwd: string | null, enabled = true) {
+  return queryOptions({
+    queryKey: gitQueryKeys.githubRepository(cwd),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!cwd) throw new Error("GitHub repository is unavailable.");
+      return api.git.githubRepository({ cwd });
+    },
+    enabled: enabled && cwd !== null,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
   });
 }
 
@@ -115,8 +154,10 @@ export function gitWorkingTreeDiffQueryOptions(input: {
   cwd: string | null;
   scope?: GitReadWorkingTreeDiffInput["scope"];
   enabled?: boolean;
+  refetchInterval?: number | false;
 }) {
   const scope = input.scope ?? "workingTree";
+  const refetchInterval = input.refetchInterval;
   return queryOptions({
     queryKey: gitQueryKeys.workingTreeDiff(input.cwd, scope),
     queryFn: async () => {
@@ -128,6 +169,7 @@ export function gitWorkingTreeDiffQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && input.cwd !== null,
     staleTime: GIT_WORKING_TREE_DIFF_STALE_TIME_MS,
+    ...(refetchInterval !== undefined ? { refetchInterval } : {}),
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
@@ -185,16 +227,88 @@ export function gitSummarizeDiffQueryOptions(input: {
   });
 }
 
-export function gitInitMutationOptions(input: { cwd: string | null; queryClient: QueryClient }) {
+type GitMutationInvalidation = "all" | "cwd";
+type GitMutationInvalidateOn = "success" | "settled";
+
+// Shared scaffolding for cwd-bound git mutations: resolve the native API, guard a
+// missing cwd with a clear message, run the single call, then invalidate git
+// caches — globally or scoped to this cwd — on success or settle. Keeps each
+// mutation definition down to its key + the one API call it performs.
+function makeGitMutationOptions<TArgs, TResult>(config: {
+  cwd: string | null;
+  queryClient: QueryClient;
+  mutationKey: readonly unknown[];
+  unavailableMessage: string;
+  run: (api: NativeApi, cwd: string, args: TArgs) => Promise<TResult>;
+  invalidate?: GitMutationInvalidation;
+  invalidateOn?: GitMutationInvalidateOn;
+}) {
+  const invalidate = config.invalidate ?? "all";
+  const invalidateOn = config.invalidateOn ?? "settled";
+  const runInvalidation = async () => {
+    if (invalidate === "cwd") {
+      if (config.cwd) {
+        await invalidateGitQueriesForCwds(config.queryClient, [config.cwd]);
+      }
+      return;
+    }
+    await invalidateGitQueries(config.queryClient);
+  };
+
   return mutationOptions({
-    mutationKey: gitMutationKeys.init(input.cwd),
-    mutationFn: async () => {
+    mutationKey: config.mutationKey,
+    mutationFn: async (args: TArgs) => {
       const api = ensureNativeApi();
-      if (!input.cwd) throw new Error("Git init is unavailable.");
-      return api.git.init({ cwd: input.cwd });
+      if (!config.cwd) throw new Error(config.unavailableMessage);
+      return config.run(api, config.cwd, args);
     },
-    onSuccess: async () => {
-      await invalidateGitQueries(input.queryClient);
+    ...(invalidateOn === "success"
+      ? { onSuccess: runInvalidation }
+      : { onSettled: runInvalidation }),
+  });
+}
+
+export function gitInitMutationOptions(input: { cwd: string | null; queryClient: QueryClient }) {
+  return makeGitMutationOptions<void, void>({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.init(input.cwd),
+    unavailableMessage: "Git init is unavailable.",
+    invalidateOn: "success",
+    run: (api, cwd) => api.git.init({ cwd }),
+  });
+}
+
+export function gitStageFilesMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<readonly string[], { ok: boolean }>({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.stageFiles(input.cwd),
+    unavailableMessage: "Staging is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, paths) => {
+      if (paths.length === 0) throw new Error("No files selected to stage.");
+      return api.git.stageFiles({ cwd, paths: [...paths] });
+    },
+  });
+}
+
+export function gitUnstageFilesMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<readonly string[], { ok: boolean }>({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.unstageFiles(input.cwd),
+    unavailableMessage: "Unstaging is unavailable.",
+    invalidate: "cwd",
+    run: (api, cwd, paths) => {
+      if (paths.length === 0) throw new Error("No files selected to unstage.");
+      return api.git.unstageFiles({ cwd, paths: [...paths] });
     },
   });
 }
@@ -203,16 +317,13 @@ export function gitCheckoutMutationOptions(input: {
   cwd: string | null;
   queryClient: QueryClient;
 }) {
-  return mutationOptions({
+  return makeGitMutationOptions<string, void>({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
     mutationKey: gitMutationKeys.checkout(input.cwd),
-    mutationFn: async (branch: string) => {
-      const api = ensureNativeApi();
-      if (!input.cwd) throw new Error("Git checkout is unavailable.");
-      return api.git.checkout({ cwd: input.cwd, branch });
-    },
-    onSuccess: async () => {
-      await invalidateGitQueries(input.queryClient);
-    },
+    unavailableMessage: "Git checkout is unavailable.",
+    invalidateOn: "success",
+    run: (api, cwd, branch) => api.git.checkout({ cwd, branch }),
   });
 }
 
@@ -223,26 +334,24 @@ export function gitRunStackedActionMutationOptions(input: {
   codexHomePath?: string | null;
   providerOptions?: ProviderStartOptions | null;
 }) {
-  return mutationOptions({
-    mutationKey: gitMutationKeys.runStackedAction(input.cwd),
-    mutationFn: async ({
-      actionId,
-      action,
-      commitMessage,
-      featureBranch,
-      filePaths,
-    }: {
+  return makeGitMutationOptions<
+    {
       actionId: string;
       action: GitStackedAction;
       commitMessage?: string;
       featureBranch?: boolean;
       filePaths?: string[];
-    }) => {
-      const api = ensureNativeApi();
-      if (!input.cwd) throw new Error("Git action is unavailable.");
-      return api.git.runStackedAction({
+    },
+    Awaited<ReturnType<NativeApi["git"]["runStackedAction"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: gitMutationKeys.runStackedAction(input.cwd),
+    unavailableMessage: "Git action is unavailable.",
+    run: (api, cwd, { actionId, action, commitMessage, featureBranch, filePaths }) =>
+      api.git.runStackedAction({
         actionId,
-        cwd: input.cwd,
+        cwd,
         action,
         ...(commitMessage ? { commitMessage } : {}),
         ...(featureBranch ? { featureBranch } : {}),
@@ -250,25 +359,17 @@ export function gitRunStackedActionMutationOptions(input: {
         ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
         ...(input.model ? { textGenerationModel: input.model } : {}),
         ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-      });
-    },
-    onSettled: async () => {
-      await invalidateGitQueries(input.queryClient);
-    },
+      }),
   });
 }
 
 export function gitPullMutationOptions(input: { cwd: string | null; queryClient: QueryClient }) {
-  return mutationOptions({
+  return makeGitMutationOptions<void, Awaited<ReturnType<NativeApi["git"]["pull"]>>>({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
     mutationKey: gitMutationKeys.pull(input.cwd),
-    mutationFn: async () => {
-      const api = ensureNativeApi();
-      if (!input.cwd) throw new Error("Git pull is unavailable.");
-      return api.git.pull({ cwd: input.cwd });
-    },
-    onSettled: async () => {
-      await invalidateGitQueries(input.queryClient);
-    },
+    unavailableMessage: "Git pull is unavailable.",
+    run: (api, cwd) => api.git.pull({ cwd }),
   });
 }
 
@@ -328,20 +429,16 @@ export function gitPreparePullRequestThreadMutationOptions(input: {
   cwd: string | null;
   queryClient: QueryClient;
 }) {
-  return mutationOptions({
-    mutationFn: async ({ reference, mode }: { reference: string; mode: "local" | "worktree" }) => {
-      const api = ensureNativeApi();
-      if (!input.cwd) throw new Error("Pull request thread preparation is unavailable.");
-      return api.git.preparePullRequestThread({
-        cwd: input.cwd,
-        reference,
-        mode,
-      });
-    },
+  return makeGitMutationOptions<
+    { reference: string; mode: "local" | "worktree" },
+    Awaited<ReturnType<NativeApi["git"]["preparePullRequestThread"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
     mutationKey: gitMutationKeys.preparePullRequestThread(input.cwd),
-    onSettled: async () => {
-      await invalidateGitQueries(input.queryClient);
-    },
+    unavailableMessage: "Pull request thread preparation is unavailable.",
+    run: (api, cwd, { reference, mode }) =>
+      api.git.preparePullRequestThread({ cwd, reference, mode }),
   });
 }
 
@@ -349,8 +446,8 @@ export function gitHandoffThreadMutationOptions(input: {
   cwd: string | null;
   queryClient: QueryClient;
 }) {
-  return mutationOptions({
-    mutationFn: async (request: {
+  return makeGitMutationOptions<
+    {
       targetMode: "local" | "worktree";
       currentBranch: string | null;
       worktreePath: string | null;
@@ -360,17 +457,13 @@ export function gitHandoffThreadMutationOptions(input: {
       preferredLocalBranch: string | null;
       preferredWorktreeBaseBranch: string | null;
       preferredNewWorktreeName: string | null;
-    }) => {
-      const api = ensureNativeApi();
-      if (!input.cwd) throw new Error("Git handoff is unavailable.");
-      return api.git.handoffThread({
-        cwd: input.cwd,
-        ...request,
-      });
     },
+    Awaited<ReturnType<NativeApi["git"]["handoffThread"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
     mutationKey: gitMutationKeys.handoffThread(input.cwd),
-    onSettled: async () => {
-      await invalidateGitQueries(input.queryClient);
-    },
+    unavailableMessage: "Git handoff is unavailable.",
+    run: (api, cwd, request) => api.git.handoffThread({ cwd, ...request }),
   });
 }

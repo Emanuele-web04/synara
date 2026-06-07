@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react";
 
 import { ArrowLeftIcon, ArrowRightIcon } from "~/lib/icons";
+import { SynaraLogo } from "~/components/SynaraLogo";
 
 import { ChangelogAccordion } from "../whatsNew/ChangelogAccordion";
 import { FeatureSection } from "../whatsNew/FeatureSection";
@@ -97,7 +98,7 @@ export default function WhatsNewDialog({
         </DialogPanel>
 
         {view === "current" && (
-          <DialogFooter className="gap-2 px-4 py-3 sm:justify-between">
+          <DialogFooter className="sm:justify-between">
             <Button
               variant="ghost"
               size="sm"
@@ -126,14 +127,7 @@ function CurrentHeader({
 }) {
   return (
     <div className="flex items-center gap-3">
-      <img
-        src="/favicon-32x32.png"
-        alt=""
-        aria-hidden="true"
-        className="size-8 shrink-0 rounded-[8px]"
-        loading="eager"
-        decoding="async"
-      />
+      <SynaraLogo aria-hidden className="size-8 shrink-0 text-foreground" />
       <div className="flex min-w-0 flex-col">
         <DialogTitle className="text-base">What&rsquo;s new?</DialogTitle>
         <DialogDescription className="text-xs">

@@ -45,8 +45,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
 
     // Footer
     const footer = document.createElement("div");
-    footer.className =
-      "flex flex-col-reverse gap-2 border-t border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] px-4 py-3 sm:flex-row sm:justify-end sm:rounded-b-[calc(var(--radius-xl)-1px)]";
+    footer.className = "flex flex-col-reverse gap-2 px-4 py-3 sm:flex-row sm:justify-end";
 
     function cleanup(result: boolean) {
       document.removeEventListener("keydown", onKeyDown);

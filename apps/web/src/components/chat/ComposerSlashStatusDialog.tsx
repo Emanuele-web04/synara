@@ -192,7 +192,7 @@ export function ComposerSlashStatusDialog(props: {
           </div>
         </DialogPanel>
         <DialogFooter variant="bare">
-          <Button type="button" onClick={() => onOpenChange(false)}>
+          <Button type="button" size="sm" onClick={() => onOpenChange(false)}>
             Close
           </Button>
         </DialogFooter>

@@ -1,42 +1,104 @@
 // FILE: composerInlineChip.ts
-// Purpose: Shares the inline chip styling and skill-label helpers used by the composer and chat.
+// Purpose: Single source of truth for composer inline token (chip) styling —
+//          skill, file/folder/plugin mention, and agent tokens — plus the shared
+//          icon/label/dismiss classes and skill-label helpers.
 // Layer: UI styling/utilities
-// Exports: Chip class names plus shared skill icon/label helpers
+// How to tune: edit COMPOSER_INLINE_CHIP_BASE_CLASS_NAME for font/size/weight/
+//          alignment shared by every chip; edit the fill/tone maps for the
+//          background + color variants; everything else composes from those.
 
+import { cn } from "~/lib/utils";
+
+// ── Shared base ───────────────────────────────────────────────────────
+// Layout + typography shared by every inline token in the composer. This is the
+// one block to change for font family/size/weight, alignment, gap, or selection
+// behavior. Per-chip differences live in the fill/tone variants below.
+export const COMPOSER_INLINE_CHIP_BASE_CLASS_NAME =
+  "inline-flex max-w-full select-none items-center gap-1 mx-0.5 align-middle font-medium leading-tight text-[length:var(--app-font-size-chat,12px)]";
+
+// ── Variants ──────────────────────────────────────────────────────────
+// `plain`  → in-composer look: no background, sits inline with typed text.
+// `soft`   → tinted pill used when a token is echoed inside a sent message.
+export type ComposerInlineChipFill = "plain" | "soft";
+// `accent` → skill + file/folder/plugin tokens (shared info color).
+// `neutral`→ generic tokens (foreground color).
+export type ComposerInlineChipTone = "accent" | "neutral";
+
+const COMPOSER_INLINE_CHIP_FILL_CLASS_NAME: Record<ComposerInlineChipFill, string> = {
+  plain: "",
+  soft: "rounded-md px-2 py-0.5 -translate-y-px",
+};
+
+const COMPOSER_INLINE_CHIP_TONE_TEXT_CLASS_NAME: Record<ComposerInlineChipTone, string> = {
+  accent: "text-[var(--info-foreground)]",
+  neutral: "text-[var(--color-text-foreground)]",
+};
+
+// Background tint for `soft` fill, kept in the same family as the tone color.
+const COMPOSER_INLINE_CHIP_TONE_SOFT_BG_CLASS_NAME: Record<ComposerInlineChipTone, string> = {
+  accent: "bg-[var(--info)]/10",
+  neutral: "bg-[var(--sidebar-accent-active)]",
+};
+
+/** Builds an inline chip class from the shared base plus a fill + tone variant. */
+export function composerInlineChipClassName(options?: {
+  fill?: ComposerInlineChipFill;
+  tone?: ComposerInlineChipTone;
+  className?: string;
+}): string {
+  const fill = options?.fill ?? "plain";
+  const tone = options?.tone ?? "accent";
+  return cn(
+    COMPOSER_INLINE_CHIP_BASE_CLASS_NAME,
+    COMPOSER_INLINE_CHIP_TONE_TEXT_CLASS_NAME[tone],
+    COMPOSER_INLINE_CHIP_FILL_CLASS_NAME[fill],
+    fill === "soft" ? COMPOSER_INLINE_CHIP_TONE_SOFT_BG_CLASS_NAME[tone] : null,
+    options?.className,
+  );
+}
+
+/** Plain accent token shared by skill + file/folder/plugin mentions in the editor. */
+export const COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME = composerInlineChipClassName({
+  fill: "plain",
+  tone: "accent",
+});
+
+// ── Shared icon / label ───────────────────────────────────────────────
+/** Icon slot for inline composer chips (skill, file, folder, plugin). */
+export const COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME = "size-3.5 shrink-0";
+export const COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME = "truncate select-none leading-tight";
+
+// ── Agent token (per-model color is set inline at render time) ─────────
+export const COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME = cn(
+  COMPOSER_INLINE_CHIP_BASE_CLASS_NAME,
+  "rounded-md px-1.5 py-0.5",
+);
+export const COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME = "size-3 shrink-0";
+
+// ── Sent-message echoes (timeline) ────────────────────────────────────
+// Mirror the in-composer chip exactly (plain, accent color, no fill) so a sent
+// skill/file/folder token reads identically to how it looked while typing.
+export const COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME = COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME;
+export const COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME = COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME;
+export const COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME =
+  COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME;
+
+// ── Composer attachment chips (image / selection / terminal context) ──
+// Bordered shell used by attachment-style chips (distinct from inline tokens).
 export const COMPOSER_INLINE_CHIP_CLASS_NAME =
-  "inline-flex max-w-full select-none items-center gap-0.5 rounded border border-[color:var(--color-border-light)] bg-[var(--sidebar-accent)] p-0.5 font-medium text-[11px] leading-[1.1] text-[var(--color-text-foreground)] align-middle";
-
-// Shared shell for composer attachment pills like image previews and text selections.
-export const COMPOSER_ATTACHMENT_CHIP_CLASS_NAME =
-  "inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-full border border-[color:var(--color-border)] bg-[var(--composer-surface)] p-0.5 text-[11px] font-medium text-[var(--color-text-foreground)]";
-
-// Wrapper for file/folder mention chips. Mirrors the skill pill (same tint
-// and rounding) but with tighter padding and smaller text so a path chip
-// reads as a compact variant of a skill chip.
-export const COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME =
-  "inline-flex max-w-full select-none items-center gap-0.5 rounded-sm bg-[var(--info-foreground)]/10 pl-1.5 pr-2 py-0.5 text-[11px] font-medium text-[var(--info-foreground)]/80 align-middle -translate-y-px";
-
-export const COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME =
-  "inline-flex max-w-full select-none items-center gap-1 rounded-md bg-[var(--info)]/10 px-2 py-0.5 text-[var(--info-foreground)]/80 align-middle -translate-y-px";
-
-export const COMPOSER_INLINE_SKILL_CHIP_ICON_CLASS_NAME = "size-3.5 shrink-0";
+  "inline-flex max-w-full select-none items-center gap-0.5 rounded border border-[color:var(--color-border-light)] bg-[var(--sidebar-accent-active)] p-0.5 font-medium text-[11px] leading-[1.1] text-[var(--color-text-foreground)] align-middle";
 
 export const COMPOSER_INLINE_CHIP_ICON_CLASS_NAME = "size-3.5 shrink-0 opacity-85";
 
-export const COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME = "size-4 shrink-0";
-
-export const COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME = "truncate select-none leading-tight";
+export const COMPOSER_ATTACHMENT_CHIP_CLASS_NAME =
+  "inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-full border border-[color:var(--color-border)] bg-[var(--composer-surface)] p-px text-[11px] font-medium text-[var(--color-text-foreground)]";
 
 export const COMPOSER_INLINE_CHIP_DISMISS_BUTTON_CLASS_NAME =
   "ml-0.5 inline-flex size-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground/72 transition-colors hover:bg-foreground/6 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
-export const COMPOSER_INLINE_SKILL_CHIP_ICON_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>`;
-
-// Agent mention chip styling (for @alias syntax) - color applied dynamically per model
-export const COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME =
-  "inline-flex max-w-full select-none items-center gap-1 rounded-md px-1.5 py-0.5 align-middle text-[11px] font-medium";
-
-export const COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME = "size-3 shrink-0";
+// ── Skill helpers ─────────────────────────────────────────────────────
+/** Central icon basename shared by every skill token (editor + timeline). */
+export const COMPOSER_INLINE_SKILL_CHIP_ICON_NAME = "building-blocks";
 
 // Formats raw skill ids like `check-code` into the label used by inline skill chips.
 export function formatComposerSkillChipLabel(name: string): string {

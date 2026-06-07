@@ -84,6 +84,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+2", command: "terminal.workspace.chat", when: "terminalWorkspaceOpen" },
   { key: "mod+shift+b", command: "browser.toggle", when: "!terminalFocus" },
   { key: "mod+d", command: "diff.toggle", when: "!terminalFocus" },
+  { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
+  { key: "mod+shift+e", command: "traitsPicker.toggle", when: "!terminalFocus" },
   { key: "mod+n", command: "chat.new", when: "!terminalFocus" },
   { key: "mod+shift+n", command: "chat.newLatestProject", when: "!terminalFocus" },
   { key: "mod+alt+n", command: "chat.newChat", when: "!terminalFocus" },
@@ -93,6 +95,12 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+alt+r", command: "chat.newCursor", when: "!terminalFocus" },
   { key: "mod+alt+g", command: "chat.newGemini", when: "!terminalFocus" },
   { key: "mod+\\", command: "chat.split", when: "!terminalFocus" },
+  // Recent-view switcher (Ctrl+Tab) is an installed-app feature only: Electron and
+  // standalone PWA windows have no tab strip, so the chord reaches the page. In a normal
+  // browser tab, Ctrl+Tab / Ctrl+Shift+Tab are reserved for browser tab switching and are
+  // not deliverable/preventable by page JS, so the switcher silently won't open there.
+  { key: "ctrl+tab", command: "view.recent.next", when: "!terminalFocus" },
+  { key: "ctrl+shift+tab", command: "view.recent.previous", when: "!terminalFocus" },
   { key: "mod+1", command: "thread.jump.1", when: "!terminalFocus && !terminalWorkspaceOpen" },
   { key: "mod+2", command: "thread.jump.2", when: "!terminalFocus && !terminalWorkspaceOpen" },
   { key: "mod+3", command: "thread.jump.3", when: "!terminalFocus && !terminalWorkspaceOpen" },
@@ -481,6 +489,43 @@ function invalidEntryIssue(index: number, detail: string): ServerConfigIssue {
   };
 }
 
+const LEGACY_KEYBINDING_COMMAND_ALIASES = {
+  "commandPalette.toggle": "sidebar.search",
+  "composer.effortPicker.toggle": "traitsPicker.toggle",
+  "composer.modelPicker.toggle": "modelPicker.toggle",
+  "effortPicker.toggle": "traitsPicker.toggle",
+  "reasoningPicker.toggle": "traitsPicker.toggle",
+  "thread.previous": "chat.visible.previous",
+  "thread.next": "chat.visible.next",
+} as const satisfies Record<string, KeybindingRule["command"]>;
+
+// Cross-device configs can lag behind command renames; normalize known aliases
+// before schema validation so stale synced files do not become warning toasts.
+function normalizeLegacyKeybindingEntry(entry: unknown): {
+  readonly entry: unknown;
+  readonly migrated: boolean;
+} {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    return { entry, migrated: false };
+  }
+
+  const command = (entry as { command?: unknown }).command;
+  if (typeof command !== "string" || !(command in LEGACY_KEYBINDING_COMMAND_ALIASES)) {
+    return { entry, migrated: false };
+  }
+
+  return {
+    entry: {
+      ...entry,
+      command:
+        LEGACY_KEYBINDING_COMMAND_ALIASES[
+          command as keyof typeof LEGACY_KEYBINDING_COMMAND_ALIASES
+        ],
+    },
+    migrated: true,
+  };
+}
+
 function mergeWithDefaultKeybindings(custom: ResolvedKeybindingsConfig): ResolvedKeybindingsConfig {
   if (custom.length === 0) {
     return [...DEFAULT_RESOLVED_KEYBINDINGS];
@@ -617,7 +662,8 @@ const makeKeybindings = Effect.gen(function* () {
 
     return yield* Effect.forEach(rawConfig, (entry) =>
       Effect.gen(function* () {
-        const decodedRule = Schema.decodeUnknownExit(KeybindingRule)(entry);
+        const normalized = normalizeLegacyKeybindingEntry(entry);
+        const decodedRule = Schema.decodeUnknownExit(KeybindingRule)(normalized.entry);
         if (decodedRule._tag === "Failure") {
           yield* Effect.logWarning("ignoring invalid keybinding entry", {
             path: keybindingsConfigPath,
@@ -644,11 +690,12 @@ const makeKeybindings = Effect.gen(function* () {
     {
       readonly keybindings: readonly KeybindingRule[];
       readonly issues: readonly ServerConfigIssue[];
+      readonly migratedLegacyCommandCount: number;
     },
     KeybindingsConfigError
   > {
     if (!(yield* readConfigExists)) {
-      return { keybindings: [], issues: [] };
+      return { keybindings: [], issues: [], migratedLegacyCommandCount: 0 };
     }
 
     const rawConfig = yield* readRawConfig;
@@ -658,13 +705,19 @@ const makeKeybindings = Effect.gen(function* () {
       return {
         keybindings: [],
         issues: [malformedConfigIssue(detail)],
+        migratedLegacyCommandCount: 0,
       };
     }
 
     const keybindings: KeybindingRule[] = [];
     const issues: ServerConfigIssue[] = [];
+    let migratedLegacyCommandCount = 0;
     for (const [index, entry] of decodedEntries.value.entries()) {
-      const decodedRule = Schema.decodeUnknownExit(KeybindingRule)(entry);
+      const normalized = normalizeLegacyKeybindingEntry(entry);
+      if (normalized.migrated) {
+        migratedLegacyCommandCount += 1;
+      }
+      const decodedRule = Schema.decodeUnknownExit(KeybindingRule)(normalized.entry);
       if (decodedRule._tag === "Failure") {
         const detail = Cause.pretty(decodedRule.cause);
         issues.push(invalidEntryIssue(index, detail));
@@ -692,7 +745,7 @@ const makeKeybindings = Effect.gen(function* () {
       keybindings.push(decodedRule.value);
     }
 
-    return { keybindings, issues };
+    return { keybindings, issues, migratedLegacyCommandCount };
   });
 
   const writeConfigAtomically = (rules: readonly KeybindingRule[]) => {
@@ -799,6 +852,9 @@ const makeKeybindings = Effect.gen(function* () {
         });
       }
       if (missingDefaults.length === 0) {
+        if (runtimeConfig.migratedLegacyCommandCount > 0) {
+          yield* writeConfigAtomically(customConfig);
+        }
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
         return;
       }
@@ -825,6 +881,12 @@ const makeKeybindings = Effect.gen(function* () {
         });
       }
 
+      if (runtimeConfig.migratedLegacyCommandCount > 0) {
+        yield* Effect.logInfo("migrated legacy keybinding command ids", {
+          path: keybindingsConfigPath,
+          count: runtimeConfig.migratedLegacyCommandCount,
+        });
+      }
       yield* writeConfigAtomically(cappedConfig);
       yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
     }),

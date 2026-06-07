@@ -112,6 +112,23 @@ describe("projectCreateRecovery", () => {
     expect(recovered?.id).toBe("project-123");
   });
 
+  it("recovers active shell-snapshot projects that do not carry deletedAt", () => {
+    const recovered = findRecoverableProjectForDuplicateCreate({
+      message:
+        "Orchestration command invariant failed (project.create): Project 'project-123' already uses workspace root '/Users/tester/Code/one'.",
+      projects: [
+        {
+          id: "project-123",
+          kind: "project",
+          workspaceRoot: "/Users/tester/Code/one",
+        },
+      ],
+      workspaceRoot: "/Users/tester/Code/one",
+    });
+
+    expect(recovered?.id).toBe("project-123");
+  });
+
   it("ignores deleted and non-project rows during recovery", () => {
     const recovered = findRecoverableProjectForDuplicateCreate({
       message:

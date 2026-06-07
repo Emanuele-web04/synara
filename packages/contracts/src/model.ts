@@ -11,6 +11,7 @@ export const CLAUDE_CODE_EFFORT_OPTIONS = [
   "xhigh",
   "max",
   "ultrathink",
+  "ultracode",
 ] as const;
 export type ClaudeCodeEffort = (typeof CLAUDE_CODE_EFFORT_OPTIONS)[number];
 export const GEMINI_THINKING_LEVEL_OPTIONS = ["LOW", "HIGH"] as const;
@@ -26,12 +27,15 @@ export const PI_THINKING_LEVEL_OPTIONS = [
   "xhigh",
 ] as const;
 export type PiThinkingLevel = (typeof PI_THINKING_LEVEL_OPTIONS)[number];
+export const GROK_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high"] as const;
+export type GrokReasoningEffort = (typeof GROK_REASONING_EFFORT_OPTIONS)[number];
 export type ProviderReasoningEffort =
   | CodexReasoningEffort
   | ClaudeCodeEffort
   | GeminiThinkingLevel
   | `${GeminiThinkingBudget}`
-  | PiThinkingLevel;
+  | PiThinkingLevel
+  | GrokReasoningEffort;
 
 export const ProviderOptionChoice = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -118,11 +122,17 @@ export const CursorModelOptions = Schema.Struct({
 });
 export type CursorModelOptions = typeof CursorModelOptions.Type;
 
+export const GrokModelOptions = Schema.Struct({
+  reasoningEffort: Schema.optional(Schema.Literals(GROK_REASONING_EFFORT_OPTIONS)),
+});
+export type GrokModelOptions = typeof GrokModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
   cursor: Schema.optional(CursorModelOptions),
   gemini: Schema.optional(GeminiModelOptions),
+  grok: Schema.optional(GrokModelOptions),
   kilo: Schema.optional(OpenCodeModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
@@ -187,6 +197,19 @@ const CODEX_GPT_5_5_CAPABILITIES: ModelCapabilities = {
   ],
 };
 
+const GROK_BUILD_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [
+    { value: "none", label: "None" },
+    { value: "low", label: "Low", isDefault: true },
+    { value: "medium", label: "Medium" },
+    { value: "high", label: "High" },
+  ],
+  supportsFastMode: false,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
+};
+
 type ModelDefinition = {
   readonly slug: string;
   readonly name: string;
@@ -237,6 +260,28 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   ],
   claudeAgent: [
     {
+      slug: "claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      capabilities: {
+        reasoningEffortLevels: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High", isDefault: true },
+          { value: "xhigh", label: "Extra High" },
+          { value: "max", label: "Max" },
+          { value: "ultrathink", label: "Ultrathink" },
+          { value: "ultracode", label: "Ultracode" },
+        ],
+        supportsFastMode: true,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: ["ultrathink"],
+        contextWindowOptions: [
+          { value: "200k", label: "200k", isDefault: true },
+          { value: "1m", label: "1M" },
+        ],
+      },
+    },
+    {
       slug: "claude-opus-4-7",
       name: "Claude Opus 4.7",
       capabilities: {
@@ -247,6 +292,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
           { value: "xhigh", label: "Extra High" },
           { value: "max", label: "Max" },
           { value: "ultrathink", label: "Ultrathink" },
+          { value: "ultracode", label: "Ultracode" },
         ],
         supportsFastMode: true,
         supportsThinkingToggle: false,
@@ -405,6 +451,18 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: GEMINI_2_5_CAPABILITIES,
     },
   ],
+  grok: [
+    {
+      slug: "grok-build-0.1",
+      name: "Grok Build 0.1",
+      capabilities: GROK_BUILD_CAPABILITIES,
+    },
+    {
+      slug: "grok-build",
+      name: "Grok 4.3",
+      capabilities: GROK_BUILD_CAPABILITIES,
+    },
+  ],
   opencode: [
     {
       slug: "openai/gpt-5",
@@ -501,6 +559,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   claudeAgent: "claude-sonnet-4-6",
   cursor: "auto",
   gemini: "auto-gemini-3",
+  grok: "grok-build",
   kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
 };
@@ -520,7 +579,10 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "gpt-5.3-spark": "gpt-5.3-codex-spark",
   },
   claudeAgent: {
-    opus: "claude-opus-4-7",
+    opus: "claude-opus-4-8",
+    "opus-4.8": "claude-opus-4-8",
+    "claude-opus-4.8": "claude-opus-4-8",
+    "claude-opus-4-8-20260528": "claude-opus-4-8",
     "opus-4.7": "claude-opus-4-7",
     "claude-opus-4.7": "claude-opus-4-7",
     "claude-opus-4-7-20260416": "claude-opus-4-7",
@@ -563,6 +625,20 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "gemini-2.5-flash": "gemini-2.5-flash",
     "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
   },
+  grok: {
+    grok: "grok-build-0.1",
+    build: "grok-build-0.1",
+    "grok-build-0.1": "grok-build-0.1",
+    "grok-build": "grok-build",
+    "4.3": "grok-build",
+    "grok-4": "grok-build",
+    "grok-4.3": "grok-build",
+    "grok-latest": "grok-build",
+    "grok-code-fast": "grok-build-0.1",
+    "grok-code-fast-1": "grok-build-0.1",
+    "grok-code-fast-1-0825": "grok-build-0.1",
+    "code-fast": "grok-build-0.1",
+  },
   kilo: {},
   opencode: {},
   pi: {},
@@ -597,6 +673,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   claudeAgent: "Claude",
   cursor: "Cursor",
   gemini: "Gemini",
+  grok: "Grok",
   kilo: "Kilo",
   opencode: "OpenCode",
   pi: "Pi",

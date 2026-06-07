@@ -1,8 +1,14 @@
+// FILE: RateLimitBanner.tsx
+// Purpose: Derives and renders provider rate-limit warnings for the active chat.
+// Layer: Chat status presentation
+// Exports: RateLimitBanner and rate-limit derivation helpers.
+
 import { memo } from "react";
 import type { OrchestrationThreadActivity } from "@t3tools/contracts";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
-import { Button } from "../ui/button";
+import { IconButton } from "../ui/icon-button";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
+import { ChatColumnBannerFrame } from "./ChatColumnBannerFrame";
 
 export type RateLimitStatus = {
   status: "rejected" | "allowed_warning";
@@ -65,24 +71,22 @@ export const RateLimitBanner = memo(function RateLimitBanner({
     : `Approaching rate limit${utilization !== undefined ? ` (${Math.round(utilization * 100)}% used)` : ""}.${resetsAt ? formatResetsAt(resetsAt) : ""}`;
 
   return (
-    <div className="pt-3 mx-auto max-w-3xl px-4">
+    <ChatColumnBannerFrame>
       <Alert variant={isRejected ? "error" : "warning"}>
         <CircleAlertIcon />
         <AlertDescription>{message}</AlertDescription>
         {onDismiss ? (
           <AlertAction>
-            <Button
-              aria-label="Dismiss rate limit status"
-              size="icon-xs"
+            <IconButton
+              label="Dismiss rate limit status"
               title="Dismiss rate limit status"
-              variant="ghost"
               onClick={onDismiss}
             >
               <XIcon className="size-3.5" />
-            </Button>
+            </IconButton>
           </AlertAction>
         ) : null}
       </Alert>
-    </div>
+    </ChatColumnBannerFrame>
   );
 });

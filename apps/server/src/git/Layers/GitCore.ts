@@ -47,7 +47,7 @@ const EMPTY_TREE_OBJECT_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const WORKING_TREE_DIFF_TIMEOUT_MS = 15_000;
 const MAX_UNTRACKED_DIFF_CONCURRENCY = 4;
 const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
-const AUTO_DETACHED_WORKTREE_DIRNAME = "dpcode";
+const AUTO_DETACHED_WORKTREE_DIRNAME = "synara";
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
   isRepo: false,
   hasOriginRemote: false,
@@ -1382,6 +1382,27 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           behindCount = 0;
         }
 
+        // Repo-level metadata for the status panel: whether an `origin` remote is configured
+        // and whether the current branch is the repo's default branch. Resolved from the same
+        // helpers `listGitBranches` uses so the two stay consistent; each lookup degrades to a
+        // safe default on failure so it never breaks the status read. `resolvePrimaryRemoteName`
+        // returns "origin" only when that remote exists, so it doubles as the origin check.
+        const primaryRemoteName = yield* resolvePrimaryRemoteName(cwd).pipe(
+          Effect.catch(() => Effect.succeed(null)),
+        );
+        const defaultBranchName =
+          primaryRemoteName === null
+            ? null
+            : yield* resolveDefaultBranchName(cwd, primaryRemoteName).pipe(
+                Effect.catch(() => Effect.succeed(null)),
+              );
+        const repoMetadata = {
+          isRepo: true,
+          hasOriginRemote: primaryRemoteName === "origin",
+          isDefaultBranch:
+            branch !== null && defaultBranchName !== null && branch === defaultBranchName,
+        } as const;
+
         const moveAwareWorkingTree =
           hasWorkingTreeChanges &&
           untrackedFilesWithoutNumstat.size > 0 &&
@@ -1390,6 +1411,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             : null;
         if (moveAwareWorkingTree) {
           return {
+            ...repoMetadata,
             branch,
             upstreamRef,
             upstreamBranch,
@@ -1448,6 +1470,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         }
 
         return {
+          ...repoMetadata,
           branch,
           upstreamRef,
           upstreamBranch,
@@ -2372,7 +2395,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         yield* executeGit(
           "GitCore.stashAndCheckout.stashPush",
           input.cwd,
-          ["stash", "push", "-u", "-m", `dpcode: stash before switching to ${input.branch}`],
+          ["stash", "push", "-u", "-m", `synara: stash before switching to ${input.branch}`],
           {
             timeoutMs: 30_000,
             fallbackErrorMessage: "git stash failed",
@@ -2556,6 +2579,30 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         ),
       );
 
+    const stageFiles: GitCoreShape["stageFiles"] = (cwd, paths) =>
+      runGit("GitCore.stageFiles", cwd, ["add", "--", ...paths]);
+
+    const unstageFiles: GitCoreShape["unstageFiles"] = (cwd, paths) =>
+      Effect.gen(function* () {
+        // `git reset` resolves against HEAD, which does not exist before the first
+        // commit. Fall back to `git rm --cached` so newly staged files can still be
+        // unstaged in a freshly initialized repository.
+        const headExists = yield* executeGit(
+          "GitCore.unstageFiles.headExists",
+          cwd,
+          ["rev-parse", "--verify", "HEAD"],
+          { allowNonZeroExit: true },
+        ).pipe(Effect.map((result) => result.code === 0));
+
+        yield* runGit(
+          "GitCore.unstageFiles",
+          cwd,
+          headExists
+            ? ["reset", "-q", "HEAD", "--", ...paths]
+            : ["rm", "--cached", "-q", "--", ...paths],
+        );
+      });
+
     return {
       execute,
       status,
@@ -2588,6 +2635,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       removeIndexLock,
       initRepo,
       listLocalBranchNames,
+      stageFiles,
+      unstageFiles,
     } satisfies GitCoreShape;
   });
 

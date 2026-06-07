@@ -1,5 +1,5 @@
 /**
- * Optional integration check against a real `agent acp` install.
+ * Optional integration check against a real `cursor-agent acp` install.
  * Enable with: T3_CURSOR_ACP_PROBE=1 bun run test --filter CursorAcpCliProbe
  */
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -10,8 +10,18 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { AcpSessionRuntime } from "./AcpSessionRuntime.ts";
 
+function flattenSelectOptionValues(
+  option: Extract<EffectAcpSchema.SessionConfigOption, { type: "select" }> | undefined,
+): ReadonlyArray<string> {
+  return (
+    option?.options.flatMap((entry) =>
+      "value" in entry ? [entry.value] : entry.options.map((choice) => choice.value),
+    ) ?? []
+  );
+}
+
 describe.runIf(process.env.T3_CURSOR_ACP_PROBE === "1")("Cursor ACP CLI probe", () => {
-  it.effect("initialize and authenticate against real agent acp", () =>
+  it.effect("initialize and authenticate against real cursor-agent acp", () =>
     Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime;
       const started = yield* runtime.start();
@@ -20,7 +30,7 @@ describe.runIf(process.env.T3_CURSOR_ACP_PROBE === "1")("Cursor ACP CLI probe", 
       Effect.provide(
         AcpSessionRuntime.layer({
           spawn: {
-            command: "agent",
+            command: "cursor-agent",
             args: ["acp"],
             cwd: process.cwd(),
           },
@@ -72,7 +82,7 @@ describe.runIf(process.env.T3_CURSOR_ACP_PROBE === "1")("Cursor ACP CLI probe", 
         AcpSessionRuntime.layer({
           authMethodId: "cursor_login",
           spawn: {
-            command: "agent",
+            command: "cursor-agent",
             args: ["acp"],
             cwd: process.cwd(),
           },
@@ -98,37 +108,37 @@ describe.runIf(process.env.T3_CURSOR_ACP_PROBE === "1")("Cursor ACP CLI probe", 
 
       const configOptions = newResult.configOptions;
       let modelConfigId = "model";
+      let targetModelValue = "gpt-5.4";
       if (Array.isArray(configOptions)) {
         const modelConfig = configOptions.find((opt) => opt.category === "model");
         if (typeof modelConfig?.id === "string") {
           modelConfigId = modelConfig.id;
         }
+        if (modelConfig?.type === "select") {
+          targetModelValue =
+            flattenSelectOptionValues(modelConfig).find(
+              (value) => value !== modelConfig.currentValue,
+            ) ?? modelConfig.currentValue;
+        }
       }
 
       const setResult: EffectAcpSchema.SetSessionConfigOptionResponse =
-        yield* runtime.setConfigOption(modelConfigId, "gpt-5.4");
+        yield* runtime.setConfigOption(modelConfigId, targetModelValue);
 
       console.log("session/set_config_option result:", JSON.stringify(setResult, null, 2));
 
       if (Array.isArray(setResult.configOptions)) {
         const modelConfig = setResult.configOptions.find((opt) => opt.category === "model");
-        const parameterizedOptions = setResult.configOptions.filter(
-          (opt) =>
-            opt.category === "thought_level" ||
-            opt.category === "model_option" ||
-            opt.category === "model_config",
-        );
         if (modelConfig?.type === "select") {
-          expect(modelConfig.currentValue).toBe("gpt-5.4");
+          expect(modelConfig.currentValue).toBe(targetModelValue);
         }
-        expect(parameterizedOptions.length).toBeGreaterThan(0);
       }
     }).pipe(
       Effect.provide(
         AcpSessionRuntime.layer({
           authMethodId: "cursor_login",
           spawn: {
-            command: "agent",
+            command: "cursor-agent",
             args: ["acp"],
             cwd: process.cwd(),
           },

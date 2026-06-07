@@ -28,7 +28,7 @@ import { Schema } from "effect";
 
 import ChatView from "../components/ChatView";
 import BrowserPanel from "../components/BrowserPanel";
-import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenAI, OpenCodeIcon, PiIcon } from "../components/Icons";
+import { ProviderIcon } from "../components/ProviderIcon";
 import { ChatPaneDropOverlay } from "../components/chat-drop-overlay/ChatPaneDropOverlay";
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import {
@@ -38,13 +38,13 @@ import {
   type DiffPanelMode,
 } from "../components/DiffPanelShell";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { useDockPaneRuntimeActivation } from "../hooks/useDockPaneRuntimeActivation";
 import {
   type ChatRightPanel,
   type DiffRouteSearch,
   parseDiffRouteSearch,
   stripDiffSearchParams,
 } from "../diffRouteSearch";
-import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { resolveActiveSplitView, isSplitRoute } from "../splitViewRoute";
 import { canSubdividePane, collectLeaves, findLeafPaneById } from "../splitView.logic";
@@ -63,10 +63,33 @@ import {
   type SplitViewPanePanelState,
   useSplitViewStore,
 } from "../splitViewStore";
-import { selectSingleChatPanelState, useSingleChatPanelStore } from "../singleChatPanelStore";
+import { selectRightDockState, useRightDockStore } from "../rightDockStore";
+import {
+  type RightDockPane,
+  type RightDockPaneKind,
+  resolveActivePane,
+} from "../rightDockStore.logic";
+import { RightDock } from "../components/chat/RightDock";
+import { DockTerminalPane } from "../components/chat/DockTerminalPane";
+import { CHAT_SURFACE_HEADER_ROW_CLASS_NAME } from "../components/chat/chatHeaderControls";
+import { GitPanel } from "../components/chat/GitPanel";
+import { PanelStateMessage } from "../components/chat/PanelStateMessage";
+import {
+  RIGHT_DOCK_ADD_MENU_KINDS,
+  getRightDockPaneMeta,
+} from "../components/chat/rightDockPaneMeta";
+import { type DockPaneRuntimeMode } from "../lib/dockPaneActivation";
+import {
+  canComposerHandlePanelWidth,
+  createPanelResizeOverlay,
+  removePanelResizeOverlay,
+} from "../lib/panelResize";
+import { getSidechatCreator } from "../lib/sidechatCreatorRegistry";
+import { toastManager } from "../components/ui/toast";
 import { useStore } from "../store";
 import {
   createAllThreadsSelector,
+  createSidebarThreadSummariesSelector,
   createThreadExistsSelector,
   createThreadProjectIdSelector,
 } from "../storeSelectors";
@@ -80,7 +103,6 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../components/ui/dialog";
-import { Sheet, SheetPopup } from "../components/ui/sheet";
 import {
   resolveRoutePanelBootstrap,
   resolveSplitPaneCloseDecision,
@@ -89,22 +111,26 @@ import {
   resolveToggledChatPanelPatch,
 } from "./-chatThreadRoute.logic";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
+import {
+  CHAT_BACKGROUND_CLASS_NAME,
+  CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
+  CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
+  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
+} from "../components/chat/composerPickerStyles";
 import { cn } from "~/lib/utils";
-import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
+import { SidebarInset } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
-const DIFF_INLINE_LAYOUT_MEDIA_QUERY = "(max-width: 1180px)";
-// Keep the inline diff visually near half of the chat area after the fixed left sidebar is counted.
-const DIFF_INLINE_DEFAULT_WIDTH = "clamp(28rem, calc(50vw - 8rem), 44rem)";
-const BROWSER_INLINE_DEFAULT_WIDTH = "50%";
+// Open the dock as a true 50/50 split of the chat area: `50vw - 8rem` is half the
+// viewport minus half the fixed 16rem left sidebar, so the chat and dock match.
+// `max()` keeps a sane minimum on narrow screens but never caps the half-width.
+const DIFF_INLINE_DEFAULT_WIDTH = "max(28rem, calc(50vw - 8rem))";
 const SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 22 * 16;
 const BROWSER_SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 30 * 16;
 const SPLIT_PANE_CHAT_MIN_WIDTH = 20 * 16;
 const SINGLE_PANEL_MIN_WIDTH = 26 * 16;
 const BROWSER_PANEL_MIN_WIDTH = 21 * 16;
-const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 208;
 const RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY = "chat_right_panel_width";
-const PANEL_RESIZE_OVERLAY_SYNC_EVENT = "dpcode:panel-resize-overlay-sync";
 const SPLIT_RATIO_MIN = 0.25;
 const SPLIT_RATIO_MAX = 0.75;
 
@@ -115,32 +141,6 @@ function clampSplitRatio(value: number): number {
   if (!Number.isFinite(value)) return 0.5;
   return Math.min(SPLIT_RATIO_MAX, Math.max(SPLIT_RATIO_MIN, value));
 }
-
-const RightPanelSheet = (props: {
-  children: ReactNode;
-  panelOpen: boolean;
-  onClosePanel: () => void;
-}) => {
-  return (
-    <Sheet
-      open={props.panelOpen}
-      onOpenChange={(open) => {
-        if (!open) {
-          props.onClosePanel();
-        }
-      }}
-    >
-      <SheetPopup
-        side="right"
-        showCloseButton={false}
-        keepMounted
-        className="h-full min-h-0 w-[min(88vw,820px)] max-w-[820px] p-0"
-      >
-        {props.children}
-      </SheetPopup>
-    </Sheet>
-  );
-};
 
 const DiffLoadingFallback = (props: { mode: DiffPanelMode }) => {
   return (
@@ -158,6 +158,7 @@ const LazyDiffPanel = (props: {
     patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
   ) => void;
   onClosePanel?: () => void;
+  liveRefreshEnabled?: boolean;
 }) => {
   return (
     <DiffWorkerPoolProvider>
@@ -168,258 +169,12 @@ const LazyDiffPanel = (props: {
           {...(props.panelState ? { panelState: props.panelState } : {})}
           {...(props.onUpdatePanelState ? { onUpdatePanelState: props.onUpdatePanelState } : {})}
           {...(props.onClosePanel ? { onClosePanel: props.onClosePanel } : {})}
+          {...(props.liveRefreshEnabled !== undefined
+            ? { liveRefreshEnabled: props.liveRefreshEnabled }
+            : {})}
         />
       </Suspense>
     </DiffWorkerPoolProvider>
-  );
-};
-
-function canComposerHandlePanelWidth(input: {
-  nextWidth: number;
-  paneScopeId?: string;
-  applyWidth: (width: number) => void;
-  resetWidth: () => void;
-}) {
-  const scopeSelector = input.paneScopeId
-    ? `[data-chat-composer-form='true'][data-chat-pane-scope='${input.paneScopeId}']`
-    : "[data-chat-composer-form='true']";
-  const composerForm = document.querySelector<HTMLElement>(scopeSelector);
-  if (!composerForm) return true;
-
-  const composerViewport = composerForm.parentElement;
-  if (!composerViewport) return true;
-
-  input.applyWidth(input.nextWidth);
-
-  const viewportStyle = window.getComputedStyle(composerViewport);
-  const viewportPaddingLeft = Number.parseFloat(viewportStyle.paddingLeft) || 0;
-  const viewportPaddingRight = Number.parseFloat(viewportStyle.paddingRight) || 0;
-  const viewportContentWidth = Math.max(
-    0,
-    composerViewport.clientWidth - viewportPaddingLeft - viewportPaddingRight,
-  );
-  const formRect = composerForm.getBoundingClientRect();
-  const composerFooter = composerForm.querySelector<HTMLElement>(
-    "[data-chat-composer-footer='true']",
-  );
-  const composerRightActions = composerForm.querySelector<HTMLElement>(
-    "[data-chat-composer-actions='right']",
-  );
-  const composerRightActionsWidth = composerRightActions?.getBoundingClientRect().width ?? 0;
-  const composerFooterGap = composerFooter
-    ? Number.parseFloat(window.getComputedStyle(composerFooter).columnGap) ||
-      Number.parseFloat(window.getComputedStyle(composerFooter).gap) ||
-      0
-    : 0;
-  const minimumComposerWidth =
-    COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX + composerRightActionsWidth + composerFooterGap;
-  const hasComposerOverflow = composerForm.scrollWidth > composerForm.clientWidth + 0.5;
-  const overflowsViewport = formRect.width > viewportContentWidth + 0.5;
-  const violatesMinimumComposerWidth = composerForm.clientWidth + 0.5 < minimumComposerWidth;
-
-  input.resetWidth();
-
-  return !hasComposerOverflow && !overflowsViewport && !violatesMinimumComposerWidth;
-}
-
-// Electron <webview> can swallow pointermove during drag; this keeps resizing in the React layer.
-function createPanelResizeOverlay(): HTMLDivElement {
-  const overlay = document.createElement("div");
-  overlay.setAttribute("data-panel-resize-overlay", "true");
-  overlay.style.position = "fixed";
-  overlay.style.inset = "0";
-  overlay.style.zIndex = "2147483647";
-  overlay.style.cursor = "col-resize";
-  overlay.style.background = "transparent";
-  document.body.append(overlay);
-  window.dispatchEvent(new Event(PANEL_RESIZE_OVERLAY_SYNC_EVENT));
-  return overlay;
-}
-
-function removePanelResizeOverlay(overlay: HTMLDivElement): void {
-  overlay.remove();
-  window.dispatchEvent(new Event(PANEL_RESIZE_OVERLAY_SYNC_EVENT));
-}
-
-const PanePanelInlineSidebar = (props: {
-  panelOpen: boolean;
-  onClosePanel: () => void;
-  onOpenPanel: () => void;
-  renderPanelContent: boolean;
-  panel: ChatRightPanel | null | undefined;
-  threadId: ThreadIdType | null;
-  paneScopeId?: string;
-  panelState?: Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">;
-  onUpdatePanelState?: (
-    patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
-  ) => void;
-}) => {
-  const {
-    panelOpen,
-    onClosePanel,
-    onOpenPanel,
-    renderPanelContent,
-    panel,
-    threadId,
-    paneScopeId,
-    panelState,
-    onUpdatePanelState,
-  } = props;
-  const inlineWrapperRef = useRef<HTMLDivElement>(null);
-  const inlineSidebarWidth =
-    panel === "browser" ? BROWSER_INLINE_DEFAULT_WIDTH : DIFF_INLINE_DEFAULT_WIDTH;
-  const inlineSidebarMinWidth =
-    panel === "browser" ? BROWSER_PANEL_MIN_WIDTH : SINGLE_PANEL_MIN_WIDTH;
-  const inlineSidebarStorageKey =
-    panel === "browser"
-      ? `${RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY}:browser`
-      : `${RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY}:diff`;
-  const onOpenChange = useCallback(
-    (open: boolean) => {
-      if (open) {
-        onOpenPanel();
-        return;
-      }
-      onClosePanel();
-    },
-    [onClosePanel, onOpenPanel],
-  );
-  const shouldAcceptInlineSidebarWidth = useCallback(
-    ({ nextWidth, wrapper }: { nextWidth: number; wrapper: HTMLElement }) => {
-      const previousSidebarWidth = wrapper.style.getPropertyValue("--sidebar-width");
-      return canComposerHandlePanelWidth({
-        nextWidth,
-        applyWidth: (width) => {
-          wrapper.style.setProperty("--sidebar-width", `${width}px`);
-        },
-        resetWidth: () => {
-          if (previousSidebarWidth.length > 0) {
-            wrapper.style.setProperty("--sidebar-width", previousSidebarWidth);
-          } else {
-            wrapper.style.removeProperty("--sidebar-width");
-          }
-        },
-        ...(paneScopeId ? { paneScopeId } : {}),
-      });
-    },
-    [paneScopeId],
-  );
-
-  if (panel === "browser") {
-    const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-      const wrapper = inlineWrapperRef.current;
-      const parent = wrapper?.parentElement;
-      if (!wrapper || !parent) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      const startX = event.clientX;
-      const startWidth = wrapper.getBoundingClientRect().width;
-      const maxWidth = Math.max(
-        inlineSidebarMinWidth,
-        parent.clientWidth - SPLIT_PANE_CHAT_MIN_WIDTH,
-      );
-      const resizeOverlay = createPanelResizeOverlay();
-
-      const onPointerMove = (moveEvent: PointerEvent) => {
-        const delta = startX - moveEvent.clientX;
-        const nextWidth = Math.max(inlineSidebarMinWidth, Math.min(maxWidth, startWidth + delta));
-        if (
-          !canComposerHandlePanelWidth({
-            nextWidth,
-            applyWidth: (width) => {
-              wrapper.style.width = `${width}px`;
-            },
-            resetWidth: () => {
-              wrapper.style.width = `${startWidth}px`;
-            },
-            ...(paneScopeId ? { paneScopeId } : {}),
-          })
-        ) {
-          return;
-        }
-        wrapper.style.width = `${nextWidth}px`;
-        setLocalStorageItem(inlineSidebarStorageKey, nextWidth, Schema.Finite);
-      };
-
-      const onPointerUp = () => {
-        removePanelResizeOverlay(resizeOverlay);
-        document.body.style.removeProperty("cursor");
-        document.body.style.removeProperty("user-select");
-        resizeOverlay.removeEventListener("pointermove", onPointerMove);
-        resizeOverlay.removeEventListener("pointerup", onPointerUp);
-        resizeOverlay.removeEventListener("pointercancel", onPointerUp);
-      };
-
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-      resizeOverlay.addEventListener("pointermove", onPointerMove);
-      resizeOverlay.addEventListener("pointerup", onPointerUp);
-      resizeOverlay.addEventListener("pointercancel", onPointerUp);
-    };
-    const storedWidth = getLocalStorageItem(inlineSidebarStorageKey, Schema.Finite);
-
-    if (!panelOpen) {
-      return null;
-    }
-
-    return (
-      <div
-        ref={inlineWrapperRef}
-        data-native-browser-surface="true"
-        className="relative flex h-dvh min-h-0 min-w-0 flex-none border-l border-sidebar-border bg-card text-foreground"
-        style={
-          {
-            width:
-              storedWidth === null
-                ? inlineSidebarWidth
-                : `min(${storedWidth}px, calc(100% - ${SPLIT_PANE_CHAT_MIN_WIDTH}px))`,
-            maxWidth: `calc(100% - ${SPLIT_PANE_CHAT_MIN_WIDTH}px)`,
-            minWidth: inlineSidebarMinWidth,
-          } as CSSProperties
-        }
-      >
-        <div
-          className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-transparent before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-sidebar-border"
-          onPointerDown={startResize}
-        />
-        {renderPanelContent && threadId ? (
-          <BrowserPanel mode="sidebar" threadId={threadId} onClosePanel={onClosePanel} />
-        ) : null}
-      </div>
-    );
-  }
-
-  return (
-    <SidebarProvider
-      defaultOpen={false}
-      open={panelOpen}
-      onOpenChange={onOpenChange}
-      className="w-auto min-h-0 flex-none bg-transparent"
-      style={{ "--sidebar-width": inlineSidebarWidth } as CSSProperties}
-    >
-      <Sidebar
-        side="right"
-        collapsible="offcanvas"
-        className="border-l border-sidebar-border bg-card text-foreground"
-        resizable={{
-          minWidth: inlineSidebarMinWidth,
-          shouldAcceptWidth: shouldAcceptInlineSidebarWidth,
-          storageKey: inlineSidebarStorageKey,
-        }}
-      >
-        {renderPanelContent && threadId ? (
-          <LazyDiffPanel
-            mode="sidebar"
-            threadId={threadId}
-            onClosePanel={onClosePanel}
-            {...(panelState ? { panelState } : {})}
-            {...(onUpdatePanelState ? { onUpdatePanelState } : {})}
-          />
-        ) : null}
-        <SidebarRail />
-      </Sidebar>
-    </SidebarProvider>
   );
 };
 
@@ -434,6 +189,7 @@ function SplitPaneEmbeddedPanel(props: {
   threadId: ThreadIdType | null;
   onClosePanel: () => void;
   panelState: Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">;
+  isFocused: boolean;
   onUpdatePanelState: (
     patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
   ) => void;
@@ -512,7 +268,7 @@ function SplitPaneEmbeddedPanel(props: {
       resizeOverlay.addEventListener("pointerup", onPointerUp);
       resizeOverlay.addEventListener("pointercancel", onPointerUp);
     },
-    [minPanelWidth, panelWidth, shouldAcceptEmbeddedWidth, storageKey],
+    [minPanelWidth, shouldAcceptEmbeddedWidth, storageKey],
   );
 
   if (!props.panelOpen || !props.threadId) {
@@ -544,6 +300,7 @@ function SplitPaneEmbeddedPanel(props: {
           threadId={props.threadId}
           onClosePanel={props.onClosePanel}
           panelState={props.panelState}
+          liveRefreshEnabled={props.isFocused}
           onUpdatePanelState={props.onUpdatePanelState}
         />
       )}
@@ -593,7 +350,8 @@ function SplitPaneEmptyState(props: {
   return (
     <div
       className={cn(
-        "flex min-h-0 min-w-0 flex-1 flex-col items-center bg-background px-6 pt-16",
+        "flex min-h-0 min-w-0 flex-1 flex-col items-center px-6 pt-16",
+        CHAT_BACKGROUND_CLASS_NAME,
         props.isFocused ? "ring-2 ring-inset ring-primary/70" : "",
       )}
       onMouseDown={props.onFocus}
@@ -620,7 +378,7 @@ function SplitPaneEmptyState(props: {
                   if (!isUsed) props.onSelectThread(thread.id);
                 }}
               >
-                <PickerProviderGlyph
+                <ProviderIcon
                   provider={thread.modelSelection.provider}
                   className="size-4 shrink-0"
                 />
@@ -637,36 +395,6 @@ function SplitPaneEmptyState(props: {
       </div>
     </div>
   );
-}
-
-function PickerProviderGlyph(props: { provider: ProviderKind; className?: string }) {
-  if (props.provider === "claudeAgent") {
-    return <ClaudeAI aria-hidden="true" className={cn("text-foreground", props.className)} />;
-  }
-  if (props.provider === "cursor") {
-    return <CursorIcon aria-hidden="true" className={cn("text-foreground", props.className)} />;
-  }
-  if (props.provider === "gemini") {
-    return <Gemini aria-hidden="true" className={cn("text-foreground", props.className)} />;
-  }
-  if (props.provider === "kilo") {
-    return (
-      <KiloIcon aria-hidden="true" className={cn("text-muted-foreground/70", props.className)} />
-    );
-  }
-  if (props.provider === "opencode") {
-    return (
-      <OpenCodeIcon
-        aria-hidden="true"
-        className={cn("text-muted-foreground/70", props.className)}
-      />
-    );
-  }
-  if (props.provider === "pi") {
-    return <PiIcon aria-hidden="true" className={cn("text-foreground", props.className)} />;
-  }
-
-  return <OpenAI aria-hidden="true" className={cn("text-muted-foreground/60", props.className)} />;
 }
 
 function SplitDivider(props: {
@@ -832,10 +560,15 @@ function PaneRenderer(props: {
 
 function ChatMountSkeleton() {
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground [contain:layout_style_paint]">
+    <div
+      className={cn(
+        "flex min-h-0 min-w-0 flex-1 flex-col text-foreground [contain:layout_style_paint]",
+        CHAT_BACKGROUND_CLASS_NAME,
+      )}
+    >
       {/* Mirrors the real chat shell so route changes paint immediately while ChatView mounts
           on the next frames. */}
-      <div className="flex h-[52px] shrink-0 items-center gap-3 border-b border-[color:var(--color-border-light)] px-4">
+      <div className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "gap-3 px-4")}>
         <div className="size-5 rounded-full bg-muted" />
         <div className="min-w-0 flex-1 space-y-1.5">
           <div className="h-3.5 w-44 max-w-[48%] rounded-full bg-muted" />
@@ -883,6 +616,7 @@ function DeferredChatView(props: {
   panelState: SplitViewPanePanelState;
   onToggleDiff: () => void;
   onToggleBrowser: () => void;
+  onOpenBrowserUrl: (url: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onSplitSurface?: () => void;
   onMaximize?: () => void;
@@ -933,6 +667,7 @@ function DeferredChatView(props: {
       panelState={props.panelState}
       onToggleDiffPanel={props.onToggleDiff}
       onToggleBrowserPanel={props.onToggleBrowser}
+      onOpenBrowserUrl={props.onOpenBrowserUrl}
       onOpenTurnDiffPanel={props.onOpenTurnDiff}
       {...(props.onSplitSurface ? { onSplitSurface: props.onSplitSurface } : {})}
       {...(props.onMaximize ? { onMaximizeSurface: props.onMaximize } : {})}
@@ -961,6 +696,7 @@ function SplitPaneSurface(props: {
   onFocus: () => void;
   onToggleDiff: () => void;
   onToggleBrowser: () => void;
+  onOpenBrowserUrl: (url: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onClosePanel: () => void;
   onUpdatePanelState: (
@@ -996,7 +732,8 @@ function SplitPaneSurface(props: {
   return (
     <div
       className={cn(
-        "group relative flex min-h-0 min-w-0 flex-1 bg-background [contain:layout_style_paint]",
+        "group relative flex min-h-0 min-w-0 flex-1 [contain:layout_style_paint]",
+        CHAT_BACKGROUND_CLASS_NAME,
       )}
     >
       <ChatPaneDropOverlay
@@ -1011,6 +748,7 @@ function SplitPaneSurface(props: {
             "min-h-0 min-w-0 overflow-hidden overscroll-y-none text-foreground transition-shadow",
             props.isFocused ? "ring-2 ring-inset ring-primary/70" : "",
           )}
+          surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
           onMouseDown={props.onFocus}
         >
           {props.threadId ? (
@@ -1023,6 +761,7 @@ function SplitPaneSurface(props: {
               panelState={props.panelState}
               onToggleDiff={props.onToggleDiff}
               onToggleBrowser={props.onToggleBrowser}
+              onOpenBrowserUrl={props.onOpenBrowserUrl}
               onOpenTurnDiff={props.onOpenTurnDiff}
               onMaximize={props.onMaximize}
               onChangeThread={props.onChooseThread}
@@ -1050,6 +789,7 @@ function SplitPaneSurface(props: {
         threadId={props.threadId}
         onClosePanel={props.onClosePanel}
         panelState={props.panelState}
+        isFocused={props.isFocused}
         onUpdatePanelState={props.onUpdatePanelState}
       />
       {props.isFocused ? (
@@ -1094,7 +834,10 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
         to: "/$threadId",
         params: { threadId: props.routeThreadId },
         replace: true,
-        search: (previous) => ({ ...stripDiffSearchParams(previous), splitViewId: undefined }),
+        search: (previous) => ({
+          ...stripDiffSearchParams(previous),
+          splitViewId: undefined,
+        }),
       });
       return;
     }
@@ -1113,7 +856,10 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
         to: "/$threadId",
         params: { threadId: fallbackThreadId },
         replace: true,
-        search: (previous) => ({ ...stripDiffSearchParams(previous), splitViewId: undefined }),
+        search: (previous) => ({
+          ...stripDiffSearchParams(previous),
+          splitViewId: undefined,
+        }),
       });
       return;
     }
@@ -1314,7 +1060,10 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
         return;
       }
 
-      const closed = removePaneFromSplitView({ splitViewId: activeSplitView.id, paneId });
+      const closed = removePaneFromSplitView({
+        splitViewId: activeSplitView.id,
+        paneId,
+      });
       if (!closed) return;
 
       const nextSplitView = useSplitViewStore.getState().splitViewsById[activeSplitView.id];
@@ -1471,6 +1220,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
         onFocus={() => setPaneFocus(leaf.id)}
         onToggleDiff={() => togglePanePanel(leaf.id, "diff")}
         onToggleBrowser={() => togglePanePanel(leaf.id, "browser")}
+        onOpenBrowserUrl={() => updatePanePanelState(leaf.id, { panel: "browser" })}
         onOpenTurnDiff={(turnId, filePath) => openPaneTurnDiff(leaf.id, turnId, filePath)}
         onClosePanel={() => closePanePanel(leaf.id)}
         onUpdatePanelState={(patch) => updatePanePanelState(leaf.id, patch)}
@@ -1493,7 +1243,9 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
 
   return (
     <>
-      <div className="flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
+      <div
+        className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}
+      >
         <PaneRenderer
           pane={activeSplitView.root}
           splitView={activeSplitView}
@@ -1534,7 +1286,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
                     )}
                     onClick={() => chooseThreadForPane(thread.id)}
                   >
-                    <PickerProviderGlyph
+                    <ProviderIcon
                       provider={thread.modelSelection.provider}
                       className="size-4 shrink-0"
                     />
@@ -1560,54 +1312,88 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
   );
 }
 
+function RightDockPanePlaceholder(props: { kind: RightDockPaneKind }) {
+  const { label } = getRightDockPaneMeta(props.kind);
+  return <PanelStateMessage>{label} panel is coming soon.</PanelStateMessage>;
+}
+
+// Embedded dock chats (side chats) manage their own panels through the dock, so the
+// nested ChatView always renders with a closed, inert panel state.
+const DOCK_EMBEDDED_PANEL_STATE: SplitViewPanePanelState = {
+  panel: null,
+  diffTurnId: null,
+  diffFilePath: null,
+  hasOpenedPanel: false,
+  lastOpenPanel: "browser",
+};
+
 function SingleChatSurface(props: {
   threadId: ThreadIdType;
   search: DiffRouteSearch;
   projectId: ProjectId | null;
 }) {
   const navigate = useNavigate();
-  const shouldUseDiffSheet = useMediaQuery(DIFF_INLINE_LAYOUT_MEDIA_QUERY);
   const createSplitView = useSplitViewStore((store) => store.createFromThread);
   const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
-  const panelState = useSingleChatPanelStore(selectSingleChatPanelState(props.threadId));
-  const setThreadPanelState = useSingleChatPanelStore((store) => store.setThreadPanelState);
-  const activePanel = panelState.panel;
-  const panelOpen = activePanel !== null;
+  const dockState = useRightDockStore(selectRightDockState(props.threadId));
+  const openPane = useRightDockStore((store) => store.openPane);
+  const toggleSingletonPane = useRightDockStore((store) => store.toggleSingletonPane);
+  const closePane = useRightDockStore((store) => store.closePane);
+  const setActivePane = useRightDockStore((store) => store.setActivePane);
+  const setDockOpen = useRightDockStore((store) => store.setDockOpen);
+  const updatePane = useRightDockStore((store) => store.updatePane);
   const lastAppliedRoutePanelSearchKeyRef = useRef<string | null>(null);
-  const hasNormalizedAutoRestoredBrowserPanelRef = useRef(false);
-  useEffect(() => {
-    hasNormalizedAutoRestoredBrowserPanelRef.current = false;
-  }, [props.threadId]);
-  const updatePanelState = useCallback(
-    (patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>) => {
-      const nextPanel = patch.panel ?? panelState.panel;
-      setThreadPanelState(props.threadId, {
-        ...patch,
-        hasOpenedPanel: panelState.hasOpenedPanel || nextPanel !== null,
-        lastOpenPanel:
-          patch.panel === "browser" || patch.panel === "diff"
-            ? patch.panel
-            : panelState.lastOpenPanel,
+
+  const activePane = resolveActivePane(dockState);
+  const {
+    activePaneRuntimeMode,
+    requestActivePaneLive: requestActiveDockPaneLive,
+    requestImmediateHydration: requestImmediateDockHydration,
+  } = useDockPaneRuntimeActivation({
+    threadId: props.threadId,
+    activePane,
+  });
+
+  // Bridge the dock's active browser/diff pane back into the panelState shape the
+  // chat shell still consumes (diff badge, toggle pressed state, transcript gating).
+  const chatPanelState = useMemo<SplitViewPanePanelState>(
+    () => ({
+      panel:
+        activePane && (activePane.kind === "browser" || activePane.kind === "diff")
+          ? activePane.kind
+          : null,
+      diffTurnId: activePane?.kind === "diff" ? activePane.diffTurnId : null,
+      diffFilePath: activePane?.kind === "diff" ? activePane.diffFilePath : null,
+      hasOpenedPanel: dockState.panes.length > 0,
+      lastOpenPanel: "browser",
+    }),
+    [activePane, dockState.panes.length],
+  );
+
+  const handleToggleDiff = useCallback(() => {
+    requestImmediateDockHydration("diff");
+    toggleSingletonPane(props.threadId, { kind: "diff" });
+  }, [props.threadId, requestImmediateDockHydration, toggleSingletonPane]);
+  const handleToggleBrowser = useCallback(() => {
+    requestImmediateDockHydration("browser");
+    toggleSingletonPane(props.threadId, { kind: "browser" });
+  }, [props.threadId, requestImmediateDockHydration, toggleSingletonPane]);
+  const handleOpenBrowserUrl = useCallback(() => {
+    requestImmediateDockHydration("browser");
+    openPane(props.threadId, { kind: "browser" });
+  }, [openPane, props.threadId, requestImmediateDockHydration]);
+  const handleOpenTurnDiff = useCallback(
+    (turnId: TurnId, filePath?: string) => {
+      requestImmediateDockHydration("diff");
+      openPane(props.threadId, {
+        kind: "diff",
+        diffTurnId: turnId,
+        diffFilePath: filePath ?? null,
       });
     },
-    [
-      panelState.hasOpenedPanel,
-      panelState.lastOpenPanel,
-      panelState.panel,
-      props.threadId,
-      setThreadPanelState,
-    ],
+    [openPane, props.threadId, requestImmediateDockHydration],
   );
-  const closePanel = useCallback(() => {
-    updatePanelState({ panel: null });
-  }, [updatePanelState]);
-  const openPanel = useCallback(() => {
-    updatePanelState({
-      panel: panelState.lastOpenPanel,
-      diffTurnId: panelState.lastOpenPanel === "diff" ? panelState.diffTurnId : null,
-      diffFilePath: panelState.lastOpenPanel === "diff" ? panelState.diffFilePath : null,
-    });
-  }, [panelState.diffFilePath, panelState.diffTurnId, panelState.lastOpenPanel, updatePanelState]);
+
   const handleSplitSurface = useCallback(() => {
     if (!props.projectId) return;
     const splitViewId = createSplitView({
@@ -1659,14 +1445,33 @@ function SingleChatSurface(props: {
       return;
     }
 
-    updatePanelState(panelPatch);
+    if (panelPatch.panel === "browser") {
+      requestImmediateDockHydration("browser");
+      openPane(props.threadId, { kind: "browser" });
+    } else if (panelPatch.panel === "diff") {
+      requestImmediateDockHydration("diff");
+      openPane(props.threadId, {
+        kind: "diff",
+        diffTurnId: panelPatch.diffTurnId ?? null,
+        diffFilePath: panelPatch.diffFilePath ?? null,
+      });
+    } else {
+      setDockOpen(props.threadId, false);
+    }
     void navigate({
       to: "/$threadId",
       params: { threadId: props.threadId },
       replace: true,
       search: (previous) => stripDiffSearchParams(previous),
     });
-  }, [navigate, props.search, props.threadId, updatePanelState]);
+  }, [
+    navigate,
+    openPane,
+    props.search,
+    props.threadId,
+    requestImmediateDockHydration,
+    setDockOpen,
+  ]);
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
@@ -1676,28 +1481,14 @@ function SingleChatSurface(props: {
 
     const unsubscribe = onMenuAction((action) => {
       if (action !== "toggle-browser") return;
-      updatePanelState(resolveToggledChatPanelPatch(panelState, "browser"));
+      requestImmediateDockHydration("browser");
+      toggleSingletonPane(props.threadId, { kind: "browser" });
     });
 
     return () => {
       unsubscribe?.();
     };
-  }, [panelState, updatePanelState]);
-
-  useEffect(() => {
-    if (hasNormalizedAutoRestoredBrowserPanelRef.current) {
-      return;
-    }
-
-    hasNormalizedAutoRestoredBrowserPanelRef.current = true;
-    const routeExplicitlyRequestsBrowserPanel = props.search.panel === "browser";
-    if (routeExplicitlyRequestsBrowserPanel || activePanel !== "browser") {
-      return;
-    }
-
-    // Reopening the browser should be explicit: route search, user toggle, or browser-use request.
-    updatePanelState({ panel: null });
-  }, [activePanel, props.search.panel, updatePanelState]);
+  }, [props.threadId, requestImmediateDockHydration, toggleSingletonPane]);
 
   useEffect(() => {
     const onOpenBrowserPanelRequest = window.desktopBridge?.browser.onBrowserUseOpenPanelRequest;
@@ -1706,112 +1497,240 @@ function SingleChatSurface(props: {
     }
 
     const unsubscribe = onOpenBrowserPanelRequest(() => {
-      updatePanelState({ panel: "browser" });
+      requestImmediateDockHydration("browser");
+      openPane(props.threadId, { kind: "browser" });
     });
 
     return () => {
       unsubscribe?.();
     };
-  }, [updatePanelState]);
-
-  const shouldRenderPanelContent = activePanel !== null && (panelOpen || panelState.hasOpenedPanel);
+  }, [openPane, props.threadId, requestImmediateDockHydration]);
 
   const excludedThreadIds = useMemo(
     () => new Set<ThreadIdType>([props.threadId]),
     [props.threadId],
   );
 
-  if (!shouldUseDiffSheet || activePanel === "browser") {
-    return (
-      <div className="flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
-        <ChatPaneDropOverlay
-          canDropInDirection={allowAnySplitDirection}
-          excludedThreadIds={excludedThreadIds}
-          onDrop={handleDropThread}
-          className="flex h-full min-h-0 min-w-0 flex-1"
-        >
-          <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
-            <DeferredChatView
+  // Sidechat tab labels only need thread titles, so subscribe to the coarse
+  // sidebar-summary selector (turn-level changes) instead of the full thread
+  // selector, which re-emits on every streaming token of any thread and would
+  // otherwise re-render the entire chat surface + right dock + active pane.
+  const threadSummaries = useStore(useMemo(() => createSidebarThreadSummariesSelector(), []));
+  const paneLabelOverrides = useMemo(() => {
+    const hasSidechatPane = dockState.panes.some((pane) => pane.kind === "sidechat");
+    if (!hasSidechatPane) {
+      return undefined;
+    }
+    const titleByThreadId = new Map(threadSummaries.map((summary) => [summary.id, summary.title]));
+    const overrides: Record<string, string | undefined> = {};
+    for (const pane of dockState.panes) {
+      if (pane.kind === "sidechat" && pane.threadId) {
+        overrides[pane.id] = titleByThreadId.get(pane.threadId) || "Side chat";
+      }
+    }
+    return overrides;
+  }, [threadSummaries, dockState.panes]);
+
+  const shouldAcceptDockWidth = useCallback(
+    ({ nextWidth, wrapper }: { nextWidth: number; wrapper: HTMLElement }) => {
+      const previousSidebarWidth = wrapper.style.getPropertyValue("--sidebar-width");
+      return canComposerHandlePanelWidth({
+        nextWidth,
+        applyWidth: (width) => {
+          wrapper.style.setProperty("--sidebar-width", `${width}px`);
+        },
+        resetWidth: () => {
+          if (previousSidebarWidth.length > 0) {
+            wrapper.style.setProperty("--sidebar-width", previousSidebarWidth);
+          } else {
+            wrapper.style.removeProperty("--sidebar-width");
+          }
+        },
+      });
+    },
+    [],
+  );
+
+  const handleAddDockPane = useCallback(
+    (kind: RightDockPaneKind) => {
+      requestImmediateDockHydration(kind);
+      if (kind === "sidechat") {
+        // Sidechat spawns a thread; reuse the composer's /side flow (correct model
+        // selection) published via the registry instead of opening an empty pane.
+        const createSidechat = getSidechatCreator(props.threadId);
+        if (!createSidechat) {
+          toastManager.add({
+            type: "warning",
+            title: "Sidechat is unavailable",
+            description: "Open a server-backed main thread before starting a sidechat.",
+          });
+          return;
+        }
+        void createSidechat().catch((error) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not start sidechat",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An error occurred while creating the sidechat.",
+          });
+        });
+        return;
+      }
+      openPane(props.threadId, { kind });
+    },
+    [openPane, props.threadId, requestImmediateDockHydration],
+  );
+
+  const renderDockPane = useCallback(
+    (
+      pane: RightDockPane,
+      context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean },
+    ): ReactNode => {
+      switch (pane.kind) {
+        case "browser":
+          return (
+            <BrowserPanel
+              mode="sidebar"
               threadId={props.threadId}
-              paneScopeId="single"
-              deferMount={false}
-              surfaceMode="single"
-              isFocusedPane
-              panelState={panelState}
-              onToggleDiff={() =>
-                updatePanelState(resolveToggledChatPanelPatch(panelState, "diff"))
-              }
-              onToggleBrowser={() =>
-                updatePanelState(resolveToggledChatPanelPatch(panelState, "browser"))
-              }
-              onOpenTurnDiff={(turnId, filePath) =>
-                updatePanelState({
-                  panel: "diff",
-                  diffTurnId: turnId,
-                  diffFilePath: filePath ?? null,
+              onClosePanel={() => closePane(props.threadId, pane.id)}
+              runtimeMode={context.runtimeMode}
+              onRequestLive={requestActiveDockPaneLive}
+            />
+          );
+        case "diff":
+          return (
+            <LazyDiffPanel
+              mode="sidebar"
+              threadId={props.threadId}
+              panelState={{
+                panel: "diff",
+                diffTurnId: pane.diffTurnId,
+                diffFilePath: pane.diffFilePath,
+              }}
+              onUpdatePanelState={(patch) =>
+                updatePane(props.threadId, pane.id, {
+                  diffTurnId: patch.diffTurnId ?? null,
+                  diffFilePath: patch.diffFilePath ?? null,
                 })
               }
-              onSplitSurface={handleSplitSurface}
+              onClosePanel={() => closePane(props.threadId, pane.id)}
             />
-          </SidebarInset>
-        </ChatPaneDropOverlay>
-        <PanePanelInlineSidebar
-          panelOpen={panelOpen}
-          onClosePanel={closePanel}
-          onOpenPanel={openPanel}
-          renderPanelContent={shouldRenderPanelContent}
-          panel={activePanel}
-          threadId={props.threadId}
-          panelState={panelState}
-          onUpdatePanelState={updatePanelState}
-        />
-      </div>
-    );
-  }
+          );
+        case "terminal":
+          if (context.runtimeMode === "preview") {
+            return <PanelStateMessage>Terminal is sleeping. Restoring shortly.</PanelStateMessage>;
+          }
+          // Kept mounted across tab switches; visibility toggles the xterm runtime
+          // instead of detaching/reattaching it (avoids the open-lag + fit flicker).
+          // Also sleep it while the dock is collapsed: a closed dock keeps the pane
+          // mounted (offcanvas is CSS-only), so without this the off-screen terminal
+          // would keep WebGL + resize observers alive for nothing.
+          return (
+            <DockTerminalPane
+              hostThreadId={props.threadId}
+              projectId={props.projectId}
+              isActive={context.isActive && dockState.open}
+            />
+          );
+        case "git":
+          return (
+            <GitPanel
+              hostThreadId={props.threadId}
+              projectId={props.projectId}
+              onClose={() => closePane(props.threadId, pane.id)}
+            />
+          );
+        case "sidechat":
+          if (!pane.threadId) {
+            return <RightDockPanePlaceholder kind="sidechat" />;
+          }
+          if (context.runtimeMode === "preview") {
+            return <ChatMountSkeleton />;
+          }
+          return (
+            <DeferredChatView
+              threadId={pane.threadId}
+              paneScopeId={`dock-sidechat:${pane.id}`}
+              deferMount={false}
+              surfaceMode="split"
+              isFocusedPane={false}
+              panelState={DOCK_EMBEDDED_PANEL_STATE}
+              onToggleDiff={noop}
+              onToggleBrowser={noop}
+              onOpenBrowserUrl={noop}
+              onOpenTurnDiff={noop}
+              onCloseThreadPane={() => closePane(props.threadId, pane.id)}
+            />
+          );
+        default:
+          return <RightDockPanePlaceholder kind={pane.kind} />;
+      }
+    },
+    [
+      closePane,
+      dockState.open,
+      props.projectId,
+      props.threadId,
+      requestActiveDockPaneLive,
+      updatePane,
+    ],
+  );
+
+  const handleSelectDockPane = useCallback(
+    (paneId: string) => {
+      requestImmediateDockHydration(dockState.panes.find((pane) => pane.id === paneId)?.kind);
+      setActivePane(props.threadId, paneId);
+    },
+    [dockState.panes, props.threadId, requestImmediateDockHydration, setActivePane],
+  );
 
   return (
-    <>
+    <div className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}>
       <ChatPaneDropOverlay
         canDropInDirection={allowAnySplitDirection}
         excludedThreadIds={excludedThreadIds}
         onDrop={handleDropThread}
-        className="flex h-dvh min-h-0 min-w-0 flex-1"
+        className="flex h-full min-h-0 min-w-0 flex-1"
       >
-        <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
+        <SidebarInset
+          className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
+          surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
+        >
           <DeferredChatView
             threadId={props.threadId}
             paneScopeId="single"
             deferMount={false}
             surfaceMode="single"
             isFocusedPane
-            panelState={panelState}
-            onToggleDiff={() => updatePanelState(resolveToggledChatPanelPatch(panelState, "diff"))}
-            onToggleBrowser={() =>
-              updatePanelState(resolveToggledChatPanelPatch(panelState, "browser"))
-            }
-            onOpenTurnDiff={(turnId, filePath) =>
-              updatePanelState({
-                panel: "diff",
-                diffTurnId: turnId,
-                diffFilePath: filePath ?? null,
-              })
-            }
+            panelState={chatPanelState}
+            onToggleDiff={handleToggleDiff}
+            onToggleBrowser={handleToggleBrowser}
+            onOpenBrowserUrl={handleOpenBrowserUrl}
+            onOpenTurnDiff={handleOpenTurnDiff}
             onSplitSurface={handleSplitSurface}
           />
         </SidebarInset>
       </ChatPaneDropOverlay>
-      <RightPanelSheet panelOpen={panelOpen} onClosePanel={closePanel}>
-        {shouldRenderPanelContent ? (
-          <LazyDiffPanel
-            mode="sheet"
-            threadId={props.threadId}
-            panelState={panelState}
-            onUpdatePanelState={updatePanelState}
-            onClosePanel={closePanel}
-          />
-        ) : null}
-      </RightPanelSheet>
-    </>
+      <RightDock
+        state={dockState}
+        minWidth={SINGLE_PANEL_MIN_WIDTH}
+        defaultWidth={DIFF_INLINE_DEFAULT_WIDTH}
+        storageKey={`${RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY}:dock:v2`}
+        shouldAcceptWidth={shouldAcceptDockWidth}
+        addMenuKinds={RIGHT_DOCK_ADD_MENU_KINDS}
+        motionKey={props.threadId}
+        activePaneRuntimeMode={activePaneRuntimeMode}
+        {...(paneLabelOverrides ? { paneLabelOverrides } : {})}
+        onSelectPane={handleSelectDockPane}
+        onClosePane={(paneId) => closePane(props.threadId, paneId)}
+        onCollapse={() => setDockOpen(props.threadId, false)}
+        onOpenChange={(open) => setDockOpen(props.threadId, open)}
+        onAddPane={handleAddDockPane}
+        renderPane={renderDockPane}
+      />
+    </div>
   );
 }
 
@@ -1852,7 +1771,10 @@ function ChatThreadRouteView() {
           to: "/$threadId",
           params: { threadId },
           replace: true,
-          search: (previous) => ({ ...stripDiffSearchParams(previous), splitViewId: undefined }),
+          search: (previous) => ({
+            ...stripDiffSearchParams(previous),
+            splitViewId: undefined,
+          }),
         });
       }
       return;

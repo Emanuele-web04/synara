@@ -1,15 +1,17 @@
-import { CheckpointRef, MessageId, TurnId } from "@t3tools/contracts";
+import { CheckpointRef, MessageId, OrchestrationProposedPlanId, TurnId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 import {
   buildTurnDiffSummaryByAssistantMessageId,
   computeMessageDurationStart,
   computeStableMessagesTimelineRows,
+  deriveMessagesTimelineRows,
   deriveTerminalAssistantMessageIds,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   type MessagesTimelineRow,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
+import type { TimelineEntry } from "../../session-logic";
 import type { TurnDiffSummary } from "../../types";
 
 function makeSummary(
@@ -251,8 +253,8 @@ describe("computeStableMessagesTimelineRows", () => {
         ],
         inlineWorkGroupId: "activity-command",
         durationStart: "2026-05-09T10:00:01.000Z",
-        showCompletionDivider: false,
         showAssistantCopyButton: false,
+        assistantCopyStreaming: true,
       },
     ];
     const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
@@ -284,7 +286,7 @@ describe("computeStableMessagesTimelineRows", () => {
 });
 
 describe("deriveTerminalAssistantMessageIds", () => {
-  it("keeps only the latest assistant message for a turn", () => {
+  it("keeps only the latest assistant message in a user-visible response segment", () => {
     expect(
       deriveTerminalAssistantMessageIds([
         { id: "u1", role: "user", createdAt: "2026-01-01T00:00:00Z" },
@@ -292,7 +294,7 @@ describe("deriveTerminalAssistantMessageIds", () => {
         { id: "a2", role: "assistant", createdAt: "2026-01-01T00:00:02Z", turnId: "t1" },
         { id: "a3", role: "assistant", createdAt: "2026-01-01T00:00:03Z", turnId: "t2" },
       ]),
-    ).toEqual(new Set(["a2", "a3"]));
+    ).toEqual(new Set(["a3"]));
   });
 
   it("treats assistant messages without turn ids as one response per user boundary", () => {
@@ -309,12 +311,102 @@ describe("deriveTerminalAssistantMessageIds", () => {
 });
 
 describe("buildTurnDiffSummaryByAssistantMessageId", () => {
-  it("attaches each summary to the terminal assistant message of its turn by turnId", () => {
+  it("attaches each summary to the terminal assistant message of its response segment", () => {
     const result = buildTurnDiffSummaryByAssistantMessageId({
       turnDiffSummaries: [makeSummary({ turnId: "turn-1" }), makeSummary({ turnId: "turn-2" })],
-      assistantMessages: [
-        { id: MessageId.makeUnsafe("a-turn-1"), turnId: TurnId.makeUnsafe("turn-1") },
-        { id: MessageId.makeUnsafe("a-turn-2"), turnId: TurnId.makeUnsafe("turn-2") },
+      messages: [
+        { id: MessageId.makeUnsafe("u-1"), role: "user", turnId: null },
+        {
+          id: MessageId.makeUnsafe("a-turn-1"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-1"),
+        },
+        {
+          id: MessageId.makeUnsafe("a-turn-2"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-2"),
+        },
+      ],
+    });
+
+    expect(result.get(MessageId.makeUnsafe("a-turn-2"))?.turnId).toBe(TurnId.makeUnsafe("turn-2"));
+    expect(result.has(MessageId.makeUnsafe("a-turn-1"))).toBe(false);
+    expect(result.size).toBe(1);
+  });
+
+  it("moves an earlier mini-turn diff to a later final answer in the same response segment", () => {
+    const result = buildTurnDiffSummaryByAssistantMessageId({
+      turnDiffSummaries: [makeSummary({ turnId: "turn-files" })],
+      messages: [
+        { id: MessageId.makeUnsafe("u-1"), role: "user", turnId: null },
+        {
+          id: MessageId.makeUnsafe("a-files"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-files"),
+        },
+        {
+          id: MessageId.makeUnsafe("a-final"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-final"),
+        },
+      ],
+    });
+
+    expect(result.get(MessageId.makeUnsafe("a-final"))?.turnId).toBe(
+      TurnId.makeUnsafe("turn-files"),
+    );
+    expect(result.has(MessageId.makeUnsafe("a-files"))).toBe(false);
+  });
+
+  it("keeps files from multiple mini-turn summaries on the final answer", () => {
+    const result = buildTurnDiffSummaryByAssistantMessageId({
+      turnDiffSummaries: [
+        makeSummary({
+          turnId: "turn-files",
+          files: [{ path: "a.ts", additions: 1, deletions: 0 }],
+        }),
+        makeSummary({
+          turnId: "turn-final",
+          files: [{ path: "b.ts", additions: 0, deletions: 1 }],
+        }),
+      ],
+      messages: [
+        { id: MessageId.makeUnsafe("u-1"), role: "user", turnId: null },
+        {
+          id: MessageId.makeUnsafe("a-files"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-files"),
+        },
+        {
+          id: MessageId.makeUnsafe("a-final"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-final"),
+        },
+      ],
+    });
+
+    expect(result.get(MessageId.makeUnsafe("a-final"))?.files.map((file) => file.path)).toEqual([
+      "a.ts",
+      "b.ts",
+    ]);
+  });
+
+  it("keeps separate cards for response segments split by user messages", () => {
+    const result = buildTurnDiffSummaryByAssistantMessageId({
+      turnDiffSummaries: [makeSummary({ turnId: "turn-1" }), makeSummary({ turnId: "turn-2" })],
+      messages: [
+        { id: MessageId.makeUnsafe("u-1"), role: "user", turnId: null },
+        {
+          id: MessageId.makeUnsafe("a-turn-1"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-1"),
+        },
+        { id: MessageId.makeUnsafe("u-2"), role: "user", turnId: null },
+        {
+          id: MessageId.makeUnsafe("a-turn-2"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-2"),
+        },
       ],
     });
 
@@ -326,12 +418,16 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
   it("does not leak a summary to an unrelated message even when ids look similar", () => {
     // Regression for the "Files changed on wrong thread" bug: before the fix,
     // the server synthesized `assistant:<turnId>` ids that could collide with
-    // the real message id of a different turn. With the new turnId-scoped
-    // lookup, collisions cannot attach the card to the wrong message.
+    // the real message id of a different turn. Anchoring by the matching turn's
+    // response segment prevents the card from attaching to unrelated rows.
     const result = buildTurnDiffSummaryByAssistantMessageId({
       turnDiffSummaries: [makeSummary({ turnId: "turn-files-changed" })],
-      assistantMessages: [
-        { id: MessageId.makeUnsafe("a-unrelated"), turnId: TurnId.makeUnsafe("turn-no-changes") },
+      messages: [
+        {
+          id: MessageId.makeUnsafe("a-unrelated"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-no-changes"),
+        },
       ],
     });
 
@@ -341,7 +437,7 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
   it("ignores summaries for turns that have no rendered assistant message yet", () => {
     const result = buildTurnDiffSummaryByAssistantMessageId({
       turnDiffSummaries: [makeSummary({ turnId: "turn-1" })],
-      assistantMessages: [],
+      messages: [],
     });
 
     expect(result.size).toBe(0);
@@ -350,9 +446,17 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
   it("attaches the summary to the LAST assistant message of a turn when multiple exist", () => {
     const result = buildTurnDiffSummaryByAssistantMessageId({
       turnDiffSummaries: [makeSummary({ turnId: "turn-1" })],
-      assistantMessages: [
-        { id: MessageId.makeUnsafe("a-turn-1-first"), turnId: TurnId.makeUnsafe("turn-1") },
-        { id: MessageId.makeUnsafe("a-turn-1-last"), turnId: TurnId.makeUnsafe("turn-1") },
+      messages: [
+        {
+          id: MessageId.makeUnsafe("a-turn-1-first"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-1"),
+        },
+        {
+          id: MessageId.makeUnsafe("a-turn-1-last"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-1"),
+        },
       ],
     });
 
@@ -366,7 +470,9 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
   it("returns an empty map when there are no summaries", () => {
     const result = buildTurnDiffSummaryByAssistantMessageId({
       turnDiffSummaries: [],
-      assistantMessages: [{ id: MessageId.makeUnsafe("a-1"), turnId: TurnId.makeUnsafe("turn-1") }],
+      messages: [
+        { id: MessageId.makeUnsafe("a-1"), role: "assistant", turnId: TurnId.makeUnsafe("turn-1") },
+      ],
     });
 
     expect(result.size).toBe(0);
@@ -375,7 +481,7 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
   it("ignores assistant messages without a turnId", () => {
     const result = buildTurnDiffSummaryByAssistantMessageId({
       turnDiffSummaries: [makeSummary({ turnId: "turn-1" })],
-      assistantMessages: [{ id: MessageId.makeUnsafe("a-nullturn"), turnId: null }],
+      messages: [{ id: MessageId.makeUnsafe("a-nullturn"), role: "assistant", turnId: null }],
     });
 
     expect(result.size).toBe(0);
@@ -411,5 +517,222 @@ describe("resolveAssistantMessageCopyState", () => {
         streaming: false,
       }),
     ).toEqual({ text: null, visible: false });
+  });
+});
+
+describe("deriveMessagesTimelineRows", () => {
+  type MessageTimelineRow = Extract<MessagesTimelineRow, { kind: "message" }>;
+
+  const baseInput = {
+    isWorking: false,
+    activeTurnStartedAt: null as string | null,
+    turnDiffSummaryByAssistantMessageId: new Map(),
+    revertTurnCountByUserMessageId: new Map(),
+  };
+
+  const userEntry = (id: string, createdAt: string): TimelineEntry => ({
+    id: `entry-${id}`,
+    kind: "message",
+    createdAt,
+    message: {
+      id: MessageId.makeUnsafe(id),
+      role: "user",
+      text: "ask",
+      createdAt,
+      streaming: false,
+    },
+  });
+
+  const assistantEntry = (
+    id: string,
+    createdAt: string,
+    opts: { turnId?: string; text?: string; streaming?: boolean; completedAt?: string },
+  ): TimelineEntry => ({
+    id: `entry-${id}`,
+    kind: "message",
+    createdAt,
+    message: {
+      id: MessageId.makeUnsafe(id),
+      role: "assistant",
+      text: opts.text ?? "reply",
+      createdAt,
+      streaming: opts.streaming ?? false,
+      ...(opts.turnId ? { turnId: TurnId.makeUnsafe(opts.turnId) } : {}),
+      ...(opts.completedAt ? { completedAt: opts.completedAt } : {}),
+    },
+  });
+
+  const workEntry = (
+    id: string,
+    createdAt: string,
+    label: string,
+    tone: "thinking" | "tool" | "info" | "error" = "tool",
+  ): TimelineEntry => ({
+    id: `entry-${id}`,
+    kind: "work",
+    createdAt,
+    entry: { id, createdAt, label, tone },
+  });
+
+  const proposedPlanEntry = (id: string, createdAt: string, turnId: string): TimelineEntry => ({
+    id: `entry-${id}`,
+    kind: "proposed-plan",
+    createdAt,
+    proposedPlan: {
+      id: OrchestrationProposedPlanId.makeUnsafe(id),
+      turnId: TurnId.makeUnsafe(turnId),
+      planMarkdown: "# Plan",
+      implementedAt: null,
+      implementationThreadId: null,
+      createdAt,
+      updatedAt: createdAt,
+    },
+  });
+
+  const messageRow = (rows: MessagesTimelineRow[], id: string): MessageTimelineRow | undefined =>
+    rows.find(
+      (row): row is MessageTimelineRow =>
+        row.kind === "message" && row.message.id === MessageId.makeUnsafe(id),
+    );
+
+  const collapsedSignature = (row: MessageTimelineRow): string[] =>
+    (row.collapsedTurnItems ?? []).map((item) => `${item.kind}:${String(item.id)}`);
+
+  it("folds a settled turn's narration and work into one collapsed group on the terminal message", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "Looking into it",
+          completedAt: "2026-01-01T00:00:01Z",
+        }),
+        workEntry("w1", "2026-01-01T00:00:02Z", "tool 1"),
+        assistantEntry("a2", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "Almost there",
+          completedAt: "2026-01-01T00:00:03Z",
+        }),
+        workEntry("w2", "2026-01-01T00:00:04Z", "tool 2"),
+        assistantEntry("a3", "2026-01-01T00:00:05Z", {
+          turnId: "t1",
+          text: "All done",
+          completedAt: "2026-01-01T00:00:06Z",
+        }),
+      ],
+    });
+
+    const visibleMessageIds = rows
+      .filter((row): row is MessageTimelineRow => row.kind === "message")
+      .map((row) => String(row.message.id));
+    expect(visibleMessageIds).toEqual(["u1", "a3"]);
+
+    const terminal = messageRow(rows, "a3");
+    expect(terminal).toBeDefined();
+    expect(collapsedSignature(terminal!)).toEqual([
+      "narration:a1",
+      "work:w1",
+      "narration:a2",
+      "work:w2",
+    ]);
+    expect(terminal!.inlineWorkEntries).toBeUndefined();
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
+
+  it("keeps the live turn expanded instead of collapsing while it streams", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("t1"),
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "Looking into it",
+          completedAt: "2026-01-01T00:00:01Z",
+        }),
+        workEntry("w1", "2026-01-01T00:00:02Z", "tool 1"),
+        assistantEntry("a3", "2026-01-01T00:00:05Z", {
+          turnId: "t1",
+          text: "still going",
+          streaming: true,
+        }),
+      ],
+    });
+
+    expect(messageRow(rows, "a1")).toBeDefined();
+    const terminal = messageRow(rows, "a3");
+    expect(terminal).toBeDefined();
+    expect(terminal!.collapsedTurnItems).toBeUndefined();
+  });
+
+  it("collapses adjacent provider mini-turns into the same user-visible response", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "first preamble",
+          completedAt: "2026-01-01T00:00:01Z",
+        }),
+        workEntry("w1", "2026-01-01T00:00:02Z", "tool 1"),
+        assistantEntry("a2", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "first final",
+          completedAt: "2026-01-01T00:00:03Z",
+        }),
+        assistantEntry("a3", "2026-01-01T00:00:04Z", {
+          turnId: "t2",
+          text: "second preamble",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+        workEntry("w2", "2026-01-01T00:00:05Z", "tool 2"),
+        assistantEntry("a4", "2026-01-01T00:00:06Z", {
+          turnId: "t2",
+          text: "second final",
+          completedAt: "2026-01-01T00:00:06Z",
+        }),
+      ],
+    });
+
+    const visibleMessageIds = rows
+      .filter((row): row is MessageTimelineRow => row.kind === "message")
+      .map((row) => String(row.message.id));
+    expect(visibleMessageIds).toEqual(["u1", "a4"]);
+
+    expect(collapsedSignature(messageRow(rows, "a4")!)).toEqual([
+      "narration:a1",
+      "work:w1",
+      "narration:a2",
+      "narration:a3",
+      "work:w2",
+    ]);
+  });
+
+  it("collapses turn work across an intervening proposed plan card", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "I have a plan",
+          completedAt: "2026-01-01T00:00:01Z",
+        }),
+        workEntry("w1", "2026-01-01T00:00:02Z", "tool 1"),
+        proposedPlanEntry("plan-1", "2026-01-01T00:00:03Z", "t1"),
+        assistantEntry("a2", "2026-01-01T00:00:04Z", {
+          turnId: "t1",
+          text: "final",
+          completedAt: "2026-01-01T00:00:05Z",
+        }),
+      ],
+    });
+
+    expect(rows.some((row) => row.kind === "proposed-plan")).toBe(true);
+    expect(collapsedSignature(messageRow(rows, "a2")!)).toEqual(["narration:a1", "work:w1"]);
   });
 });

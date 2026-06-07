@@ -104,6 +104,24 @@ export interface ThreadTitleGenerationResult {
   title: string;
 }
 
+export interface ThreadRecapGenerationInput {
+  cwd: string;
+  previousRecap?: string | undefined;
+  newMaterial: string;
+  currentState?: string | undefined;
+  codexHomePath?: string;
+  /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
+  model?: string;
+  /** Optional provider-aware selection for providers that need more than a raw model slug. */
+  modelSelection?: ModelSelection;
+  /** Optional provider startup overrides, such as custom binary paths or server URLs. */
+  providerOptions?: ProviderStartOptions;
+}
+
+export interface ThreadRecapGenerationResult {
+  recap: string;
+}
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
@@ -112,6 +130,7 @@ export interface TextGenerationService {
   generateDiffSummary(input: DiffSummaryGenerationInput): Promise<DiffSummaryGenerationResult>;
   generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
   generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
+  generateThreadRecap(input: ThreadRecapGenerationInput): Promise<ThreadRecapGenerationResult>;
 }
 
 /**
@@ -152,6 +171,13 @@ export interface TextGenerationShape {
   readonly generateThreadTitle: (
     input: ThreadTitleGenerationInput,
   ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+  /**
+   * Generate a compact chat recap for the UI side panel.
+   */
+  readonly generateThreadRecap: (
+    input: ThreadRecapGenerationInput,
+  ) => Effect.Effect<ThreadRecapGenerationResult, TextGenerationError>;
 }
 
 /**

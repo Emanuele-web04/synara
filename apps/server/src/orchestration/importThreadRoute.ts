@@ -13,10 +13,11 @@ import {
   workspaceRootsEqual,
 } from "@t3tools/shared/threadWorkspace";
 import type { FileSystem, Path } from "effect";
-import { Data, Effect } from "effect";
+import { Data, Effect, Option } from "effect";
 
 import { resolveThreadWorkspaceCwd } from "../checkpointing/Utils";
 import type { OrchestrationEngineShape } from "./Services/OrchestrationEngine";
+import type { ProjectionSnapshotQueryShape } from "./Services/ProjectionSnapshotQuery";
 import type { ProviderAdapterRegistryShape } from "../provider/Services/ProviderAdapterRegistry";
 import type { ProviderServiceShape } from "../provider/Services/ProviderService";
 import { parseManagedWorktreeWorkspaceRoot } from "../workspace/managedWorktree";
@@ -59,6 +60,7 @@ export interface ImportThreadHandlerOptions {
   readonly orchestrationEngine: OrchestrationEngineShape;
   readonly path: Path.Path;
   readonly platform: NodeJS.Platform;
+  readonly projectionSnapshotQuery: ProjectionSnapshotQueryShape;
   readonly providerAdapterRegistry: ProviderAdapterRegistryShape;
   readonly providerService: ProviderServiceShape;
 }
@@ -281,11 +283,11 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
   });
 
   return Effect.fnUntraced(function* (body: ImportThreadRequest) {
-    const readModel = yield* options.orchestrationEngine.getReadModel();
-    const thread = readModel.threads.find((entry) => entry.id === body.threadId);
-    if (!thread || thread.deletedAt !== null) {
+    const threadOption = yield* options.projectionSnapshotQuery.getThreadDetailById(body.threadId);
+    if (Option.isNone(threadOption)) {
       return yield* Effect.fail(importMessagesError(`Thread '${body.threadId}' was not found.`));
     }
+    const thread = threadOption.value;
 
     if (thread.session && thread.session.status !== "stopped") {
       return yield* Effect.fail(
@@ -293,12 +295,22 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       );
     }
 
+    const projectOption = yield* options.projectionSnapshotQuery.getProjectShellById(
+      thread.projectId,
+    );
+    const project = Option.getOrNull(projectOption);
     const cwd = resolveThreadWorkspaceCwd({
       thread,
-      projects: readModel.projects,
+      projects: project
+        ? [
+            {
+              id: project.id,
+              workspaceRoot: project.workspaceRoot,
+            },
+          ]
+        : [],
     });
     const externalId = body.externalId.trim();
-    const project = readModel.projects.find((entry) => entry.id === thread.projectId);
 
     const importedProviderContext =
       (thread.modelSelection.provider === "codex" ||

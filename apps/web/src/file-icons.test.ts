@@ -1,73 +1,51 @@
 import { assert, describe, it } from "vitest";
 
-import { getFileIconUrlForEntry, inferEntryKindFromPath } from "./file-icons";
+import { getFileIconName, inferEntryKindFromPath } from "./file-icons";
 
-describe("getFileIconUrlForEntry", () => {
-  it("uses exact filename matches from the Seti mapping", () => {
-    const packageJsonUrl = getFileIconUrlForEntry("package.json", "file", "dark");
-    const dockerfileUrl = getFileIconUrlForEntry("Dockerfile", "file", "dark");
-    const tsconfigUrl = getFileIconUrlForEntry("tsconfig.json", "file", "dark");
-    const gitignoreUrl = getFileIconUrlForEntry(".gitignore", "file", "dark");
-
-    assert.isTrue(packageJsonUrl.endsWith("/npm.svg"));
-    assert.isTrue(dockerfileUrl.endsWith("/docker.svg"));
-    assert.isTrue(tsconfigUrl.endsWith("/typescript.svg"));
-    assert.isTrue(gitignoreUrl.endsWith("/git.svg"));
+describe("getFileIconName", () => {
+  it("uses exact filename matches from the Central mapping", () => {
+    assert.equal(getFileIconName("package.json"), "npm");
+    assert.equal(getFileIconName("bun.lock"), "bun");
+    assert.equal(getFileIconName("tsconfig.json"), "typescript");
+    assert.equal(getFileIconName(".gitignore"), "git");
+    assert.equal(getFileIconName("Cargo.toml"), "rust");
   });
 
   it("prefers the longest compound extension", () => {
-    const tsxUrl = getFileIconUrlForEntry("checkbox.tsx", "file", "light");
-    const dtsUrl = getFileIconUrlForEntry("types.d.ts", "file", "dark");
-    const tsUrl = getFileIconUrlForEntry("logic.ts", "file", "dark");
-
-    assert.isTrue(tsxUrl.endsWith("/react.svg"));
-    assert.isTrue(dtsUrl.endsWith("/typescript.svg"));
-    assert.isTrue(tsUrl.endsWith("/typescript.svg"));
+    assert.equal(getFileIconName("checkbox.tsx"), "react");
+    assert.equal(getFileIconName("types.d.ts"), "typescript");
+    assert.equal(getFileIconName("logic.ts"), "typescript");
   });
 
   it("resolves common language extensions", () => {
-    assert.isTrue(getFileIconUrlForEntry("main.py", "file", "dark").endsWith("/python.svg"));
-    assert.isTrue(getFileIconUrlForEntry("lib.rs", "file", "dark").endsWith("/rust.svg"));
-    assert.isTrue(getFileIconUrlForEntry("main.go", "file", "dark").endsWith("/go.svg"));
-    assert.isTrue(getFileIconUrlForEntry("index.html", "file", "dark").endsWith("/html.svg"));
-    assert.isTrue(getFileIconUrlForEntry("styles.scss", "file", "dark").endsWith("/sass.svg"));
-    assert.isTrue(getFileIconUrlForEntry("entrypoint.sh", "file", "dark").endsWith("/shell.svg"));
-    assert.isTrue(getFileIconUrlForEntry("readme.md", "file", "dark").endsWith("/markdown.svg"));
-    assert.isTrue(getFileIconUrlForEntry("general.mdc", "file", "dark").endsWith("/markdown.svg"));
-    assert.isTrue(
-      getFileIconUrlForEntry(".github/workflows/ci.yml", "file", "light").endsWith("/yml.svg"),
-    );
+    assert.equal(getFileIconName("main.py"), "phyton");
+    assert.equal(getFileIconName("lib.rs"), "rust");
+    assert.equal(getFileIconName("index.php"), "php");
+    assert.equal(getFileIconName("App.vue"), "vue");
+    assert.equal(getFileIconName("Counter.svelte"), "svelte");
+    assert.equal(getFileIconName("Main.java"), "java");
+    assert.equal(getFileIconName("readme.md"), "markdown");
+    assert.equal(getFileIconName("general.mdc"), "markdown");
+    assert.equal(getFileIconName(".github/workflows/ci.yml"), "settings-gear-1");
   });
 
-  it("maps directories to the generic folder icon", () => {
-    const folderUrl = getFileIconUrlForEntry("packages/src", "directory", "light");
-    const nestedUrl = getFileIconUrlForEntry("apps/web", "directory", "dark");
-
-    assert.isTrue(folderUrl.endsWith("/folder.svg"));
-    assert.isTrue(nestedUrl.endsWith("/folder.svg"));
-  });
-
-  it("falls back to defaults when there is no match", () => {
-    const fileUrl = getFileIconUrlForEntry("foo.unknown-ext", "file", "dark");
-    const plainUrl = getFileIconUrlForEntry("notes", "file", "dark");
-
-    assert.isTrue(fileUrl.endsWith("/default.svg"));
-    assert.isTrue(plainUrl.endsWith("/default.svg"));
+  it("falls back to the bracket glyph for unknown or icon-less types", () => {
+    // Swift/Go/Ruby have no dedicated Central icon, so they use the bracket.
+    assert.equal(getFileIconName("App.swift"), "code-brackets");
+    assert.equal(getFileIconName("main.go"), "code-brackets");
+    assert.equal(getFileIconName("server.rb"), "code-brackets");
+    assert.equal(getFileIconName("foo.unknown-ext"), "code-brackets");
+    assert.equal(getFileIconName("notes"), "code-brackets");
   });
 
   it("is case insensitive on basename lookup", () => {
-    const upperUrl = getFileIconUrlForEntry("PACKAGE.JSON", "file", "dark");
-    const mixedUrl = getFileIconUrlForEntry("DockerFile", "file", "dark");
-
-    assert.isTrue(upperUrl.endsWith("/npm.svg"));
-    assert.isTrue(mixedUrl.endsWith("/docker.svg"));
+    assert.equal(getFileIconName("PACKAGE.JSON"), "npm");
+    assert.equal(getFileIconName("Main.PY"), "phyton");
   });
 
   it("treats known extensionless basenames as files", () => {
-    assert.equal(inferEntryKindFromPath("Dockerfile"), "file");
     assert.equal(inferEntryKindFromPath("LICENSE"), "file");
-    assert.equal(inferEntryKindFromPath("Gemfile"), "file");
-    assert.equal(inferEntryKindFromPath("C:\\repo\\Dockerfile"), "file");
+    assert.equal(inferEntryKindFromPath("C:\\repo\\.gitignore"), "file");
     assert.equal(inferEntryKindFromPath("scripts"), "directory");
   });
 });

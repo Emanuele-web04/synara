@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { realpathSync } from "node:fs";
 
 import {
@@ -12,6 +13,7 @@ import {
   type OrchestrationShellStreamEvent,
   type OrchestrationThreadStreamItem,
   type ServerConfigStreamEvent,
+  type ServerDiagnosticsResult,
   type ServerLifecycleStreamEvent,
 } from "@t3tools/contracts";
 import { clamp } from "effect/Number";
@@ -24,9 +26,10 @@ import { ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { ServerConfig } from "./config";
-import { GitCore } from "./git/Services/GitCore";
+import { GitCore, type GitCoreShape } from "./git/Services/GitCore";
 import { GitManager } from "./git/Services/GitManager";
 import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
+import { TextGeneration } from "./git/Services/TextGeneration";
 import { Keybindings } from "./keybindings";
 import { Open, resolveAvailableEditors } from "./open";
 import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
@@ -45,6 +48,191 @@ import { ServerSettingsService } from "./serverSettings";
 import { TerminalManager } from "./terminal/Services/Manager";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
+
+const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
+const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
+
+interface ProcessTableRow {
+  readonly pid: number;
+  readonly ppid: number;
+  readonly rssBytes: number;
+  readonly virtualSizeBytes: number;
+  readonly command: string;
+  readonly args: string;
+}
+
+// Normalizes supported GitHub remote URL forms into `owner/repo` for browser-panel links.
+function parseGitHubRepositoryNameWithOwnerFromRemoteUrl(url: string | null): string | null {
+  const trimmed = url?.trim() ?? "";
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  const match =
+    /^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/github\.com\/|git:\/\/github\.com\/)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/i.exec(
+      trimmed,
+    );
+  const repositoryNameWithOwner = match?.[1]?.trim() ?? "";
+  return repositoryNameWithOwner.length > 0 ? repositoryNameWithOwner : null;
+}
+
+function normalizeGitRemoteName(value: string | null): string | null {
+  const normalized = value?.trim() ?? "";
+  return normalized.length > 0 && normalized !== "." ? normalized : null;
+}
+
+function uniqueRemoteCandidates(candidates: ReadonlyArray<string | null>): string[] {
+  const unique = new Set<string>();
+  for (const candidate of candidates) {
+    const normalized = normalizeGitRemoteName(candidate);
+    if (normalized) {
+      unique.add(normalized);
+    }
+  }
+  return [...unique];
+}
+
+function readGitStdoutOrNull(
+  git: GitCoreShape,
+  cwd: string,
+  operation: string,
+  args: ReadonlyArray<string>,
+) {
+  return git
+    .execute({
+      operation,
+      cwd,
+      args,
+      allowNonZeroExit: true,
+      maxOutputBytes: 16_384,
+    })
+    .pipe(
+      Effect.map((result) => {
+        if (result.code !== 0) {
+          return null;
+        }
+        const trimmed = result.stdout.trim();
+        return trimmed.length > 0 ? trimmed : null;
+      }),
+      Effect.catch(() => Effect.succeed(null)),
+    );
+}
+
+function parseGitRemoteNames(stdout: string | null): string[] {
+  if (!stdout) {
+    return [];
+  }
+  return stdout
+    .split(/\r?\n/g)
+    .map((line) => normalizeGitRemoteName(line))
+    .filter((remoteName): remoteName is string => remoteName !== null);
+}
+
+// Resolves the GitHub repository link from Git config without running the full status path.
+function resolveGitHubRepository(git: GitCoreShape, cwd: string) {
+  return Effect.gen(function* () {
+    const branch = yield* readGitStdoutOrNull(git, cwd, "WsRpc.githubRepository.currentBranch", [
+      "branch",
+      "--show-current",
+    ]);
+    const remoteNames = parseGitRemoteNames(
+      yield* readGitStdoutOrNull(git, cwd, "WsRpc.githubRepository.remotes", ["remote"]),
+    );
+    const branchRemote = branch ? yield* git.readConfigValue(cwd, `branch.${branch}.remote`) : null;
+    const pushDefaultRemote = yield* git.readConfigValue(cwd, "remote.pushDefault");
+
+    for (const remoteName of uniqueRemoteCandidates([
+      branchRemote,
+      pushDefaultRemote,
+      "origin",
+      ...remoteNames,
+    ])) {
+      const remoteUrl = yield* git.readConfigValue(cwd, `remote.${remoteName}.url`);
+      const nameWithOwner = parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
+      if (nameWithOwner) {
+        return {
+          repository: {
+            nameWithOwner,
+            url: `https://github.com/${nameWithOwner}`,
+          },
+        };
+      }
+    }
+
+    return { repository: null };
+  });
+}
+
+function truncateDiagnosticText(value: string, limit: number): string {
+  return value.length > limit ? `${value.slice(0, Math.max(0, limit - 15))}... [truncated]` : value;
+}
+
+function redactProcessArgs(args: string): string {
+  const redacted = args
+    .replace(
+      /(--?(?:api[-_]?key|auth|authorization|key|password|secret|token)(?:=|\s+))(\S+)/gi,
+      "$1[redacted]",
+    )
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[redacted]")
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "[redacted]");
+  return truncateDiagnosticText(redacted, MAX_DIAGNOSTIC_ARGS_CHARS);
+}
+
+function parseProcessTable(output: string): ProcessTableRow[] {
+  const rows: ProcessTableRow[] = [];
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)(?:\s+(.*))?$/);
+    if (!match) {
+      continue;
+    }
+    rows.push({
+      pid: Number(match[1]),
+      ppid: Number(match[2]),
+      rssBytes: Number(match[3]) * 1024,
+      virtualSizeBytes: Number(match[4]) * 1024,
+      command: match[5] ?? "",
+      args: redactProcessArgs(match[6] ?? ""),
+    });
+  }
+  return rows;
+}
+
+function collectDescendantProcesses(
+  rows: readonly ProcessTableRow[],
+  rootPid: number,
+): ProcessTableRow[] {
+  const childrenByParent = new Map<number, ProcessTableRow[]>();
+  for (const row of rows) {
+    const children = childrenByParent.get(row.ppid) ?? [];
+    children.push(row);
+    childrenByParent.set(row.ppid, children);
+  }
+
+  const descendants: ProcessTableRow[] = [];
+  const stack = [...(childrenByParent.get(rootPid) ?? [])];
+  while (stack.length > 0) {
+    const row = stack.pop()!;
+    descendants.push(row);
+    stack.push(...(childrenByParent.get(row.pid) ?? []));
+  }
+  return descendants.toSorted((left, right) => right.rssBytes - left.rssBytes);
+}
+
+function readDescendantProcesses(rootPid: number): Promise<ProcessTableRow[]> {
+  if (process.platform === "win32") {
+    return Promise.resolve([]);
+  }
+  return new Promise((resolve) => {
+    execFile(
+      "ps",
+      ["-axo", "pid=,ppid=,rss=,vsz=,comm=,args="],
+      { maxBuffer: 2 * 1024 * 1024 },
+      (_error, stdout) => {
+        resolve(collectDescendantProcesses(parseProcessTable(stdout), rootPid));
+      },
+    );
+  });
+}
 
 function toWsRpcError(cause: unknown, fallbackMessage: string) {
   return Schema.is(WsRpcError)(cause)
@@ -66,7 +254,14 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
       | "thread.turn-diff-completed"
       | "thread.reverted"
       | "thread.conversation-rolled-back"
-      | "thread.session-set";
+      | "thread.session-set"
+      | "thread.meta-updated"
+      | "thread.pinned-message-added"
+      | "thread.pinned-message-removed"
+      | "thread.pinned-message-done-set"
+      | "thread.pinned-message-label-set"
+      | "thread.archived"
+      | "thread.unarchived";
   }
 > {
   return (
@@ -76,7 +271,14 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
     event.type === "thread.conversation-rolled-back" ||
-    event.type === "thread.session-set"
+    event.type === "thread.session-set" ||
+    event.type === "thread.meta-updated" ||
+    event.type === "thread.pinned-message-added" ||
+    event.type === "thread.pinned-message-removed" ||
+    event.type === "thread.pinned-message-done-set" ||
+    event.type === "thread.pinned-message-label-set" ||
+    event.type === "thread.archived" ||
+    event.type === "thread.unarchived"
   );
 }
 
@@ -103,6 +305,7 @@ export const makeWsRpcLayer = () =>
       const serverEnvironment = yield* ServerEnvironment;
       const serverSettings = yield* ServerSettingsService;
       const terminalManager = yield* TerminalManager;
+      const textGeneration = yield* TextGeneration;
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
 
@@ -169,6 +372,7 @@ export const makeWsRpcLayer = () =>
         orchestrationEngine,
         path,
         platform: process.platform,
+        projectionSnapshotQuery: projectionReadModelQuery,
         providerAdapterRegistry,
         providerService,
       });
@@ -311,19 +515,12 @@ export const makeWsRpcLayer = () =>
         [ORCHESTRATION_WS_METHODS.subscribeThread]: (input) =>
           Stream.merge(
             Stream.fromEffect(
-              Effect.all([
-                projectionReadModelQuery.getThreadDetailById(input.threadId),
-                orchestrationEngine
-                  .getReadModel()
-                  .pipe(Effect.map((model) => model.snapshotSequence)),
-              ]).pipe(
-                Effect.map(([thread, snapshotSequence]) =>
-                  Option.isSome(thread)
-                    ? Option.some({
-                        kind: "snapshot" as const,
-                        snapshot: { snapshotSequence, thread: thread.value },
-                      })
-                    : Option.none(),
+              projectionReadModelQuery.getThreadDetailSnapshotById(input.threadId).pipe(
+                Effect.map((snapshot) =>
+                  Option.map(snapshot, (value) => ({
+                    kind: "snapshot" as const,
+                    snapshot: value,
+                  })),
                 ),
                 Effect.mapError((cause) => toWsRpcError(cause, "Failed to load thread snapshot")),
               ),
@@ -362,6 +559,8 @@ export const makeWsRpcLayer = () =>
         [WS_METHODS.shellOpenInEditor]: (input) =>
           rpcEffect(open.openInEditor(input), "Failed to open editor"),
 
+        [WS_METHODS.gitGithubRepository]: (input) =>
+          rpcEffect(resolveGitHubRepository(git, input.cwd), "Failed to resolve GitHub repository"),
         [WS_METHODS.gitStatus]: (input) =>
           rpcEffect(gitStatusBroadcaster.getStatus(input), "Failed to read git status"),
         [WS_METHODS.gitReadWorkingTreeDiff]: (input) =>
@@ -449,6 +648,22 @@ export const makeWsRpcLayer = () =>
             git.initRepo(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             "Failed to initialize repository",
           ),
+        [WS_METHODS.gitStageFiles]: (input) =>
+          rpcEffect(
+            git.stageFiles(input.cwd, input.paths).pipe(
+              Effect.tap(() => refreshGitStatus(input.cwd)),
+              Effect.as({ ok: true }),
+            ),
+            "Failed to stage files",
+          ),
+        [WS_METHODS.gitUnstageFiles]: (input) =>
+          rpcEffect(
+            git.unstageFiles(input.cwd, input.paths).pipe(
+              Effect.tap(() => refreshGitStatus(input.cwd)),
+              Effect.as({ ok: true }),
+            ),
+            "Failed to unstage files",
+          ),
         [WS_METHODS.gitHandoffThread]: (input) =>
           rpcEffect(
             gitManager.handoffThread(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
@@ -459,6 +674,8 @@ export const makeWsRpcLayer = () =>
           rpcEffect(terminalManager.open(input), "Failed to open terminal"),
         [WS_METHODS.terminalWrite]: (input) =>
           rpcEffect(terminalManager.write(input), "Failed to write terminal"),
+        [WS_METHODS.terminalAckOutput]: (input) =>
+          rpcEffect(terminalManager.ackOutput(input), "Failed to acknowledge terminal output"),
         [WS_METHODS.terminalResize]: (input) =>
           rpcEffect(terminalManager.resize(input), "Failed to resize terminal"),
         [WS_METHODS.terminalClear]: (input) =>
@@ -490,9 +707,44 @@ export const makeWsRpcLayer = () =>
             providerHealth.refresh.pipe(Effect.map((providers) => ({ providers }))),
             "Failed to refresh providers",
           ),
+        [WS_METHODS.serverUpdateProvider]: (input) => providerHealth.updateProvider(input),
         [WS_METHODS.serverListWorktrees]: () => Effect.succeed({ worktrees: [] }),
         [WS_METHODS.serverGetProviderUsageSnapshot]: (input) =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
+        [WS_METHODS.serverGetDiagnostics]: () =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const [projection, fullChildProcesses] = yield* Effect.all([
+                projectionReadModelQuery.getCounts(),
+                Effect.promise(() => readDescendantProcesses(process.pid)),
+              ]);
+              const childProcesses = fullChildProcesses.slice(0, MAX_DIAGNOSTIC_CHILD_PROCESSES);
+              const memory = process.memoryUsage();
+              const diagnostics: ServerDiagnosticsResult = {
+                generatedAt: new Date().toISOString(),
+                process: {
+                  pid: process.pid,
+                  uptimeSeconds: Math.max(0, Math.round(process.uptime())),
+                  memory: {
+                    rssBytes: Math.max(0, Math.round(memory.rss)),
+                    heapTotalBytes: Math.max(0, Math.round(memory.heapTotal)),
+                    heapUsedBytes: Math.max(0, Math.round(memory.heapUsed)),
+                    externalBytes: Math.max(0, Math.round(memory.external)),
+                    arrayBuffersBytes: Math.max(0, Math.round(memory.arrayBuffers)),
+                  },
+                },
+                childProcesses,
+                childProcessTotalCount: fullChildProcesses.length,
+                childProcessTotalRssBytes: fullChildProcesses.reduce(
+                  (total, processRow) => total + processRow.rssBytes,
+                  0,
+                ),
+                projection,
+              };
+              return diagnostics;
+            }),
+            "Failed to load server diagnostics",
+          ),
         [WS_METHODS.serverTranscribeVoice]: (input) =>
           rpcEffect(
             providerAdapterRegistry
@@ -509,6 +761,25 @@ export const makeWsRpcLayer = () =>
                 ),
               ),
             "Voice transcription failed",
+          ),
+        [WS_METHODS.serverGenerateThreadRecap]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const settings = yield* serverSettings.getSettings;
+              const modelSelection =
+                input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
+              return yield* textGeneration.generateThreadRecap({
+                cwd: input.cwd,
+                newMaterial: input.newMaterial,
+                ...(input.previousRecap ? { previousRecap: input.previousRecap } : {}),
+                ...(input.currentState ? { currentState: input.currentState } : {}),
+                ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+                model: input.textGenerationModel ?? modelSelection.model,
+                modelSelection,
+                ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+              });
+            }),
+            "Failed to generate thread recap",
           ),
         [WS_METHODS.serverUpsertKeybinding]: (input) =>
           rpcEffect(
@@ -607,6 +878,9 @@ const makeRpcWebSocketHttpEffect = RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
     "rpc.transport": "websocket",
     "rpc.system": "effect-rpc",
   },
+  // JSON keeps the wire format symmetric with any web build. A serialization
+  // mismatch on this single multiplexed socket is a hard connect failure, and the
+  // desktop/dev setup routinely runs server and web on independently-built copies.
 }).pipe(Effect.provide(makeWsRpcLayer().pipe(Layer.provideMerge(RpcSerialization.layerJson))));
 
 export const websocketRpcRouteLayer = Layer.effectDiscard(

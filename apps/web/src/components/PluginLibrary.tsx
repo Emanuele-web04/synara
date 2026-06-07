@@ -26,7 +26,7 @@ import {
   SiStripe,
   SiVercel,
 } from "react-icons/si";
-import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenCodeIcon, PiIcon } from "./Icons";
+import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "./ProviderIcon";
 import { useStore } from "~/store";
 import {
   buildPluginSearchBlob,
@@ -50,13 +50,14 @@ import {
   CircleAlertIcon,
   HammerIcon,
   ListChecksIcon,
-  PlugIcon,
+  PluginIcon,
   SearchIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "./ui/input-group";
 import { SidebarInset } from "./ui/sidebar";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
+import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
 import { Skeleton } from "./ui/skeleton";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -77,19 +78,15 @@ type PluginBrandArtwork = {
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const PROVIDER_ICON: Record<ProviderKind, React.FC<React.SVGProps<SVGSVGElement>>> = {
+  ...PROVIDER_ICON_COMPONENT_BY_PROVIDER,
   codex: HammerIcon,
-  claudeAgent: ClaudeAI,
-  cursor: CursorIcon,
-  gemini: Gemini,
-  kilo: KiloIcon,
-  opencode: OpenCodeIcon,
-  pi: PiIcon,
 };
 const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = [
   "codex",
   "claudeAgent",
   "cursor",
   "gemini",
+  "grok",
   "kilo",
   "opencode",
   "pi",
@@ -213,7 +210,7 @@ function PluginGlyph({ plugin }: { plugin: ProviderPluginDescriptor }) {
       className="inline-flex size-11 shrink-0 items-center justify-center rounded-[14px]"
       style={style}
     >
-      <PlugIcon className="size-5 text-white/80" />
+      <PluginIcon className="size-5 text-white/80" />
     </span>
   );
 }
@@ -371,6 +368,7 @@ function SectionHeader({ title }: { title: string }) {
 // ── Main component ─────────────────────────────────────────────────────────
 
 export function PluginLibrary() {
+  const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const firstProject = useStore(useMemo(() => createFirstProjectSelector(), []));
   const { activeProject: focusedProject, activeThread, focusedThreadId } = useFocusedChatContext();
   const activeProject = focusedProject ?? firstProject ?? null;
@@ -393,6 +391,7 @@ export function PluginLibrary() {
   const claudeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("claudeAgent"));
   const cursorCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cursor"));
   const geminiCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("gemini"));
+  const grokCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("grok"));
   const kiloCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kilo"));
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
@@ -415,6 +414,10 @@ export function PluginLibrary() {
         plugins: supportsPluginDiscovery(geminiCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(geminiCapabilitiesQuery.data),
       },
+      grok: {
+        plugins: supportsPluginDiscovery(grokCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(grokCapabilitiesQuery.data),
+      },
       kilo: {
         plugins: supportsPluginDiscovery(kiloCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(kiloCapabilitiesQuery.data),
@@ -433,6 +436,7 @@ export function PluginLibrary() {
       codexCapabilitiesQuery.data,
       cursorCapabilitiesQuery.data,
       geminiCapabilitiesQuery.data,
+      grokCapabilitiesQuery.data,
       kiloCapabilitiesQuery.data,
       openCodeCapabilitiesQuery.data,
       piCapabilitiesQuery.data,
@@ -548,7 +552,12 @@ export function PluginLibrary() {
     <SidebarInset className="h-dvh min-h-0 overflow-hidden isolate">
       <div className="flex h-full flex-col">
         {/* ── Top nav ───────────────────────────────────────────────────── */}
-        <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 sm:px-6">
+        <div
+          className={cn(
+            "flex shrink-0 items-center gap-3 border-b border-border px-4 sm:px-6",
+            desktopTopBarTrafficLightGutterClassName,
+          )}
+        >
           <SidebarHeaderNavigationControls />
           <div className="flex items-end gap-3">
             <TabButton

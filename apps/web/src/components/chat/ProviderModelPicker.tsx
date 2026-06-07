@@ -6,37 +6,43 @@
 import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import * as Schema from "effect/Schema";
-import { Fragment, memo, useCallback, useDeferredValue, useMemo, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import { formatProviderModelOptionName } from "../../providerModelOptions";
 import { compareProvidersByOrder } from "../../providerOrdering";
 import {
   Menu,
-  MenuGroup,
-  MenuGroupLabel,
   MenuItem,
-  MenuPopup,
   MenuRadioGroup,
-  MenuRadioItem,
   MenuSeparator,
   MenuSub,
-  MenuSubPopup,
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
-import { ClaudeAI, CursorIcon, Gemini, Icon, KiloIcon, OpenAI, OpenCodeIcon, PiIcon } from "../Icons";
+import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import { cn } from "~/lib/utils";
 import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ProviderModelOptionGroupList } from "./ProviderModelOptionGroupList";
+import {
+  ComposerPickerMenuPopup,
+  ComposerPickerMenuSubPopup,
+  ComposerPickerTooltipPopup,
+} from "./ComposerPickerMenuPopup";
+import {
+  COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
+  COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
+  COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME,
+} from "./composerPickerStyles";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
+import { Tooltip, TooltipTrigger } from "../ui/tooltip";
 import {
   groupProviderModelOptions,
   groupProviderModelOptionsWithFavorites,
+  shouldUseCollapsibleModelGroups,
   type ProviderModelOption,
 } from "../../providerModelOptions";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
-import { StarFilledIcon, StarIcon } from "../../lib/icons";
 import { Skeleton } from "../ui/skeleton";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
@@ -47,24 +53,14 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
   return option.available;
 }
 
-const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
-  codex: OpenAI,
-  claudeAgent: ClaudeAI,
-  cursor: CursorIcon,
-  gemini: Gemini,
-  kilo: KiloIcon,
-  opencode: OpenCodeIcon,
-  pi: PiIcon,
-};
-
 function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefined): {
   disabled: boolean;
   label: string | null;
 } {
   if (!provider) {
     return {
-      disabled: false,
-      label: null,
+      disabled: true,
+      label: "Checking",
     };
   }
 
@@ -120,16 +116,18 @@ function providerIconClassName(
 
 const SEARCHABLE_MODEL_PICKER_THRESHOLD = 15;
 const FAVORITE_MODEL_STORAGE_KEYS = {
-  cursor: "dpcode:cursor-favourite-models:v1",
-  kilo: "dpcode:kilo-favourite-models:v1",
-  opencode: "dpcode:opencode-favourite-models:v1",
-  pi: "dpcode:pi-favourite-models:v1",
+  cursor: "synara:cursor-favourite-models:v1",
+  kilo: "synara:kilo-favourite-models:v1",
+  opencode: "synara:opencode-favourite-models:v1",
+  pi: "synara:pi-favourite-models:v1",
 } as const;
 const FavoriteModelSlugs = Schema.Array(Schema.String);
 type FavoriteModelProvider = keyof typeof FAVORITE_MODEL_STORAGE_KEYS;
 
 function supportsModelFavorites(provider: ProviderKind): provider is FavoriteModelProvider {
-  return provider === "cursor" || provider === "kilo" || provider === "opencode" || provider === "pi";
+  return (
+    provider === "cursor" || provider === "kilo" || provider === "opencode" || provider === "pi"
+  );
 }
 
 // Keeps persisted favorite slugs compact and stable while preserving the user's order.
@@ -175,7 +173,7 @@ function buildModelSearchText(option: ProviderModelOption): string {
     .toLowerCase();
 }
 
-export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
+type ProviderModelMenuItemsProps = {
   provider: ProviderKind;
   model: ModelSlug;
   lockedProvider: ProviderKind | null;
@@ -184,16 +182,20 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
-  activeProviderIconClassName?: string;
-  compact?: boolean;
   disabled?: boolean;
-  open?: boolean;
-  onOpenChange?: (open: boolean) => void;
-  shortcutLabel?: string | null;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
-}) {
-  const { onOpenChange, open } = props;
-  const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
+  // Invoked after a model selection commits so callers can close ancestor
+  // menus and refocus the composer.
+  onAfterSelection?: () => void;
+};
+
+// Renders only the popup body of the provider/model picker. Designed to be
+// dropped into any MenuPopup or MenuSubPopup so the same selection logic can
+// be reused by the standalone picker and the combined composer trait picker.
+export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
+  props: ProviderModelMenuItemsProps,
+) {
+  const { onAfterSelection } = props;
   const [modelSearchQuery, setModelSearchQuery] = useState("");
   const [kiloFavoriteModelSlugs, setKiloFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.kilo,
@@ -217,7 +219,6 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   );
   const deferredModelSearchQuery = useDeferredValue(modelSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
-  const isMenuOpen = open ?? uncontrolledMenuOpen;
   const hiddenProviders = props.hiddenProviders;
   const providerOrder = props.providerOrder;
   const hiddenProviderSet = useMemo(
@@ -283,25 +284,6 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       piFavoriteModelSlugSet,
     ],
   );
-  const selectedProviderOptions = props.modelOptionsByProvider[activeProvider];
-  const selectedModelLabel = resolveSelectedModelLabel({
-    provider: activeProvider,
-    model: props.model,
-    options: selectedProviderOptions,
-  });
-  const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[activeProvider];
-  const setMenuOpen = useCallback(
-    (nextOpen: boolean) => {
-      if (open === undefined) {
-        setUncontrolledMenuOpen(nextOpen);
-      }
-      if (!nextOpen) {
-        setModelSearchQuery("");
-      }
-      onOpenChange?.(nextOpen);
-    },
-    [onOpenChange, open],
-  );
   const handleModelChange = (provider: ProviderKind, value: string) => {
     if (props.disabled) return;
     if (!value) return;
@@ -312,7 +294,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     );
     if (!resolvedModel) return;
     props.onProviderModelChange(provider, resolvedModel);
-    setMenuOpen(false);
+    onAfterSelection?.();
   };
   const toggleFavoriteModel = useCallback(
     (provider: FavoriteModelProvider, slug: string) => {
@@ -321,9 +303,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           ? setCursorFavoriteModelSlugs
           : provider === "kilo"
             ? setKiloFavoriteModelSlugs
-          : provider === "pi"
-            ? setPiFavoriteModelSlugs
-            : setOpenCodeFavoriteModelSlugs;
+            : provider === "pi"
+              ? setPiFavoriteModelSlugs
+              : setOpenCodeFavoriteModelSlugs;
       setFavoriteModelSlugs((current) => toggleFavoriteModelSlug(current, slug));
     },
     [
@@ -337,7 +319,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const renderModelRadioGroup = (provider: ProviderKind) => {
     if (props.loadingModelProviders?.[provider]) {
       return (
-        <div className="w-60 space-y-2 px-2 py-2" aria-label="Loading models">
+        <div className="space-y-2 px-2 py-2" aria-label="Loading models">
           {Array.from({ length: 6 }, (_, index) => (
             <div key={index} className="flex items-center gap-2 rounded-md px-2 py-1.5">
               <Skeleton className="size-3.5 rounded-full" />
@@ -379,66 +361,38 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           value={activeProvider === provider ? props.model : ""}
           onValueChange={(value) => handleModelChange(provider, value)}
         >
-          {groupedOptions.map((group, index) => (
-            <Fragment key={`${provider}:${group.key}`}>
-              <MenuGroup>
-                {group.label ? <MenuGroupLabel>{group.label}</MenuGroupLabel> : null}
-                {group.options.map((modelOption) => {
-                  const isFavorite = favoriteModelSlugSet?.has(modelOption.slug) ?? false;
-                  return (
-                    <MenuRadioItem
-                      key={`${provider}:${modelOption.slug}`}
-                      value={modelOption.slug}
-                      onClick={() => setMenuOpen(false)}
-                    >
-                      {favoriteModelSlugSet !== undefined ? (
-                        <span className="flex w-full min-w-0 items-center gap-2">
-                          <span className="block min-w-0 flex-1 truncate">{modelOption.name}</span>
-                          <button
-                            type="button"
-                            aria-label={
-                              isFavorite
-                                ? `Remove ${modelOption.name} from favourites`
-                                : `Add ${modelOption.name} to favourites`
-                            }
-                            className={cn(
-                              "-me-2 ms-auto inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground/55 transition-colors hover:bg-[var(--color-background-elevated-tertiary)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/60",
-                              isFavorite && "text-amber-300 hover:text-amber-200",
-                            )}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              if (favoriteProvider !== null) {
-                                toggleFavoriteModel(favoriteProvider, modelOption.slug);
-                              }
-                            }}
-                            onPointerDown={(event) => {
-                              event.stopPropagation();
-                            }}
-                          >
-                            {isFavorite ? (
-                              <StarFilledIcon aria-hidden="true" className="size-3.5" />
-                            ) : (
-                              <StarIcon aria-hidden="true" className="size-3.5" />
-                            )}
-                          </button>
-                        </span>
-                      ) : (
-                        modelOption.name
-                      )}
-                    </MenuRadioItem>
-                  );
-                })}
-              </MenuGroup>
-              {index < groupedOptions.length - 1 ? <MenuSeparator /> : null}
-            </Fragment>
-          ))}
+          <ProviderModelOptionGroupList
+            groupedOptions={groupedOptions}
+            provider={provider}
+            activeModel={props.model}
+            isSearching={normalizedModelSearchQuery.length > 0}
+            favoriteProvider={favoriteProvider}
+            favoriteModelSlugSet={favoriteModelSlugSet}
+            onToggleFavorite={toggleFavoriteModel}
+            {...(onAfterSelection ? { onAfterSelection } : {})}
+          />
         </MenuRadioGroup>
       ) : (
         <div className="px-2 py-2 text-muted-foreground text-sm">No matches</div>
       );
 
     if (!shouldShowSearch) {
+      const needsScrollContainer =
+        filteredOptions.length >= SEARCHABLE_MODEL_PICKER_THRESHOLD ||
+        shouldUseCollapsibleModelGroups(groupedOptions.length, false);
+      if (needsScrollContainer) {
+        return (
+          <div
+            className={cn(
+              "overflow-y-auto overscroll-contain py-0.5",
+              COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
+              COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
+            )}
+          >
+            {content}
+          </div>
+        );
+      }
       return content;
     }
 
@@ -449,54 +403,209 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         onQueryChange={setModelSearchQuery}
         stopSearchKeyPropagation
         autoFocusSearch
-        widthClassName="w-60"
+        widthClassName="w-full"
         bleedParentPadding
+        listMaxHeightClassName={COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME}
       >
         {content}
       </PickerPanelShell>
     );
   };
 
+  if (props.lockedProvider !== null) {
+    return <>{renderModelRadioGroup(props.lockedProvider)}</>;
+  }
+
+  return (
+    <>
+      {visibleAvailableProviderOptions.map((option) => {
+        const OptionIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[option.value];
+        const liveProvider = props.providers?.find((entry) => entry.provider === option.value);
+        const availability = resolveLiveProviderAvailability(liveProvider);
+        if (availability.disabled) {
+          return (
+            <MenuItem key={option.value} disabled>
+              <OptionIcon
+                aria-hidden="true"
+                className={cn(
+                  "size-3 shrink-0 opacity-80",
+                  providerIconClassName(option.value, "text-muted-foreground/85"),
+                )}
+              />
+              <span>{option.label}</span>
+              <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+                {availability.label}
+              </span>
+            </MenuItem>
+          );
+        }
+        return (
+          <MenuSub key={option.value}>
+            <MenuSubTrigger>
+              <OptionIcon
+                aria-hidden="true"
+                className={cn(
+                  "size-3 shrink-0",
+                  providerIconClassName(option.value, "text-muted-foreground/85"),
+                )}
+              />
+              {option.label}
+            </MenuSubTrigger>
+            <ComposerPickerMenuSubPopup
+              fixedWidth
+              className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
+            >
+              {renderModelRadioGroup(option.value)}
+            </ComposerPickerMenuSubPopup>
+          </MenuSub>
+        );
+      })}
+      {visibleUnavailableProviderOptions.length > 0 && <MenuSeparator />}
+      {visibleUnavailableProviderOptions.map((option) => {
+        const OptionIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[option.value];
+        return (
+          <MenuItem key={option.value} disabled>
+            <OptionIcon
+              aria-hidden="true"
+              className="size-3 shrink-0 text-muted-foreground/85 opacity-80"
+            />
+            <span>{option.label}</span>
+            <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+              Coming soon
+            </span>
+          </MenuItem>
+        );
+      })}
+    </>
+  );
+});
+
+// Resolves the human-readable label for the currently selected model.
+export function resolveProviderModelLabel(input: {
+  provider: ProviderKind;
+  lockedProvider: ProviderKind | null;
+  model: ModelSlug;
+  modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+}): string {
+  const activeProvider = input.lockedProvider ?? input.provider;
+  return resolveSelectedModelLabel({
+    provider: activeProvider,
+    model: input.model,
+    options: input.modelOptionsByProvider[activeProvider],
+  });
+}
+
+export function getProviderIconClassName(
+  provider: ProviderKind | ProviderPickerKind,
+  fallbackClassName: string = "text-muted-foreground/70",
+): string {
+  return providerIconClassName(provider, fallbackClassName);
+}
+
+type ProviderModelPickerProps = {
+  provider: ProviderKind;
+  model: ModelSlug;
+  lockedProvider: ProviderKind | null;
+  providers?: ReadonlyArray<ServerProviderStatus>;
+  modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
+  hiddenProviders?: ReadonlyArray<ProviderKind>;
+  providerOrder?: ReadonlyArray<ProviderKind>;
+  activeProviderIconClassName?: string;
+  compact?: boolean;
+  disabled?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  onSelectionCommitted?: () => void;
+  shortcutLabel?: string | null;
+  onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+};
+
+export const ProviderModelPicker = memo(function ProviderModelPicker(
+  props: ProviderModelPickerProps,
+) {
+  const { onOpenChange, onSelectionCommitted, open } = props;
+  const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
+  const selectionCommitTimerRef = useRef<number | null>(null);
+  const isMenuOpen = open ?? uncontrolledMenuOpen;
+  const activeProvider = props.lockedProvider ?? props.provider;
+  const selectedModelLabel = resolveProviderModelLabel({
+    provider: props.provider,
+    lockedProvider: props.lockedProvider,
+    model: props.model,
+    modelOptionsByProvider: props.modelOptionsByProvider,
+  });
+  const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
+
+  const setMenuOpen = useCallback(
+    (nextOpen: boolean) => {
+      if (open === undefined) {
+        setUncontrolledMenuOpen(nextOpen);
+      }
+      onOpenChange?.(nextOpen);
+    },
+    [onOpenChange, open],
+  );
+  const scheduleSelectionCommitted = useCallback(() => {
+    if (selectionCommitTimerRef.current !== null) {
+      window.clearTimeout(selectionCommitTimerRef.current);
+    }
+    // Base UI restores focus to the trigger while closing; refocus callers after that tick.
+    selectionCommitTimerRef.current = window.setTimeout(() => {
+      selectionCommitTimerRef.current = null;
+      onSelectionCommitted?.();
+    }, 0);
+  }, [onSelectionCommitted]);
+  useEffect(
+    () => () => {
+      if (selectionCommitTimerRef.current !== null) {
+        window.clearTimeout(selectionCommitTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  const handleAfterSelection = useCallback(() => {
+    setMenuOpen(false);
+    scheduleSelectionCommitted();
+  }, [scheduleSelectionCommitted, setMenuOpen]);
+
+  const triggerButton = (
+    <PickerTriggerButton
+      disabled={props.disabled ?? false}
+      compact={props.compact ?? false}
+      icon={
+        <ProviderIcon
+          aria-hidden="true"
+          className={cn(
+            "size-3.5 shrink-0",
+            providerIconClassName(activeProvider, "text-muted-foreground/70"),
+            props.activeProviderIconClassName,
+          )}
+        />
+      }
+      label={selectedModelLabel}
+    />
+  );
+
   return (
     <Menu
       open={isMenuOpen}
-      onOpenChange={(open) => {
+      onOpenChange={(nextOpen) => {
         if (props.disabled) {
           setMenuOpen(false);
           return;
         }
-        setMenuOpen(open);
+        setMenuOpen(nextOpen);
       }}
     >
       {props.shortcutLabel ? (
         <Tooltip>
-          <TooltipTrigger
-            render={
-              <MenuTrigger
-                render={
-                  <PickerTriggerButton
-                    disabled={props.disabled ?? false}
-                    compact={props.compact ?? false}
-                    icon={
-                      <ProviderIcon
-                        aria-hidden="true"
-                        className={cn(
-                          "size-3.5 shrink-0",
-                          providerIconClassName(activeProvider, "text-muted-foreground/70"),
-                          props.activeProviderIconClassName,
-                        )}
-                      />
-                    }
-                    label={selectedModelLabel}
-                  />
-                }
-              />
-            }
-          >
+          <TooltipTrigger render={<MenuTrigger render={triggerButton} />}>
             <span className="sr-only">{selectedModelLabel}</span>
           </TooltipTrigger>
           {!isMenuOpen ? (
-            <TooltipPopup side="top" sideOffset={6}>
+            <ComposerPickerTooltipPopup side="top" sideOffset={6}>
               <span className="inline-flex items-center gap-2 px-1 py-0.5">
                 <span>Change model</span>
                 <ShortcutKbd
@@ -504,97 +613,31 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                   className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
                 />
               </span>
-            </TooltipPopup>
+            </ComposerPickerTooltipPopup>
           ) : null}
         </Tooltip>
       ) : (
-        <MenuTrigger
-          render={
-            <PickerTriggerButton
-              disabled={props.disabled ?? false}
-              compact={props.compact ?? false}
-              icon={
-                <ProviderIcon
-                  aria-hidden="true"
-                  className={cn(
-                    "size-3.5 shrink-0",
-                    providerIconClassName(activeProvider, "text-muted-foreground/70"),
-                    props.activeProviderIconClassName,
-                  )}
-                />
-              }
-              label={selectedModelLabel}
-            />
-          }
-        >
+        <MenuTrigger render={triggerButton}>
           <span className="sr-only">{selectedModelLabel}</span>
         </MenuTrigger>
       )}
-      <MenuPopup align="start">
-        {props.lockedProvider !== null ? (
-          renderModelRadioGroup(props.lockedProvider)
-        ) : (
-          <>
-            {visibleAvailableProviderOptions.map((option) => {
-              const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
-              const liveProvider = props.providers?.find(
-                (entry) => entry.provider === option.value,
-              );
-              const availability = resolveLiveProviderAvailability(liveProvider);
-              if (availability.disabled) {
-                return (
-                  <MenuItem key={option.value} disabled>
-                    <OptionIcon
-                      aria-hidden="true"
-                      className={cn(
-                        "size-4 shrink-0 opacity-80",
-                        providerIconClassName(option.value, "text-muted-foreground/85"),
-                      )}
-                    />
-                    <span>{option.label}</span>
-                    <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
-                      {availability.label}
-                    </span>
-                  </MenuItem>
-                );
-              }
-              return (
-                <MenuSub key={option.value}>
-                  <MenuSubTrigger>
-                    <OptionIcon
-                      aria-hidden="true"
-                      className={cn(
-                        "size-4 shrink-0",
-                        providerIconClassName(option.value, "text-muted-foreground/85"),
-                      )}
-                    />
-                    {option.label}
-                  </MenuSubTrigger>
-                  <MenuSubPopup className="[--available-height:min(24rem,70vh)]">
-                    {renderModelRadioGroup(option.value)}
-                  </MenuSubPopup>
-                </MenuSub>
-              );
-            })}
-            {visibleUnavailableProviderOptions.length > 0 && <MenuSeparator />}
-            {visibleUnavailableProviderOptions.map((option) => {
-              const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
-              return (
-                <MenuItem key={option.value} disabled>
-                  <OptionIcon
-                    aria-hidden="true"
-                    className="size-4 shrink-0 text-muted-foreground/85 opacity-80"
-                  />
-                  <span>{option.label}</span>
-                  <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
-                    Coming soon
-                  </span>
-                </MenuItem>
-              );
-            })}
-          </>
-        )}
-      </MenuPopup>
+      <ComposerPickerMenuPopup align="start" fixedWidth={props.lockedProvider !== null}>
+        <ProviderModelMenuItems
+          provider={props.provider}
+          model={props.model}
+          lockedProvider={props.lockedProvider}
+          {...(props.providers ? { providers: props.providers } : {})}
+          modelOptionsByProvider={props.modelOptionsByProvider}
+          {...(props.loadingModelProviders
+            ? { loadingModelProviders: props.loadingModelProviders }
+            : {})}
+          {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
+          {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
+          {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
+          onProviderModelChange={props.onProviderModelChange}
+          onAfterSelection={handleAfterSelection}
+        />
+      </ComposerPickerMenuPopup>
     </Menu>
   );
 });

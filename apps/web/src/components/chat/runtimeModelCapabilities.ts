@@ -95,6 +95,7 @@ export function getRuntimeAwareModelCapabilities(input: {
   if (
     (input.provider !== "codex" &&
       input.provider !== "cursor" &&
+      input.provider !== "grok" &&
       input.provider !== "kilo" &&
       input.provider !== "opencode" &&
       input.provider !== "pi") ||

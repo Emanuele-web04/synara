@@ -39,6 +39,11 @@ function createTextGenerationDouble(label: string) {
       title: `${label} title`,
     }),
   );
+  const generateThreadRecap = vi.fn<TextGenerationShape["generateThreadRecap"]>(() =>
+    Effect.succeed({
+      recap: `${label} recap`,
+    }),
+  );
 
   return {
     service: {
@@ -47,12 +52,14 @@ function createTextGenerationDouble(label: string) {
       generateDiffSummary,
       generateBranchName,
       generateThreadTitle,
+      generateThreadRecap,
     } satisfies TextGenerationShape,
     generateCommitMessage,
     generatePrContent,
     generateDiffSummary,
     generateBranchName,
     generateThreadTitle,
+    generateThreadRecap,
   };
 }
 

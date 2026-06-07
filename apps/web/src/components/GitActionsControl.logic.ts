@@ -3,7 +3,7 @@ import type {
   GitStackedAction,
   GitStatusResult,
 } from "@t3tools/contracts";
-import { isTemporaryWorktreeBranch, resolveUniqueDpcodeBranchName } from "@t3tools/shared/git";
+import { isTemporaryWorktreeBranch, resolveUniqueSynaraBranchName } from "@t3tools/shared/git";
 
 export type GitActionIconName = "commit" | "push" | "pr";
 
@@ -69,7 +69,7 @@ export function resolveDefaultCreateBranchName(
   existingBranchNames: readonly string[],
   preferredBranch?: string,
 ): string {
-  return resolveUniqueDpcodeBranchName(existingBranchNames, preferredBranch);
+  return resolveUniqueSynaraBranchName(existingBranchNames, preferredBranch);
 }
 
 export function buildGitActionProgressStages(input: {
@@ -107,6 +107,39 @@ export function buildGitActionProgressStages(input: {
 
 const withDescription = (title: string, description: string | undefined) =>
   description ? { title, description } : { title };
+
+// Shared PR eligibility for explicit menu/CTA paths; the primary quick action ranks separately.
+function canRunCreatePrAction(input: {
+  gitStatus: GitStatusResult | null;
+  isBusy: boolean;
+  isDefaultBranch: boolean;
+  hasOriginRemote: boolean;
+  defaultBranchName?: string | null | undefined;
+}): boolean {
+  const { gitStatus, isBusy, isDefaultBranch, hasOriginRemote, defaultBranchName } = input;
+  if (!gitStatus) return false;
+
+  const hasBranch = gitStatus.branch !== null;
+  const hasChanges = gitStatus.hasWorkingTreeChanges;
+  const hasOpenPr = gitStatus.pr?.state === "open";
+  const isBehind = gitStatus.behindCount > 0;
+  const canPushWithoutUpstream = hasOriginRemote && !gitStatus.hasUpstream;
+  const canCreateCleanPublishedPr =
+    !isDefaultBranch &&
+    gitStatus.hasUpstream &&
+    gitStatus.upstreamBranch !== null &&
+    !tracksDefaultUpstream(gitStatus, defaultBranchName);
+
+  return (
+    !isBusy &&
+    hasBranch &&
+    !hasChanges &&
+    !hasOpenPr &&
+    !isBehind &&
+    (canCreateCleanPublishedPr ||
+      (gitStatus.aheadCount > 0 && (gitStatus.hasUpstream || canPushWithoutUpstream)))
+  );
+}
 
 function extractTrackedBranchName(upstreamBranch: string | null | undefined): string | null {
   if (!upstreamBranch) return null;
@@ -167,11 +200,6 @@ export function buildMenuItems(
   const hasChanges = gitStatus.hasWorkingTreeChanges;
   const hasOpenPr = gitStatus.pr?.state === "open";
   const isBehind = gitStatus.behindCount > 0;
-  const canCreateCleanPublishedPr =
-    !isDefaultBranch &&
-    gitStatus.hasUpstream &&
-    gitStatus.upstreamBranch !== null &&
-    !tracksDefaultUpstream(gitStatus, defaultBranchName);
   const canPushWithoutUpstream = hasOriginRemote && !gitStatus.hasUpstream;
   const canCommit = !isBusy && hasChanges;
   const canPush =
@@ -187,14 +215,13 @@ export function buildMenuItems(
     !isBehind &&
     (hasChanges || gitStatus.aheadCount > 0) &&
     (gitStatus.hasUpstream || canPushWithoutUpstream);
-  const canCreatePr =
-    !isBusy &&
-    hasBranch &&
-    !hasChanges &&
-    !hasOpenPr &&
-    !isBehind &&
-    (canCreateCleanPublishedPr ||
-      (gitStatus.aheadCount > 0 && (gitStatus.hasUpstream || canPushWithoutUpstream)));
+  const canCreatePr = canRunCreatePrAction({
+    gitStatus,
+    isBusy,
+    isDefaultBranch,
+    hasOriginRemote,
+    defaultBranchName,
+  });
   const canOpenPr = !isBusy && hasOpenPr;
 
   return [
@@ -251,7 +278,7 @@ export function resolveQuickAction(
   isDefaultBranch = false,
   hasOriginRemote = true,
   shouldOfferCreateBranch = false,
-  defaultBranchName?: string | null,
+  _defaultBranchName?: string | null,
 ): GitQuickAction {
   if (isBusy) {
     return { label: "Commit", disabled: true, kind: "show_hint", hint: "Git action in progress." };
@@ -272,8 +299,6 @@ export function resolveQuickAction(
   const isAhead = gitStatus.aheadCount > 0;
   const isBehind = gitStatus.behindCount > 0;
   const isDiverged = isAhead && isBehind;
-  const isTrackingDefaultUpstream = tracksDefaultUpstream(gitStatus, defaultBranchName);
-  const hasKnownUpstreamBranch = gitStatus.upstreamBranch !== null;
 
   if (!hasBranch) {
     return {
@@ -391,33 +416,6 @@ export function resolveQuickAction(
     return { label: "View PR", disabled: false, kind: "open_pr" };
   }
 
-  if (gitStatus.hasUpstream && !hasKnownUpstreamBranch) {
-    return {
-      label: "Create PR",
-      disabled: true,
-      kind: "show_hint",
-      hint: CREATE_PR_UNAVAILABLE_HINT,
-    };
-  }
-
-  if (isTrackingDefaultUpstream) {
-    return {
-      label: "Create PR",
-      disabled: true,
-      kind: "show_hint",
-      hint: CREATE_PR_UNAVAILABLE_HINT,
-    };
-  }
-
-  if (!isDefaultBranch) {
-    return {
-      label: "Create PR",
-      disabled: false,
-      kind: "run_action",
-      action: "create_pr",
-    };
-  }
-
   return {
     label: "Commit",
     disabled: true,
@@ -430,26 +428,42 @@ export function resolveCreatePrActionAvailability(input: {
   gitStatus: GitStatusResult | null;
   isDefaultBranch?: boolean;
   hasOriginRemote?: boolean;
-  defaultBranchName?: string | null;
+  defaultBranchName?: string | null | undefined;
 }): { canRun: boolean; hint: string | null } {
-  const quickAction = resolveQuickAction(
-    input.gitStatus,
-    false,
-    input.isDefaultBranch ?? false,
-    input.hasOriginRemote ?? true,
-    false,
-    input.defaultBranchName,
-  );
-
-  const canRun =
-    quickAction.kind === "run_action" &&
-    quickAction.action === "create_pr" &&
-    !quickAction.disabled;
+  const canRun = canRunCreatePrAction({
+    gitStatus: input.gitStatus,
+    isBusy: false,
+    isDefaultBranch: input.isDefaultBranch ?? false,
+    hasOriginRemote: input.hasOriginRemote ?? true,
+    defaultBranchName: input.defaultBranchName,
+  });
 
   return {
     canRun,
-    hint: canRun ? null : (quickAction.hint ?? CREATE_PR_UNAVAILABLE_HINT),
+    hint: canRun ? null : CREATE_PR_UNAVAILABLE_HINT,
   };
+}
+
+export function resolvePullActionAvailability(input: {
+  gitStatus: GitStatusResult | null;
+  isBusy: boolean;
+}): { canRun: boolean; hint: string | null } {
+  const { gitStatus, isBusy } = input;
+  if (isBusy) return { canRun: false, hint: "Git action in progress." };
+  if (!gitStatus) return { canRun: false, hint: "Git status is unavailable." };
+  if (gitStatus.branch === null) {
+    return { canRun: false, hint: "Detached HEAD: checkout a branch before pulling." };
+  }
+  if (!gitStatus.hasUpstream) {
+    return { canRun: false, hint: "Current branch has no upstream to pull from." };
+  }
+  if (gitStatus.aheadCount > 0 && gitStatus.behindCount > 0) {
+    return { canRun: false, hint: "Branch has diverged from upstream. Rebase/merge first." };
+  }
+  if (gitStatus.behindCount <= 0) {
+    return { canRun: false, hint: "Branch is already up to date." };
+  }
+  return { canRun: true, hint: null };
 }
 
 export function shouldOfferCreateBranchPrompt(input: {

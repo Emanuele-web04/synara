@@ -1,10 +1,12 @@
 import {
+  PROVIDER_DISPLAY_NAMES,
   ThreadId,
   type OrchestrationEvent,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
   type OrchestrationThread,
   type ServerConfig,
+  type ServerProviderStatus,
 } from "@t3tools/contracts";
 import { defaultTerminalTitleForCliKind } from "@t3tools/shared/terminalThreads";
 import {
@@ -14,9 +16,8 @@ import {
   useNavigate,
   useParams,
   useRouterState,
-  useSearch,
 } from "@tanstack/react-router";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
@@ -26,10 +27,11 @@ import WhatsNewDialog from "../components/WhatsNewDialog";
 import { useWhatsNew } from "../whatsNew/useWhatsNew";
 import { WhatsNewPopoutCard } from "../whatsNew/WhatsNewPopoutCard";
 import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
-import { Button } from "../components/ui/button";
+import { Button, dialogActionButtonClassName } from "../components/ui/button";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../components/ui/toast";
+import { useGitProgressToastPreview } from "../components/useGitProgressToastPreview";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
-import { isElectron } from "../env";
+import { useFeatureFlags } from "../featureFlags";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
@@ -37,7 +39,7 @@ import {
   serverQueryKeys,
   serverSettingsQueryOptions,
 } from "../lib/serverReactQuery";
-import { readNativeApi } from "../nativeApi";
+import { ensureNativeApi, readNativeApi } from "../nativeApi";
 import {
   finalizePromotedDraftThreads,
   markPromotedDraftThreads,
@@ -55,6 +57,7 @@ import {
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
 import {
@@ -63,18 +66,46 @@ import {
 } from "../threadDetailSubscriptionRetention";
 import { getThreadFromState } from "../threadDerivation";
 import { useAppTypography } from "../hooks/useAppTypography";
-import { useChatCodeFont } from "../hooks/useChatCodeFont";
+import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopTopBarGutter";
 import { useTheme } from "../hooks/useTheme";
-import { useUIFont } from "../hooks/useUIFont";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
-import { invalidateGitQueries } from "../lib/gitReactQuery";
+import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
 import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
-import { parseDiffRouteSearch } from "../diffRouteSearch";
+import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
+import { useProviderAuthRefreshOnFocus } from "../hooks/useProviderAuthRefreshOnFocus";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
+import {
+  getGitInvalidationThreadIdForEvent,
+  resolveGitInvalidationCwdForThreadId,
+  shouldInvalidateGitQueriesForEvent,
+  shouldInvalidateProviderQueriesForEvent,
+} from "./-rootEventInvalidation";
 
 const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
+const seenProviderUpdateNotificationKeys = new Set<string>();
+
+type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
+type ActiveProviderUpdateToast =
+  | { readonly kind: "prompt"; readonly key: string; readonly toastId: ProviderUpdateToastId }
+  | { readonly kind: "update"; readonly key: string; readonly toastId: ProviderUpdateToastId };
+
+function isProviderUpdateActive(provider: ServerProviderStatus): boolean {
+  return provider.updateState?.status === "queued" || provider.updateState?.status === "running";
+}
+
+function providerUpdateNotificationKey(
+  providers: ReadonlyArray<ServerProviderStatus>,
+): string | null {
+  const parts = providers
+    .map((provider) =>
+      [provider.provider, provider.versionAdvisory?.latestVersion ?? "unknown"].join(":"),
+    )
+    .toSorted();
+
+  return parts.length > 0 ? parts.join("|") : null;
+}
 
 function shellThreadHasStarted(thread: OrchestrationShellSnapshot["threads"][number]): boolean {
   return thread.latestTurn !== null || thread.session !== null;
@@ -112,10 +143,9 @@ export const Route = createRootRouteWithContext<{
 
 function RootRouteView() {
   useAppTypography();
-  useChatCodeFont();
   useNativeFontSmoothing();
+  useSyncDesktopTopBarTrafficLightGutterZoom();
   useTheme();
-  useUIFont();
 
   if (!readNativeApi()) {
     return (
@@ -130,17 +160,276 @@ function RootRouteView() {
   }
 
   return (
-    <ToastProvider>
+    <ToastProvider position="top-center">
       <AnchoredToastProvider>
+        <GitProgressToastPreviewDev />
         <EventRouter />
         <GlobalShortcutsDialog />
         <GlobalWhatsNewSurface />
         <TaskCompletionNotifications />
+        <ProviderUpdateNotifications />
         <DesktopProjectBootstrap />
         <Outlet />
       </AnchoredToastProvider>
     </ToastProvider>
   );
+}
+
+function GitProgressToastPreviewDev() {
+  const featureFlags = useFeatureFlags();
+  const enabled = import.meta.env.DEV && featureFlags["pin-git-progress-toast-preview"];
+  useGitProgressToastPreview(enabled);
+  return null;
+}
+
+function ProviderUpdateNotifications() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const [isUpdatingAll, setIsUpdatingAll] = useState(false);
+  const activeToastRef = useRef<ActiveProviderUpdateToast | null>(null);
+  const isUpdatingAllRef = useRef(false);
+  const progressToastDismissedRef = useRef(false);
+  const outdatedProviders = useMemo(
+    () =>
+      (serverConfigQuery.data?.providers ?? []).filter(
+        (provider) =>
+          provider.versionAdvisory?.status === "behind_latest" &&
+          provider.versionAdvisory.latestVersion !== null &&
+          provider.versionAdvisory.canUpdate === true &&
+          provider.versionAdvisory.updateCommand !== null,
+      ),
+    [serverConfigQuery.data?.providers],
+  );
+  const oneClickProviders = useMemo(
+    () => outdatedProviders.filter((provider) => !isProviderUpdateActive(provider)),
+    [outdatedProviders],
+  );
+  const notificationKey = useMemo(
+    () => providerUpdateNotificationKey(outdatedProviders),
+    [outdatedProviders],
+  );
+
+  const updateAll = useCallback(
+    async (providers: ReadonlyArray<ServerProviderStatus>) => {
+      const activeNotificationKey = providerUpdateNotificationKey(providers);
+      if (isUpdatingAllRef.current || providers.length === 0 || !activeNotificationKey) {
+        return;
+      }
+
+      isUpdatingAllRef.current = true;
+      progressToastDismissedRef.current = false;
+      setIsUpdatingAll(true);
+      const trackedToast = activeToastRef.current;
+      const toastId =
+        trackedToast?.toastId ??
+        toastManager.add({
+          type: "loading",
+          title: "Updating providers...",
+          description:
+            providers.length === 1
+              ? `Updating ${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]}.`
+              : `Updating ${providers.length} providers.`,
+          timeout: 0,
+        });
+      activeToastRef.current = { kind: "update", key: activeNotificationKey, toastId };
+      const dismissProgressToast = () => {
+        progressToastDismissedRef.current = true;
+        if (activeToastRef.current?.toastId === toastId) {
+          activeToastRef.current = null;
+        }
+        toastManager.close(toastId);
+      };
+
+      toastManager.update(toastId, {
+        type: "loading",
+        title: "Updating providers...",
+        description:
+          providers.length === 1
+            ? `Updating ${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]}.`
+            : `Updating ${providers.length} providers.`,
+        actionProps: undefined,
+        data: { onClose: dismissProgressToast },
+        timeout: 0,
+      });
+
+      const failures: Array<{ provider: ServerProviderStatus; reason: string }> = [];
+
+      try {
+        const api = ensureNativeApi();
+        for (const provider of providers) {
+          try {
+            const result = await api.server.updateProvider({ provider: provider.provider });
+            const refreshed = result.providers.find(
+              (entry) => entry.provider === provider.provider,
+            );
+            const updateState = refreshed?.updateState;
+            if (updateState?.status === "failed" || updateState?.status === "unchanged") {
+              failures.push({
+                provider,
+                reason: updateState.message ?? "The update command did not complete successfully.",
+              });
+            } else if (refreshed?.versionAdvisory?.status === "behind_latest") {
+              failures.push({
+                provider,
+                reason: "The provider still appears outdated after updating.",
+              });
+            }
+          } catch (error) {
+            failures.push({
+              provider,
+              reason: error instanceof Error ? error.message : "The update request failed.",
+            });
+          }
+        }
+      } catch (error) {
+        for (const provider of providers) {
+          failures.push({
+            provider,
+            reason:
+              error instanceof Error
+                ? error.message
+                : "The provider update request could not start.",
+          });
+        }
+      } finally {
+        // Refresh is best-effort UI sync; it must not keep the progress toast alive.
+        await queryClient
+          .invalidateQueries({ queryKey: serverQueryKeys.config() })
+          .catch(() => undefined);
+        isUpdatingAllRef.current = false;
+        setIsUpdatingAll(false);
+      }
+
+      if (progressToastDismissedRef.current || activeToastRef.current?.toastId !== toastId) {
+        return;
+      }
+
+      if (failures.length > 0) {
+        activeToastRef.current = null;
+        // Surface the exact manual commands so a user whose one-click update
+        // failed (EACCES on global npm, PATH/package-manager mismatch, etc.) can
+        // copy and run them in a terminal instead of being stuck.
+        const manualCommands = Array.from(
+          new Set(
+            failures
+              .map(({ provider }) => provider.versionAdvisory?.updateCommand)
+              .filter(
+                (command): command is string =>
+                  typeof command === "string" && command.trim().length > 0,
+              ),
+          ),
+        );
+        const failureLines = failures
+          .map(({ provider, reason }) => `${PROVIDER_DISPLAY_NAMES[provider.provider]}: ${reason}`)
+          .join("\n");
+        toastManager.update(toastId, {
+          type: "error",
+          title:
+            failures.length === providers.length
+              ? "Provider updates failed"
+              : "Some provider updates failed",
+          description:
+            manualCommands.length > 0
+              ? `${failureLines}\n\nCopy the command${manualCommands.length === 1 ? "" : "s"} below to update manually in a terminal.`
+              : failureLines,
+          data: {
+            onClose: dismissProgressToast,
+            ...(manualCommands.length > 0 ? { copyText: manualCommands.join("\n") } : {}),
+          },
+          timeout: 0,
+        });
+        return;
+      }
+
+      activeToastRef.current = null;
+      toastManager.update(toastId, {
+        type: "success",
+        title:
+          providers.length === 1
+            ? `${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]} updated`
+            : `${providers.length} providers updated`,
+        description: "New sessions will use the refreshed provider tools.",
+        data: { onClose: dismissProgressToast },
+        timeout: 6000,
+      });
+    },
+    [queryClient],
+  );
+
+  useEffect(() => {
+    const activeToast = activeToastRef.current;
+    if (activeToast?.kind === "prompt" && activeToast.key !== notificationKey) {
+      toastManager.close(activeToast.toastId);
+      activeToastRef.current = null;
+    }
+
+    if (
+      outdatedProviders.length === 0 ||
+      oneClickProviders.length === 0 ||
+      !notificationKey ||
+      isUpdatingAll ||
+      activeToastRef.current ||
+      seenProviderUpdateNotificationKeys.has(notificationKey)
+    ) {
+      return;
+    }
+
+    // Key the prompt by the complete provider/version set so a partial refresh
+    // cannot stack a second "Update all" prompt on top of the first one.
+    seenProviderUpdateNotificationKeys.add(notificationKey);
+
+    const firstProvider = outdatedProviders[0]!;
+    const additionalCount = outdatedProviders.length - 1;
+    const providerName = PROVIDER_DISPLAY_NAMES[firstProvider.provider];
+    const title =
+      outdatedProviders.length === 1
+        ? `${providerName} update available`
+        : `${outdatedProviders.length} provider updates available`;
+    const description =
+      outdatedProviders.length === 1
+        ? `${providerName} has a newer version available.`
+        : `${providerName} and ${additionalCount} more provider${additionalCount === 1 ? "" : "s"} have newer versions available.`;
+
+    let toastId!: ProviderUpdateToastId;
+    const closeTrackedPrompt = () => {
+      if (activeToastRef.current?.toastId === toastId) {
+        activeToastRef.current = null;
+      }
+      toastManager.close(toastId);
+    };
+    toastId = toastManager.add({
+      type: "warning",
+      title,
+      description,
+      timeout: 0,
+      actionProps: {
+        children: "Review updates",
+        onClick: () => {
+          if (activeToastRef.current?.toastId === toastId) {
+            toastManager.close(toastId);
+            activeToastRef.current = null;
+          }
+          void navigate({
+            to: "/settings",
+            search: { section: "providers", target: "provider-updates" },
+          });
+        },
+      },
+      data: {
+        onClose: closeTrackedPrompt,
+        secondaryActionProps: {
+          children: "Update all",
+          onClick: () => {
+            void updateAll(oneClickProviders);
+          },
+        },
+      },
+    });
+    activeToastRef.current = { kind: "prompt", key: notificationKey, toastId };
+  }, [isUpdatingAll, navigate, notificationKey, oneClickProviders, outdatedProviders, updateAll]);
+
+  return null;
 }
 
 function GlobalShortcutsDialog() {
@@ -156,7 +445,6 @@ function GlobalShortcutsDialog() {
   );
   const terminalOpen = activeThreadTerminalState?.terminalOpen ?? false;
   const terminalWorkspaceOpen = shouldRenderTerminalWorkspace({
-    activeProjectExists: activeProject !== null,
     presentationMode: activeThreadTerminalState?.presentationMode ?? "drawer",
     terminalOpen,
   });
@@ -190,7 +478,6 @@ function GlobalShortcutsDialog() {
         terminalOpen,
         terminalWorkspaceOpen,
       }}
-      isElectron={isElectron}
     />
   );
 }
@@ -255,10 +542,15 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{message}</p>
 
         <div className="mt-5 flex flex-wrap gap-2">
-          <Button size="sm" onClick={() => reset()}>
+          <Button size="sm" className={dialogActionButtonClassName} onClick={() => reset()}>
             Try again
           </Button>
-          <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+          <Button
+            size="sm"
+            variant="outline"
+            className={dialogActionButtonClassName}
+            onClick={() => window.location.reload()}
+          >
             Reload app
           </Button>
         </div>
@@ -374,7 +666,14 @@ function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: Threa
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
     event.type === "thread.conversation-rolled-back" ||
-    event.type === "thread.session-set"
+    event.type === "thread.session-set" ||
+    event.type === "thread.meta-updated" ||
+    event.type === "thread.pinned-message-added" ||
+    event.type === "thread.pinned-message-removed" ||
+    event.type === "thread.pinned-message-done-set" ||
+    event.type === "thread.pinned-message-label-set" ||
+    event.type === "thread.archived" ||
+    event.type === "thread.unarchived"
   );
 }
 
@@ -406,10 +705,7 @@ function EventRouter() {
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
   });
-  const routeSearch = useSearch({
-    strict: false,
-    select: (search) => parseDiffRouteSearch(search),
-  });
+  const routeSearch = useDiffRouteSearch();
   const activeSplitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
   const visibleThreadIds = useMemo(() => {
     if (activeSplitView) {
@@ -456,7 +752,8 @@ function EventRouter() {
     if (!api) return;
     let disposed = false;
     let needsProviderInvalidation = false;
-    let needsGitInvalidation = false;
+    let needsBroadGitInvalidation = false;
+    let pendingGitInvalidationThreadIds = new Set<ThreadId>();
     let pendingDomainEvents: OrchestrationEvent[] = [];
     const immediatelyFlushedAssistantMessageIds = new Set<string>();
     let shellSnapshotSequence = -1;
@@ -617,6 +914,12 @@ function EventRouter() {
           workspaceThreadId(workspace.id),
         ),
       });
+      // Right-dock terminals live under a synthetic scope derived from each active
+      // thread; retain those scopes so docked terminals are not pruned mid-session.
+      // Snapshot first: we mutate the set while iterating its prior membership.
+      for (const activeThreadId of Array.from(activeThreadIds)) {
+        activeThreadIds.add(dockTerminalThreadId(activeThreadId));
+      }
       removeOrphanedTerminalStates(activeThreadIds);
     };
 
@@ -632,31 +935,43 @@ function EventRouter() {
         // reflects files created, deleted, or restored during this turn.
         void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
       }
-      if (needsGitInvalidation) {
-        needsGitInvalidation = false;
+      if (needsBroadGitInvalidation) {
+        needsBroadGitInvalidation = false;
+        pendingGitInvalidationThreadIds = new Set();
         void invalidateGitQueries(queryClient);
+      } else if (pendingGitInvalidationThreadIds.size > 0) {
+        const currentState = useStore.getState();
+        const scopedCwds = new Set<string>();
+        let hasUnresolvedThread = false;
+        for (const threadId of pendingGitInvalidationThreadIds) {
+          const cwd = resolveGitInvalidationCwdForThreadId(currentState, threadId);
+          if (cwd) {
+            scopedCwds.add(cwd);
+          } else {
+            hasUnresolvedThread = true;
+          }
+        }
+        pendingGitInvalidationThreadIds = new Set();
+        if (hasUnresolvedThread || scopedCwds.size === 0) {
+          void invalidateGitQueries(queryClient);
+        } else {
+          void invalidateGitQueriesForCwds(queryClient, scopedCwds);
+        }
       }
     };
 
     const queueDomainEvent = (event: OrchestrationEvent) => {
       pendingDomainEvents.push(event);
-      if (
-        event.type === "thread.turn-diff-completed" ||
-        event.type === "thread.reverted" ||
-        event.type === "thread.conversation-rolled-back"
-      ) {
+      if (shouldInvalidateProviderQueriesForEvent(event)) {
         needsProviderInvalidation = true;
       }
-      if (
-        event.type === "thread.meta-updated" &&
-        (event.payload.branch !== undefined ||
-          event.payload.envMode !== undefined ||
-          event.payload.worktreePath !== undefined ||
-          event.payload.associatedWorktreePath !== undefined ||
-          event.payload.associatedWorktreeBranch !== undefined ||
-          event.payload.associatedWorktreeRef !== undefined)
-      ) {
-        needsGitInvalidation = true;
+      if (shouldInvalidateGitQueriesForEvent(event)) {
+        const threadId = getGitInvalidationThreadIdForEvent(event);
+        if (threadId) {
+          pendingGitInvalidationThreadIds.add(threadId);
+        } else {
+          needsBroadGitInvalidation = true;
+        }
       }
       if (shouldFlushDomainEventImmediately(event, immediatelyFlushedAssistantMessageIds)) {
         domainEventFlushThrottler.cancel();
@@ -921,6 +1236,8 @@ function EventRouter() {
       window.clearTimeout(shellBootstrapFallbackTimer);
       window.clearInterval(threadDetailCatchupInterval);
       needsProviderInvalidation = false;
+      needsBroadGitInvalidation = false;
+      pendingGitInvalidationThreadIds = new Set();
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
       void api.orchestration.unsubscribeShell().catch(() => undefined);
@@ -957,6 +1274,10 @@ function EventRouter() {
     }
     void reconcile(subscribedThreadIds);
   }, [subscribedThreadIds]);
+
+  // Account changes made outside the app reflect without a restart by
+  // re-probing provider auth when the window regains focus (see hook).
+  useProviderAuthRefreshOnFocus();
 
   return null;
 }

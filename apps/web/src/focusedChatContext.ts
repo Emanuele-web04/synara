@@ -4,10 +4,10 @@
 // Exports: pure resolver and hook used by shortcut, discovery, and thread creation flows
 
 import { ThreadId, type ThreadId as ThreadIdType } from "@t3tools/contracts";
-import { useParams, useSearch } from "@tanstack/react-router";
+import { useParams } from "@tanstack/react-router";
 import { useMemo } from "react";
 import { type DraftThreadState, useComposerDraftStore } from "./composerDraftStore";
-import { parseDiffRouteSearch } from "./diffRouteSearch";
+import { useDiffRouteSearch } from "./hooks/useDiffRouteSearch";
 import {
   resolveSplitViewFocusedPaneThreadId,
   selectSplitView,
@@ -71,10 +71,7 @@ export function useFocusedChatContext(): FocusedChatContext {
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
   });
-  const routeSearch = useSearch({
-    strict: false,
-    select: (search) => parseDiffRouteSearch(search),
-  });
+  const routeSearch = useDiffRouteSearch();
   const activeSplitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
   const focusedThreadId = useMemo(
     () => (activeSplitView ? resolveSplitViewFocusedPaneThreadId(activeSplitView) : routeThreadId),

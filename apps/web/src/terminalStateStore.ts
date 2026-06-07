@@ -35,7 +35,7 @@ import {
   type WorkspaceLayoutPresetId,
 } from "./workspaceTerminalLayoutPresets";
 
-interface ThreadTerminalState {
+export interface ThreadTerminalState {
   entryPoint: ThreadPrimarySurface;
   terminalOpen: boolean;
   presentationMode: ThreadTerminalPresentationMode;
@@ -53,7 +53,7 @@ interface ThreadTerminalState {
   activeTerminalGroupId: string;
 }
 
-const TERMINAL_STATE_STORAGE_KEY = "dpcode:terminal-state:v1";
+const TERMINAL_STATE_STORAGE_KEY = "synara:terminal-state:v1";
 
 function normalizeTerminalIds(terminalIds: string[]): string[] {
   const ids = [...new Set(terminalIds.map((id) => id.trim()).filter((id) => id.length > 0))];
@@ -452,6 +452,36 @@ function normalizeThreadTerminalState(state: ThreadTerminalState): ThreadTermina
 function isDefaultThreadTerminalState(state: ThreadTerminalState): boolean {
   const normalized = normalizeThreadTerminalState(state);
   return threadTerminalStateEqual(normalized, DEFAULT_THREAD_TERMINAL_STATE);
+}
+
+function stripVolatileTerminalRuntimeState(state: ThreadTerminalState): ThreadTerminalState {
+  const normalized = normalizeThreadTerminalState(state);
+  if (
+    normalized.runningTerminalIds.length === 0 &&
+    Object.keys(normalized.terminalAttentionStatesById).length === 0
+  ) {
+    return normalized;
+  }
+  // Runtime activity is replayed by live terminal events after startup; persisting
+  // it would make old attention states look like fresh notifications.
+  return {
+    ...normalized,
+    terminalAttentionStatesById: {},
+    runningTerminalIds: [],
+  };
+}
+
+export function sanitizePersistedTerminalStateByThreadId(
+  terminalStateByThreadId: Record<ThreadId, ThreadTerminalState> | null | undefined,
+): Record<ThreadId, ThreadTerminalState> {
+  const next: Record<ThreadId, ThreadTerminalState> = {};
+  for (const [threadId, state] of Object.entries(terminalStateByThreadId ?? {})) {
+    const sanitized = stripVolatileTerminalRuntimeState(state);
+    if (!isDefaultThreadTerminalState(sanitized)) {
+      next[threadId as ThreadId] = sanitized;
+    }
+  }
+  return next;
 }
 
 function isValidTerminalId(terminalId: string): boolean {
@@ -1364,7 +1394,15 @@ export const useTerminalStateStore = create<TerminalStateStoreState>()(
       version: 1,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
-        terminalStateByThreadId: state.terminalStateByThreadId,
+        terminalStateByThreadId: sanitizePersistedTerminalStateByThreadId(
+          state.terminalStateByThreadId,
+        ),
+      }),
+      merge: (persistedState, currentState) => ({
+        ...currentState,
+        terminalStateByThreadId: sanitizePersistedTerminalStateByThreadId(
+          (persistedState as Partial<TerminalStateStoreState> | undefined)?.terminalStateByThreadId,
+        ),
       }),
     },
   ),

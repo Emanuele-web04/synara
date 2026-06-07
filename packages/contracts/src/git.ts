@@ -83,6 +83,11 @@ export const GitStatusInput = Schema.Struct({
 });
 export type GitStatusInput = typeof GitStatusInput.Type;
 
+export const GitHubRepositoryInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+});
+export type GitHubRepositoryInput = typeof GitHubRepositoryInput.Type;
+
 export const GitReadWorkingTreeDiffInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   scope: Schema.optional(Schema.Literals(["workingTree", "unstaged", "staged", "branch"])).pipe(
@@ -218,6 +223,18 @@ export const GitInitInput = Schema.Struct({
 });
 export type GitInitInput = typeof GitInitInput.Type;
 
+export const GitStageFilesInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  paths: Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
+});
+export type GitStageFilesInput = typeof GitStageFilesInput.Type;
+
+export const GitUnstageFilesInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  paths: Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
+});
+export type GitUnstageFilesInput = typeof GitUnstageFilesInput.Type;
+
 // RPC Results
 
 const GitStatusPr = Schema.Struct({
@@ -267,6 +284,16 @@ export const GitStatusRemoteResult = Schema.Struct({
 });
 export type GitStatusRemoteResult = typeof GitStatusRemoteResult.Type;
 
+export const GitHubRepositoryResult = Schema.Struct({
+  repository: Schema.NullOr(
+    Schema.Struct({
+      nameWithOwner: TrimmedNonEmptyStringSchema,
+      url: TrimmedNonEmptyStringSchema,
+    }),
+  ),
+});
+export type GitHubRepositoryResult = typeof GitHubRepositoryResult.Type;
+
 export const GitStatusStreamEvent = Schema.Union([
   Schema.TaggedStruct("snapshot", {
     local: GitStatusLocalResult,
@@ -285,6 +312,15 @@ export const GitReadWorkingTreeDiffResult = Schema.Struct({
   patch: Schema.String,
 });
 export type GitReadWorkingTreeDiffResult = typeof GitReadWorkingTreeDiffResult.Type;
+
+// Stage/unstage are fire-and-forget index mutations; callers refetch status/diff.
+export const GitStageFilesResult = Schema.Struct({
+  ok: Schema.Boolean,
+});
+export type GitStageFilesResult = typeof GitStageFilesResult.Type;
+
+export const GitUnstageFilesResult = GitStageFilesResult;
+export type GitUnstageFilesResult = GitStageFilesResult;
 
 export const GitListBranchesResult = Schema.Struct({
   branches: Schema.Array(GitBranch),

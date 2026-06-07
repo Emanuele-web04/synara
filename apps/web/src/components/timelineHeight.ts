@@ -13,6 +13,7 @@ import {
   getChatTranscriptAssistantCharWidthPx,
   getChatTranscriptLineHeightPx,
   getChatTranscriptUserCharWidthPx,
+  getChatTranscriptUserMessageLineHeightPx,
 } from "./chat/chatTypography";
 
 const ASSISTANT_CHARS_PER_LINE_FALLBACK = 72;
@@ -35,7 +36,6 @@ const MIN_ASSISTANT_CHARS_PER_LINE = 20;
 const ASSISTANT_INLINE_CODE_WIDTH_MULTIPLIER = 1.2;
 const ASSISTANT_INLINE_CODE_WRAP_OVERHEAD_CHARS = 2;
 const INLINE_CODE_SPAN_REGEX = /`([^`\n]+)`/g;
-const COMPLETION_DIVIDER_HEIGHT_PX = 40;
 const TURN_DIFF_SUMMARY_CHROME_HEIGHT_PX = 76;
 const TURN_DIFF_TREE_ROW_HEIGHT_PX = 24;
 const TURN_DIFF_TREE_ROW_GAP_PX = 2;
@@ -64,7 +64,6 @@ interface TimelineMessageHeightInput {
   diffSummaryAllDirectoriesExpanded?: boolean;
   inlineToolEntries?: ReadonlyArray<TimelineWorkEntryHeightInput>;
   inlineToolExpanded?: boolean;
-  showCompletionDivider?: boolean;
 }
 
 interface TimelineHeightEstimateLayout {
@@ -277,7 +276,6 @@ export function estimateTimelineMessageHeight(
     return (
       ASSISTANT_BASE_HEIGHT_PX +
       estimatedLines * lineHeightPx +
-      (message.showCompletionDivider ? COMPLETION_DIVIDER_HEIGHT_PX : 0) +
       changedFilesHeight +
       inlineToolPreviewHeight
     );
@@ -285,6 +283,7 @@ export function estimateTimelineMessageHeight(
 
   if (message.role === "user") {
     const charsPerLine = estimateCharsPerLineForUser(layout.timelineWidthPx, chatFontSizePx);
+    const lineHeightPx = getChatTranscriptUserMessageLineHeightPx(chatFontSizePx);
     const displayedUserMessage = deriveDisplayedUserMessageState(message.text, {
       hideImageOnlyBootstrapPrompt: (message.attachments?.length ?? 0) > 0,
     });

@@ -1,4 +1,4 @@
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId, type ModelSlug } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -11,10 +11,16 @@ import {
   hasServerAcknowledgedLocalDispatch,
   isVoiceAuthExpiredMessage,
   resolveActiveThreadTitle,
+  resolveCommittedProviderModel,
+  resolveDefaultEnvironmentPanelOpen,
+  resolveEnvironmentPanelVisible,
+  resolveProjectScriptTerminalTarget,
+  resolveRuntimeModeAfterApprovalDecision,
   sanitizeVoiceErrorMessage,
   buildExpiredTerminalContextToastCopy,
   shouldAutoDeleteTerminalThreadOnLastClose,
   shouldConsumePendingCustomBinaryConfirmation,
+  shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,
   shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
@@ -154,6 +160,45 @@ describe("voice helpers", () => {
   });
 });
 
+describe("environment panel visibility", () => {
+  it("opens normal chat threads by default", () => {
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps empty landing and terminal-primary surfaces closed by default", () => {
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: true,
+        isTerminalPrimarySurface: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("never renders the panel on the centered empty landing while stale open state resets", () => {
+    expect(
+      resolveEnvironmentPanelVisible({
+        environmentEnabled: true,
+        environmentPanelOpen: true,
+        isCenteredEmptyLanding: true,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("shouldShowComposerModelBootstrapSkeleton", () => {
   it("shows a skeleton while a provider requires runtime-discovered models", () => {
     expect(
@@ -242,6 +287,33 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         providerModelsLoading: false,
       }),
     ).toBe(true);
+  });
+});
+
+describe("resolveCommittedProviderModel", () => {
+  it("preserves the exact runtime-discovered slug when the picker selected it", () => {
+    expect(
+      resolveCommittedProviderModel({
+        selectedModel: "grok-code-fast-1-0825" as ModelSlug,
+        availableOptions: [
+          {
+            slug: "grok-code-fast-1-0825" as ModelSlug,
+            name: "Grok Code Fast 1 0825",
+          },
+        ],
+        fallback: () => "grok-build-0.1",
+      }),
+    ).toBe("grok-code-fast-1-0825");
+  });
+
+  it("falls back to static alias resolution when the selected slug is not in the options", () => {
+    expect(
+      resolveCommittedProviderModel({
+        selectedModel: "code-fast" as ModelSlug,
+        availableOptions: [],
+        fallback: () => "grok-build-0.1",
+      }),
+    ).toBe("grok-build-0.1");
   });
 });
 
@@ -344,31 +416,114 @@ describe("buildExpiredTerminalContextToastCopy", () => {
 });
 
 describe("shouldRenderTerminalWorkspace", () => {
-  it("requires an active project to render workspace mode", () => {
+  it("renders the workspace shell before the active project has hydrated", () => {
     expect(
       shouldRenderTerminalWorkspace({
-        activeProjectExists: false,
         presentationMode: "workspace",
         terminalOpen: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("renders only for an open workspace terminal", () => {
     expect(
       shouldRenderTerminalWorkspace({
-        activeProjectExists: true,
         presentationMode: "workspace",
         terminalOpen: true,
       }),
     ).toBe(true);
     expect(
       shouldRenderTerminalWorkspace({
-        activeProjectExists: true,
         presentationMode: "drawer",
         terminalOpen: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveProjectScriptTerminalTarget", () => {
+  it("reuses the base terminal only when no terminal is open or running", () => {
+    const target = resolveProjectScriptTerminalTarget({
+      baseTerminalId: "default",
+      createTerminalId: () => "new-terminal",
+      hasRunningTerminal: false,
+      terminalOpen: false,
+    });
+
+    expect(target).toEqual({
+      shouldCreateNewTerminal: false,
+      terminalId: "default",
+    });
+  });
+
+  it("creates a fresh terminal when a live terminal could keep stale cwd or env", () => {
+    expect(
+      resolveProjectScriptTerminalTarget({
+        baseTerminalId: "default",
+        createTerminalId: () => "visible-script-terminal",
+        hasRunningTerminal: false,
+        terminalOpen: true,
+      }),
+    ).toEqual({
+      shouldCreateNewTerminal: true,
+      terminalId: "visible-script-terminal",
+    });
+
+    expect(
+      resolveProjectScriptTerminalTarget({
+        baseTerminalId: "default",
+        createTerminalId: () => "running-script-terminal",
+        hasRunningTerminal: true,
+        terminalOpen: false,
+      }),
+    ).toEqual({
+      shouldCreateNewTerminal: true,
+      terminalId: "running-script-terminal",
+    });
+  });
+
+  it("honors explicit requests for a new terminal", () => {
+    const target = resolveProjectScriptTerminalTarget({
+      baseTerminalId: "default",
+      createTerminalId: () => "forced-script-terminal",
+      hasRunningTerminal: false,
+      preferNewTerminal: true,
+      terminalOpen: false,
+    });
+
+    expect(target).toEqual({
+      shouldCreateNewTerminal: true,
+      terminalId: "forced-script-terminal",
+    });
+  });
+});
+
+describe("shouldRenderProviderHealthBanner", () => {
+  it("does not show chat provider health while a terminal thread is active", () => {
+    expect(
+      shouldRenderProviderHealthBanner({
+        threadEntryPoint: "terminal",
+        terminalWorkspaceTerminalTabActive: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not show chat provider health while the terminal workspace tab is active", () => {
+    expect(
+      shouldRenderProviderHealthBanner({
+        threadEntryPoint: "chat",
+        terminalWorkspaceTerminalTabActive: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("shows chat provider health only on the chat surface", () => {
+    expect(
+      shouldRenderProviderHealthBanner({
+        threadEntryPoint: "chat",
+        terminalWorkspaceTerminalTabActive: false,
+      }),
+    ).toBe(true);
   });
 });
 
@@ -578,5 +733,22 @@ describe("shouldAutoDeleteTerminalThreadOnLastClose", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveRuntimeModeAfterApprovalDecision", () => {
+  it("switches approval-required threads to full-access on acceptForSession", () => {
+    expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "acceptForSession")).toBe(
+      "full-access",
+    );
+  });
+
+  it("does not change a thread already in full-access", () => {
+    expect(resolveRuntimeModeAfterApprovalDecision("full-access", "acceptForSession")).toBeNull();
+  });
+
+  it("leaves runtime mode untouched for one-off accept and decline decisions", () => {
+    expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "accept")).toBeNull();
+    expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "decline")).toBeNull();
   });
 });

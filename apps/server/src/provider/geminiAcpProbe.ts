@@ -57,7 +57,7 @@ function pushLogLine(target: string[], line: string): void {
 }
 
 function formatGeminiDiscoveryWarning(detail: string): string {
-  return `Gemini CLI is installed, but DP Code could not verify authentication or discover models. ${detail}`;
+  return `Gemini CLI is installed, but Synara could not verify authentication or discover models. ${detail}`;
 }
 
 function formatGeminiAuthMessage(detail: string): string {
@@ -65,7 +65,7 @@ function formatGeminiAuthMessage(detail: string): string {
 }
 
 function formatGeminiModelDiscoveryFallbackMessage(): string {
-  return "Gemini CLI is installed and authenticated, but it did not report any available models. DP Code will use its built-in Gemini model list.";
+  return "Gemini CLI is installed and authenticated, but it did not report any available models. Synara will use its built-in Gemini model list.";
 }
 
 function detailFromProbeLogs(
@@ -383,8 +383,8 @@ export const probeGeminiCapabilities = (input: {
         sendRequest(1, "initialize", {
           protocolVersion: 1,
           clientInfo: {
-            name: "dpcode",
-            title: "DP Code",
+            name: "synara",
+            title: "Synara",
             version: "0.1.0",
           },
           clientCapabilities: {

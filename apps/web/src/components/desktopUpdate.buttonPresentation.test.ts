@@ -17,6 +17,7 @@ const baseState: DesktopUpdateState = {
   message: null,
   errorContext: null,
   canRetry: false,
+  releaseUrl: null,
 };
 
 describe("desktop update button presentation timeline", () => {
@@ -34,7 +35,7 @@ describe("desktop update button presentation timeline", () => {
       availableVersion: "1.2.0",
       downloadPercent: 37.9,
     });
-    expect(downloading.label).toBe("Downloading...");
+    expect(downloading.label).toBe("Preparing...");
     expect(downloading.progressPercent).toBe(37);
 
     const downloaded = getDesktopUpdateButtonPresentation({
@@ -43,7 +44,7 @@ describe("desktop update button presentation timeline", () => {
       availableVersion: "1.2.0",
       downloadedVersion: "1.2.0",
     });
-    expect(downloaded.label).toBe("Ready to update");
+    expect(downloaded.label).toBe("Update");
     expect(downloaded.progressPercent).toBeNull();
   });
 
@@ -55,7 +56,7 @@ describe("desktop update button presentation timeline", () => {
       downloadPercent: null,
     });
 
-    expect(downloading.label).toBe("Downloading...");
+    expect(downloading.label).toBe("Preparing...");
     expect(downloading.progressPercent).toBeNull();
   });
 

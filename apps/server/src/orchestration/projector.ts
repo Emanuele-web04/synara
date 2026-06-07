@@ -5,6 +5,12 @@ import {
   OrchestrationSession,
   OrchestrationThread,
 } from "@t3tools/contracts";
+import {
+  addPinnedMessage,
+  removePinnedMessage,
+  setPinnedMessageDone,
+  setPinnedMessageLabel,
+} from "@t3tools/shared/pinnedMessages";
 import { Effect, Schema } from "effect";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
@@ -19,6 +25,10 @@ import {
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
+  ThreadPinnedMessageAddedPayload,
+  ThreadPinnedMessageDoneSetPayload,
+  ThreadPinnedMessageLabelSetPayload,
+  ThreadPinnedMessageRemovedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadConversationRolledBackPayload,
   ThreadRuntimeModeSetPayload,
@@ -28,9 +38,11 @@ import {
   ThreadTurnDiffCompletedPayload,
   ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
+import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
+const MAX_THREAD_ACTIVITIES = 500;
 const MAX_THREAD_CHECKPOINTS = 500;
 
 function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
@@ -222,6 +234,7 @@ export function projectEvent(
             workspaceRoot: payload.workspaceRoot,
             defaultModelSelection: payload.defaultModelSelection,
             scripts: payload.scripts,
+            isPinned: payload.isPinned ?? false,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -255,6 +268,7 @@ export function projectEvent(
                     ? { defaultModelSelection: payload.defaultModelSelection }
                     : {}),
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
+                  ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
                   updatedAt: payload.updatedAt,
                 }
               : project,
@@ -420,6 +434,101 @@ export function projectEvent(
               ...(payload.subagentRole !== undefined ? { subagentRole: payload.subagentRole } : {}),
               ...(payload.lastKnownPr !== undefined ? { lastKnownPr: payload.lastKnownPr } : {}),
               ...(payload.handoff !== undefined ? { handoff: payload.handoff } : {}),
+              ...(payload.pinnedMessages !== undefined
+                ? { pinnedMessages: payload.pinnedMessages }
+                : {}),
+              ...(payload.notes !== undefined ? { notes: payload.notes } : {}),
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.pinned-message-added":
+      return decodeForEvent(
+        ThreadPinnedMessageAddedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const existingThread =
+            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              pinnedMessages: addPinnedMessage(existingThread?.pinnedMessages, payload.pin),
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.pinned-message-removed":
+      return decodeForEvent(
+        ThreadPinnedMessageRemovedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const existingThread =
+            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              pinnedMessages: removePinnedMessage(
+                existingThread?.pinnedMessages,
+                payload.messageId,
+              ),
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.pinned-message-done-set":
+      return decodeForEvent(
+        ThreadPinnedMessageDoneSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const existingThread =
+            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              pinnedMessages: setPinnedMessageDone(
+                existingThread?.pinnedMessages,
+                payload.messageId,
+                payload.done,
+              ),
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.pinned-message-label-set":
+      return decodeForEvent(
+        ThreadPinnedMessageLabelSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const existingThread =
+            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              pinnedMessages: setPinnedMessageLabel(
+                existingThread?.pinnedMessages,
+                payload.messageId,
+                payload.label,
+              ),
               updatedAt: payload.updatedAt,
             }),
           };
@@ -465,9 +574,12 @@ export function projectEvent(
           if (!thread) {
             return nextBase;
           }
+          const canAdoptFirstTurnProvider =
+            thread.latestTurn === null && thread.session === null && thread.messages.length <= 1;
           const modelSelectionPatch =
             payload.modelSelection !== undefined &&
-            payload.modelSelection.provider === thread.modelSelection.provider
+            (payload.modelSelection.provider === thread.modelSelection.provider ||
+              canAdoptFirstTurnProvider)
               ? { modelSelection: payload.modelSelection }
               : {};
           return {
@@ -528,7 +640,10 @@ export function projectEvent(
                     streaming: message.streaming,
                     source: message.source,
                     updatedAt: message.updatedAt,
-                    turnId: message.turnId,
+                    turnId: resolveStableMessageTurnId({
+                      existingTurnId: entry.turnId,
+                      incomingTurnId: message.turnId,
+                    }),
                     ...(message.attachments !== undefined
                       ? { attachments: message.attachments }
                       : {}),
@@ -844,7 +959,7 @@ export function projectEvent(
             payload.activity,
           ]
             .toSorted(compareThreadActivities)
-            .slice(-500);
+            .slice(-MAX_THREAD_ACTIVITIES);
 
           return {
             ...nextBase,

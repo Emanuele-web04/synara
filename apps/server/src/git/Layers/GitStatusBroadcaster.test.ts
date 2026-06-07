@@ -20,6 +20,9 @@ const baseStatus: GitStatusResult = {
 };
 
 const baseDetails: GitStatusDetails = {
+  isRepo: true,
+  hasOriginRemote: true,
+  isDefaultBranch: false,
   branch: baseStatus.branch,
   upstreamRef: "origin/feature/status-broadcast",
   upstreamBranch: baseStatus.upstreamBranch,
@@ -141,6 +144,8 @@ describe("GitStatusBroadcasterLive", () => {
             title: "Open PR",
             url: "https://github.com/acme/repo/pull/42",
             state: "open",
+            baseBranch: "main",
+            headBranch: "feature/status-refresh",
           },
         };
         const second = yield* broadcaster.getStatus({ cwd: "/repo" });
@@ -180,6 +185,8 @@ describe("GitStatusBroadcasterLive", () => {
             title: "Fresh PR",
             url: "https://github.com/acme/repo/pull/43",
             state: "open",
+            baseBranch: "main",
+            headBranch: "feature/status-refresh",
           },
         };
         const third = yield* broadcaster.getStatus({ cwd: "/repo" });

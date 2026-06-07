@@ -215,7 +215,7 @@ function computeUsagePercent(
   return Math.min(100, Math.max(0, (usedTokens / maxTokens) * 100));
 }
 
-// Converts ACP's unstable usage updates into DP Code's context-window snapshot shape.
+// Converts ACP's unstable usage updates into Synara's context-window snapshot shape.
 function tokenUsageSnapshotFromAcpUsageUpdate(input: {
   readonly size: unknown;
   readonly used: unknown;

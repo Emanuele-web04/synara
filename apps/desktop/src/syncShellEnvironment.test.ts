@@ -174,7 +174,70 @@ describe("syncShellEnvironment", () => {
     expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
   });
 
-  it("does nothing outside macOS and Linux", () => {
+  it("hydrates PATH and missing variables from the Windows registry", () => {
+    const env: NodeJS.ProcessEnv = {
+      PATH: "C:\\Windows\\system32",
+    };
+    const readWindowsEnvironment = vi.fn(() => ({
+      PATH: "C:\\Windows\\system32;C:\\Users\\ramar\\.local\\bin",
+      CLAUDE_CONFIG_DIR: "C:\\Users\\ramar\\.config\\claude",
+    }));
+
+    syncShellEnvironment(env, {
+      platform: "win32",
+      readWindowsEnvironment,
+    });
+
+    expect(readWindowsEnvironment).toHaveBeenCalledTimes(1);
+    expect(env.PATH).toBe("C:\\Windows\\system32;C:\\Users\\ramar\\.local\\bin");
+    expect(env.CLAUDE_CONFIG_DIR).toBe("C:\\Users\\ramar\\.config\\claude");
+  });
+
+  it("merges Windows PATH but preserves variables already in the environment", () => {
+    const env: NodeJS.ProcessEnv = {
+      PATH: "C:\\Windows\\system32",
+      CLAUDE_CONFIG_DIR: "C:\\already\\set",
+    };
+    const readWindowsEnvironment = vi.fn(() => ({
+      PATH: "C:\\Users\\ramar\\.local\\bin",
+      CLAUDE_CONFIG_DIR: "C:\\Users\\ramar\\.config\\claude",
+      GEMINI_API_KEY: "from-registry",
+    }));
+
+    syncShellEnvironment(env, {
+      platform: "win32",
+      readWindowsEnvironment,
+    });
+
+    expect(env.PATH).toBe("C:\\Users\\ramar\\.local\\bin;C:\\Windows\\system32");
+    expect(env.CLAUDE_CONFIG_DIR).toBe("C:\\already\\set");
+    expect(env.GEMINI_API_KEY).toBe("from-registry");
+  });
+
+  it("logs a warning and leaves the environment intact when the Windows reader throws", () => {
+    const env: NodeJS.ProcessEnv = {
+      PATH: "C:\\Windows\\system32",
+    };
+    const readWindowsEnvironment = vi.fn(() => {
+      throw new Error("powershell.exe ENOENT");
+    });
+    const logWarning = vi.fn();
+
+    syncShellEnvironment(env, {
+      platform: "win32",
+      readWindowsEnvironment,
+      logWarning,
+    });
+
+    expect(readWindowsEnvironment).toHaveBeenCalledTimes(1);
+    expect(logWarning).toHaveBeenCalledWith(
+      "Failed to synchronize the desktop Windows environment.",
+      expect.any(Error),
+    );
+    expect(env.PATH).toBe("C:\\Windows\\system32");
+  });
+
+  it("does nothing on unsupported platforms", () => {
     const env: NodeJS.ProcessEnv = {
       SHELL: "/bin/zsh",
       PATH: "/usr/bin",
@@ -186,7 +249,7 @@ describe("syncShellEnvironment", () => {
     }));
 
     syncShellEnvironment(env, {
-      platform: "win32",
+      platform: "freebsd",
       readEnvironment,
     });
 

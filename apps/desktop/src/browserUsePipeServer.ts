@@ -18,7 +18,8 @@ const BROWSER_USE_INITIAL_URL = "about:blank";
 const BROWSER_USE_PANEL_READY_TIMEOUT_MS = 2_000;
 const BROWSER_USE_PANEL_READY_POLL_MS = 50;
 const BROWSER_USE_PIPE_DIR = "codex-browser-use";
-const BROWSER_USE_PIPE_NAME_PREFIX = "dpcode-iab";
+const BROWSER_USE_PIPE_NAME_PREFIX = "synara-iab";
+export const SYNARA_BROWSER_USE_PIPE_ENV = "SYNARA_BROWSER_USE_PIPE_PATH";
 export const DPCODE_BROWSER_USE_PIPE_ENV = "DPCODE_BROWSER_USE_PIPE_PATH";
 export const T3CODE_BROWSER_USE_PIPE_ENV = "T3CODE_BROWSER_USE_PIPE_PATH";
 
@@ -57,11 +58,14 @@ export function resolveConfiguredBrowserUsePipePath(
   platform = process.platform,
 ): string {
   const configured =
-    env[DPCODE_BROWSER_USE_PIPE_ENV]?.trim() || env[T3CODE_BROWSER_USE_PIPE_ENV]?.trim();
+    env[SYNARA_BROWSER_USE_PIPE_ENV]?.trim() ||
+    env[DPCODE_BROWSER_USE_PIPE_ENV]?.trim() ||
+    env[T3CODE_BROWSER_USE_PIPE_ENV]?.trim();
   return configured || resolveDefaultBrowserUsePipePath(platform);
 }
 
-export const DPCODE_BROWSER_USE_PIPE_PATH = resolveConfiguredBrowserUsePipePath();
+export const SYNARA_BROWSER_USE_PIPE_PATH = resolveConfiguredBrowserUsePipePath();
+export const DPCODE_BROWSER_USE_PIPE_PATH = SYNARA_BROWSER_USE_PIPE_PATH;
 
 function asObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -158,10 +162,10 @@ export class BrowserUsePipeServer {
 
   constructor(
     private readonly browserManager: DesktopBrowserManager,
-    options: BrowserUsePipeServerOptions | string = DPCODE_BROWSER_USE_PIPE_PATH,
+    options: BrowserUsePipeServerOptions | string = SYNARA_BROWSER_USE_PIPE_PATH,
   ) {
     this.pipePath =
-      typeof options === "string" ? options : (options.pipePath ?? DPCODE_BROWSER_USE_PIPE_PATH);
+      typeof options === "string" ? options : (options.pipePath ?? SYNARA_BROWSER_USE_PIPE_PATH);
     this.requestOpenPanel = typeof options === "string" ? undefined : options.requestOpenPanel;
     this.server = Net.createServer((socket) => this.handleSocketConnection(socket));
   }
@@ -267,7 +271,7 @@ export class BrowserUsePipeServer {
       case "getInfo":
         const sessionId = asString(asObject(params)?.session_id);
         return {
-          name: "DP Code In-app Browser",
+          name: "Synara In-app Browser",
           version: "0.1.0",
           type: "iab",
           ...(sessionId ? { metadata: { codexSessionId: sessionId } } : {}),
@@ -374,7 +378,7 @@ export class BrowserUsePipeServer {
   }> {
     const snapshot = await this.waitForActiveBrowserHostState();
     if (!snapshot) {
-      throw new Error("No active DP Code browser pane available");
+      throw new Error("No active Synara browser pane available");
     }
     const nextState = this.browserManager.newTab({
       threadId: snapshot.threadId,

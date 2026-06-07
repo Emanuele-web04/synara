@@ -2,10 +2,28 @@
 // Purpose: Shared sidebar sorting and status helpers used by the thread list UI.
 // Exports: Sidebar row state derivation, add-project error helpers, sort utilities, and visibility helpers.
 
-import type { KeybindingCommand, ProjectId, ThreadId } from "@t3tools/contracts";
+import {
+  MAX_PINNED_PROJECTS,
+  type KeybindingCommand,
+  type ProjectId,
+  type ThreadId,
+} from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
+import { resolveRestorableThreadRoute, type LastThreadRoute } from "../chatRouteRestore";
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
+import {
+  derivePinnedIds,
+  getPinnedItems,
+  isLatestPinMutation,
+  orderPinnedItemsFirst,
+} from "../pinning.logic";
+import {
+  SIDEBAR_ROW_ACTIVE_CLASS_NAME,
+  SIDEBAR_ROW_HOVER_CLASS_NAME,
+  SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+  SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
+} from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
 import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 import {
@@ -22,7 +40,7 @@ export {
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
-export const DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY = "dpcode:show-debug-feature-flags-menu";
+export const DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY = "synara:show-debug-feature-flags-menu";
 export type SidebarNewThreadEnvMode = "local" | "worktree";
 type SidebarProject = {
   id: string;
@@ -166,6 +184,46 @@ export function resolveSidebarNewThreadEnvMode(input: {
   return input.requestedEnvMode ?? input.defaultEnvMode;
 }
 
+export type SettingsBackTarget =
+  | {
+      kind: "thread";
+      threadId: string;
+      splitViewId?: string | undefined;
+    }
+  | {
+      kind: "home";
+    };
+
+export function resolveSettingsBackTarget(input: {
+  lastThreadRoute: LastThreadRoute | null;
+  availableThreadIds: ReadonlySet<string>;
+  latestThreadId: string | null;
+  availableSplitViewIds?: ReadonlySet<string>;
+}): SettingsBackTarget {
+  const restorableRoute = resolveRestorableThreadRoute({
+    lastThreadRoute: input.lastThreadRoute,
+    availableThreadIds: input.availableThreadIds,
+    ...(input.availableSplitViewIds ? { availableSplitViewIds: input.availableSplitViewIds } : {}),
+  });
+
+  if (restorableRoute) {
+    return {
+      kind: "thread",
+      threadId: restorableRoute.threadId,
+      splitViewId: restorableRoute.splitViewId,
+    };
+  }
+
+  if (input.latestThreadId) {
+    return {
+      kind: "thread",
+      threadId: input.latestThreadId,
+    };
+  }
+
+  return { kind: "home" };
+}
+
 // Drops remembered "show more" state for projects that are currently collapsed.
 export function pruneExpandedProjectThreadListsForCollapsedProjects<
   T extends Pick<Project, "cwd" | "expanded">,
@@ -199,39 +257,53 @@ export function pruneExpandedProjectThreadListsForCollapsedProjects<
   return changed ? nextExpandedProjectThreadListCwds : expandedProjectThreadListCwds;
 }
 
+/**
+ * Trailing padding that protects the title from the absolutely-positioned
+ * trailing cluster. Split into two reserves so the title is only truncated by
+ * content that is actually on screen:
+ *
+ * - Idle rows reserve just enough for the timestamp/status glyph plus any
+ *   fork/worktree/handoff meta chips. A row with no badges therefore runs the
+ *   title nearly to the timestamp instead of truncating against permanently
+ *   reserved empty space.
+ * - The wider reserve that clears the hover pin/archive actions is only applied
+ *   on hover/focus (mirroring the project header row), so the title gives up that
+ *   width exactly when those actions appear and not a moment sooner.
+ *
+ * Literal class strings are required so Tailwind's JIT scanner emits them.
+ */
+export function resolveThreadRowTrailingReserveClass(metaChipCount: number): string {
+  // Hover/focus reveals the pin/archive actions; the meta chips + timestamp fade
+  // out at the same time, so this reserve is a constant regardless of chip count.
+  const hoverReserve =
+    "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]";
+  if (metaChipCount <= 0) return cn("pr-[2.25rem]", hoverReserve);
+  if (metaChipCount === 1) return cn("pr-[3.5rem]", hoverReserve);
+  if (metaChipCount === 2) return cn("pr-[4rem]", hoverReserve);
+  return cn("pr-[4.5rem]", hoverReserve);
+}
+
 export function resolveThreadRowClassName(input: {
   isActive: boolean;
   isSelected: boolean;
 }): string {
-  // Reserve room for the absolute fork/worktree/timestamp cluster so long titles truncate cleanly.
-  const baseClassName =
-    "h-8 w-full translate-x-0 cursor-pointer justify-start rounded-md pr-[4.25rem] pl-8 text-left text-[13px] select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
+  // Trailing reserve for the absolute cluster is applied separately by callers
+  // via resolveThreadRowTrailingReserveClass so it can flex with the chip count.
+  const baseClassName = SIDEBAR_THREAD_ROW_BASE_CLASS_NAME;
 
   if (input.isSelected && input.isActive) {
-    return cn(
-      baseClassName,
-      "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)] hover:bg-[var(--color-background-button-secondary)] hover:text-[var(--color-text-foreground)]",
-    );
+    return cn(baseClassName, SIDEBAR_ROW_ACTIVE_CLASS_NAME);
   }
 
   if (input.isSelected) {
-    return cn(
-      baseClassName,
-      "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)] hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]",
-    );
+    return cn(baseClassName, SIDEBAR_ROW_ACTIVE_CLASS_NAME);
   }
 
   if (input.isActive) {
-    return cn(
-      baseClassName,
-      "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)] hover:bg-[var(--color-background-button-secondary)] hover:text-[var(--color-text-foreground)]",
-    );
+    return cn(baseClassName, SIDEBAR_ROW_ACTIVE_CLASS_NAME);
   }
 
-  return cn(
-    baseClassName,
-    "text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary)] hover:text-[var(--color-text-foreground)]",
-  );
+  return cn(baseClassName, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME);
 }
 
 export function resolveThreadStatusPill(input: {
@@ -401,6 +473,13 @@ export function describeAddProjectError(message: string): string | null {
     return "This usually means the folder is already linked to an existing project. On Windows, the same folder can arrive with a different path format, so it looks new even when it is not.";
   }
 
+  if (
+    message.startsWith("Failed to create project directory: /") ||
+    message.startsWith("Project directory does not exist: /")
+  ) {
+    return "This is an absolute path from the filesystem root. If the folder is in your home directory, use ~/Developer/... or the full /Users/<name>/Developer/... path.";
+  }
+
   return null;
 }
 
@@ -547,18 +626,8 @@ export function getVisibleSidebarEntriesForPreview<
   visibleEntries: T[];
 } {
   const { activeEntryId, entries, isExpanded, previewLimit } = input;
-  const orderedRootRowIds: Thread["id"][] = [];
-  const seenRootRowIds = new Set<Thread["id"]>();
+  const hasHiddenEntries = entries.length > previewLimit;
 
-  for (const entry of entries) {
-    if (seenRootRowIds.has(entry.rootRowId)) {
-      continue;
-    }
-    seenRootRowIds.add(entry.rootRowId);
-    orderedRootRowIds.push(entry.rootRowId);
-  }
-
-  const hasHiddenEntries = orderedRootRowIds.length > previewLimit;
   if (!hasHiddenEntries || isExpanded) {
     return {
       hasHiddenEntries,
@@ -566,41 +635,111 @@ export function getVisibleSidebarEntriesForPreview<
     };
   }
 
-  const visibleRootRowIds = new Set(orderedRootRowIds.slice(0, previewLimit));
-  const activeRootRowId =
-    activeEntryId !== undefined
-      ? (entries.find((entry) => entry.rowId === activeEntryId)?.rootRowId ?? null)
-      : null;
+  const previewEntries = entries.slice(0, previewLimit);
+  const visibleEntryIds = new Set(previewEntries.map((entry) => entry.rowId));
 
-  if (activeRootRowId) {
-    visibleRootRowIds.add(activeRootRowId);
+  if (!activeEntryId || visibleEntryIds.has(activeEntryId)) {
+    return {
+      hasHiddenEntries: true,
+      visibleEntries: previewEntries,
+    };
+  }
+
+  const activeEntryIndex = entries.findIndex((entry) => entry.rowId === activeEntryId);
+  if (activeEntryIndex === -1) {
+    return {
+      hasHiddenEntries: true,
+      visibleEntries: previewEntries,
+    };
+  }
+
+  const activeEntry = entries[activeEntryIndex];
+  if (!activeEntry) {
+    return {
+      hasHiddenEntries: true,
+      visibleEntries: previewEntries,
+    };
+  }
+
+  const rootEntryIndex = entries.findIndex((entry) => entry.rowId === activeEntry.rootRowId);
+  const forcedVisibleEntries =
+    rootEntryIndex === -1 ? [activeEntry] : entries.slice(rootEntryIndex, activeEntryIndex + 1);
+
+  for (const entry of forcedVisibleEntries) {
+    visibleEntryIds.add(entry.rowId);
   }
 
   return {
     hasHiddenEntries: true,
-    visibleEntries: entries.filter((entry) => visibleRootRowIds.has(entry.rootRowId)),
+    visibleEntries: entries.filter((entry) => visibleEntryIds.has(entry.rowId)),
   };
 }
 
-// Preserve the persisted pin order while discarding ids that no longer exist locally.
 export function getPinnedThreadsForSidebar<T extends Pick<Thread, "id">>(
   threads: readonly T[],
   pinnedThreadIds: readonly T["id"][],
 ): T[] {
-  const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
-  const seen = new Set<T["id"]>();
-  const pinnedThreads: T[] = [];
+  return getPinnedItems(threads, pinnedThreadIds);
+}
 
-  for (const threadId of pinnedThreadIds) {
-    if (seen.has(threadId)) continue;
-    seen.add(threadId);
-    const thread = threadById.get(threadId);
-    if (thread) {
-      pinnedThreads.push(thread);
-    }
-  }
+// Resolve the visible pinned ids from server state, local legacy pins, and pending user clicks.
+export function derivePinnedThreadIdsForSidebar<T extends Pick<Thread, "id" | "isPinned">>(input: {
+  readonly threads: readonly T[];
+  readonly persistedPinnedThreadIds: readonly T["id"][];
+  readonly optimisticPinnedStateByThreadId: ReadonlyMap<T["id"], boolean>;
+}): T["id"][] {
+  return derivePinnedIds({
+    items: input.threads,
+    persistedPinnedIds: input.persistedPinnedThreadIds,
+    optimisticPinnedStateById: input.optimisticPinnedStateByThreadId,
+  });
+}
 
-  return pinnedThreads;
+// Only the newest pin mutation may roll back optimistic state after rapid clicks.
+export function isLatestPinnedThreadMutation<T>(input: {
+  readonly threadId: T;
+  readonly requestVersion: number;
+  readonly latestMutationVersionByThreadId: ReadonlyMap<T, number>;
+}): boolean {
+  return isLatestPinMutation({
+    id: input.threadId,
+    requestVersion: input.requestVersion,
+    latestMutationVersionById: input.latestMutationVersionByThreadId,
+  });
+}
+
+export function isLatestPinnedProjectMutation<T>(input: {
+  readonly projectId: T;
+  readonly requestVersion: number;
+  readonly latestMutationVersionByProjectId: ReadonlyMap<T, number>;
+}): boolean {
+  return isLatestPinMutation({
+    id: input.projectId,
+    requestVersion: input.requestVersion,
+    latestMutationVersionById: input.latestMutationVersionByProjectId,
+  });
+}
+
+export function derivePinnedProjectIdsForSidebar<
+  T extends Pick<Project, "id" | "isPinned">,
+>(input: {
+  readonly projects: readonly T[];
+  readonly persistedPinnedProjectIds: readonly T["id"][];
+  readonly optimisticPinnedStateByProjectId: ReadonlyMap<T["id"], boolean>;
+}): T["id"][] {
+  return derivePinnedIds({
+    items: input.projects,
+    persistedPinnedIds: input.persistedPinnedProjectIds,
+    optimisticPinnedStateById: input.optimisticPinnedStateByProjectId,
+    maxCount: MAX_PINNED_PROJECTS,
+  });
+}
+
+export function orderPinnedProjectsForSidebar<T extends Pick<Project, "id">>(
+  projects: readonly T[],
+  pinnedProjectIds: readonly T["id"][],
+): T[] {
+  return orderPinnedItemsFirst(projects, pinnedProjectIds);
 }
 
 // Hide globally pinned rows from the per-project lists so the sidebar doesn't duplicate chats.

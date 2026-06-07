@@ -22,6 +22,13 @@ async function renderMarkdown(text: string, cwd = "C:\\Users\\LENOVO\\dpcode") {
 }
 
 describe("ChatMarkdown", () => {
+  it("uses the theme foreground token for markdown text", async () => {
+    const markup = await renderMarkdown("Theme-aware text");
+
+    expect(markup).toContain("text-foreground");
+    expect(markup).not.toContain("text-neutral-900");
+  });
+
   it("renders inline math with KaTeX", async () => {
     const markup = await renderMarkdown("Euler wrote $e^{i\\\\pi} + 1 = 0$.");
 

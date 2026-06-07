@@ -10,6 +10,8 @@ import {
   formatProviderModelOptionName,
   groupProviderModelOptions,
   groupProviderModelOptionsWithFavorites,
+  resolveModelGroupDefaultOpen,
+  shouldUseCollapsibleModelGroups,
   type ProviderModelOption,
 } from "./providerModelOptions";
 
@@ -55,6 +57,9 @@ describe("buildProviderOptionPatch", () => {
   it("passes through non-Gemini option ids unchanged", () => {
     expect(buildProviderOptionPatch("codex", "reasoningEffort", "xhigh")).toEqual({
       reasoningEffort: "xhigh",
+    });
+    expect(buildProviderOptionPatch("grok", "reasoningEffort", "high")).toEqual({
+      reasoningEffort: "high",
     });
     expect(buildProviderOptionPatch("cursor", "fastMode", true)).toEqual({ fastMode: true });
   });
@@ -111,5 +116,40 @@ describe("groupProviderModelOptionsWithFavorites", () => {
       "openai/gpt-5",
       "anthropic/claude-sonnet",
     ]);
+  });
+});
+
+describe("collapsible model group helpers", () => {
+  it("enables collapsible sections only for long grouped lists while not searching", () => {
+    expect(shouldUseCollapsibleModelGroups(2, false)).toBe(false);
+    expect(shouldUseCollapsibleModelGroups(3, false)).toBe(true);
+    expect(shouldUseCollapsibleModelGroups(4, true)).toBe(false);
+  });
+
+  it("keeps favourites and the active model group expanded by default", () => {
+    expect(
+      resolveModelGroupDefaultOpen({
+        groupKey: "__favorites__",
+        options: [{ slug: "openai/gpt-5", name: "GPT-5" }],
+        activeModel: "anthropic/claude-sonnet",
+        groupCount: 4,
+      }),
+    ).toBe(true);
+    expect(
+      resolveModelGroupDefaultOpen({
+        groupKey: "openai",
+        options: [{ slug: "openai/gpt-5", name: "GPT-5" }],
+        activeModel: "openai/gpt-5",
+        groupCount: 4,
+      }),
+    ).toBe(true);
+    expect(
+      resolveModelGroupDefaultOpen({
+        groupKey: "anthropic",
+        options: [{ slug: "anthropic/claude-sonnet", name: "Claude Sonnet" }],
+        activeModel: "openai/gpt-5",
+        groupCount: 4,
+      }),
+    ).toBe(false);
   });
 });

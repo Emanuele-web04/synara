@@ -36,7 +36,6 @@ interface BuildShortcutSheetSectionsOptions {
   projectScripts: ReadonlyArray<ProjectScript>;
   platform: string;
   context: ShortcutSheetContext;
-  isElectron: boolean;
 }
 
 interface ShortcutDefinition {
@@ -105,6 +104,26 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     command: "chat.split",
     label: "Split chat",
     description: "Open the current conversation in a second pane.",
+  },
+  {
+    command: "view.recent.previous",
+    label: "Previous recent view",
+    description: "Cycle backward through recently opened primary views.",
+  },
+  {
+    command: "view.recent.next",
+    label: "Next recent view",
+    description: "Cycle forward through recently opened primary views.",
+  },
+  {
+    command: "modelPicker.toggle",
+    label: "Model picker",
+    description: "Open the composer provider and model picker.",
+  },
+  {
+    command: "traitsPicker.toggle",
+    label: "Reasoning picker",
+    description: "Open the composer reasoning and trait controls.",
   },
   {
     command: "terminal.toggle",
@@ -228,20 +247,18 @@ export function buildShortcutSheetSections(
     ),
   ];
 
-  if (options.isElectron) {
-    const sidebarToggle = definitionToEntry(
-      {
-        command: "sidebar.toggle",
-        label: "Toggle sidebar",
-        description: "Collapse or reveal the desktop sidebar shell.",
-      },
-      options.keybindings,
-      options.platform,
-      options.context,
-    );
-    if (sidebarToggle) {
-      currentEntries.splice(1, 0, sidebarToggle);
-    }
+  const sidebarToggle = definitionToEntry(
+    {
+      command: "sidebar.toggle",
+      label: "Toggle sidebar",
+      description: "Collapse or reveal the sidebar shell.",
+    },
+    options.keybindings,
+    options.platform,
+    options.context,
+  );
+  if (sidebarToggle) {
+    currentEntries.splice(1, 0, sidebarToggle);
   }
 
   const currentNavigationEntries = options.context.terminalWorkspaceOpen

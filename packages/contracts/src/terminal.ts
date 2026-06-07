@@ -4,11 +4,21 @@ import { TrimmedNonEmptyString } from "./baseSchemas";
 export const DEFAULT_TERMINAL_ID = "default";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
-const TerminalColsSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(20)).check(
-  Schema.isLessThanOrEqualTo(400),
+
+// Dimension bounds for a PTY window. The OS `winsize` fields (`ws_col`/`ws_row`)
+// are unsigned 16-bit, so the only hard ceiling is 65535; these caps stay well
+// below that while comfortably covering ultrawide displays at small font sizes
+// (legitimate fits can exceed 400 columns). The lower bounds keep a usable shell.
+export const TERMINAL_MIN_COLS = 20;
+export const TERMINAL_MAX_COLS = 2000;
+export const TERMINAL_MIN_ROWS = 5;
+export const TERMINAL_MAX_ROWS = 1000;
+
+const TerminalColsSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(TERMINAL_MIN_COLS)).check(
+  Schema.isLessThanOrEqualTo(TERMINAL_MAX_COLS),
 );
-const TerminalRowsSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(5)).check(
-  Schema.isLessThanOrEqualTo(200),
+const TerminalRowsSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(TERMINAL_MIN_ROWS)).check(
+  Schema.isLessThanOrEqualTo(TERMINAL_MAX_ROWS),
 );
 const TerminalIdSchema = TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(128));
 const TerminalEnvKeySchema = Schema.String.check(
@@ -49,6 +59,12 @@ export const TerminalWriteInput = Schema.Struct({
 });
 export type TerminalWriteInput = Schema.Codec.Encoded<typeof TerminalWriteInput>;
 
+export const TerminalAckOutputInput = Schema.Struct({
+  ...TerminalSessionInput.fields,
+  bytes: Schema.Int.check(Schema.isGreaterThan(0)).check(Schema.isLessThanOrEqualTo(8_388_608)),
+});
+export type TerminalAckOutputInput = Schema.Codec.Encoded<typeof TerminalAckOutputInput>;
+
 export const TerminalResizeInput = Schema.Struct({
   ...TerminalSessionInput.fields,
   cols: TerminalColsSchema,
@@ -85,6 +101,7 @@ export const TerminalSessionSnapshot = Schema.Struct({
   status: TerminalSessionStatus,
   pid: Schema.NullOr(Schema.Int.check(Schema.isGreaterThan(0))),
   history: Schema.String,
+  replayPreamble: Schema.optional(Schema.String.check(Schema.isMaxLength(4_096))),
   exitCode: Schema.NullOr(Schema.Int),
   exitSignal: Schema.NullOr(Schema.Int),
   updatedAt: Schema.String,
@@ -107,6 +124,7 @@ const TerminalOutputEvent = Schema.Struct({
   ...TerminalEventBaseSchema.fields,
   type: Schema.Literal("output"),
   data: Schema.String,
+  byteLength: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 });
 
 const TerminalExitedEvent = Schema.Struct({

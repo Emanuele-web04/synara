@@ -6,6 +6,7 @@ import {
 import {
   createComposerMentionTokenRegex,
   extractComposerMentionPath,
+  providerMentionMatchesToken,
 } from "./lib/composerMentions";
 import { resolveAgentAlias } from "@t3tools/contracts";
 import type { ProviderMentionReference } from "@t3tools/contracts";
@@ -184,10 +185,8 @@ function splitTextIntoPromptSegments(
       });
     } else if (match.kind === "mention") {
       const isPluginMention =
-        options.mentionReferences?.some(
-          (mention) =>
-            mention.name.toLowerCase() === match.value.toLowerCase() ||
-            mention.path.toLowerCase() === match.value.toLowerCase(),
+        options.mentionReferences?.some((mention) =>
+          providerMentionMatchesToken(mention, match.value),
         ) ?? false;
       segments.push(
         isPluginMention
@@ -211,9 +210,13 @@ function splitTextIntoPromptSegments(
   return segments;
 }
 
-export function splitPromptIntoDisplaySegments(prompt: string): ComposerPromptSegment[] {
+export function splitPromptIntoDisplaySegments(
+  prompt: string,
+  mentionReferences: ReadonlyArray<ProviderMentionReference> = [],
+): ComposerPromptSegment[] {
   return splitTextIntoPromptSegments(prompt, {
     includeTrailingTokenAtEnd: true,
+    mentionReferences,
   });
 }
 

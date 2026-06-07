@@ -5,15 +5,31 @@ import { Select as SelectPrimitive } from "@base-ui/react/select";
 import { useRender } from "@base-ui/react/use-render";
 import { cva, type VariantProps } from "class-variance-authority";
 import { ChevronDownIcon, ChevronsUpDownIcon, ChevronUpIcon } from "~/lib/icons";
-import type * as React from "react";
+import * as React from "react";
 
 import { cn } from "~/lib/utils";
+import {
+  APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
+  APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME,
+  COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
+  COMPOSER_PICKER_MENU_POPUP_VIEWPORT_CLASS_NAME,
+  COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
+  COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME,
+  COMPOSER_SURFACE_SHADOW_CLASS_NAME,
+} from "../chat/composerPickerStyles";
 
 const Select = SelectPrimitive.Root;
 
+type SelectPopupSurface = "default" | "composer" | "settings";
+
+const settingsSelectOptionClassName =
+  "[&>svg]:-mx-0.5 flex cursor-default select-none items-center rounded-lg text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 [&>svg:not([class*='opacity-'])]:opacity-80 [&>svg]:pointer-events-none [&>svg]:shrink-0 grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)]";
+
+const SelectPopupSurfaceContext = React.createContext<SelectPopupSurface>("default");
+
 // Keep neutral select chrome on the same token families Codex uses for menus and list hover.
 const selectTriggerVariants = cva(
-  "relative inline-flex cursor-pointer select-none items-center justify-between gap-2 border rounded-md text-left text-[length:var(--app-font-size-ui,12px)] outline-none transition-[color,box-shadow,background-color] data-disabled:pointer-events-none data-disabled:opacity-64 sm:text-[length:var(--app-font-size-ui,12px)] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4",
+  "relative inline-flex cursor-pointer select-none items-center justify-between gap-2 border rounded-md text-left text-[length:var(--app-font-size-ui,12px)] outline-none transition-[color,background-color] data-disabled:pointer-events-none data-disabled:opacity-64 sm:text-[length:var(--app-font-size-ui,12px)] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4",
   {
     defaultVariants: {
       size: "default",
@@ -22,7 +38,7 @@ const selectTriggerVariants = cva(
     variants: {
       variant: {
         default:
-          "w-full min-w-36 border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] not-dark:bg-clip-padding text-[var(--color-text-foreground)] ring-[color:var(--color-border-focus)]/16 before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-md)-1px)] not-data-disabled:not-focus-visible:not-aria-invalid:not-data-pressed:before:shadow-[0_1px_--theme(--color-black/2%)] pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 focus-visible:border-[color:var(--color-border-focus)] focus-visible:ring-2 aria-invalid:border-destructive/30 focus-visible:aria-invalid:border-destructive/50 focus-visible:aria-invalid:ring-destructive/12 dark:aria-invalid:ring-destructive/20 dark:not-data-disabled:not-focus-visible:not-aria-invalid:not-data-pressed:before:shadow-[0_-1px_--theme(--color-white/3%)] [&_svg:not([class*='opacity-'])]:opacity-80",
+          "w-full min-w-36 border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] text-[var(--color-text-foreground)] ring-[color:var(--color-border-focus)]/16 pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 focus-visible:border-[color:var(--color-border-focus)] focus-visible:ring-2 aria-invalid:border-destructive/30 focus-visible:aria-invalid:border-destructive/50 focus-visible:aria-invalid:ring-destructive/12 dark:aria-invalid:ring-destructive/20 [&_svg:not([class*='opacity-'])]:opacity-80",
         ghost:
           "border-transparent text-[var(--color-text-foreground-secondary)] focus-visible:ring-1 focus-visible:ring-[color:var(--color-border-focus)]/60 data-pressed:bg-[var(--color-background-elevated-secondary)] [:hover,[data-pressed]]:bg-[var(--color-background-elevated-secondary)] [:hover,[data-pressed]]:text-[var(--color-text-foreground)]",
       },
@@ -30,7 +46,7 @@ const selectTriggerVariants = cva(
         default: "min-h-9 px-[calc(--spacing(3)-1px)] sm:min-h-8",
         lg: "min-h-10 px-[calc(--spacing(3)-1px)] sm:min-h-9",
         sm: "min-h-8 gap-1.5 px-[calc(--spacing(2.5)-1px)] sm:min-h-7",
-        xs: "h-7 gap-1 rounded-sm px-[calc(--spacing(2)-1px)] text-[length:var(--app-font-size-ui-sm,11px)] before:rounded-[calc(var(--radius-sm)-1px)] sm:h-6 sm:text-[length:var(--app-font-size-ui-xs,10px)] [&_svg:not([class*='size-'])]:size-4 sm:[&_svg:not([class*='size-'])]:size-3.5",
+        xs: "h-7 gap-1 rounded-sm px-[calc(--spacing(2)-1px)] text-[length:var(--app-font-size-ui-sm,11px)] sm:h-6 sm:text-[length:var(--app-font-size-ui-xs,10px)] [&_svg:not([class*='size-'])]:size-4 sm:[&_svg:not([class*='size-'])]:size-3.5",
       },
     },
   },
@@ -61,7 +77,7 @@ function SelectButton({ className, size, variant, render, children, ...props }: 
         )}
       </>
     ),
-    className: cn(selectTriggerVariants({ size, variant }), "min-w-none", className),
+    className: cn(selectTriggerVariants({ size, variant }), "min-w-0", className),
     "data-slot": "select-button",
     type: typeValue,
   };
@@ -106,6 +122,7 @@ function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
 
 function SelectPopup({
   className,
+  shellClassName,
   children,
   side = "bottom",
   sideOffset = 4,
@@ -113,6 +130,7 @@ function SelectPopup({
   alignOffset = 0,
   alignItemWithTrigger = true,
   anchor,
+  surface = "default",
   ...props
 }: SelectPrimitive.Popup.Props & {
   side?: SelectPrimitive.Positioner.Props["side"];
@@ -121,54 +139,101 @@ function SelectPopup({
   alignOffset?: SelectPrimitive.Positioner.Props["alignOffset"];
   alignItemWithTrigger?: SelectPrimitive.Positioner.Props["alignItemWithTrigger"];
   anchor?: SelectPrimitive.Positioner.Props["anchor"];
+  surface?: SelectPopupSurface;
+  /** Size/shell classes applied to the composer picker viewport wrapper. */
+  shellClassName?: string;
 }) {
+  const isComposerLikeSurface = surface === "composer" || surface === "settings";
+  const viewportClassName = isComposerLikeSurface
+    ? cn(
+        COMPOSER_PICKER_MENU_POPUP_VIEWPORT_CLASS_NAME,
+        surface === "settings"
+          ? cn(
+              APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
+              "rounded-lg",
+              COMPOSER_SURFACE_SHADOW_CLASS_NAME,
+            )
+          : COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
+        shellClassName,
+      )
+    : cn(
+        APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME,
+        "relative min-w-(--anchor-width) max-h-[min(var(--available-height),28rem)]",
+      );
+
+  const listClassName = isComposerLikeSurface
+    ? cn(
+        COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
+        "max-h-[min(var(--available-height),28rem)]",
+        className,
+      )
+    : cn(
+        "max-h-[min(var(--available-height),28rem)] overflow-y-auto overscroll-contain p-1",
+        className,
+      );
+  const scrollArrowSurfaceClassName =
+    surface === "settings"
+      ? "before:from-[var(--app-settings-surface)]"
+      : "before:from-[var(--composer-surface)]";
+
   return (
-    <SelectPrimitive.Portal>
-      <SelectPrimitive.Positioner
-        align={align}
-        alignItemWithTrigger={alignItemWithTrigger}
-        alignOffset={alignOffset}
-        anchor={anchor}
-        className="z-50 select-none"
-        data-slot="select-positioner"
-        side={side}
-        sideOffset={sideOffset}
-      >
-        <SelectPrimitive.Popup
-          className="origin-(--transform-origin) text-foreground"
-          data-slot="select-popup"
-          {...props}
+    <SelectPopupSurfaceContext.Provider value={surface}>
+      <SelectPrimitive.Portal>
+        <SelectPrimitive.Positioner
+          align={align}
+          alignItemWithTrigger={alignItemWithTrigger}
+          alignOffset={alignOffset}
+          anchor={anchor}
+          className="z-50 select-none"
+          data-slot="select-positioner"
+          side={side}
+          sideOffset={sideOffset}
         >
-          <SelectPrimitive.ScrollUpArrow
-            className="top-0 z-50 flex h-6 w-full cursor-default items-center justify-center before:pointer-events-none before:absolute before:inset-x-px before:top-px before:h-[200%] before:rounded-t-[calc(var(--radius-lg)-1px)] before:bg-linear-to-b before:from-50% before:from-[var(--composer-surface)]"
-            data-slot="select-scroll-up-arrow"
+          <SelectPrimitive.Popup
+            className={cn(
+              "origin-(--transform-origin)",
+              isComposerLikeSurface ? "text-[var(--color-text-foreground)]" : "text-foreground",
+            )}
+            data-slot="select-popup"
+            {...props}
           >
-            <ChevronUpIcon className="relative size-4.5 sm:size-4" />
-          </SelectPrimitive.ScrollUpArrow>
-          {/* Keep a hard popup viewport cap so long theme lists can always scroll
-              fully to both edges even when the positioner reports a tight height. */}
-          <div className="relative min-w-(--anchor-width) max-h-[min(var(--available-height),28rem)] rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] shadow-xl">
-            <SelectPrimitive.List
+            <SelectPrimitive.ScrollUpArrow
               className={cn(
-                "max-h-[min(var(--available-height),28rem)] overflow-y-auto overscroll-contain p-1",
-                className,
+                "top-0 z-50 flex h-6 w-full cursor-default items-center justify-center before:pointer-events-none before:absolute before:inset-x-px before:top-px before:h-[200%] before:rounded-t-[calc(var(--radius-lg)-1px)] before:bg-linear-to-b before:from-50%",
+                scrollArrowSurfaceClassName,
               )}
-              data-slot="select-list"
+              data-slot="select-scroll-up-arrow"
             >
-              {children}
-            </SelectPrimitive.List>
-          </div>
-          <SelectPrimitive.ScrollDownArrow
-            className="bottom-0 z-50 flex h-6 w-full cursor-default items-center justify-center before:pointer-events-none before:absolute before:inset-x-px before:bottom-px before:h-[200%] before:rounded-b-[calc(var(--radius-lg)-1px)] before:bg-linear-to-t before:from-50% before:from-[var(--composer-surface)]"
-            data-slot="select-scroll-down-arrow"
-          >
-            <ChevronDownIcon className="relative size-4.5 sm:size-4" />
-          </SelectPrimitive.ScrollDownArrow>
-        </SelectPrimitive.Popup>
-      </SelectPrimitive.Positioner>
-    </SelectPrimitive.Portal>
+              <ChevronUpIcon className="relative size-4.5 sm:size-4" />
+            </SelectPrimitive.ScrollUpArrow>
+            {/* Keep a hard popup viewport cap so long theme lists can always scroll
+                fully to both edges even when the positioner reports a tight height. */}
+            <div className={viewportClassName}>
+              <SelectPrimitive.List
+                className={cn(listClassName, isComposerLikeSurface ? "relative z-1" : null)}
+                data-slot={isComposerLikeSurface ? "menu-popup-body" : "select-list"}
+              >
+                {children}
+              </SelectPrimitive.List>
+            </div>
+            <SelectPrimitive.ScrollDownArrow
+              className={cn(
+                "bottom-0 z-50 flex h-6 w-full cursor-default items-center justify-center before:pointer-events-none before:absolute before:inset-x-px before:bottom-px before:h-[200%] before:rounded-b-[calc(var(--radius-lg)-1px)] before:bg-linear-to-t before:from-50%",
+                scrollArrowSurfaceClassName,
+              )}
+              data-slot="select-scroll-down-arrow"
+            >
+              <ChevronDownIcon className="relative size-4.5 sm:size-4" />
+            </SelectPrimitive.ScrollDownArrow>
+          </SelectPrimitive.Popup>
+        </SelectPrimitive.Positioner>
+      </SelectPrimitive.Portal>
+    </SelectPopupSurfaceContext.Provider>
   );
 }
+
+const selectItemDefaultClassName =
+  "grid min-h-[1.625rem] in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default items-center gap-2 rounded-lg py-px text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-6 [&_svg:not([class*='size-'])]:size-3 [&_svg]:pointer-events-none [&_svg]:shrink-0";
 
 function SelectItem({
   className,
@@ -178,19 +243,34 @@ function SelectItem({
 }: SelectPrimitive.Item.Props & {
   hideIndicator?: boolean;
 }) {
+  const popupSurface = React.useContext(SelectPopupSurfaceContext);
+  const optionBaseClassName =
+    popupSurface === "composer"
+      ? COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME
+      : popupSurface === "settings"
+        ? settingsSelectOptionClassName
+        : selectItemDefaultClassName;
+
   return (
     <SelectPrimitive.Item
       className={cn(
-        "grid min-h-8 in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default items-center gap-2 rounded-sm py-1 text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-elevated-secondary)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
-        hideIndicator ? "grid-cols-[1fr] ps-3 pe-3" : "grid-cols-[1rem_1fr] ps-2 pe-4",
+        optionBaseClassName,
+        hideIndicator ? "grid-cols-[1fr] ps-3 pe-3" : "grid-cols-[1fr_auto] gap-3 px-2.5",
         className,
       )}
       data-slot="select-item"
       {...props}
     >
+      <SelectPrimitive.ItemText className="col-start-1 min-w-0" data-slot="select-item-text">
+        {children}
+      </SelectPrimitive.ItemText>
       {hideIndicator ? null : (
-        <SelectPrimitive.ItemIndicator className="col-start-1" data-slot="select-item-indicator">
+        <SelectPrimitive.ItemIndicator
+          className="col-start-2 justify-self-end"
+          data-slot="select-item-indicator"
+        >
           <svg
+            className="size-3"
             fill="none"
             height="24"
             stroke="currentColor"
@@ -199,18 +279,12 @@ function SelectItem({
             strokeWidth="2"
             viewBox="0 0 24 24"
             width="24"
-            xmlns="http://www.w3.org/1500/svg"
+            xmlns="http://www.w3.org/2000/svg"
           >
             <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
           </svg>
         </SelectPrimitive.ItemIndicator>
       )}
-      <SelectPrimitive.ItemText
-        className={cn("min-w-0", hideIndicator ? "col-start-1" : "col-start-2")}
-        data-slot="select-item-text"
-      >
-        {children}
-      </SelectPrimitive.ItemText>
     </SelectPrimitive.Item>
   );
 }

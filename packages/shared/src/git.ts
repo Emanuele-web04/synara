@@ -2,8 +2,11 @@
  * Sanitize an arbitrary string into a valid, lowercase git branch fragment.
  * Strips quotes, collapses separators, limits to 64 chars.
  */
-export const WORKTREE_BRANCH_PREFIX = "dpcode";
-const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(`^${WORKTREE_BRANCH_PREFIX}\\/[0-9a-f]{8}$`);
+export const WORKTREE_BRANCH_PREFIX = "synara";
+const LEGACY_WORKTREE_BRANCH_PREFIXES = ["dpcode", "t3code"] as const;
+const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(
+  `^(${[WORKTREE_BRANCH_PREFIX, ...LEGACY_WORKTREE_BRANCH_PREFIXES].join("|")})\\/[0-9a-f]{8}$`,
+);
 
 export function sanitizeBranchFragment(raw: string): string {
   const normalized = raw
@@ -36,7 +39,7 @@ export function sanitizeFeatureBranchName(raw: string): string {
 }
 
 const AUTO_FEATURE_BRANCH_FALLBACK = "feature/update";
-const DPCODE_BRANCH_FALLBACK = "update";
+const SYNARA_BRANCH_FALLBACK = "update";
 
 /**
  * Resolve a unique `feature/…` branch name that doesn't collide with
@@ -64,18 +67,19 @@ export function resolveAutoFeatureBranchName(
   return `${resolvedBase}-${suffix}`;
 }
 
-export function buildDpcodeBranchName(preferredBranch?: string | null): string {
-  const normalizedExisting = preferredBranch?.trim().replace(/^(codex|t3code|dpcode)\//i, "") ?? "";
+export function buildSynaraBranchName(preferredBranch?: string | null): string {
+  const normalizedExisting =
+    preferredBranch?.trim().replace(/^(codex|t3code|dpcode|synara)\//i, "") ?? "";
   return `${WORKTREE_BRANCH_PREFIX}/${sanitizeBranchFragment(
-    normalizedExisting || DPCODE_BRANCH_FALLBACK,
+    normalizedExisting || SYNARA_BRANCH_FALLBACK,
   )}`;
 }
 
-export function resolveUniqueDpcodeBranchName(
+export function resolveUniqueSynaraBranchName(
   existingBranchNames: readonly string[],
   preferredBranch?: string | null,
 ): string {
-  const resolvedBase = buildDpcodeBranchName(preferredBranch);
+  const resolvedBase = buildSynaraBranchName(preferredBranch);
   const existingNames = new Set(existingBranchNames.map((branch) => branch.toLowerCase()));
 
   if (!existingNames.has(resolvedBase)) {

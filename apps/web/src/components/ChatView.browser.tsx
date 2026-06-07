@@ -11,7 +11,6 @@ import {
   ThreadId,
   TurnId,
   type WsWelcomePayload,
-  WS_CHANNELS,
   WS_METHODS,
   OrchestrationSessionStatus,
 } from "@t3tools/contracts";
@@ -36,8 +35,16 @@ import { isMacPlatform } from "../lib/utils";
 import { getRouter } from "../router";
 import { useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
+import {
+  createShellSnapshotFromReadModel,
+  flattenEffectRpcRequestPayload,
+  readEffectRpcClientMessage,
+  sendEffectRpcChunk,
+  sendEffectRpcExit,
+} from "../test/effectRpcWebSocketMock";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
+import { resetWsNativeApiForTest } from "../wsNativeApi";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
 
 const THREAD_ID = "thread-browser-test" as ThreadId;
@@ -422,6 +429,22 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
   };
 }
 
+function getThreadDetailFromFixtureSnapshot(
+  threadId: ThreadId,
+): OrchestrationReadModel["threads"][number] {
+  const thread = fixture.snapshot.threads.find((entry) => entry.id === threadId);
+  if (!thread) {
+    throw new Error(`Missing thread fixture for ${threadId}`);
+  }
+  return thread;
+}
+
+function findThreadDetailFromFixtureSnapshot(
+  threadId: ThreadId,
+): OrchestrationReadModel["threads"][number] | null {
+  return fixture.snapshot.threads.find((entry) => entry.id === threadId) ?? null;
+}
+
 function addThreadToSnapshot(
   snapshot: OrchestrationReadModel,
   threadId: ThreadId,
@@ -736,8 +759,14 @@ function createSnapshotWithInlineToolOverflow(options: {
 
 function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   const tag = body._tag;
+  if (tag === ORCHESTRATION_WS_METHODS.getShellSnapshot) {
+    return createShellSnapshotFromReadModel(fixture.snapshot);
+  }
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
+  }
+  if (tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+    return { sequence: fixture.snapshot.snapshotSequence + 1 };
   }
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
@@ -804,37 +833,82 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
       updatedAt: NOW_ISO,
     };
   }
+  if (tag === WS_METHODS.shellOpenInEditor || tag === WS_METHODS.terminalWrite) {
+    return null;
+  }
   return {};
+}
+
+function toRecordedWsRequestBody(request: {
+  readonly tag: string;
+  readonly payload: unknown;
+}): WsRequestEnvelope["body"] {
+  if (request.tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+    return {
+      _tag: request.tag,
+      command: request.payload,
+    };
+  }
+  return flattenEffectRpcRequestPayload(request.tag, request.payload);
 }
 
 const worker = setupWorker(
   wsLink.addEventListener("connection", ({ client }) => {
-    client.send(
-      JSON.stringify({
-        type: "push",
-        sequence: 1,
-        channel: WS_CHANNELS.serverWelcome,
-        data: fixture.welcome,
-      }),
-    );
     client.addEventListener("message", (event) => {
       const rawData = event.data;
       if (typeof rawData !== "string") return;
-      let request: WsRequestEnvelope;
-      try {
-        request = JSON.parse(rawData) as WsRequestEnvelope;
-      } catch {
+      const parsed = readEffectRpcClientMessage(client, rawData);
+      if (parsed.kind !== "request") return;
+
+      const requestBody = toRecordedWsRequestBody(parsed.request);
+      const method = requestBody._tag;
+      wsRequests.push(requestBody);
+
+      if (method === WS_METHODS.subscribeServerLifecycle) {
+        sendEffectRpcChunk(client, parsed.request.id, {
+          type: "welcome",
+          payload: fixture.welcome,
+        });
         return;
       }
-      const method = request.body?._tag;
-      if (typeof method !== "string") return;
-      wsRequests.push(request.body);
-      client.send(
-        JSON.stringify({
-          id: request.id,
-          result: resolveWsRpc(request.body),
-        }),
-      );
+      if (method === WS_METHODS.subscribeServerConfig) {
+        sendEffectRpcChunk(client, parsed.request.id, {
+          type: "snapshot",
+          config: fixture.serverConfig,
+        });
+        return;
+      }
+      if (method === ORCHESTRATION_WS_METHODS.subscribeShell) {
+        sendEffectRpcChunk(client, parsed.request.id, {
+          kind: "snapshot",
+          snapshot: createShellSnapshotFromReadModel(fixture.snapshot),
+        });
+        return;
+      }
+      if (method === ORCHESTRATION_WS_METHODS.subscribeThread && "threadId" in requestBody) {
+        const threadId = requestBody.threadId as ThreadId;
+        const thread = findThreadDetailFromFixtureSnapshot(threadId);
+        if (!thread) {
+          return;
+        }
+        sendEffectRpcChunk(client, parsed.request.id, {
+          kind: "snapshot",
+          snapshot: {
+            snapshotSequence: fixture.snapshot.snapshotSequence,
+            thread,
+          },
+        });
+        return;
+      }
+      if (
+        method === WS_METHODS.subscribeServerProviderStatuses ||
+        method === WS_METHODS.subscribeServerSettings ||
+        method === WS_METHODS.subscribeTerminalEvents ||
+        method === WS_METHODS.subscribeOrchestrationDomainEvents
+      ) {
+        return;
+      }
+      sendEffectRpcExit(client, parsed.request.id, resolveWsRpc(requestBody));
     });
   }),
   http.get("*/attachments/:attachmentId", async () => {
@@ -935,6 +1009,16 @@ async function waitForSendButton(): Promise<HTMLButtonElement> {
   );
 }
 
+async function waitForEnvironmentModeButton(label: string): Promise<HTMLButtonElement> {
+  return waitForElement(
+    () =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent?.trim() === label,
+      ) ?? null,
+    `Unable to find ${label} environment button.`,
+  );
+}
+
 async function waitForServerConfigToApply(): Promise<void> {
   await vi.waitFor(
     () => {
@@ -943,6 +1027,50 @@ async function waitForServerConfigToApply(): Promise<void> {
     { timeout: 8_000, interval: 16 },
   );
   await waitForLayout();
+}
+
+function dispatchComposerPickerShortcut(target: EventTarget, key: "m" | "e"): void {
+  const useMetaForMod = isMacPlatform(navigator.platform);
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key,
+      shiftKey: true,
+      metaKey: useMetaForMod,
+      ctrlKey: !useMetaForMod,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+}
+
+function dispatchConfiguredShortcut(
+  target: EventTarget,
+  input: { key: string; shiftKey?: boolean; altKey?: boolean },
+): void {
+  const useMetaForMod = isMacPlatform(navigator.platform);
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: input.key,
+      shiftKey: input.shiftKey ?? false,
+      altKey: input.altKey ?? false,
+      metaKey: useMetaForMod,
+      ctrlKey: !useMetaForMod,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+}
+
+// The composer model/effort shortcuts both drop into the same combined picker,
+// rendered as a Base UI menu popup. Provider and effort detail live in lazily
+// mounted submenus, so the reliable signal that the surface opened is the popup
+// mounting with the active model label (the fixture pins the thread to gpt-5).
+async function waitForComposerPickerSurfaceOpen(): Promise<void> {
+  await vi.waitFor(() => {
+    const popup = document.querySelector('[data-slot="menu-popup"]');
+    expect(popup).not.toBeNull();
+    expect(popup?.textContent ?? "").toContain("GPT-5");
+  });
 }
 
 function dispatchChatNewShortcut(): void {
@@ -956,20 +1084,6 @@ function dispatchTerminalThreadShortcut(): void {
 function dispatchThreadShortcut(key: string): void {
   const useMetaForMod = isMacPlatform(navigator.platform);
   window.dispatchEvent(
-    new KeyboardEvent("keydown", {
-      key,
-      shiftKey: true,
-      metaKey: useMetaForMod,
-      ctrlKey: !useMetaForMod,
-      bubbles: true,
-      cancelable: true,
-    }),
-  );
-}
-
-function dispatchComposerPickerShortcut(target: EventTarget, key: "m" | "e"): void {
-  const useMetaForMod = isMacPlatform(navigator.platform);
-  target.dispatchEvent(
     new KeyboardEvent("keydown", {
       key,
       shiftKey: true,
@@ -1080,13 +1194,6 @@ async function measureUserRow(options: {
   scrollContainer.dispatchEvent(new Event("scroll"));
   await nextFrame();
 
-  const timelineRoot =
-    row!.closest<HTMLElement>('[data-timeline-root="true"]') ??
-    host.querySelector<HTMLElement>('[data-timeline-root="true"]');
-  if (!(timelineRoot instanceof HTMLElement)) {
-    throw new Error("Unable to locate timeline root container.");
-  }
-
   let timelineWidthMeasuredPx = 0;
   let measuredRowHeightPx = 0;
   let renderedInVirtualizedRegion = false;
@@ -1097,7 +1204,7 @@ async function measureUserRow(options: {
       await nextFrame();
       const measuredRow = host.querySelector<HTMLElement>(rowSelector);
       expect(measuredRow, "Unable to measure targeted user row height.").toBeTruthy();
-      timelineWidthMeasuredPx = timelineRoot.getBoundingClientRect().width;
+      timelineWidthMeasuredPx = measuredRow!.getBoundingClientRect().width;
       measuredRowHeightPx = measuredRow!.getBoundingClientRect().height;
       renderedInVirtualizedRegion = measuredRow!.closest("[data-index]") instanceof HTMLElement;
       expect(timelineWidthMeasuredPx, "Unable to measure timeline width.").toBeGreaterThan(0);
@@ -1223,6 +1330,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   beforeEach(async () => {
+    resetWsNativeApiForTest();
     await setViewport(DEFAULT_VIEWPORT);
     attachmentResponseDelayMs = 0;
     localStorage.clear();
@@ -1254,6 +1362,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   afterEach(() => {
+    resetWsNativeApiForTest();
     document.body.innerHTML = "";
   });
 
@@ -1347,7 +1456,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       targetText: userText,
     });
     const desktopMeasurement = await measureUserRowAtViewport({
-      viewport: TEXT_VIEWPORT_MATRIX[0],
+      viewport: { ...TEXT_VIEWPORT_MATRIX[0], width: 1_400 },
       snapshot,
       targetMessageId,
     });
@@ -1419,7 +1528,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           const title = document.querySelector<HTMLElement>(`h2[title='${longTitle}']`);
           const overflowButton = document.querySelector<HTMLButtonElement>(
-            'button[aria-label="Panel toggles"]',
+            'button[aria-label="Toggle environment panel"]',
           );
 
           expect(title, "Unable to find the chat header title.").toBeTruthy();
@@ -1623,11 +1732,23 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const panelTogglesButton = page.getByLabelText("Panel toggles");
-      await expect.element(panelTogglesButton).toBeInTheDocument();
-      await panelTogglesButton.click();
-      await expect.element(page.getByText("Open in editor")).toBeInTheDocument();
-      await page.getByText("Open in editor").click();
+      const openInVsCodeTrigger = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+            (button) => button.textContent?.trim() === "Open in VS Code",
+          ) ?? null,
+        "Unable to find Open in VS Code environment row.",
+      );
+      openInVsCodeTrigger.click();
+
+      const vscodeOption = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="menu-item"]')).find(
+            (item) => item.textContent?.trim() === "VS Code",
+          ) ?? null,
+        "Unable to find VS Code editor option.",
+      );
+      vscodeOption.click();
 
       await vi.waitFor(
         () => {
@@ -1655,8 +1776,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     try {
       await expect.element(page.getByText("What should we do in")).toBeInTheDocument();
-      await expect.element(page.getByText("Local")).toBeInTheDocument();
-      await expect.element(page.getByText("main")).toBeInTheDocument();
+      await expect.element(page.getByRole("button", { name: "Local" })).toBeInTheDocument();
+      expect(document.body.textContent).toContain("main");
     } finally {
       await mounted.cleanup();
     }
@@ -1682,7 +1803,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     const mounted = await mountChatView({
-      viewport: DEFAULT_VIEWPORT,
+      viewport: { ...DEFAULT_VIEWPORT, width: 1_400 },
       snapshot: withProjectScripts(createDraftOnlySnapshot(), [
         {
           id: "lint",
@@ -1707,7 +1828,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           const openRequest = wsRequests.find(
-            (request) => request._tag === WS_METHODS.terminalOpen,
+            (request) =>
+              request._tag === WS_METHODS.terminalOpen && request.cwd === "/repo/project",
           );
           expect(openRequest).toMatchObject({
             _tag: WS_METHODS.terminalOpen,
@@ -1759,7 +1881,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     const mounted = await mountChatView({
-      viewport: DEFAULT_VIEWPORT,
+      viewport: { ...DEFAULT_VIEWPORT, width: 1_400 },
       snapshot: withProjectScripts(createDraftOnlySnapshot(), [
         {
           id: "test",
@@ -1784,7 +1906,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           const openRequest = wsRequests.find(
-            (request) => request._tag === WS_METHODS.terminalOpen,
+            (request) =>
+              request._tag === WS_METHODS.terminalOpen &&
+              request.cwd === "/repo/worktrees/feature-draft",
           );
           expect(openRequest).toMatchObject({
             _tag: WS_METHODS.terminalOpen,
@@ -1871,7 +1995,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("opens the composer model picker with Cmd+Shift+M", async () => {
+  it("opens the composer model picker surface", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -1882,20 +2006,56 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     try {
       const composerEditor = await waitForComposerEditor();
+      await waitForServerConfigToApply();
       composerEditor.focus();
       dispatchComposerPickerShortcut(composerEditor, "m");
 
-      await vi.waitFor(() => {
-        const text = document.body.textContent ?? "";
-        expect(text).toContain("Codex");
-        expect(text).toContain("Claude");
-      });
+      await waitForComposerPickerSurfaceOpen();
     } finally {
       await mounted.cleanup();
     }
   });
 
-  it("opens the composer effort picker with Cmd+Shift+E", async () => {
+  it("opens the composer model picker with configured keybinding labels loaded", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-model-picker-configured-shortcut" as MessageId,
+        targetText: "configured model picker shortcut",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "modelPicker.toggle",
+              shortcut: {
+                key: "m",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: true,
+                modKey: true,
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      const composerEditor = await waitForComposerEditor();
+      await waitForServerConfigToApply();
+      composerEditor.focus();
+      dispatchConfiguredShortcut(composerEditor, { key: "m", altKey: true });
+
+      await waitForComposerPickerSurfaceOpen();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens the composer effort picker surface", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -1906,14 +2066,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     try {
       const composerEditor = await waitForComposerEditor();
+      await waitForServerConfigToApply();
       composerEditor.focus();
       dispatchComposerPickerShortcut(composerEditor, "e");
 
-      await vi.waitFor(() => {
-        const text = document.body.textContent ?? "";
-        expect(text).toContain("Effort");
-        expect(text).toContain("Low");
-      });
+      await waitForComposerPickerSurfaceOpen();
     } finally {
       await mounted.cleanup();
     }
@@ -2303,7 +2460,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
               .getState()
               .draftsByThreadId[THREAD_ID]?.images.map((image) => image.name),
           ).toEqual(["queued-image.png"]);
-          expect(document.body.textContent).toContain("queued-image.png");
+          // The restored image renders as a thumbnail chip whose filename lives in
+          // its accessible label/title, not in text content.
+          expect(document.querySelector('[aria-label="Preview queued-image.png"]')).not.toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -2437,9 +2596,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
-      const envPickerTrigger = page.getByText("Local");
-      await expect.element(envPickerTrigger).toBeInTheDocument();
-      await envPickerTrigger.click();
+      const envPickerTrigger = await waitForEnvironmentModeButton("Local");
+      envPickerTrigger.click();
 
       const newWorktreeOption = page.getByText("New worktree");
       await expect.element(newWorktreeOption).toBeInTheDocument();
@@ -2479,9 +2637,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
-      const envPickerTrigger = page.getByText("Local");
-      await expect.element(envPickerTrigger).toBeInTheDocument();
-      await envPickerTrigger.click();
+      const envPickerTrigger = await waitForEnvironmentModeButton("Local");
+      envPickerTrigger.click();
 
       const newWorktreeOption = page.getByText("New worktree");
       await expect.element(newWorktreeOption).toBeInTheDocument();
@@ -2503,7 +2660,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
               typeof request.newBranch === "string",
           );
           expect(createWorktreeRequest).toBeTruthy();
-          expect(createWorktreeRequest?.newBranch).toMatch(/^dpcode\/[0-9a-f]{8}$/);
+          expect(createWorktreeRequest?.newBranch).toMatch(/^synara\/[0-9a-f]{8}$/);
 
           const detachedRequest = wsRequests.find(
             (request) => request._tag === WS_METHODS.gitCreateDetachedWorktree,
@@ -2843,6 +3000,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
           persistedAttachments: [],
           assistantSelections: [],
           terminalContexts: [],
+          skills: [],
+          mentions: [],
           queuedTurns: [],
           modelSelectionByProvider: {
             claudeAgent: {
@@ -3109,15 +3268,27 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const taskListCard = document.querySelector<HTMLElement>(
         '[data-testid="active-task-list-card"]',
       );
+      const composerShell = document.querySelector<HTMLElement>(
+        'form[data-chat-composer-form="true"] .chat-composer-shell',
+      );
       expect(transcriptPane).not.toBeNull();
       expect(taskListCard).not.toBeNull();
+      expect(composerShell).not.toBeNull();
       expect(transcriptPane!.getBoundingClientRect().bottom).toBeGreaterThan(
         taskListCard!.getBoundingClientRect().top + 1,
       );
-      expect(taskListCard!.getBoundingClientRect().width).toBeLessThan(window.innerWidth);
+      // Active plan activity shares the queued-follow-up rail: 11/12 composer width,
+      // centered, with the composer retaining its own rounded top corners.
+      const taskRect = taskListCard!.getBoundingClientRect();
+      const composerRect = composerShell!.getBoundingClientRect();
+      expect(Math.abs(taskRect.width - (composerRect.width * 11) / 12)).toBeLessThanOrEqual(2);
+      expect(
+        Math.abs(taskRect.left + taskRect.width / 2 - (composerRect.left + composerRect.width / 2)),
+      ).toBeLessThanOrEqual(1);
+      expect(parseFloat(getComputedStyle(composerShell!).borderTopLeftRadius)).toBeGreaterThan(0);
 
       const openPlanButton = await waitForElement(
-        () => document.querySelector<HTMLButtonElement>('button[title="Collapse plan"]'),
+        () => document.querySelector<HTMLButtonElement>('button[title="Open tasks sidebar"]'),
         "Unable to find inline active plan sidebar button.",
       );
       openPlanButton.click();
@@ -3212,9 +3383,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
         window.setTimeout(() => resolve(), 260);
       });
 
+      // Once the grace delay lapses the settled turn folds its inline tools into
+      // the closed "Worked for…" disclosure, so neither the live tail (Tool 6)
+      // nor the head (Tool 1) stays mounted until the user expands the group.
       await vi.waitFor(
         () => {
-          expect(document.body.textContent).toContain("Tool 1");
+          expect(document.body.textContent).toContain("Worked for");
+          expect(document.body.textContent).not.toContain("Tool 1");
           expect(document.body.textContent).not.toContain("Tool 6");
         },
         { timeout: 8_000, interval: 16 },

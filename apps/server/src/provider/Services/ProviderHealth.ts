@@ -6,7 +6,12 @@
  *
  * @module ProviderHealth
  */
-import type { ServerProviderStatus } from "@t3tools/contracts";
+import type {
+  ServerProviderStatus,
+  ServerProviderUpdateInput,
+  ServerProviderUpdateResult,
+  ServerProviderUpdateError,
+} from "@t3tools/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Stream } from "effect";
 
@@ -20,6 +25,14 @@ export interface ProviderHealthShape {
    * Force a foreground refresh of provider health snapshots.
    */
   readonly refresh: Effect.Effect<ReadonlyArray<ServerProviderStatus>>;
+
+  /**
+   * Run the allowlisted update command for a provider and publish the
+   * resulting provider snapshots.
+   */
+  readonly updateProvider: (
+    input: ServerProviderUpdateInput,
+  ) => Effect.Effect<ServerProviderUpdateResult, ServerProviderUpdateError>;
 
   /**
    * Stream of provider snapshot changes for config consumers.

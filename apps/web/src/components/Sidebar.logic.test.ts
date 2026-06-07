@@ -2,28 +2,34 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildProjectThreadTree,
+  derivePinnedProjectIdsForSidebar,
+  derivePinnedThreadIdsForSidebar,
   deriveSidebarProjectData,
   describeAddProjectError,
   extractDuplicateProjectCreateProjectId,
   findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
   getVisibleSidebarEntriesForPreview,
+  orderPinnedProjectsForSidebar,
   getPinnedThreadsForSidebar,
   getNextVisibleSidebarThreadId,
   getSidebarThreadIdForJumpCommand,
   getSidebarThreadIdsToPrewarm,
   getRenderedThreadsForSidebarProject,
   groupSidebarThreadsByProjectId,
+  isLatestPinnedProjectMutation,
   getUnpinnedThreadsForSidebar,
   getVisibleSidebarThreadIds,
   getVisibleThreadsForProject,
   getProjectSortTimestamp,
   hasUnseenCompletion,
+  isLatestPinnedThreadMutation,
   isLoopbackHostname,
   isDuplicateProjectCreateError,
   pruneExpandedProjectThreadListsForCollapsedProjects,
   recoverExistingAddProjectTarget,
   resolveProjectEmptyState,
+  resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
@@ -159,6 +165,51 @@ describe("resolveSidebarNewThreadEnvMode", () => {
   });
 });
 
+describe("resolveSettingsBackTarget", () => {
+  it("returns the remembered live thread route", () => {
+    expect(
+      resolveSettingsBackTarget({
+        lastThreadRoute: {
+          threadId: "thread-remembered",
+          splitViewId: "split-live",
+        },
+        availableThreadIds: new Set(["thread-remembered", "thread-latest"]),
+        availableSplitViewIds: new Set(["split-live"]),
+        latestThreadId: "thread-latest",
+      }),
+    ).toEqual({
+      kind: "thread",
+      threadId: "thread-remembered",
+      splitViewId: "split-live",
+    });
+  });
+
+  it("falls back to the latest sidebar thread when the remembered route is stale", () => {
+    expect(
+      resolveSettingsBackTarget({
+        lastThreadRoute: {
+          threadId: "thread-missing",
+        },
+        availableThreadIds: new Set(["thread-latest"]),
+        latestThreadId: "thread-latest",
+      }),
+    ).toEqual({
+      kind: "thread",
+      threadId: "thread-latest",
+    });
+  });
+
+  it("falls back to home when no thread target is available", () => {
+    expect(
+      resolveSettingsBackTarget({
+        lastThreadRoute: null,
+        availableThreadIds: new Set(),
+        latestThreadId: null,
+      }),
+    ).toEqual({ kind: "home" });
+  });
+});
+
 describe("pruneExpandedProjectThreadListsForCollapsedProjects", () => {
   it("clears remembered show-more state when a project is collapsed", () => {
     const current = new Set(["/Users/tester/Code/one", "/Users/tester/Code/two"]);
@@ -273,14 +324,36 @@ describe("add-project error helpers", () => {
     ).toContain("already linked to an existing project");
   });
 
+  it("explains root-absolute add-project paths that probably missed the home directory", () => {
+    expect(
+      describeAddProjectError("Failed to create project directory: /Developer/Testing/t3code"),
+    ).toContain("/Users/<name>/Developer");
+  });
+
   it("returns no explanation for unrelated add-project errors", () => {
-    expect(describeAddProjectError("Project directory does not exist: C:\\Labs\\influenzo")).toBe(
+    expect(describeAddProjectError("Project path is not a directory: C:\\Labs\\influenzo")).toBe(
       null,
     );
   });
 });
 
 describe("pin helpers", () => {
+  const makeProject = (id: string): Project =>
+    ({
+      id: id as ProjectId,
+      kind: "project",
+      name: id,
+      remoteName: id,
+      folderName: id,
+      localName: null,
+      cwd: `/tmp/${id}`,
+      defaultModelSelection: null,
+      expanded: true,
+      createdAt: "2026-03-09T10:00:00.000Z",
+      updatedAt: "2026-03-09T10:00:00.000Z",
+      scripts: [],
+    }) satisfies Project;
+
   const makeThread = (id: string): Thread =>
     ({
       id: id as ThreadId,
@@ -319,6 +392,96 @@ describe("pin helpers", () => {
     expect(
       getUnpinnedThreadsForSidebar(threads, ["thread-2" as ThreadId, "thread-3" as ThreadId]),
     ).toEqual([threads[0]]);
+  });
+
+  it("lets an optimistic unpin override server and persisted pinned state", () => {
+    const threads = [
+      {
+        ...makeThread("thread-1"),
+        isPinned: true,
+      },
+    ];
+
+    expect(
+      derivePinnedThreadIdsForSidebar({
+        threads,
+        persistedPinnedThreadIds: ["thread-1" as ThreadId],
+        optimisticPinnedStateByThreadId: new Map([["thread-1" as ThreadId, false]]),
+      }),
+    ).toEqual([]);
+  });
+
+  it("shows an optimistic pin before the server snapshot confirms it", () => {
+    const threads = [makeThread("thread-1")];
+
+    expect(
+      derivePinnedThreadIdsForSidebar({
+        threads,
+        persistedPinnedThreadIds: [],
+        optimisticPinnedStateByThreadId: new Map([["thread-1" as ThreadId, true]]),
+      }),
+    ).toEqual(["thread-1"]);
+  });
+
+  it("derives at most three pinned projects and keeps persisted order first", () => {
+    const projects = [
+      { ...makeProject("project-1"), isPinned: true },
+      { ...makeProject("project-2"), isPinned: true },
+      { ...makeProject("project-3"), isPinned: true },
+      { ...makeProject("project-4"), isPinned: true },
+    ];
+
+    expect(
+      derivePinnedProjectIdsForSidebar({
+        projects,
+        persistedPinnedProjectIds: ["project-3" as ProjectId, "project-1" as ProjectId],
+        optimisticPinnedStateByProjectId: new Map([["project-1" as ProjectId, false]]),
+      }),
+    ).toEqual(["project-3", "project-2", "project-4"]);
+  });
+
+  it("moves pinned projects to the top while preserving unpinned order", () => {
+    const projects = [makeProject("project-1"), makeProject("project-2"), makeProject("project-3")];
+
+    expect(
+      orderPinnedProjectsForSidebar(projects, ["project-3" as ProjectId, "project-1" as ProjectId]),
+    ).toEqual([projects[2], projects[0], projects[1]]);
+  });
+
+  it("rejects stale pin mutation versions so old failures cannot roll back newer clicks", () => {
+    const threadId = "thread-1" as ThreadId;
+    const latestMutationVersionByThreadId = new Map<ThreadId, number>([[threadId, 2]]);
+    const projectId = "project-1" as ProjectId;
+    const latestMutationVersionByProjectId = new Map<ProjectId, number>([[projectId, 2]]);
+
+    expect(
+      isLatestPinnedThreadMutation({
+        threadId,
+        requestVersion: 1,
+        latestMutationVersionByThreadId,
+      }),
+    ).toBe(false);
+    expect(
+      isLatestPinnedThreadMutation({
+        threadId,
+        requestVersion: 2,
+        latestMutationVersionByThreadId,
+      }),
+    ).toBe(true);
+    expect(
+      isLatestPinnedProjectMutation({
+        projectId,
+        requestVersion: 1,
+        latestMutationVersionByProjectId,
+      }),
+    ).toBe(false);
+    expect(
+      isLatestPinnedProjectMutation({
+        projectId,
+        requestVersion: 2,
+        latestMutationVersionByProjectId,
+      }),
+    ).toBe(true);
   });
 
   it("waits for thread hydration before pruning persisted pins", () => {
@@ -520,29 +683,29 @@ describe("resolveThreadStatusPill", () => {
 describe("resolveThreadRowClassName", () => {
   it("keeps selected active rows on the selected sidebar background", () => {
     const className = resolveThreadRowClassName({ isActive: true, isSelected: true });
-    expect(className).toContain("bg-[var(--color-background-button-secondary)]");
-    expect(className).toContain("hover:bg-[var(--color-background-button-secondary)]");
-    expect(className).toContain("text-[var(--color-text-foreground)]");
-    expect(className).not.toContain("hover:bg-[var(--color-background-button-secondary-hover)]");
+    expect(className).toContain("bg-[var(--sidebar-accent-active)]");
+    expect(className).toContain("hover:bg-[var(--sidebar-accent-active)]");
+    expect(className).toContain("text-[var(--sidebar-accent-foreground)]");
+    expect(className).not.toContain("bg-[var(--color-background-button-secondary-hover)]");
   });
 
-  it("keeps selected rows visually stable on hover", () => {
+  it("keeps selected rows visually aligned with hover", () => {
     const className = resolveThreadRowClassName({ isActive: false, isSelected: true });
-    expect(className).toContain("bg-[var(--color-background-elevated-secondary)]");
-    expect(className).toContain("hover:bg-[var(--color-background-elevated-secondary)]");
-    expect(className).toContain("text-[var(--color-text-foreground)]");
-    expect(className).not.toContain("hover:bg-[var(--color-background-button-secondary-hover)]");
+    expect(className).toContain("bg-[var(--sidebar-accent-active)]");
+    expect(className).toContain("hover:bg-[var(--sidebar-accent-active)]");
+    expect(className).toContain("text-[var(--sidebar-accent-foreground)]");
+    expect(className).not.toContain("bg-[var(--color-background-button-secondary-hover)]");
   });
 
-  it("uses the selected sidebar background for active-only threads", () => {
+  it("uses the hover sidebar background for active-only threads", () => {
     const className = resolveThreadRowClassName({ isActive: true, isSelected: false });
-    expect(className).toContain("bg-[var(--color-background-button-secondary)]");
-    expect(className).toContain("hover:bg-[var(--color-background-button-secondary)]");
+    expect(className).toContain("bg-[var(--sidebar-accent-active)]");
+    expect(className).toContain("hover:bg-[var(--sidebar-accent-active)]");
   });
 
-  it("matches hover-only rows to the selected active background", () => {
+  it("uses the sidebar accent token for hover-only rows", () => {
     const className = resolveThreadRowClassName({ isActive: false, isSelected: false });
-    expect(className).toContain("hover:bg-[var(--color-background-button-secondary)]");
+    expect(className).toContain("hover:bg-[var(--sidebar-accent)]");
     expect(className).not.toContain("hover:bg-[var(--color-background-button-secondary-hover)]");
   });
 });
@@ -726,8 +889,8 @@ describe("buildProjectThreadTree", () => {
 });
 
 describe("getVisibleSidebarEntriesForPreview", () => {
-  it("caps project preview by root rows, not flattened child rows", () => {
-    const visibleEntries = getVisibleSidebarEntriesForPreview({
+  it("caps preview by rendered rows, not root-thread count", () => {
+    const result = getVisibleSidebarEntriesForPreview({
       entries: [
         {
           rowId: ThreadId.makeUnsafe("thread-parent"),
@@ -749,12 +912,47 @@ describe("getVisibleSidebarEntriesForPreview", () => {
       activeEntryId: undefined,
       isExpanded: false,
       previewLimit: 2,
-    }).visibleEntries;
+    });
 
-    expect(visibleEntries.map((entry) => entry.rowId)).toEqual([
+    expect(result.hasHiddenEntries).toBe(true);
+    expect(result.visibleEntries.map((entry) => entry.rowId)).toEqual([
       ThreadId.makeUnsafe("thread-parent"),
       ThreadId.makeUnsafe("thread-child"),
-      ThreadId.makeUnsafe("thread-second-root"),
+    ]);
+  });
+
+  it("reveals the active row and its ancestor chain when it falls below the preview", () => {
+    const entries = [
+      {
+        rowId: ThreadId.makeUnsafe("thread-parent"),
+        rootRowId: ThreadId.makeUnsafe("thread-parent"),
+      },
+      {
+        rowId: ThreadId.makeUnsafe("thread-child"),
+        rootRowId: ThreadId.makeUnsafe("thread-parent"),
+      },
+      {
+        rowId: ThreadId.makeUnsafe("thread-second-root"),
+        rootRowId: ThreadId.makeUnsafe("thread-second-root"),
+      },
+      {
+        rowId: ThreadId.makeUnsafe("thread-third-root"),
+        rootRowId: ThreadId.makeUnsafe("thread-third-root"),
+      },
+    ];
+
+    const result = getVisibleSidebarEntriesForPreview({
+      entries,
+      activeEntryId: ThreadId.makeUnsafe("thread-third-root"),
+      isExpanded: false,
+      previewLimit: 2,
+    });
+
+    expect(result.hasHiddenEntries).toBe(true);
+    expect(result.visibleEntries.map((entry) => entry.rowId)).toEqual([
+      ThreadId.makeUnsafe("thread-parent"),
+      ThreadId.makeUnsafe("thread-child"),
+      ThreadId.makeUnsafe("thread-third-root"),
     ]);
   });
 });

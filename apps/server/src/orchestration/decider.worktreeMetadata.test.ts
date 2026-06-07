@@ -1,4 +1,5 @@
 import {
+  ApprovalRequestId,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
@@ -281,6 +282,71 @@ describe("decider worktree metadata", () => {
       associatedWorktreePath: null,
       associatedWorktreeBranch: null,
       associatedWorktreeRef: null,
+    });
+  });
+});
+
+describe("decider user input answers", () => {
+  it("omits null answers before resolving provider user input", async () => {
+    const now = new Date().toISOString();
+    const readModel = await createWorktreeThreadReadModel(now);
+
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.user-input.respond",
+          commandId: CommandId.makeUnsafe("cmd-user-input-null-answer"),
+          threadId: THREAD_ID,
+          requestId: ApprovalRequestId.makeUnsafe("request-1"),
+          answers: {
+            Language: null,
+            Runtime: "Bun",
+          },
+          createdAt: now,
+        },
+        readModel,
+      }),
+    );
+
+    const event = Array.isArray(result) ? result[0] : result;
+    expect(event?.type).toBe("thread.user-input-response-requested");
+    if (!event || event.type !== "thread.user-input-response-requested") {
+      return;
+    }
+    expect(event.payload.answers).toEqual({
+      Runtime: "Bun",
+    });
+  });
+
+  it("accepts concrete string and array answers", async () => {
+    const now = new Date().toISOString();
+    const readModel = await createWorktreeThreadReadModel(now);
+
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.user-input.respond",
+          commandId: CommandId.makeUnsafe("cmd-user-input-valid-answer"),
+          threadId: THREAD_ID,
+          requestId: ApprovalRequestId.makeUnsafe("request-1"),
+          answers: {
+            Language: "TypeScript",
+            Frontend: ["React", "Astro"],
+          },
+          createdAt: now,
+        },
+        readModel,
+      }),
+    );
+
+    const event = Array.isArray(result) ? result[0] : result;
+    expect(event?.type).toBe("thread.user-input-response-requested");
+    if (!event || event.type !== "thread.user-input-response-requested") {
+      return;
+    }
+    expect(event.payload.answers).toEqual({
+      Language: "TypeScript",
+      Frontend: ["React", "Astro"],
     });
   });
 });

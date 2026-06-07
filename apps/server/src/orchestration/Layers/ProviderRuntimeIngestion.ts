@@ -4,13 +4,14 @@ import {
   CommandId,
   MessageId,
   type OrchestrationEvent,
+  type OrchestrationProjectShell,
   type OrchestrationProposedPlanId,
   CheckpointRef,
   isToolLifecycleItemType,
   ThreadId,
   TurnId,
   type OrchestrationThreadActivity,
-  type OrchestrationReadModel,
+  type OrchestrationThread,
   type ProviderRuntimeEvent,
   type RuntimeMode,
 } from "@t3tools/contracts";
@@ -34,6 +35,7 @@ import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/Projectio
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
   ProviderRuntimeIngestionService,
   type ProviderRuntimeIngestionShape,
@@ -57,6 +59,11 @@ const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(120);
 const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 10_000;
 const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
+const MAX_ACTIVITY_DATA_JSON_CHARS = 16_000;
+const MAX_ACTIVITY_DATA_STRING_CHARS = 2_000;
+const MAX_ACTIVITY_DATA_ARRAY_ITEMS = 24;
+const MAX_ACTIVITY_DATA_OBJECT_KEYS = 64;
+const ACTIVITY_DATA_TRUNCATION_MARKER = "__synaraTruncated";
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
 type TurnStartRequestedDomainEvent = Extract<
@@ -125,6 +132,194 @@ function inferRuntimeModeFromUserInputAnswers(
 
 function truncateDetail(value: string, limit = 180): string {
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
+}
+
+function stringifyJsonLike(value: unknown): string {
+  const seen = new WeakSet<object>();
+  return (
+    JSON.stringify(value, (_key, entry) => {
+      if (typeof entry === "bigint") {
+        return entry.toString();
+      }
+      if (typeof entry === "function" || typeof entry === "symbol") {
+        return undefined;
+      }
+      if (entry && typeof entry === "object") {
+        if (seen.has(entry)) {
+          return "[Circular]";
+        }
+        seen.add(entry);
+      }
+      return entry;
+    }) ?? "null"
+  );
+}
+
+function truncateJsonString(value: string, limit: number): string {
+  return value.length > limit ? `${value.slice(0, Math.max(0, limit - 15))}... [truncated]` : value;
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function activityPayloadKeyRank(key: string): number {
+  const ranks: Record<string, number> = {
+    itemType: 0,
+    status: 1,
+    title: 2,
+    detail: 3,
+    toolName: 4,
+    tool: 5,
+    toolCallId: 6,
+    callID: 7,
+    callId: 8,
+    command: 9,
+    cmd: 10,
+    input: 11,
+    rawInput: 12,
+    arguments: 13,
+    args: 14,
+    params: 15,
+    item: 16,
+    result: 17,
+    rawOutput: 18,
+    output: 19,
+    data: 20,
+    commandActions: 21,
+    files: 22,
+    changes: 23,
+    path: 24,
+    file: 25,
+    filePath: 26,
+    stdout: 27,
+    stderr: 28,
+    content: 29,
+    totalFiles: 30,
+    truncated: 31,
+  };
+  return ranks[key] ?? 100;
+}
+
+function truncateJsonValue(
+  value: unknown,
+  options: {
+    readonly stringLimit: number;
+    readonly arrayItems: number;
+    readonly objectKeys: number;
+    readonly depth: number;
+    readonly seen?: WeakSet<object>;
+  },
+): unknown {
+  if (value === null || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return truncateJsonString(value, options.stringLimit);
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (typeof value === "function" || typeof value === "symbol" || value === undefined) {
+    return null;
+  }
+  const seen = options.seen ?? new WeakSet<object>();
+  if (value && typeof value === "object") {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+  }
+  if (options.depth <= 0) {
+    return isJsonObject(value) || Array.isArray(value)
+      ? {
+          [ACTIVITY_DATA_TRUNCATION_MARKER]: true,
+        }
+      : String(value);
+  }
+  if (Array.isArray(value)) {
+    const retained = value
+      .slice(0, options.arrayItems)
+      .map((entry) => truncateJsonValue(entry, { ...options, depth: options.depth - 1 }));
+    if (value.length > options.arrayItems) {
+      retained.push({
+        [ACTIVITY_DATA_TRUNCATION_MARKER]: true,
+        omittedItems: value.length - options.arrayItems,
+      });
+    }
+    return retained;
+  }
+  if (!isJsonObject(value)) {
+    return String(value);
+  }
+
+  const entries = Object.entries(value)
+    .filter(
+      ([, entry]) =>
+        entry !== undefined && typeof entry !== "function" && typeof entry !== "symbol",
+    )
+    .toSorted((left, right) => {
+      const byRank = activityPayloadKeyRank(left[0]) - activityPayloadKeyRank(right[0]);
+      return byRank !== 0 ? byRank : left[0].localeCompare(right[0]);
+    });
+  const retainedEntries = entries.slice(0, options.objectKeys);
+  const result: Record<string, unknown> = {};
+  for (const [key, entry] of retainedEntries) {
+    result[key] = truncateJsonValue(entry, { ...options, depth: options.depth - 1 });
+  }
+  if (entries.length > options.objectKeys) {
+    result[ACTIVITY_DATA_TRUNCATION_MARKER] = true;
+    result.omittedKeys = entries.length - options.objectKeys;
+  }
+  return result;
+}
+
+function boundActivityData(value: unknown): unknown {
+  const serialized = stringifyJsonLike(value);
+  if (serialized.length <= MAX_ACTIVITY_DATA_JSON_CHARS) {
+    return JSON.parse(serialized);
+  }
+
+  const withTruncationMetadata = (bounded: unknown): Record<string, unknown> => {
+    const metadata = {
+      [ACTIVITY_DATA_TRUNCATION_MARKER]: true,
+      originalJsonChars: serialized.length,
+    };
+    return isJsonObject(bounded) ? { ...bounded, ...metadata } : { ...metadata, value: bounded };
+  };
+  const hardFallback = (): Record<string, unknown> => ({
+    [ACTIVITY_DATA_TRUNCATION_MARKER]: true,
+    originalJsonChars: serialized.length,
+    preview: truncateJsonString(serialized, MAX_ACTIVITY_DATA_STRING_CHARS),
+  });
+
+  const compact = truncateJsonValue(value, {
+    stringLimit: MAX_ACTIVITY_DATA_STRING_CHARS,
+    arrayItems: MAX_ACTIVITY_DATA_ARRAY_ITEMS,
+    objectKeys: MAX_ACTIVITY_DATA_OBJECT_KEYS,
+    depth: 6,
+  });
+  const compactWithMetadata = withTruncationMetadata(compact);
+  if (stringifyJsonLike(compactWithMetadata).length <= MAX_ACTIVITY_DATA_JSON_CHARS) {
+    return compactWithMetadata;
+  }
+
+  const bounded = withTruncationMetadata(
+    truncateJsonValue(value, {
+      stringLimit: 800,
+      arrayItems: 12,
+      objectKeys: 32,
+      depth: 4,
+    }),
+  );
+  return stringifyJsonLike(bounded).length <= MAX_ACTIVITY_DATA_JSON_CHARS
+    ? bounded
+    : hardFallback();
+}
+
+// Tool payloads power the timeline, but they must stay small enough for snapshots.
+function activityDataField(data: unknown): { readonly data?: unknown } {
+  return data === undefined ? {} : { data: boundActivityData(data) };
 }
 
 // Keep MCP progress payloads available to the web timeline so it can render the specific tool call.
@@ -687,7 +882,7 @@ function runtimeEventToActivities(
               itemType: event.payload.itemType,
               status: event.payload.status,
               ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
-              ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
+              ...activityDataField(event.payload.data),
             }),
             turnId: toTurnId(event.turnId) ?? null,
             ...maybeSequence,
@@ -709,7 +904,7 @@ function runtimeEventToActivities(
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.title ? { title: event.payload.title } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
-            ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
+            ...activityDataField(event.payload.data),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -733,7 +928,7 @@ function runtimeEventToActivities(
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.title ? { title: event.payload.title } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
-            ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
+            ...activityDataField(event.payload.data),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -757,7 +952,7 @@ function runtimeEventToActivities(
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.title ? { title: event.payload.title } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
-            ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
+            ...activityDataField(event.payload.data),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -906,6 +1101,7 @@ function runtimeEventToActivities(
 
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
 
@@ -931,15 +1127,38 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed({ text: "", createdAt: "" }),
   });
 
+  const getThreadDetail = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+  ): Effect.fn.Return<OrchestrationThread | undefined> {
+    return Option.getOrUndefined(
+      yield* projectionSnapshotQuery
+        .getThreadDetailById(threadId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+    );
+  });
+
+  const getProjectShell = Effect.fnUntraced(function* (
+    thread: Pick<OrchestrationThread, "projectId">,
+  ): Effect.fn.Return<OrchestrationProjectShell | undefined> {
+    return Option.getOrUndefined(
+      yield* projectionSnapshotQuery
+        .getProjectShellById(thread.projectId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+    );
+  });
+
   const isGitRepoForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
-    const readModel = yield* orchestrationEngine.getReadModel();
-    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    const thread = yield* getThreadDetail(threadId);
     if (!thread) {
+      return false;
+    }
+    const project = yield* getProjectShell(thread);
+    if (!project) {
       return false;
     }
     const workspaceCwd = resolveThreadWorkspaceCwd({
       thread,
-      projects: readModel.projects,
+      projects: [project],
     });
     if (!workspaceCwd) {
       return false;
@@ -1053,7 +1272,7 @@ const make = Effect.gen(function* () {
 
   const resolveAssistantCompletionMessageId = (input: {
     event: ProviderRuntimeEvent;
-    thread: OrchestrationReadModel["threads"][number];
+    thread: OrchestrationThread;
     turnId?: TurnId;
   }) =>
     Effect.gen(function* () {
@@ -1077,15 +1296,15 @@ const make = Effect.gen(function* () {
         if (knownAssistantMessageIds.size > 1) {
           const preferredKnownMessage = input.thread.messages
             .filter(
-              (message: OrchestrationReadModel["threads"][number]["messages"][number]) =>
+              (message: OrchestrationThread["messages"][number]) =>
                 message.role === "assistant" &&
                 message.turnId === input.turnId &&
                 knownAssistantMessageIds.has(message.id),
             )
             .toSorted(
               (
-                left: OrchestrationReadModel["threads"][number]["messages"][number],
-                right: OrchestrationReadModel["threads"][number]["messages"][number],
+                left: OrchestrationThread["messages"][number],
+                right: OrchestrationThread["messages"][number],
               ) => {
                 if (left.streaming !== right.streaming) {
                   return left.streaming ? -1 : 1;
@@ -1235,7 +1454,7 @@ const make = Effect.gen(function* () {
 
   const appendGeneratedImageReference = (input: {
     event: ProviderRuntimeEvent;
-    thread: OrchestrationReadModel["threads"][number];
+    thread: OrchestrationThread;
     imagePath: string;
     turnId?: TurnId;
     createdAt: string;
@@ -1474,8 +1693,7 @@ const make = Effect.gen(function* () {
     implementationThreadId: ThreadId,
     implementedAt: string,
   ) {
-    const readModel = yield* orchestrationEngine.getReadModel();
-    const sourceThread = readModel.threads.find((entry) => entry.id === sourceThreadId);
+    const sourceThread = yield* getThreadDetail(sourceThreadId);
     const sourcePlan = sourceThread?.proposedPlans.find((entry) => entry.id === sourcePlanId);
     if (!sourceThread || !sourcePlan || sourcePlan.implementedAt !== null) {
       return;
@@ -1499,9 +1717,8 @@ const make = Effect.gen(function* () {
 
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
-      const readModel = yield* orchestrationEngine.getReadModel();
       const now = event.createdAt;
-      const parentThread = readModel.threads.find((entry) => entry.id === event.threadId);
+      const parentThread = yield* getThreadDetail(event.threadId);
       if (!parentThread) return;
 
       const ensureSubagentThread = (
@@ -1515,10 +1732,7 @@ const make = Effect.gen(function* () {
           const childThreadId = subagentThreadId(parentThread.id, providerThreadId);
           // A single provider event can describe the child both as a collab receiver and
           // as the event's provider thread, so re-read after any earlier dispatch in this handler.
-          const latestReadModel = yield* orchestrationEngine.getReadModel();
-          const existingThread = latestReadModel.threads.find(
-            (entry) => entry.id === childThreadId,
-          );
+          const existingThread = yield* projectionSnapshotQuery.getThreadDetailById(childThreadId);
           const resolvedModelSelection =
             identity?.model && identity.modelIsRequestedHint !== true
               ? {
@@ -1527,7 +1741,7 @@ const make = Effect.gen(function* () {
                 }
               : undefined;
 
-          if (!existingThread) {
+          if (Option.isNone(existingThread)) {
             yield* orchestrationEngine.dispatch({
               type: "thread.create",
               commandId: providerCommandId(event, "subagent-thread-create"),
@@ -1553,60 +1767,69 @@ const make = Effect.gen(function* () {
               subagentRole: identity?.role ?? null,
               createdAt: now,
             });
-          } else if (
-            identity?.agentId !== undefined ||
-            identity?.nickname !== undefined ||
-            identity?.role !== undefined ||
-            (identity?.model !== undefined && identity.modelIsRequestedHint !== true)
-          ) {
-            yield* orchestrationEngine.dispatch({
-              type: "thread.meta.update",
-              commandId: providerCommandId(event, "subagent-thread-meta-update"),
-              threadId: childThreadId,
-              ...(identity?.nickname !== undefined || identity?.role !== undefined
-                ? {
-                    title: subagentThreadTitle({
-                      nickname: identity?.nickname ?? existingThread.subagentNickname ?? undefined,
-                      role: identity?.role ?? existingThread.subagentRole ?? undefined,
-                      providerThreadId,
-                    }),
-                  }
-                : {}),
-              parentThreadId: parentThread.id,
-              ...(resolvedModelSelection !== undefined &&
-              existingThread.modelSelection.model !== resolvedModelSelection.model
-                ? { modelSelection: resolvedModelSelection }
-                : {}),
-              ...(identity?.agentId !== undefined ? { subagentAgentId: identity.agentId } : {}),
-              ...(identity?.nickname !== undefined ? { subagentNickname: identity.nickname } : {}),
-              ...(identity?.role !== undefined ? { subagentRole: identity.role } : {}),
-            });
+          } else {
+            const existingThreadShell = existingThread.value;
+            if (
+              identity?.agentId !== undefined ||
+              identity?.nickname !== undefined ||
+              identity?.role !== undefined ||
+              (identity?.model !== undefined && identity.modelIsRequestedHint !== true)
+            ) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.meta.update",
+                commandId: providerCommandId(event, "subagent-thread-meta-update"),
+                threadId: childThreadId,
+                ...(identity?.nickname !== undefined || identity?.role !== undefined
+                  ? {
+                      title: subagentThreadTitle({
+                        nickname:
+                          identity?.nickname ?? existingThreadShell.subagentNickname ?? undefined,
+                        role: identity?.role ?? existingThreadShell.subagentRole ?? undefined,
+                        providerThreadId,
+                      }),
+                    }
+                  : {}),
+                parentThreadId: parentThread.id,
+                ...(resolvedModelSelection !== undefined &&
+                existingThreadShell.modelSelection.model !== resolvedModelSelection.model
+                  ? { modelSelection: resolvedModelSelection }
+                  : {}),
+                ...(identity?.agentId !== undefined ? { subagentAgentId: identity.agentId } : {}),
+                ...(identity?.nickname !== undefined
+                  ? { subagentNickname: identity.nickname }
+                  : {}),
+                ...(identity?.role !== undefined ? { subagentRole: identity.role } : {}),
+              });
+            }
           }
 
           return {
             threadId: childThreadId,
-            thread: existingThread ?? {
-              ...parentThread,
-              id: childThreadId,
-              title: subagentThreadTitle({
-                nickname: identity?.nickname,
-                role: identity?.role,
-                providerThreadId,
+            thread: Option.match(existingThread, {
+              onSome: (thread) => thread,
+              onNone: () => ({
+                ...parentThread,
+                id: childThreadId,
+                title: subagentThreadTitle({
+                  nickname: identity?.nickname,
+                  role: identity?.role,
+                  providerThreadId,
+                }),
+                parentThreadId: parentThread.id,
+                subagentAgentId: identity?.agentId ?? null,
+                subagentNickname: identity?.nickname ?? null,
+                subagentRole: identity?.role ?? null,
+                modelSelection: resolvedModelSelection ?? parentThread.modelSelection,
+                latestTurn: null,
+                messages: [],
+                proposedPlans: [],
+                activities: [],
+                checkpoints: [],
+                session: null,
+                createdAt: now,
+                updatedAt: now,
               }),
-              parentThreadId: parentThread.id,
-              subagentAgentId: identity?.agentId ?? null,
-              subagentNickname: identity?.nickname ?? null,
-              subagentRole: identity?.role ?? null,
-              modelSelection: resolvedModelSelection ?? parentThread.modelSelection,
-              latestTurn: null,
-              messages: [],
-              proposedPlans: [],
-              activities: [],
-              checkpoints: [],
-              session: null,
-              createdAt: now,
-              updatedAt: now,
-            },
+            }),
           };
         });
 
@@ -2063,8 +2286,9 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      const readModel = yield* orchestrationEngine.getReadModel();
-      const thread = readModel.threads.find((entry) => entry.id === event.payload.threadId);
+      const thread = Option.getOrUndefined(
+        yield* projectionSnapshotQuery.getThreadShellById(event.payload.threadId),
+      );
       const activeTurnId = thread?.session?.activeTurnId ?? undefined;
       if (!activeTurnId) {
         return;

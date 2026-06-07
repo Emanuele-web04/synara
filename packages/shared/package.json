@@ -16,6 +16,10 @@
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"
     },
+    "./errorMessages": {
+      "types": "./src/errorMessages.ts",
+      "import": "./src/errorMessages.ts"
+    },
     "./shell": {
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"
@@ -23,6 +27,10 @@
     "./codexConfig": {
       "types": "./src/codexConfig.ts",
       "import": "./src/codexConfig.ts"
+    },
+    "./desktopChrome": {
+      "types": "./src/desktopChrome.ts",
+      "import": "./src/desktopChrome.ts"
     },
     "./Net": {
       "types": "./src/Net.ts",
@@ -63,6 +71,10 @@
     "./threadSummary": {
       "types": "./src/threadSummary.ts",
       "import": "./src/threadSummary.ts"
+    },
+    "./pinnedMessages": {
+      "types": "./src/pinnedMessages.ts",
+      "import": "./src/pinnedMessages.ts"
     },
     "./threadWorkspace": {
       "types": "./src/threadWorkspace.ts",

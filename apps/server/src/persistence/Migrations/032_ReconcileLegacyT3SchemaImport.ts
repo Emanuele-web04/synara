@@ -1,7 +1,7 @@
 /**
  * Reconciles schema after a legacy ~/.t3 import where the imported
  * `effect_sql_migrations` tracker already records IDs 17-31 under unrelated
- * T3 Code names. Because the migrator skips by ID, the renumbered DP Code
+ * T3 Code names. Because the migrator skips by ID, the renumbered Synara
  * migrations 17-31 never run on those imports, leaving columns like
  * `env_mode` missing and crashing the server on first query.
  *
@@ -10,7 +10,7 @@
  * so the migrator skipped it too. This migration is at a fresh ID beyond
  * any T3 Code migration, guaranteeing it runs on import.
  *
- * Idempotent and a no-op for fresh DP Code installs (every column already
+ * Idempotent and a no-op for fresh Synara installs (every column already
  * exists from the in-order runs of 17-31).
  */
 import * as SqlClient from "effect/unstable/sql/SqlClient";

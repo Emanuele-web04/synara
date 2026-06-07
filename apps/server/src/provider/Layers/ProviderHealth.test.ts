@@ -1,18 +1,28 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import type { ServerProviderStatus } from "@t3tools/contracts";
 import { describe, it, assert } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import { DPCODE_CODEX_HOME_OVERLAY_DIR } from "../../codexHomePaths";
 import {
   checkClaudeProviderStatus,
   checkCodexProviderStatus,
   checkCursorProviderStatus,
+  checkGrokProviderStatus,
   checkOpenCodeProviderStatus,
   hasCustomModelProvider,
+  makeCheckClaudeProviderStatus,
+  makeCheckCodexProviderStatus,
+  makeCheckCursorProviderStatus,
+  makeCheckGrokProviderStatus,
+  makeCheckKiloProviderStatus,
+  makeCheckOpenCodeProviderStatus,
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
   readCodexConfigModelProvider,
+  stabilizeProviderStatusesAgainstTransientTimeouts,
 } from "./ProviderHealth";
 
 // ── Test helpers ────────────────────────────────────────────────────
@@ -35,13 +45,25 @@ function mockHandle(result: { stdout: string; stderr: string; code: number }) {
 }
 
 function mockSpawnerLayer(
-  handler: (args: ReadonlyArray<string>) => { stdout: string; stderr: string; code: number },
+  handler: (
+    args: ReadonlyArray<string>,
+    command: string,
+    env: NodeJS.ProcessEnv | undefined,
+  ) => {
+    stdout: string;
+    stderr: string;
+    code: number;
+  },
 ) {
   return Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make((command) => {
-      const cmd = command as unknown as { args: ReadonlyArray<string> };
-      return Effect.succeed(mockHandle(handler(cmd.args)));
+      const cmd = command as unknown as {
+        command: string;
+        args: ReadonlyArray<string>;
+        options?: { env?: NodeJS.ProcessEnv };
+      };
+      return Effect.succeed(mockHandle(handler(cmd.args, cmd.command, cmd.options?.env)));
     }),
   );
 }
@@ -71,19 +93,34 @@ function withTempCodexHome(configContent?: string) {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const tmpDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-test-codex-" });
+    const runtimeDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-test-runtime-" });
 
     yield* Effect.acquireRelease(
       Effect.sync(() => {
         const originalCodexHome = process.env.CODEX_HOME;
+        const originalDpCodeHome = process.env.DPCODE_HOME;
+        const originalPortkeyApiKey = process.env.PORTKEY_API_KEY;
         process.env.CODEX_HOME = tmpDir;
-        return originalCodexHome;
+        process.env.DPCODE_HOME = runtimeDir;
+        process.env.PORTKEY_API_KEY ??= "test-portkey-key";
+        return { originalCodexHome, originalDpCodeHome, originalPortkeyApiKey };
       }),
-      (originalCodexHome) =>
+      ({ originalCodexHome, originalDpCodeHome, originalPortkeyApiKey }) =>
         Effect.sync(() => {
           if (originalCodexHome !== undefined) {
             process.env.CODEX_HOME = originalCodexHome;
           } else {
             delete process.env.CODEX_HOME;
+          }
+          if (originalDpCodeHome !== undefined) {
+            process.env.DPCODE_HOME = originalDpCodeHome;
+          } else {
+            delete process.env.DPCODE_HOME;
+          }
+          if (originalPortkeyApiKey !== undefined) {
+            process.env.PORTKEY_API_KEY = originalPortkeyApiKey;
+          } else {
+            delete process.env.PORTKEY_API_KEY;
           }
         }),
     );
@@ -92,11 +129,130 @@ function withTempCodexHome(configContent?: string) {
       yield* fileSystem.writeFileString(path.join(tmpDir, "config.toml"), configContent);
     }
 
-    return { tmpDir } as const;
+    return { tmpDir, runtimeDir } as const;
   });
 }
 
 it.layer(NodeServices.layer)("ProviderHealth", (it) => {
+  describe("stabilizeProviderStatusesAgainstTransientTimeouts", () => {
+    const previousReadyOpenCode = {
+      provider: "opencode",
+      status: "ready",
+      available: true,
+      authStatus: "unknown",
+      version: "1.15.13",
+      checkedAt: "2026-06-04T17:00:00.000Z",
+      message:
+        "OpenCode CLI is installed. Configure provider credentials inside OpenCode as needed.",
+    } satisfies ServerProviderStatus;
+
+    it("keeps an already usable provider available after a transient command timeout", () => {
+      const result = stabilizeProviderStatusesAgainstTransientTimeouts(
+        [previousReadyOpenCode],
+        [
+          {
+            provider: "opencode",
+            status: "error",
+            available: false,
+            authStatus: "unknown",
+            checkedAt: "2026-06-04T17:01:00.000Z",
+            message:
+              "OpenCode CLI is installed but failed to run. Timed out while running command.",
+          },
+        ],
+      );
+
+      assert.deepStrictEqual(result, [
+        {
+          ...previousReadyOpenCode,
+          checkedAt: "2026-06-04T17:01:00.000Z",
+        },
+      ]);
+    });
+
+    it("does not hide non-timeout provider failures", () => {
+      const unavailableStatus = {
+        provider: "opencode",
+        status: "error",
+        available: false,
+        authStatus: "unknown",
+        checkedAt: "2026-06-04T17:01:00.000Z",
+        message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
+      } satisfies ServerProviderStatus;
+
+      assert.deepStrictEqual(
+        stabilizeProviderStatusesAgainstTransientTimeouts(
+          [previousReadyOpenCode],
+          [unavailableStatus],
+        ),
+        [unavailableStatus],
+      );
+    });
+
+    it("keeps an already usable provider ready after a transient auth timeout warning", () => {
+      const previousReadyClaude = {
+        provider: "claudeAgent",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+        version: "2.1.162",
+        checkedAt: "2026-06-04T17:00:00.000Z",
+      } satisfies ServerProviderStatus;
+
+      const result = stabilizeProviderStatusesAgainstTransientTimeouts(
+        [previousReadyClaude],
+        [
+          {
+            provider: "claudeAgent",
+            status: "warning",
+            available: true,
+            authStatus: "unknown",
+            version: "2.1.162",
+            checkedAt: "2026-06-04T17:01:00.000Z",
+            message:
+              "Could not verify Claude authentication status. Timed out while running command.",
+          },
+        ],
+      );
+
+      assert.deepStrictEqual(result, [
+        {
+          ...previousReadyClaude,
+          checkedAt: "2026-06-04T17:01:00.000Z",
+        },
+      ]);
+    });
+
+    it("does not keep a stale Claude auth error after a transient auth timeout", () => {
+      const previousUnauthenticatedClaude = {
+        provider: "claudeAgent",
+        status: "error",
+        available: true,
+        authStatus: "unauthenticated",
+        version: "2.1.162",
+        checkedAt: "2026-06-04T17:00:00.000Z",
+        message: "Claude is not authenticated. Run `claude auth login` and try again.",
+      } satisfies ServerProviderStatus;
+      const authTimeoutWarning = {
+        provider: "claudeAgent",
+        status: "warning",
+        available: true,
+        authStatus: "unknown",
+        version: "2.1.162",
+        checkedAt: "2026-06-04T17:01:00.000Z",
+        message: "Could not verify Claude authentication status. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+
+      assert.deepStrictEqual(
+        stabilizeProviderStatusesAgainstTransientTimeouts(
+          [previousUnauthenticatedClaude],
+          [authTimeoutWarning],
+        ),
+        [authTimeoutWarning],
+      );
+    });
+  });
+
   // ── checkCodexProviderStatus tests ────────────────────────────────
   //
   // These tests control CODEX_HOME to ensure the custom-provider detection
@@ -126,6 +282,65 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
+    it.effect("uses configured codex binary for version and auth probes", () =>
+      Effect.gen(function* () {
+        yield* withTempCodexHome();
+        const status = yield* makeCheckCodexProviderStatus("/custom/bin/codex");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/codex");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            if (joined === "login status") return { stdout: "Logged in\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("uses configured codex home for version, config, and auth probes", () => {
+      let sawLoginStatusProbe = false;
+      let expectedCodexHome: string | undefined;
+      return Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { tmpDir, runtimeDir } = yield* withTempCodexHome();
+        yield* fileSystem.writeFileString(
+          path.join(tmpDir, "config.toml"),
+          'model_provider = "portkey"\n',
+        );
+        const configuredHome = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-configured-codex-",
+        });
+        yield* fileSystem.writeFileString(
+          path.join(configuredHome, "config.toml"),
+          'model_provider = "openai"\n',
+        );
+        expectedCodexHome = path.join(runtimeDir, DPCODE_CODEX_HOME_OVERLAY_DIR);
+
+        const status = yield* makeCheckCodexProviderStatus("codex", configuredHome);
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.message, undefined);
+        assert.strictEqual(sawLoginStatusProbe, true);
+        assert.notStrictEqual(configuredHome, tmpDir);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, _command, env) => {
+            assert.strictEqual(env?.CODEX_HOME, expectedCodexHome);
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            if (joined === "login status") {
+              sawLoginStatusProbe = true;
+              return { stdout: "Logged in\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      );
+    });
+
     it.effect("returns unavailable when codex is missing", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome();
@@ -148,7 +363,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "unknown");
         assert.strictEqual(
           status.message,
-          "Codex CLI v0.36.0 is too old for DP Code. Upgrade to v0.37.0 or newer and restart DP Code.",
+          "Codex CLI v0.36.0 is too old for Synara. Upgrade to v0.37.0 or newer and restart Synara.",
         );
       }).pipe(
         Effect.provide(
@@ -496,6 +711,28 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
+    it.effect("uses configured claude binary for version and auth probes", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckClaudeProviderStatus(undefined, "/custom/bin/claude");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/claude");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+            if (joined === "auth status")
+              return {
+                stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
+                stderr: "",
+                code: 0,
+              };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
     it.effect("returns unavailable when claude is missing", () =>
       Effect.gen(function* () {
         const status = yield* checkClaudeProviderStatus;
@@ -619,6 +856,22 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
+    it.effect("uses configured opencode binary for version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckOpenCodeProviderStatus("/custom/bin/opencode");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/opencode");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "opencode 1.3.17\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
     it.effect("returns unavailable when opencode is missing", () =>
       Effect.gen(function* () {
         const status = yield* checkOpenCodeProviderStatus;
@@ -634,6 +887,125 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     );
   });
 
+  describe("checkKiloProviderStatus", () => {
+    it.effect("uses configured Kilo binary for version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckKiloProviderStatus("/custom/bin/kilo");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/kilo");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "kilo 7.2.52\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+  });
+
+  describe("checkGrokProviderStatus", () => {
+    it.effect("returns ready when Grok CLI is installed", () => {
+      const previousXaiApiKey = process.env.XAI_API_KEY;
+      const previousApiKey = process.env.GROK_CODE_XAI_API_KEY;
+      delete process.env.XAI_API_KEY;
+      delete process.env.GROK_CODE_XAI_API_KEY;
+      return Effect.gen(function* () {
+        const status = yield* checkGrokProviderStatus;
+        assert.strictEqual(status.provider, "grok");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(status.version, "0.1.0");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (previousXaiApiKey === undefined) {
+              delete process.env.XAI_API_KEY;
+            } else {
+              process.env.XAI_API_KEY = previousXaiApiKey;
+            }
+            if (previousApiKey === undefined) {
+              delete process.env.GROK_CODE_XAI_API_KEY;
+            } else {
+              process.env.GROK_CODE_XAI_API_KEY = previousApiKey;
+            }
+          }),
+        ),
+      );
+    });
+
+    it.effect("marks Grok authenticated when XAI_API_KEY is present", () => {
+      const previousXaiApiKey = process.env.XAI_API_KEY;
+      const previousApiKey = process.env.GROK_CODE_XAI_API_KEY;
+      process.env.XAI_API_KEY = "xai-test-key";
+      delete process.env.GROK_CODE_XAI_API_KEY;
+      return Effect.gen(function* () {
+        const status = yield* checkGrokProviderStatus;
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.authType, "apiKey");
+        assert.strictEqual(status.authLabel, "xAI API Key");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (previousXaiApiKey === undefined) {
+              delete process.env.XAI_API_KEY;
+            } else {
+              process.env.XAI_API_KEY = previousXaiApiKey;
+            }
+            if (previousApiKey === undefined) {
+              delete process.env.GROK_CODE_XAI_API_KEY;
+            } else {
+              process.env.GROK_CODE_XAI_API_KEY = previousApiKey;
+            }
+          }),
+        ),
+      );
+    });
+
+    it.effect("uses configured Grok binary for version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckGrokProviderStatus("/custom/bin/grok");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/grok");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("returns unavailable when Grok CLI is missing", () =>
+      Effect.gen(function* () {
+        const status = yield* checkGrokProviderStatus;
+        assert.strictEqual(status.provider, "grok");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, false);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(status.message, "Grok CLI (`grok`) is not installed or not on PATH.");
+      }).pipe(Effect.provide(failingSpawnerLayer("spawn grok ENOENT"))),
+    );
+  });
+
   describe("checkCursorProviderStatus", () => {
     it.effect("returns ready when Cursor Agent is installed", () =>
       Effect.gen(function* () {
@@ -644,7 +1016,44 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "unknown");
       }).pipe(
         Effect.provide(
-          mockSpawnerLayer((args) => {
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "cursor-agent");
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("maps the old ambiguous agent default to cursor-agent", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckCursorProviderStatus("agent");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "cursor-agent");
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("uses configured Cursor Agent binary for version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckCursorProviderStatus("/custom/bin/agent");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/agent");
             const joined = args.join(" ");
             if (joined === "--version") {
               return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };
@@ -664,9 +1073,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "unknown");
         assert.strictEqual(
           status.message,
-          "Cursor Agent CLI (`agent`) is not installed or not on PATH.",
+          "Cursor Agent CLI (`cursor-agent`) is not installed or not on PATH.",
         );
-      }).pipe(Effect.provide(failingSpawnerLayer("spawn agent ENOENT"))),
+      }).pipe(Effect.provide(failingSpawnerLayer("spawn cursor-agent ENOENT"))),
     );
 
     it.effect("returns unavailable when Cursor Agent exits with an error", () =>
@@ -682,7 +1091,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         );
       }).pipe(
         Effect.provide(
-          mockSpawnerLayer((args) => {
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "cursor-agent");
             const joined = args.join(" ");
             if (joined === "--version") {
               return { stdout: "", stderr: "version failed\n", code: 1 };

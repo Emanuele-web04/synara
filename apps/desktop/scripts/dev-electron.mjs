@@ -56,7 +56,7 @@ function listStaleComputerUsePids() {
     return [];
   }
 
-  const result = spawnSync("pgrep", ["-fal", "DP Code \\(Dev\\).*(computerUseMcp\\.mjs mcp)"], {
+  const result = spawnSync("pgrep", ["-fal", "Synara \\(Dev\\).*(computerUseMcp\\.mjs mcp)"], {
     encoding: "utf8",
   });
   const output = typeof result.stdout === "string" ? result.stdout.trim() : "";
@@ -97,7 +97,7 @@ function cleanupStaleComputerUseApps() {
   }
 
   console.error(
-    `[desktop-dev] Cleaning up ${stalePids.length} stale DP Code (Dev) Computer Use helper process${stalePids.length === 1 ? "" : "es"} from other worktrees.`,
+    `[desktop-dev] Cleaning up ${stalePids.length} stale Synara (Dev) Computer Use helper process${stalePids.length === 1 ? "" : "es"} from other worktrees.`,
   );
 
   for (const pid of stalePids) {
@@ -116,18 +116,16 @@ function warnIfAlphaAppRunning() {
     return;
   }
 
-  const result = spawnSync(
-    "pgrep",
-    ["-fal", "/Applications/DP Code \\(Alpha\\)\\.app/Contents/MacOS/DP Code \\(Alpha\\)"],
-    { encoding: "utf8" },
-  );
+  const result = spawnSync("pgrep", ["-fal", "/Applications/Synara\\.app/Contents/MacOS/Synara"], {
+    encoding: "utf8",
+  });
   const output = typeof result.stdout === "string" ? result.stdout.trim() : "";
   if (!output) {
     return;
   }
 
   console.error(
-    "[desktop-dev] DP Code (Alpha) is still running. Close it before testing voice in DP Code (Dev), or you may be looking at the wrong app/runtime.",
+    "[desktop-dev] Synara is still running. Close it before testing voice in Synara (Dev), or you may be looking at the wrong app/runtime.",
   );
   console.error(output);
 }

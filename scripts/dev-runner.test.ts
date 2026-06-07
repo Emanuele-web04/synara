@@ -46,7 +46,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
   });
 
   describe("createDevRunnerEnv", () => {
-    it.effect("defaults T3CODE_HOME to ~/.dpcode when not provided", () =>
+    it.effect("defaults SYNARA_HOME to ~/.synara when not provided", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
           mode: "dev",
@@ -63,7 +63,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(env.T3CODE_HOME, resolve(homedir(), ".dpcode"));
+        assert.equal(env.SYNARA_HOME, resolve(homedir(), ".synara"));
+        assert.equal(env.T3CODE_HOME, resolve(homedir(), ".synara"));
       }),
     );
 
@@ -85,6 +86,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         });
 
         assert.equal(env.T3CODE_HOME, resolve("/tmp/custom-t3"));
+        assert.equal(env.SYNARA_HOME, resolve("/tmp/custom-t3"));
         assert.equal(env.T3CODE_PORT, "4222");
         assert.equal(env.VITE_WS_URL, "ws://[::1]:4222");
         assert.equal(env.T3CODE_NO_BROWSER, "1");
@@ -159,6 +161,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
         assert.equal(env.T3CODE_HOME, resolve("/tmp/my-t3"));
         assert.equal(env.DPCODE_HOME, resolve("/tmp/my-t3"));
+        assert.equal(env.SYNARA_HOME, resolve("/tmp/my-t3"));
       }),
     );
   });

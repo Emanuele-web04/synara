@@ -35,14 +35,14 @@ export function resolveDpCodeCodexHomeOverlayPath(
   env: NodeJS.ProcessEnv,
   sourceHomePath: string,
 ): string {
-  const runtimeHome = env.DPCODE_HOME?.trim() || env.T3CODE_HOME?.trim();
-  const overlayRoot = runtimeHome || path.join(path.dirname(sourceHomePath), ".dpcode", "runtime");
+  const runtimeHome = env.SYNARA_HOME?.trim() || env.DPCODE_HOME?.trim() || env.T3CODE_HOME?.trim();
+  const overlayRoot = runtimeHome || path.join(path.dirname(sourceHomePath), ".synara", "runtime");
   return path.join(overlayRoot, DPCODE_CODEX_HOME_OVERLAY_DIR);
 }
 
 /**
  * Returns the home directory that the codex app-server child process actually
- * writes under. This is the overlay home when DP Code wraps Codex with the
+ * writes under. This is the overlay home when Synara wraps Codex with the
  * dpcode-browser plugin disabled (the production default), otherwise the
  * caller-supplied or env-provided home.
  */

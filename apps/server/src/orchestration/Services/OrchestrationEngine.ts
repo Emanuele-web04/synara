@@ -1,7 +1,7 @@
 /**
  * OrchestrationEngineService - Service interface for orchestration command handling.
  *
- * Owns command validation/dispatch and in-memory read-model updates backed by
+ * Owns command validation/dispatch and lightweight command-state updates backed by
  * `OrchestrationEventStore` persistence. It does not own provider process
  * management or transport concerns (e.g. websocket request parsing).
  *
@@ -26,13 +26,6 @@ import type { OrchestrationEventStoreError } from "../../persistence/Errors.ts";
  */
 export interface OrchestrationEngineShape {
   /**
-   * Read the current in-memory orchestration read model.
-   *
-   * @returns Effect containing the latest read model.
-   */
-  readonly getReadModel: () => Effect.Effect<OrchestrationReadModel, never, never>;
-
-  /**
    * Replay persisted orchestration events from an exclusive sequence cursor.
    *
    * @param fromSequenceExclusive - Sequence cursor (exclusive).
@@ -41,6 +34,13 @@ export interface OrchestrationEngineShape {
   readonly readEvents: (
     fromSequenceExclusive: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
+
+  /**
+   * Read the command-oriented in-memory model used by orchestration tests and
+   * compatibility callers. Runtime snapshot reads should prefer
+   * ProjectionSnapshotQuery.
+   */
+  readonly getReadModel: () => Effect.Effect<OrchestrationReadModel, never, never>;
 
   /**
    * Dispatch a validated orchestration command.
@@ -60,7 +60,7 @@ export interface OrchestrationEngineShape {
    * existing chat rows.
    *
    * Replays the snapshot-related projector cursors and refreshes the in-memory
-   * read model from the repaired projection snapshot.
+   * command model from projection state.
    */
   readonly repairState: () => Effect.Effect<
     OrchestrationReadModel,
@@ -79,13 +79,6 @@ export interface OrchestrationEngineShape {
 /**
  * OrchestrationEngineService - Service tag for orchestration engine access.
  *
- * @example
- * ```ts
- * const program = Effect.gen(function* () {
- *   const engine = yield* OrchestrationEngineService
- *   return yield* engine.getReadModel()
- * })
- * ```
  */
 export class OrchestrationEngineService extends ServiceMap.Service<
   OrchestrationEngineService,

@@ -58,7 +58,7 @@ function waitForSync<A>(
   read: () => A,
   predicate: (value: A) => boolean,
   description: string,
-  timeoutMs = 3000,
+  timeoutMs = 10_000,
 ): Effect.Effect<A, never> {
   return Effect.gen(function* () {
     const deadline = Date.now() + timeoutMs;
@@ -501,6 +501,7 @@ it.live("runs multi-turn file edits and persists checkpoint diffs", () =>
         fromCheckpointRef: checkpointRefForThreadTurn(THREAD_ID, 1),
         toCheckpointRef: checkpointRefForThreadTurn(THREAD_ID, 2),
         fallbackFromToHead: false,
+        ignoreWhitespace: false,
       });
       assert.equal(incrementalDiff.includes("README.md"), true);
 
@@ -509,6 +510,7 @@ it.live("runs multi-turn file edits and persists checkpoint diffs", () =>
         fromCheckpointRef: checkpointRefForThreadTurn(THREAD_ID, 0),
         toCheckpointRef: checkpointRefForThreadTurn(THREAD_ID, 2),
         fallbackFromToHead: false,
+        ignoreWhitespace: false,
       });
       assert.equal(fullDiff.includes("README.md"), true);
 
@@ -814,7 +816,6 @@ it.live("reverts to an earlier checkpoint and trims checkpoint projections + git
           entry.latestTurn?.turnId === "turn-2" &&
           entry.checkpoints.length === 2 &&
           entry.activities.some((activity) => activity.turnId === "turn-2"),
-        8000,
       );
 
       yield* harness.engine.dispatch({

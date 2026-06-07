@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { isElectron } from "../env";
+import { isMacPlatform } from "../lib/utils";
 import {
   DEFAULT_THEME_STATE,
   type ChromeTheme,
@@ -33,7 +34,7 @@ type ThemeSnapshot = {
   systemDark: boolean;
 };
 
-const STORAGE_KEY = "dpcode:theme";
+const STORAGE_KEY = "synara:theme";
 const MEDIA_QUERY = "(prefers-color-scheme: dark)";
 
 let listeners: Array<() => void> = [];
@@ -156,6 +157,7 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
   const activeTheme = resolveThemePack(state, variant);
   const cssVariableBuild = buildThemeCssVariables(activeTheme, variant, {
     electron: isElectron,
+    isMac: isMacPlatform(typeof navigator === "undefined" ? "" : navigator.platform),
   });
 
   root.classList.toggle("dark", variant === "dark");

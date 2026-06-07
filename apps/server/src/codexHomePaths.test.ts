@@ -29,7 +29,14 @@ describe("resolveBaseCodexHomePath", () => {
 });
 
 describe("resolveDpCodeCodexHomeOverlayPath", () => {
-  it("anchors the overlay under DPCODE_HOME when set", () => {
+  it("anchors the overlay under SYNARA_HOME when set", () => {
+    assert.equal(
+      resolveDpCodeCodexHomeOverlayPath({ SYNARA_HOME: "/synara/runtime" }, "/users/me/.codex"),
+      path.join("/synara/runtime", "codex-home-overlay"),
+    );
+  });
+
+  it("honours the legacy DPCODE_HOME variable", () => {
     assert.equal(
       resolveDpCodeCodexHomeOverlayPath({ DPCODE_HOME: "/dp/runtime" }, "/users/me/.codex"),
       path.join("/dp/runtime", "codex-home-overlay"),
@@ -46,7 +53,7 @@ describe("resolveDpCodeCodexHomeOverlayPath", () => {
   it("derives a default overlay sibling of the source home", () => {
     assert.equal(
       resolveDpCodeCodexHomeOverlayPath({}, "/users/me/.codex"),
-      path.join("/users/me", ".dpcode", "runtime", "codex-home-overlay"),
+      path.join("/users/me", ".synara", "runtime", "codex-home-overlay"),
     );
   });
 });
@@ -68,10 +75,10 @@ describe("resolveActiveCodexHomeWritePath", () => {
   it("returns the overlay home when the plugin is disabled (default)", () => {
     assert.equal(
       resolveActiveCodexHomeWritePath({
-        env: { DPCODE_HOME: "/dp/runtime" },
+        env: { SYNARA_HOME: "/synara/runtime" },
         homePath: "/users/me/.codex",
       }),
-      path.join("/dp/runtime", "codex-home-overlay"),
+      path.join("/synara/runtime", "codex-home-overlay"),
     );
   });
 
@@ -92,12 +99,12 @@ describe("resolveActiveCodexHomeWritePath", () => {
 describe("resolveCodexHomeAllowlistCandidates", () => {
   it("includes both source and overlay homes when distinct", () => {
     const candidates = resolveCodexHomeAllowlistCandidates({
-      env: { DPCODE_HOME: "/dp/runtime" },
+      env: { SYNARA_HOME: "/synara/runtime" },
       homePath: "/users/me/.codex",
     });
     assert.deepEqual(candidates, [
       "/users/me/.codex",
-      path.join("/dp/runtime", "codex-home-overlay"),
+      path.join("/synara/runtime", "codex-home-overlay"),
     ]);
   });
 

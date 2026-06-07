@@ -4,7 +4,7 @@
 // Exports: ChatMarkdown
 
 import { DiffsHighlighter, getSharedHighlighter, SupportedLanguages } from "@pierre/diffs";
-import { CheckIcon, CopyIcon } from "~/lib/icons";
+import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
 import React, {
   Children,
   type CSSProperties,
@@ -12,6 +12,7 @@ import React, {
   isValidElement,
   use,
   useCallback,
+  useDeferredValue,
   memo,
   useEffect,
   useMemo,
@@ -29,6 +30,9 @@ import { openInPreferredEditor } from "../editorPreferences";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { fnv1a32 } from "../lib/diffRendering";
+import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeFence";
+import { getFileIconName } from "../file-icons";
+import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
 import { LRUCache } from "../lib/lruCache";
 import { useTheme } from "../hooks/useTheme";
@@ -36,6 +40,7 @@ import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../ma
 import { readNativeApi } from "../nativeApi";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
+import { IconButton } from "./ui/icon-button";
 
 class CodeHighlightErrorBoundary extends React.Component<
   { fallback: ReactNode; children: ReactNode },
@@ -438,11 +443,12 @@ function protectLiteralMarkdownDollars(value: string): string {
   return result;
 }
 
-function extractFenceLanguage(className: string | undefined): string {
+// Returns the raw fence info string (the token after ```), e.g. "ts" or the
+// Cursor reference form "173:186:packages/shared/src/model.ts". Parsing into a
+// highlighter language + file metadata is handled by `parseCodeFenceInfo`.
+function extractRawFenceInfo(className: string | undefined): string {
   const match = className?.match(CODE_FENCE_LANGUAGE_REGEX);
-  const raw = match?.[1] ?? "text";
-  // Shiki doesn't bundle a gitignore grammar; ini is a close match (#685)
-  return raw === "gitignore" ? "ini" : raw;
+  return match?.[1] ?? "text";
 }
 
 function nodeToPlainText(node: ReactNode): string {
@@ -509,8 +515,39 @@ function getHighlighterPromise(language: string): Promise<DiffsHighlighter> {
   return promise;
 }
 
-function MarkdownCodeBlock({ code, children }: { code: string; children: ReactNode }) {
+function CodeBlockHeaderTitle({ fence }: { fence: CodeFenceInfo }) {
+  if (fence.isFileReference && fence.fileName) {
+    return (
+      <span className="chat-markdown-codeblock__file" title={fence.filePath ?? fence.fileName}>
+        <CentralIcon
+          name={getFileIconName(fence.filePath ?? fence.fileName)}
+          className="chat-markdown-codeblock__file-icon"
+        />
+        <span className="chat-markdown-codeblock__file-name">{fence.fileName}</span>
+        {fence.directory ? (
+          <span className="chat-markdown-codeblock__file-dir">{fence.directory}</span>
+        ) : null}
+        {fence.lineRange ? (
+          <span className="chat-markdown-codeblock__file-lines">{fence.lineRange}</span>
+        ) : null}
+      </span>
+    );
+  }
+
+  return <span className="chat-markdown-codeblock__lang">{fence.language}</span>;
+}
+
+function MarkdownCodeBlock({
+  code,
+  fence,
+  children,
+}: {
+  code: string;
+  fence: CodeFenceInfo;
+  children: ReactNode;
+}) {
   const [copied, setCopied] = useState(false);
+  const [wrap, setWrap] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleCopy = useCallback(() => {
     void copyTextToClipboard(code)
@@ -526,6 +563,7 @@ function MarkdownCodeBlock({ code, children }: { code: string; children: ReactNo
       })
       .catch(() => undefined);
   }, [code]);
+  const toggleWrap = useCallback(() => setWrap((previous) => !previous), []);
 
   useEffect(
     () => () => {
@@ -538,35 +576,52 @@ function MarkdownCodeBlock({ code, children }: { code: string; children: ReactNo
   );
 
   return (
-    <div className="chat-markdown-codeblock">
-      <button
-        type="button"
-        className="chat-markdown-copy-button"
-        onClick={handleCopy}
-        title={copied ? "Copied" : "Copy code"}
-        aria-label={copied ? "Copied" : "Copy code"}
-      >
-        {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
-      </button>
-      {children}
+    <div className="chat-markdown-codeblock" data-wrap={wrap ? "true" : "false"}>
+      <div className="chat-markdown-codeblock__header">
+        <CodeBlockHeaderTitle fence={fence} />
+        <div className="chat-markdown-codeblock__actions">
+          <IconButton
+            className="chat-markdown-codeblock__action"
+            onClick={toggleWrap}
+            title={wrap ? "Disable soft wrap" : "Enable soft wrap"}
+            label={wrap ? "Disable soft wrap" : "Enable soft wrap"}
+            aria-pressed={wrap}
+            data-active={wrap ? "true" : "false"}
+            size="icon-xs"
+            variant="ghost"
+          >
+            <TextWrapIcon className="size-3" />
+          </IconButton>
+          <IconButton
+            className="chat-markdown-codeblock__action"
+            onClick={handleCopy}
+            title={copied ? "Copied" : "Copy code"}
+            label={copied ? "Copied" : "Copy code"}
+            size="icon-xs"
+            variant="ghost"
+          >
+            {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+          </IconButton>
+        </div>
+      </div>
+      <div className="chat-markdown-codeblock__body">{children}</div>
     </div>
   );
 }
 
 interface SuspenseShikiCodeBlockProps {
-  className: string | undefined;
+  language: string;
   code: string;
   themeName: DiffThemeName;
   isStreaming: boolean;
 }
 
 function SuspenseShikiCodeBlock({
-  className,
+  language,
   code,
   themeName,
   isStreaming,
 }: SuspenseShikiCodeBlockProps) {
-  const language = extractFenceLanguage(className);
   const cacheKey = createHighlightCacheKey(code, language, themeName);
   const cachedHighlightedHtml = !isStreaming ? highlightedCodeCache.get(cacheKey) : null;
 
@@ -620,6 +675,12 @@ function ChatMarkdown({
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const normalizedText = useMemo(() => protectLiteralMarkdownDollars(text), [text]);
+  // While streaming, let React deprioritize and coalesce the markdown re-parse so a
+  // fast token stream (one flush per ~100ms) doesn't re-render the full ReactMarkdown
+  // tree on every flush. The deferred value always converges to the latest text, and
+  // completed messages render the exact current text immediately (no visual change).
+  const deferredNormalizedText = useDeferredValue(normalizedText);
+  const renderedText = isStreaming ? deferredNormalizedText : normalizedText;
   const markdownUrlTransform = useCallback((href: string) => {
     const restoredHref = restoreLiteralDollarPlaceholders(href);
     return rewriteMarkdownFileUriHref(restoredHref) ?? defaultUrlTransform(restoredHref);
@@ -656,13 +717,16 @@ function ChatMarkdown({
           return <pre {...props}>{children}</pre>;
         }
 
+        const fence = parseCodeFenceInfo(extractRawFenceInfo(codeBlock.className));
+        const code = dedentCode(codeBlock.code);
+
         return (
-          <MarkdownCodeBlock code={codeBlock.code}>
+          <MarkdownCodeBlock code={code} fence={fence}>
             <CodeHighlightErrorBoundary fallback={<pre {...props}>{children}</pre>}>
               <Suspense fallback={<pre {...props}>{children}</pre>}>
                 <SuspenseShikiCodeBlock
-                  className={codeBlock.className}
-                  code={codeBlock.code}
+                  language={fence.language}
+                  code={code}
                   themeName={diffThemeName}
                   isStreaming={isStreaming}
                 />
@@ -690,17 +754,14 @@ function ChatMarkdown({
   );
 
   return (
-    <div
-      className={`chat-markdown w-full min-w-0 ${className} text-neutral-900 dark:text-foreground/80`}
-      style={style}
-    >
+    <div className={`chat-markdown w-full min-w-0 ${className} text-foreground`} style={style}>
       <ReactMarkdown
         remarkPlugins={MARKDOWN_REMARK_PLUGINS}
         rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
         components={markdownComponents}
         urlTransform={markdownUrlTransform}
       >
-        {normalizedText}
+        {renderedText}
       </ReactMarkdown>
     </div>
   );

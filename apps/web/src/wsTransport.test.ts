@@ -59,6 +59,7 @@ const originalWebSocket = globalThis.WebSocket;
 
 beforeEach(() => {
   sockets.length = 0;
+  vi.stubEnv("VITE_WS_URL", "");
 
   Object.defineProperty(globalThis, "window", {
     configurable: true,
@@ -73,6 +74,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.WebSocket = originalWebSocket;
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -123,5 +125,25 @@ describe("WsTransport", () => {
     expect(sockets[0]?.url).toBe("ws://localhost:3020/ws");
 
     transport.dispose();
+  });
+
+  it("notifies state listeners and replays the current state on demand", () => {
+    const transport = new WsTransport();
+    const listener = vi.fn();
+
+    const unsubscribe = transport.onStateChange(listener, { replayCurrent: true });
+
+    expect(listener).toHaveBeenCalledWith("connecting");
+
+    listener.mockClear();
+    transport.dispose();
+
+    expect(listener).toHaveBeenCalledWith("disposed");
+
+    listener.mockClear();
+    unsubscribe();
+    transport.dispose();
+
+    expect(listener).not.toHaveBeenCalled();
   });
 });

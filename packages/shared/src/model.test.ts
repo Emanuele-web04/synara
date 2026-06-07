@@ -5,6 +5,7 @@ import {
   MODEL_OPTIONS,
   MODEL_OPTIONS_BY_PROVIDER,
   CODEX_REASONING_EFFORT_OPTIONS,
+  GROK_REASONING_EFFORT_OPTIONS,
 } from "@t3tools/contracts";
 
 import {
@@ -20,6 +21,7 @@ import {
   normalizeClaudeModelOptions,
   normalizeCodexModelOptions,
   normalizeGeminiModelOptions,
+  normalizeGrokModelOptions,
   normalizeModelSlug,
   resolveApiModelId,
   resolveSelectableModel,
@@ -61,6 +63,10 @@ describe("normalizeModelSlug", () => {
     expect(normalizeModelSlug("sonnet", "claudeAgent")).toBe("claude-sonnet-4-6");
     expect(normalizeModelSlug("opus-4.6", "claudeAgent")).toBe("claude-opus-4-6");
     expect(normalizeModelSlug("claude-haiku-4-5-20251001", "claudeAgent")).toBe("claude-haiku-4-5");
+    expect(normalizeModelSlug("4.3", "grok")).toBe("grok-build");
+    expect(normalizeModelSlug("grok-latest", "grok")).toBe("grok-build");
+    expect(normalizeModelSlug("grok-code-fast-1", "grok")).toBe("grok-build-0.1");
+    expect(normalizeModelSlug("grok-code-fast-1-0825", "grok")).toBe("grok-build-0.1");
   });
 });
 
@@ -163,7 +169,7 @@ describe("resolveSelectableModel", () => {
 });
 
 describe("getModelCapabilities reasoningEffortLevels", () => {
-  const values = (provider: "codex" | "claudeAgent" | "gemini", model: string | null) =>
+  const values = (provider: "codex" | "claudeAgent" | "gemini" | "grok", model: string | null) =>
     getModelCapabilities(provider, model).reasoningEffortLevels.map((l) => l.value);
 
   it("returns codex reasoning options for codex", () => {
@@ -189,6 +195,19 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
       "xhigh",
       "max",
       "ultrathink",
+      "ultracode",
+    ]);
+  });
+
+  it("returns claude effort options for Opus 4.8", () => {
+    expect(values("claudeAgent", "claude-opus-4-8")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultrathink",
+      "ultracode",
     ]);
   });
 
@@ -216,6 +235,11 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     expect(values("gemini", "gemini-2.5-flash-lite")).toEqual(["-1", "512"]);
   });
 
+  it("returns Grok effort options for Grok Build models", () => {
+    expect(values("grok", "grok-build-0.1")).toEqual([...GROK_REASONING_EFFORT_OPTIONS]);
+    expect(values("grok", "grok-build")).toEqual([...GROK_REASONING_EFFORT_OPTIONS]);
+  });
+
   it("co-locates labels with effort values", () => {
     const levels = getModelCapabilities("claudeAgent", "claude-opus-4-6").reasoningEffortLevels;
     const high = levels.find((l) => l.value === "high");
@@ -235,6 +259,8 @@ describe("getDefaultEffort", () => {
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-opus-4-6"))).toBe("high");
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-haiku-4-5"))).toBeNull();
     expect(getDefaultEffort(getModelCapabilities("gemini", "gemini-2.5-flash-lite"))).toBe("-1");
+    expect(getDefaultEffort(getModelCapabilities("grok", "grok-build-0.1"))).toBe("low");
+    expect(getDefaultEffort(getModelCapabilities("grok", "grok-build"))).toBe("low");
   });
 });
 
@@ -250,6 +276,10 @@ describe("hasEffortLevel", () => {
     const codexCaps = getModelCapabilities("codex", "gpt-5.4");
     expect(hasEffortLevel(codexCaps, "xhigh")).toBe(true);
     expect(hasEffortLevel(codexCaps, "max")).toBe(false);
+
+    const grokCaps = getModelCapabilities("grok", "grok-build-0.1");
+    expect(hasEffortLevel(grokCaps, "high")).toBe(true);
+    expect(hasEffortLevel(grokCaps, "xhigh")).toBe(false);
   });
 });
 
@@ -286,6 +316,43 @@ describe("provider option descriptor helpers", () => {
       type: "select",
       currentValue: "512",
     });
+  });
+
+  it("projects Grok reasoning effort into a generic option descriptor", () => {
+    const descriptors = getProviderOptionDescriptors({
+      provider: "grok",
+      caps: getModelCapabilities("grok", "grok-build"),
+      selections: { reasoningEffort: "high" },
+    });
+
+    expect(descriptors.find((descriptor) => descriptor.id === "reasoningEffort")).toMatchObject({
+      type: "select",
+      currentValue: "high",
+    });
+  });
+
+  it("maps Pi reasoning controls onto the thinkingLevel option", () => {
+    const descriptors = getProviderOptionDescriptors({
+      provider: "pi",
+      caps: {
+        reasoningEffortLevels: [
+          { value: "off", label: "Off" },
+          { value: "medium", label: "Medium", isDefault: true },
+          { value: "xhigh", label: "Extra High" },
+        ],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+      selections: { thinkingLevel: "xhigh" },
+    });
+
+    expect(descriptors.find((descriptor) => descriptor.id === "thinkingLevel")).toMatchObject({
+      type: "select",
+      currentValue: "xhigh",
+    });
+    expect(descriptors.some((descriptor) => descriptor.id === "reasoningEffort")).toBe(false);
   });
 
   it("honors explicit descriptors and serializes their current values", () => {
@@ -469,6 +536,22 @@ describe("normalizeGeminiModelOptions", () => {
   });
 });
 
+describe("normalizeGrokModelOptions", () => {
+  it("drops default Grok reasoning effort options and preserves supported overrides", () => {
+    expect(normalizeGrokModelOptions("grok-build", { reasoningEffort: "low" })).toBeUndefined();
+    expect(normalizeGrokModelOptions("grok-build-0.1", { reasoningEffort: "low" })).toBeUndefined();
+    expect(
+      normalizeGrokModelOptions("grok-build", { reasoningEffort: "max" as never }),
+    ).toBeUndefined();
+    expect(
+      normalizeGrokModelOptions("grok-build", { reasoningEffort: "xhigh" as never }),
+    ).toBeUndefined();
+    expect(normalizeGrokModelOptions("grok-build-0.1", { reasoningEffort: "high" })).toEqual({
+      reasoningEffort: "high",
+    });
+  });
+});
+
 describe("getGeminiThinkingModelAlias", () => {
   it("refuses unsupported Gemini 2.5 off aliases", () => {
     expect(getGeminiThinkingModelAlias("gemini-2.5-pro", { thinkingBudget: 0 })).toBeNull();
@@ -488,6 +571,7 @@ describe("getModelCapabilities Claude capability flags", () => {
   it("only enables adaptive reasoning for Opus 4.6 and Sonnet 4.6", () => {
     const has = (m: string | undefined) =>
       getModelCapabilities("claudeAgent", m).reasoningEffortLevels.length > 0;
+    expect(has("claude-opus-4-8")).toBe(true);
     expect(has("claude-opus-4-7")).toBe(true);
     expect(has("claude-opus-4-6")).toBe(true);
     expect(has("claude-sonnet-4-6")).toBe(true);
@@ -498,6 +582,7 @@ describe("getModelCapabilities Claude capability flags", () => {
   it("only enables max effort for Opus 4.6 and Sonnet 4.6", () => {
     const has = (m: string | undefined) =>
       getModelCapabilities("claudeAgent", m).reasoningEffortLevels.some((l) => l.value === "max");
+    expect(has("claude-opus-4-8")).toBe(true);
     expect(has("claude-opus-4-7")).toBe(true);
     expect(has("claude-opus-4-6")).toBe(true);
     expect(has("claude-sonnet-4-6")).toBe(true);
@@ -507,6 +592,7 @@ describe("getModelCapabilities Claude capability flags", () => {
 
   it("only enables Claude fast mode for Opus 4.6", () => {
     const has = (m: string | undefined) => getModelCapabilities("claudeAgent", m).supportsFastMode;
+    expect(has("claude-opus-4-8")).toBe(true);
     expect(has("claude-opus-4-7")).toBe(true);
     expect(has("claude-opus-4-6")).toBe(true);
     expect(has("opus")).toBe(true);
@@ -518,6 +604,7 @@ describe("getModelCapabilities Claude capability flags", () => {
   it("only enables ultrathink keyword handling for Opus 4.6 and Sonnet 4.6", () => {
     const has = (m: string | undefined) =>
       getModelCapabilities("claudeAgent", m).promptInjectedEffortLevels.includes("ultrathink");
+    expect(has("claude-opus-4-8")).toBe(true);
     expect(has("claude-opus-4-7")).toBe(true);
     expect(has("claude-opus-4-6")).toBe(true);
     expect(has("claude-sonnet-4-6")).toBe(true);

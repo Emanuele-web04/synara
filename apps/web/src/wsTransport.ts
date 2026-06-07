@@ -1,3 +1,8 @@
+// FILE: wsTransport.ts
+// Purpose: Browser-side Effect RPC transport over the Synara WebSocket endpoint.
+// Layer: Web transport
+// Exports: WsTransport plus stream-selection helpers used by tests.
+
 import {
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
@@ -22,13 +27,13 @@ import { Cause, Data, Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from 
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 
+import type { WsTransportState } from "./wsTransportEvents";
+
 type PushListener<C extends WsPushChannel> = (message: WsPushMessage<C>) => void;
 
 type RpcClientEffect = typeof makeRpcClient;
 type RpcClientInstance =
   RpcClientEffect extends Effect.Effect<infer Client, any, any> ? Client : never;
-
-type TransportState = "connecting" | "open" | "closed" | "disposed";
 
 class WsTransportRpcError extends Data.TaggedError("WsTransportRpcError")<{
   readonly message: string;
@@ -60,6 +65,9 @@ function makeProtocolLayer(url: string) {
   const socketLayer = Socket.layerWebSocket(url).pipe(
     Layer.provide(Socket.layerWebSocketConstructorGlobal),
   );
+  // JSON keeps the wire format symmetric with any server build: a serialization
+  // mismatch on this single multiplexed socket is a hard connect failure, and the
+  // desktop/dev setup routinely runs web and server on independently-built copies.
   return RpcClient.layerProtocolSocket().pipe(
     Layer.provide(Layer.mergeAll(socketLayer, RpcSerialization.layerJson)),
   );
@@ -68,6 +76,27 @@ function makeProtocolLayer(url: string) {
 function causeToError(cause: Cause.Cause<unknown>): Error {
   const error = Cause.squash(cause);
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function omitNullUserInputAnswers(input: unknown): unknown {
+  if (!input || typeof input !== "object") {
+    return input;
+  }
+  const command = input as { type?: unknown; answers?: unknown };
+  if (command.type !== "thread.user-input.respond" || !command.answers) {
+    return input;
+  }
+  if (typeof command.answers !== "object") {
+    return input;
+  }
+  return {
+    ...command,
+    answers: Object.fromEntries(
+      Object.entries(command.answers).filter(
+        ([, answer]) => answer !== null && answer !== undefined,
+      ),
+    ),
+  };
 }
 
 export function isServerLifecyclePushChannel(channel: string): boolean {
@@ -84,9 +113,11 @@ export function shouldKeepServerLifecycleStream(activeChannels: ReadonlySet<stri
 export class WsTransport {
   private readonly explicitUrl: string | null;
   private readonly listeners = new Map<string, Set<(message: WsPush) => void>>();
+  private readonly stateListeners = new Set<(state: WsTransportState) => void>();
   private readonly latestPushByChannel = new Map<string, WsPush>();
   private sequence = 0;
-  private state: TransportState = "connecting";
+  private sessionVersion = 0;
+  private state: WsTransportState = "connecting";
   private disposed = false;
   private runtime: ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never>;
   private clientScope: Scope.Closeable;
@@ -145,6 +176,7 @@ export class WsTransport {
       method === ORCHESTRATION_WS_METHODS.dispatchCommand
         ? (params as { command: unknown }).command
         : (params ?? {});
+    const normalizedRpcInput = omitNullUserInputAnswers(rpcInput);
     const call = (
       client as unknown as Record<
         string,
@@ -152,7 +184,7 @@ export class WsTransport {
       >
     )[method];
     if (!call) throw new WsTransportRpcError({ message: `Unknown RPC method: ${method}` });
-    return (await this.runtime.runPromise(call(rpcInput))) as T;
+    return (await this.runtime.runPromise(call(normalizedRpcInput))) as T;
   }
 
   subscribe<C extends WsPushChannel>(
@@ -189,13 +221,27 @@ export class WsTransport {
     return latest ? (latest as WsPushMessage<C>) : null;
   }
 
-  getState(): TransportState {
+  onStateChange(
+    listener: (state: WsTransportState) => void,
+    options?: { readonly replayCurrent?: boolean },
+  ): () => void {
+    this.stateListeners.add(listener);
+    if (options?.replayCurrent) {
+      listener(this.state);
+    }
+
+    return () => {
+      this.stateListeners.delete(listener);
+    };
+  }
+
+  getState(): WsTransportState {
     return this.state;
   }
 
   dispose() {
     this.disposed = true;
-    this.state = "disposed";
+    this.setState("disposed");
     for (const cleanup of this.streamCleanups.values()) cleanup();
     this.streamCleanups.clear();
     void this.runtime.runPromise(Scope.close(this.clientScope, Exit.void)).finally(() => {
@@ -204,16 +250,21 @@ export class WsTransport {
   }
 
   private createSession() {
+    const sessionVersion = ++this.sessionVersion;
     const runtime = ManagedRuntime.make(makeProtocolLayer(makeSocketUrl(this.explicitUrl)));
     const clientScope = runtime.runSync(Scope.make());
     const clientPromise = runtime
       .runPromise(Scope.provide(clientScope)(makeRpcClient))
       .then((client) => {
-        this.state = "open";
+        if (!this.disposed && this.sessionVersion === sessionVersion) {
+          this.setState("open");
+        }
         return client;
       })
       .catch((error) => {
-        this.state = "closed";
+        if (!this.disposed && this.sessionVersion === sessionVersion) {
+          this.setState("closed");
+        }
         throw error;
       });
     return { runtime, clientScope, clientPromise };
@@ -237,7 +288,7 @@ export class WsTransport {
     this.streamCleanups.clear();
     this.stoppingStreams.clear();
 
-    this.state = "connecting";
+    this.setState("connecting");
 
     void oldRuntime.runPromise(Scope.close(oldClientScope, Exit.void)).finally(() => {
       oldRuntime.dispose();
@@ -247,6 +298,18 @@ export class WsTransport {
       this.reconnectPromise = null;
     });
     return this.reconnectPromise;
+  }
+
+  private setState(state: WsTransportState): void {
+    if (this.state === state) return;
+    this.state = state;
+    for (const listener of this.stateListeners) {
+      try {
+        listener(state);
+      } catch {
+        // Listener errors must not break reconnect or RPC state transitions.
+      }
+    }
   }
 
   private async openReconnectSession(): Promise<RpcClientInstance> {

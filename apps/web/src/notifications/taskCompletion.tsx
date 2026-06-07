@@ -4,13 +4,13 @@
 // Exports: TaskCompletionNotifications and browser permission helpers
 
 import { ThreadId } from "@t3tools/contracts";
-import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef } from "react";
 import { toastManager } from "../components/ui/toast";
 import { resolveVisibleToastThreadIds } from "../components/ui/toastRouteVisibility";
 import { useAppSettings } from "../appSettings";
-import { parseDiffRouteSearch } from "../diffRouteSearch";
 import { isElectron } from "../env";
+import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
 import { createAllThreadsSelector } from "../storeSelectors";
@@ -146,10 +146,7 @@ export function TaskCompletionNotifications() {
     select: (params) =>
       typeof params.threadId === "string" ? ThreadId.makeUnsafe(params.threadId) : null,
   });
-  const routeSearch = useSearch({
-    strict: false,
-    select: (search) => parseDiffRouteSearch(search),
-  });
+  const routeSearch = useDiffRouteSearch();
   const splitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
   const threads = useStore(useRef(createAllThreadsSelector()).current);
   const threadsHydrated = useStore((store) => store.threadsHydrated);

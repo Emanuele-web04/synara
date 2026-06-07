@@ -2,12 +2,15 @@ import {
   ProjectId,
   ThreadId,
   type ModelSelection,
+  type ModelSlug,
+  type ProviderApprovalDecision,
   type ProviderKind,
+  type RuntimeMode,
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
 import { normalizeModelSlug } from "@t3tools/shared/model";
-import { buildDpcodeBranchName } from "@t3tools/shared/git";
+import { buildSynaraBranchName } from "@t3tools/shared/git";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@t3tools/shared/terminalThreads";
 import {
@@ -30,12 +33,59 @@ import {
 } from "../lib/subagentPresentation";
 import { hasLiveTurnTailWork, type WorkLogEntry } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
+import type { ProviderModelOption } from "../providerModelOptions";
 
-export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "dpcode:last-invoked-script-by-project";
-export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "dpcode:dismissed-provider-health-banners";
+export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "synara:last-invoked-script-by-project";
+export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "synara:dismissed-provider-health-banners";
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 export const DismissedProviderHealthBannersSchema = Schema.Array(Schema.String);
+
+const ALWAYS_ALLOW_RUNTIME_MODE: RuntimeMode = "full-access";
+
+/**
+ * "Always allow" (acceptForSession) only auto-approves the live provider turn.
+ * Because the client is the source of truth for runtime mode (it sends it with
+ * every turn), the choice must also flip the thread to full-access so it survives
+ * idle-stop and runtime restarts instead of reverting to approval-required on the
+ * next turn. Returns the runtime mode to persist, or null when nothing changes.
+ */
+export function resolveRuntimeModeAfterApprovalDecision(
+  currentRuntimeMode: RuntimeMode,
+  decision: ProviderApprovalDecision,
+): RuntimeMode | null {
+  if (decision === "acceptForSession" && currentRuntimeMode !== ALWAYS_ALLOW_RUNTIME_MODE) {
+    return ALWAYS_ALLOW_RUNTIME_MODE;
+  }
+  return null;
+}
+
+export function shouldRenderProviderHealthBanner(input: {
+  threadEntryPoint: ThreadPrimarySurface;
+  terminalWorkspaceTerminalTabActive: boolean;
+}): boolean {
+  return input.threadEntryPoint === "chat" && !input.terminalWorkspaceTerminalTabActive;
+}
+
+// Default-open policy for the Environment panel; render-time visibility is resolved separately.
+export function resolveDefaultEnvironmentPanelOpen(input: {
+  environmentEnabled: boolean;
+  isCenteredEmptyLanding: boolean;
+  isTerminalPrimarySurface: boolean;
+}): boolean {
+  return (
+    input.environmentEnabled && !input.isCenteredEmptyLanding && !input.isTerminalPrimarySurface
+  );
+}
+
+// Hides stale open state immediately on empty landing views, before reset effects run.
+export function resolveEnvironmentPanelVisible(input: {
+  environmentEnabled: boolean;
+  environmentPanelOpen: boolean;
+  isCenteredEmptyLanding: boolean;
+}): boolean {
+  return input.environmentEnabled && input.environmentPanelOpen && !input.isCenteredEmptyLanding;
+}
 
 export function buildLocalDraftThread(
   threadId: ThreadId,
@@ -172,7 +222,7 @@ export function describeVoiceRecordingStartError(error: unknown): string {
   const errorName = typeof error.name === "string" ? error.name : "";
 
   if (errorName === "NotAllowedError" || errorName === "PermissionDeniedError") {
-    return "Microphone access was denied. Enable it in macOS Privacy & Security > Microphone for DP Code, then try again.";
+    return "Microphone access was denied. Enable it in macOS Privacy & Security > Microphone for Synara, then try again.";
   }
   if (errorName === "NotFoundError" || errorName === "DevicesNotFoundError") {
     return "No microphone was found. Connect one and try again.";
@@ -247,6 +297,17 @@ export function shouldShowComposerModelBootstrapSkeleton(input: {
     persistedSelection.model;
 
   return normalizedSelectedModel !== normalizedPersistedModel;
+}
+
+export function resolveCommittedProviderModel(input: {
+  selectedModel: ModelSlug;
+  availableOptions: ReadonlyArray<ProviderModelOption>;
+  fallback: () => string;
+}): string {
+  const directRuntimeOption = input.availableOptions.find(
+    (option) => option.slug === input.selectedModel,
+  );
+  return directRuntimeOption?.slug ?? input.fallback();
 }
 
 // Lets a pending custom binary path re-check a session that was already observed ready.
@@ -381,7 +442,7 @@ export function buildSuggestedWorktreeName(input: {
   associatedWorktreeBranch?: string | null;
   title?: string | null;
 }): string {
-  return buildDpcodeBranchName(input.associatedWorktreeBranch ?? input.title);
+  return buildSynaraBranchName(input.associatedWorktreeBranch ?? input.title);
 }
 
 export function cloneComposerImageForRetry(
@@ -458,13 +519,30 @@ export function buildExpiredTerminalContextToastCopy(
 }
 
 export function shouldRenderTerminalWorkspace(options: {
-  activeProjectExists: boolean;
   presentationMode: "drawer" | "workspace";
   terminalOpen: boolean;
 }): boolean {
-  return (
-    options.terminalOpen && options.presentationMode === "workspace" && options.activeProjectExists
-  );
+  // The workspace shell should paint immediately; the terminal viewport gates the
+  // backend attach until a valid cwd is available.
+  return options.terminalOpen && options.presentationMode === "workspace";
+}
+
+export function resolveProjectScriptTerminalTarget(options: {
+  baseTerminalId: string;
+  createTerminalId: () => string;
+  hasRunningTerminal: boolean;
+  preferNewTerminal?: boolean | undefined;
+  terminalOpen: boolean;
+}): { shouldCreateNewTerminal: boolean; terminalId: string } {
+  // Project scripts require their requested cwd/env before the command write;
+  // live PTYs keep their launch context, so visible or running terminals get a new tab.
+  const shouldCreateNewTerminal =
+    Boolean(options.preferNewTerminal) || options.terminalOpen || options.hasRunningTerminal;
+
+  return {
+    shouldCreateNewTerminal,
+    terminalId: shouldCreateNewTerminal ? options.createTerminalId() : options.baseTerminalId,
+  };
 }
 
 export function shouldAutoDeleteTerminalThreadOnLastClose(options: {

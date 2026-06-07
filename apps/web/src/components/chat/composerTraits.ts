@@ -137,9 +137,7 @@ export function getComposerTraitSelection(
     caps.promptInjectedEffortLevels,
     primarySelectDescriptor,
   );
-  const isPromptInjected = resolvedEffort
-    ? promptInjectedValues.includes(resolvedEffort)
-    : false;
+  const isPromptInjected = resolvedEffort ? promptInjectedValues.includes(resolvedEffort) : false;
   const effort = resolvedEffort && !isPromptInjected ? resolvedEffort : defaultEffort;
 
   const thinkingEnabled = thinkingDescriptor

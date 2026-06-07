@@ -19,6 +19,103 @@ export function resolveDiffThemeName(theme: "light" | "dark"): DiffThemeName {
   return theme === "dark" ? DIFF_THEME_NAMES.dark : DIFF_THEME_NAMES.light;
 }
 
+// The `unsafeCSS` payload is identical per theme and only ever has two values,
+// so cache it instead of rebuilding the (large) template string per file/render.
+const diffPanelUnsafeCssCache = new Map<"light" | "dark", string>();
+
+// Themed CSS injected into the @pierre/diffs shadow markup so the diff viewer
+// adopts the app's chat code font and themed addition/deletion backgrounds.
+// Shared by every diff surface (turn diffs, repo diffs, the git pane) so they
+// render consistently — previously the git pane omitted this entirely.
+export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
+  const cached = diffPanelUnsafeCssCache.get(theme);
+  if (cached) {
+    return cached;
+  }
+  const titleColor = theme === "dark" ? "#6073CC" : "#526FFF";
+  const css = `
+:host {
+  /* Route the entire diff viewer through the chat code font so custom code fonts reach line numbers too. */
+  --diffs-font-family: var(--font-chat-code-family);
+  --diffs-header-font-family: var(--font-chat-code-family);
+  /* Honor the user-chosen chat code font size from settings instead of the library default (13px). */
+  --diffs-font-size: var(--app-font-size-chat-code, 11px);
+  font-family: var(--font-chat-code-family) !important;
+  font-size: var(--app-font-size-chat-code, 11px) !important;
+}
+
+[data-diffs-header],
+[data-diff],
+[data-file],
+[data-error-wrapper],
+[data-virtualizer-buffer] {
+  /* Re-assert the code font inside the library chrome because these nodes live in shadow-rooted markup. */
+  --diffs-font-family: var(--font-chat-code-family) !important;
+  --diffs-header-font-family: var(--font-chat-code-family) !important;
+  --diffs-font-size: var(--app-font-size-chat-code, 11px) !important;
+  font-family: var(--font-chat-code-family) !important;
+  font-size: var(--app-font-size-chat-code, 11px) !important;
+  --diffs-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
+  --diffs-light-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
+  --diffs-dark-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
+  --diffs-token-light-bg: transparent;
+  --diffs-token-dark-bg: transparent;
+
+  --diffs-bg-context-override: color-mix(in srgb, var(--background) 97%, var(--foreground));
+  --diffs-bg-hover-override: color-mix(in srgb, var(--background) 94%, var(--foreground));
+  --diffs-bg-separator-override: color-mix(in srgb, var(--background) 95%, var(--foreground));
+  --diffs-bg-buffer-override: color-mix(in srgb, var(--background) 90%, var(--foreground));
+
+  --diffs-bg-addition-override: color-mix(in srgb, var(--background) 92%, var(--success));
+  --diffs-bg-addition-number-override: color-mix(in srgb, var(--background) 88%, var(--success));
+  --diffs-bg-addition-hover-override: color-mix(in srgb, var(--background) 85%, var(--success));
+  --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--background) 80%, var(--success));
+
+  --diffs-bg-deletion-override: color-mix(in srgb, var(--background) 92%, var(--destructive));
+  --diffs-bg-deletion-number-override: color-mix(in srgb, var(--background) 88%, var(--destructive));
+  --diffs-bg-deletion-hover-override: color-mix(in srgb, var(--background) 85%, var(--destructive));
+  --diffs-bg-deletion-emphasis-override: color-mix(
+    in srgb,
+    var(--background) 80%,
+    var(--destructive)
+  );
+
+  background-color: var(--diffs-bg) !important;
+}
+
+[data-file-info] {
+  font-family: var(--font-chat-code-family) !important;
+  font-size: var(--app-font-size-chat-code, 11px) !important;
+  background-color: color-mix(in srgb, var(--card) 94%, var(--foreground)) !important;
+  border-block-color: var(--border) !important;
+  color: var(--foreground) !important;
+}
+
+[data-diffs-header] {
+  position: sticky !important;
+  top: 0;
+  z-index: 4;
+  background-color: color-mix(in srgb, var(--card) 94%, var(--foreground)) !important;
+  border-bottom: 1px solid var(--border) !important;
+  cursor: pointer;
+}
+
+/* Hide the default change-type icon (blue circle) — replaced by chevron + file-type icon. */
+[data-change-icon] {
+  display: none;
+}
+
+[data-title] {
+  font-family: var(--font-chat-code-family) !important;
+  font-size: var(--app-font-size-chat-code, 11px) !important;
+  cursor: pointer;
+  color: ${titleColor} !important;
+}
+`;
+  diffPanelUnsafeCssCache.set(theme, css);
+  return css;
+}
+
 const FNV_OFFSET_BASIS_32 = 0x811c9dc5;
 const FNV_PRIME_32 = 0x01000193;
 const SECONDARY_HASH_SEED = 0x9e3779b9;
@@ -174,6 +271,46 @@ export function serializeRenderablePatchText(renderable: RenderablePatch | null)
   }
   const serialized = renderable.files.map(serializeFileDiffMetadata).join("\n");
   return serialized.length > 0 ? serialized : null;
+}
+
+// Resolve the working-tree-relative path for a parsed file diff, stripping the
+// conventional `a/` / `b/` patch prefixes so callers can match git status paths.
+export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
+  const raw = fileDiff.name ?? fileDiff.prevName ?? "";
+  if (raw.startsWith("a/") || raw.startsWith("b/")) {
+    return raw.slice(2);
+  }
+  return raw;
+}
+
+// Stable identity for a parsed file diff, used as a React key and selection id.
+export function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
+  return fileDiff.cacheKey ?? `${fileDiff.prevName ?? "none"}:${fileDiff.name}`;
+}
+
+// Split a repo-relative path into a trailing-slash directory prefix and a leaf
+// name so diff/file rows can dim the directory while emphasizing the file name.
+// Intentionally not reusing the directory-browser helpers (projectPaths.ts):
+// those carry trailing-separator / Windows-drive semantics meant for browsing.
+export function splitRepoRelativePath(path: string): { dir: string; name: string } {
+  const index = path.lastIndexOf("/");
+  if (index === -1) {
+    return { dir: "", name: path };
+  }
+  return { dir: path.slice(0, index + 1), name: path.slice(index + 1) };
+}
+
+// Natural-order comparator for parsed file diffs by working-tree path, so file
+// lists stay stable and human-friendly (numeric-aware, case-insensitive).
+export function compareFileDiffByPath(left: FileDiffMetadata, right: FileDiffMetadata): number {
+  return resolveFileDiffPath(left).localeCompare(resolveFileDiffPath(right), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+export function sortFileDiffsByPath(files: ReadonlyArray<FileDiffMetadata>): FileDiffMetadata[] {
+  return files.toSorted(compareFileDiffByPath);
 }
 
 // Summarize parsed hunks for compact, consistent diff stats across panel chrome.

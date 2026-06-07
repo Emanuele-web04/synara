@@ -4,11 +4,18 @@
 // Exports: row derivation, structural sharing, copy/timer helpers
 
 import { type MessageId, type TurnId } from "@t3tools/contracts";
-import { type TimelineEntry, type WorkLogEntry } from "../../session-logic";
+import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
+
+// Ordered item folded into a settled turn's single "Worked for Xs" disclosure.
+// A turn can interleave tool work and intermediate assistant narration
+// (preambles), so the collapsed panel keeps both in chronological order.
+export type CollapsedTurnItem =
+  | { kind: "work"; id: string; entry: WorkLogEntry }
+  | { kind: "narration"; id: string; message: ChatMessage };
 
 export interface TimelineDurationMessage {
   id: string;
@@ -16,6 +23,12 @@ export interface TimelineDurationMessage {
   createdAt: string;
   turnId?: string | null;
   completedAt?: string | undefined;
+}
+
+interface TimelineDiffMessage {
+  id: MessageId;
+  role: "user" | "assistant" | "system";
+  turnId: TurnId | null;
 }
 
 export type MessagesTimelineRow =
@@ -32,9 +45,11 @@ export type MessagesTimelineRow =
       message: ChatMessage;
       inlineWorkEntries?: WorkLogEntry[];
       inlineWorkGroupId?: string;
+      collapsedTurnItems?: CollapsedTurnItem[];
+      collapsedWorkElapsed?: string | null;
       durationStart: string;
-      showCompletionDivider: boolean;
       showAssistantCopyButton: boolean;
+      assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
       revertTurnCount?: number | undefined;
     }
@@ -90,13 +105,12 @@ export function resolveAssistantMessageCopyState({
   };
 }
 
-// Builds the "Files changed" lookup keyed by the terminal assistant message id
-// of each turn. Scoping by turnId (not by summary.assistantMessageId) prevents
-// turn-diff placeholders from attaching a card to the wrong row when ids are
-// missing, synthetic, or temporarily stale across reconnects.
+// Builds the "Files changed" lookup keyed by the last assistant row in the
+// user-visible response segment. Provider mini-turns can emit diffs before the
+// final answer, so the card follows the segment tail instead of the raw turn.
 export function buildTurnDiffSummaryByAssistantMessageId(input: {
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
-  assistantMessages: ReadonlyArray<{ id: MessageId; turnId: TurnId | null }>;
+  messages: ReadonlyArray<TimelineDiffMessage>;
 }): Map<MessageId, TurnDiffSummary> {
   const byMessageId = new Map<MessageId, TurnDiffSummary>();
   if (input.turnDiffSummaries.length === 0) return byMessageId;
@@ -106,51 +120,84 @@ export function buildTurnDiffSummaryByAssistantMessageId(input: {
     summaryByTurnId.set(summary.turnId, summary);
   }
 
-  const terminalAssistantMessageIdByTurnId = new Map<string, MessageId>();
-  for (const message of input.assistantMessages) {
-    if (!message.turnId) continue;
-    terminalAssistantMessageIdByTurnId.set(message.turnId, message.id);
+  const messageIndexByTurnId = new Map<string, number>();
+  for (let index = 0; index < input.messages.length; index += 1) {
+    const message = input.messages[index]!;
+    if (message.role !== "assistant" || !message.turnId) continue;
+    messageIndexByTurnId.set(message.turnId, index);
   }
 
-  for (const [turnId, messageId] of terminalAssistantMessageIdByTurnId) {
-    const summary = summaryByTurnId.get(turnId);
-    if (summary) {
-      byMessageId.set(messageId, summary);
+  for (const [turnId, summary] of summaryByTurnId) {
+    const anchorIndex = messageIndexByTurnId.get(turnId);
+    if (anchorIndex === undefined) continue;
+    let terminalAssistantMessageId: MessageId | null = null;
+    for (let index = anchorIndex; index < input.messages.length; index += 1) {
+      const message = input.messages[index]!;
+      if (index > anchorIndex && message.role === "user") break;
+      if (message.role === "assistant") {
+        terminalAssistantMessageId = message.id;
+      }
     }
+    if (!terminalAssistantMessageId) continue;
+
+    byMessageId.set(
+      terminalAssistantMessageId,
+      mergeTurnDiffSummaries(byMessageId.get(terminalAssistantMessageId), summary),
+    );
   }
   return byMessageId;
+}
+
+// Keeps multi-turn provider responses from losing earlier "Files changed" rows
+// when several turn-diff summaries anchor to the same final assistant message.
+function mergeTurnDiffSummaries(
+  existing: TurnDiffSummary | undefined,
+  next: TurnDiffSummary,
+): TurnDiffSummary {
+  if (!existing) return next;
+
+  const filesByPath = new Map(existing.files.map((file) => [file.path, file]));
+  for (const file of next.files) {
+    filesByPath.set(file.path, file);
+  }
+
+  return {
+    ...next,
+    files: [...filesByPath.values()],
+  };
 }
 
 export function deriveTerminalAssistantMessageIds(
   messages: ReadonlyArray<TimelineDurationMessage>,
 ): Set<string> {
-  const lastAssistantMessageIdByResponseKey = new Map<string, string>();
-  let nullTurnResponseIndex = 0;
+  const terminalAssistantMessageIds = new Set<string>();
+  let latestAssistantMessageId: string | null = null;
 
   for (const message of messages) {
-    if (message.role === "user") {
-      nullTurnResponseIndex += 1;
-      continue;
-    }
     if (message.role !== "assistant") {
+      if (latestAssistantMessageId) {
+        terminalAssistantMessageIds.add(latestAssistantMessageId);
+        latestAssistantMessageId = null;
+      }
       continue;
     }
-
-    const responseKey = message.turnId
-      ? `turn:${message.turnId}`
-      : `unkeyed:${nullTurnResponseIndex}`;
-    lastAssistantMessageIdByResponseKey.set(responseKey, message.id);
+    latestAssistantMessageId = message.id;
   }
 
-  return new Set(lastAssistantMessageIdByResponseKey.values());
+  if (latestAssistantMessageId) {
+    terminalAssistantMessageIds.add(latestAssistantMessageId);
+  }
+
+  return terminalAssistantMessageIds;
 }
 
 // Derives transcript rows from timeline entries while preserving the current
 // t3code behavior of attaching trailing work groups to the adjacent assistant reply.
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
-  completionDividerBeforeEntryId: string | null;
   isWorking: boolean;
+  activeTurnInProgress?: boolean;
+  activeTurnId?: TurnId | null | undefined;
   activeTurnStartedAt: string | null;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
@@ -229,7 +276,9 @@ export function deriveMessagesTimelineRows(input: {
     }
 
     if (timelineEntry.kind === "proposed-plan") {
-      flushPendingWorkGroup();
+      // A plan card is a visible mid-turn artifact. Keep adjacent work as its
+      // own row so final turn collapse can preserve the true chronology.
+      flushPendingWorkGroup({ attachToPreviousAssistant: false });
       nextRows.push({
         kind: "proposed-plan",
         id: timelineEntry.id,
@@ -249,6 +298,12 @@ export function deriveMessagesTimelineRows(input: {
       flushPendingWorkGroup();
     }
 
+    const assistantTurnStillInProgress =
+      timelineEntry.message.role === "assistant" &&
+      input.activeTurnInProgress === true &&
+      input.activeTurnId != null &&
+      timelineEntry.message.turnId === input.activeTurnId;
+
     nextRows.push({
       kind: "message",
       id: timelineEntry.id,
@@ -258,12 +313,10 @@ export function deriveMessagesTimelineRows(input: {
       ...(inlineWorkGroupId ? { inlineWorkGroupId } : {}),
       durationStart:
         durationStartByMessageId.get(timelineEntry.message.id) ?? timelineEntry.message.createdAt,
-      showCompletionDivider:
-        timelineEntry.message.role === "assistant" &&
-        input.completionDividerBeforeEntryId === timelineEntry.id,
       showAssistantCopyButton:
         timelineEntry.message.role === "assistant" &&
         terminalAssistantMessageIds.has(timelineEntry.message.id),
+      assistantCopyStreaming: timelineEntry.message.streaming || assistantTurnStillInProgress,
       assistantTurnDiffSummary:
         timelineEntry.message.role === "assistant"
           ? input.turnDiffSummaryByAssistantMessageId.get(timelineEntry.message.id)
@@ -287,7 +340,135 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
+  collapseSettledTurns(nextRows, {
+    terminalAssistantMessageIds,
+    activeTurnInProgress: input.activeTurnInProgress ?? false,
+    activeTurnId: input.activeTurnId ?? null,
+  });
+
   return nextRows;
+}
+
+// Returns the id of the most recent terminal assistant message row, used to keep
+// the live turn expanded when `activeTurnInProgress` is true but no explicit
+// `activeTurnId` is available (a transient window during turn settle).
+function findLastTerminalAssistantMessageId(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+  terminalAssistantMessageIds: ReadonlySet<string>,
+): string | null {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]!;
+    if (
+      row.kind === "message" &&
+      row.message.role === "assistant" &&
+      terminalAssistantMessageIds.has(row.message.id)
+    ) {
+      return row.message.id;
+    }
+  }
+  return null;
+}
+
+// Post-pass: collapse each *settled* turn into a single "Worked for Xs"
+// disclosure on the turn's terminal assistant message. Unlike a per-message
+// collapse, this folds every non-terminal assistant narration (preambles) AND
+// the turn's tool work into one ordered group, so the transcript shows a single
+// toggle + the final answer per turn (Remodex-style). The live turn stays
+// expanded/inline so streaming output is never hidden behind a toggle.
+function collapseSettledTurns(
+  rows: MessagesTimelineRow[],
+  options: {
+    terminalAssistantMessageIds: ReadonlySet<string>;
+    activeTurnInProgress: boolean;
+    activeTurnId: TurnId | null;
+  },
+): void {
+  const { terminalAssistantMessageIds, activeTurnInProgress, activeTurnId } = options;
+  const lastTerminalAssistantMessageId = activeTurnInProgress
+    ? findLastTerminalAssistantMessageId(rows, terminalAssistantMessageIds)
+    : null;
+
+  const collectWorkItems = (entries: ReadonlyArray<WorkLogEntry>, into: CollapsedTurnItem[]) => {
+    for (const entry of entries) {
+      into.push({ kind: "work", id: entry.id, entry });
+    }
+  };
+
+  for (let pass = rows.length - 1; pass >= 0; pass -= 1) {
+    const row = rows[pass]!;
+    if (row.kind !== "message" || row.message.role !== "assistant") continue;
+    // Only the terminal message of a turn owns the collapsed group.
+    if (!terminalAssistantMessageIds.has(row.message.id)) continue;
+    // Never collapse the live turn: streaming text or the in-progress turn stays
+    // inline so the user sees output as it arrives.
+    if (row.message.streaming) continue;
+    const turnId = row.message.turnId ?? null;
+    const turnIsActive =
+      activeTurnInProgress &&
+      (activeTurnId != null
+        ? (turnId != null && turnId === activeTurnId) ||
+          row.message.id === lastTerminalAssistantMessageId
+        : row.message.id === lastTerminalAssistantMessageId);
+    if (turnIsActive) continue;
+
+    // Scan back to the response boundary collecting rows to fold. Provider
+    // mini-turns can have distinct turnIds inside one assistant answer, so the
+    // user message boundary is the stable UI grouping point.
+    const foldIndices: number[] = [];
+    for (let scan = pass - 1; scan >= 0; scan -= 1) {
+      const prev = rows[scan]!;
+      if (prev.kind === "work") {
+        foldIndices.push(scan);
+        continue;
+      }
+      if (prev.kind === "message" && prev.message.role === "assistant") {
+        foldIndices.push(scan);
+        continue;
+      }
+      if (prev.kind === "proposed-plan") {
+        // The plan card stays visible, but it should not strand earlier
+        // narration/work outside the final "Worked for..." disclosure.
+        continue;
+      }
+      break;
+    }
+    foldIndices.reverse();
+
+    const collapsedItems: CollapsedTurnItem[] = [];
+    for (const index of foldIndices) {
+      const folded = rows[index]!;
+      if (folded.kind === "work") {
+        collectWorkItems(folded.groupedEntries, collapsedItems);
+      } else if (folded.kind === "message" && folded.message.role === "assistant") {
+        if (folded.assistantTurnDiffSummary) {
+          row.assistantTurnDiffSummary = mergeTurnDiffSummaries(
+            folded.assistantTurnDiffSummary,
+            row.assistantTurnDiffSummary ?? folded.assistantTurnDiffSummary,
+          );
+        }
+        // Work that preceded a narration message was attached as its inline
+        // entries; keep it ahead of the narration text in chronological order.
+        if (folded.collapsedTurnItems) collapsedItems.push(...folded.collapsedTurnItems);
+        if (folded.inlineWorkEntries) collectWorkItems(folded.inlineWorkEntries, collapsedItems);
+        collapsedItems.push({ kind: "narration", id: folded.message.id, message: folded.message });
+      }
+    }
+    // The terminal's own inline work happened before its final answer text.
+    if (row.inlineWorkEntries) collectWorkItems(row.inlineWorkEntries, collapsedItems);
+
+    if (collapsedItems.length > 0) {
+      const elapsed = formatElapsed(row.durationStart, row.message.completedAt);
+      row.collapsedTurnItems = collapsedItems;
+      row.collapsedWorkElapsed = elapsed ?? null;
+      delete row.inlineWorkEntries;
+      delete row.inlineWorkGroupId;
+
+      for (const index of [...foldIndices].sort((a, b) => b - a)) {
+        rows.splice(index, 1);
+      }
+      pass -= foldIndices.length;
+    }
+  }
 }
 
 // Reuses stable row references so streaming updates only invalidate rows whose
@@ -395,6 +576,26 @@ function workLogEntryArraysEqual(
   return left.every((entry, index) => workLogEntryContentEqual(entry, right[index]!));
 }
 
+function collapsedTurnItemsEqual(
+  left: ReadonlyArray<CollapsedTurnItem> | undefined,
+  right: ReadonlyArray<CollapsedTurnItem> | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => {
+    const other = right[index]!;
+    if (item.kind !== other.kind || item.id !== other.id) return false;
+    if (item.kind === "work" && other.kind === "work") {
+      return workLogEntryContentEqual(item.entry, other.entry);
+    }
+    if (item.kind === "narration" && other.kind === "narration") {
+      return item.message === other.message;
+    }
+    return false;
+  });
+}
+
 function shallowEqualEntryArray<T>(
   left: ReadonlyArray<T> | undefined,
   right: ReadonlyArray<T> | undefined,
@@ -426,9 +627,11 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.message === bm.message &&
         workLogEntryArraysEqual(a.inlineWorkEntries, bm.inlineWorkEntries) &&
         a.inlineWorkGroupId === bm.inlineWorkGroupId &&
+        collapsedTurnItemsEqual(a.collapsedTurnItems, bm.collapsedTurnItems) &&
+        a.collapsedWorkElapsed === bm.collapsedWorkElapsed &&
         a.durationStart === bm.durationStart &&
-        a.showCompletionDivider === bm.showCompletionDivider &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
+        a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
         a.revertTurnCount === bm.revertTurnCount
       );

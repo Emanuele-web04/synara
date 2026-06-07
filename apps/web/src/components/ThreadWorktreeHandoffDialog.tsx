@@ -85,16 +85,16 @@ export function ThreadWorktreeHandoffDialog({
                     onOpenChange(false);
                   }
                 }}
-                placeholder="dpcode/feature-name"
+                placeholder="synara/feature-name"
               />
             </label>
           </form>
         </DialogPanel>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={handleSubmit} disabled={!canSubmit}>
+          <Button size="sm" onClick={handleSubmit} disabled={!canSubmit}>
             {busy ? "Handing off..." : "Hand off"}
           </Button>
         </DialogFooter>

@@ -58,6 +58,12 @@ import {
 import type { ProviderMentionReference } from "@t3tools/contracts";
 import { cn } from "~/lib/utils";
 import {
+  COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME,
+  COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
+  COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
+  COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
+} from "./chat/composerPickerStyles";
+import {
   ComposerMentionNode,
   ComposerSkillNode,
   ComposerAgentMentionNode,
@@ -957,7 +963,10 @@ function ComposerPromptEditorInner({
           contentEditable={
             <ContentEditable
               className={cn(
-                "font-system-ui block max-h-[200px] min-h-[3rem] w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[length:var(--app-font-size-chat,12px)] leading-relaxed text-foreground focus:outline-none",
+                "block max-h-[200px] w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-foreground focus:outline-none",
+                COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
+                COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
+                COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME,
                 className,
               )}
               data-testid="composer-editor"
@@ -968,7 +977,13 @@ function ComposerPromptEditorInner({
           }
           placeholder={
             terminalContexts.length > 0 ? null : (
-              <div className="font-system-ui pointer-events-none absolute inset-0 text-[length:var(--app-font-size-chat,12px)] leading-relaxed text-muted-foreground/40">
+              <div
+                className={cn(
+                  "pointer-events-none absolute inset-0",
+                  COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
+                  COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
+                )}
+              >
                 {placeholder}
               </div>
             )

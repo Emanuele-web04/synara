@@ -4,6 +4,10 @@ import type { DesktopUpdateState } from "@t3tools/contracts";
 import {
   getCanRetryAfterDownloadFailure,
   getAutoUpdateDisabledReason,
+  getDownloadStallTimeoutMessage,
+  hasDownloadProgressAdvanced,
+  isExpectedStalledDownloadCancellationError,
+  isUpdateVersionNewer,
   nextStatusAfterDownloadFailure,
   shouldCheckForUpdatesOnForeground,
   shouldBroadcastDownloadProgress,
@@ -23,7 +27,94 @@ const baseState: DesktopUpdateState = {
   message: null,
   errorContext: null,
   canRetry: false,
+  releaseUrl: null,
 };
+
+describe("getDownloadStallTimeoutMessage", () => {
+  it("formats the no-progress timeout in seconds", () => {
+    expect(getDownloadStallTimeoutMessage(90_000)).toBe(
+      "Download stalled after 90 seconds without progress. Try again.",
+    );
+  });
+});
+
+describe("isExpectedStalledDownloadCancellationError", () => {
+  it("suppresses the cancellation emitted after a stalled download is cancelled", () => {
+    expect(
+      isExpectedStalledDownloadCancellationError({
+        suppressionArmed: true,
+        errorContext: "download",
+        message: " cancelled ",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not suppress unrelated updater errors", () => {
+    expect(
+      isExpectedStalledDownloadCancellationError({
+        suppressionArmed: false,
+        errorContext: "download",
+        message: "cancelled",
+      }),
+    ).toBe(false);
+    expect(
+      isExpectedStalledDownloadCancellationError({
+        suppressionArmed: true,
+        errorContext: "download",
+        message: "network timeout",
+      }),
+    ).toBe(false);
+    expect(
+      isExpectedStalledDownloadCancellationError({
+        suppressionArmed: true,
+        errorContext: "check",
+        message: "cancelled",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("hasDownloadProgressAdvanced", () => {
+  it("treats the first progress sample as active progress", () => {
+    expect(hasDownloadProgressAdvanced(null, { percent: 10, transferred: 1_024 })).toBe(true);
+  });
+
+  it("ignores malformed progress samples without numeric progress", () => {
+    expect(hasDownloadProgressAdvanced(null, {})).toBe(false);
+  });
+
+  it("detects byte progress inside the same percent bucket", () => {
+    expect(
+      hasDownloadProgressAdvanced(
+        { percent: 40.1, transferred: 10_000 },
+        { percent: 40.1, transferred: 12_000 },
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat duplicate progress samples as active progress", () => {
+    expect(
+      hasDownloadProgressAdvanced(
+        { percent: 60, transferred: 20_000 },
+        { percent: 60, transferred: 20_000 },
+      ),
+    ).toBe(false);
+  });
+
+  it("falls back to percent when transferred bytes are unavailable", () => {
+    expect(hasDownloadProgressAdvanced({ percent: 60 }, { percent: 61 })).toBe(true);
+    expect(hasDownloadProgressAdvanced({ percent: 60 }, { percent: 60 })).toBe(false);
+  });
+
+  it("resets on percent progress when transferred bytes do not advance", () => {
+    expect(
+      hasDownloadProgressAdvanced(
+        { percent: 60, transferred: 20_000 },
+        { percent: 61, transferred: 20_000 },
+      ),
+    ).toBe(true);
+  });
+});
 
 describe("shouldBroadcastDownloadProgress", () => {
   it("broadcasts the first downloading progress update", () => {
@@ -35,16 +126,16 @@ describe("shouldBroadcastDownloadProgress", () => {
     ).toBe(true);
   });
 
-  it("skips progress updates within the same 10% bucket", () => {
+  it("skips progress updates within the same whole-percent bucket", () => {
     expect(
       shouldBroadcastDownloadProgress(
         { ...baseState, status: "downloading", downloadPercent: 11.2 },
-        18.7,
+        11.7,
       ),
     ).toBe(false);
   });
 
-  it("broadcasts progress updates when a new 10% bucket is reached", () => {
+  it("broadcasts progress updates when a new whole-percent bucket is reached", () => {
     expect(
       shouldBroadcastDownloadProgress(
         { ...baseState, status: "downloading", downloadPercent: 19.9 },
@@ -60,6 +151,23 @@ describe("shouldBroadcastDownloadProgress", () => {
         0.2,
       ),
     ).toBe(true);
+  });
+});
+
+describe("isUpdateVersionNewer", () => {
+  it("rejects same-version updates from stale updater cache", () => {
+    expect(isUpdateVersionNewer("0.1.0", "0.1.0")).toBe(false);
+    expect(isUpdateVersionNewer("0.1.0", "v0.1.0")).toBe(false);
+  });
+
+  it("allows newer stable versions and stable releases replacing matching prereleases", () => {
+    expect(isUpdateVersionNewer("0.1.0", "0.1.1")).toBe(true);
+    expect(isUpdateVersionNewer("0.1.0-beta.1", "0.1.0")).toBe(true);
+  });
+
+  it("rejects older versions", () => {
+    expect(isUpdateVersionNewer("0.1.1", "0.1.0")).toBe(false);
+    expect(isUpdateVersionNewer("1.0.0", "0.9.9")).toBe(false);
   });
 });
 

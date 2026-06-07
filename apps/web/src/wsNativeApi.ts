@@ -1,3 +1,8 @@
+// FILE: wsNativeApi.ts
+// Purpose: NativeApi implementation backed by the browser WebSocket RPC transport.
+// Layer: Web transport adapter
+// Exports: createWsNativeApi and event subscription helpers for server push channels.
+
 import {
   type AuthBearerBootstrapResult,
   type AuthBootstrapInput,
@@ -33,6 +38,7 @@ import {
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { WsTransport } from "./wsTransport";
+import { emitWsTransportState } from "./wsTransportEvents";
 
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
 const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
@@ -43,6 +49,23 @@ const serverProviderStatusesUpdatedListeners = new Set<
 const serverMaintenanceUpdatedListeners = new Set<(payload: ServerLifecycleStreamEvent) => void>();
 const serverSettingsUpdatedListeners = new Set<(payload: ServerSettingsUpdatedPayload) => void>();
 const gitActionProgressListeners = new Set<(payload: GitActionProgressEvent) => void>();
+
+function omitNullUserInputAnswers(
+  command: Parameters<NativeApi["orchestration"]["dispatchCommand"]>[0],
+) {
+  if (command.type !== "thread.user-input.respond") {
+    return command;
+  }
+
+  return {
+    ...command,
+    answers: Object.fromEntries(
+      Object.entries(command.answers).filter(
+        ([, answer]) => answer !== null && answer !== undefined,
+      ),
+    ),
+  };
+}
 const terminalEventListeners = new Set<(payload: TerminalEvent) => void>();
 const orchestrationDomainEventListeners = new Set<(payload: OrchestrationEvent) => void>();
 const orchestrationShellEventListeners = new Set<(payload: OrchestrationShellStreamItem) => void>();
@@ -294,6 +317,7 @@ export function createWsNativeApi(): NativeApi {
   }
 
   const transport = new WsTransport();
+  transport.onStateChange((state) => emitWsTransportState(state));
 
   transport.subscribe(WS_CHANNELS.serverWelcome, (message) => {
     const payload = message.data;
@@ -424,6 +448,7 @@ export function createWsNativeApi(): NativeApi {
     terminal: {
       open: (input) => transport.request(WS_METHODS.terminalOpen, input),
       write: (input) => transport.request(WS_METHODS.terminalWrite, input),
+      ackOutput: (input) => transport.request(WS_METHODS.terminalAckOutput, input),
       resize: (input) => transport.request(WS_METHODS.terminalResize, input),
       clear: (input) => transport.request(WS_METHODS.terminalClear, input),
       restart: (input) => transport.request(WS_METHODS.terminalRestart, input),
@@ -469,6 +494,7 @@ export function createWsNativeApi(): NativeApi {
       },
     },
     git: {
+      githubRepository: (input) => transport.request(WS_METHODS.gitGithubRepository, input),
       pull: (input) => transport.request(WS_METHODS.gitPull, input),
       status: (input) => transport.request(WS_METHODS.gitStatus, input),
       readWorkingTreeDiff: (input) => transport.request(WS_METHODS.gitReadWorkingTreeDiff, input),
@@ -492,6 +518,8 @@ export function createWsNativeApi(): NativeApi {
       stashInfo: (input) => transport.request(WS_METHODS.gitStashInfo, input),
       removeIndexLock: (input) => transport.request(WS_METHODS.gitRemoveIndexLock, input),
       init: (input) => transport.request(WS_METHODS.gitInit, input),
+      stageFiles: (input) => transport.request(WS_METHODS.gitStageFiles, input),
+      unstageFiles: (input) => transport.request(WS_METHODS.gitUnstageFiles, input),
       handoffThread: (input) => transport.request(WS_METHODS.gitHandoffThread, input),
       resolvePullRequest: (input) => transport.request(WS_METHODS.gitResolvePullRequest, input),
       preparePullRequestThread: (input) =>
@@ -555,9 +583,15 @@ export function createWsNativeApi(): NativeApi {
           method: "POST",
         }),
       refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
+      updateProvider: (input) => transport.request(WS_METHODS.serverUpdateProvider, input),
       listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
       getProviderUsageSnapshot: (input) =>
         transport.request(WS_METHODS.serverGetProviderUsageSnapshot, input),
+      getDiagnostics: () => transport.request(WS_METHODS.serverGetDiagnostics),
+      generateThreadRecap: (input) =>
+        transport.request(WS_METHODS.serverGenerateThreadRecap, input, {
+          timeoutMs: null,
+        }),
       transcribeVoice: (input) => {
         if (window.desktopBridge?.server?.transcribeVoice) {
           return window.desktopBridge.server.transcribeVoice(input);
@@ -580,10 +614,11 @@ export function createWsNativeApi(): NativeApi {
     orchestration: {
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),
       getShellSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getShellSnapshot),
-      dispatchCommand: (command) =>
-        transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, {
-          command,
-        }),
+      dispatchCommand: (command) => {
+        return transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, {
+          command: omitNullUserInputAnswers(command),
+        });
+      },
       importThread: (input) => transport.request(ORCHESTRATION_WS_METHODS.importThread, input),
       repairState: () => transport.request(ORCHESTRATION_WS_METHODS.repairState),
       getTurnDiff: (input) => transport.request(ORCHESTRATION_WS_METHODS.getTurnDiff, input),
@@ -778,6 +813,25 @@ export function createWsNativeApi(): NativeApi {
 
   instance = { api, transport };
   return api;
+}
+
+// Browser-mode tests mount full app roots repeatedly in one page; reset the
+// singleton so each test gets a fresh WebSocket stream and cached push state.
+export function resetWsNativeApiForTest(): void {
+  instance?.transport.dispose();
+  instance = null;
+  welcomeListeners.clear();
+  serverConfigUpdatedListeners.clear();
+  serverProviderStatusesUpdatedListeners.clear();
+  serverMaintenanceUpdatedListeners.clear();
+  serverSettingsUpdatedListeners.clear();
+  gitActionProgressListeners.clear();
+  terminalEventListeners.clear();
+  orchestrationDomainEventListeners.clear();
+  orchestrationShellEventListeners.clear();
+  orchestrationThreadEventListeners.clear();
+  fallbackBrowserStateListeners.clear();
+  fallbackBrowserStates.clear();
 }
 
 if (import.meta.hot) {

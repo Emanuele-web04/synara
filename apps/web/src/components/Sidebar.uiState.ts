@@ -6,7 +6,7 @@
 import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
 import type { LastThreadRoute } from "../chatRouteRestore";
 
-const SIDEBAR_UI_STATE_STORAGE_KEY = "dpcode:sidebar-ui:v1";
+const SIDEBAR_UI_STATE_STORAGE_KEY = "synara:sidebar-ui:v1";
 
 export type SidebarUiState = {
   chatSectionExpanded: boolean;

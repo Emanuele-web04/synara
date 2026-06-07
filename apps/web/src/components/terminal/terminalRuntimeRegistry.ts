@@ -17,6 +17,7 @@ import {
 import type {
   TerminalRuntimeConfig,
   TerminalRuntimeEntry,
+  TerminalRuntimeStatus,
   TerminalRuntimeViewState,
 } from "./terminalRuntimeTypes";
 import { buildTerminalRuntimeKey } from "./terminalRuntimeTypes";
@@ -32,7 +33,7 @@ class TerminalRuntimeRegistry {
     config: TerminalRuntimeConfig,
     viewState: TerminalRuntimeViewState,
     container: HTMLDivElement,
-  ): { terminal: Terminal; searchAddon: SearchAddon } {
+  ): { terminal: Terminal; searchAddon: SearchAddon; runtimeStatus: TerminalRuntimeStatus } {
     let entry = this.entries.get(config.runtimeKey);
     if (!entry) {
       entry = createRuntimeEntry(config);
@@ -45,6 +46,7 @@ class TerminalRuntimeRegistry {
     return {
       terminal: entry.terminal,
       searchAddon: entry.searchAddon,
+      runtimeStatus: entry.runtimeStatus,
     };
   }
 

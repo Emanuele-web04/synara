@@ -8,17 +8,16 @@ import { memo, useId, useRef, type ChangeEvent } from "react";
 import { GoTasklist } from "react-icons/go";
 
 import { PaperclipIcon, PlusIcon } from "~/lib/icons";
+import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import { Button } from "../ui/button";
 import {
   Menu,
   MenuCheckboxItem,
   MenuItem,
-  MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
   MenuSeparator,
   MenuSub,
-  MenuSubPopup,
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
@@ -68,7 +67,7 @@ export const ComposerExtrasMenu = memo(function ComposerExtrasMenu(props: {
         >
           <PlusIcon aria-hidden="true" className="size-4" />
         </MenuTrigger>
-        <MenuPopup align="start">
+        <ComposerPickerMenuPopup align="start">
           <MenuItem
             onClick={() => {
               fileInputRef.current?.click();
@@ -97,7 +96,7 @@ export const ComposerExtrasMenu = memo(function ComposerExtrasMenu(props: {
               <MenuSeparator />
               <MenuSub>
                 <MenuSubTrigger>Fast</MenuSubTrigger>
-                <MenuSubPopup>
+                <ComposerPickerMenuSubPopup>
                   <MenuRadioGroup
                     value={props.fastModeEnabled ? "fast" : "normal"}
                     onValueChange={(value) => {
@@ -109,11 +108,11 @@ export const ComposerExtrasMenu = memo(function ComposerExtrasMenu(props: {
                     <MenuRadioItem value="normal">Default</MenuRadioItem>
                     <MenuRadioItem value="fast">Fast</MenuRadioItem>
                   </MenuRadioGroup>
-                </MenuSubPopup>
+                </ComposerPickerMenuSubPopup>
               </MenuSub>
             </>
           ) : null}
-        </MenuPopup>
+        </ComposerPickerMenuPopup>
       </Menu>
     </>
   );

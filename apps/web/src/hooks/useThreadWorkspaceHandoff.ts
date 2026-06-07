@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
+import type { OrchestrationShellSnapshot, ThreadId } from "@t3tools/contracts";
 import { resolveWorktreeHandoffIntent } from "@t3tools/shared/worktreeHandoff";
 import { useCallback, useState } from "react";
 import { gitHandoffThreadMutationOptions } from "~/lib/gitReactQuery";
@@ -31,7 +31,7 @@ export function useThreadWorkspaceHandoff(input: {
     },
   ) => Promise<void>;
   setStoreThreadWorkspace: (threadId: ThreadId, patch: ThreadWorkspacePatch) => void;
-  syncServerReadModel: (snapshot: OrchestrationReadModel) => void;
+  syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
 }) {
   const queryClient = useQueryClient();
   const handoffThreadMutation = useMutation(
@@ -89,8 +89,8 @@ export function useThreadWorkspaceHandoff(input: {
         });
         input.setStoreThreadWorkspace(input.activeThread.id, workspacePatch);
 
-        const snapshot = await api.orchestration.getSnapshot();
-        input.syncServerReadModel(snapshot);
+        const snapshot = await api.orchestration.getShellSnapshot();
+        input.syncServerShellSnapshot(snapshot);
 
         if (targetMode === "worktree" && result.worktreePath) {
           const setupScript = setupProjectScript(input.activeProject.scripts);

@@ -2,7 +2,7 @@
 
 import { Toast, type ToastObject } from "@base-ui/react/toast";
 import { useEffect, useMemo, type CSSProperties } from "react";
-import { useParams, useSearch } from "@tanstack/react-router";
+import { useParams } from "@tanstack/react-router";
 import { ThreadId } from "@t3tools/contracts";
 import {
   CircleAlertIcon,
@@ -19,7 +19,12 @@ import { cn } from "~/lib/utils";
 import { Button, buttonVariants } from "~/components/ui/button";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { buildVisibleToastLayout, shouldHideCollapsedToastContent } from "./toast.logic";
-import { parseDiffRouteSearch } from "../../diffRouteSearch";
+import {
+  COMPACT_NOTIFICATION_SURFACE_CLASS_NAME,
+  EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,
+  NOTIFICATION_ICON_CLASS_NAME,
+} from "./notificationSurface";
+import { useDiffRouteSearch } from "../../hooks/useDiffRouteSearch";
 import { selectSplitView, useSplitViewStore } from "../../splitViewStore";
 import {
   resolveVisibleToastThreadIds,
@@ -29,6 +34,8 @@ import {
 type ThreadToastData = {
   allowCrossThreadVisibility?: boolean;
   copyText?: string;
+  onClose?: () => void;
+  secondaryActionProps?: React.ComponentProps<typeof Button>;
   threadId?: ThreadId | null;
   tooltipStyle?: boolean;
   dismissAfterVisibleMs?: number;
@@ -46,6 +53,21 @@ const TOAST_ICONS = {
   success: CircleCheckIcon,
   warning: TriangleAlertIcon,
 } as const;
+
+function shouldUseCompactToast(toast: ToastObject<ThreadToastData>): boolean {
+  return !toast.data?.copyText && !toast.actionProps && !toast.data?.secondaryActionProps;
+}
+
+function toastRootClassName(position: ToastPosition, compact: boolean): string {
+  return cn(
+    compact ? COMPACT_NOTIFICATION_SURFACE_CLASS_NAME : EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,
+    position.includes("center") ? "mx-auto" : compact ? "" : "w-full",
+  );
+}
+
+function toastIconClassName(type: ToastObject<ThreadToastData>["type"]): string {
+  return cn(NOTIFICATION_ICON_CLASS_NAME, type === "loading" && "animate-spin opacity-90");
+}
 
 type ToastPosition =
   | "top-left"
@@ -76,10 +98,7 @@ function useVisibleThreadIdsFromRoute(): ReadonlySet<ThreadId> {
     select: (params) =>
       typeof params.threadId === "string" ? ThreadId.makeUnsafe(params.threadId) : null,
   });
-  const routeSearch = useSearch({
-    strict: false,
-    select: (search) => parseDiffRouteSearch(search),
-  });
+  const routeSearch = useDiffRouteSearch();
   const splitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
 
   return useMemo(() => {
@@ -168,20 +187,22 @@ function ThreadToastVisibleAutoDismiss({
 function ToastActions({
   actionProps,
   copyText,
+  secondaryActionProps,
 }: {
   actionProps: ToastObject<ThreadToastData>["actionProps"];
   copyText: string | undefined;
+  secondaryActionProps: ThreadToastData["secondaryActionProps"];
 }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
 
-  if (!actionProps && !copyText) return null;
+  if (!actionProps && !copyText && !secondaryActionProps) return null;
 
   return (
     <div className="mt-2 flex flex-wrap items-center gap-1.5">
       {copyText && (
         <Button
           aria-label={isCopied ? "Copied error message" : "Copy error message"}
-          className="self-start"
+          className="self-start rounded-md border-[var(--notification-fg)]/20 bg-[var(--notification-fg)]/10 text-[var(--notification-fg)] hover:bg-[var(--notification-fg)]/20"
           onClick={() => {
             copyToClipboard(copyText, undefined);
           }}
@@ -196,30 +217,120 @@ function ToastActions({
       {actionProps && (
         <Toast.Action
           {...actionProps}
-          className={cn(buttonVariants({ size: "xs" }), "self-start", actionProps.className)}
+          className={cn(
+            buttonVariants({ size: "xs", variant: "outline" }),
+            "self-start rounded-md border-[var(--notification-fg)]/20 bg-[var(--notification-fg)]/10 text-[var(--notification-fg)] hover:bg-[var(--notification-fg)]/20",
+            actionProps.className,
+          )}
           data-slot="toast-action"
         >
           {actionProps.children}
         </Toast.Action>
       )}
+      {secondaryActionProps && (
+        <Button
+          {...secondaryActionProps}
+          className={cn(
+            "self-start rounded-md border-[var(--notification-fg)]/20 bg-[var(--notification-fg)]/10 text-[var(--notification-fg)] hover:bg-[var(--notification-fg)]/20",
+            secondaryActionProps.className,
+          )}
+          size={secondaryActionProps.size ?? "xs"}
+          variant={secondaryActionProps.variant ?? "outline"}
+        />
+      )}
     </div>
   );
 }
 
-function ToastCloseButton() {
+function ToastCloseButton({
+  compact = false,
+  onClose,
+}: {
+  compact?: boolean;
+  onClose?: (() => void) | undefined;
+}) {
   return (
     <Toast.Close
       aria-label="Dismiss toast"
-      className="absolute top-2 right-2 inline-flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-70 transition-colors hover:bg-muted hover:text-foreground hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className={cn(
+        // pointer-events-auto keeps the X clickable even when a stacked/collapsed
+        // toast still gates its content with pointer-events-none.
+        "pointer-events-auto z-10 inline-flex shrink-0 items-center justify-center rounded-full text-[var(--notification-fg)]/65 transition-colors hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--notification-fg)]/35",
+        compact ? "size-5" : "absolute top-2 right-2 size-6",
+      )}
       data-slot="toast-close"
+      onClick={onClose}
       title="Dismiss toast"
     >
-      <XIcon className="size-3.5" />
+      <XIcon className={compact ? "size-3" : "size-3.5"} />
     </Toast.Close>
   );
 }
 
-function ToastProvider({ children, position = "top-right", ...props }: ToastProviderProps) {
+function ToastSurface({
+  toast,
+  compact,
+  hideCollapsedContent,
+}: {
+  toast: ToastObject<ThreadToastData>;
+  compact: boolean;
+  hideCollapsedContent: boolean;
+}) {
+  const Icon = toast.type ? TOAST_ICONS[toast.type as keyof typeof TOAST_ICONS] : null;
+
+  return (
+    <Toast.Content
+      className={cn(
+        "pointer-events-auto relative flex overflow-hidden transition-opacity duration-250 data-expanded:opacity-100",
+        compact
+          ? "items-center gap-2 px-3 py-1.5 pr-1.5 text-[length:var(--app-font-size-ui-sm,11px)] leading-normal"
+          : "items-start gap-2 px-3.5 py-3 pr-10 text-sm",
+        hideCollapsedContent && "not-data-expanded:pointer-events-none not-data-expanded:opacity-0",
+      )}
+    >
+      {Icon ? (
+        <div
+          className={cn(
+            "shrink-0 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+            compact ? "[&>svg]:size-3.5" : "[&>svg]:h-lh [&>svg]:w-4",
+          )}
+          data-slot="toast-icon"
+        >
+          <Icon className={toastIconClassName(toast.type)} />
+        </div>
+      ) : null}
+
+      <div
+        className={cn("min-w-0 flex-1", compact ? "flex items-center" : "flex flex-col gap-0.5")}
+      >
+        <Toast.Title
+          className={cn(
+            "min-w-0 font-normal",
+            compact ? "truncate whitespace-nowrap" : "break-words",
+          )}
+          data-slot="toast-title"
+        />
+        {!compact ? (
+          <Toast.Description
+            className="min-w-0 break-words text-[var(--notification-fg)]/72"
+            data-slot="toast-description"
+          />
+        ) : null}
+        {!compact ? (
+          <ToastActions
+            actionProps={toast.actionProps}
+            copyText={toast.data?.copyText}
+            secondaryActionProps={toast.data?.secondaryActionProps}
+          />
+        ) : null}
+      </div>
+
+      <ToastCloseButton compact={compact} onClose={toast.data?.onClose} />
+    </Toast.Content>
+  );
+}
+
+function ToastProvider({ children, position = "top-center", ...props }: ToastProviderProps) {
   return (
     <Toast.Provider toastManager={toastManager} {...props}>
       {children}
@@ -228,7 +339,7 @@ function ToastProvider({ children, position = "top-right", ...props }: ToastProv
   );
 }
 
-function Toasts({ position = "top-right" }: { position: ToastPosition }) {
+function Toasts({ position = "top-center" }: { position: ToastPosition }) {
   const { toasts } = Toast.useToastManager<ThreadToastData>();
   const visibleThreadIds = useVisibleThreadIdsFromRoute();
   const isTop = position.startsWith("top");
@@ -250,9 +361,11 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
     <Toast.Portal data-slot="toast-portal">
       <Toast.Viewport
         className={cn(
-          "fixed z-50 mx-auto flex w-[calc(100%-var(--toast-inset)*2)] max-w-90 [--toast-header-offset:52px] [--toast-inset:--spacing(4)] sm:[--toast-inset:--spacing(8)]",
+          "fixed z-[200] mx-auto flex w-[calc(100%-var(--toast-inset)*2)] max-w-sm [--toast-inset:--spacing(4)] sm:[--toast-inset:--spacing(8)]",
           // Vertical positioning
-          "data-[position*=top]:top-[calc(var(--toast-inset)+var(--toast-header-offset))]",
+          "data-[position=top-center]:top-4",
+          "data-[position=top-left]:top-[calc(var(--toast-inset)+46px)]",
+          "data-[position=top-right]:top-[calc(var(--toast-inset)+46px)]",
           "data-[position*=bottom]:bottom-(--toast-inset)",
           // Horizontal positioning
           "data-[position*=left]:left-(--toast-inset)",
@@ -268,16 +381,17 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
         }
       >
         {visibleToastLayout.items.map(({ toast, visibleIndex, offsetY }) => {
-          const Icon = toast.type ? TOAST_ICONS[toast.type as keyof typeof TOAST_ICONS] : null;
           const hideCollapsedContent = shouldHideCollapsedToastContent(
             visibleIndex,
             visibleToastLayout.items.length,
           );
+          const compact = shouldUseCompactToast(toast);
 
           return (
             <Toast.Root
               className={cn(
-                "absolute z-[calc(9999-var(--toast-index))] h-(--toast-calc-height) w-full select-none rounded-lg border bg-popover not-dark:bg-clip-padding text-popover-foreground shadow-lg/5 [transition:transform_.5s_cubic-bezier(.22,1,.36,1),opacity_.5s,height_.15s] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
+                "absolute z-[calc(9999-var(--toast-index))] h-(--toast-calc-height) select-none [transition:transform_.5s_cubic-bezier(.22,1,.36,1),opacity_.5s,height_.15s]",
+                toastRootClassName(position, compact),
                 // Base positioning using data-position
                 "data-[position*=right]:right-0 data-[position*=right]:left-auto",
                 "data-[position*=left]:right-auto data-[position*=left]:left-0",
@@ -293,6 +407,10 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
                 // If that shared measurement is briefly stale, long content can render
                 // outside the card until hover expands the toast and swaps to its own height.
                 "[--toast-calc-height:max(var(--toast-frontmost-height,var(--toast-height)),var(--toast-height))] [--toast-gap:--spacing(3)] [--toast-peek:--spacing(3)] [--toast-scale:calc(max(0,1-(var(--toast-index)*.1)))] [--toast-shrink:calc(1-var(--toast-scale))]",
+                // Top-center uses a flat banner stack without peek/shrink offsets.
+                "data-[position=top-center]:[--toast-peek:0px] data-[position=top-center]:[--toast-scale:1] data-[position=top-center]:[--toast-shrink:0]",
+                "data-[position=top-center]:transform-[translateX(var(--toast-swipe-movement-x))_translateY(var(--toast-swipe-movement-y))]",
+                "data-[position=top-center]:data-expanded:transform-[translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-offset-y)+var(--toast-swipe-movement-y)))]",
                 // Define offset-y variable
                 "data-[position*=top]:[--toast-calc-offset-y:calc(var(--toast-offset-y)+var(--toast-index)*var(--toast-gap)+var(--toast-swipe-movement-y))]",
                 "data-[position*=bottom]:[--toast-calc-offset-y:calc(var(--toast-offset-y)*-1+var(--toast-index)*var(--toast-gap)*-1+var(--toast-swipe-movement-y))]",
@@ -306,6 +424,7 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
                 "data-position:data-expanded:transform-[translateX(var(--toast-swipe-movement-x))_translateY(var(--toast-calc-offset-y))]",
                 // Starting and ending animations
                 "data-[position*=top]:data-starting-style:transform-[translateY(calc(-100%-var(--toast-inset)))]",
+                "data-[position=top-center]:data-ending-style:not-data-limited:not-data-swipe-direction:transform-[translateY(calc(var(--toast-swipe-movement-y)-100%-var(--toast-inset)))]",
                 "data-[position*=bottom]:data-starting-style:transform-[translateY(calc(100%+var(--toast-inset)))]",
                 "data-[position*=top]:data-[position*=right]:data-starting-style:transform-[translateX(calc(100%+var(--toast-inset)))_translateY(var(--toast-calc-offset-y))]",
                 "data-ending-style:opacity-0",
@@ -343,35 +462,11 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
                 dismissAfterVisibleMs={toast.data?.dismissAfterVisibleMs}
                 toastId={toast.id}
               />
-              <Toast.Content
-                className={cn(
-                  "pointer-events-auto relative flex items-start gap-2 overflow-hidden px-3.5 py-3 pr-10 text-sm transition-opacity duration-250 data-expanded:opacity-100",
-                  hideCollapsedContent &&
-                    "not-data-expanded:pointer-events-none not-data-expanded:opacity-0",
-                )}
-              >
-                {Icon && (
-                  <div
-                    className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
-                    data-slot="toast-icon"
-                  >
-                    <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
-                  </div>
-                )}
-
-                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <Toast.Title
-                    className="min-w-0 break-words font-medium"
-                    data-slot="toast-title"
-                  />
-                  <Toast.Description
-                    className="min-w-0 break-words text-muted-foreground"
-                    data-slot="toast-description"
-                  />
-                  <ToastActions actionProps={toast.actionProps} copyText={toast.data?.copyText} />
-                </div>
-                <ToastCloseButton />
-              </Toast.Content>
+              <ToastSurface
+                compact={compact}
+                hideCollapsedContent={hideCollapsedContent}
+                toast={toast}
+              />
             </Toast.Root>
           );
         })}
@@ -399,9 +494,9 @@ function AnchoredToasts() {
         {toasts
           .filter((toast) => shouldRenderForActiveThread(toast.data, visibleThreadIds))
           .map((toast) => {
-            const Icon = toast.type ? TOAST_ICONS[toast.type as keyof typeof TOAST_ICONS] : null;
             const tooltipStyle = toast.data?.tooltipStyle ?? false;
             const positionerProps = toast.positionerProps;
+            const compact = !tooltipStyle && shouldUseCompactToast(toast);
 
             if (!positionerProps?.anchor) {
               return null;
@@ -417,10 +512,12 @@ function AnchoredToasts() {
               >
                 <Toast.Root
                   className={cn(
-                    "relative text-balance border bg-popover not-dark:bg-clip-padding text-popover-foreground text-xs transition-[scale,opacity] before:pointer-events-none before:absolute before:inset-0 before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0 dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
+                    "relative text-balance transition-[scale,opacity] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0",
                     tooltipStyle
-                      ? "rounded-md shadow-md/5 before:rounded-[calc(var(--radius-md)-1px)]"
-                      : "rounded-lg shadow-lg/5 before:rounded-[calc(var(--radius-lg)-1px)]",
+                      ? "rounded-lg border bg-popover text-popover-foreground text-xs shadow-md/5 [-webkit-app-region:no-drag] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]"
+                      : compact
+                        ? COMPACT_NOTIFICATION_SURFACE_CLASS_NAME
+                        : EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,
                   )}
                   data-slot="toast-popup"
                   toast={toast}
@@ -430,32 +527,7 @@ function AnchoredToasts() {
                       <Toast.Title data-slot="toast-title" />
                     </Toast.Content>
                   ) : (
-                    <Toast.Content className="pointer-events-auto relative flex items-start gap-2 overflow-hidden px-3.5 py-3 pr-10 text-sm">
-                      {Icon && (
-                        <div
-                          className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
-                          data-slot="toast-icon"
-                        >
-                          <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
-                        </div>
-                      )}
-
-                      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                        <Toast.Title
-                          className="min-w-0 break-words font-medium"
-                          data-slot="toast-title"
-                        />
-                        <Toast.Description
-                          className="min-w-0 break-words text-muted-foreground"
-                          data-slot="toast-description"
-                        />
-                        <ToastActions
-                          actionProps={toast.actionProps}
-                          copyText={toast.data?.copyText}
-                        />
-                      </div>
-                      <ToastCloseButton />
-                    </Toast.Content>
+                    <ToastSurface compact={compact} hideCollapsedContent={false} toast={toast} />
                   )}
                 </Toast.Root>
               </Toast.Positioner>

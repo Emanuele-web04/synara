@@ -1,6 +1,6 @@
 import {
   type ModelSelection,
-  type OrchestrationReadModel,
+  type OrchestrationShellSnapshot,
   type ProviderInteractionMode,
   type ProviderKind,
   type ProviderNativeCommandDescriptor,
@@ -10,7 +10,7 @@ import {
 } from "@t3tools/contracts";
 import { buildPromptThreadTitleFallback } from "@t3tools/shared/chatThreads";
 import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { newCommandId, newMessageId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import type { Project, Thread } from "../types";
@@ -31,7 +31,9 @@ import { toastManager } from "../components/ui/toast";
 import type { ComposerCommandItem } from "../components/chat/ComposerCommandMenu";
 import { buildNextProviderOptions } from "../providerModelOptions";
 import { resolveForkThreadEnvironment } from "../lib/threadEnvironment";
-import { type SplitViewId, useSplitViewStore } from "../splitViewStore";
+import { type SplitViewId } from "../splitViewStore";
+import { useRightDockStore } from "../rightDockStore";
+import { registerSidechatCreator } from "../lib/sidechatCreatorRegistry";
 
 type ComposerSnapshot = {
   value: string;
@@ -63,7 +65,7 @@ export function useComposerSlashCommands(input: {
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
   threadId: ThreadId;
-  syncServerReadModel: (snapshot: OrchestrationReadModel) => void;
+  syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
   navigateToThread: (threadId: ThreadId, options?: { splitViewId?: SplitViewId }) => Promise<void>;
   handleClearConversation: () => Promise<void> | void;
   handleInteractionModeChange: (mode: "default" | "plan") => Promise<void> | void;
@@ -111,7 +113,7 @@ export function useComposerSlashCommands(input: {
     runtimeMode,
     interactionMode,
     threadId,
-    syncServerReadModel,
+    syncServerShellSnapshot,
     navigateToThread,
     handleClearConversation,
     handleInteractionModeChange,
@@ -121,7 +123,6 @@ export function useComposerSlashCommands(input: {
     editorActions,
   } = input;
   const providerNativeCommandNames = providerNativeCommands.map((command) => command.name);
-  const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const availableBuiltInSlashCommands = getAvailableComposerSlashCommands({
     provider: selectedProvider,
     supportsFastSlashCommand,
@@ -274,8 +275,8 @@ export function useComposerSlashCommands(input: {
         importedMessages: [...importedMessages],
         createdAt,
       });
-      const snapshot = await api.orchestration.getSnapshot();
-      syncServerReadModel(snapshot);
+      const snapshot = await api.orchestration.getShellSnapshot();
+      syncServerShellSnapshot(snapshot);
       await navigateToThread(nextThreadId);
       return true;
     },
@@ -288,7 +289,7 @@ export function useComposerSlashCommands(input: {
       navigateToThread,
       runtimeMode,
       selectedModelSelection,
-      syncServerReadModel,
+      syncServerShellSnapshot,
     ],
   );
 
@@ -352,29 +353,34 @@ export function useComposerSlashCommands(input: {
         });
       }
 
-      const snapshot = await api.orchestration.getSnapshot();
-      syncServerReadModel(snapshot);
-      const splitViewId = createSplitViewFromDrop({
-        sourceThreadId: activeThread.id,
-        ownerProjectId: activeProject.id,
-        droppedThreadId: nextThreadId,
-        direction: "horizontal",
-        side: "second",
+      const snapshot = await api.orchestration.getShellSnapshot();
+      syncServerShellSnapshot(snapshot);
+      // Side chats now live as a tab in the host thread's right dock instead of a
+      // split-view pane, so the user stays on the main conversation.
+      useRightDockStore.getState().openPane(activeThread.id, {
+        kind: "sidechat",
+        threadId: nextThreadId,
       });
-      await navigateToThread(nextThreadId, { splitViewId });
       return true;
     },
     [
       activeProject,
       activeThread,
       canOfferSideCommand,
-      createSplitViewFromDrop,
       isServerThread,
-      navigateToThread,
       selectedModelSelection,
-      syncServerReadModel,
+      syncServerShellSnapshot,
     ],
   );
+
+  // Publish the host thread's sidechat creator so the right-dock "+" button can start
+  // a sidechat using the exact same flow (and model selection) as typing /side.
+  useEffect(() => {
+    if (!canOfferSideCommand) {
+      return;
+    }
+    return registerSidechatCreator(threadId, createSidechatFromSlashCommand);
+  }, [canOfferSideCommand, createSidechatFromSlashCommand, threadId]);
 
   const runCodexReviewStart = useCallback(
     async (target: "changes" | "base-branch") => {
@@ -456,8 +462,8 @@ export function useComposerSlashCommands(input: {
           interactionMode: "default",
           createdAt,
         });
-        const snapshot = await api.orchestration.getSnapshot();
-        syncServerReadModel(snapshot);
+        const snapshot = await api.orchestration.getShellSnapshot();
+        syncServerShellSnapshot(snapshot);
         await navigateToThread(nextThreadId);
         return true;
       } catch (error) {
@@ -477,7 +483,7 @@ export function useComposerSlashCommands(input: {
       navigateToThread,
       runtimeMode,
       selectedModelSelection,
-      syncServerReadModel,
+      syncServerShellSnapshot,
     ],
   );
 

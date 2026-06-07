@@ -1,3 +1,8 @@
+// FILE: desktopUpdate.logic.ts
+// Purpose: Maps desktop updater state into sidebar button actions, copy, and variants.
+// Layer: Web UI state helper
+// Depends on: Desktop update IPC contracts.
+
 import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
 
 export type DesktopUpdateButtonAction = "check" | "download" | "install" | "none";
@@ -20,10 +25,16 @@ export function resolveDesktopUpdateButtonAction(
     return "install";
   }
   if (state.status === "error") {
-    if (state.errorContext === "install" && state.downloadedVersion) {
+    if (
+      state.downloadedVersion &&
+      (state.errorContext === "install" || state.errorContext === null)
+    ) {
       return "install";
     }
-    if (state.errorContext === "download" && state.availableVersion) {
+    if (
+      state.availableVersion &&
+      (state.errorContext === "download" || state.errorContext === null)
+    ) {
       return "download";
     }
   }
@@ -33,13 +44,14 @@ export function resolveDesktopUpdateButtonAction(
 export function shouldShowDesktopUpdateButton(state: DesktopUpdateState | null): boolean {
   if (!state?.enabled) return false;
   // Only show the button when there's actually something to do:
-  // a new version to download, a downloaded update to install, or a retryable error
+  // a version being prepared, a downloaded update to install, or a retryable error.
+  // Update checks stay background-only so periodic polling never flashes sidebar UI.
+  const action = resolveDesktopUpdateButtonAction(state);
   return (
-    state.status === "checking" ||
     state.status === "available" ||
     state.status === "downloading" ||
     state.status === "downloaded" ||
-    (state.status === "error" && state.errorContext !== "check")
+    (state.status === "error" && state.errorContext !== "check" && action !== "none")
   );
 }
 
@@ -48,7 +60,11 @@ export function shouldShowArm64IntelBuildWarning(state: DesktopUpdateState | nul
 }
 
 export function isDesktopUpdateButtonDisabled(state: DesktopUpdateState | null): boolean {
-  return state?.status === "downloading" || state?.status === "checking";
+  return (
+    state?.status === "downloading" ||
+    state?.status === "checking" ||
+    (state?.status === "available" && state.errorContext !== "download")
+  );
 }
 
 function formatDesktopUpdateDownloadPercent(percent: number | null): string | null {
@@ -96,38 +112,38 @@ export function getDesktopUpdateButtonPresentation(
   if (state.status === "downloading") {
     const percentText = formatDesktopUpdateDownloadPercent(state.downloadPercent);
     return {
-      label: "Downloading...",
-      secondaryLabel: state.availableVersion ?? null,
+      label: "Preparing...",
+      secondaryLabel: null,
       progressPercent: percentText ? Number.parseInt(percentText, 10) : null,
     };
   }
 
   const action = resolveDesktopUpdateButtonAction(state);
   if (action === "download") {
-    if (state.status === "error" && state.errorContext === "download") {
+    if (state.errorContext === "download") {
       return {
-        label: "Download failed",
-        secondaryLabel: state.availableVersion ?? null,
+        label: "Retry",
+        secondaryLabel: null,
         progressPercent: null,
       };
     }
     return {
-      label: "Update available",
-      secondaryLabel: state.availableVersion ?? null,
+      label: "Preparing...",
+      secondaryLabel: null,
       progressPercent: null,
     };
   }
   if (action === "install") {
-    if (state.status === "error" && state.errorContext === "install") {
+    if (state.errorContext === "install") {
       return {
-        label: "Install failed",
-        secondaryLabel: state.downloadedVersion ?? state.availableVersion ?? null,
+        label: "Retry",
+        secondaryLabel: null,
         progressPercent: null,
       };
     }
     return {
-      label: "Ready to update",
-      secondaryLabel: state.downloadedVersion ?? state.availableVersion ?? null,
+      label: "Update",
+      secondaryLabel: null,
       progressPercent: null,
     };
   }
@@ -156,12 +172,12 @@ export function getArm64IntelBuildWarningDescription(state: DesktopUpdateState):
 
   const action = resolveDesktopUpdateButtonAction(state);
   if (action === "download") {
-    return "This Mac has Apple Silicon, but DP Code is still running the Intel build under Rosetta. Download the available update to switch to the native Apple Silicon build.";
+    return "This Mac has Apple Silicon, but Synara is still running the Intel build under Rosetta. Synara is preparing the native Apple Silicon update.";
   }
   if (action === "install") {
-    return "This Mac has Apple Silicon, but DP Code is still running the Intel build under Rosetta. Restart to install the downloaded Apple Silicon build.";
+    return "This Mac has Apple Silicon, but Synara is still running the Intel build under Rosetta. Click Update to restart into the native Apple Silicon build.";
   }
-  return "This Mac has Apple Silicon, but DP Code is still running the Intel build under Rosetta. The next app update will replace it with the native Apple Silicon build.";
+  return "This Mac has Apple Silicon, but Synara is still running the Intel build under Rosetta. The next app update will replace it with the native Apple Silicon build.";
 }
 
 export function getDesktopUpdateButtonTooltip(
@@ -180,16 +196,22 @@ export function getDesktopUpdateButtonTooltip(
   if (state.status === "up-to-date") {
     return `You're up to date on ${state.currentVersion}. Click to check again.`;
   }
+  if (state.errorContext === "download" && state.availableVersion) {
+    return `Could not prepare update ${state.availableVersion}. Click to retry.`;
+  }
+  if (state.errorContext === "install" && (state.downloadedVersion || state.availableVersion)) {
+    return `Could not install update ${state.downloadedVersion ?? state.availableVersion}. Click to retry.`;
+  }
   if (state.status === "available") {
-    return `Update ${state.availableVersion ?? "available"} ready to download`;
+    return `Preparing update ${state.availableVersion ?? ""}`.trim();
   }
   if (state.status === "downloading") {
     const progress =
       typeof state.downloadPercent === "number" ? ` (${Math.floor(state.downloadPercent)}%)` : "";
-    return `Downloading update${progress}`;
+    return `Preparing update${progress}`;
   }
   if (state.status === "downloaded") {
-    return `Update ${state.downloadedVersion ?? state.availableVersion ?? "ready"} downloaded. Click to restart and install.`;
+    return `Update ${state.downloadedVersion ?? state.availableVersion ?? "ready"} is ready. Click to restart and install.`;
   }
   if (state.status === "error") {
     if (state.errorContext === "check") {
@@ -198,10 +220,10 @@ export function getDesktopUpdateButtonTooltip(
         : "Update check failed. Click to try again.";
     }
     if (state.errorContext === "download" && state.availableVersion) {
-      return `Download failed for ${state.availableVersion}. Click to retry.`;
+      return `Could not prepare update ${state.availableVersion}. Click to retry.`;
     }
     if (state.errorContext === "install" && state.downloadedVersion) {
-      return `Install failed for ${state.downloadedVersion}. Click to retry.`;
+      return `Could not install update ${state.downloadedVersion}. Click to retry.`;
     }
     return state.message ?? "Update failed";
   }
@@ -219,7 +241,52 @@ export function shouldToastDesktopUpdateActionResult(result: DesktopUpdateAction
   return result.accepted && !result.completed;
 }
 
+// A download/install request can resolve to "up-to-date" when the offered version
+// turned out not to be newer (stale updater state). That is not an error, so the UI
+// should show an informational notice instead of silently resetting the button.
+export function getDesktopUpdateAlreadyCurrentNotice(
+  result: DesktopUpdateActionResult,
+): string | null {
+  if (result.completed || result.state.status !== "up-to-date") {
+    return null;
+  }
+  return `You're already on the latest version (${result.state.currentVersion}).`;
+}
+
 export function shouldHighlightDesktopUpdateError(state: DesktopUpdateState | null): boolean {
-  if (!state || state.status !== "error") return false;
+  if (!state) return false;
   return state.errorContext === "download" || state.errorContext === "install";
+}
+
+// Stable identity for an in-app update failure, used to avoid toasting the same
+// download/install error twice (e.g. once from the click handler and again when
+// the install watchdog pushes the recovered state). Returns null for states that
+// have no actionable manual-download fallback (checks, successes, in-progress).
+export function getDesktopUpdateErrorSignature(state: DesktopUpdateState | null): string | null {
+  if (!state || (state.errorContext !== "download" && state.errorContext !== "install")) {
+    return null;
+  }
+  const version = state.downloadedVersion ?? state.availableVersion ?? "";
+  return `${state.errorContext}:${version}:${state.message ?? ""}`;
+}
+
+export type DesktopUpdateButtonVariant = "installing" | "ready" | "progress" | "error" | "info";
+
+/**
+ * Resolve the severity/color variant for the update button.
+ *
+ * A failed install keeps `status === "downloaded"` (with `errorContext === "install"`),
+ * so the error state must be evaluated before the happy "downloaded"/"downloading"
+ * states — otherwise a failed install would render with the green "ready" color while
+ * its label says "Retry".
+ */
+export function getDesktopUpdateButtonVariant(
+  state: DesktopUpdateState | null,
+  options?: { installing?: boolean },
+): DesktopUpdateButtonVariant {
+  if (options?.installing) return "installing";
+  if (shouldHighlightDesktopUpdateError(state)) return "error";
+  if (state?.status === "downloaded") return "ready";
+  if (state?.status === "downloading") return "progress";
+  return "info";
 }

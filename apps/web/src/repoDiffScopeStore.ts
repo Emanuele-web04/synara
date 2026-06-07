@@ -29,7 +29,7 @@ interface RepoDiffScopeStore {
   setScope: (scope: RepoDiffScope) => void;
 }
 
-const REPO_DIFF_SCOPE_STORAGE_KEY = "dpcode:repo-diff-scope:v1";
+const REPO_DIFF_SCOPE_STORAGE_KEY = "synara:repo-diff-scope:v1";
 
 export const useRepoDiffScopeStore = create<RepoDiffScopeStore>()(
   persist(
@@ -41,6 +41,18 @@ export const useRepoDiffScopeStore = create<RepoDiffScopeStore>()(
       name: REPO_DIFF_SCOPE_STORAGE_KEY,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({ scope: state.scope }),
+      // Validate the persisted scope on rehydrate: an unknown/legacy value would
+      // otherwise flow into the diff request and the label lookup unchecked.
+      merge: (persisted, current) => {
+        const persistedScope = (persisted as { scope?: unknown } | undefined)?.scope;
+        return {
+          ...current,
+          scope:
+            typeof persistedScope === "string" && isRepoDiffScope(persistedScope)
+              ? persistedScope
+              : DEFAULT_REPO_DIFF_SCOPE,
+        };
+      },
     },
   ),
 );

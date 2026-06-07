@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   buildGitHubReleaseDownloadBaseUrl,
   pickLatestStableGitHubRelease,
+  resolveLatestStableGitHubRelease,
   resolveGitHubUpdateSource,
 } from "./githubUpdateFeed";
 
@@ -68,5 +69,35 @@ describe("buildGitHubReleaseDownloadBaseUrl", () => {
         "v0.0.31",
       ),
     ).toBe("https://github.com/openai/codex/releases/download/v0.0.31/");
+  });
+});
+
+describe("resolveLatestStableGitHubRelease", () => {
+  it("uses the injected fetch implementation and abort signal", async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      return new Response(JSON.stringify([{ tag_name: "v0.1.0", draft: false }]), {
+        status: 200,
+      });
+    });
+
+    await expect(
+      resolveLatestStableGitHubRelease(
+        {
+          owner: "openai",
+          repo: "codex",
+          host: "github.com",
+          protocol: "https",
+        },
+        undefined,
+        { fetchImpl, signal: controller.signal },
+      ),
+    ).resolves.toEqual({
+      tag: "v0.1.0",
+      version: "0.1.0",
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ signal: controller.signal });
   });
 });

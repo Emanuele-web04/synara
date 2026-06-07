@@ -2,6 +2,7 @@ import { type ModelSelection } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 import {
   resolveAvailableHandoffTargetProviders,
+  resolveThreadHandoffTitle,
   resolveThreadHandoffModelSelection,
 } from "./threadHandoff";
 
@@ -11,6 +12,7 @@ describe("threadHandoff", () => {
       "claudeAgent",
       "cursor",
       "gemini",
+      "grok",
       "kilo",
       "opencode",
       "pi",
@@ -19,6 +21,7 @@ describe("threadHandoff", () => {
       "codex",
       "cursor",
       "gemini",
+      "grok",
       "kilo",
       "opencode",
       "pi",
@@ -27,6 +30,7 @@ describe("threadHandoff", () => {
       "codex",
       "claudeAgent",
       "gemini",
+      "grok",
       "kilo",
       "opencode",
       "pi",
@@ -35,6 +39,16 @@ describe("threadHandoff", () => {
       "codex",
       "claudeAgent",
       "cursor",
+      "grok",
+      "kilo",
+      "opencode",
+      "pi",
+    ]);
+    expect(resolveAvailableHandoffTargetProviders("grok")).toEqual([
+      "codex",
+      "claudeAgent",
+      "cursor",
+      "gemini",
       "kilo",
       "opencode",
       "pi",
@@ -44,6 +58,7 @@ describe("threadHandoff", () => {
       "claudeAgent",
       "cursor",
       "gemini",
+      "grok",
       "opencode",
       "pi",
     ]);
@@ -52,6 +67,7 @@ describe("threadHandoff", () => {
       "claudeAgent",
       "cursor",
       "gemini",
+      "grok",
       "kilo",
       "pi",
     ]);
@@ -60,9 +76,17 @@ describe("threadHandoff", () => {
       "claudeAgent",
       "cursor",
       "gemini",
+      "grok",
       "kilo",
       "opencode",
     ]);
+  });
+
+  it("preserves the source thread title for the created handoff thread", () => {
+    expect(resolveThreadHandoffTitle({ title: "General Greeting" })).toBe("General Greeting");
+    expect(resolveThreadHandoffTitle({ title: "  Debug   Grok handoff  " })).toBe(
+      "Debug Grok handoff",
+    );
   });
 
   it("prefers sticky model selection for the chosen handoff target", () => {

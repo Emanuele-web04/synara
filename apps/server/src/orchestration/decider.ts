@@ -3,6 +3,7 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
 } from "@t3tools/contracts";
+import { MAX_PINNED_PROJECTS, PINNED_MESSAGES_MAX_COUNT, TurnId } from "@t3tools/contracts";
 import {
   deriveAssociatedWorktreeMetadata,
   deriveAssociatedWorktreeMetadataPatch,
@@ -15,6 +16,7 @@ import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
+import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 import {
   listActiveProjectsByWorkspaceRoot,
   listThreadsByProjectId,
@@ -60,6 +62,79 @@ function withEventBase(
     correlationId: input.commandId,
     metadata: input.metadata ?? {},
   };
+}
+
+function omitNullUserInputAnswers(
+  command: Extract<OrchestrationCommand, { type: "thread.user-input.respond" }>,
+) {
+  return Object.fromEntries(
+    Object.entries(command.answers).filter(([, answer]) => answer !== null && answer !== undefined),
+  );
+}
+
+function countPinnedProjects(
+  readModel: OrchestrationReadModel,
+  options?: { readonly excludeProjectIds?: ReadonlySet<string> },
+): number {
+  return readModel.projects.filter(
+    (project) =>
+      project.deletedAt === null &&
+      project.kind === "project" &&
+      project.isPinned === true &&
+      !options?.excludeProjectIds?.has(project.id),
+  ).length;
+}
+
+function validateProjectPinLimit(input: {
+  readonly command: Extract<
+    OrchestrationCommand,
+    { type: "project.create" | "project.meta.update" }
+  >;
+  readonly readModel: OrchestrationReadModel;
+  readonly projectId: OrchestrationEvent["aggregateId"];
+  readonly nextKind: "project" | "chat";
+  readonly nextDeletedAt?: string | null;
+  readonly wasPinned?: boolean;
+  readonly staleProjectIds?: ReadonlySet<string>;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  if (input.command.isPinned !== true) {
+    return Effect.void;
+  }
+
+  if (input.nextKind !== "project") {
+    return Effect.fail(
+      new OrchestrationCommandInvariantError({
+        commandType: input.command.type,
+        detail: `Only projects can be pinned.`,
+      }),
+    );
+  }
+
+  if (input.nextDeletedAt !== undefined && input.nextDeletedAt !== null) {
+    return Effect.fail(
+      new OrchestrationCommandInvariantError({
+        commandType: input.command.type,
+        detail: `Deleted project '${input.projectId}' cannot be pinned.`,
+      }),
+    );
+  }
+
+  if (input.wasPinned === true) {
+    return Effect.void;
+  }
+
+  const excludeProjectIds = new Set<string>([input.projectId, ...(input.staleProjectIds ?? [])]);
+  const pinnedProjectCount = countPinnedProjects(input.readModel, { excludeProjectIds });
+  if (pinnedProjectCount < MAX_PINNED_PROJECTS) {
+    return Effect.void;
+  }
+
+  return Effect.fail(
+    new OrchestrationCommandInvariantError({
+      commandType: input.command.type,
+      detail: `Only ${MAX_PINNED_PROJECTS} projects can be pinned at once.`,
+    }),
+  );
 }
 
 function deriveCommandAssociatedWorktreeMetadata(input: {
@@ -142,12 +217,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         projectId: command.projectId,
       });
       const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      const staleProjects: Array<OrchestrationReadModel["projects"][number]> = [];
       if ((command.kind ?? "project") === "project") {
         const existingProjects = listActiveProjectsByWorkspaceRoot(
           readModel,
           command.workspaceRoot,
         );
-        const staleProjects: Array<(typeof existingProjects)[number]> = [];
         for (const existingProject of existingProjects) {
           const remainingThreads = listThreadsByProjectId(readModel, existingProject.id).filter(
             (thread) => thread.deletedAt === null,
@@ -179,6 +254,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           });
         }
       }
+      yield* validateProjectPinLimit({
+        command,
+        readModel,
+        projectId: command.projectId,
+        nextKind: command.kind ?? "project",
+        staleProjectIds: new Set(staleProjects.map((project) => project.id)),
+      });
 
       events.push({
         ...withEventBase({
@@ -195,6 +277,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           workspaceRoot: command.workspaceRoot,
           defaultModelSelection: command.defaultModelSelection ?? null,
           scripts: [],
+          isPinned: command.isPinned,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -203,7 +286,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "project.meta.update": {
-      yield* requireProject({
+      const existingProject = yield* requireProject({
         readModel,
         command,
         projectId: command.projectId,
@@ -216,6 +299,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           excludeProjectId: command.projectId,
         });
       }
+      yield* validateProjectPinLimit({
+        command,
+        readModel,
+        projectId: command.projectId,
+        nextKind: command.kind ?? existingProject.kind ?? "project",
+        nextDeletedAt: existingProject.deletedAt,
+        wasPinned: existingProject.isPinned === true,
+      });
       const occurredAt = nowIso();
       return {
         ...withEventBase({
@@ -234,6 +325,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { defaultModelSelection: command.defaultModelSelection }
             : {}),
           ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
+          ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
           updatedAt: occurredAt,
         },
       };
@@ -653,6 +745,116 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.subagentRole !== undefined ? { subagentRole: command.subagentRole } : {}),
           ...(command.handoff !== undefined ? { handoff: command.handoff } : {}),
           ...(command.lastKnownPr !== undefined ? { lastKnownPr: command.lastKnownPr } : {}),
+          ...(command.pinnedMessages !== undefined
+            ? { pinnedMessages: command.pinnedMessages }
+            : {}),
+          ...(command.notes !== undefined ? { notes: command.notes } : {}),
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.pinned-message.add": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const existingPin = thread.pinnedMessages?.find((pin) => pin.messageId === command.messageId);
+      if (!existingPin && (thread.pinnedMessages?.length ?? 0) >= PINNED_MESSAGES_MAX_COUNT) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' already has the maximum of ${PINNED_MESSAGES_MAX_COUNT} pinned messages.`,
+        });
+      }
+      const occurredAt = nowIso();
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.pinned-message-added",
+        payload: {
+          threadId: command.threadId,
+          pin: existingPin ?? {
+            messageId: command.messageId,
+            label: null,
+            done: false,
+            pinnedAt: occurredAt,
+          },
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.pinned-message.remove": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const occurredAt = nowIso();
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.pinned-message-removed",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.pinned-message.done.set": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const occurredAt = nowIso();
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.pinned-message-done-set",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          done: command.done,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.pinned-message.label.set": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const occurredAt = nowIso();
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.pinned-message-label-set",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          label: command.label,
           updatedAt: occurredAt,
         },
       };
@@ -905,6 +1107,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const answers = omitNullUserInputAnswers(command);
       return {
         ...withEventBase({
           aggregateKind: "thread",
@@ -919,7 +1122,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           requestId: command.requestId,
-          answers: command.answers,
+          answers,
           createdAt: command.createdAt,
         },
       };
@@ -1013,6 +1216,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           messageId: command.messageId,
           text: command.text,
+          rollbackTurnCount: editTarget.rollbackTurnCount,
+          removedTurnIds: editTarget.removedTurnIds.map((turnId) => TurnId.makeUnsafe(turnId)),
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
             : {}),
@@ -1102,11 +1307,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.message.assistant.delta": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      const existingMessage = thread.messages.find((message) => message.id === command.messageId);
       return {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1120,7 +1326,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: command.delta,
-          turnId: command.turnId ?? null,
+          turnId: resolveStableMessageTurnId({
+            existingTurnId: existingMessage?.turnId,
+            incomingTurnId: command.turnId,
+          }),
           streaming: true,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
@@ -1148,7 +1357,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: existingMessage?.text ?? "",
-          turnId: command.turnId ?? null,
+          turnId: resolveStableMessageTurnId({
+            existingTurnId: existingMessage?.turnId,
+            incomingTurnId: command.turnId,
+          }),
           streaming: false,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,

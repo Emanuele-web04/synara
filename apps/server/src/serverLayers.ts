@@ -51,6 +51,7 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(GitCoreLive),
     Layer.provideMerge(TextGenerationLayerLive),
+    Layer.provideMerge(ServerSettingsLive),
   );
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
@@ -90,6 +91,7 @@ export function makeServerRuntimeServicesLayer() {
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
     GitLayerLive,
+    TextGenerationLayerLive,
     TerminalLayerLive,
     KeybindingsLive,
     ServerSettingsLive,

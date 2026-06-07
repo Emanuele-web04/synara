@@ -9,6 +9,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DESKTOP_STAGE_DEPENDENCY_OVERRIDES } from "./lib/desktop-stage-dependency-overrides.ts";
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const workspaceFiles = [
@@ -44,13 +46,13 @@ function writeMacManifestFixtures(targetRoot: string): { arm64Path: string; x64P
     arm64Path,
     `version: 9.9.9-smoke.0
 files:
-  - url: DP-Code-9.9.9-smoke.0-arm64.zip
+  - url: Synara-9.9.9-smoke.0-arm64.zip
     sha512: arm64zip
     size: 125621344
-  - url: DP-Code-9.9.9-smoke.0-arm64.dmg
+  - url: Synara-9.9.9-smoke.0-arm64.dmg
     sha512: arm64dmg
     size: 131754935
-path: DP-Code-9.9.9-smoke.0-arm64.zip
+path: Synara-9.9.9-smoke.0-arm64.zip
 sha512: arm64zip
 releaseDate: '2026-03-08T10:32:14.587Z'
 `,
@@ -60,13 +62,13 @@ releaseDate: '2026-03-08T10:32:14.587Z'
     x64Path,
     `version: 9.9.9-smoke.0
 files:
-  - url: DP-Code-9.9.9-smoke.0-x64.zip
+  - url: Synara-9.9.9-smoke.0-x64.zip
     sha512: x64zip
     size: 132000112
-  - url: DP-Code-9.9.9-smoke.0-x64.dmg
+  - url: Synara-9.9.9-smoke.0-x64.dmg
     sha512: x64dmg
     size: 138148807
-path: DP-Code-9.9.9-smoke.0-x64.zip
+path: Synara-9.9.9-smoke.0-x64.zip
 sha512: x64zip
 releaseDate: '2026-03-08T10:36:07.540Z'
 `,
@@ -78,6 +80,41 @@ releaseDate: '2026-03-08T10:36:07.540Z'
 function assertContains(haystack: string, needle: string, message: string): void {
   if (!haystack.includes(needle)) {
     throw new Error(message);
+  }
+}
+
+function writeJsonFile(path: string, value: unknown): void {
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function verifyDesktopStageProductionInstall(targetRoot: string): void {
+  const stageInstallRoot = resolve(targetRoot, "desktop-stage-install");
+  mkdirSync(stageInstallRoot, { recursive: true });
+
+  writeJsonFile(resolve(stageInstallRoot, "package.json"), {
+    private: true,
+    dependencies: {
+      "@pierre/diffs": "^1.1.0-beta.16",
+    },
+    overrides: DESKTOP_STAGE_DEPENDENCY_OVERRIDES,
+  });
+
+  execFileSync("bun", ["install", "--production"], {
+    cwd: stageInstallRoot,
+    stdio: "inherit",
+  });
+
+  const diffsPackageJson = JSON.parse(
+    readFileSync(resolve(stageInstallRoot, "node_modules/@pierre/diffs/package.json"), "utf8"),
+  ) as { dependencies?: Record<string, string> };
+  const themePackageJson = JSON.parse(
+    readFileSync(resolve(stageInstallRoot, "node_modules/@pierre/theme/package.json"), "utf8"),
+  ) as { version?: string };
+  const expectedThemeVersion = diffsPackageJson.dependencies?.["@pierre/theme"];
+  if (!expectedThemeVersion || themePackageJson.version !== expectedThemeVersion) {
+    throw new Error(
+      `Expected @pierre/theme ${expectedThemeVersion ?? "<missing>"} for @pierre/diffs, got ${themePackageJson.version ?? "<missing>"}.`,
+    );
   }
 }
 
@@ -125,14 +162,16 @@ try {
   const mergedManifest = readFileSync(arm64Path, "utf8");
   assertContains(
     mergedManifest,
-    "DP-Code-9.9.9-smoke.0-arm64.zip",
+    "Synara-9.9.9-smoke.0-arm64.zip",
     "Merged manifest is missing the arm64 asset.",
   );
   assertContains(
     mergedManifest,
-    "DP-Code-9.9.9-smoke.0-x64.zip",
+    "Synara-9.9.9-smoke.0-x64.zip",
     "Merged manifest is missing the x64 asset.",
   );
+
+  verifyDesktopStageProductionInstall(tempRoot);
 
   console.log("Release smoke checks passed.");
 } finally {

@@ -21,7 +21,8 @@ async function mountMenu(props?: {
   const draftsByThreadId = {} as ReturnType<
     typeof useComposerDraftStore.getState
   >["draftsByThreadId"];
-  const model = props?.modelSelection?.model ?? getDefaultModel(provider) ?? getDefaultModel("codex");
+  const model =
+    props?.modelSelection?.model ?? getDefaultModel(provider) ?? getDefaultModel("codex");
 
   draftsByThreadId[threadId] = {
     prompt: props?.prompt ?? "",
@@ -30,6 +31,8 @@ async function mountMenu(props?: {
     persistedAttachments: [],
     assistantSelections: [],
     terminalContexts: [],
+    skills: [],
+    mentions: [],
     queuedTurns: [],
     modelSelectionByProvider: {
       [provider]: {

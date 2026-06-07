@@ -18,13 +18,20 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
+import { Select, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
+import { SettingsSelectPopup } from "./settings/SettingsPanelPrimitives";
+import { SettingResetButton } from "./settings/SettingControls";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { type ChromeTheme, type ThemeMode, type ThemeVariant, useTheme } from "../hooks/useTheme";
 import { cn } from "../lib/utils";
+import {
+  SETTINGS_CARD_CLASS_NAME,
+  SETTINGS_CARD_ROW_CLASS_NAME,
+  SETTINGS_CONTROL_RADIUS_CLASS_NAME,
+} from "../settingsPanelStyles";
 import {
   CODE_THEME_OPTIONS,
   DEFAULT_THEME_STATE,
@@ -105,7 +112,7 @@ export function ThemePackEditor({
   };
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-[color:var(--color-border)] bg-[var(--color-background-panel)] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]">
+    <div className={cn(SETTINGS_CARD_CLASS_NAME, "overflow-hidden")}>
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:py-3.5">
         <div className="flex items-center gap-2">
@@ -114,7 +121,7 @@ export function ThemePackEditor({
             <button
               type="button"
               onClick={() => resetThemeVariant(variant)}
-              className="rounded-sm px-1.5 py-0.5 text-[11px] text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
+              className="rounded-md px-1.5 py-0.5 text-[11px] text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
             >
               Reset
             </button>
@@ -138,33 +145,33 @@ export function ThemePackEditor({
           >
             <SelectTrigger
               size="sm"
-              className="ml-1 min-w-52 gap-2"
+              className={cn(SETTINGS_CONTROL_RADIUS_CLASS_NAME, "ml-1 min-w-52 gap-2")}
               aria-label={`${titleLabel} code theme`}
             >
               <SelectValue className="flex-1 text-left">
                 <CodeThemeSelectOption label={codeThemeLabel} theme={theme} />
               </SelectValue>
             </SelectTrigger>
-            <SelectPopup align="end" alignItemWithTrigger={false} className="p-1.5">
+            <SettingsSelectPopup align="end" alignItemWithTrigger={false} className="p-1.5">
               {codeThemes.map((option) => (
                 <SelectItem
                   hideIndicator
                   key={option.id}
                   value={option.id}
-                  className="rounded-lg px-2 py-2"
+                  className={cn(SETTINGS_CONTROL_RADIUS_CLASS_NAME, "px-2 py-2")}
                 >
                   <CodeThemeSelectOption label={option.label} theme={option.previewTheme} />
                 </SelectItem>
               ))}
-            </SelectPopup>
+            </SettingsSelectPopup>
           </Select>
         </div>
       </div>
-      <div className="px-4 pb-3 text-[11px] text-[var(--color-text-foreground-secondary)] sm:px-4">
+      <div className="border-b border-[color:var(--color-border)] px-4 pb-3 text-[11px] text-[var(--color-text-foreground-secondary)]">
         {contextLabel}
       </div>
 
-      <div className="border-t border-border/40">
+      <div className="divide-y divide-[color:var(--color-border)]">
         <ThemeRow label="Accent">
           <ColorPill
             color={theme.accent}
@@ -262,7 +269,12 @@ export function ThemePackEditor({
 
 function ThemeRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex min-h-12 items-center justify-between gap-3 border-t border-border/30 px-4 py-2 first:border-t-0">
+    <div
+      className={cn(
+        SETTINGS_CARD_ROW_CLASS_NAME,
+        "flex min-h-12 items-center justify-between gap-3",
+      )}
+    >
       <span className="text-sm text-foreground/90">{label}</span>
       <div className="flex shrink-0 items-center gap-2">{children}</div>
     </div>
@@ -364,7 +376,7 @@ function ColorPill({
             setDraftHex(null);
             onReset();
           }}
-          className="rounded-sm p-1 text-[var(--color-text-foreground-tertiary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
+          className="rounded-md p-1 text-[var(--color-text-foreground-tertiary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
           aria-label={`Reset ${ariaLabel}`}
           title="Reset to default"
         >
@@ -376,8 +388,13 @@ function ColorPill({
           render={
             <button
               type="button"
-              className="group relative flex h-8 min-w-44 items-center gap-2 overflow-hidden rounded-md px-2 pr-3 text-left transition-[transform,box-shadow] hover:scale-[1.005] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-              style={{ backgroundColor: previewColor, color: textColor }}
+              className={cn(
+                SETTINGS_CONTROL_RADIUS_CLASS_NAME,
+                "group relative flex h-8 min-w-44 items-center gap-2 overflow-hidden border px-2 pr-3 text-left transition-[transform,box-shadow] hover:scale-[1.005] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+              )}
+              // borderColor rides the readable color so a near-white fill still shows
+              // a crisp edge against the (also near-white) settings card.
+              style={{ backgroundColor: previewColor, color: textColor, borderColor: ringColor }}
               aria-label={ariaLabel}
             />
           }
@@ -413,7 +430,10 @@ function ColorPill({
               }}
               spellCheck={false}
               maxLength={7}
-              className="h-8 rounded-md border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] px-2 text-center font-chat-code text-xs uppercase outline-none focus:border-[color:var(--color-border-focus)]"
+              className={cn(
+                SETTINGS_CONTROL_RADIUS_CLASS_NAME,
+                "h-8 border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] px-2 text-center font-chat-code text-xs uppercase outline-none focus:border-[color:var(--color-border-focus)]",
+              )}
               aria-label={`${ariaLabel} hex value`}
             />
           </div>
@@ -478,7 +498,7 @@ function FontInput({
       onBlur={() => setDraft(null)}
       spellCheck={false}
       aria-label={ariaLabel}
-      className={cn("h-8 min-w-44 rounded-md px-3 text-right", mono && "font-chat-code")}
+      className={cn(SETTINGS_CONTROL_RADIUS_CLASS_NAME, "w-56", mono && "font-chat-code")}
     />
   );
 }
@@ -588,12 +608,17 @@ function ImportThemeDialog({
         <DialogFooter>
           <DialogClose
             render={
-              <Button variant="outline" type="button">
+              <Button variant="outline" type="button" size="sm">
                 Cancel
               </Button>
             }
           />
-          <Button type="button" disabled={value.trim().length === 0} onClick={handleSubmit}>
+          <Button
+            type="button"
+            size="sm"
+            disabled={value.trim().length === 0}
+            onClick={handleSubmit}
+          >
             Import
           </Button>
         </DialogFooter>

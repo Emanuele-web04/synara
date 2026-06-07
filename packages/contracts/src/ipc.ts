@@ -17,6 +17,8 @@ import type {
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
   GitCreateDetachedWorktreeResult,
+  GitHubRepositoryInput,
+  GitHubRepositoryResult,
   GitHandoffThreadInput,
   GitHandoffThreadResult,
   GitPreparePullRequestThreadInput,
@@ -36,6 +38,8 @@ import type {
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
   GitRunStackedActionResult,
+  GitStageFilesInput,
+  GitStageFilesResult,
   GitStashAndCheckoutInput,
   GitStashDropInput,
   GitStashInfoInput,
@@ -44,6 +48,8 @@ import type {
   GitStatusResult,
   GitSummarizeDiffInput,
   GitSummarizeDiffResult,
+  GitUnstageFilesInput,
+  GitUnstageFilesResult,
 } from "./git";
 import type {
   ProjectListDirectoriesInput,
@@ -58,11 +64,16 @@ import type {
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import type {
   ServerConfig,
+  ServerDiagnosticsResult,
+  ServerGenerateThreadRecapInput,
+  ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
   ServerGetProviderUsageSnapshotInput,
   ServerGetProviderUsageSnapshotResult,
   ServerGetSettingsResult,
   ServerListWorktreesResult,
+  ServerProviderUpdateInput,
+  ServerProviderUpdateResult,
   ServerRefreshProvidersResult,
   ServerUpdateSettingsInput,
   ServerUpdateSettingsResult,
@@ -72,6 +83,7 @@ import type {
   ServerVoiceTranscriptionResult,
 } from "./server";
 import type {
+  TerminalAckOutputInput,
   TerminalClearInput,
   TerminalCloseInput,
   TerminalEvent,
@@ -157,6 +169,11 @@ export interface DesktopUpdateState {
   message: string | null;
   errorContext: "check" | "download" | "install" | null;
   canRetry: boolean;
+  // Public URL where the user can manually download the release when the
+  // in-app updater cannot apply it (silent installer failure, unsigned build,
+  // read-only install location, unsupported platform). Null when no GitHub
+  // update source is configured.
+  releaseUrl: string | null;
 }
 
 export interface DesktopUpdateActionResult {
@@ -269,6 +286,9 @@ export interface DesktopBridge {
     showInFolder: (path: string) => Promise<void>;
   };
   onMenuAction: (listener: (action: string) => void) => () => void;
+  /** Current `webContents` page zoom (1 = 100%). Used to keep macOS traffic-light gutter aligned. */
+  getZoomFactor: () => number;
+  onZoomFactorChange: (listener: (zoomFactor: number) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
   checkForUpdates: () => Promise<DesktopUpdateState>;
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
@@ -319,6 +339,7 @@ export interface NativeApi {
   terminal: {
     open: (input: TerminalOpenInput) => Promise<TerminalSessionSnapshot>;
     write: (input: TerminalWriteInput) => Promise<void>;
+    ackOutput: (input: TerminalAckOutputInput) => Promise<void>;
     resize: (input: TerminalResizeInput) => Promise<void>;
     clear: (input: TerminalClearInput) => Promise<void>;
     restart: (input: TerminalRestartInput) => Promise<TerminalSessionSnapshot>;
@@ -343,6 +364,7 @@ export interface NativeApi {
   };
   git: {
     // Existing branch/worktree API
+    githubRepository: (input: GitHubRepositoryInput) => Promise<GitHubRepositoryResult>;
     listBranches: (input: GitListBranchesInput) => Promise<GitListBranchesResult>;
     createWorktree: (input: GitCreateWorktreeInput) => Promise<GitCreateWorktreeResult>;
     createDetachedWorktree: (
@@ -356,6 +378,8 @@ export interface NativeApi {
     stashInfo: (input: GitStashInfoInput) => Promise<GitStashInfoResult>;
     removeIndexLock: (input: GitRemoveIndexLockInput) => Promise<void>;
     init: (input: GitInitInput) => Promise<void>;
+    stageFiles: (input: GitStageFilesInput) => Promise<GitStageFilesResult>;
+    unstageFiles: (input: GitUnstageFilesInput) => Promise<GitUnstageFilesResult>;
     handoffThread: (input: GitHandoffThreadInput) => Promise<GitHandoffThreadResult>;
     resolvePullRequest: (input: GitPullRequestRefInput) => Promise<GitResolvePullRequestResult>;
     preparePullRequestThread: (
@@ -395,10 +419,15 @@ export interface NativeApi {
     revokeAuthClient: (input: AuthRevokeClientSessionInput) => Promise<{ revoked: boolean }>;
     revokeOtherAuthClients: () => Promise<{ revokedCount: number }>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
+    updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
     getProviderUsageSnapshot: (
       input: ServerGetProviderUsageSnapshotInput,
     ) => Promise<ServerGetProviderUsageSnapshotResult>;
+    getDiagnostics: () => Promise<ServerDiagnosticsResult>;
+    generateThreadRecap: (
+      input: ServerGenerateThreadRecapInput,
+    ) => Promise<ServerGenerateThreadRecapResult>;
     transcribeVoice: (
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;

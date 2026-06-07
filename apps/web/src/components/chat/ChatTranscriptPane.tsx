@@ -8,6 +8,7 @@ import { type LegendListRef } from "@legendapp/list/react";
 import {
   memo,
   type ComponentProps,
+  type CSSProperties,
   type MouseEventHandler,
   type PointerEventHandler,
   type RefObject,
@@ -20,17 +21,19 @@ import { ArrowDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ChatEmptyStateHero } from "./ChatEmptyStateHero";
-import { MessagesTimeline } from "./MessagesTimeline";
+import { MessagesTimeline, type MessagesTimelineController } from "./MessagesTimeline";
+import { AgentActivityDetailView } from "./AgentActivityDetailView";
+import type { AgentActivityDetail } from "./agentActivity.logic";
 
 interface ChatTranscriptPaneProps {
   activeThreadId: string;
   activeTurnId?: TurnId | null;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
+  agentActivityDetail?: AgentActivityDetail | null;
   bottomContentInsetPx?: ComponentProps<typeof MessagesTimeline>["bottomContentInsetPx"];
+  contentInsetRightPx?: ComponentProps<typeof MessagesTimeline>["contentInsetRightPx"];
   chatFontSizePx: number;
-  completionDividerBeforeEntryId: string | null;
-  completionSummary: string | null;
   emptyStateProjectName: string | undefined;
   expandedWorkGroups?: Record<string, boolean>;
   hasMessages: boolean;
@@ -38,6 +41,9 @@ interface ChatTranscriptPaneProps {
   isWorking: boolean;
   followLiveOutput: boolean;
   listRef: RefObject<LegendListRef | null>;
+  timelineControllerRef?: RefObject<MessagesTimelineController | null>;
+  pinnedMessageIds?: ReadonlySet<MessageId>;
+  onTogglePinMessage?: (messageId: MessageId) => void;
   markdownCwd: string | undefined;
   onExpandTimelineImage: (preview: ExpandedImagePreview) => void;
   onMessagesClickCapture: MouseEventHandler<HTMLDivElement>;
@@ -51,6 +57,8 @@ interface ChatTranscriptPaneProps {
   onMessagesTouchStart: TouchEventHandler<HTMLDivElement>;
   onMessagesWheel: WheelEventHandler<HTMLDivElement>;
   onIsAtEndChange: (isAtEnd: boolean) => void;
+  onCloseAgentActivityDetail?: () => void;
+  onOpenAgentActivity?: ComponentProps<typeof MessagesTimeline>["onOpenAgentActivity"];
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread: (threadId: ThreadId) => void;
   onRevertUserMessage: (messageId: MessageId) => void;
@@ -72,10 +80,10 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   activeTurnId,
   activeTurnInProgress,
   activeTurnStartedAt,
+  agentActivityDetail,
   bottomContentInsetPx,
+  contentInsetRightPx,
   chatFontSizePx,
-  completionDividerBeforeEntryId,
-  completionSummary,
   emptyStateProjectName,
   expandedWorkGroups,
   hasMessages,
@@ -83,6 +91,9 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   isWorking,
   followLiveOutput,
   listRef,
+  timelineControllerRef,
+  pinnedMessageIds,
+  onTogglePinMessage,
   markdownCwd,
   onExpandTimelineImage,
   onMessagesClickCapture,
@@ -96,6 +107,8 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   onMessagesTouchStart,
   onMessagesWheel,
   onIsAtEndChange,
+  onCloseAgentActivityDetail,
+  onOpenAgentActivity,
   onOpenTurnDiff,
   onOpenThread,
   onRevertUserMessage,
@@ -111,6 +124,10 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   turnDiffSummaryByAssistantMessageId,
   workspaceRoot,
 }: ChatTranscriptPaneProps) {
+  const scrollButtonFrameStyle: CSSProperties | undefined = contentInsetRightPx
+    ? { paddingRight: contentInsetRightPx }
+    : undefined;
+
   return (
     <div
       data-chat-transcript-pane="true"
@@ -121,58 +138,80 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
       )}
     >
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-        <MessagesTimeline
-          key={activeThreadId}
-          hasMessages={hasMessages}
-          isWorking={isWorking}
-          activeTurnId={activeTurnId ?? null}
-          activeTurnInProgress={activeTurnInProgress}
-          activeTurnStartedAt={activeTurnStartedAt}
-          listRef={listRef}
-          timelineEntries={timelineEntries}
-          completionDividerBeforeEntryId={completionDividerBeforeEntryId}
-          completionSummary={completionSummary}
-          turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-          onOpenTurnDiff={onOpenTurnDiff}
-          onOpenThread={onOpenThread}
-          revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
-          onRevertUserMessage={onRevertUserMessage}
-          {...(onEditUserMessage ? { onEditUserMessage } : {})}
-          isRevertingCheckpoint={isRevertingCheckpoint}
-          onImageExpand={onExpandTimelineImage}
-          followLiveOutput={followLiveOutput}
-          onIsAtEndChange={onIsAtEndChange}
-          onMessagesScroll={onMessagesScroll}
-          onMessagesClickCapture={onMessagesClickCapture}
-          onMessagesMouseUp={onMessagesMouseUp}
-          onMessagesWheel={onMessagesWheel}
-          onMessagesPointerDown={onMessagesPointerDown}
-          onMessagesPointerUp={onMessagesPointerUp}
-          onMessagesPointerCancel={onMessagesPointerCancel}
-          onMessagesTouchStart={onMessagesTouchStart}
-          onMessagesTouchMove={onMessagesTouchMove}
-          onMessagesTouchEnd={onMessagesTouchEnd}
-          markdownCwd={markdownCwd}
-          resolvedTheme={resolvedTheme}
-          chatFontSizePx={chatFontSizePx}
-          timestampFormat={timestampFormat}
-          workspaceRoot={workspaceRoot}
-          bottomContentInsetPx={bottomContentInsetPx}
-          emptyStateContent={<ChatEmptyStateHero projectName={emptyStateProjectName} />}
-          {...(expandedWorkGroups ? { expandedWorkGroups } : {})}
-          {...(onToggleWorkGroup ? { onToggleWorkGroup } : {})}
-        />
+        {agentActivityDetail && onCloseAgentActivityDetail ? (
+          <AgentActivityDetailView
+            detail={agentActivityDetail}
+            bottomContentInsetPx={bottomContentInsetPx}
+            chatFontSizePx={chatFontSizePx}
+            contentInsetRightPx={contentInsetRightPx}
+            markdownCwd={markdownCwd}
+            onBack={onCloseAgentActivityDetail}
+            onImageExpand={onExpandTimelineImage}
+            onOpenThread={onOpenThread}
+            timestampFormat={timestampFormat}
+          />
+        ) : (
+          <MessagesTimeline
+            key={activeThreadId}
+            hasMessages={hasMessages}
+            isWorking={isWorking}
+            activeTurnId={activeTurnId ?? null}
+            activeTurnInProgress={activeTurnInProgress}
+            activeTurnStartedAt={activeTurnStartedAt}
+            listRef={listRef}
+            {...(timelineControllerRef ? { controllerRef: timelineControllerRef } : {})}
+            {...(pinnedMessageIds ? { pinnedMessageIds } : {})}
+            {...(onTogglePinMessage ? { onTogglePinMessage } : {})}
+            timelineEntries={timelineEntries}
+            turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+            onOpenTurnDiff={onOpenTurnDiff}
+            onOpenThread={onOpenThread}
+            revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
+            onRevertUserMessage={onRevertUserMessage}
+            {...(onEditUserMessage ? { onEditUserMessage } : {})}
+            isRevertingCheckpoint={isRevertingCheckpoint}
+            onImageExpand={onExpandTimelineImage}
+            followLiveOutput={followLiveOutput}
+            onIsAtEndChange={onIsAtEndChange}
+            onMessagesScroll={onMessagesScroll}
+            onMessagesClickCapture={onMessagesClickCapture}
+            onMessagesMouseUp={onMessagesMouseUp}
+            onMessagesWheel={onMessagesWheel}
+            onMessagesPointerDown={onMessagesPointerDown}
+            onMessagesPointerUp={onMessagesPointerUp}
+            onMessagesPointerCancel={onMessagesPointerCancel}
+            onMessagesTouchStart={onMessagesTouchStart}
+            onMessagesTouchMove={onMessagesTouchMove}
+            onMessagesTouchEnd={onMessagesTouchEnd}
+            markdownCwd={markdownCwd}
+            resolvedTheme={resolvedTheme}
+            chatFontSizePx={chatFontSizePx}
+            timestampFormat={timestampFormat}
+            workspaceRoot={workspaceRoot}
+            bottomContentInsetPx={bottomContentInsetPx}
+            contentInsetRightPx={contentInsetRightPx}
+            {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
+            emptyStateContent={<ChatEmptyStateHero projectName={emptyStateProjectName} />}
+            {...(expandedWorkGroups ? { expandedWorkGroups } : {})}
+            {...(onToggleWorkGroup ? { onToggleWorkGroup } : {})}
+          />
+        )}
 
-        {scrollButtonVisible ? (
-          <div className="pointer-events-none absolute bottom-1 left-1/2 z-30 flex -translate-x-1/2 justify-center py-1">
+        {scrollButtonVisible && !agentActivityDetail ? (
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-6 z-30 flex justify-center py-1"
+            // Follow the same right inset as transcript rows so the button centers in the
+            // visible chat column while the side panel overlays the viewport edge.
+            style={scrollButtonFrameStyle}
+          >
             <button
               type="button"
               onClick={onScrollToBottom}
               data-scroll-anchor-ignore
               aria-label="Scroll to bottom"
-              className="pointer-events-auto flex size-9 items-center justify-center rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground-secondary)] shadow-sm backdrop-blur-sm transition-colors hover:cursor-pointer hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
+              className="pointer-events-auto flex size-8 items-center justify-center rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] backdrop-blur-md transition-colors hover:cursor-pointer hover:bg-[var(--color-background-elevated-secondary)]"
             >
-              <ArrowDownIcon className="size-4" />
+              <ArrowDownIcon className="size-3.5" />
             </button>
           </div>
         ) : null}

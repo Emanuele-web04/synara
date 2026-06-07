@@ -1,6 +1,6 @@
 # Keybindings
 
-DP Code reads keybindings from:
+Synara reads keybindings from:
 
 - `~/.dpcode/userdata/keybindings.json`
 

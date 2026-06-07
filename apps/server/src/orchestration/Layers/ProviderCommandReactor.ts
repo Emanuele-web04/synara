@@ -1,7 +1,6 @@
 import {
   type ChatAttachment,
   CommandId,
-  DEFAULT_GIT_TEXT_GENERATION_MODEL,
   EventId,
   type ModelSelection,
   MessageId,
@@ -14,6 +13,8 @@ import {
   type ProviderStartOptions,
   type ProviderSkillReference,
   type OrchestrationSession,
+  type OrchestrationProjectShell,
+  type OrchestrationThread,
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
@@ -40,15 +41,22 @@ import {
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { ProviderAdapterRequestError, ProviderServiceError } from "../../provider/Errors.ts";
-import { TextGeneration } from "../../git/Services/TextGeneration.ts";
+import {
+  TextGeneration,
+  type BranchNameGenerationInput,
+  type ThreadTitleGenerationInput,
+} from "../../git/Services/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
 import {
+  buildPriorTranscriptBootstrapText,
   buildForkBootstrapText,
   buildHandoffBootstrapText,
   hasNativeAssistantMessagesBefore,
 } from "../handoff.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
   ProviderCommandReactor,
   type ProviderCommandReactorShape,
@@ -81,6 +89,31 @@ type ProviderQueueDrainEvent = Extract<
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Codex app-server still expects `$skill` text next to the structured skill item.
+export function normalizeSkillMentionTextForProvider(input: {
+  readonly provider: ProviderKind;
+  readonly messageText: string;
+  readonly skills?: ReadonlyArray<ProviderSkillReference>;
+}): string {
+  if (input.provider !== "codex" || !input.skills || input.skills.length === 0) {
+    return input.messageText;
+  }
+
+  let nextText = input.messageText;
+  for (const skill of input.skills) {
+    const escapedName = escapeRegExp(skill.name);
+    nextText = nextText.replace(
+      new RegExp(`(^|\\s)/${escapedName}(?=\\s|$)`, "gi"),
+      `$1$${skill.name}`,
+    );
+  }
+  return nextText;
 }
 
 function attachmentTitleSeed(attachment: ChatAttachment | undefined): string {
@@ -166,6 +199,16 @@ function isStaleCodexResumeError(error: unknown): boolean {
   );
 }
 
+function isStaleClaudeResumeError(error: unknown): boolean {
+  if (Schema.is(ProviderAdapterRequestError)(error)) {
+    return (
+      error.provider === "claudeAgent" &&
+      error.detail.toLowerCase().includes("no conversation found with session id")
+    );
+  }
+  return String(error).toLowerCase().includes("no conversation found with session id");
+}
+
 function isRollbackStillInProgressError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
@@ -191,9 +234,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
     .replace(/^refs\/heads\//, "")
     .replace(/['"`]/g, "");
 
-  const withoutPrefix = normalized.startsWith(`${WORKTREE_BRANCH_PREFIX}/`)
-    ? normalized.slice(`${WORKTREE_BRANCH_PREFIX}/`.length)
-    : normalized;
+  const withoutPrefix = normalized.replace(/^(synara|dpcode|t3code)\//, "");
 
   const branchFragment = withoutPrefix
     .replace(/[^a-z0-9/_-]+/g, "-")
@@ -207,12 +248,20 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
   return `${WORKTREE_BRANCH_PREFIX}/${safeFragment}`;
 }
 
+function hasDedicatedTextGenerationProvider(provider: ProviderKind | undefined): boolean {
+  return (
+    provider === "codex" || provider === "cursor" || provider === "kilo" || provider === "opencode"
+  );
+}
+
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const checkpointStore = yield* CheckpointStore;
   const git = yield* GitCore;
   const textGeneration = yield* TextGeneration;
+  const serverSettings = yield* ServerSettingsService;
   const handledTurnStartKeys = yield* Cache.make<string, true>({
     capacity: HANDLED_TURN_START_KEY_MAX,
     timeToLive: HANDLED_TURN_START_KEY_TTL,
@@ -228,6 +277,29 @@ const make = Effect.gen(function* () {
 
   const threadProviderOptions = new Map<string, ProviderStartOptions>();
   const threadModelSelections = new Map<string, ModelSelection>();
+
+  const resolveThreadWorkspaceProject = Effect.fnUntraced(function* (
+    thread: Pick<OrchestrationThread, "projectId">,
+  ): Effect.fn.Return<OrchestrationProjectShell | undefined> {
+    return Option.getOrUndefined(
+      yield* projectionSnapshotQuery
+        .getProjectShellById(thread.projectId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+    );
+  });
+
+  const resolveProjectedThreadWorkspaceCwd = Effect.fnUntraced(function* (
+    thread: Pick<OrchestrationThread, "projectId" | "envMode" | "worktreePath">,
+  ): Effect.fn.Return<string | undefined> {
+    const project = yield* resolveThreadWorkspaceProject(thread);
+    if (!project) {
+      return undefined;
+    }
+    return resolveThreadWorkspaceCwd({
+      thread,
+      projects: [project],
+    });
+  });
   const queuedTurnStartsByThread = new Map<
     string,
     Array<Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>["payload"]>
@@ -236,21 +308,12 @@ const make = Effect.gen(function* () {
   const drainingQueuedTurns = new Set<string>();
   const sidechatContextBootstrapThreadIds = new Set<string>();
 
-  const resolveThreadTextGenerationInput = Effect.fnUntraced(function* (input: {
-    readonly threadId: ThreadId;
-    readonly modelSelection?: ModelSelection;
-    readonly providerOptions?: ProviderStartOptions;
-  }) {
-    const thread = yield* resolveThread(input.threadId);
-    const modelSelection =
-      input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread?.modelSelection;
-    const providerOptions = input.providerOptions ?? threadProviderOptions.get(input.threadId);
-
-    if (modelSelection?.provider === "kilo" || modelSelection?.provider === "opencode") {
-      return {
-        modelSelection,
-        ...(providerOptions ? { providerOptions } : {}),
-      } as const;
+  const resolveTextGenerationInputForSelection = (
+    modelSelection: ModelSelection | undefined,
+    providerOptions: ProviderStartOptions | undefined,
+  ) => {
+    if (!hasDedicatedTextGenerationProvider(modelSelection?.provider)) {
+      return null;
     }
 
     if (modelSelection?.provider === "codex") {
@@ -264,8 +327,36 @@ const make = Effect.gen(function* () {
     }
 
     return {
-      model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
+      modelSelection,
+      ...(providerOptions ? { providerOptions } : {}),
     } as const;
+  };
+
+  const resolveThreadTextGenerationInput = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly modelSelection?: ModelSelection;
+    readonly providerOptions?: ProviderStartOptions;
+    readonly useConfiguredFallback?: boolean;
+  }) {
+    const thread = yield* resolveThread(input.threadId);
+    const modelSelection =
+      input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread?.modelSelection;
+    const providerOptions = input.providerOptions ?? threadProviderOptions.get(input.threadId);
+    const threadTextGenerationInput = resolveTextGenerationInputForSelection(
+      modelSelection,
+      providerOptions,
+    );
+
+    if (threadTextGenerationInput || !input.useConfiguredFallback) {
+      return threadTextGenerationInput;
+    }
+
+    // Non-generating chat providers still get AI titles via the configured git-writing model.
+    const settings = yield* serverSettings.getSettings;
+    return resolveTextGenerationInputForSelection(
+      settings.textGenerationModelSelection,
+      providerOptions,
+    );
   });
 
   const appendProviderFailureActivity = (input: {
@@ -340,8 +431,7 @@ const make = Effect.gen(function* () {
   });
 
   const resolveThread = Effect.fnUntraced(function* (threadId: ThreadId) {
-    const readModel = yield* orchestrationEngine.getReadModel();
-    return readModel.threads.find((entry) => entry.id === threadId);
+    return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
   });
 
   // Recovers the parent thread when older/local-only subagent rows are missing parentThreadId metadata.
@@ -353,11 +443,9 @@ const make = Effect.gen(function* () {
       return null;
     }
 
-    const readModel = yield* orchestrationEngine.getReadModel();
-    const matchingParents = readModel.threads.filter((entry) =>
-      rawThreadId.startsWith(`subagent:${entry.id}:`),
+    return Option.getOrNull(
+      yield* projectionSnapshotQuery.findSyntheticSubagentParentThread(threadId),
     );
-    return matchingParents.toSorted((left, right) => right.id.length - left.id.length)[0] ?? null;
   });
 
   const resolveProviderSessionThread = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -470,13 +558,10 @@ const make = Effect.gen(function* () {
         .stopSession({ threadId: input.threadId })
         .pipe(Effect.catch(() => Effect.void));
     }
-    yield* Effect.logWarning(
-      "provider command reactor cleared stale provider resume state during conversation rollback",
-      {
-        threadId: input.threadId,
-        cause: input.cause.message,
-      },
-    );
+    yield* Effect.logWarning("provider command reactor cleared stale provider resume state", {
+      threadId: input.threadId,
+      cause: input.cause.message,
+    });
   });
 
   const rollbackProviderConversationForEdit = Effect.fnUntraced(function* (input: {
@@ -525,8 +610,7 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const readModel = yield* orchestrationEngine.getReadModel();
-    const thread = readModel.threads.find((entry) => entry.id === input.threadId);
+    const thread = yield* resolveThread(input.threadId);
     if (!thread) {
       return;
     }
@@ -544,10 +628,7 @@ const make = Effect.gen(function* () {
       Number.POSITIVE_INFINITY,
     );
     const targetTurnCount = Math.max(0, firstRemovedTurnCount - 1);
-    const cwd = resolveThreadWorkspaceCwd({
-      thread,
-      projects: readModel.projects,
-    });
+    const cwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     if (!cwd) {
       return;
     }
@@ -592,10 +673,11 @@ const make = Effect.gen(function* () {
       readonly runtimeMode?: RuntimeMode;
     },
   ) {
-    const readModel = yield* orchestrationEngine.getReadModel();
-    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    const thread = yield* resolveThread(threadId);
     if (!thread) {
-      return yield* Effect.die(new Error(`Thread '${threadId}' was not found in read model.`));
+      return yield* Effect.die(
+        new Error(`Thread '${threadId}' was not found in projection state.`),
+      );
     }
 
     const desiredRuntimeMode = options?.runtimeMode ?? thread.runtimeMode;
@@ -618,10 +700,7 @@ const make = Effect.gen(function* () {
     }
     const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
-    const effectiveCwd = resolveThreadWorkspaceCwd({
-      thread,
-      projects: readModel.projects,
-    });
+    const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
       worktreePath: thread.worktreePath,
@@ -690,7 +769,7 @@ const make = Effect.gen(function* () {
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "restart-session";
       const previousModelSelection = threadModelSelections.get(threadId);
       const shouldRestartForModelSelectionChange =
-        currentProvider === "claudeAgent" &&
+        (currentProvider === "claudeAgent" || currentProvider === "grok") &&
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
 
@@ -793,6 +872,11 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    const activeSessionBeforeEnsure = yield* providerService
+      .listSessions()
+      .pipe(
+        Effect.map((sessions) => sessions.find((session) => session.threadId === input.threadId)),
+      );
     yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
@@ -825,6 +909,20 @@ const make = Effect.gen(function* () {
       shouldBootstrapSidechatContext && availableBootstrapChars > 0
         ? buildForkBootstrapText(thread, availableBootstrapChars)
         : null;
+    const selectedProvider =
+      input.modelSelection?.provider ??
+      threadModelSelections.get(input.threadId)?.provider ??
+      thread.session?.providerName ??
+      thread.modelSelection.provider;
+    const shouldBootstrapPriorTranscriptContext =
+      (selectedProvider === "kilo" || selectedProvider === "opencode") &&
+      activeSessionBeforeEnsure === undefined &&
+      !handoffBootstrapText &&
+      !sidechatBootstrapText;
+    const priorTranscriptBootstrapText =
+      shouldBootstrapPriorTranscriptContext && availableBootstrapChars > 0
+        ? buildPriorTranscriptBootstrapText(thread, input.messageId, availableBootstrapChars)
+        : null;
     const boundaryMessageText = thread.sidechatSourceThreadId
       ? wrapSidechatInput(input.messageText)
       : input.messageText;
@@ -832,8 +930,16 @@ const make = Effect.gen(function* () {
       ? `<handoff_context>\n${handoffBootstrapText}\n</handoff_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
       : sidechatBootstrapText
         ? `<sidechat_context>\n${sidechatBootstrapText}\n</sidechat_context>\n\n${boundaryMessageText}`
-        : boundaryMessageText;
-    const normalizedInput = toNonEmptyProviderInput(providerInput);
+        : priorTranscriptBootstrapText
+          ? `<thread_context>\n${priorTranscriptBootstrapText}\n</thread_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
+          : boundaryMessageText;
+    const normalizedInput = toNonEmptyProviderInput(
+      normalizeSkillMentionTextForProvider({
+        provider: selectedProvider as ProviderKind,
+        messageText: providerInput,
+        ...(input.skills !== undefined ? { skills: input.skills } : {}),
+      }),
+    );
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()
@@ -855,22 +961,28 @@ const make = Effect.gen(function* () {
             }
           : requestedModelSelection
         : input.modelSelection;
+    const sendQueuedProviderTurn = (messageText: string | undefined) =>
+      providerService.sendTurn({
+        threadId: input.threadId,
+        ...(messageText ? { input: messageText } : {}),
+        ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
+        ...(input.skills !== undefined ? { skills: input.skills } : {}),
+        ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
+        ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
+        ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      });
 
     const captureMessageStartCheckpoint = Effect.gen(function* () {
       if ((input.dispatchMode ?? "queue") === "steer") {
         return;
       }
 
-      const readModel = yield* orchestrationEngine.getReadModel();
-      const currentThread = readModel.threads.find((entry) => entry.id === input.threadId);
+      const currentThread = yield* resolveThread(input.threadId);
       if (!currentThread) {
         return;
       }
 
-      const cwd = resolveThreadWorkspaceCwd({
-        thread: currentThread,
-        projects: readModel.projects,
-      });
+      const cwd = yield* resolveProjectedThreadWorkspaceCwd(currentThread);
       if (!cwd || !(yield* checkpointStore.isGitRepository(cwd))) {
         return;
       }
@@ -911,15 +1023,60 @@ const make = Effect.gen(function* () {
       });
     } else {
       yield* captureMessageStartCheckpoint;
-      yield* providerService.sendTurn({
-        threadId: input.threadId,
-        ...(normalizedInput ? { input: normalizedInput } : {}),
-        ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
-        ...(input.skills !== undefined ? { skills: input.skills } : {}),
-        ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
-        ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
-        ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
-      });
+      yield* sendQueuedProviderTurn(normalizedInput).pipe(
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            if (selectedProvider !== "claudeAgent" || !isStaleClaudeResumeError(error)) {
+              return yield* Effect.fail(error);
+            }
+
+            // Claude cannot continue from a missing native session; clear the
+            // dead cursor and replay once with Synara transcript context.
+            yield* clearStaleProviderResumeState({
+              threadId: input.threadId,
+              cause: error,
+            });
+            yield* ensureSessionForThread(input.threadId, input.createdAt, {
+              ...(input.modelSelection !== undefined
+                ? { modelSelection: input.modelSelection }
+                : {}),
+              ...(input.providerOptions !== undefined
+                ? { providerOptions: input.providerOptions }
+                : {}),
+              ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
+            });
+
+            const retryBootstrapText =
+              availableBootstrapChars > 0
+                ? buildPriorTranscriptBootstrapText(
+                    thread,
+                    input.messageId,
+                    availableBootstrapChars,
+                  )
+                : null;
+            const retryProviderInput = retryBootstrapText
+              ? `<thread_context>\n${retryBootstrapText}\n</thread_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
+              : boundaryMessageText;
+            const retryNormalizedInput = toNonEmptyProviderInput(
+              normalizeSkillMentionTextForProvider({
+                provider: selectedProvider as ProviderKind,
+                messageText: retryProviderInput,
+                ...(input.skills !== undefined ? { skills: input.skills } : {}),
+              }),
+            );
+
+            yield* Effect.logWarning(
+              "provider command reactor retrying claude turn after stale resume",
+              {
+                threadId: input.threadId,
+                messageId: input.messageId,
+                bootstrappedPriorTranscript: retryBootstrapText !== null,
+              },
+            );
+            return yield* sendQueuedProviderTurn(retryNormalizedInput);
+          }),
+        ),
+      );
     }
     if (handoffBootstrapText && thread.handoff !== null) {
       yield* orchestrationEngine.dispatch({
@@ -935,6 +1092,43 @@ const make = Effect.gen(function* () {
     if (sidechatBootstrapText) {
       sidechatContextBootstrapThreadIds.delete(input.threadId);
     }
+  });
+
+  const renameTemporaryWorktreeBranch = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly cwd: string;
+    readonly oldBranch: string;
+    readonly targetBranch: string;
+  }) {
+    if (input.targetBranch === input.oldBranch) {
+      return;
+    }
+
+    const renamed = yield* git.renameBranch({
+      cwd: input.cwd,
+      oldBranch: input.oldBranch,
+      newBranch: input.targetBranch,
+    });
+    yield* git.publishBranch({ cwd: input.cwd, branch: renamed.branch }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider command reactor failed to publish renamed branch", {
+          threadId: input.threadId,
+          cwd: input.cwd,
+          branch: renamed.branch,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+    yield* orchestrationEngine.dispatch({
+      type: "thread.meta.update",
+      commandId: serverCommandId("worktree-branch-rename"),
+      threadId: input.threadId,
+      branch: renamed.branch,
+      worktreePath: input.cwd,
+      associatedWorktreePath: input.cwd,
+      associatedWorktreeBranch: renamed.branch,
+      associatedWorktreeRef: renamed.branch,
+    });
   });
 
   const maybeGenerateAndRenameWorktreeBranchForFirstTurn = Effect.fnUntraced(function* (input: {
@@ -974,60 +1168,66 @@ const make = Effect.gen(function* () {
       ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
       ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
     });
-    yield* textGeneration
-      .generateBranchName({
+    if (!textGenerationInput) {
+      const targetBranch = buildGeneratedWorktreeBranchName(
+        input.messageText.trim() || attachmentTitleSeed(attachments[0]) || "",
+      );
+      yield* renameTemporaryWorktreeBranch({
+        threadId: input.threadId,
         cwd,
-        message: input.messageText,
-        ...(attachments.length > 0 ? { attachments } : {}),
-        ...textGenerationInput,
-      })
-      .pipe(
-        Effect.catch((error) =>
-          Effect.logWarning(
-            "provider command reactor failed to generate worktree branch name; skipping rename",
-            { threadId: input.threadId, cwd, oldBranch, reason: error.message },
-          ),
-        ),
-        Effect.flatMap((generated) => {
-          if (!generated) return Effect.void;
-
-          const targetBranch = buildGeneratedWorktreeBranchName(generated.branch);
-          if (targetBranch === oldBranch) return Effect.void;
-
-          return Effect.flatMap(
-            git.renameBranch({ cwd, oldBranch, newBranch: targetBranch }),
-            (renamed) =>
-              git.publishBranch({ cwd, branch: renamed.branch }).pipe(
-                Effect.catchCause((cause) =>
-                  Effect.logWarning("provider command reactor failed to publish renamed branch", {
-                    threadId: input.threadId,
-                    cwd,
-                    branch: renamed.branch,
-                    cause: Cause.pretty(cause),
-                  }),
-                ),
-                Effect.flatMap(() =>
-                  orchestrationEngine.dispatch({
-                    type: "thread.meta.update",
-                    commandId: serverCommandId("worktree-branch-rename"),
-                    threadId: input.threadId,
-                    branch: renamed.branch,
-                    worktreePath: cwd,
-                    associatedWorktreePath: cwd,
-                    associatedWorktreeBranch: renamed.branch,
-                    associatedWorktreeRef: renamed.branch,
-                  }),
-                ),
-              ),
-          );
-        }),
+        oldBranch,
+        targetBranch,
+      }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(
-            "provider command reactor failed to generate or rename worktree branch",
-            { threadId: input.threadId, cwd, oldBranch, cause: Cause.pretty(cause) },
+            "provider command reactor failed to apply fallback worktree branch name",
+            { threadId: input.threadId, cwd, oldBranch, targetBranch, cause: Cause.pretty(cause) },
           ),
         ),
       );
+      return;
+    }
+    const branchNameGenerationInput: BranchNameGenerationInput = {
+      cwd,
+      message: input.messageText,
+      ...(attachments.length > 0 ? { attachments } : {}),
+      ...("model" in textGenerationInput && typeof textGenerationInput.model === "string"
+        ? { model: textGenerationInput.model }
+        : {}),
+      ...("modelSelection" in textGenerationInput && textGenerationInput.modelSelection
+        ? { modelSelection: textGenerationInput.modelSelection }
+        : {}),
+      ...("providerOptions" in textGenerationInput && textGenerationInput.providerOptions
+        ? { providerOptions: textGenerationInput.providerOptions }
+        : {}),
+    };
+    yield* textGeneration.generateBranchName(branchNameGenerationInput).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning(
+          "provider command reactor failed to generate worktree branch name; skipping rename",
+          { threadId: input.threadId, cwd, oldBranch, reason: error.message },
+        ),
+      ),
+      Effect.flatMap((generated) => {
+        if (!generated) return Effect.void;
+
+        const targetBranch = buildGeneratedWorktreeBranchName(generated.branch);
+        return renameTemporaryWorktreeBranch({
+          threadId: input.threadId,
+          cwd,
+          oldBranch,
+          targetBranch,
+        });
+      }),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider command reactor failed to generate or rename worktree branch", {
+          threadId: input.threadId,
+          cwd,
+          oldBranch,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
   });
 
   // Only auto-rename placeholder titles that still reflect the first-turn draft state.
@@ -1039,8 +1239,7 @@ const make = Effect.gen(function* () {
     readonly modelSelection?: ModelSelection;
     readonly providerOptions?: ProviderStartOptions;
   }) {
-    const readModel = yield* orchestrationEngine.getReadModel();
-    const thread = readModel.threads.find((entry) => entry.id === input.threadId);
+    const thread = yield* resolveThread(input.threadId);
     if (!thread) {
       return;
     }
@@ -1059,15 +1258,24 @@ const make = Effect.gen(function* () {
     if (!isGenericChatThreadTitle(currentTitle) && currentTitle !== fallbackTitle) {
       return;
     }
-    const cwd = resolveThreadWorkspaceCwd({
-      thread,
-      projects: readModel.projects,
-    });
+    const cwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     const textGenerationInput = yield* resolveThreadTextGenerationInput({
       threadId: input.threadId,
       ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
       ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      useConfiguredFallback: true,
     });
+    if (!textGenerationInput) {
+      if (fallbackTitle !== currentTitle) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.meta.update",
+          commandId: serverCommandId("thread-title-fallback-rename"),
+          threadId: input.threadId,
+          title: fallbackTitle,
+        });
+      }
+      return;
+    }
     const textGenerationSelection =
       "modelSelection" in textGenerationInput ? textGenerationInput.modelSelection : null;
     const textGenerationModel =
@@ -1087,30 +1295,37 @@ const make = Effect.gen(function* () {
       textGenerationOptions: textGenerationSelection?.options ?? null,
       hasProviderOptions: Boolean(textGenerationProviderOptions),
     });
-    const nextTitle = yield* textGeneration
-      .generateThreadTitle({
-        cwd: cwd ?? process.cwd(),
-        message: input.messageText,
-        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
-        ...textGenerationInput,
-      })
-      .pipe(
-        Effect.map((generated) => generated.title),
-        Effect.catch((error) =>
-          Effect.logWarning("provider command reactor failed to generate thread title", {
-            threadId: input.threadId,
-            cwd,
-            reason: error.message,
-            threadProvider: thread.modelSelection.provider,
-            threadModel: thread.modelSelection.model,
-            requestedProvider: input.modelSelection?.provider ?? null,
-            requestedModel: input.modelSelection?.model ?? null,
-            textGenerationProvider: textGenerationSelection?.provider ?? null,
-            textGenerationModel,
-            textGenerationOptions: textGenerationSelection?.options ?? null,
-          }).pipe(Effect.as(fallbackTitle)),
-        ),
-      );
+    const titleGenerationInput: ThreadTitleGenerationInput = {
+      cwd: cwd ?? process.cwd(),
+      message: input.messageText,
+      ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+      ...("model" in textGenerationInput && typeof textGenerationInput.model === "string"
+        ? { model: textGenerationInput.model }
+        : {}),
+      ...("modelSelection" in textGenerationInput && textGenerationInput.modelSelection
+        ? { modelSelection: textGenerationInput.modelSelection }
+        : {}),
+      ...("providerOptions" in textGenerationInput && textGenerationInput.providerOptions
+        ? { providerOptions: textGenerationInput.providerOptions }
+        : {}),
+    };
+    const nextTitle = yield* textGeneration.generateThreadTitle(titleGenerationInput).pipe(
+      Effect.map((generated) => generated.title),
+      Effect.catch((error) =>
+        Effect.logWarning("provider command reactor failed to generate thread title", {
+          threadId: input.threadId,
+          cwd,
+          reason: error.message,
+          threadProvider: thread.modelSelection.provider,
+          threadModel: thread.modelSelection.model,
+          requestedProvider: input.modelSelection?.provider ?? null,
+          requestedModel: input.modelSelection?.model ?? null,
+          textGenerationProvider: textGenerationSelection?.provider ?? null,
+          textGenerationModel,
+          textGenerationOptions: textGenerationSelection?.options ?? null,
+        }).pipe(Effect.as(fallbackTitle)),
+      ),
+    );
 
     if (nextTitle === currentTitle) {
       return;
@@ -1482,15 +1697,27 @@ const make = Effect.gen(function* () {
         new Error(`Cannot edit missing user message '${payload.messageId}'.`),
       );
     }
-    const editTarget = resolveTailUserMessageEditTarget({
-      messages: originalThread.messages,
-      messageId: payload.messageId,
-      activeTurnId:
-        options?.activeTurnId ??
-        (originalThread.session?.status === "running"
-          ? (originalThread.session.activeTurnId ?? null)
-          : null),
-    });
+    const editTarget =
+      payload.removedTurnIds !== undefined && payload.rollbackTurnCount !== undefined
+        ? {
+            editable: true as const,
+            messageId: payload.messageId,
+            messageIndex: originalThread.messages.findIndex(
+              (message) => message.id === payload.messageId,
+            ),
+            mode: payload.rollbackTurnCount > 0 ? ("rollback" as const) : ("active" as const),
+            rollbackTurnCount: payload.rollbackTurnCount,
+            removedTurnIds: payload.removedTurnIds,
+          }
+        : resolveTailUserMessageEditTarget({
+            messages: originalThread.messages,
+            messageId: payload.messageId,
+            activeTurnId:
+              options?.activeTurnId ??
+              (originalThread.session?.status === "running"
+                ? (originalThread.session.activeTurnId ?? null)
+                : null),
+          });
     if (!editTarget.editable) {
       return yield* Effect.fail(
         new Error(

@@ -162,6 +162,21 @@ describe("resolvePreferredComposerModelSelection", () => {
       }),
     );
   });
+
+  it("can prefer Grok draft selections", () => {
+    expect(
+      resolvePreferredComposerModelSelection({
+        draft: {
+          modelSelectionByProvider: {
+            grok: modelSelection("grok", "grok-build"),
+          },
+          activeProvider: "grok",
+        },
+        threadModelSelection: modelSelection("codex", "gpt-5"),
+        projectModelSelection: modelSelection("codex", "gpt-5.4"),
+      }),
+    ).toEqual(modelSelection("grok", "grok-build"));
+  });
 });
 
 describe("composerDraftStore addImages", () => {
@@ -278,6 +293,17 @@ describe("composerDraftStore clearComposerContent", () => {
     expect(draft).toBeUndefined();
     expect(revokeSpy).not.toHaveBeenCalledWith("blob:optimistic");
   });
+
+  it("clears selected provider references with composer content", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setPrompt(threadId, "Use @linear and /check-code");
+    store.setSkills(threadId, [{ name: "check-code", path: "/skills/check-code" }]);
+    store.setMentions(threadId, [{ name: "linear", path: "plugin://linear" }]);
+    store.clearComposerContent(threadId);
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
 });
 
 describe("composerDraftStore copyTransferableComposerState", () => {
@@ -300,6 +326,12 @@ describe("composerDraftStore copyTransferableComposerState", () => {
 
     useComposerDraftStore.getState().setPrompt(sourceThreadId, copiedPrompt);
     useComposerDraftStore.getState().setTerminalContexts(sourceThreadId, [sourceContext]);
+    useComposerDraftStore
+      .getState()
+      .setSkills(sourceThreadId, [{ name: "check-code", path: "/skills/check-code" }]);
+    useComposerDraftStore
+      .getState()
+      .setMentions(sourceThreadId, [{ name: "linear", path: "plugin://linear" }]);
 
     useComposerDraftStore.getState().copyTransferableComposerState(sourceThreadId, targetThreadId);
 
@@ -317,6 +349,8 @@ describe("composerDraftStore copyTransferableComposerState", () => {
           text: sourceContext.text,
         }),
       ],
+      skills: [{ name: "check-code", path: "/skills/check-code" }],
+      mentions: [{ name: "linear", path: "plugin://linear" }],
     });
   });
 
@@ -344,6 +378,53 @@ describe("composerDraftStore copyTransferableComposerState", () => {
       },
       activeProvider: "claudeAgent",
     });
+  });
+});
+
+describe("composerDraftStore provider references", () => {
+  const threadId = ThreadId.makeUnsafe("thread-provider-refs");
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("persists selected plugin mentions with regular composer drafts", () => {
+    const selectedSkill = { name: "check-code", path: "/skills/check-code" };
+    const selectedMention = { name: "linear", path: "plugin://linear" };
+    const store = useComposerDraftStore.getState();
+
+    store.setPrompt(threadId, "Use @linear with /check-code");
+    store.setSkills(threadId, [selectedSkill]);
+    store.setMentions(threadId, [selectedMention]);
+
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+      draftsByThreadId?: Record<
+        string,
+        {
+          skills?: Array<Record<string, unknown>>;
+          mentions?: Array<Record<string, unknown>>;
+        }
+      >;
+    };
+
+    expect(persistedState.draftsByThreadId?.[threadId]?.skills).toEqual([selectedSkill]);
+    expect(persistedState.draftsByThreadId?.[threadId]?.mentions).toEqual([selectedMention]);
+
+    const mergedState = persistApi
+      .getOptions()
+      .merge(persistedState, useComposerDraftStore.getInitialState());
+
+    expect(mergedState.draftsByThreadId[threadId]?.skills).toEqual([selectedSkill]);
+    expect(mergedState.draftsByThreadId[threadId]?.mentions).toEqual([selectedMention]);
   });
 });
 
@@ -578,6 +659,39 @@ describe("composerDraftStore terminal contexts", () => {
     expect(mergedState.draftsByThreadId[threadId]).toBeUndefined();
     expect(mergedState.draftThreadsByThreadId).toEqual({});
     expect(mergedState.projectDraftThreadIdByProjectId).toEqual({});
+  });
+
+  it("drops unsupported restored Grok reasoning efforts from legacy draft storage", () => {
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const mergedState = persistApi.getOptions().merge(
+      {
+        draftsByThreadId: {
+          [threadId]: {
+            provider: "grok",
+            model: "grok-build",
+            modelOptions: {
+              grok: {
+                reasoningEffort: "xhigh",
+              },
+            },
+          },
+        },
+        draftThreadsByThreadId: {},
+        projectDraftThreadIdByProjectId: {},
+      },
+      useComposerDraftStore.getInitialState(),
+    );
+
+    expect(mergedState.draftsByThreadId[threadId]?.modelSelectionByProvider.grok).toEqual(
+      modelSelection("grok", "grok-build"),
+    );
   });
 });
 
@@ -924,6 +1038,21 @@ describe("composerDraftStore modelSelection", () => {
     ).toEqual(modelSelection("codex", "gpt-5.4"));
   });
 
+  it("stores Grok selections instead of dropping them during normalization", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setModelSelection(threadId, modelSelection("grok", "grok-build"));
+    store.setStickyModelSelection(modelSelection("grok", "grok-build"));
+
+    const state = useComposerDraftStore.getState();
+    expect(state.draftsByThreadId[threadId]?.modelSelectionByProvider.grok).toEqual(
+      modelSelection("grok", "grok-build"),
+    );
+    expect(state.draftsByThreadId[threadId]?.activeProvider).toBe("grok");
+    expect(state.stickyModelSelectionByProvider.grok).toEqual(modelSelection("grok", "grok-build"));
+    expect(state.stickyActiveProvider).toBe("grok");
+  });
+
   it("replaces only the targeted provider options on the current model selection", () => {
     const store = useComposerDraftStore.getState();
 
@@ -1116,6 +1245,7 @@ describe("composerDraftStore modelSelection", () => {
         claudeAgent: [],
         cursor: [],
         gemini: [],
+        grok: [],
         kilo: [],
         opencode: [],
         pi: [],
@@ -1142,6 +1272,7 @@ describe("composerDraftStore modelSelection", () => {
         claudeAgent: [],
         cursor: [],
         gemini: [],
+        grok: [],
         kilo: [],
         opencode: [],
         pi: [],
@@ -1173,6 +1304,7 @@ describe("composerDraftStore modelSelection", () => {
         claudeAgent: [],
         cursor: [],
         gemini: [],
+        grok: [],
         kilo: [],
         opencode: [],
         pi: [],
@@ -1204,6 +1336,8 @@ describe("composerDraftStore modelSelection", () => {
         claudeAgent: [],
         cursor: [],
         gemini: [],
+        grok: [],
+        kilo: [],
         opencode: [],
         pi: [],
       },
@@ -1282,11 +1416,15 @@ describe("composerDraftStore queued follow-ups", () => {
     const store = useComposerDraftStore.getState();
 
     store.setPrompt(threadId, "temporary prompt");
+    store.setSkills(threadId, [{ name: "check-code", path: "/skills/check-code" }]);
+    store.setMentions(threadId, [{ name: "linear", path: "plugin://linear" }]);
     store.enqueueQueuedTurn(threadId, makeQueuedTurn("queued-1"));
     store.clearComposerContent(threadId);
 
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toMatchObject({
       prompt: "",
+      skills: [],
+      mentions: [],
       queuedTurns: [makeQueuedTurn("queued-1")],
     });
   });
@@ -1474,6 +1612,24 @@ describe("composerDraftStore provider-scoped option updates", () => {
     expect(draft?.modelSelectionByProvider.claudeAgent).toEqual(
       modelSelection("claudeAgent", "claude-opus-4-7", {
         effort: "xhigh",
+      }),
+    );
+  });
+
+  it("retains Grok reasoning effort in provider-scoped options", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setProviderModelOptions(
+      threadId,
+      "grok",
+      { reasoningEffort: "high" },
+      { model: "grok-build" },
+    );
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect(draft?.modelSelectionByProvider.grok).toEqual(
+      modelSelection("grok", "grok-build", {
+        reasoningEffort: "high",
       }),
     );
   });

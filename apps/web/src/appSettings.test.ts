@@ -1,3 +1,8 @@
+// FILE: appSettings.test.ts
+// Purpose: Verifies app settings normalization, model options, and provider dispatch options.
+// Layer: Web settings tests
+// Exports: Vitest suites for appSettings.ts
+
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -5,9 +10,11 @@ import {
   AppSettingsSchema,
   DEFAULT_CHAT_FONT_SIZE_PX,
   DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
+  DEFAULT_TERMINAL_FONT_SIZE_PX,
   DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
   DEFAULT_TIMESTAMP_FORMAT,
   getAppModelOptions,
+  getCustomBinaryPathForProvider,
   getDefaultNativeFontSmoothing,
   getCustomModelOptionsByProvider,
   getCustomModelsByProvider,
@@ -19,8 +26,11 @@ import {
   normalizeChatFontSizePx,
   normalizeCustomModelSlugs,
   normalizeStoredAppSettings,
+  normalizeTerminalFontFamily,
+  normalizeTerminalFontSizePx,
   patchCustomModels,
   resolveAppModelSelection,
+  resolveTerminalFontFamilyStack,
 } from "./appSettings";
 
 describe("normalizeCustomModelSlugs", () => {
@@ -152,6 +162,7 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           gemini: [],
+          grok: [],
           kilo: [],
           opencode: [],
           pi: [],
@@ -165,7 +176,16 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [], pi: [] },
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          gemini: [],
+          grok: [],
+          kilo: [],
+          opencode: [],
+          pi: [],
+        },
         "",
       ),
     ).toBe("gpt-5.5");
@@ -175,7 +195,16 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [], pi: [] },
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          gemini: [],
+          grok: [],
+          kilo: [],
+          opencode: [],
+          pi: [],
+        },
         "GPT-5.3 Codex",
       ),
     ).toBe("gpt-5.3-codex");
@@ -185,7 +214,16 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "claudeAgent",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [], pi: [] },
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          gemini: [],
+          grok: [],
+          kilo: [],
+          opencode: [],
+          pi: [],
+        },
         "sonnet",
       ),
     ).toBe("claude-sonnet-4-6");
@@ -195,7 +233,16 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [], pi: [] },
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          gemini: [],
+          grok: [],
+          kilo: [],
+          opencode: [],
+          pi: [],
+        },
         "custom/selected-model",
       ),
     ).toBe("custom/selected-model");
@@ -217,6 +264,44 @@ describe("chat font size defaults", () => {
     expect(normalizeChatFontSizePx(9)).toBe(11);
     expect(normalizeChatFontSizePx(18.4)).toBe(18);
     expect(normalizeChatFontSizePx(Number.NaN)).toBe(DEFAULT_CHAT_FONT_SIZE_PX);
+  });
+});
+
+describe("terminal font size defaults", () => {
+  it("defaults terminal font size to 12px", () => {
+    expect(DEFAULT_TERMINAL_FONT_SIZE_PX).toBe(12);
+  });
+
+  it("clamps terminal font size updates into the supported range", () => {
+    expect(normalizeTerminalFontSizePx(8)).toBe(10);
+    expect(normalizeTerminalFontSizePx(20.4)).toBe(20);
+    expect(normalizeTerminalFontSizePx(99)).toBe(22);
+    expect(normalizeTerminalFontSizePx(Number.NaN)).toBe(DEFAULT_TERMINAL_FONT_SIZE_PX);
+  });
+});
+
+describe("terminal font family settings", () => {
+  it("leaves the bundled terminal font stack active for empty values", () => {
+    expect(resolveTerminalFontFamilyStack("")).toBeNull();
+    expect(resolveTerminalFontFamilyStack("   ")).toBeNull();
+  });
+
+  it("quotes a single multi-word font and appends a monospace fallback", () => {
+    expect(resolveTerminalFontFamilyStack("Fira Code")).toBe('"Fira Code", monospace');
+    expect(resolveTerminalFontFamilyStack("Menlo")).toBe("Menlo, monospace");
+  });
+
+  it("preserves explicit font stacks while adding a generic fallback when missing", () => {
+    expect(resolveTerminalFontFamilyStack('"Fira Code", Menlo')).toBe(
+      '"Fira Code", Menlo, monospace',
+    );
+    expect(resolveTerminalFontFamilyStack('"Fira Code", ui-monospace')).toBe(
+      '"Fira Code", ui-monospace',
+    );
+  });
+
+  it("strips characters that could break the terminal font CSS variable", () => {
+    expect(normalizeTerminalFontFamily("Fira; Code{}\n<>")).toBe("Fira Code");
   });
 });
 
@@ -248,6 +333,7 @@ describe("normalizeStoredAppSettings", () => {
       JSON.stringify({
         sidebarProjectSortOrder: "updated_at",
         chatFontSizePx: 99,
+        terminalFontSizePx: 3,
         customCodexModels: [" custom/internal-model ", "gpt-5.4", "custom/internal-model"],
       }),
     );
@@ -255,8 +341,37 @@ describe("normalizeStoredAppSettings", () => {
     expect(normalizeStoredAppSettings(decodedSettings)).toMatchObject({
       sidebarProjectSortOrder: "updated_at",
       chatFontSizePx: 18,
+      terminalFontSizePx: 10,
       customCodexModels: ["custom/internal-model"],
     });
+  });
+
+  it("drops default provider command names so they do not look like custom paths", () => {
+    const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
+      JSON.stringify({
+        claudeBinaryPath: "claude",
+        codexBinaryPath: "codex",
+        cursorBinaryPath: "cursor-agent",
+        geminiBinaryPath: "gemini",
+        grokBinaryPath: "grok",
+        kiloBinaryPath: "kilo",
+        openCodeBinaryPath: "opencode",
+        piBinaryPath: "pi",
+      }),
+    );
+    const normalized = normalizeStoredAppSettings(decodedSettings);
+
+    expect(normalized).toMatchObject({
+      claudeBinaryPath: "",
+      codexBinaryPath: "",
+      cursorBinaryPath: "",
+      geminiBinaryPath: "",
+      grokBinaryPath: "",
+      kiloBinaryPath: "",
+      openCodeBinaryPath: "",
+      piBinaryPath: "",
+    });
+    expect(getCustomBinaryPathForProvider(normalized, "opencode")).toBe("");
   });
 });
 
@@ -278,10 +393,12 @@ describe("getProviderStartOptions", () => {
         cursorApiEndpoint: "http://localhost:3000",
         cursorBinaryPath: "/usr/local/bin/agent",
         geminiBinaryPath: "/usr/local/bin/gemini",
+        grokBinaryPath: "/usr/local/bin/grok",
         kiloBinaryPath: "",
         kiloServerPassword: "",
         kiloServerUrl: "",
         openCodeBinaryPath: "",
+        openCodeExperimentalWebSockets: false,
         openCodeServerPassword: "",
         openCodeServerUrl: "",
         piAgentDir: "",
@@ -301,6 +418,9 @@ describe("getProviderStartOptions", () => {
       gemini: {
         binaryPath: "/usr/local/bin/gemini",
       },
+      grok: {
+        binaryPath: "/usr/local/bin/grok",
+      },
     });
   });
 
@@ -313,14 +433,39 @@ describe("getProviderStartOptions", () => {
         cursorApiEndpoint: "",
         cursorBinaryPath: "",
         geminiBinaryPath: "",
+        grokBinaryPath: "",
         kiloBinaryPath: "",
         kiloServerPassword: "",
         kiloServerUrl: "",
         openCodeBinaryPath: "",
+        openCodeExperimentalWebSockets: false,
         openCodeServerPassword: "",
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("ignores default provider command names as custom binary overrides", () => {
+    expect(
+      getProviderStartOptions({
+        claudeBinaryPath: "claude",
+        codexBinaryPath: "codex",
+        codexHomePath: "",
+        cursorApiEndpoint: "",
+        cursorBinaryPath: "cursor-agent",
+        geminiBinaryPath: "gemini",
+        grokBinaryPath: "grok",
+        kiloBinaryPath: "kilo",
+        kiloServerPassword: "",
+        kiloServerUrl: "",
+        openCodeBinaryPath: "opencode",
+        openCodeExperimentalWebSockets: false,
+        openCodeServerPassword: "",
+        openCodeServerUrl: "",
+        piAgentDir: "",
+        piBinaryPath: "pi",
       }),
     ).toBeUndefined();
   });
@@ -332,6 +477,7 @@ describe("provider-indexed custom model settings", () => {
     customClaudeModels: ["claude/custom-opus"],
     customCursorModels: ["cursor/custom-model"],
     customGeminiModels: ["gemini/custom-flash"],
+    customGrokModels: ["grok/custom-fast"],
     customKiloModels: ["kilo/kilo-auto/free"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
@@ -343,6 +489,7 @@ describe("provider-indexed custom model settings", () => {
       "claudeAgent",
       "cursor",
       "gemini",
+      "grok",
       "kilo",
       "opencode",
       "pi",
@@ -354,6 +501,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "claudeAgent")).toEqual(["claude/custom-opus"]);
     expect(getCustomModelsForProvider(settings, "cursor")).toEqual(["cursor/custom-model"]);
     expect(getCustomModelsForProvider(settings, "gemini")).toEqual(["gemini/custom-flash"]);
+    expect(getCustomModelsForProvider(settings, "grok")).toEqual(["grok/custom-fast"]);
     expect(getCustomModelsForProvider(settings, "kilo")).toEqual(["kilo/kilo-auto/free"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
     expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
@@ -365,6 +513,7 @@ describe("provider-indexed custom model settings", () => {
       customClaudeModels: ["claude/default-opus"],
       customCursorModels: ["cursor/default-model"],
       customGeminiModels: ["gemini/default-flash"],
+      customGrokModels: ["grok/default-fast"],
       customKiloModels: ["kilo/default-auto"],
       customOpenCodeModels: ["openai/gpt-5"],
       customPiModels: ["anthropic/default-pi"],
@@ -376,6 +525,7 @@ describe("provider-indexed custom model settings", () => {
     ]);
     expect(getDefaultCustomModelsForProvider(defaults, "cursor")).toEqual(["cursor/default-model"]);
     expect(getDefaultCustomModelsForProvider(defaults, "gemini")).toEqual(["gemini/default-flash"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "grok")).toEqual(["grok/default-fast"]);
     expect(getDefaultCustomModelsForProvider(defaults, "kilo")).toEqual(["kilo/default-auto"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
     expect(getDefaultCustomModelsForProvider(defaults, "pi")).toEqual(["anthropic/default-pi"]);
@@ -396,6 +546,12 @@ describe("provider-indexed custom model settings", () => {
   it("patches custom models for gemini", () => {
     expect(patchCustomModels("gemini", ["gemini/custom-flash"])).toEqual({
       customGeminiModels: ["gemini/custom-flash"],
+    });
+  });
+
+  it("patches custom models for grok", () => {
+    expect(patchCustomModels("grok", ["grok/custom-fast"])).toEqual({
+      customGrokModels: ["grok/custom-fast"],
     });
   });
 
@@ -429,6 +585,7 @@ describe("provider-indexed custom model settings", () => {
       claudeAgent: ["claude/custom-opus"],
       cursor: ["cursor/custom-model"],
       gemini: ["gemini/custom-flash"],
+      grok: ["grok/custom-fast"],
       kilo: ["kilo/kilo-auto/free"],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
@@ -450,6 +607,9 @@ describe("provider-indexed custom model settings", () => {
     expect(
       modelOptionsByProvider.gemini.some((option) => option.slug === "gemini/custom-flash"),
     ).toBe(true);
+    expect(modelOptionsByProvider.grok.some((option) => option.slug === "grok/custom-fast")).toBe(
+      true,
+    );
     expect(
       modelOptionsByProvider.kilo.some((option) => option.slug === "kilo/kilo-auto/free"),
     ).toBe(true);
@@ -467,6 +627,7 @@ describe("provider-indexed custom model settings", () => {
       customClaudeModels: [" sonnet ", "claude/custom-opus", "claude/custom-opus"],
       customCursorModels: [" composer-2 ", "cursor/custom-model", "cursor/custom-model"],
       customGeminiModels: [" auto-gemini-3 ", "gemini/custom-flash", "gemini/custom-flash"],
+      customGrokModels: [" grok-build ", "grok/custom-fast", "grok/custom-fast"],
       customKiloModels: [" kilo/kilo-auto/free ", "kilo/kilo-auto/free"],
       customOpenCodeModels: [
         " openai/gpt-5 ",
@@ -500,6 +661,13 @@ describe("provider-indexed custom model settings", () => {
       true,
     );
     expect(
+      modelOptionsByProvider.grok.filter((option) => option.slug === "grok/custom-fast"),
+    ).toHaveLength(1);
+    expect(modelOptionsByProvider.grok.some((option) => option.slug === "grok-build-0.1")).toBe(
+      true,
+    );
+    expect(modelOptionsByProvider.grok.some((option) => option.slug === "grok-build")).toBe(true);
+    expect(
       modelOptionsByProvider.kilo.filter((option) => option.slug === "kilo/kilo-auto/free"),
     ).toHaveLength(1);
     expect(
@@ -528,6 +696,7 @@ describe("AppSettingsSchema", () => {
       codexBinaryPath: "/usr/local/bin/codex",
       codexHomePath: "",
       geminiBinaryPath: "",
+      grokBinaryPath: "",
       defaultThreadEnvMode: "local",
       confirmThreadDelete: false,
       confirmTerminalTabClose: true,
@@ -539,6 +708,7 @@ describe("AppSettingsSchema", () => {
       customClaudeModels: [],
       customCursorModels: [],
       customGeminiModels: [],
+      customGrokModels: [],
       customKiloModels: [],
       customOpenCodeModels: [],
       customPiModels: [],

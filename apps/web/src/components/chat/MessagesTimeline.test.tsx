@@ -90,8 +90,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -135,8 +133,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -179,8 +175,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -199,9 +193,104 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("flex w-full justify-end");
     expect(markup).toContain("group flex flex-col items-end gap-px max-w-[80%]");
-    expect(markup).toContain("w-max max-w-full min-w-0 self-end rounded-lg bg-secondary px-3.5");
-    expect(markup).toContain("pt-[5.5px] pb-[7px]");
-    expect(markup).toContain("text-muted-foreground/45");
+    expect(markup).toContain(
+      "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
+    );
+    expect(markup).toContain("rounded-[var(--radius-user-message)]");
+    expect(markup).toContain("py-[8px]");
+    expect(markup).toContain("group-hover:opacity-100");
+  });
+
+  it("keeps user-bubble file and folder mention icons from being overridden by plugin names", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const baseProps = {
+      hasMessages: true,
+      isWorking: false,
+      activeTurnInProgress: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      nowIso: "2026-03-17T19:12:30.000Z",
+      expandedWorkGroups: {},
+      onToggleWorkGroup: () => {},
+      onOpenTurnDiff: () => {},
+      revertTurnCountByUserMessageId: new Map(),
+      onRevertUserMessage: () => {},
+      isRevertingCheckpoint: false,
+      onImageExpand: () => {},
+      markdownCwd: undefined,
+      resolvedTheme: "light" as const,
+      timestampFormat: "locale" as const,
+      workspaceRoot: undefined,
+    };
+
+    const folderMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...baseProps}
+        timelineEntries={[
+          {
+            id: "entry-folder-mention",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-folder-mention"),
+              role: "user",
+              text: "Use @linear",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(folderMarkup).toContain("/central-icons-reversed/folder-2.svg");
+    expect(folderMarkup).not.toContain("/central-icons-reversed/puzzle.svg");
+
+    const tsxMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...baseProps}
+        timelineEntries={[
+          {
+            id: "entry-tsx-file-mention",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-tsx-file-mention"),
+              role: "user",
+              text: "Use @src/App.tsx",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(tsxMarkup).toContain("/central-icons-reversed/react.svg");
+    expect(tsxMarkup).not.toContain("/central-icons-reversed/folder-2.svg");
+
+    const pluginMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...baseProps}
+        timelineEntries={[
+          {
+            id: "entry-plugin-mention",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-plugin-mention"),
+              role: "user",
+              text: "Use @linear",
+              mentions: [{ name: "linear", path: "plugin://linear@openai-curated" }],
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(pluginMarkup).toContain("/central-icons-reversed/puzzle.svg");
   });
 
   it("renders edit beside copy for user messages", async () => {
@@ -239,8 +328,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -263,10 +350,10 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('aria-label="Copy message"');
     expect(markup).toContain('aria-label="Edit message"');
     expect(markup).toContain('aria-label="Revert to this message"');
-    expect(markup).toContain("sidebar-icon-button");
+    expect(markup).toContain("size-[1.125em]");
   });
 
-  it("keeps edit available and undo visible before a revert checkpoint exists", async () => {
+  it("keeps edit available and hides undo before a revert checkpoint exists", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -301,8 +388,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -320,11 +405,10 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain('aria-label="Revert to this message"');
     expect(markup).toContain('aria-label="Edit message"');
+    expect(markup).not.toContain('aria-label="Revert to this message"');
     expect(markup).not.toContain('title="Edit message"');
     expect(markup).not.toContain('title="Revert to this message"');
-    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Revert to this message"/);
   });
 
   it("keeps edit available while an assistant turn is running", async () => {
@@ -350,8 +434,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:32.000Z"
         expandedWorkGroups={{}}
@@ -401,8 +483,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -461,8 +541,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -505,8 +583,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -524,7 +600,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain(
-      "inline-block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui",
+      "block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui",
     );
     expect(markup).not.toContain("<pre");
   });
@@ -553,8 +629,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -605,8 +679,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -624,7 +696,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Terminal 1 lines 1-5");
-    expect(markup).toContain("tabler-icon-terminal");
+    expect(markup).toContain("/central-icons-reversed/console.svg");
     expect(markup).toContain("yoo what&#x27;s ");
   });
 
@@ -657,8 +729,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -702,8 +772,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -721,7 +789,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Check Code");
-    expect(markup).toContain("bg-[var(--info)]/10");
+    expect(markup).toContain("text-[var(--info-foreground)]");
     expect(markup).not.toContain("$check-code</div>");
   });
 
@@ -747,8 +815,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -766,7 +832,8 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("@spark");
-    expect(markup).toContain("inline-flex max-w-full select-none items-center gap-1 rounded-md");
+    expect(markup).toContain("inline-flex max-w-full select-none items-center gap-1 mx-0.5");
+    expect(markup).toContain("rounded-md px-1.5 py-0.5");
     expect(markup).toContain("(check the UI)");
     expect(markup).not.toContain("@spark(check the UI)</div>");
   });
@@ -792,8 +859,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -835,8 +900,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -858,7 +921,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("h-px flex-1 bg-border");
   });
 
-  it("folds work log summaries into the next assistant message footer", async () => {
+  it("folds work log summaries above the next assistant message footer", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -892,8 +955,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -910,7 +971,9 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain(
+    expect(markup).toContain(formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale"));
+    expect(markup).toContain("Worked for 1.0s");
+    expect(markup).not.toContain(
       `${formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale")} • 1.0s`,
     );
     expect(markup).not.toContain("Work log");
@@ -950,8 +1013,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:31.000Z"
         expandedWorkGroups={{}}
@@ -973,7 +1034,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-timeline-row-kind="work"');
   });
 
-  it("shows the first four inline tool calls and collapses the remainder", async () => {
+  it("collapses every completed-turn tool call behind a single Worked-for toggle", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1062,8 +1123,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -1080,11 +1139,13 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Tool 1");
-    expect(markup).toContain("Tool 4");
-    expect(markup).toContain("+2 more tool calls");
+    expect(markup).toContain("Worked for");
+    expect(markup).toContain(">done</p>");
+    // Completed turns fold all tool work behind the single collapsed disclosure,
+    // which stays unmounted until expanded, so no inline tool rows leak out.
+    expect(markup).not.toContain("+2 more tool calls");
+    expect(markup).not.toContain("Tool 1");
     expect(markup).not.toContain("Tool 5");
-    expect(markup).not.toContain("Tool calls");
   });
 
   it("highlights the action word on Cursor-style inline tool rows", async () => {
@@ -1092,9 +1153,9 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        isWorking
+        activeTurnInProgress
+        activeTurnStartedAt="2026-05-09T16:31:20.000Z"
         timelineEntries={[
           {
             id: "entry-cursor-search",
@@ -1124,8 +1185,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-05-09T16:31:25.000Z"
         expandedWorkGroups={{}}
@@ -1236,8 +1295,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -1306,8 +1363,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:31.000Z"
         expandedWorkGroups={{}}
@@ -1324,8 +1379,12 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Tool 1");
-    expect(markup).toContain("Tool 2");
+    expect(markup).toContain("Worked for");
+    expect(markup).toContain(">done</p>");
+    // Trailing work folds into the terminal reply's collapsed disclosure rather
+    // than leaving a detached work row at the end of the transcript.
+    expect(markup).not.toContain("Tool 1");
+    expect(markup).not.toContain("Tool 2");
     expect(markup).not.toContain('data-timeline-row-kind="work"');
   });
 
@@ -1334,9 +1393,9 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        isWorking
+        activeTurnInProgress
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
         timelineEntries={[
           {
             id: "entry-inline-tools-expanded",
@@ -1407,8 +1466,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{ "entry-inline-tools-expanded": true }}
@@ -1466,8 +1523,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={
           new Map([
             [
@@ -1536,8 +1591,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -1589,8 +1642,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-05-09T10:07:00.000Z"
         expandedWorkGroups={{}}
@@ -1637,8 +1688,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -1684,8 +1733,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -1731,8 +1778,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -1778,8 +1823,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -1824,8 +1867,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -1846,7 +1887,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-inline-tool-icon="mcp"');
   });
 
-  it("renders every changed file in the same inline file-change tool call", async () => {
+  it("anchors the changed-files summary at the end of a collapsed file-change turn", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const assistantMessageId = MessageId.makeUnsafe("message-assistant-inline-multi-edit");
     const markup = renderToStaticMarkup(
@@ -1886,8 +1927,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={
           new Map([
             [
@@ -1927,9 +1966,12 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("MessagesTimeline.test.tsx");
-    expect(markup).toContain("MessagesTimeline.tsx");
-    expect(markup.match(/Edited/g)?.length).toBe(2);
+    // The tool work collapses, but the changed-files summary stays anchored at
+    // the end of the turn with every file from the turn diff.
+    expect(markup).toContain("Worked for");
+    expect(markup).toContain("Edited 2 files");
+    expect(markup).toContain("apps/web/src/components/chat/MessagesTimeline.test.tsx");
+    expect(markup).toContain("apps/web/src/components/chat/MessagesTimeline.tsx");
     expect(markup).toContain("+1");
     expect(markup).toContain("-1");
     expect(markup).toContain("+2");
@@ -1971,8 +2013,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={
           new Map([
             [
@@ -2046,8 +2086,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={
           new Map([
             [
@@ -2078,7 +2116,8 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("1 File changed");
+    expect(markup).toContain("Edited 1 file");
+    expect(markup).toContain("Review");
     expect(markup).toContain('aria-expanded="true"');
     expect(markup).toContain("font-system-ui truncate font-normal");
     expect(markup).toContain("apps/web/src/components/Sidebar.tsx");

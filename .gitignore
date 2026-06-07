@@ -15,10 +15,14 @@ release/
 .t3
 /.dpcode/electron-dev
 /.dpcode/backups
+/.dpcode-*/
+/.synara/
+/.synara-*/
 .idea/
 apps/web/.playwright
 apps/web/playwright-report
 .playwright-cli/
+output/playwright/
 apps/web/src/components/__screenshots__
 .vitest-*
 __screenshots__/

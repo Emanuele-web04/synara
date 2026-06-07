@@ -73,7 +73,7 @@ export const expandHomePath = Effect.fn(function* (input: string) {
 export const resolveBaseDir = Effect.fn(function* (raw: string | undefined) {
   const { join, resolve } = yield* Path.Path;
   if (!raw || raw.trim().length === 0) {
-    return join(OS.homedir(), ".dpcode");
+    return join(OS.homedir(), ".synara");
   }
   return resolve(yield* expandHomePath(raw.trim()));
 });

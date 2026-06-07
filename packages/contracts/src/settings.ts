@@ -36,9 +36,15 @@ export const GeminiServerProviderSettings = Schema.Struct({
 });
 export type GeminiServerProviderSettings = typeof GeminiServerProviderSettings.Type;
 
+export const GrokServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "grok")),
+});
+export type GrokServerProviderSettings = typeof GrokServerProviderSettings.Type;
+
 export const CursorServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
-  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "agent")),
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "cursor-agent")),
   apiEndpoint: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
 });
 export type CursorServerProviderSettings = typeof CursorServerProviderSettings.Type;
@@ -48,6 +54,7 @@ export const OpenCodeServerProviderSettings = Schema.Struct({
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "opencode")),
   serverUrl: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
   serverPassword: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+  experimentalWebSockets: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
 });
 export type OpenCodeServerProviderSettings = typeof OpenCodeServerProviderSettings.Type;
 
@@ -81,6 +88,7 @@ export const ServerSettings = Schema.Struct({
     claudeAgent: ClaudeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     cursor: CursorServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     gemini: GeminiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    grok: GrokServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     kilo: KiloServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -128,6 +136,7 @@ export const ServerSettingsPatch = Schema.Struct({
         }),
       ),
       gemini: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
+      grok: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       kilo: Schema.optionalKey(
         Schema.Struct({
           ...ProviderSettingsBasePatch,
@@ -140,6 +149,7 @@ export const ServerSettingsPatch = Schema.Struct({
           ...ProviderSettingsBasePatch,
           serverUrl: Schema.optionalKey(StringSetting),
           serverPassword: Schema.optionalKey(StringSetting),
+          experimentalWebSockets: Schema.optionalKey(Schema.Boolean),
         }),
       ),
       pi: Schema.optionalKey(

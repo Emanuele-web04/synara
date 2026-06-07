@@ -13,7 +13,11 @@ import desktopPackageJson from "../apps/desktop/package.json" with { type: "json
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
-import { createDesktopPlatformBuildConfig } from "./lib/desktop-platform-build-config.ts";
+import { DESKTOP_STAGE_DEPENDENCY_OVERRIDES } from "./lib/desktop-stage-dependency-overrides.ts";
+import {
+  createDesktopPlatformBuildConfig,
+  validateDesktopNativeBuildHost,
+} from "./lib/desktop-platform-build-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -43,11 +47,6 @@ const ProductionMacIconSource = Effect.zipWith(
   Effect.service(Path.Path),
   (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacIconPng),
 );
-const ProductionMacLegacyIconSource = Effect.zipWith(
-  RepoRoot,
-  Effect.service(Path.Path),
-  (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacLegacyIconPng),
-);
 const ProductionLinuxIconSource = Effect.zipWith(
   RepoRoot,
   Effect.service(Path.Path),
@@ -57,6 +56,9 @@ const ProductionWindowsIconSource = Effect.zipWith(
   RepoRoot,
   Effect.service(Path.Path),
   (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionWindowsIconIco),
+);
+const NodePtySmokeScript = Effect.zipWith(RepoRoot, Effect.service(Path.Path), (repoRoot, path) =>
+  path.join(repoRoot, "scripts/node-pty-smoke.mjs"),
 );
 const encodeJsonString = Schema.encodeEffect(Schema.UnknownFromJsonString);
 
@@ -358,12 +360,6 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
         message: `Production macOS icon source is missing at ${modernIconSource}`,
       });
     }
-    const legacyIconSource = yield* ProductionMacLegacyIconSource;
-    if (!(yield* fs.exists(legacyIconSource))) {
-      return yield* new BuildScriptError({
-        message: `Production legacy macOS icon source is missing at ${legacyIconSource}`,
-      });
-    }
     const composerIconSource = yield* ProductionMacIconComposerSource;
     const hasComposerIcon = yield* fs.exists(composerIconSource);
 
@@ -381,7 +377,7 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
       })`sips -z 512 512 ${modernIconSource} --out ${iconPngPath}`,
     );
 
-    yield* generateMacIconSet(legacyIconSource, iconIcnsPath, tmpRoot, path, verbose);
+    yield* generateMacIconSet(modernIconSource, iconIcnsPath, tmpRoot, path, verbose);
 
     if (hasComposerIcon) {
       // Replace any repo-local placeholder so the staged build always reflects the authored Icon Composer asset.
@@ -504,6 +500,25 @@ function resolveGitHubPublishConfig():
   };
 }
 
+const verifyStagedNodePty = Effect.fn("verifyStagedNodePty")(function* (
+  stageAppDir: string,
+  verbose: boolean,
+) {
+  const smokeScript = yield* NodePtySmokeScript;
+  yield* Effect.log("[desktop-artifact] Verifying staged node-pty native PTY...");
+  yield* runCommand(
+    ChildProcess.make({
+      cwd: stageAppDir,
+      env: {
+        ...process.env,
+        SYNARA_NODE_PTY_SMOKE_REQUIRE_ROOT: stageAppDir,
+      },
+      ...commandOutputOptions(verbose),
+      shell: process.platform === "win32",
+    })`node ${smokeScript}`,
+  );
+});
+
 const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
@@ -514,9 +529,9 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   hasMacIconComposer: boolean,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: "com.t3tools.dpcode",
+    appId: "com.t3tools.synara",
     productName,
-    artifactName: "DP-Code-${version}-${arch}.${ext}",
+    artifactName: "Synara-${version}-${arch}.${ext}",
     directories: {
       buildResources: "apps/desktop/resources",
     },
@@ -587,6 +602,17 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (!platformConfig) {
     return yield* new BuildScriptError({
       message: `Unsupported platform '${options.platform}'.`,
+    });
+  }
+  const nativeBuildHostIssue = validateDesktopNativeBuildHost({
+    platform: options.platform,
+    arch: options.arch,
+    hostPlatform: process.platform,
+    hostArch: process.arch,
+  });
+  if (nativeBuildHostIssue) {
+    return yield* new BuildScriptError({
+      message: nativeBuildHostIssue,
     });
   }
 
@@ -714,18 +740,18 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.copy(stageResourcesDir, path.join(stageAppDir, "apps/desktop/prod-resources"));
 
   const stagePackageJson: StagePackageJson = {
-    name: "dp-code-desktop",
+    name: "synara-desktop",
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
     private: true,
-    description: "DP Code desktop build",
+    description: "Synara desktop build",
     author: "Emanuele Di Pietro",
     main: "apps/desktop/dist-electron/main.js",
     build: yield* createBuildConfig(
       options.platform,
       options.target,
-      desktopPackageJson.productName ?? "DP Code",
+      desktopPackageJson.productName ?? "Synara",
       options.signed,
       options.mockUpdates,
       options.mockUpdateServerPort,
@@ -738,7 +764,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     devDependencies: {
       electron: electronVersion,
     },
-    overrides: resolvedOverrides,
+    overrides: {
+      ...DESKTOP_STAGE_DEPENDENCY_OVERRIDES,
+      ...resolvedOverrides,
+    },
   };
 
   const stagePackageJsonString = yield* encodeJsonString(stagePackageJson);
@@ -753,6 +782,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       shell: process.platform === "win32",
     })`bun install --production`,
   );
+
+  if (options.platform === "linux") {
+    yield* verifyStagedNodePty(stageAppDir, options.verbose);
+  }
 
   const buildEnv: NodeJS.ProcessEnv = {
     ...process.env,
@@ -878,7 +911,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
     Flag.optional,
   ),
 }).pipe(
-  Command.withDescription("Build a desktop artifact for DP Code."),
+  Command.withDescription("Build a desktop artifact for Synara."),
   Command.withHandler((input) => Effect.flatMap(resolveBuildOptions(input), buildDesktopArtifact)),
 );
 

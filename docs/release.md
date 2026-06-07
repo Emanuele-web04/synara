@@ -23,8 +23,8 @@ This document covers how to run desktop releases from one tag, first without sig
 - Runtime updater: `electron-updater` in `apps/desktop/src/main.ts`.
 - Update UX:
   - Background checks run on startup delay + interval.
-  - No automatic download or install.
-  - The desktop UI shows a rocket update button when an update is available; click once to download, click again after download to restart/install.
+  - New updates are prepared/downloaded in the background after detection; install/restart stays manual.
+  - The desktop UI shows a rocket update button while preparing and switches to an install action once the update is ready.
 - Provider: GitHub Releases (`provider: github`) configured at build time.
 - Repository slug source:
   - `T3CODE_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
@@ -36,6 +36,7 @@ This document covers how to run desktop releases from one tag, first without sig
   - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
   - `latest*.yml` metadata
   - `*.blockmap` files (used for differential downloads)
+- Production desktop builds omit web/server/desktop source maps by default to keep update payloads small. Set `SYNARA_WEB_SOURCEMAP=1`, `SYNARA_SERVER_SOURCEMAP=1`, or `SYNARA_DESKTOP_SOURCEMAP=1` only for a diagnostic release that needs them.
 - macOS metadata note:
   - `electron-updater` reads `latest-mac.yml` for both Intel and Apple Silicon.
   - The workflow merges the per-arch mac manifests into one `latest-mac.yml` before publishing the GitHub Release.
@@ -59,11 +60,11 @@ Checklist:
    - build web + server
    - run `bun publish --access public`
 
-## DP Code notes
+## Synara notes
 
-- `DP Code` keeps the same release architecture as upstream `T3Code`, but publishes desktop artifacts under the DP branding.
+- `Synara` keeps the same release architecture as upstream `T3Code`, but publishes desktop artifacts under the Synara branding.
 - The desktop updater expects the GitHub Release in this repository to include the generated updater metadata files, not just the installers.
-- The published release title should read `DP Code vX.Y.Z`.
+- The published release title should read `Synara vX.Y.Z`.
 - By default, the first-party desktop release path does not require CLI publish or post-release version-bump automation.
 - Optional jobs stay disabled unless repository variables enable them:
   - `DPCODE_PUBLISH_CLI=1`

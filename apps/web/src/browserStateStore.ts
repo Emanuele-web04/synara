@@ -8,10 +8,17 @@
 import type { ThreadBrowserState, ThreadId } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 
-const BROWSER_STATE_STORAGE_KEY = "dpcode:browser-state:v1";
+const BROWSER_STATE_STORAGE_KEY = "synara:browser-state:v1";
 const BROWSER_HISTORY_LIMIT = 12;
 const EMPTY_BROWSER_HISTORY: BrowserHistoryEntry[] = [];
+
+interface StringStorage {
+  getItem: (name: string) => string | null;
+  setItem: (name: string, value: string) => void;
+  removeItem: (name: string) => void;
+}
 
 export interface BrowserHistoryEntry {
   url: string;
@@ -75,6 +82,61 @@ function sameBrowserHistoryEntries(
   });
 }
 
+function sanitizeBrowserHistoryEntry(rawEntry: unknown): BrowserHistoryEntry | null {
+  if (!isPlainObject(rawEntry)) {
+    return null;
+  }
+  const { url, title, tabId } = rawEntry;
+  if (typeof url !== "string" || typeof title !== "string" || typeof tabId !== "string") {
+    return null;
+  }
+  return { url, title, tabId };
+}
+
+// Drops malformed persisted history so a corrupt entry can never reach the
+// upsert path (which dereferences `entry.url`) or render as a broken tab.
+export function sanitizeRecentHistoryByThreadId(
+  value: unknown,
+): Record<string, BrowserHistoryEntry[]> {
+  return sanitizeStringKeyedRecord(value, (rawEntries) => {
+    if (!Array.isArray(rawEntries)) {
+      return null;
+    }
+    const entries = rawEntries
+      .map(sanitizeBrowserHistoryEntry)
+      .filter((entry): entry is BrowserHistoryEntry => entry !== null)
+      .slice(0, BROWSER_HISTORY_LIMIT);
+    // Drop threads whose history fully fails validation so we don't retain
+    // empty placeholder keys in storage.
+    return entries.length > 0 ? entries : null;
+  });
+}
+
+export function createDedupedBrowserStateStorage(
+  resolveStorage: () => StringStorage,
+): StringStorage {
+  const lastWrittenValueByName = new Map<string, string>();
+
+  return {
+    getItem: (name) => resolveStorage().getItem(name),
+    setItem: (name, value) => {
+      const previousValue = lastWrittenValueByName.get(name) ?? resolveStorage().getItem(name);
+      if (previousValue === value) {
+        lastWrittenValueByName.set(name, value);
+        return;
+      }
+      lastWrittenValueByName.set(name, value);
+      resolveStorage().setItem(name, value);
+    },
+    removeItem: (name) => {
+      lastWrittenValueByName.delete(name);
+      resolveStorage().removeItem(name);
+    },
+  };
+}
+
+const browserStateStorage = createDedupedBrowserStateStorage(() => localStorage);
+
 export const useBrowserStateStore = create<BrowserStateStore>()(
   persist(
     (set) => ({
@@ -137,9 +199,15 @@ export const useBrowserStateStore = create<BrowserStateStore>()(
     }),
     {
       name: BROWSER_STATE_STORAGE_KEY,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => browserStateStorage),
       partialize: (state) => ({
         recentHistoryByThreadId: state.recentHistoryByThreadId,
+      }),
+      merge: (persisted, current) => ({
+        ...current,
+        recentHistoryByThreadId: sanitizeRecentHistoryByThreadId(
+          (persisted as { recentHistoryByThreadId?: unknown } | undefined)?.recentHistoryByThreadId,
+        ),
       }),
     },
   ),

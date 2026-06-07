@@ -17,15 +17,17 @@ export type FeatureFlag =
 
 export type ToggleFeatureFlagId =
   | "persist-action-failed-debug-toasts"
+  | "pin-git-progress-toast-preview"
   | "show-debug-task-banner"
   | "show-expanded-cursor-model-variants";
 
 type FeatureFlagState = Record<ToggleFeatureFlagId, boolean>;
 
-const FEATURE_FLAG_STORAGE_KEY = "dpcode:feature-flags";
+const FEATURE_FLAG_STORAGE_KEY = "synara:feature-flags";
 
 const DEFAULT_FEATURE_FLAG_STATE: FeatureFlagState = {
   "persist-action-failed-debug-toasts": false,
+  "pin-git-progress-toast-preview": false,
   "show-debug-task-banner": false,
   "show-expanded-cursor-model-variants": false,
 };
@@ -43,6 +45,13 @@ export const FEATURE_FLAGS: readonly FeatureFlag[] = [
     label: "Keep debug error toasts open",
     description: "Disable auto-dismiss for locally triggered error toasts.",
     defaultEnabled: DEFAULT_FEATURE_FLAG_STATE["persist-action-failed-debug-toasts"],
+  },
+  {
+    id: "pin-git-progress-toast-preview",
+    kind: "toggle",
+    label: "Pin git progress toast",
+    description: "Keep a looping git progress toast visible for styling.",
+    defaultEnabled: DEFAULT_FEATURE_FLAG_STATE["pin-git-progress-toast-preview"],
   },
   {
     id: "show-debug-task-banner",
@@ -80,6 +89,10 @@ function normalizeFeatureFlagState(value: unknown): FeatureFlagState {
       typeof record["persist-action-failed-debug-toasts"] === "boolean"
         ? record["persist-action-failed-debug-toasts"]
         : DEFAULT_FEATURE_FLAG_STATE["persist-action-failed-debug-toasts"],
+    "pin-git-progress-toast-preview":
+      typeof record["pin-git-progress-toast-preview"] === "boolean"
+        ? record["pin-git-progress-toast-preview"]
+        : DEFAULT_FEATURE_FLAG_STATE["pin-git-progress-toast-preview"],
     "show-debug-task-banner":
       typeof record["show-debug-task-banner"] === "boolean"
         ? record["show-debug-task-banner"]

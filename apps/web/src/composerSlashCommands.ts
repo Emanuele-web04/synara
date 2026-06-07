@@ -376,7 +376,7 @@ export function getAvailableComposerSlashCommands(input: {
         ]
       : [
           // Claude owns most slash-command UX natively; sidechat remains app-level because it
-          // creates a DP Code split/context clone before the provider sees the first turn.
+          // creates a Synara split/context clone before the provider sees the first turn.
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
         ];
   return availableCommands.filter((command) => !collidingNativeCommandNames.has(command));

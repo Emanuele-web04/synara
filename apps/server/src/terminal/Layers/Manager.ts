@@ -6,6 +6,7 @@ import treeKill from "tree-kill";
 
 import {
   DEFAULT_TERMINAL_ID,
+  TerminalAckOutputInput,
   TerminalClearInput,
   TerminalCloseInput,
   TerminalOpenInput,
@@ -15,6 +16,7 @@ import {
   type TerminalEvent,
   type TerminalSessionSnapshot,
 } from "@t3tools/contracts";
+import { describeErrorMessage } from "@t3tools/shared/errorMessages";
 import {
   consumeTerminalIdentityInput,
   deriveTerminalOutputIdentity,
@@ -45,10 +47,24 @@ import {
   TerminalSessionState,
   TerminalStartInput,
 } from "../Services/Manager";
+import {
+  capHistoryByLimits,
+  DEFAULT_HISTORY_BYTE_LIMIT,
+  TerminalHistoryBuffer,
+  type HistoryLimits,
+} from "../terminalHistory";
+import { createTerminalModeReplayTracker } from "../terminalModeReplay";
 
 const DEFAULT_HISTORY_LINE_LIMIT = 5_000;
-const DEFAULT_PERSIST_DEBOUNCE_MS = 40;
+const DEFAULT_PERSIST_DEBOUNCE_MS = 250;
 const DEFAULT_SUBPROCESS_POLL_INTERVAL_MS = 1_000;
+/**
+ * When every running terminal is idle (no live subprocess and no recent
+ * input/output) the subprocess poll backs off to this multiple of the base
+ * interval, cutting the per-`ps` idle drain. Any activity pulls the cadence back
+ * to the base interval via {@link TerminalManagerRuntime#bumpSubprocessPolling}.
+ */
+const SUBPROCESS_IDLE_POLL_MULTIPLIER = 8;
 const DEFAULT_PROCESS_KILL_GRACE_MS = 1_000;
 const DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS = 128;
 /** Flush batched PTY output at ~60 fps to reduce WebSocket message volume. */
@@ -57,10 +73,21 @@ const OUTPUT_BATCH_INTERVAL_MS = 16;
 const OUTPUT_BATCH_SIZE_LIMIT = 131_072; // 128 KB
 /** Pause PTY reads when the pending output buffer exceeds this size. */
 const OUTPUT_BUFFER_HIGH_WATERMARK = 1_048_576; // 1 MB
+/** Pause once renderer-unacked output grows past this byte count. */
+const OUTPUT_ACK_HIGH_WATERMARK = 100_000;
+/** Resume after parsed-output ACKs drain below this byte count. */
+const OUTPUT_ACK_LOW_WATERMARK = 5_000;
+/**
+ * Force-resume ACK-paused reads if no ACK arrives within this window. Each ACK is
+ * proof the renderer is alive and resets the countdown, so this only fires when a
+ * renderer has stalled or disconnected while reads were paused.
+ */
+const OUTPUT_ACK_RESUME_TIMEOUT_MS = 10_000;
 const DEFAULT_OPEN_COLS = 120;
 const DEFAULT_OPEN_ROWS = 30;
-const PROVIDER_INPUT_ACTIVITY_GRACE_MS = 8_000;
-const PROVIDER_OUTPUT_ACTIVITY_GRACE_MS = 4_000;
+const PROVIDER_INPUT_ACTIVITY_GRACE_MS = 120_000;
+const PROVIDER_OUTPUT_ACTIVITY_GRACE_MS = 30_000;
+const POSIX_TREE_WALK_MAX_VISITED = 256;
 const TERMINAL_ENV_BLOCKLIST = new Set(["PORT", "ELECTRON_RENDERER_PORT", "ELECTRON_RUN_AS_NODE"]);
 const MANAGED_TERMINAL_WRAPPER_DIRNAME = "_managed-bin";
 const MANAGED_TERMINAL_ZSH_DIRNAME = "_managed-zsh";
@@ -68,11 +95,12 @@ const MANAGED_TERMINAL_ZSH_DIRNAME = "_managed-zsh";
 const decodeTerminalOpenInput = Schema.decodeUnknownSync(TerminalOpenInput);
 const decodeTerminalRestartInput = Schema.decodeUnknownSync(TerminalRestartInput);
 const decodeTerminalWriteInput = Schema.decodeUnknownSync(TerminalWriteInput);
+const decodeTerminalAckOutputInput = Schema.decodeUnknownSync(TerminalAckOutputInput);
 const decodeTerminalResizeInput = Schema.decodeUnknownSync(TerminalResizeInput);
 const decodeTerminalClearInput = Schema.decodeUnknownSync(TerminalClearInput);
 const decodeTerminalCloseInput = Schema.decodeUnknownSync(TerminalCloseInput);
 
-interface TerminalSubprocessActivity {
+export interface TerminalSubprocessActivity {
   cliKind: TerminalCliKind | null;
   hasRunningSubprocess: boolean;
   hasProviderDescendant: boolean;
@@ -82,6 +110,13 @@ interface TerminalSubprocessActivity {
 type TerminalSubprocessChecker = (
   terminalPid: number,
 ) => Promise<boolean | TerminalSubprocessActivity>;
+
+function terminalErrorFromCause(fallbackMessage: string, cause: unknown): TerminalError {
+  return new TerminalError({
+    message: describeErrorMessage(cause, fallbackMessage),
+    cause,
+  });
+}
 
 function normalizeSubprocessActivity(
   result: boolean | TerminalSubprocessActivity,
@@ -274,87 +309,78 @@ async function checkWindowsSubprocessActivity(
   }
 }
 
-async function checkPosixSubprocessActivity(
-  terminalPid: number,
-): Promise<TerminalSubprocessActivity> {
-  const shellLikeProcessNames = new Set([
-    "bash",
-    "dash",
-    "fish",
-    "ksh",
-    "login",
-    "nu",
-    "screen",
-    "sh",
-    "tcsh",
-    "tmux",
-    "zellij",
-    "zsh",
-  ]);
+export type ProcessChildrenMap = Map<number, Array<{ pid: number; command: string }>>;
 
-  const isShellLikeProcessName = (command: string): boolean => {
-    const normalized = path.basename(command.trim().split(/\s+/g)[0] ?? "").toLowerCase();
-    return shellLikeProcessNames.has(normalized);
+const SHELL_LIKE_PROCESS_NAMES = new Set([
+  "bash",
+  "dash",
+  "fish",
+  "ksh",
+  "login",
+  "nu",
+  "screen",
+  "sh",
+  "tcsh",
+  "tmux",
+  "zellij",
+  "zsh",
+]);
+
+function emptySubprocessActivity(): TerminalSubprocessActivity {
+  return {
+    cliKind: null,
+    hasNonProviderSubprocess: false,
+    hasProviderDescendant: false,
+    hasRunningSubprocess: false,
   };
+}
 
-  const inspectDescendants = (
-    parentPid: number,
-    childrenByParentPid: Map<number, Array<{ pid: number; command: string }>>,
-  ): TerminalSubprocessActivity => {
-    const children = childrenByParentPid.get(parentPid) ?? [];
-    let cliKind: TerminalCliKind | null = null;
-    let hasNonProviderSubprocess = false;
-    let hasProviderDescendant = false;
-    let hasRunningSubprocess = false;
-    for (const child of children) {
-      const nestedActivity = inspectDescendants(child.pid, childrenByParentPid);
-      const childCliKind = deriveTerminalProcessIdentity(child.command)?.cliKind ?? null;
-      if (childCliKind || nestedActivity.hasProviderDescendant) {
-        hasProviderDescendant = true;
-      }
-      if (
-        (!childCliKind && !isShellLikeProcessName(child.command)) ||
-        nestedActivity.hasNonProviderSubprocess
-      ) {
-        hasNonProviderSubprocess = true;
-      }
-      cliKind = cliKind ?? childCliKind ?? nestedActivity.cliKind;
-      if (!isShellLikeProcessName(child.command) || nestedActivity.hasRunningSubprocess) {
-        hasRunningSubprocess = true;
-      }
-    }
-    return { cliKind, hasNonProviderSubprocess, hasProviderDescendant, hasRunningSubprocess };
-  };
+function isShellLikeProcessName(command: string): boolean {
+  const normalized = path.basename(command.trim().split(/\s+/g)[0] ?? "").toLowerCase();
+  return SHELL_LIKE_PROCESS_NAMES.has(normalized);
+}
 
-  try {
-    const pgrepResult = await runProcess("pgrep", ["-P", String(terminalPid)], {
-      timeoutMs: 1_000,
-      allowNonZeroExit: true,
-      maxBufferBytes: 32_768,
-      outputMode: "truncate",
-    });
-    if (pgrepResult.code === 0) {
-      if (pgrepResult.stdout.trim().length === 0) {
-        return {
-          cliKind: null,
-          hasNonProviderSubprocess: false,
-          hasProviderDescendant: false,
-          hasRunningSubprocess: false,
-        };
-      }
+/**
+ * Walk the process tree below `parentPid` using a pre-captured children map.
+ * Pure and synchronous, so a single captured snapshot can be reused across many
+ * polled terminals without re-scanning the system per terminal.
+ */
+export function inspectSubprocessActivity(
+  parentPid: number,
+  childrenByParentPid: ProcessChildrenMap,
+): TerminalSubprocessActivity {
+  const children = childrenByParentPid.get(parentPid) ?? [];
+  let cliKind: TerminalCliKind | null = null;
+  let hasNonProviderSubprocess = false;
+  let hasProviderDescendant = false;
+  let hasRunningSubprocess = false;
+  for (const child of children) {
+    const nestedActivity = inspectSubprocessActivity(child.pid, childrenByParentPid);
+    const childCliKind = deriveTerminalProcessIdentity(child.command)?.cliKind ?? null;
+    if (childCliKind || nestedActivity.hasProviderDescendant) {
+      hasProviderDescendant = true;
     }
-    if (pgrepResult.code === 1) {
-      return {
-        cliKind: null,
-        hasNonProviderSubprocess: false,
-        hasProviderDescendant: false,
-        hasRunningSubprocess: false,
-      };
+    if (
+      (!childCliKind && !isShellLikeProcessName(child.command)) ||
+      nestedActivity.hasNonProviderSubprocess
+    ) {
+      hasNonProviderSubprocess = true;
     }
-  } catch {
-    // Fall back to ps when pgrep is unavailable.
+    cliKind = cliKind ?? childCliKind ?? nestedActivity.cliKind;
+    if (!isShellLikeProcessName(child.command) || nestedActivity.hasRunningSubprocess) {
+      hasRunningSubprocess = true;
+    }
   }
+  return { cliKind, hasNonProviderSubprocess, hasProviderDescendant, hasRunningSubprocess };
+}
 
+/**
+ * Capture the whole-system process tree as a children-by-ppid map with a single
+ * `ps` invocation. Returns null when `ps` is unavailable or fails. Sharing one
+ * snapshot across all polled terminals turns an O(running-terminals) burst of
+ * full-system scans per poll cycle into a single scan.
+ */
+async function captureProcessChildrenMap(): Promise<ProcessChildrenMap | null> {
   try {
     const psResult = await runProcess("ps", ["-eo", "pid=,ppid=,command="], {
       timeoutMs: 1_000,
@@ -362,16 +388,10 @@ async function checkPosixSubprocessActivity(
       maxBufferBytes: 262_144,
       outputMode: "truncate",
     });
-    if (psResult.code !== 0) {
-      return {
-        cliKind: null,
-        hasNonProviderSubprocess: false,
-        hasProviderDescendant: false,
-        hasRunningSubprocess: false,
-      };
-    }
+    if (psResult.code !== 0) return null;
+    if (psResult.stdoutTruncated) return null;
 
-    const childrenByParentPid = new Map<number, Array<{ pid: number; command: string }>>();
+    const childrenByParentPid: ProcessChildrenMap = new Map();
     for (const line of psResult.stdout.split(/\r?\n/g)) {
       const [pidRaw, ppidRaw, ...commandParts] = line.trim().split(/\s+/g);
       const pid = Number(pidRaw);
@@ -383,16 +403,117 @@ async function checkPosixSubprocessActivity(
       siblings.push({ pid, command });
       childrenByParentPid.set(ppid, siblings);
     }
-
-    return inspectDescendants(terminalPid, childrenByParentPid);
+    return childrenByParentPid;
   } catch {
-    return {
-      cliKind: null,
-      hasNonProviderSubprocess: false,
-      hasProviderDescendant: false,
-      hasRunningSubprocess: false,
-    };
+    return null;
   }
+}
+
+async function readPosixChildPids(parentPid: number): Promise<number[]> {
+  try {
+    const pgrepResult = await runProcess("pgrep", ["-P", String(parentPid)], {
+      timeoutMs: 1_000,
+      allowNonZeroExit: true,
+      maxBufferBytes: 32_768,
+      outputMode: "truncate",
+    });
+    if (pgrepResult.code === 1) return [];
+    if (pgrepResult.code !== 0) return [];
+    return pgrepResult.stdout
+      .split(/\s+/g)
+      .map((value) => Number(value))
+      .filter((pid) => Number.isInteger(pid) && pid > 0);
+  } catch {
+    return [];
+  }
+}
+
+async function readPosixCommand(pid: number): Promise<string> {
+  try {
+    const psResult = await runProcess("ps", ["-p", String(pid), "-o", "command="], {
+      timeoutMs: 1_000,
+      allowNonZeroExit: true,
+      maxBufferBytes: 32_768,
+      outputMode: "truncate",
+    });
+    return psResult.code === 0 ? psResult.stdout.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+async function checkPosixSubprocessActivityByTreeWalk(
+  terminalPid: number,
+): Promise<TerminalSubprocessActivity> {
+  let visited = 0;
+
+  // Fallback for hosts where `ps -eo` was unavailable/truncated. It is slower,
+  // but bounded and only used when the shared snapshot cannot be trusted.
+  const inspectPid = async (parentPid: number): Promise<TerminalSubprocessActivity> => {
+    if (visited >= POSIX_TREE_WALK_MAX_VISITED) {
+      return {
+        cliKind: null,
+        hasNonProviderSubprocess: true,
+        hasProviderDescendant: false,
+        hasRunningSubprocess: true,
+      };
+    }
+
+    const childPids = await readPosixChildPids(parentPid);
+    let cliKind: TerminalCliKind | null = null;
+    let hasNonProviderSubprocess = false;
+    let hasProviderDescendant = false;
+    let hasRunningSubprocess = false;
+
+    for (const childPid of childPids) {
+      visited += 1;
+      const command = await readPosixCommand(childPid);
+      if (!command) continue;
+      const nestedActivity = await inspectPid(childPid);
+      const childCliKind = deriveTerminalProcessIdentity(command)?.cliKind ?? null;
+      if (childCliKind || nestedActivity.hasProviderDescendant) {
+        hasProviderDescendant = true;
+      }
+      if (
+        (!childCliKind && !isShellLikeProcessName(command)) ||
+        nestedActivity.hasNonProviderSubprocess
+      ) {
+        hasNonProviderSubprocess = true;
+      }
+      cliKind = cliKind ?? childCliKind ?? nestedActivity.cliKind;
+      if (!isShellLikeProcessName(command) || nestedActivity.hasRunningSubprocess) {
+        hasRunningSubprocess = true;
+      }
+    }
+
+    return { cliKind, hasNonProviderSubprocess, hasProviderDescendant, hasRunningSubprocess };
+  };
+
+  return inspectPid(terminalPid);
+}
+
+async function checkPosixSubprocessActivity(
+  terminalPid: number,
+): Promise<TerminalSubprocessActivity> {
+  // Cheap fast path: skip the full process scan when the shell has no children.
+  try {
+    const pgrepResult = await runProcess("pgrep", ["-P", String(terminalPid)], {
+      timeoutMs: 1_000,
+      allowNonZeroExit: true,
+      maxBufferBytes: 32_768,
+      outputMode: "truncate",
+    });
+    if (pgrepResult.code === 1) return emptySubprocessActivity();
+    if (pgrepResult.code === 0 && pgrepResult.stdout.trim().length === 0) {
+      return emptySubprocessActivity();
+    }
+  } catch {
+    // Fall back to ps when pgrep is unavailable.
+  }
+
+  const childrenByParentPid = await captureProcessChildrenMap();
+  if (childrenByParentPid === null) return checkPosixSubprocessActivityByTreeWalk(terminalPid);
+  return inspectSubprocessActivity(terminalPid, childrenByParentPid);
 }
 
 async function defaultSubprocessChecker(terminalPid: number): Promise<TerminalSubprocessActivity> {
@@ -408,47 +529,6 @@ async function defaultSubprocessChecker(terminalPid: number): Promise<TerminalSu
     return checkWindowsSubprocessActivity(terminalPid);
   }
   return checkPosixSubprocessActivity(terminalPid);
-}
-
-function capHistory(history: string, maxLines: number): string {
-  if (history.length === 0) return history;
-  const hasTrailingNewline = history.endsWith("\n");
-  const lines = history.split("\n");
-  if (hasTrailingNewline) {
-    lines.pop();
-  }
-  if (lines.length <= maxLines) return history;
-  const capped = lines.slice(lines.length - maxLines).join("\n");
-  return hasTrailingNewline ? `${capped}\n` : capped;
-}
-
-function countCharacter(value: string, target: string): number {
-  let count = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    if (value[index] === target) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-function measureHistory(history: string): {
-  historyLineBreakCount: number;
-  historyEndsWithNewline: boolean;
-} {
-  return {
-    historyLineBreakCount: countCharacter(history, "\n"),
-    historyEndsWithNewline: history.endsWith("\n"),
-  };
-}
-
-function historyLineCount(
-  history: string,
-  lineBreakCount: number,
-  endsWithNewline: boolean,
-): number {
-  if (history.length === 0) return 0;
-  return lineBreakCount + (endsWithNewline ? 0 : 1);
 }
 
 function isCsiFinalByte(codePoint: number): boolean {
@@ -763,9 +843,7 @@ function cliKindFromRuntimeEnv(
 }
 
 function resetSessionHistory(session: TerminalSessionState): void {
-  session.history = "";
-  session.historyLineBreakCount = 0;
-  session.historyEndsWithNewline = false;
+  session.history.reset();
   session.pendingHistoryControlSequence = "";
   session.pendingInputBuffer = "";
   session.managedAgentRunning = false;
@@ -794,31 +872,6 @@ function agentStateFromHookEvent(eventType: TerminalAgentHookEventType): Termina
   }
 }
 
-function appendSessionHistory(
-  session: TerminalSessionState,
-  chunk: string,
-  historyLineLimit: number,
-): void {
-  if (chunk.length === 0) return;
-
-  const nextHistory = `${session.history}${chunk}`;
-  const nextLineBreakCount = session.historyLineBreakCount + countCharacter(chunk, "\n");
-  const nextEndsWithNewline = chunk.endsWith("\n");
-  const nextLineCount = historyLineCount(nextHistory, nextLineBreakCount, nextEndsWithNewline);
-
-  if (nextLineCount <= historyLineLimit) {
-    session.history = nextHistory;
-    session.historyLineBreakCount = nextLineBreakCount;
-    session.historyEndsWithNewline = nextEndsWithNewline;
-    return;
-  }
-
-  session.history = capHistory(nextHistory, historyLineLimit);
-  const cappedMetrics = measureHistory(session.history);
-  session.historyLineBreakCount = cappedMetrics.historyLineBreakCount;
-  session.historyEndsWithNewline = cappedMetrics.historyEndsWithNewline;
-}
-
 function sanitizePersistedTerminalHistory(history: string): string {
   if (history.length === 0) return history;
   return sanitizeTerminalHistoryChunk("", history).visibleText;
@@ -831,6 +884,7 @@ interface TerminalManagerEvents {
 interface TerminalManagerOptions {
   logsDir?: string;
   historyLineLimit?: number;
+  historyByteLimit?: number;
   ptyAdapter: PtyAdapterShape;
   shellResolver?: () => string;
   subprocessChecker?: TerminalSubprocessChecker;
@@ -850,19 +904,30 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private managedWrapperBinDir: string | null;
   private managedWrapperZshDir: string | null;
   private readonly historyLineLimit: number;
+  private readonly historyByteLimit: number;
   private readonly ptyAdapter: PtyAdapterShape;
   private readonly shellResolver: () => string;
   private readonly persistQueues = new Map<string, Promise<void>>();
   private readonly persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly pendingPersistHistory = new Map<string, string>();
+  /**
+   * Pending persist work keyed by session. Stores a materializer thunk rather
+   * than a string so the O(maxBytes) history cap only runs when the debounced
+   * write actually fires (≈4/s) — never on the per-flush hot path.
+   */
+  private readonly pendingPersistHistory = new Map<string, () => string>();
+  private readonly persistedHistoryByKey = new Map<string, string>();
+  private persistTempCounter = 0;
   private readonly threadLocks = new Map<string, Promise<void>>();
   private readonly persistDebounceMs: number;
   private readonly subprocessChecker: TerminalSubprocessChecker;
+  private readonly useDefaultSubprocessChecker: boolean;
   private readonly subprocessPollIntervalMs: number;
   private readonly processKillGraceMs: number;
   private readonly maxRetainedInactiveSessions: number;
-  private subprocessPollTimer: ReturnType<typeof setInterval> | null = null;
+  private subprocessPollTimer: ReturnType<typeof setTimeout> | null = null;
   private subprocessPollInFlight = false;
+  /** Delay of the currently scheduled poll, so activity can pull it forward. */
+  private currentSubprocessPollDelayMs = 0;
   private readonly killEscalationTimers = new Map<PtyProcess, KillEscalationHandle>();
   private readonly logger = createLogger("terminal");
 
@@ -876,10 +941,14 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     this.managedWrapperZshDir =
       process.platform === "win32" ? null : path.join(this.logsDir, MANAGED_TERMINAL_ZSH_DIRNAME);
     this.historyLineLimit = options.historyLineLimit ?? DEFAULT_HISTORY_LINE_LIMIT;
+    this.historyByteLimit = options.historyByteLimit ?? DEFAULT_HISTORY_BYTE_LIMIT;
     this.ptyAdapter = options.ptyAdapter;
     this.shellResolver = options.shellResolver ?? defaultShellResolver;
     this.persistDebounceMs = DEFAULT_PERSIST_DEBOUNCE_MS;
     this.subprocessChecker = options.subprocessChecker ?? defaultSubprocessChecker;
+    // Only the built-in checker can share a single process snapshot across the
+    // poll cycle; injected checkers (tests) keep the per-pid path.
+    this.useDefaultSubprocessChecker = options.subprocessChecker === undefined;
     this.subprocessPollIntervalMs =
       options.subprocessPollIntervalMs ?? DEFAULT_SUBPROCESS_POLL_INTERVAL_MS;
     this.processKillGraceMs = options.processKillGraceMs ?? DEFAULT_PROCESS_KILL_GRACE_MS;
@@ -908,6 +977,10 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
   }
 
+  private historyLimits(): HistoryLimits {
+    return { maxLines: this.historyLineLimit, maxBytes: this.historyByteLimit };
+  }
+
   async open(raw: TerminalOpenInput): Promise<TerminalSessionSnapshot> {
     const input = decodeTerminalOpenInput(raw);
     return this.runWithThreadLock(input.threadId, async () => {
@@ -920,16 +993,13 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         const history = await this.readHistory(input.threadId, input.terminalId);
         const cols = input.cols ?? DEFAULT_OPEN_COLS;
         const rows = input.rows ?? DEFAULT_OPEN_ROWS;
-        const historyMetrics = measureHistory(history);
         const session: TerminalSessionState = {
           threadId: input.threadId,
           terminalId: input.terminalId,
           cwd: input.cwd,
           status: "starting",
           pid: null,
-          history,
-          historyLineBreakCount: historyMetrics.historyLineBreakCount,
-          historyEndsWithNewline: historyMetrics.historyEndsWithNewline,
+          history: TerminalHistoryBuffer.fromString(history, this.historyLimits()),
           pendingHistoryControlSequence: "",
           exitCode: null,
           exitSignal: null,
@@ -946,10 +1016,16 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           managedAgentObserved: false,
           runtimeEnv: normalizedRuntimeEnv(input.env),
           pendingInputBuffer: "",
+          modeReplayTracker: null,
           pendingOutputChunks: [],
           pendingOutputLength: 0,
           outputFlushTimer: null,
           outputPaused: false,
+          outputBufferPauseRequested: false,
+          outputAckPauseRequested: false,
+          outputAckObserved: false,
+          outputUnackedBytes: 0,
+          outputAckResumeTimer: null,
           lastInputAt: null,
           lastOutputAt: null,
           lastOutputSignature: null,
@@ -967,17 +1043,37 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const runtimeEnvChanged =
         JSON.stringify(currentRuntimeEnv) !== JSON.stringify(nextRuntimeEnv);
 
-      if (existing.cwd !== input.cwd || runtimeEnvChanged) {
+      if (existing.process) {
+        // A renderer reattach/reconcile is not an explicit restart; keep the live
+        // PTY's original cwd/env so UI drift cannot SIGTERM a running agent.
+        if (existing.cwd !== input.cwd || runtimeEnvChanged) {
+          this.logger.warn("ignoring terminal open cwd/env change for running session", {
+            threadId: existing.threadId,
+            terminalId: existing.terminalId,
+            currentCwd: existing.cwd,
+            requestedCwd: input.cwd,
+            runtimeEnvChanged,
+          });
+        }
+      } else if (existing.cwd !== input.cwd || runtimeEnvChanged) {
         this.stopProcess(existing);
         existing.cwd = input.cwd;
         existing.runtimeEnv = nextRuntimeEnv;
         resetSessionHistory(existing);
-        await this.persistHistory(existing.threadId, existing.terminalId, existing.history);
+        await this.persistHistory(
+          existing.threadId,
+          existing.terminalId,
+          existing.history.toString(),
+        );
       } else if (existing.status === "exited" || existing.status === "error") {
         existing.runtimeEnv = nextRuntimeEnv;
         resetSessionHistory(existing);
-        await this.persistHistory(existing.threadId, existing.terminalId, existing.history);
-      } else if (currentRuntimeEnv !== nextRuntimeEnv) {
+        await this.persistHistory(
+          existing.threadId,
+          existing.terminalId,
+          existing.history.toString(),
+        );
+      } else if (runtimeEnvChanged) {
         existing.runtimeEnv = nextRuntimeEnv;
       }
 
@@ -990,13 +1086,22 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         return this.snapshot(existing);
       }
 
+      // Reattaching a renderer to a still-running session: discard the previous
+      // client's ACK accounting and resume reads so a reconnect-while-paused can
+      // never leave this terminal frozen.
+      this.resetOutputAckTracking(existing);
+
       if (existing.cols !== targetCols || existing.rows !== targetRows) {
         existing.cols = targetCols;
         existing.rows = targetRows;
         existing.process.resize(targetCols, targetRows);
+        existing.modeReplayTracker?.resize(targetCols, targetRows);
         existing.updatedAt = new Date().toISOString();
       }
 
+      // Drain any batched-but-unparsed output so the reconnect snapshot carries
+      // the latest history and an up-to-date mode-replay preamble.
+      this.flushOutputBuffer(existing);
       return this.snapshot(existing);
     });
   }
@@ -1024,7 +1129,25 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       this.emitActivityEvent(session);
     }
     session.lastInputAt = Date.now();
+    // Typing may spawn a subprocess; restore fast subprocess polling promptly.
+    this.bumpSubprocessPolling();
     session.process.write(input.data);
+  }
+
+  async ackOutput(raw: TerminalAckOutputInput): Promise<void> {
+    const input = decodeTerminalAckOutputInput(raw);
+    const session = this.sessions.get(toSessionKey(input.threadId, input.terminalId));
+    if (!session) return;
+
+    session.outputAckObserved = true;
+    session.outputUnackedBytes = Math.max(0, session.outputUnackedBytes - input.bytes);
+    if (session.outputUnackedBytes <= OUTPUT_ACK_LOW_WATERMARK) {
+      session.outputAckPauseRequested = false;
+    }
+    // An ACK proves the renderer is alive: reset the resume watchdog window and
+    // re-sync pause state (which re-arms the watchdog if reads stay paused).
+    this.clearOutputAckResumeTimer(session);
+    this.syncOutputReadPause(session);
   }
 
   async resize(raw: TerminalResizeInput): Promise<void> {
@@ -1039,6 +1162,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.rows = input.rows;
     session.updatedAt = new Date().toISOString();
     session.process.resize(input.cols, input.rows);
+    session.modeReplayTracker?.resize(input.cols, input.rows);
   }
 
   async clear(raw: TerminalClearInput): Promise<void> {
@@ -1047,7 +1171,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const session = this.requireSession(input.threadId, input.terminalId);
       resetSessionHistory(session);
       session.updatedAt = new Date().toISOString();
-      await this.persistHistory(input.threadId, input.terminalId, session.history);
+      await this.persistHistory(input.threadId, input.terminalId, session.history.toString());
       this.emitEvent({
         type: "cleared",
         threadId: input.threadId,
@@ -1073,9 +1197,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           cwd: input.cwd,
           status: "starting",
           pid: null,
-          history: "",
-          historyLineBreakCount: 0,
-          historyEndsWithNewline: false,
+          history: new TerminalHistoryBuffer(this.historyLimits()),
           pendingHistoryControlSequence: "",
           exitCode: null,
           exitSignal: null,
@@ -1092,10 +1214,16 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           managedAgentObserved: false,
           runtimeEnv: normalizedRuntimeEnv(input.env),
           pendingInputBuffer: "",
+          modeReplayTracker: null,
           pendingOutputChunks: [],
           pendingOutputLength: 0,
           outputFlushTimer: null,
           outputPaused: false,
+          outputBufferPauseRequested: false,
+          outputAckPauseRequested: false,
+          outputAckObserved: false,
+          outputUnackedBytes: 0,
+          outputAckResumeTimer: null,
           lastOutputSignature: null,
           lastInputAt: null,
           lastOutputAt: null,
@@ -1118,7 +1246,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const rows = input.rows ?? session.rows;
 
       resetSessionHistory(session);
-      await this.persistHistory(input.threadId, input.terminalId, session.history);
+      await this.persistHistory(input.threadId, input.terminalId, session.history.toString());
       await this.startSession(session, { ...input, cols, rows }, "restarted");
       return this.snapshot(session);
     });
@@ -1192,6 +1320,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.managedAgentState = null;
     session.managedAgentObserved = false;
     session.pendingInputBuffer = "";
+    this.resetOutputBackpressure(session);
+    this.resetModeReplayTracker(session);
     session.lastInputAt = null;
     session.lastOutputAt = null;
     session.lastOutputSignature = null;
@@ -1250,8 +1380,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       }
 
       if (!ptyProcess) {
-        const detail =
-          lastSpawnError instanceof Error ? lastSpawnError.message : "Terminal start failed";
+        const detail = describeErrorMessage(lastSpawnError, "Terminal start failed");
         const tried =
           shellCandidates.length > 0
             ? ` Tried shells: ${shellCandidates.map((candidate) => formatShellCandidate(candidate)).join(", ")}.`
@@ -1263,6 +1392,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       session.pid = ptyProcess.pid;
       session.status = "running";
       session.updatedAt = new Date().toISOString();
+      this.ensureModeReplayTracker(session);
       session.unsubscribeData = ptyProcess.onData((data) => {
         this.onProcessData(session, data);
       });
@@ -1295,7 +1425,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       session.updatedAt = new Date().toISOString();
       this.evictInactiveSessionsIfNeeded();
       this.updateSubprocessPollingState();
-      const message = error instanceof Error ? error.message : "Terminal start failed";
+      const message = describeErrorMessage(error, "Terminal start failed");
       this.emitEvent({
         type: "error",
         threadId: session.threadId,
@@ -1313,6 +1443,42 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   }
 
   private onProcessData(session: TerminalSessionState, data: string): void {
+    // Hot path: only buffer raw output here. All parsing (mode-replay feed,
+    // history sanitize, CLI/hook detection, persistence) happens once per
+    // coalesced batch in flushOutputBuffer, so its cost scales with batches
+    // (~60/s) rather than with the number of raw PTY chunks.
+    session.pendingOutputChunks.push(data);
+    session.pendingOutputLength += Buffer.byteLength(data, "utf8");
+
+    // Backpressure: pause PTY when the local server buffer grows too large.
+    if (
+      !session.outputBufferPauseRequested &&
+      session.pendingOutputLength >= OUTPUT_BUFFER_HIGH_WATERMARK
+    ) {
+      session.outputBufferPauseRequested = true;
+      this.syncOutputReadPause(session);
+    }
+
+    if (session.pendingOutputLength >= OUTPUT_BATCH_SIZE_LIMIT) {
+      // Large burst — flush immediately to avoid excessive latency.
+      this.flushOutputBuffer(session);
+    } else if (session.outputFlushTimer === null) {
+      session.outputFlushTimer = setTimeout(() => {
+        this.flushOutputBuffer(session);
+      }, OUTPUT_BATCH_INTERVAL_MS);
+    }
+  }
+
+  /**
+   * Parse a coalesced output batch: feed the mode-replay mirror, sanitize into
+   * scrollback, detect CLI/hook activity, and schedule persistence. Operating on
+   * the joined batch is equivalent to processing each raw chunk in order:
+   * sanitize/replay thread their state across the pending-control carryover, and
+   * history capping only ever trims from the front, so per-chunk and per-batch
+   * processing yield identical observable state.
+   */
+  private processOutputBatch(session: TerminalSessionState, data: string): void {
+    this.feedModeReplayTracker(session, data);
     const sanitized = sanitizeTerminalHistoryChunk(session.pendingHistoryControlSequence, data);
     session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
     const latestHookEvent = sanitized.hookEvents.at(-1) ?? null;
@@ -1341,8 +1507,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       this.emitActivityEvent(session);
     }
     if (sanitized.visibleText.length > 0) {
-      appendSessionHistory(session, sanitized.visibleText, this.historyLineLimit);
-      this.queuePersist(session.threadId, session.terminalId, session.history);
+      session.history.append(sanitized.visibleText);
+      this.queuePersist(session);
       const normalizedSignature = normalizeProviderOutputSignature(sanitized.visibleText);
       if (normalizedSignature.length > 0 && normalizedSignature !== session.lastOutputSignature) {
         // Only refresh on genuinely new output. Repeated identical redraws (idle prompt
@@ -1351,28 +1517,11 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         // this heuristic only matters for unmanaged terminals.
         session.lastOutputAt = Date.now();
         session.lastOutputSignature = normalizedSignature;
+        // Fresh output can mean a subprocess started; recover fast polling.
+        this.bumpSubprocessPolling();
       }
     }
     session.updatedAt = new Date().toISOString();
-
-    // Accumulate output and batch-emit at ~60 fps to reduce WS message volume.
-    session.pendingOutputChunks.push(data);
-    session.pendingOutputLength += data.length;
-
-    // Backpressure: pause PTY when the pending buffer grows too large.
-    if (!session.outputPaused && session.pendingOutputLength >= OUTPUT_BUFFER_HIGH_WATERMARK) {
-      session.process?.pause();
-      session.outputPaused = true;
-    }
-
-    if (session.pendingOutputLength >= OUTPUT_BATCH_SIZE_LIMIT) {
-      // Large burst — flush immediately to avoid excessive latency.
-      this.flushOutputBuffer(session);
-    } else if (session.outputFlushTimer === null) {
-      session.outputFlushTimer = setTimeout(() => {
-        this.flushOutputBuffer(session);
-      }, OUTPUT_BATCH_INTERVAL_MS);
-    }
   }
 
   private flushOutputBuffer(session: TerminalSessionState): void {
@@ -1383,14 +1532,15 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     if (session.pendingOutputChunks.length === 0) return;
 
     const data = session.pendingOutputChunks.join("");
+    const byteLength = session.pendingOutputLength;
     session.pendingOutputChunks = [];
     session.pendingOutputLength = 0;
 
-    // Backpressure: resume PTY reads now that the buffer is drained.
-    if (session.outputPaused) {
-      session.process?.resume();
-      session.outputPaused = false;
-    }
+    session.outputBufferPauseRequested = false;
+
+    // Parse the batch (history/replay/detection) before emitting so a snapshot
+    // taken right after a flush reflects this output.
+    this.processOutputBatch(session, data);
 
     this.emitEvent({
       type: "output",
@@ -1398,7 +1548,141 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       terminalId: session.terminalId,
       createdAt: new Date().toISOString(),
       data,
+      byteLength,
     });
+    if (session.outputAckObserved) {
+      session.outputUnackedBytes += byteLength;
+      if (session.outputUnackedBytes >= OUTPUT_ACK_HIGH_WATERMARK) {
+        session.outputAckPauseRequested = true;
+      }
+    }
+    this.syncOutputReadPause(session);
+  }
+
+  private syncOutputReadPause(session: TerminalSessionState): void {
+    const shouldPause = session.outputBufferPauseRequested || session.outputAckPauseRequested;
+    if (shouldPause !== session.outputPaused) {
+      if (shouldPause) {
+        session.process?.pause();
+        session.outputPaused = true;
+      } else {
+        session.process?.resume();
+        session.outputPaused = false;
+      }
+    }
+    this.syncOutputAckResumeWatchdog(session);
+  }
+
+  /**
+   * ACK-backpressure can only be drained by renderer ACKs. If a renderer stalls or
+   * disconnects while reads are paused, those ACKs never arrive and the PTY would
+   * stay paused forever. Arm a watchdog whenever ACK-pause holds reads down so the
+   * session always recovers; any ACK or state change resets it.
+   */
+  private syncOutputAckResumeWatchdog(session: TerminalSessionState): void {
+    if (session.outputPaused && session.outputAckPauseRequested) {
+      if (session.outputAckResumeTimer !== null) return;
+      const timer = setTimeout(() => {
+        session.outputAckResumeTimer = null;
+        if (!session.outputAckPauseRequested) return;
+        session.outputAckPauseRequested = false;
+        session.outputUnackedBytes = 0;
+        this.logger.warn("terminal output force-resumed by ack watchdog", {
+          threadId: session.threadId,
+          terminalId: session.terminalId,
+        });
+        this.syncOutputReadPause(session);
+      }, OUTPUT_ACK_RESUME_TIMEOUT_MS);
+      timer.unref?.();
+      session.outputAckResumeTimer = timer;
+    } else {
+      this.clearOutputAckResumeTimer(session);
+    }
+  }
+
+  private clearOutputAckResumeTimer(session: TerminalSessionState): void {
+    if (session.outputAckResumeTimer !== null) {
+      clearTimeout(session.outputAckResumeTimer);
+      session.outputAckResumeTimer = null;
+    }
+  }
+
+  /**
+   * Drop the previous renderer's ACK accounting when a new renderer reattaches to a
+   * still-running session. Without this, a reconnect that happened while reads were
+   * ack-paused would strand outputUnackedBytes high and the PTY paused forever
+   * (the fresh renderer never ACKs output it never received).
+   */
+  private resetOutputAckTracking(session: TerminalSessionState): void {
+    session.outputAckObserved = false;
+    session.outputUnackedBytes = 0;
+    session.outputAckPauseRequested = false;
+    this.clearOutputAckResumeTimer(session);
+    this.syncOutputReadPause(session);
+  }
+
+  private resetOutputBackpressure(session: TerminalSessionState): void {
+    session.pendingOutputChunks = [];
+    session.pendingOutputLength = 0;
+    session.outputBufferPauseRequested = false;
+    session.outputAckPauseRequested = false;
+    session.outputAckObserved = false;
+    session.outputUnackedBytes = 0;
+    this.clearOutputAckResumeTimer(session);
+    if (session.outputPaused) {
+      session.process?.resume();
+    }
+    session.outputPaused = false;
+  }
+
+  private ensureModeReplayTracker(session: TerminalSessionState): void {
+    try {
+      session.modeReplayTracker = createTerminalModeReplayTracker(session.cols, session.rows);
+    } catch (error) {
+      session.modeReplayTracker = null;
+      this.logger.warn("terminal mode replay tracker unavailable", {
+        threadId: session.threadId,
+        terminalId: session.terminalId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private resetModeReplayTracker(session: TerminalSessionState): void {
+    session.modeReplayTracker?.dispose();
+    session.modeReplayTracker = null;
+  }
+
+  private feedModeReplayTracker(session: TerminalSessionState, data: string): void {
+    const tracker = session.modeReplayTracker;
+    if (!tracker) return;
+    try {
+      tracker.feed(data);
+    } catch (error) {
+      this.logger.warn("terminal mode replay tracker feed failed", {
+        threadId: session.threadId,
+        terminalId: session.terminalId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.resetModeReplayTracker(session);
+    }
+  }
+
+  private buildModeReplayPreamble(session: TerminalSessionState): string {
+    if (session.status !== "running") return "";
+    const tracker = session.modeReplayTracker;
+    if (!tracker) return "";
+    try {
+      return tracker.buildPreamble();
+    } catch (error) {
+      this.logger.warn("terminal mode replay preamble failed", {
+        threadId: session.threadId,
+        terminalId: session.terminalId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.resetModeReplayTracker(session);
+      return "";
+    }
   }
 
   private onProcessExit(session: TerminalSessionState, event: PtyExitEvent): void {
@@ -1416,7 +1700,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.lastInputAt = null;
     session.lastOutputAt = null;
     session.lastOutputSignature = null;
-    session.outputPaused = false;
+    this.resetOutputBackpressure(session);
+    this.resetModeReplayTracker(session);
     session.status = "exited";
     session.pendingHistoryControlSequence = "";
     session.exitCode = Number.isInteger(event.exitCode) ? event.exitCode : null;
@@ -1450,7 +1735,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.lastInputAt = null;
     session.lastOutputAt = null;
     session.lastOutputSignature = null;
-    session.outputPaused = false;
+    this.resetOutputBackpressure(session);
+    this.resetModeReplayTracker(session);
     session.status = "exited";
     session.pendingHistoryControlSequence = "";
     session.updatedAt = new Date().toISOString();
@@ -1561,15 +1847,30 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       this.sessions.delete(key);
       this.clearPersistTimer(session.threadId, session.terminalId);
       this.pendingPersistHistory.delete(key);
-      this.persistQueues.delete(key);
+      // Release the cached history reference once the final write lands (the write
+      // re-populates it on completion). The session is gone, so retaining it would
+      // leak up to historyByteLimit per evicted key for the server's lifetime.
+      void this.enqueuePersistWrite(
+        session.threadId,
+        session.terminalId,
+        session.history.toString(),
+      ).finally(() => {
+        this.persistedHistoryByKey.delete(key);
+      });
       this.clearKillEscalationTimer(session.process);
     }
   }
 
-  private queuePersist(threadId: string, terminalId: string, history: string): void {
-    const persistenceKey = toSessionKey(threadId, terminalId);
-    this.pendingPersistHistory.set(persistenceKey, history);
-    this.schedulePersist(threadId, terminalId);
+  /**
+   * Mark a session's history dirty for a debounced persist. The history string is
+   * materialized lazily (in the debounce timer / flush), so the hot output path
+   * never pays the cap cost. The thunk reads `session.history` at write time so it
+   * always persists the latest content, even after the session is removed.
+   */
+  private queuePersist(session: TerminalSessionState): void {
+    const persistenceKey = toSessionKey(session.threadId, session.terminalId);
+    this.pendingPersistHistory.set(persistenceKey, () => session.history.toString());
+    this.schedulePersist(session.threadId, session.terminalId);
   }
 
   private async persistHistory(
@@ -1590,7 +1891,22 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   ): Promise<void> {
     const persistenceKey = toSessionKey(threadId, terminalId);
     const task = async () => {
-      await fs.promises.writeFile(this.historyPath(threadId, terminalId), history, "utf8");
+      if (this.persistedHistoryByKey.get(persistenceKey) === history) {
+        return;
+      }
+      // Atomic replace: write a temp file then rename, so a crash mid-write can
+      // never leave a torn history file. History is byte-capped, so this writes
+      // at most ~historyByteLimit bytes regardless of total output volume.
+      const finalPath = this.historyPath(threadId, terminalId);
+      const tempPath = `${finalPath}.tmp-${process.pid}-${(this.persistTempCounter += 1)}`;
+      try {
+        await fs.promises.writeFile(tempPath, history, "utf8");
+        await fs.promises.rename(tempPath, finalPath);
+        this.persistedHistoryByKey.set(persistenceKey, history);
+      } catch (error) {
+        await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
+        throw error;
+      }
     };
     const previous = this.persistQueues.get(persistenceKey) ?? Promise.resolve();
     const next = previous
@@ -1624,11 +1940,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     if (this.persistTimers.has(persistenceKey)) return;
     const timer = setTimeout(() => {
       this.persistTimers.delete(persistenceKey);
-      const pendingHistory = this.pendingPersistHistory.get(persistenceKey);
-      if (pendingHistory === undefined) return;
+      const materialize = this.pendingPersistHistory.get(persistenceKey);
+      if (materialize === undefined) return;
       this.pendingPersistHistory.delete(persistenceKey);
-      void this.enqueuePersistWrite(threadId, terminalId, pendingHistory);
+      void this.enqueuePersistWrite(threadId, terminalId, materialize());
     }, this.persistDebounceMs);
+    timer.unref?.();
     this.persistTimers.set(persistenceKey, timer);
   }
 
@@ -1642,12 +1959,17 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   private async readHistory(threadId: string, terminalId: string): Promise<string> {
     const nextPath = this.historyPath(threadId, terminalId);
+    const persistenceKey = toSessionKey(threadId, terminalId);
     try {
       const raw = await fs.promises.readFile(nextPath, "utf8");
-      const capped = capHistory(sanitizePersistedTerminalHistory(raw), this.historyLineLimit);
+      const capped = capHistoryByLimits(sanitizePersistedTerminalHistory(raw), {
+        maxLines: this.historyLineLimit,
+        maxBytes: this.historyByteLimit,
+      });
       if (capped !== raw) {
         await fs.promises.writeFile(nextPath, capped, "utf8");
       }
+      this.persistedHistoryByKey.set(persistenceKey, capped);
       return capped;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -1662,10 +1984,14 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     const legacyPath = this.legacyHistoryPath(threadId);
     try {
       const raw = await fs.promises.readFile(legacyPath, "utf8");
-      const capped = capHistory(sanitizePersistedTerminalHistory(raw), this.historyLineLimit);
+      const capped = capHistoryByLimits(sanitizePersistedTerminalHistory(raw), {
+        maxLines: this.historyLineLimit,
+        maxBytes: this.historyByteLimit,
+      });
 
       // Migrate legacy transcript filename to the terminal-scoped path.
       await fs.promises.writeFile(nextPath, capped, "utf8");
+      this.persistedHistoryByKey.set(persistenceKey, capped);
       try {
         await fs.promises.rm(legacyPath, { force: true });
       } catch (cleanupError) {
@@ -1678,6 +2004,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       return capped;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        this.persistedHistoryByKey.set(persistenceKey, "");
         return "";
       }
       throw error;
@@ -1685,6 +2012,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   }
 
   private async deleteHistory(threadId: string, terminalId: string): Promise<void> {
+    this.persistedHistoryByKey.delete(toSessionKey(threadId, terminalId));
     const deletions = [fs.promises.rm(this.historyPath(threadId, terminalId), { force: true })];
     if (terminalId === DEFAULT_TERMINAL_ID) {
       deletions.push(fs.promises.rm(this.legacyHistoryPath(threadId), { force: true }));
@@ -1705,10 +2033,10 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     this.clearPersistTimer(threadId, terminalId);
 
     while (true) {
-      const pendingHistory = this.pendingPersistHistory.get(persistenceKey);
-      if (pendingHistory !== undefined) {
+      const materialize = this.pendingPersistHistory.get(persistenceKey);
+      if (materialize !== undefined) {
         this.pendingPersistHistory.delete(persistenceKey);
-        await this.enqueuePersistWrite(threadId, terminalId, pendingHistory);
+        await this.enqueuePersistWrite(threadId, terminalId, materialize());
       }
 
       const pending = this.persistQueues.get(persistenceKey);
@@ -1731,17 +2059,74 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   }
 
   private ensureSubprocessPolling(): void {
-    if (this.subprocessPollTimer) return;
-    this.subprocessPollTimer = setInterval(() => {
-      void this.pollSubprocessActivity();
-    }, this.subprocessPollIntervalMs);
-    this.subprocessPollTimer.unref?.();
-    void this.pollSubprocessActivity();
+    if (this.subprocessPollTimer || this.subprocessPollInFlight) return;
+    // Kick an immediate poll, then self-schedule the next one adaptively.
+    void this.runSubprocessPollCycle();
+  }
+
+  /**
+   * Poll fast while any terminal is working (a live subprocess, or recent
+   * input/output) and back off when all running sessions are idle. Hook-managed
+   * and quiet shells then cost one `ps` sweep every few seconds instead of every
+   * second.
+   */
+  private desiredSubprocessPollIntervalMs(now: number): number {
+    const base = this.subprocessPollIntervalMs;
+    for (const session of this.sessions.values()) {
+      if (session.status !== "running" || session.pid === null) continue;
+      if (session.hasRunningSubprocess || isProviderSessionBusy(session, now)) {
+        return base;
+      }
+    }
+    return base * SUBPROCESS_IDLE_POLL_MULTIPLIER;
+  }
+
+  private async runSubprocessPollCycle(): Promise<void> {
+    if (this.subprocessPollTimer) {
+      clearTimeout(this.subprocessPollTimer);
+      this.subprocessPollTimer = null;
+    }
+    await this.pollSubprocessActivity();
+    this.scheduleNextSubprocessPoll();
+  }
+
+  private scheduleNextSubprocessPoll(): void {
+    if (this.subprocessPollTimer) {
+      clearTimeout(this.subprocessPollTimer);
+      this.subprocessPollTimer = null;
+    }
+    const hasRunningSessions = [...this.sessions.values()].some(
+      (session) => session.status === "running" && session.pid !== null,
+    );
+    if (!hasRunningSessions) {
+      this.currentSubprocessPollDelayMs = 0;
+      return;
+    }
+    const delayMs = this.desiredSubprocessPollIntervalMs(Date.now());
+    this.currentSubprocessPollDelayMs = delayMs;
+    const timer = setTimeout(() => {
+      void this.runSubprocessPollCycle();
+    }, delayMs);
+    timer.unref?.();
+    this.subprocessPollTimer = timer;
+  }
+
+  /**
+   * Pull the next subprocess poll forward to the base cadence when a backed-off
+   * session sees fresh input/output, so activity detection stays responsive
+   * after an idle period. No-op while already polling fast.
+   */
+  private bumpSubprocessPolling(): void {
+    if (this.subprocessPollInFlight) return;
+    if (!this.subprocessPollTimer) return;
+    if (this.currentSubprocessPollDelayMs <= this.subprocessPollIntervalMs) return;
+    this.scheduleNextSubprocessPoll();
   }
 
   private stopSubprocessPolling(): void {
+    this.currentSubprocessPollDelayMs = 0;
     if (!this.subprocessPollTimer) return;
-    clearInterval(this.subprocessPollTimer);
+    clearTimeout(this.subprocessPollTimer);
     this.subprocessPollTimer = null;
   }
 
@@ -1758,6 +2143,13 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
 
     this.subprocessPollInFlight = true;
+    // Capture the whole process tree once per cycle (built-in POSIX checker
+    // only); every running terminal is then inspected against this shared
+    // snapshot instead of each spawning its own full-system `ps`.
+    const sharedChildrenMap =
+      this.useDefaultSubprocessChecker && process.platform !== "win32"
+        ? await captureProcessChildrenMap()
+        : null;
     try {
       await Promise.all(
         runningSessions.map(async (session) => {
@@ -1765,9 +2157,10 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           let hasRunningSubprocess = false;
           let terminalCliKind: TerminalCliKind | null = null;
           try {
-            const subprocessActivity = normalizeSubprocessActivity(
-              await this.subprocessChecker(terminalPid),
-            );
+            const subprocessActivity =
+              sharedChildrenMap !== null
+                ? inspectSubprocessActivity(terminalPid, sharedChildrenMap)
+                : normalizeSubprocessActivity(await this.subprocessChecker(terminalPid));
             terminalCliKind = subprocessActivity.cliKind ?? session.detectedCliKind;
             if (session.managedAgentObserved) {
               // Hooks have fired — trust them as the sole source of truth (superset model).
@@ -1852,6 +2245,11 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   private async deleteAllHistoryForThread(threadId: string): Promise<void> {
     const threadPrefix = `${toSafeThreadId(threadId)}_`;
+    for (const key of [...this.persistedHistoryByKey.keys()]) {
+      if (key.startsWith(`${threadId}\u0000`)) {
+        this.persistedHistoryByKey.delete(key);
+      }
+    }
     try {
       const entries = await fs.promises.readdir(this.logsDir, { withFileTypes: true });
       const removals = entries
@@ -1882,13 +2280,15 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   }
 
   private snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
+    const replayPreamble = this.buildModeReplayPreamble(session);
     return {
       threadId: session.threadId,
       terminalId: session.terminalId,
       cwd: session.cwd,
       status: session.status,
       pid: session.pid,
-      history: session.history,
+      history: session.history.toString(),
+      ...(replayPreamble.length > 0 ? { replayPreamble } : {}),
       exitCode: session.exitCode,
       exitSignal: session.exitSignal,
       updatedAt: session.updatedAt,
@@ -1957,32 +2357,37 @@ export const TerminalManagerLive = Layer.effect(
       open: (input) =>
         Effect.tryPromise({
           try: () => runtime.open(input),
-          catch: (cause) => new TerminalError({ message: "Failed to open terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to open terminal", cause),
         }),
       write: (input) =>
         Effect.tryPromise({
           try: () => runtime.write(input),
-          catch: (cause) => new TerminalError({ message: "Failed to write to terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to write to terminal", cause),
+        }),
+      ackOutput: (input) =>
+        Effect.tryPromise({
+          try: () => runtime.ackOutput(input),
+          catch: (cause) => terminalErrorFromCause("Failed to acknowledge terminal output", cause),
         }),
       resize: (input) =>
         Effect.tryPromise({
           try: () => runtime.resize(input),
-          catch: (cause) => new TerminalError({ message: "Failed to resize terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to resize terminal", cause),
         }),
       clear: (input) =>
         Effect.tryPromise({
           try: () => runtime.clear(input),
-          catch: (cause) => new TerminalError({ message: "Failed to clear terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to clear terminal", cause),
         }),
       restart: (input) =>
         Effect.tryPromise({
           try: () => runtime.restart(input),
-          catch: (cause) => new TerminalError({ message: "Failed to restart terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to restart terminal", cause),
         }),
       close: (input) =>
         Effect.tryPromise({
           try: () => runtime.close(input),
-          catch: (cause) => new TerminalError({ message: "Failed to close terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to close terminal", cause),
         }),
       subscribe: (listener) =>
         Effect.sync(() => {

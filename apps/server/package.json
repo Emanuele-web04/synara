@@ -1,10 +1,10 @@
 {
   "name": "t3",
-  "version": "0.0.46",
+  "version": "0.1.4",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Emanuele-web04/dpcode",
+    "url": "https://github.com/Emanuele-web04/Synara",
     "directory": "apps/server"
   },
   "bin": {
@@ -23,14 +23,16 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.111",
+    "@anthropic-ai/claude-agent-sdk": "0.3.154",
+    "@anthropic-ai/sdk": "^0.100.0",
     "@earendil-works/pi-agent-core": "^0.74.0",
     "@earendil-works/pi-ai": "^0.74.0",
     "@earendil-works/pi-coding-agent": "^0.74.0",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
-    "@opencode-ai/sdk": "^1.14.48",
+    "@opencode-ai/sdk": "^1.15.13",
     "@pierre/diffs": "^1.1.0-beta.16",
+    "@xterm/headless": "^6.0.0",
     "effect": "catalog:",
     "node-pty": "^1.1.0",
     "open": "^10.1.0",

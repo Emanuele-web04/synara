@@ -1,5 +1,5 @@
 /**
- * CursorAdapterLive — Cursor CLI (`agent acp`) via ACP.
+ * CursorAdapterLive — Cursor CLI (`cursor-agent acp`) via ACP.
  *
  * @module CursorAdapterLive
  */
@@ -13,6 +13,7 @@ import {
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
   type ProviderListModelsResult,
+  type ProviderListSkillsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderUserInputAnswers,
@@ -42,13 +43,20 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
+import { filterProviderPromptImageAttachments } from "../promptAttachments.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
-import { acpPermissionOutcome, mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
+import {
+  classifyAcpPromptTurnCompletion,
+  mapAcpToAdapterError,
+  readAcpFailedToolDetail,
+  selectAcpFullAccessPermissionOptionId,
+  selectAcpPermissionOptionId,
+} from "../acp/AcpAdapterSupport.ts";
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
@@ -72,6 +80,7 @@ import {
   resolveCursorAcpBaseModelId,
   type CursorAcpRuntimeCursorSettings,
 } from "../acp/CursorAcpSupport.ts";
+import { resolveCursorAgentBinaryPath } from "../acp/CursorAcpCommand.ts";
 import {
   CursorAskQuestionRequest,
   CursorCreatePlanRequest,
@@ -83,6 +92,7 @@ import {
 } from "../acp/CursorAcpExtension.ts";
 import { CursorAdapter, type CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { discoverCursorSkills } from "../cursorSkillsDiscovery.ts";
 
 const PROVIDER = "cursor" as const;
 const CURSOR_RESUME_VERSION = 1 as const;
@@ -91,7 +101,7 @@ const ACP_PLAN_MODE_ALIASES = ["plan", "architect"];
 const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
 const ACP_APPROVAL_MODE_ALIASES = ["ask"];
 const CURSOR_PLAN_MODE_PROMPT_PREFIX = [
-  "DP Code Cursor plan mode is active.",
+  "Synara Cursor plan mode is active.",
   "Do not implement or mutate files in this turn.",
   "Do not ask follow-up questions or wait for confirmation; if scope is ambiguous, choose a reasonable default and state the assumption in the plan.",
   "When ready, create the final implementation plan.",
@@ -127,10 +137,12 @@ interface CursorSessionContext {
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
   readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
+  readonly assistantItemTurnIds: Map<string, TurnId>;
   lastPlanFingerprint: string | undefined;
   completedPlanFingerprint: string | undefined;
   activeInteractionMode: ProviderInteractionMode | undefined;
   activeTurnId: TurnId | undefined;
+  activeTurnFailedToolDetail: string | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
   latestSessionCostUsd: number | undefined;
   stopped: boolean;
@@ -142,11 +154,39 @@ function clearCursorActiveTurn(ctx: CursorSessionContext, turnId: TurnId): boole
   }
 
   ctx.activeTurnId = undefined;
+  ctx.activeTurnFailedToolDetail = undefined;
   ctx.activePromptFiber = undefined;
   ctx.activeInteractionMode = undefined;
   const { activeTurnId: _activeTurnId, ...session } = ctx.session;
   ctx.session = session;
   return true;
+}
+
+function resolveCursorAssistantItemTurnId(
+  ctx: CursorSessionContext,
+  itemId: string | undefined,
+): TurnId | undefined {
+  if (itemId === undefined) {
+    return ctx.activeTurnId;
+  }
+  const knownTurnId = ctx.assistantItemTurnIds.get(itemId);
+  if (knownTurnId !== undefined) {
+    return knownTurnId;
+  }
+  if (ctx.activeTurnId !== undefined) {
+    ctx.assistantItemTurnIds.set(itemId, ctx.activeTurnId);
+    return ctx.activeTurnId;
+  }
+  return ctx.assistantItemTurnIds.get(itemId);
+}
+
+function completeCursorAssistantItemTurnId(
+  ctx: CursorSessionContext,
+  itemId: string,
+): TurnId | undefined {
+  const turnId = resolveCursorAssistantItemTurnId(ctx, itemId);
+  ctx.assistantItemTurnIds.delete(itemId);
+  return turnId;
 }
 
 function readAcpUsdCost(cost: EffectAcpSchema.Cost | null | undefined): number | undefined {
@@ -342,22 +382,6 @@ function applyRequestedSessionConfiguration<E>(input: {
       ),
     );
   });
-}
-
-function selectAutoApprovedPermissionOption(
-  request: EffectAcpSchema.RequestPermissionRequest,
-): string | undefined {
-  const allowAlwaysOption = request.options.find((option) => option.kind === "allow_always");
-  if (typeof allowAlwaysOption?.optionId === "string" && allowAlwaysOption.optionId.trim()) {
-    return allowAlwaysOption.optionId.trim();
-  }
-
-  const allowOnceOption = request.options.find((option) => option.kind === "allow_once");
-  if (typeof allowOnceOption?.optionId === "string" && allowOnceOption.optionId.trim()) {
-    return allowOnceOption.optionId.trim();
-  }
-
-  return undefined;
 }
 
 function resolveCursorSessionCwd(
@@ -607,7 +631,7 @@ export function makeCursorAdapter(
             childProcessSpawner,
             cwd,
             ...(resumeSessionId ? { resumeSessionId } : {}),
-            clientInfo: { name: "t3-code", version: "0.0.0" },
+            clientInfo: { name: "Synara", version: "0.0.0" },
             ...acpNativeLoggers,
           }).pipe(
             Effect.provideService(Scope.Scope, sessionScope),
@@ -735,7 +759,9 @@ export function makeCursorAdapter(
                   "acp.jsonrpc",
                 );
                 if (input.runtimeMode === "full-access") {
-                  const autoApprovedOptionId = selectAutoApprovedPermissionOption(params);
+                  const autoApprovedOptionId = selectAcpFullAccessPermissionOptionId(
+                    params.options,
+                  );
                   if (autoApprovedOptionId !== undefined) {
                     return {
                       outcome: {
@@ -785,10 +811,18 @@ export function makeCursorAdapter(
                   outcome:
                     resolved === "cancel"
                       ? ({ outcome: "cancelled" } as const)
-                      : {
-                          outcome: "selected" as const,
-                          optionId: acpPermissionOutcome(resolved),
-                        },
+                      : (() => {
+                          const selectedOptionId = selectAcpPermissionOptionId(
+                            resolved,
+                            params.options,
+                          );
+                          return selectedOptionId === undefined
+                            ? ({ outcome: "cancelled" } as const)
+                            : ({
+                                outcome: "selected" as const,
+                                optionId: selectedOptionId,
+                              } as const);
+                        })(),
                 };
               }),
             );
@@ -833,10 +867,12 @@ export function makeCursorAdapter(
             pendingApprovals,
             pendingUserInputs,
             turns: [],
+            assistantItemTurnIds: new Map(),
             lastPlanFingerprint: undefined,
             completedPlanFingerprint: undefined,
             activeInteractionMode: undefined,
             activeTurnId: undefined,
+            activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
             latestSessionCostUsd: undefined,
             stopped: false,
@@ -849,28 +885,34 @@ export function makeCursorAdapter(
                   case "ModeChanged":
                     return;
                   case "AssistantItemStarted":
-                    yield* offerRuntimeEvent(
-                      makeAcpAssistantItemEvent({
-                        stamp: yield* makeEventStamp(),
-                        provider: PROVIDER,
-                        threadId: ctx.threadId,
-                        turnId: ctx.activeTurnId,
-                        itemId: event.itemId,
-                        lifecycle: "item.started",
-                      }),
-                    );
+                    {
+                      const turnId = resolveCursorAssistantItemTurnId(ctx, event.itemId);
+                      yield* offerRuntimeEvent(
+                        makeAcpAssistantItemEvent({
+                          stamp: yield* makeEventStamp(),
+                          provider: PROVIDER,
+                          threadId: ctx.threadId,
+                          turnId,
+                          itemId: event.itemId,
+                          lifecycle: "item.started",
+                        }),
+                      );
+                    }
                     return;
                   case "AssistantItemCompleted":
-                    yield* offerRuntimeEvent(
-                      makeAcpAssistantItemEvent({
-                        stamp: yield* makeEventStamp(),
-                        provider: PROVIDER,
-                        threadId: ctx.threadId,
-                        turnId: ctx.activeTurnId,
-                        itemId: event.itemId,
-                        lifecycle: "item.completed",
-                      }),
-                    );
+                    {
+                      const turnId = completeCursorAssistantItemTurnId(ctx, event.itemId);
+                      yield* offerRuntimeEvent(
+                        makeAcpAssistantItemEvent({
+                          stamp: yield* makeEventStamp(),
+                          provider: PROVIDER,
+                          threadId: ctx.threadId,
+                          turnId,
+                          itemId: event.itemId,
+                          lifecycle: "item.completed",
+                        }),
+                      );
+                    }
                     return;
                   case "PlanUpdated":
                     yield* logNative(
@@ -894,6 +936,10 @@ export function makeCursorAdapter(
                       event.rawPayload,
                       "acp.jsonrpc",
                     );
+                    const failedToolDetail = readAcpFailedToolDetail(event.toolCall);
+                    if (failedToolDetail !== undefined && ctx.activeTurnId !== undefined) {
+                      ctx.activeTurnFailedToolDetail = failedToolDetail;
+                    }
                     yield* offerRuntimeEvent(
                       makeAcpToolCallEvent({
                         stamp: yield* makeEventStamp(),
@@ -917,7 +963,7 @@ export function makeCursorAdapter(
                         stamp: yield* makeEventStamp(),
                         provider: PROVIDER,
                         threadId: ctx.threadId,
-                        turnId: ctx.activeTurnId,
+                        turnId: resolveCursorAssistantItemTurnId(ctx, event.itemId),
                         ...(event.itemId ? { itemId: event.itemId } : {}),
                         text: event.text,
                         ...(event.streamKind ? { streamKind: event.streamKind } : {}),
@@ -1014,14 +1060,7 @@ export function makeCursorAdapter(
           });
         }
         if (input.attachments && input.attachments.length > 0) {
-          for (const attachment of input.attachments) {
-            if (attachment.type !== "image") {
-              return yield* new ProviderAdapterValidationError({
-                provider: PROVIDER,
-                operation: "sendTurn",
-                issue: "Cursor only supports image attachments for provider prompts.",
-              });
-            }
+          for (const attachment of filterProviderPromptImageAttachments(input.attachments)) {
             const attachmentPath = resolveAttachmentPath({
               attachmentsDir: serverConfig.attachmentsDir,
               attachment,
@@ -1061,6 +1100,7 @@ export function makeCursorAdapter(
         }
 
         ctx.activeTurnId = turnId;
+        ctx.activeTurnFailedToolDetail = undefined;
         ctx.activeInteractionMode = input.interactionMode;
         ctx.lastPlanFingerprint = undefined;
         ctx.completedPlanFingerprint = undefined;
@@ -1117,6 +1157,7 @@ export function makeCursorAdapter(
               }),
             onSuccess: (result) =>
               Effect.gen(function* () {
+                const failedToolDetail = ctx.activeTurnFailedToolDetail;
                 if (!clearCursorActiveTurn(ctx, turnId)) {
                   return;
                 }
@@ -1129,6 +1170,10 @@ export function makeCursorAdapter(
                   updatedAt: yield* nowIso,
                   model: resolvedModel,
                 };
+                const completion = classifyAcpPromptTurnCompletion({
+                  stopReason: result.stopReason,
+                  ...(failedToolDetail !== undefined ? { failedToolDetail } : {}),
+                });
                 yield* offerRuntimeEvent({
                   type: "turn.completed",
                   ...(yield* makeEventStamp()),
@@ -1136,8 +1181,11 @@ export function makeCursorAdapter(
                   threadId: input.threadId,
                   turnId,
                   payload: {
-                    state: result.stopReason === "cancelled" ? "cancelled" : "completed",
+                    state: completion.state,
                     stopReason: result.stopReason ?? null,
+                    ...(completion.errorMessage !== undefined
+                      ? { errorMessage: completion.errorMessage }
+                      : {}),
                     ...(result.usage ? { usage: result.usage } : {}),
                     ...completedCost,
                   },
@@ -1282,8 +1330,8 @@ export function makeCursorAdapter(
     > = () =>
       Effect.succeed({
         provider: PROVIDER,
-        supportsSkillMentions: false,
-        supportsSkillDiscovery: false,
+        supportsSkillMentions: true,
+        supportsSkillDiscovery: true,
         supportsNativeSlashCommandDiscovery: false,
         supportsPluginMentions: false,
         supportsPluginDiscovery: false,
@@ -1292,10 +1340,32 @@ export function makeCursorAdapter(
         supportsThreadImport: true,
       } satisfies ProviderComposerCapabilities);
 
+    const listSkills: NonNullable<CursorAdapterShape["listSkills"]> = (input) =>
+      Effect.tryPromise({
+        try: async () =>
+          ({
+            skills: await discoverCursorSkills({
+              cwd: input.cwd,
+              homeDir: serverConfig.homeDir,
+            }),
+            source: "cursor.filesystem",
+            cached: false,
+          }) satisfies ProviderListSkillsResult,
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "skill/list",
+            detail: "Failed to discover Cursor skills.",
+            cause,
+          }),
+      });
+
     const listModels: NonNullable<CursorAdapterShape["listModels"]> = (input) => {
       const binaryPath = input.binaryPath?.trim();
       const apiEndpoint = input.apiEndpoint?.trim();
-      const effectiveBinaryPath = binaryPath || cursorSettings.binaryPath || "agent";
+      const effectiveBinaryPath = resolveCursorAgentBinaryPath(
+        binaryPath || cursorSettings.binaryPath,
+      );
       const effectiveApiEndpoint = apiEndpoint || cursorSettings.apiEndpoint;
       const runCursorModelListCommand = Effect.gen(function* () {
         const child = yield* childProcessSpawner.spawn(
@@ -1402,6 +1472,7 @@ export function makeCursorAdapter(
       stopSession,
       listSessions,
       getComposerCapabilities,
+      listSkills,
       listModels,
       hasSession,
       stopAll,

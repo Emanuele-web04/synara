@@ -49,6 +49,9 @@ export interface ExecuteGitResult {
 }
 
 export interface GitStatusDetails extends Omit<GitStatusResult, "pr"> {
+  isRepo: boolean;
+  hasOriginRemote: boolean;
+  isDefaultBranch: boolean;
   upstreamRef: string | null;
 }
 
@@ -173,16 +176,12 @@ export interface GitCoreShape {
   /**
    * Read only unstaged tracked changes plus untracked files.
    */
-  readonly readUnstagedPatch: (
-    cwd: string,
-  ) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
+  readonly readUnstagedPatch: (cwd: string) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
 
   /**
    * Read only staged changes.
    */
-  readonly readStagedPatch: (
-    cwd: string,
-  ) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
+  readonly readStagedPatch: (cwd: string) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
 
   /**
    * Read committed branch changes against the upstream/base branch.
@@ -347,6 +346,22 @@ export interface GitCoreShape {
    * List local branch names (short format).
    */
   readonly listLocalBranchNames: (cwd: string) => Effect.Effect<string[], GitCommandError>;
+
+  /**
+   * Stage the provided paths into the index (`git add`).
+   */
+  readonly stageFiles: (
+    cwd: string,
+    paths: readonly string[],
+  ) => Effect.Effect<void, GitCommandError>;
+
+  /**
+   * Unstage the provided paths from the index, handling the pre-initial-commit case.
+   */
+  readonly unstageFiles: (
+    cwd: string,
+    paths: readonly string[],
+  ) => Effect.Effect<void, GitCommandError>;
 }
 
 /**

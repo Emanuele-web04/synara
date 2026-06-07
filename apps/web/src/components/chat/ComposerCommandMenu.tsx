@@ -7,27 +7,32 @@ import {
   type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
 } from "@t3tools/contracts";
-import { memo, useEffect, useMemo, useRef } from "react";
-import { RiRobot3Line } from "react-icons/ri";
+import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { type ComposerTriggerKind } from "../../composer-logic";
 import { type ComposerSlashCommand } from "../../composerSlashCommands";
-import { ListTodoIcon, PlugIcon } from "~/lib/icons";
 import {
-  TbEraser,
-  TbBrain,
-  TbBolt,
-  TbDeviceLaptop,
-  TbMessage,
-  TbBug,
-  TbChartBar,
-  TbUsers,
-  TbGitCompare,
-  TbTerminal2,
-} from "react-icons/tb";
-import { GoRepoForked } from "react-icons/go";
+  BotIcon,
+  BrainIcon,
+  BugIcon,
+  ChangesIcon,
+  DeviceLaptopIcon,
+  DisposableThreadIcon,
+  EraserIcon,
+  GitBranchIcon,
+  GitForkIcon,
+  InfoIcon,
+  ListTodoIcon,
+  type LucideIcon,
+  MessageCircleIcon,
+  Minimize2,
+  PluginIcon,
+  SkillCubeIcon,
+  TerminalIcon,
+  WorktreeIcon,
+  ZapIcon,
+} from "~/lib/icons";
 import { formatSkillScope } from "~/lib/providerDiscovery";
 import { cn } from "~/lib/utils";
-import { Badge } from "../ui/badge";
 import {
   Command,
   CommandGroup,
@@ -37,34 +42,11 @@ import {
   CommandSeparator,
 } from "../ui/command";
 import { FileEntryIcon } from "./FileEntryIcon";
-
-function SkillCubeIcon(props: { className?: string }) {
-  return (
-    <svg className={props.className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="m3.3 7 8.7 5 8.7-5"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M12 22V12"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
+import {
+  COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME,
+  COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME,
+  COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME,
+} from "./composerPickerStyles";
 
 function humanizeProviderCommandName(command: string): string {
   return command
@@ -120,6 +102,10 @@ function commandMenuTrailingMeta(item: ComposerCommandItem): string | null {
 
   if (item.type === "skill") {
     return formatSkillScope(item.skill.scope);
+  }
+
+  if (item.type === "model") {
+    return "Model";
   }
 
   if (item.type === "slash-command" || item.type === "provider-native-command") {
@@ -277,8 +263,12 @@ export function groupCommandItems(
 
   const builtInItems = items.filter((item) => item.type === "slash-command");
   const providerItems = items.filter((item) => item.type === "provider-native-command");
+  const skillItems = items.filter((item) => item.type === "skill");
   const otherItems = items.filter(
-    (item) => item.type !== "slash-command" && item.type !== "provider-native-command",
+    (item) =>
+      item.type !== "slash-command" &&
+      item.type !== "provider-native-command" &&
+      item.type !== "skill",
   );
 
   const groups: ComposerCommandGroupModel[] = [];
@@ -287,6 +277,9 @@ export function groupCommandItems(
   }
   if (providerItems.length > 0) {
     groups.push({ id: "provider", label: "Provider", items: providerItems });
+  }
+  if (skillItems.length > 0) {
+    groups.push({ id: "skills", label: "Skills", items: skillItems });
   }
   if (otherItems.length > 0) {
     groups.push({ id: "other", label: null, items: otherItems });
@@ -332,8 +325,8 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
         );
       }}
     >
-      <div className="chat-composer-surface relative overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-surface-under)] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]">
-        <CommandList className="max-h-72 py-0.5">
+      <div className={COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME}>
+        <CommandList className="max-h-72 scroll-py-1 p-1">
           {groups.map((group, groupIndex) => (
             <div key={group.id}>
               {groupIndex > 0 ? <CommandSeparator className="my-0.5" /> : null}
@@ -400,6 +393,107 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
   );
 });
 
+// Single icon column shared by every menu row. Rows differ only by the glyph,
+// its color, and the name — slot geometry stays constant so files, folders,
+// skills, plugins, commands, and agents line up identically.
+const COMPOSER_COMMAND_ITEM_ICON_SLOT_CLASSNAME =
+  "flex size-4 shrink-0 items-center justify-center text-muted-foreground/60";
+
+// Files mirror the recap / diff changed-files treatment (FileEntryIcon at
+// size-3.5 with the same dimmed foreground) so a file reads identically whether
+// it appears in a turn summary or in the composer.
+const COMPOSER_COMMAND_ITEM_FILE_ICON_CLASSNAME =
+  "size-3.5 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80";
+
+const COMPOSER_COMMAND_ITEM_GLYPH_CLASSNAME = "size-3.5";
+
+// Reuse the app's existing icon components for each concept so the command menu
+// stays coherent with how plan/fork/review/model/etc. appear everywhere else.
+// Don't introduce bespoke glyphs here — map to the shared `~/lib/icons` exports.
+const SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
+  clear: EraserIcon,
+  compact: Minimize2,
+  model: BrainIcon,
+  fast: ZapIcon,
+  plan: ListTodoIcon,
+  default: MessageCircleIcon,
+  review: BugIcon,
+  fork: GitForkIcon,
+  side: DisposableThreadIcon,
+  status: InfoIcon,
+  subagents: BotIcon,
+};
+
+function commandMenuSlashGlyph(command: string, fallback: LucideIcon): ReactNode {
+  const Icon = SLASH_COMMAND_ICONS[command] ?? fallback;
+  return <Icon className={COMPOSER_COMMAND_ITEM_GLYPH_CLASSNAME} />;
+}
+
+function commandMenuItemGlyph(item: ComposerCommandItem, theme: "light" | "dark"): ReactNode {
+  const cls = COMPOSER_COMMAND_ITEM_GLYPH_CLASSNAME;
+  switch (item.type) {
+    case "path":
+      return (
+        <FileEntryIcon
+          pathValue={item.path}
+          kind={item.pathKind}
+          theme={theme}
+          className={
+            item.pathKind === "directory" ? cls : COMPOSER_COMMAND_ITEM_FILE_ICON_CLASSNAME
+          }
+        />
+      );
+    case "local-root":
+      return <DeviceLaptopIcon className={cls} />;
+    case "fork-target":
+      return item.target === "local" ? (
+        <DeviceLaptopIcon className={cls} />
+      ) : (
+        <WorktreeIcon className={cls} />
+      );
+    case "review-target":
+      return item.target === "changes" ? (
+        <ChangesIcon className={cls} />
+      ) : (
+        <GitBranchIcon className={cls} />
+      );
+    case "slash-command":
+      return commandMenuSlashGlyph(item.command, TerminalIcon);
+    case "provider-native-command":
+      // Provider native commands surface skills (e.g. Claude exposes skills as
+      // slash commands), so default to the skill block glyph used for skill
+      // tokens in the composer/timeline — named commands still keep their icon.
+      return commandMenuSlashGlyph(item.command, SkillCubeIcon);
+    case "model":
+      return <BrainIcon className={cls} />;
+    case "agent":
+      return <BotIcon className={cls} />;
+    case "plugin":
+      return <PluginIcon className={cls} />;
+    case "skill":
+      return <SkillCubeIcon className={cls} />;
+    default:
+      return null;
+  }
+}
+
+const ComposerCommandItemIcon = memo(function ComposerCommandItemIcon(props: {
+  item: ComposerCommandItem;
+  resolvedTheme: "light" | "dark";
+  isActive: boolean;
+}) {
+  return (
+    <span
+      className={cn(
+        COMPOSER_COMMAND_ITEM_ICON_SLOT_CLASSNAME,
+        props.isActive && "text-foreground/70",
+      )}
+    >
+      {commandMenuItemGlyph(props.item, props.resolvedTheme)}
+    </span>
+  );
+});
+
 const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   item: ComposerCommandItem;
   resolvedTheme: "light" | "dark";
@@ -416,9 +510,8 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       ref={props.itemRef}
       value={props.item.id}
       className={cn(
-        "cursor-pointer select-none gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)] data-highlighted:bg-[var(--color-background-elevated-secondary)]",
-        props.isActive &&
-          "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
+        COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME,
+        props.isActive && COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME,
       )}
       onMouseMove={() => {
         if (!props.isActive) props.onHighlight(props.item.id);
@@ -430,89 +523,14 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
         props.onSelect(props.item);
       }}
     >
-      {props.item.type === "path" ? (
-        <FileEntryIcon
-          pathValue={props.item.path}
-          kind={props.item.pathKind}
-          theme={props.resolvedTheme}
-        />
-      ) : null}
-      {props.item.type === "local-root" ? (
-        <TbDeviceLaptop className="size-3.5 text-muted-foreground/60" />
-      ) : null}
-      {props.item.type === "fork-target" ? (
-        props.item.target === "local" ? (
-          <TbDeviceLaptop className="size-3.5 text-muted-foreground/60" />
-        ) : (
-          <GoRepoForked className="size-3.5 text-muted-foreground/60" />
-        )
-      ) : null}
-      {props.item.type === "review-target" ? (
-        props.item.target === "changes" ? (
-          <TbBug className="size-3.5 text-muted-foreground/60" />
-        ) : (
-          <TbGitCompare className="size-3.5 text-muted-foreground/60" />
-        )
-      ) : null}
-      {props.item.type === "slash-command" || props.item.type === "provider-native-command"
-        ? (() => {
-            const cls = "size-3.5 text-muted-foreground/60";
-            switch (props.item.command) {
-              case "clear":
-                return <TbEraser className={cls} />;
-              case "model":
-                return <TbBrain className={cls} />;
-              case "fast":
-                return <TbBolt className={cls} />;
-              case "plan":
-                return <ListTodoIcon className={cls} />;
-              case "default":
-                return <TbMessage className={cls} />;
-              case "review":
-                return <TbBug className={cls} />;
-              case "status":
-                return <TbChartBar className={cls} />;
-              case "subagents":
-                return <TbUsers className={cls} />;
-              case "fork":
-                return <GoRepoForked className={cls} />;
-              case "side":
-                return <TbMessage className={cls} />;
-              default:
-                return <TbTerminal2 className={cls} />;
-            }
-          })()
-        : null}
-      {props.item.type === "model" ? (
-        <Badge variant="outline" className="px-1 py-0 text-[9px]">
-          model
-        </Badge>
-      ) : null}
-      {props.item.type === "agent" ? (
-        <RiRobot3Line className="size-3.5 text-muted-foreground/60" />
-      ) : null}
-      {props.item.type === "plugin" || props.item.type === "skill" ? (
-        <div
-          className={cn(
-            "flex size-3.5 shrink-0 items-center justify-center text-muted-foreground/50",
-            props.isActive && "text-foreground/60",
-          )}
-        >
-          {props.item.type === "skill" ? (
-            <SkillCubeIcon className="size-3" />
-          ) : (
-            <PlugIcon className="size-3" />
-          )}
-        </div>
-      ) : null}
+      <ComposerCommandItemIcon
+        item={props.item}
+        resolvedTheme={props.resolvedTheme}
+        isActive={props.isActive}
+      />
       <div className="min-w-0 flex flex-1 items-center gap-3">
         <div className="min-w-0 flex flex-1 items-center gap-1.5 overflow-hidden">
-          <span
-            className={cn(
-              "shrink-0 text-[11.5px] font-medium text-foreground/80",
-              (props.item.type === "plugin" || props.item.type === "skill") && "font-semibold",
-            )}
-          >
+          <span className="shrink-0 text-[11.5px] font-medium text-foreground/80">
             {props.item.type === "slash-command" || props.item.type === "provider-native-command"
               ? commandMenuTitle(props.item)
               : props.item.label}

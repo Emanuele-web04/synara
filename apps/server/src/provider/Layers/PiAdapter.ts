@@ -14,7 +14,13 @@ import {
   type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
+import {
+  getSupportedThinkingLevels,
+  type Api,
+  type ImageContent,
+  type Model,
+  type TextContent,
+} from "@earendil-works/pi-ai";
 import {
   type ChatAttachment,
   EventId,
@@ -42,6 +48,7 @@ import {
 } from "../Errors.ts";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
 import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
+import { classifyPiTurnFailure } from "../piTurnFailure.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "pi" as const;
@@ -120,6 +127,17 @@ function isPiThinkingLevel(value: string | null | undefined): value is ThinkingL
 
 function normalizePiThinkingLevel(value: string | null | undefined): ThinkingLevel | undefined {
   return isPiThinkingLevel(value) ? value : undefined;
+}
+
+// Mirrors Pi SDK clamping so model discovery does not advertise levels that will be ignored.
+export function getPiSupportedThinkingOptions(
+  model: Pick<Model<Api>, "reasoning" | "thinkingLevelMap">,
+): ReadonlyArray<(typeof PI_THINKING_OPTIONS)[number]> {
+  if (!model.reasoning) {
+    return [];
+  }
+  const supportedLevels = new Set(getSupportedThinkingLevels(model as Model<Api>));
+  return PI_THINKING_OPTIONS.filter((option) => supportedLevels.has(option.value));
 }
 
 function parseModelReference(
@@ -771,6 +789,34 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       } satisfies ProviderRuntimeEvent);
     };
 
+    const completePromptRejection = (context: PiSessionContext, turnId: TurnId, cause: unknown) => {
+      if (context.activeTurnId !== turnId) {
+        return;
+      }
+
+      const message = toMessage(cause, "Pi turn failed.");
+      const failure = classifyPiTurnFailure(message);
+      const completionBase = makeEventBase(context);
+      if (failure.state === "failed") {
+        offerRuntimeError(context, { message, method: "prompt", cause });
+      }
+      context.activeTurnId = undefined;
+      context.activeAssistantItemId = undefined;
+      context.activeReasoningItemId = undefined;
+      context.activeToolItems.clear();
+      context.session = makeSessionSnapshot(context);
+      offerRuntimeEvent({
+        ...completionBase,
+        type: "turn.completed",
+        payload: {
+          state: failure.state,
+          stopReason: failure.stopReason,
+          errorMessage: message,
+        },
+        raw: { source: "pi.sdk.event", method: "prompt", payload: cause },
+      } satisfies ProviderRuntimeEvent);
+    };
+
     const recordItem = (context: PiSessionContext, item: unknown) => {
       const turn = context.activeTurnId
         ? context.turns.find((candidate) => candidate.id === context.activeTurnId)
@@ -1028,6 +1074,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           context.lastKnownTokenUsage = usage;
           const turnId = context.activeTurnId;
           const errorMessage = context.runtime.session.agent.state.errorMessage;
+          const failure = errorMessage ? classifyPiTurnFailure(errorMessage) : undefined;
           const leafId = context.runtime.session.sessionManager.getLeafId();
           const turn = turnId
             ? context.turns.find((candidate) => candidate.id === turnId)
@@ -1067,15 +1114,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
             } satisfies ProviderRuntimeEvent);
           }
-          offerRuntimeEvent({
-            ...makeEventBase(context),
-            type: "turn.completed",
-            payload: errorMessage
-              ? { state: "failed", stopReason: "error", errorMessage, usage: stats }
-              : { state: "completed", stopReason: null, usage: stats },
-            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
-          } satisfies ProviderRuntimeEvent);
-          if (errorMessage) {
+          if (errorMessage && failure?.state === "failed") {
             offerRuntimeError(context, {
               message: errorMessage,
               method: "prompt",
@@ -1083,10 +1122,26 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               cause: event,
             });
           }
+          const completionBase = makeEventBase(context);
           context.activeTurnId = undefined;
           context.activeAssistantItemId = undefined;
           context.activeReasoningItemId = undefined;
+          context.activeToolItems.clear();
           context.session = makeSessionSnapshot(context);
+          offerRuntimeEvent({
+            ...completionBase,
+            type: "turn.completed",
+            payload:
+              errorMessage && failure
+                ? {
+                    state: failure.state,
+                    stopReason: failure.stopReason,
+                    errorMessage,
+                    usage: stats,
+                  }
+                : { state: "completed", stopReason: null, usage: stats },
+            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+          } satisfies ProviderRuntimeEvent);
           return;
         }
         default:
@@ -1226,7 +1281,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             type: "runtime.warning",
             payload: {
               message:
-                "Pi extensions are loaded, but DP Code does not yet support Pi extension UI APIs. Non-UI extension behavior should work, but extensions that call ctx.ui.* for prompts, widgets, confirmations, or status updates may not behave correctly.",
+                "Pi extensions are loaded, but Synara does not yet support Pi extension UI APIs. Non-UI extension behavior should work, but extensions that call ctx.ui.* for prompts, widgets, confirmations, or status updates may not behave correctly.",
               detail: {
                 extensionCount: loadedExtensions.length,
                 extensions: extensionNames,
@@ -1413,16 +1468,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         void context.runtime.session
           .prompt(payload.text, payload.images.length > 0 ? { images: payload.images } : undefined)
           .catch((cause) => {
-            const message = toMessage(cause, "Pi turn failed.");
-            offerRuntimeEvent({
-              ...makeEventBase(context),
-              type: "turn.completed",
-              payload: { state: "failed", stopReason: "error", errorMessage: message },
-              raw: { source: "pi.sdk.event", method: "prompt", payload: cause },
-            } satisfies ProviderRuntimeEvent);
-            offerRuntimeError(context, { message, method: "prompt", cause });
-            context.activeTurnId = undefined;
-            context.session = makeSessionSnapshot(context);
+            completePromptRejection(context, turnId, cause);
           });
         return {
           threadId: input.threadId,
@@ -1458,16 +1504,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               payload.images.length > 0 ? { images: payload.images } : undefined,
             )
             .catch((cause) => {
-              const message = toMessage(cause, "Pi turn failed.");
-              offerRuntimeEvent({
-                ...makeEventBase(context),
-                type: "turn.completed",
-                payload: { state: "failed", stopReason: "error", errorMessage: message },
-                raw: { source: "pi.sdk.event", method: "prompt", payload: cause },
-              } satisfies ProviderRuntimeEvent);
-              offerRuntimeError(context, { message, method: "prompt", cause });
-              context.activeTurnId = undefined;
-              context.session = makeSessionSnapshot(context);
+              completePromptRejection(context, turnId, cause);
             });
         }
         return {
@@ -1499,7 +1536,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         new ProviderAdapterRequestError({
           provider: PROVIDER,
           method,
-          detail: `Pi does not expose DP Code approval/user-input requests for thread ${threadId}.`,
+          detail: `Pi does not expose Synara approval/user-input requests for thread ${threadId}.`,
         }),
       );
 
@@ -1615,22 +1652,29 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           const agentDir = makeAgentDir(input.agentDir);
           const registry = getModelRegistry(agentDir);
           registry.refresh();
-          const models = registry.getAvailable().map((model) => ({
-            slug: `${model.provider}/${model.id}`,
-            name: model.name,
-            upstreamProviderId: model.provider,
-            upstreamProviderName: registry.getProviderDisplayName(model.provider),
-            ...(model.reasoning
-              ? {
-                  supportedReasoningEfforts: PI_THINKING_OPTIONS.map((option) => ({
-                    value: option.value,
-                    label: option.label,
-                    description: option.description,
-                  })),
-                  defaultReasoningEffort: DEFAULT_PI_THINKING_LEVEL,
-                }
-              : {}),
-          }));
+          const models = registry.getAvailable().map((model) => {
+            const supportedThinkingOptions = getPiSupportedThinkingOptions(model);
+            return {
+              slug: `${model.provider}/${model.id}`,
+              name: model.name,
+              upstreamProviderId: model.provider,
+              upstreamProviderName: registry.getProviderDisplayName(model.provider),
+              ...(supportedThinkingOptions.length > 0
+                ? {
+                    supportedReasoningEfforts: supportedThinkingOptions.map((option) => ({
+                      value: option.value,
+                      label: option.label,
+                      description: option.description,
+                    })),
+                    ...(supportedThinkingOptions.some(
+                      (option) => option.value === DEFAULT_PI_THINKING_LEVEL,
+                    )
+                      ? { defaultReasoningEffort: DEFAULT_PI_THINKING_LEVEL }
+                      : {}),
+                  }
+                : {}),
+            };
+          });
           return { models, source: "pi.sdk", cached: false } satisfies ProviderListModelsResult;
         },
         catch: (cause) =>

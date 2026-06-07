@@ -301,6 +301,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           createdAt: "2026-02-24T00:00:00.000Z",
           updatedAt: "2026-02-24T00:00:01.000Z",
           deletedAt: null,
+          isPinned: false,
         },
       ]);
       assert.deepEqual(snapshot.threads, [
@@ -444,6 +445,218 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           },
         },
       ]);
+    }),
+  );
+
+  it.effect("limits hydrated thread activities to the latest activity window", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_thread_activities`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'project-activity-cap',
+          'Project Activity Cap',
+          '/tmp/project-activity-cap',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          '[]',
+          '2026-02-24T00:00:00.000Z',
+          '2026-02-24T00:00:00.000Z',
+          NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          branch,
+          worktree_path,
+          latest_turn_id,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'thread-activity-cap',
+          'project-activity-cap',
+          'Thread Activity Cap',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          NULL,
+          NULL,
+          NULL,
+          '2026-02-24T00:00:00.000Z',
+          '2026-02-24T00:00:00.000Z',
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id,
+          thread_id,
+          turn_id,
+          tone,
+          kind,
+          summary,
+          payload_json,
+          sequence,
+          created_at
+        )
+        VALUES (
+          'approval-old',
+          'thread-activity-cap',
+          NULL,
+          'approval',
+          'approval.requested',
+          'Command approval requested',
+          '{"requestId":"approval-1","requestKind":"command"}',
+          0,
+          '2026-02-24T00:00:00.000Z'
+        )
+      `;
+
+      for (let index = 0; index < 505; index += 1) {
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id,
+            thread_id,
+            turn_id,
+            tone,
+            kind,
+            summary,
+            payload_json,
+            sequence,
+            created_at
+          )
+          VALUES (
+            ${`activity-${index}`},
+            'thread-activity-cap',
+            NULL,
+            'tool',
+            'tool.completed',
+            'Tool completed',
+            '{"stage":"completed"}',
+            ${index + 1},
+            '2026-02-24T00:00:00.000Z'
+          )
+        `;
+      }
+
+      const snapshot = yield* snapshotQuery.getSnapshot();
+      const snapshotActivities = snapshot.threads[0]?.activities ?? [];
+      assert.equal(snapshotActivities.length, 501);
+      assert.equal(snapshotActivities[0]?.id, asEventId("approval-old"));
+      assert.equal(snapshotActivities[1]?.id, asEventId("activity-5"));
+      assert.equal(snapshotActivities.at(-1)?.id, asEventId("activity-504"));
+
+      const detail = yield* snapshotQuery.getThreadDetailById(asThreadId("thread-activity-cap"));
+      assert.isTrue(Option.isSome(detail));
+      const detailActivities = Option.isSome(detail) ? detail.value.activities : [];
+      assert.equal(detailActivities.length, 501);
+      assert.equal(detailActivities[0]?.id, asEventId("approval-old"));
+      assert.equal(detailActivities[1]?.id, asEventId("activity-5"));
+      assert.equal(detailActivities.at(-1)?.id, asEventId("activity-504"));
+
+      yield* sql`
+        DELETE FROM projection_thread_activities
+        WHERE thread_id = 'thread-activity-cap'
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id,
+          thread_id,
+          turn_id,
+          tone,
+          kind,
+          summary,
+          payload_json,
+          sequence,
+          created_at
+        )
+        VALUES
+          (
+            'approval-old',
+            'thread-activity-cap',
+            NULL,
+            'approval',
+            'approval.requested',
+            'Command approval requested',
+            '{"requestId":"approval-1","requestKind":"command"}',
+            0,
+            '2026-02-24T00:00:00.000Z'
+          ),
+          (
+            'approval-resolved-old',
+            'thread-activity-cap',
+            NULL,
+            'approval',
+            'approval.resolved',
+            'Command approval resolved',
+            '{"requestId":"approval-1","decision":"accept"}',
+            1,
+            '2026-02-24T00:00:00.000Z'
+          )
+      `;
+
+      for (let index = 0; index < 505; index += 1) {
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id,
+            thread_id,
+            turn_id,
+            tone,
+            kind,
+            summary,
+            payload_json,
+            sequence,
+            created_at
+          )
+          VALUES (
+            ${`resolved-activity-${index}`},
+            'thread-activity-cap',
+            NULL,
+            'tool',
+            'tool.completed',
+            'Tool completed',
+            '{"stage":"completed"}',
+            ${index + 2},
+            '2026-02-24T00:00:00.000Z'
+          )
+        `;
+      }
+
+      const resolvedSnapshot = yield* snapshotQuery.getSnapshot();
+      const resolvedSnapshotActivities = resolvedSnapshot.threads[0]?.activities ?? [];
+      assert.equal(resolvedSnapshotActivities.length, 500);
+      assert.equal(resolvedSnapshotActivities[0]?.id, asEventId("resolved-activity-5"));
+      assert.equal(resolvedSnapshotActivities.at(-1)?.id, asEventId("resolved-activity-504"));
+
+      const resolvedDetail = yield* snapshotQuery.getThreadDetailById(
+        asThreadId("thread-activity-cap"),
+      );
+      assert.isTrue(Option.isSome(resolvedDetail));
+      const resolvedDetailActivities = Option.isSome(resolvedDetail)
+        ? resolvedDetail.value.activities
+        : [];
+      assert.equal(resolvedDetailActivities.length, 500);
+      assert.equal(resolvedDetailActivities[0]?.id, asEventId("resolved-activity-5"));
+      assert.equal(resolvedDetailActivities.at(-1)?.id, asEventId("resolved-activity-504"));
     }),
   );
 
@@ -1262,6 +1475,23 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               completedAt: "2026-03-02T00:00:05.000Z",
             },
           ],
+        });
+      }
+
+      const fullThreadDiffContext = yield* snapshotQuery.getFullThreadDiffContext(
+        ThreadId.makeUnsafe("thread-context"),
+        2,
+      );
+      assert.equal(fullThreadDiffContext._tag, "Some");
+      if (fullThreadDiffContext._tag === "Some") {
+        assert.deepEqual(fullThreadDiffContext.value, {
+          threadId: ThreadId.makeUnsafe("thread-context"),
+          projectId: asProjectId("project-context"),
+          workspaceRoot: "/tmp/context-workspace",
+          envMode: "local",
+          worktreePath: "/tmp/context-worktree",
+          latestCheckpointTurnCount: 2,
+          toCheckpointRef: asCheckpointRef("checkpoint-b"),
         });
       }
     }),

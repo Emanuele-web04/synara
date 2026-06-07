@@ -3,12 +3,18 @@
 // Layer: Server maintenance
 // Exports: retention constants, stale-thread selection, and scoped job startup.
 
-import { CommandId, type OrchestrationReadModel, type ThreadId } from "@t3tools/contracts";
+import {
+  CommandId,
+  type OrchestrationReadModel,
+  type OrchestrationShellSnapshot,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { randomUUID } from "node:crypto";
 
 import type { OrchestrationEngineShape } from "./orchestration/Services/OrchestrationEngine";
+import type { ProjectionSnapshotQueryShape } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 
 export const THREAD_RETENTION_UNUSED_MS = 7 * 24 * 60 * 60 * 1000;
@@ -18,7 +24,9 @@ const THREAD_RETENTION_BATCH_SIZE = 25;
 const THREAD_RETENTION_BATCH_PAUSE_MS = 50;
 const RETENTION_COMPACT_FREE_PAGE_THRESHOLD = 8192;
 
-type RetentionThread = OrchestrationReadModel["threads"][number];
+type RetentionThread =
+  | OrchestrationReadModel["threads"][number]
+  | OrchestrationShellSnapshot["threads"][number];
 
 type RetentionMaintenanceState = "started" | "progress" | "compacting" | "completed" | "failed";
 
@@ -181,14 +189,14 @@ const compactDatabaseAfterRetention = Effect.fn("compactDatabaseAfterRetention")
 
 // Picks the same threads manual deletion can delete, while protecting active work.
 export function getInactiveThreadIdsForRetention(
-  readModel: OrchestrationReadModel,
+  readModel: Pick<OrchestrationReadModel, "threads"> | Pick<OrchestrationShellSnapshot, "threads">,
   nowMs = Date.now(),
 ): ThreadId[] {
   const cutoffMs = nowMs - THREAD_RETENTION_UNUSED_MS;
   const inactiveThreadIds: ThreadId[] = [];
 
   for (const thread of readModel.threads) {
-    if (thread.deletedAt !== null) continue;
+    if ("deletedAt" in thread && thread.deletedAt !== null) continue;
     if (thread.isPinned === true) continue;
     if (isThreadBusy(thread)) continue;
     const lastActivityMs = getThreadLastActivityMs(thread);
@@ -225,11 +233,11 @@ const listSoftDeletedThreadIdsFromDatabase = Effect.fn("listSoftDeletedThreadIds
 
 export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(function* (
   orchestrationEngine: OrchestrationEngineShape,
+  projectionSnapshotQuery: ProjectionSnapshotQueryShape,
 ) {
-  const readModel = yield* orchestrationEngine.getReadModel();
-  const inactiveThreadIds = getInactiveThreadIdsForRetention(readModel);
+  const shellSnapshot = yield* projectionSnapshotQuery.getShellSnapshot();
+  const inactiveThreadIds = getInactiveThreadIdsForRetention(shellSnapshot);
   const purgeThreadIds = new Set<ThreadId>([
-    ...getSoftDeletedThreadIdsForRetentionPurge(readModel),
     ...(yield* listSoftDeletedThreadIdsFromDatabase().pipe(
       Effect.catch((error) =>
         Effect.logWarning("failed to list soft-deleted threads for retention purge").pipe(
@@ -373,15 +381,16 @@ export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(func
 
 export const startThreadRetentionJob = Effect.fn("startThreadRetentionJob")(function* (
   orchestrationEngine: OrchestrationEngineShape,
+  projectionSnapshotQuery: ProjectionSnapshotQueryShape,
 ) {
   // Give startup/projection bootstrap a short settling window, then run one
   // cleanup promptly so desktop installs do not need to stay open for 24 hours.
   yield* Effect.gen(function* () {
     yield* Effect.sleep(THREAD_RETENTION_INITIAL_SWEEP_DELAY_MS);
-    yield* runThreadRetentionSweep(orchestrationEngine);
+    yield* runThreadRetentionSweep(orchestrationEngine, projectionSnapshotQuery);
     yield* Effect.forever(
       Effect.sleep(THREAD_RETENTION_SWEEP_INTERVAL_MS).pipe(
-        Effect.flatMap(() => runThreadRetentionSweep(orchestrationEngine)),
+        Effect.flatMap(() => runThreadRetentionSweep(orchestrationEngine, projectionSnapshotQuery)),
       ),
       { disableYield: true },
     );

@@ -8,6 +8,7 @@ import { it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import { expect } from "vitest";
 
+import { TextGenerationError } from "../Errors.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
 import { CursorTextGenerationLive } from "./CursorTextGeneration.ts";
 
@@ -229,6 +230,104 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
           });
 
           expect(generated.summary).toBe("## Summary\n- Route git summaries through Cursor.");
+        }),
+    ),
+  );
+
+  it.effect("falls back to raw text when Cursor replies without JSON for a thread title", () =>
+    withFakeAcpAgent(
+      {
+        T3_ACP_PROMPT_RESPONSE_TEXT: "Sidebar Thread Row Spacing",
+      },
+      (agentPath) =>
+        Effect.gen(function* () {
+          const textGeneration = yield* TextGeneration;
+
+          const generated = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Improve sidebar thread row spacing and hover states.",
+            modelSelection: {
+              provider: "cursor",
+              model: "composer-2",
+            },
+            providerOptions: {
+              cursor: {
+                binaryPath: agentPath,
+              },
+            },
+          });
+
+          expect(generated.title).toBe("Sidebar Thread Row Spacing");
+        }),
+    ),
+  );
+
+  it.effect("recovers a thread title from a wrong-key JSON payload", () =>
+    withFakeAcpAgent(
+      {
+        T3_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({ name: "Reconnect Backoff Fix" }),
+      },
+      (agentPath) =>
+        Effect.gen(function* () {
+          const textGeneration = yield* TextGeneration;
+
+          const generated = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Fix the websocket reconnect backoff.",
+            modelSelection: {
+              provider: "cursor",
+              model: "composer-2",
+            },
+            providerOptions: {
+              cursor: {
+                binaryPath: agentPath,
+              },
+            },
+          });
+
+          expect(generated.title).toBe("Reconnect Backoff Fix");
+        }),
+    ),
+  );
+
+  it.effect("rejects sentence-length prose instead of using it as a title", () =>
+    withFakeAcpAgent(
+      {
+        T3_ACP_PROMPT_RESPONSE_TEXT:
+          "I'm sorry, but I cannot generate a concise title for this particular request right now.",
+      },
+      (agentPath) =>
+        Effect.gen(function* () {
+          const textGeneration = yield* TextGeneration;
+
+          const result = yield* textGeneration
+            .generateThreadTitle({
+              cwd: process.cwd(),
+              message: "Fix the websocket reconnect backoff.",
+              modelSelection: {
+                provider: "cursor",
+                model: "composer-2",
+              },
+              providerOptions: {
+                cursor: {
+                  binaryPath: agentPath,
+                },
+              },
+            })
+            .pipe(
+              Effect.match({
+                onFailure: (error) => ({ _tag: "Left" as const, left: error }),
+                onSuccess: (value) => ({ _tag: "Right" as const, right: value }),
+              }),
+            );
+
+          expect(result._tag).toBe("Left");
+          if (result._tag === "Left") {
+            expect(result.left).toBeInstanceOf(TextGenerationError);
+            expect(result.left.message).toContain(
+              "Cursor Agent returned invalid structured output",
+            );
+          }
         }),
     ),
   );

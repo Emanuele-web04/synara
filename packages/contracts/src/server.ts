@@ -8,7 +8,7 @@ import {
 } from "./baseSchemas";
 import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
-import { ProviderKind } from "./orchestration";
+import { ModelSelection, ProviderKind, ProviderStartOptions } from "./orchestration";
 import { ServerSettings, ServerSettingsPatch } from "./settings";
 import { ExecutionEnvironmentDescriptor } from "./environment";
 
@@ -51,10 +51,34 @@ export const ServerProviderStatus = Schema.Struct({
   authType: Schema.optional(TrimmedNonEmptyString),
   authLabel: Schema.optional(TrimmedNonEmptyString),
   voiceTranscriptionAvailable: Schema.optional(Schema.Boolean),
+  version: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   checkedAt: IsoDateTime,
   message: Schema.optional(TrimmedNonEmptyString),
+  versionAdvisory: Schema.optionalKey(
+    Schema.Struct({
+      status: Schema.Literals(["unknown", "current", "behind_latest"]),
+      currentVersion: Schema.NullOr(TrimmedNonEmptyString),
+      latestVersion: Schema.NullOr(TrimmedNonEmptyString),
+      updateCommand: Schema.NullOr(TrimmedNonEmptyString),
+      canUpdate: Schema.Boolean,
+      checkedAt: Schema.NullOr(IsoDateTime),
+      message: Schema.NullOr(TrimmedNonEmptyString),
+    }),
+  ),
+  updateState: Schema.optionalKey(
+    Schema.Struct({
+      status: Schema.Literals(["idle", "queued", "running", "succeeded", "failed", "unchanged"]),
+      startedAt: Schema.NullOr(IsoDateTime),
+      finishedAt: Schema.NullOr(IsoDateTime),
+      message: Schema.NullOr(TrimmedNonEmptyString),
+      output: Schema.NullOr(Schema.String.check(Schema.isMaxLength(10_000))),
+    }),
+  ),
 });
 export type ServerProviderStatus = typeof ServerProviderStatus.Type;
+
+export type ServerProviderVersionAdvisory = NonNullable<ServerProviderStatus["versionAdvisory"]>;
+export type ServerProviderUpdateState = NonNullable<ServerProviderStatus["updateState"]>;
 
 const ServerProviderStatuses = Schema.Array(ServerProviderStatus);
 
@@ -116,6 +140,42 @@ export type ServerGetProviderUsageSnapshotInput = typeof ServerGetProviderUsageS
 export const ServerGetProviderUsageSnapshotResult = Schema.NullOr(ServerProviderUsageSnapshot);
 export type ServerGetProviderUsageSnapshotResult = typeof ServerGetProviderUsageSnapshotResult.Type;
 
+export const ServerDiagnosticsMemory = Schema.Struct({
+  rssBytes: NonNegativeInt,
+  heapTotalBytes: NonNegativeInt,
+  heapUsedBytes: NonNegativeInt,
+  externalBytes: NonNegativeInt,
+  arrayBuffersBytes: NonNegativeInt,
+});
+export type ServerDiagnosticsMemory = typeof ServerDiagnosticsMemory.Type;
+
+export const ServerDiagnosticsChildProcess = Schema.Struct({
+  pid: NonNegativeInt,
+  ppid: NonNegativeInt,
+  rssBytes: NonNegativeInt,
+  virtualSizeBytes: NonNegativeInt,
+  command: Schema.String,
+  args: Schema.String,
+});
+export type ServerDiagnosticsChildProcess = typeof ServerDiagnosticsChildProcess.Type;
+
+export const ServerDiagnosticsResult = Schema.Struct({
+  generatedAt: IsoDateTime,
+  process: Schema.Struct({
+    pid: NonNegativeInt,
+    uptimeSeconds: NonNegativeInt,
+    memory: ServerDiagnosticsMemory,
+  }),
+  childProcesses: Schema.Array(ServerDiagnosticsChildProcess),
+  childProcessTotalCount: NonNegativeInt,
+  childProcessTotalRssBytes: NonNegativeInt,
+  projection: Schema.Struct({
+    projectCount: NonNegativeInt,
+    threadCount: NonNegativeInt,
+  }),
+});
+export type ServerDiagnosticsResult = typeof ServerDiagnosticsResult.Type;
+
 export const ServerVoiceTranscriptionInput = Schema.Struct({
   provider: ProviderKind,
   cwd: TrimmedNonEmptyString,
@@ -133,6 +193,25 @@ export const ServerVoiceTranscriptionResult = Schema.Struct({
   text: TrimmedNonEmptyString,
 });
 export type ServerVoiceTranscriptionResult = typeof ServerVoiceTranscriptionResult.Type;
+
+// Compact, stateless recap generation. The caller owns debounce/cache policy so
+// this endpoint never participates in the hot transcript projection path.
+export const ServerGenerateThreadRecapInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  previousRecap: Schema.optional(Schema.String.check(Schema.isMaxLength(1_000))),
+  newMaterial: Schema.String.check(Schema.isMaxLength(16_000)),
+  currentState: Schema.optional(Schema.String.check(Schema.isMaxLength(4_000))),
+  codexHomePath: Schema.optional(TrimmedNonEmptyString),
+  providerOptions: Schema.optional(ProviderStartOptions),
+  textGenerationModel: Schema.optional(TrimmedNonEmptyString),
+  textGenerationModelSelection: Schema.optional(ModelSelection),
+});
+export type ServerGenerateThreadRecapInput = typeof ServerGenerateThreadRecapInput.Type;
+
+export const ServerGenerateThreadRecapResult = Schema.Struct({
+  recap: TrimmedNonEmptyString,
+});
+export type ServerGenerateThreadRecapResult = typeof ServerGenerateThreadRecapResult.Type;
 
 export const ServerUpsertKeybindingInput = KeybindingRule;
 export type ServerUpsertKeybindingInput = typeof ServerUpsertKeybindingInput.Type;
@@ -217,6 +296,26 @@ export type ServerConfigStreamEvent = typeof ServerConfigStreamEvent.Type;
 
 export const ServerRefreshProvidersResult = ServerProviderStatusesUpdatedPayload;
 export type ServerRefreshProvidersResult = typeof ServerRefreshProvidersResult.Type;
+
+export const ServerProviderUpdateInput = Schema.Struct({
+  provider: ProviderKind,
+});
+export type ServerProviderUpdateInput = typeof ServerProviderUpdateInput.Type;
+
+export class ServerProviderUpdateError extends Schema.TaggedErrorClass<ServerProviderUpdateError>()(
+  "ServerProviderUpdateError",
+  {
+    provider: ProviderKind,
+    reason: TrimmedNonEmptyString,
+  },
+) {
+  override get message(): string {
+    return `Provider update failed for ${this.provider}: ${this.reason}`;
+  }
+}
+
+export const ServerProviderUpdateResult = ServerProviderStatusesUpdatedPayload;
+export type ServerProviderUpdateResult = typeof ServerProviderUpdateResult.Type;
 
 export const ServerGetSettingsResult = ServerSettings;
 export type ServerGetSettingsResult = typeof ServerGetSettingsResult.Type;

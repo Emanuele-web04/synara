@@ -1,11 +1,8 @@
-import { ThreadId, TurnId, type OrchestrationReadModel } from "@t3tools/contracts";
-import { Effect, Exit, Layer, Scope, Stream } from "effect";
+import { ThreadId, TurnId, type OrchestrationThreadShell } from "@t3tools/contracts";
+import { Effect, Exit, Layer, Option, Scope, Stream } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  OrchestrationEngineService,
-  type OrchestrationEngineShape,
-} from "../../orchestration/Services/OrchestrationEngine";
+import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery";
 import {
   ProviderSessionDirectory,
   type ProviderSessionDirectoryShape,
@@ -24,47 +21,49 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   }
 }
 
-function makeReadModel(input: {
+function makeThreadShell(input: {
   readonly threadId: ThreadId;
   readonly activeTurnId: TurnId | null;
-}): OrchestrationReadModel {
+}): OrchestrationThreadShell {
   return {
-    snapshotSequence: 0,
-    updatedAt: new Date().toISOString(),
-    projects: [],
-    threads: [
-      {
-        id: input.threadId,
-        session: input.activeTurnId
-          ? {
-              activeTurnId: input.activeTurnId,
-            }
-          : null,
-      },
-    ],
-  } as unknown as OrchestrationReadModel;
+    id: input.threadId,
+    session: input.activeTurnId
+      ? {
+          activeTurnId: input.activeTurnId,
+        }
+      : null,
+  } as unknown as OrchestrationThreadShell;
 }
 
 function makeLayer(input: {
-  readonly readModel: OrchestrationReadModel;
+  readonly threadShell: OrchestrationThreadShell;
   readonly directory: ProviderSessionDirectoryShape;
   readonly providerService: ProviderServiceShape;
 }) {
-  const orchestrationEngine: OrchestrationEngineShape = {
-    getReadModel: () => Effect.succeed(input.readModel),
-    readEvents: () => Stream.empty,
-    dispatch: () => unsupported(),
-    repairState: () => unsupported(),
-    streamDomainEvents: Stream.empty,
-  };
-
   return makeProviderSessionReaperLive({
     inactivityThresholdMs: 1,
     sweepIntervalMs: 60_000,
   }).pipe(
     Layer.provide(Layer.succeed(ProviderSessionDirectory, input.directory)),
     Layer.provide(Layer.succeed(ProviderService, input.providerService)),
-    Layer.provide(Layer.succeed(OrchestrationEngineService, orchestrationEngine)),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery, {
+        getSnapshot: () => unsupported(),
+        getCommandReadModel: () => unsupported(),
+        getCounts: () => unsupported(),
+        getSnapshotSequence: () => unsupported(),
+        getShellSnapshot: () => unsupported(),
+        getActiveProjectByWorkspaceRoot: () => unsupported(),
+        getProjectShellById: () => unsupported(),
+        getFirstActiveThreadIdByProjectId: () => unsupported(),
+        getThreadCheckpointContext: () => unsupported(),
+        getFullThreadDiffContext: () => unsupported(),
+        getThreadShellById: () => Effect.succeed(Option.some(input.threadShell)),
+        findSyntheticSubagentParentThread: () => unsupported(),
+        getThreadDetailById: () => unsupported(),
+        getThreadDetailSnapshotById: () => unsupported(),
+      }),
+    ),
   );
 }
 
@@ -112,7 +111,7 @@ describe("ProviderSessionReaperLive", () => {
       }).pipe(
         Effect.provide(
           makeLayer({
-            readModel: makeReadModel({ threadId, activeTurnId: null }),
+            threadShell: makeThreadShell({ threadId, activeTurnId: null }),
             directory,
             providerService,
           }),
@@ -171,7 +170,7 @@ describe("ProviderSessionReaperLive", () => {
       }).pipe(
         Effect.provide(
           makeLayer({
-            readModel: makeReadModel({ threadId, activeTurnId: turnId }),
+            threadShell: makeThreadShell({ threadId, activeTurnId: turnId }),
             directory,
             providerService,
           }),

@@ -32,6 +32,7 @@ import {
 } from "../../provider/Services/ProviderService.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
+import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
 import {
   OrchestrationEngineService,
@@ -166,12 +167,13 @@ describe("ProviderRuntimeIngestion", () => {
     const provider = createProviderServiceHarness();
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionPipelineLive),
+      Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
-      Layer.provide(SqlitePersistenceMemory),
     );
     const layer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(orchestrationLayer),
+      Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
@@ -2259,6 +2261,214 @@ describe("ProviderRuntimeIngestion", () => {
     expect(completionEvent?.payload.text).toBe("done");
   });
 
+  it("preserves the assistant turn id when a late item.completed omits it", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-late-completion"),
+      provider: "cursor",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-late-completion"),
+    });
+
+    await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.session?.status === "running" &&
+        thread.session?.activeTurnId === "turn-late-completion",
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-message-delta-late-completion"),
+      provider: "cursor",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-late-completion"),
+      itemId: asItemId("item-late-completion"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "final answer",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-late-completion"),
+      provider: "cursor",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-late-completion"),
+      payload: {
+        state: "completed",
+      },
+    });
+
+    await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.session?.status === "ready" &&
+        thread.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-late-completion" &&
+            message.turnId === "turn-late-completion" &&
+            !message.streaming,
+        ),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-item-completed-late-without-turn"),
+      provider: "cursor",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      itemId: asItemId("item-late-completion"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+      },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:item-late-completion" &&
+          message.turnId === "turn-late-completion" &&
+          !message.streaming,
+      ),
+    );
+    const message = thread.messages.find(
+      (entry: ProviderRuntimeTestMessage) => entry.id === "assistant:item-late-completion",
+    );
+    expect(message?.text).toBe("final answer");
+    expect(message?.turnId).toBe("turn-late-completion");
+
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+      ),
+    );
+    const completionEvents = events.filter((event) => {
+      if (event.type !== "thread.message-sent") {
+        return false;
+      }
+      return (
+        event.payload.messageId === "assistant:item-late-completion" &&
+        event.payload.streaming === false
+      );
+    }) as Array<Extract<OrchestrationEvent, { type: "thread.message-sent" }>>;
+    expect(completionEvents.length).toBeGreaterThanOrEqual(1);
+    expect(completionEvents.every((event) => event.payload.turnId === "turn-late-completion")).toBe(
+      true,
+    );
+  });
+
+  it("keeps an existing assistant turn id when a late completion carries a newer turn id", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-late-reassign-source"),
+      provider: "cursor",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-late-reassign-source"),
+    });
+
+    await waitForThread(
+      harness.engine,
+      (thread) => thread.session?.activeTurnId === "turn-late-reassign-source",
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-message-delta-late-reassign-source"),
+      provider: "cursor",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-late-reassign-source"),
+      itemId: asItemId("item-late-reassign"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "source answer",
+      },
+    });
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-late-reassign-source"),
+      provider: "cursor",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-late-reassign-source"),
+      payload: {
+        state: "completed",
+      },
+    });
+
+    await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.session?.status === "ready" &&
+        thread.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-late-reassign" &&
+            message.turnId === "turn-late-reassign-source" &&
+            !message.streaming,
+        ),
+    );
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-late-reassign-next"),
+      provider: "cursor",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-late-reassign-next"),
+    });
+
+    await waitForThread(
+      harness.engine,
+      (thread) => thread.session?.activeTurnId === "turn-late-reassign-next",
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-item-completed-late-reassign-wrong-turn"),
+      provider: "cursor",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-late-reassign-next"),
+      itemId: asItemId("item-late-reassign"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+      },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.session?.activeTurnId === "turn-late-reassign-next" &&
+        entry.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-late-reassign" &&
+            message.turnId === "turn-late-reassign-source" &&
+            !message.streaming,
+        ),
+    );
+    const message = thread.messages.find(
+      (entry: ProviderRuntimeTestMessage) => entry.id === "assistant:item-late-reassign",
+    );
+    expect(message?.text).toBe("source answer");
+    expect(message?.turnId).toBe("turn-late-reassign-source");
+  });
+
   it("reuses the live assistant message when item.completed omits the item id", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -2619,6 +2829,103 @@ describe("ProviderRuntimeIngestion", () => {
         : undefined;
     expect(resolvedPayload?.requestKind).toBe("command");
     expect(resolvedPayload?.requestType).toBe("command_execution_approval");
+  });
+
+  it("bounds large tool activity data while keeping command metadata", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const largeOutput = "line\n".repeat(20_000);
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-large-tool-data"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-large-tool-data"),
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        title: "Ran command",
+        detail: "bun run something",
+        data: {
+          rawInput: { command: "bun run something" },
+          rawOutput: {
+            stdout: largeOutput,
+            stderr: largeOutput,
+          },
+          item: {
+            command: "bun run something",
+          },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.id === "evt-large-tool-data"),
+    );
+    const activity = thread.activities.find((entry) => entry.id === "evt-large-tool-data");
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : {};
+    const data =
+      payload.data && typeof payload.data === "object"
+        ? (payload.data as Record<string, unknown>)
+        : {};
+    const rawInput =
+      data.rawInput && typeof data.rawInput === "object"
+        ? (data.rawInput as Record<string, unknown>)
+        : {};
+    const rawOutput =
+      data.rawOutput && typeof data.rawOutput === "object"
+        ? (data.rawOutput as Record<string, unknown>)
+        : {};
+
+    expect(data.__synaraTruncated).toBe(true);
+    expect(JSON.stringify(data).length).toBeLessThan(17_000);
+    expect(rawInput.command).toBe("bun run something");
+    expect(String(rawOutput.stdout ?? "").length).toBeLessThan(3_000);
+  });
+
+  it("hard-caps pathological tool activity data", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const wideData = Object.fromEntries(
+      Array.from({ length: 50 }, (_, index) => [`wideField${index}`, "x".repeat(5_000)]),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-pathological-tool-data"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-pathological-tool-data"),
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        title: "Ran noisy command",
+        data: wideData,
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.id === "evt-pathological-tool-data"),
+    );
+    const activity = thread.activities.find((entry) => entry.id === "evt-pathological-tool-data");
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : {};
+    const data =
+      payload.data && typeof payload.data === "object"
+        ? (payload.data as Record<string, unknown>)
+        : {};
+
+    expect(data.__synaraTruncated).toBe(true);
+    expect(typeof data.preview).toBe("string");
+    expect(JSON.stringify(data).length).toBeLessThanOrEqual(16_000);
   });
 
   it("maps runtime.error into errored session state", async () => {

@@ -1,5 +1,7 @@
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import type { ChatAttachment } from "@t3tools/contracts";
+
+import { TextGenerationError } from "./Errors.ts";
 
 export function toJsonSchemaObject(schema: Schema.Top): unknown {
   const document = Schema.toJsonSchemaDocument(schema);
@@ -66,6 +68,96 @@ export function extractJsonObject(raw: string): string {
   return trimmed.slice(start);
 }
 
+// Describes how to recover a single-field result from non-JSON output. `maxWords` rejects
+// sentence-length prose so it never masquerades as a short field (e.g. a title or branch),
+// letting the caller fall back to its own message-derived default instead.
+export interface RawTextFallback {
+  readonly key: string;
+  readonly maxWords?: number;
+}
+
+function stripCodeFences(raw: string): string {
+  const fenced = raw.match(/```(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)```/);
+  return (fenced?.[1] ?? raw).trim();
+}
+
+function tryParseJsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+// Prefer the requested field, otherwise the first usable string value, so a wrong-key
+// JSON object (e.g. {"name":"Foo"}) yields "Foo" instead of the literal braces.
+function pickFallbackString(parsed: Record<string, unknown>, key: string): string | null {
+  const preferred = parsed[key];
+  if (typeof preferred === "string" && preferred.trim().length > 0) {
+    return preferred.trim();
+  }
+  for (const value of Object.values(parsed)) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function coerceRawTextToFallback(raw: string, fallback: RawTextFallback): string | null {
+  const cleaned = stripCodeFences(raw);
+  if (cleaned.length === 0) {
+    return null;
+  }
+  const parsed = tryParseJsonObject(cleaned);
+  const candidate = parsed ? pickFallbackString(parsed, fallback.key) : cleaned;
+  if (candidate === null || candidate.length === 0) {
+    return null;
+  }
+  if (fallback.maxWords !== undefined) {
+    const wordCount = candidate.split(/\s+/u).filter((word) => word.length > 0).length;
+    if (wordCount > fallback.maxWords) {
+      return null;
+    }
+  }
+  return candidate;
+}
+
+// Free-text providers (Cursor/OpenCode/Kilo ACP) are only *asked* to emit JSON, unlike Codex
+// which enforces `--output-schema`. For single-field prompts (title/branch/summary) they often
+// reply with the bare value or surrounding prose, so coerce that raw text into the expected
+// single-string field instead of failing the whole generation.
+export function decodeStructuredTextGenerationOutput<S extends Schema.Top>(input: {
+  readonly schema: S;
+  readonly raw: string;
+  readonly operation: string;
+  readonly providerLabel: string;
+  readonly rawTextFallback?: RawTextFallback;
+}): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> {
+  const decode = Schema.decodeEffect(Schema.fromJsonString(input.schema));
+  const toError = (cause: unknown) =>
+    new TextGenerationError({
+      operation: input.operation,
+      detail: `${input.providerLabel} returned invalid structured output.`,
+      cause,
+    });
+  return decode(extractJsonObject(input.raw)).pipe(
+    Effect.catchTag("SchemaError", (error) => {
+      const fallback = input.rawTextFallback;
+      const coerced = fallback ? coerceRawTextToFallback(input.raw, fallback) : null;
+      if (!fallback || coerced === null) {
+        return Effect.fail(toError(error));
+      }
+      return decode(JSON.stringify({ [fallback.key]: coerced })).pipe(
+        Effect.catchTag("SchemaError", (innerError) => Effect.fail(toError(innerError))),
+      );
+    }),
+  );
+}
+
 export function sanitizeCommitSubject(raw: string): string {
   const singleLine = raw.trim().split(/\r?\n/g)[0]?.trim() ?? "";
   const withoutTrailingPeriod = singleLine.replace(/[.]+$/g, "").trim();
@@ -102,6 +194,26 @@ export function sanitizeDiffSummary(raw: string): string {
   ].join("\n");
 }
 
+export function sanitizeThreadRecap(raw: string, previousRecap?: string): string {
+  const strippedPrefix = raw
+    .trim()
+    .replace(/^recap\s*:\s*/iu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+  const fallback = previousRecap?.trim().replace(/\s+/gu, " ") ?? "";
+  const candidate = strippedPrefix.length > 0 ? strippedPrefix : fallback;
+
+  if (candidate.length === 0) {
+    return "No meaningful recap yet.";
+  }
+  if (candidate.length <= 240) {
+    return candidate;
+  }
+
+  const clipped = candidate.slice(0, 237).trimEnd();
+  return `${clipped}...`;
+}
+
 function attachmentMetadataLines(attachments: ReadonlyArray<ChatAttachment> | undefined): string[] {
   return (attachments ?? [])
     .filter((attachment) => attachment.type === "image")
@@ -122,6 +234,7 @@ export function buildCommitMessagePrompt(input: {
     input.includeBranch
       ? "Return a JSON object with keys: subject, body, branch."
       : "Return a JSON object with keys: subject, body.",
+    "Respond with only the JSON object, no prose and no code fences.",
     "Rules:",
     "- subject must be imperative, <= 72 chars, and no trailing period",
     "- body can be empty string or short bullet points",
@@ -164,6 +277,7 @@ export function buildPrContentPrompt(input: {
     prompt: [
       "You write GitHub pull request content.",
       "Return a JSON object with keys: title, body.",
+      "Respond with only the JSON object, no prose and no code fences.",
       "Rules:",
       "- title should be concise and specific",
       "- body must be markdown and include headings '## Summary' and '## Testing'",
@@ -194,6 +308,7 @@ export function buildDiffSummaryPrompt(input: { readonly patch: string }) {
     prompt: [
       "You write GitHub-style engineering summaries for git diffs.",
       "Return a JSON object with key: summary.",
+      "Respond with only the JSON object, no prose and no code fences.",
       "Rules:",
       "- summary must be markdown",
       "- include headings '## Summary' and '## Files Changed'",
@@ -208,6 +323,48 @@ export function buildDiffSummaryPrompt(input: { readonly patch: string }) {
     outputSchemaJson: Schema.Struct({
       summary: Schema.String,
     }),
+    rawTextFallback: { key: "summary" } satisfies RawTextFallback,
+  };
+}
+
+export function buildThreadRecapPrompt(input: {
+  readonly previousRecap?: string;
+  readonly newMaterial: string;
+  readonly currentState?: string;
+}) {
+  return {
+    prompt: [
+      "You are writing a compact live recap for Synara's chat side panel.",
+      "Return a JSON object with key: recap.",
+      "Respond with only the JSON object, no prose and no code fences.",
+      "Goal:",
+      "Help the user quickly remember what happened in this chat, especially the latest concrete work and the current next step.",
+      "",
+      "Rules:",
+      "- recap must be only the recap text; no title, no prefix, no bullets, no markdown",
+      "- use the same language as the active chat",
+      "- maximum 220 characters; prefer 150-190 characters",
+      "- write one compact paragraph that fits in 3-4 narrow panel lines",
+      "- mention the current work area first",
+      "- prioritize recent completed changes over old context",
+      "- include the next step, blocker, or pending decision if useful",
+      "- ignore tool noise unless it changed the outcome",
+      "- do not invent completed work, files, tests, or decisions",
+      "- if there is no meaningful new information, return the previous recap unchanged",
+      "",
+      "Previous recap:",
+      limitSection(input.previousRecap?.trim() || "(none)", 600),
+      "",
+      "New material:",
+      limitSection(input.newMaterial, 5_000),
+      "",
+      "Current state:",
+      limitSection(input.currentState?.trim() || "(none)", 1_500),
+    ].join("\n"),
+    outputSchemaJson: Schema.Struct({
+      recap: Schema.String,
+    }),
+    rawTextFallback: { key: "recap" } satisfies RawTextFallback,
   };
 }
 
@@ -219,6 +376,7 @@ export function buildBranchNamePrompt(input: {
   const promptSections = [
     "You generate concise git branch names.",
     "Return a JSON object with key: branch.",
+    "Respond with only the JSON object, no prose and no code fences.",
     "Rules:",
     "- Branch should describe the requested work from the user message.",
     "- Keep it short and specific (2-6 words).",
@@ -241,6 +399,7 @@ export function buildBranchNamePrompt(input: {
     outputSchemaJson: Schema.Struct({
       branch: Schema.String,
     }),
+    rawTextFallback: { key: "branch", maxWords: 8 } satisfies RawTextFallback,
   };
 }
 
@@ -252,6 +411,7 @@ export function buildThreadTitlePrompt(input: {
   const promptSections = [
     "You generate concise chat thread titles.",
     "Return a JSON object with key: title.",
+    "Respond with only the JSON object, no prose and no code fences.",
     "Rules:",
     "- Summarize the user's request in 2-4 words.",
     "- Never exceed 4 words.",
@@ -275,5 +435,6 @@ export function buildThreadTitlePrompt(input: {
     outputSchemaJson: Schema.Struct({
       title: Schema.String,
     }),
+    rawTextFallback: { key: "title", maxWords: 8 } satisfies RawTextFallback,
   };
 }

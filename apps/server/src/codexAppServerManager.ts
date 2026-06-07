@@ -1,15 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import readline from "node:readline";
@@ -48,13 +40,7 @@ import {
   type ServerVoiceTranscriptionInput,
   type ServerVoiceTranscriptionResult,
 } from "@t3tools/contracts";
-import { readActiveCodexProviderEnvKey } from "@t3tools/shared/codexConfig";
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@t3tools/shared/model";
-import {
-  readEnvironmentFromLoginShell,
-  resolveLoginShell,
-  type ShellEnvironmentReader,
-} from "@t3tools/shared/shell";
 import { Effect, ServiceMap } from "effect";
 
 import {
@@ -63,11 +49,7 @@ import {
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
-import {
-  resolveBaseCodexHomePath,
-  resolveDpCodeCodexHomeOverlayPath,
-  shouldDisableDpCodeBrowserPlugin,
-} from "./codexHomePaths.ts";
+import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 
 type PendingRequestKey = string;
@@ -109,6 +91,12 @@ type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexTurnSandboxPolicy = {
   readonly type: "readOnly" | "workspaceWrite" | "dangerFullAccess";
 };
+type CodexSessionApprovalOverride = {
+  readonly approvalPolicy: "never";
+  readonly sandboxPolicy: {
+    readonly type: "dangerFullAccess";
+  };
+};
 
 interface CodexSessionContext {
   session: ProviderSession;
@@ -118,6 +106,7 @@ interface CodexSessionContext {
   pending: Map<PendingRequestKey, PendingRequest>;
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
+  sessionApprovalOverride?: CodexSessionApprovalOverride;
   collabReceiverTurns: Map<string, TurnId>;
   collabReceiverParents: Map<string, string>;
   reviewTurnIds: Set<TurnId>;
@@ -250,113 +239,7 @@ const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
 const CODEX_DEFAULT_MODEL = "gpt-5.5";
 const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
 const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "plus"]);
-const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const CODEX_DISCOVERY_SESSION_IDLE_MS = 10 * 60 * 1000;
-const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
-const DPCODE_BROWSER_PLUGIN_CONFIG_HEADER = '[plugins."dpcode-browser@local"]';
-
-export function resolveCodexBrowserUsePipePath(
-  input: {
-    readonly env?: NodeJS.ProcessEnv;
-    readonly platform?: NodeJS.Platform;
-  } = {},
-): string {
-  const env = input.env ?? process.env;
-  const configured =
-    env.DPCODE_BROWSER_USE_PIPE_PATH?.trim() || env.T3CODE_BROWSER_USE_PIPE_PATH?.trim();
-  if (configured) {
-    return configured;
-  }
-  return (input.platform ?? process.platform) === "win32"
-    ? String.raw`\\.\pipe\codex-browser-use`
-    : "/tmp/codex-browser-use.sock";
-}
-
-export function disableDpCodeBrowserPluginInCodexConfig(config: string): string {
-  const lines = config.split(/\r?\n/);
-  const output: string[] = [];
-  let inTargetSection = false;
-  let sawTargetSection = false;
-  let targetSectionHasEnabled = false;
-
-  const closeTargetSection = () => {
-    if (inTargetSection && !targetSectionHasEnabled) {
-      output.push("enabled = false");
-    }
-  };
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-      closeTargetSection();
-      inTargetSection = trimmed === DPCODE_BROWSER_PLUGIN_CONFIG_HEADER;
-      sawTargetSection ||= inTargetSection;
-      targetSectionHasEnabled = false;
-      output.push(line);
-      continue;
-    }
-
-    if (inTargetSection && /^\s*enabled\s*=/.test(line)) {
-      output.push("enabled = false");
-      targetSectionHasEnabled = true;
-      continue;
-    }
-
-    output.push(line);
-  }
-
-  closeTargetSection();
-
-  if (!sawTargetSection) {
-    if (output.length > 0 && output.at(-1)?.trim()) {
-      output.push("");
-    }
-    output.push(DPCODE_BROWSER_PLUGIN_CONFIG_HEADER, "enabled = false");
-  }
-
-  return output.join("\n");
-}
-
-function prepareDpCodeCodexHomeOverlay(input: {
-  readonly env: NodeJS.ProcessEnv;
-  readonly homePath?: string;
-}): string | undefined {
-  const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
-  const overlayHomePath = resolveDpCodeCodexHomeOverlayPath(input.env, sourceHomePath);
-  if (path.resolve(sourceHomePath) === path.resolve(overlayHomePath)) {
-    return undefined;
-  }
-
-  mkdirSync(overlayHomePath, { recursive: true });
-
-  try {
-    for (const entry of readdirSync(sourceHomePath)) {
-      if (entry === "config.toml") {
-        continue;
-      }
-      const sourcePath = path.join(sourceHomePath, entry);
-      const targetPath = path.join(overlayHomePath, entry);
-      if (existsSync(targetPath)) {
-        continue;
-      }
-      const stat = lstatSync(sourcePath);
-      symlinkSync(sourcePath, targetPath, stat.isDirectory() ? "dir" : "file");
-    }
-  } catch {
-    // If the source home is partially missing, Codex can still start with the
-    // overlay config and create any required state lazily.
-  }
-
-  const sourceConfigPath = path.join(sourceHomePath, "config.toml");
-  const sourceConfig = existsSync(sourceConfigPath) ? readFileSync(sourceConfigPath, "utf8") : "";
-  writeFileSync(
-    path.join(overlayHomePath, "config.toml"),
-    disableDpCodeBrowserPluginInCodexConfig(sourceConfig),
-    "utf8",
-  );
-
-  return overlayHomePath;
-}
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object") {
@@ -367,70 +250,6 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
-}
-
-export function buildCodexProcessEnv(
-  input: {
-    readonly env?: NodeJS.ProcessEnv;
-    readonly homePath?: string;
-    readonly platform?: NodeJS.Platform;
-    readonly readEnvironment?: ShellEnvironmentReader;
-  } = {},
-): NodeJS.ProcessEnv {
-  const baseEnv = { ...(input.env ?? process.env) };
-  const overlayHomePath = shouldDisableDpCodeBrowserPlugin(baseEnv)
-    ? prepareDpCodeCodexHomeOverlay({
-        env: baseEnv,
-        ...(input.homePath ? { homePath: input.homePath } : {}),
-      })
-    : undefined;
-  const effectiveEnv =
-    overlayHomePath || input.homePath
-      ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? input.homePath }
-      : baseEnv;
-  const platform = input.platform ?? process.platform;
-
-  if (platform === "darwin" || platform === "linux") {
-    try {
-      const shell = resolveLoginShell(platform, effectiveEnv.SHELL);
-      const providerEnvKey = readActiveCodexProviderEnvKey(effectiveEnv);
-      if (shell && providerEnvKey && !effectiveEnv[providerEnvKey]?.trim()) {
-        const shellEnvironment = (input.readEnvironment ?? readEnvironmentFromLoginShell)(shell, [
-          ...CODEX_PROCESS_SHELL_ENV_NAMES,
-          providerEnvKey,
-        ]);
-
-        if (shellEnvironment.PATH) {
-          effectiveEnv.PATH = shellEnvironment.PATH;
-        }
-        if (!effectiveEnv.SSH_AUTH_SOCK && shellEnvironment.SSH_AUTH_SOCK) {
-          effectiveEnv.SSH_AUTH_SOCK = shellEnvironment.SSH_AUTH_SOCK;
-        }
-        if (shellEnvironment[providerEnvKey]) {
-          effectiveEnv[providerEnvKey] = shellEnvironment[providerEnvKey];
-        }
-      }
-    } catch {
-      // Keep inherited environment if shell lookup fails.
-    }
-  }
-
-  if (platform !== "win32") {
-    const browserUsePipePath = resolveCodexBrowserUsePipePath({ env: effectiveEnv, platform });
-    const allowedSockets =
-      effectiveEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS]
-        ?.split(",")
-        .map((entry) => entry.trim())
-        .filter((entry) => entry.length > 0) ?? [];
-    if (!allowedSockets.includes(browserUsePipePath)) {
-      effectiveEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS] = [
-        ...allowedSockets,
-        browserUsePipePath,
-      ].join(",");
-    }
-  }
-
-  return effectiveEnv;
 }
 
 function normalizeCodexProcessLine(rawLine: string): string {
@@ -638,7 +457,7 @@ The \`request_user_input\` tool is unavailable in Default mode. If you call it w
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
 </collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}`;
 
-// Maps DP Code's simple runtime toggle to Codex thread-level permission overrides.
+// Maps Synara's simple runtime toggle to Codex thread-level permission overrides.
 function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
   readonly approvalPolicy: CodexApprovalPolicy;
   readonly sandbox: CodexSandboxMode;
@@ -678,8 +497,25 @@ function mapCodexRuntimeModeToTurnOverrides(runtimeMode: RuntimeMode): {
   }
 }
 
+const CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES: CodexSessionApprovalOverride = {
+  approvalPolicy: "never",
+  sandboxPolicy: { type: "dangerFullAccess" },
+};
+
+// Synara re-sends turn-level Codex permission overrides, so keep "always allow"
+// as live session state instead of relying on one native approval reply.
+function resolveCodexTurnOverrides(context: CodexSessionContext): {
+  readonly approvalPolicy: CodexApprovalPolicy;
+  readonly sandboxPolicy: CodexTurnSandboxPolicy;
+} {
+  return (
+    context.sessionApprovalOverride ??
+    mapCodexRuntimeModeToTurnOverrides(context.session.runtimeMode)
+  );
+}
+
 export function ensureIsolatedScratchWorkspace(threadId: ThreadId): string {
-  const workspaceRoot = path.join(tmpdir(), "dpcode-codex-workspaces");
+  const workspaceRoot = path.join(tmpdir(), "synara-codex-workspaces");
   const workspaceDir = path.join(workspaceRoot, String(threadId));
   mkdirSync(workspaceDir, { recursive: true });
   return workspaceDir;
@@ -734,8 +570,8 @@ export function normalizeCodexModelSlug(
 export function buildCodexInitializeParams() {
   return {
     clientInfo: {
-      name: "t3code_desktop",
-      title: "DP Code Desktop",
+      name: "synara_desktop",
+      title: "Synara Desktop",
       version: "0.1.0",
     },
     capabilities: {
@@ -1150,7 +986,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     } = {
       threadId: providerThreadId,
       input: turnInput,
-      ...mapCodexRuntimeModeToTurnOverrides(context.session.runtimeMode),
+      ...resolveCodexTurnOverrides(context),
     };
     const normalizedModel = resolveCodexModelForAccount(
       normalizeCodexModelSlug(input.model ?? context.session.model),
@@ -1688,18 +1524,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
-  async respondToRequest(
-    threadId: ThreadId,
-    requestId: ApprovalRequestId,
+  private resolveApprovalRequest(
+    context: CodexSessionContext,
+    pendingRequest: PendingApprovalRequest,
     decision: ProviderApprovalDecision,
-  ): Promise<void> {
-    const context = this.requireSession(threadId);
-    const pendingRequest = context.pendingApprovals.get(requestId);
-    if (!pendingRequest) {
-      throw new Error(`Unknown pending approval request: ${requestId}`);
-    }
-
-    context.pendingApprovals.delete(requestId);
+  ): void {
     this.writeMessage(context, {
       id: pendingRequest.jsonRpcId,
       result: {
@@ -1724,6 +1553,35 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         decision,
       },
     });
+  }
+
+  private resolveRemainingSessionApprovalRequests(context: CodexSessionContext): void {
+    const remainingRequests = Array.from(context.pendingApprovals.values());
+    context.pendingApprovals.clear();
+    for (const pendingRequest of remainingRequests) {
+      this.resolveApprovalRequest(context, pendingRequest, "acceptForSession");
+    }
+  }
+
+  async respondToRequest(
+    threadId: ThreadId,
+    requestId: ApprovalRequestId,
+    decision: ProviderApprovalDecision,
+  ): Promise<void> {
+    const context = this.requireSession(threadId);
+    const pendingRequest = context.pendingApprovals.get(requestId);
+    if (!pendingRequest) {
+      throw new Error(`Unknown pending approval request: ${requestId}`);
+    }
+
+    context.pendingApprovals.delete(requestId);
+    if (decision === "acceptForSession") {
+      context.sessionApprovalOverride = CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES;
+    }
+    this.resolveApprovalRequest(context, pendingRequest, decision);
+    if (decision === "acceptForSession") {
+      this.resolveRemainingSessionApprovalRequests(context);
+    }
   }
 
   async respondToUserInput(
@@ -2510,6 +2368,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(rawRoute.turnId ? { turnId: rawRoute.turnId } : {}),
         ...(rawRoute.itemId ? { itemId: rawRoute.itemId } : {}),
       };
+      if (context.sessionApprovalOverride) {
+        this.resolveApprovalRequest(context, pendingRequest, "acceptForSession");
+        return;
+      }
       context.pendingApprovals.set(requestId, pendingRequest);
     }
 
@@ -3319,7 +3181,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return [];
       }
 
-      // Accept both DP Code's legacy string array and Remodex-style reasoning objects.
+      // Accept both Synara's legacy string array and Remodex-style reasoning objects.
       const supportedReasoningEfforts = Array.from(
         new Map(
           (

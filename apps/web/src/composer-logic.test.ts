@@ -61,6 +61,62 @@ describe("detectComposerTrigger", () => {
     });
   });
 
+  it("detects a slash command mid-line after an existing chip token", () => {
+    // Claude skills render as `/skill` chips, so a second command typed after one
+    // must still open the picker even though the line no longer starts with `/`.
+    const text = "/refactor-code /ui";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-command",
+      query: "ui",
+      rangeStart: "/refactor-code ".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("anchors a mid-line /model trigger to the slash token, not the line start", () => {
+    const text = "/refactor-code /model";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-model",
+      query: "",
+      rangeStart: "/refactor-code ".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("does not treat an in-word slash like and/or as a slash command", () => {
+    const text = "decide and/or";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toBeNull();
+  });
+
+  it("does not treat a path token like src/foo as a slash command", () => {
+    const text = "open src/foo.ts";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toBeNull();
+  });
+
+  it("does not treat a slash token containing a second slash as a slash command", () => {
+    // The slash sits after whitespace (so a token is detected), but command names
+    // are `[a-z-]+` — a query like "and/or" can never match one, so no empty picker.
+    const text = "decide /and/or";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toBeNull();
+  });
+
+  it("closes the slash picker once the command is followed by a space and more words", () => {
+    const text = "intro /fast and then";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toBeNull();
+  });
+
   it("detects a skill trigger while typing a $skill token", () => {
     const text = "Use $che";
     const trigger = detectComposerTrigger(text, text.length);

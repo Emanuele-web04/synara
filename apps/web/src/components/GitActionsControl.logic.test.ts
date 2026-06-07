@@ -10,6 +10,7 @@ import {
   resolveDefaultCreateBranchName,
   resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
+  resolvePullActionAvailability,
   resolveQuickAction,
   shouldOfferCreateBranchPrompt,
   summarizeGitResult,
@@ -256,16 +257,15 @@ describe("when: branch is clean, ahead, and has no open PR", () => {
 });
 
 describe("when: branch is clean, up to date, and has no open PR", () => {
-  it("resolveQuickAction offers creating a PR on a published feature branch", () => {
+  it("resolveQuickAction returns disabled commit on a published feature branch", () => {
     const quick = resolveQuickAction(
       status({ aheadCount: 0, behindCount: 0, hasWorkingTreeChanges: false, pr: null }),
       false,
     );
     assert.deepInclude(quick, {
-      kind: "run_action",
-      action: "create_pr",
-      label: "Create PR",
-      disabled: false,
+      kind: "show_hint",
+      label: "Commit",
+      disabled: true,
     });
   });
 
@@ -299,7 +299,7 @@ describe("when: branch is clean, up to date, and has no open PR", () => {
     ]);
   });
 
-  it("resolveQuickAction blocks PR when the branch tracks the default branch", () => {
+  it("resolveQuickAction keeps disabled commit when the branch tracks the default branch", () => {
     const quick = resolveQuickAction(
       status({
         branch: "dpcode/pi-cleanup",
@@ -317,8 +317,8 @@ describe("when: branch is clean, up to date, and has no open PR", () => {
 
     assert.deepEqual(quick, {
       kind: "show_hint",
-      label: "Create PR",
-      hint: "No branch changes to include in a PR.",
+      label: "Commit",
+      hint: "Branch is up to date. No action needed.",
       disabled: true,
     });
   });
@@ -402,7 +402,7 @@ describe("when: branch is clean, up to date, and has no open PR", () => {
     ]);
   });
 
-  it("resolveQuickAction blocks PR when the upstream branch name is unknown", () => {
+  it("resolveQuickAction keeps disabled commit when the upstream branch name is unknown", () => {
     const quick = resolveQuickAction(
       status({
         upstreamBranch: null,
@@ -415,8 +415,8 @@ describe("when: branch is clean, up to date, and has no open PR", () => {
 
     assert.deepEqual(quick, {
       kind: "show_hint",
-      label: "Create PR",
-      hint: "No branch changes to include in a PR.",
+      label: "Commit",
+      hint: "Branch is up to date. No action needed.",
       disabled: true,
     });
   });
@@ -426,6 +426,15 @@ describe("when: branch is behind upstream", () => {
   it("resolveQuickAction returns pull", () => {
     const quick = resolveQuickAction(status({ behindCount: 2 }), false);
     assert.deepInclude(quick, { kind: "run_pull", label: "Pull", disabled: false });
+  });
+
+  it("resolvePullActionAvailability enables pull", () => {
+    const availability = resolvePullActionAvailability({
+      gitStatus: status({ behindCount: 2 }),
+      isBusy: false,
+    });
+
+    assert.deepEqual(availability, { canRun: true, hint: null });
   });
 
   it("buildMenuItems disables push and create PR", () => {
@@ -467,6 +476,32 @@ describe("when: branch has diverged from upstream", () => {
       disabled: true,
       kind: "show_hint",
       hint: "Branch has diverged from upstream. Rebase/merge first.",
+    });
+  });
+
+  it("resolvePullActionAvailability blocks fast-forward pull", () => {
+    const availability = resolvePullActionAvailability({
+      gitStatus: status({ aheadCount: 2, behindCount: 1 }),
+      isBusy: false,
+    });
+
+    assert.deepEqual(availability, {
+      canRun: false,
+      hint: "Branch has diverged from upstream. Rebase/merge first.",
+    });
+  });
+});
+
+describe("when: branch is up to date", () => {
+  it("resolvePullActionAvailability disables pull", () => {
+    const availability = resolvePullActionAvailability({
+      gitStatus: status({ aheadCount: 0, behindCount: 0 }),
+      isBusy: false,
+    });
+
+    assert.deepEqual(availability, {
+      canRun: false,
+      hint: "Branch is already up to date.",
     });
   });
 });
@@ -1335,32 +1370,32 @@ describe("resolveAutoFeatureBranchName", () => {
 });
 
 describe("resolveDefaultCreateBranchName", () => {
-  it("uses dpcode as the default namespace", () => {
+  it("uses Synara as the default namespace", () => {
     const branch = resolveDefaultCreateBranchName(["main"], "fix toast copy");
-    assert.equal(branch, "dpcode/fix-toast-copy");
+    assert.equal(branch, "synara/fix-toast-copy");
   });
 
-  it("keeps an existing dpcode namespace", () => {
+  it("normalizes an existing legacy dpcode namespace", () => {
     const branch = resolveDefaultCreateBranchName(["main"], "dpcode/refine-toolbar-actions");
-    assert.equal(branch, "dpcode/refine-toolbar-actions");
+    assert.equal(branch, "synara/refine-toolbar-actions");
   });
 
-  it("preserves nested namespaces under dpcode", () => {
+  it("preserves nested namespaces under Synara", () => {
     const branch = resolveDefaultCreateBranchName(["main"], "feature/refine-toolbar-actions");
-    assert.equal(branch, "dpcode/feature/refine-toolbar-actions");
+    assert.equal(branch, "synara/feature/refine-toolbar-actions");
   });
 
-  it("increments suffix when the dpcode branch already exists", () => {
+  it("increments suffix when the Synara branch already exists", () => {
     const branch = resolveDefaultCreateBranchName(
-      ["main", "dpcode/fix-toast-copy", "dpcode/fix-toast-copy-2"],
+      ["main", "synara/fix-toast-copy", "synara/fix-toast-copy-2"],
       "fix toast copy",
     );
-    assert.equal(branch, "dpcode/fix-toast-copy-3");
+    assert.equal(branch, "synara/fix-toast-copy-3");
   });
 
-  it("falls back to dpcode/update when no preferred name is provided", () => {
+  it("falls back to synara/update when no preferred name is provided", () => {
     const branch = resolveDefaultCreateBranchName(["main"]);
-    assert.equal(branch, "dpcode/update");
+    assert.equal(branch, "synara/update");
   });
 });
 
@@ -1368,7 +1403,7 @@ describe("resolveLiveThreadBranchUpdate", () => {
   it("does not regress a semantic thread branch back to a temporary worktree branch", () => {
     const update = resolveLiveThreadBranchUpdate({
       threadBranch: "feature/semantic-branch",
-      gitStatus: status({ branch: "dpcode/deadbeef" }),
+      gitStatus: status({ branch: "synara/deadbeef" }),
     });
 
     assert.equal(update, null);
@@ -1385,7 +1420,7 @@ describe("resolveLiveThreadBranchUpdate", () => {
 });
 
 describe("shouldOfferCreateBranchPrompt", () => {
-  const temporaryBranch = "dpcode/deadbeef";
+  const temporaryBranch = "synara/deadbeef";
 
   it("shows the create-branch prompt for temporary worktree branches without upstream", () => {
     assert.isTrue(

@@ -7,6 +7,7 @@ import type { ThreadId, TurnId } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import type { ChatRightPanel } from "./diffRouteSearch";
+import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 
 export interface SingleChatPanelState {
   panel: ChatRightPanel | null;
@@ -22,7 +23,7 @@ interface SingleChatPanelStore {
   clearThreadPanelState: (threadId: ThreadId) => void;
 }
 
-const SINGLE_CHAT_PANEL_STORAGE_KEY = "dpcode:single-chat-panel-state:v1";
+const SINGLE_CHAT_PANEL_STORAGE_KEY = "synara:single-chat-panel-state:v1";
 
 export function createDefaultSingleChatPanelState(): SingleChatPanelState {
   return {
@@ -38,6 +39,30 @@ const DEFAULT_SINGLE_CHAT_PANEL_STATE = createDefaultSingleChatPanelState();
 
 function getDefaultSingleChatPanelState(): SingleChatPanelState {
   return DEFAULT_SINGLE_CHAT_PANEL_STATE;
+}
+
+function isChatRightPanel(value: unknown): value is ChatRightPanel {
+  return value === "browser" || value === "diff";
+}
+
+function sanitizeSingleChatPanelState(rawState: unknown): SingleChatPanelState | null {
+  if (!isPlainObject(rawState)) {
+    return null;
+  }
+  const { panel, diffTurnId, diffFilePath, hasOpenedPanel, lastOpenPanel } = rawState;
+  return {
+    panel: isChatRightPanel(panel) ? panel : null,
+    diffTurnId: typeof diffTurnId === "string" ? (diffTurnId as TurnId) : null,
+    diffFilePath: typeof diffFilePath === "string" ? diffFilePath : null,
+    hasOpenedPanel: hasOpenedPanel === true,
+    lastOpenPanel: isChatRightPanel(lastOpenPanel) ? lastOpenPanel : "browser",
+  };
+}
+
+// Validates persisted per-thread panel state so an unknown panel kind or a
+// malformed entry degrades to defaults instead of flowing into the UI.
+export function sanitizePanelStateByThreadId(value: unknown): Record<string, SingleChatPanelState> {
+  return sanitizeStringKeyedRecord(value, sanitizeSingleChatPanelState);
 }
 
 export const useSingleChatPanelStore = create<SingleChatPanelStore>()(
@@ -82,6 +107,12 @@ export const useSingleChatPanelStore = create<SingleChatPanelStore>()(
     {
       name: SINGLE_CHAT_PANEL_STORAGE_KEY,
       storage: createJSONStorage(() => localStorage),
+      merge: (persisted, current) => ({
+        ...current,
+        panelStateByThreadId: sanitizePanelStateByThreadId(
+          (persisted as { panelStateByThreadId?: unknown } | undefined)?.panelStateByThreadId,
+        ),
+      }),
     },
   ),
 );

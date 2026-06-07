@@ -1,10 +1,11 @@
-import { type FC, type SVGProps } from "react";
-import { PiGitCommit, PiSquareSplitHorizontal, PiSquareSplitVertical } from "react-icons/pi";
+import { type CSSProperties, type FC, type SVGProps } from "react";
+import { PiSquareSplitHorizontal, PiSquareSplitVertical } from "react-icons/pi";
 import { RiApps2Line } from "react-icons/ri";
 import { SiGithub } from "react-icons/si";
 import { VscMcp } from "react-icons/vsc";
-import { LuSplit } from "react-icons/lu";
-import { TbArrowsRightLeft } from "react-icons/tb";
+import { LuMessageSquareDashed, LuSplit } from "react-icons/lu";
+import { cn } from "./utils";
+import { CentralIcon } from "./central-icons";
 import {
   IconAdjustments,
   IconAlertCircle,
@@ -15,6 +16,7 @@ import {
   IconArrowLeft,
   IconArrowRight,
   IconArrowUp,
+  IconArrowUpRight,
   IconArrowsUpDown,
   IconBell,
   IconBolt,
@@ -27,9 +29,7 @@ import {
   IconChevronRight,
   IconChevronUp,
   IconCircleCheck,
-  IconCloudUpload,
   IconColumns2,
-  IconCopy,
   IconDots,
   IconDownload,
   IconExternalLink,
@@ -39,14 +39,8 @@ import {
   IconFlask2,
   IconFolder,
   IconFolderOpen,
-  IconGitCompare,
-  IconGitFork,
-  IconGitPullRequest,
   IconEdit,
   IconInfoCircle,
-  IconLayoutSidebarLeftCollapse,
-  IconLayoutSidebarLeftExpand,
-  IconLayoutSidebarRightCollapse,
   IconLayoutDistributeHorizontal,
   IconListCheck,
   IconListDetails,
@@ -57,11 +51,9 @@ import {
   IconMinimize,
   IconDeviceLaptop,
   IconMessageCircle,
-  IconMicrophone,
   IconMoon,
   IconPalette,
   IconPaperclip,
-  IconPinnedFilled,
   IconPlayerPlay,
   IconPlayerStop,
   IconPlus,
@@ -69,14 +61,11 @@ import {
   IconRocket,
   IconRobot,
   IconRotate2,
-  IconSearch,
   IconSelector,
   IconSettings,
   IconStar,
   IconStarFilled,
   IconSun,
-  IconTerminal,
-  IconTerminal2,
   IconTextWrap,
   IconTool,
   IconTrash,
@@ -94,32 +83,40 @@ function adaptIcon(Component: TablerIcon): LucideIcon {
   };
 }
 
+// Wraps a Central icon asset behind the LucideIcon API. Rendering via CSS mask
+// avoids stroke-on-stroke alpha summation that gave hand-drawn SVGs a
+// "stamped twice" look on shared vertices (the previous PinIcon bug).
+function centralIconWrapper(name: string): LucideIcon {
+  return function CentralIconWrapper({ className, style, ...rest }) {
+    const ariaLabelRaw = (rest as { ["aria-label"]?: unknown })["aria-label"];
+    const label = typeof ariaLabelRaw === "string" ? ariaLabelRaw : undefined;
+    return (
+      <CentralIcon
+        name={name}
+        className={typeof className === "string" ? className : undefined}
+        style={style as CSSProperties | undefined}
+        label={label}
+      />
+    );
+  };
+}
+
 export const AppsIcon: LucideIcon = (props) => (
   <RiApps2Line className={props.className} style={props.style} />
 );
-export const QueueArrow: LucideIcon = (props) => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={1.5}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-    {...props}
-  >
-    <path d="M3.75 5.75V15.25C3.75 16.3546 4.64543 17.25 5.75 17.25H19.25" />
-    <path d="M18 19V15.5L20.25 17.25L18 19Z" />
-    <path d="M8.25 7.25H16.75" />
-    <path d="M8.25 12.25H13.25" />
-  </svg>
-);
+export const QueueArrow: LucideIcon = centralIconWrapper("reading-list");
+export const SteerIcon: LucideIcon = centralIconWrapper("arrow-corner-down-right");
+export const ComposerSendArrowIcon: LucideIcon = centralIconWrapper("arrow-up");
+export const HandoffIcon: LucideIcon = centralIconWrapper("arrow-left-right");
+export const SkillCubeIcon: LucideIcon = centralIconWrapper("building-blocks");
+export const NewThreadIcon: LucideIcon = centralIconWrapper("compose-pencil");
+export const EraserIcon: LucideIcon = centralIconWrapper("eraser");
 export const ArrowLeftIcon = adaptIcon(IconArrowLeft);
 export const BellIcon = adaptIcon(IconBell);
 export const ArrowRightIcon = adaptIcon(IconArrowRight);
 export const ArrowDownIcon = adaptIcon(IconArrowDown);
 export const ArrowUpIcon = adaptIcon(IconArrowUp);
+export const ArrowUpRightIcon = adaptIcon(IconArrowUpRight);
 export const ArrowUpDownIcon = adaptIcon(IconArrowsUpDown);
 export const BotIcon = adaptIcon(IconRobot);
 export const BugIcon = adaptIcon(IconBug);
@@ -132,10 +129,12 @@ export const ChevronUpIcon = adaptIcon(IconChevronUp);
 export const ChevronsUpDownIcon = adaptIcon(IconSelector);
 export const CircleAlertIcon = adaptIcon(IconAlertCircle);
 export const CircleCheckIcon = adaptIcon(IconCircleCheck);
-export const CloudUploadIcon = adaptIcon(IconCloudUpload);
+export const CloudUploadIcon = centralIconWrapper("cloud-upload");
+export const CloudSyncIcon = centralIconWrapper("cloud-sync");
 export const Columns2Icon = adaptIcon(IconColumns2);
-export const CopyIcon = adaptIcon(IconCopy);
-export const DiffIcon = adaptIcon(IconGitCompare);
+export const ChangesIcon = centralIconWrapper("changes");
+export const CopyIcon = centralIconWrapper("square-behind-square-6");
+export const DiffIcon = centralIconWrapper("difference-modified");
 export const DownloadIcon = adaptIcon(IconDownload);
 export const EllipsisIcon = adaptIcon(IconDots);
 export const ExternalLinkIcon = adaptIcon(IconExternalLink);
@@ -151,41 +150,22 @@ export const FlaskConicalIcon = adaptIcon(IconFlask2);
 export const FolderClosedIcon = adaptIcon(IconFolder);
 export const FolderIcon = adaptIcon(IconFolder);
 export const FolderOpenIcon = adaptIcon(IconFolderOpen);
-export const GitCommitIcon: LucideIcon = (props) => (
-  <PiGitCommit className={props.className} style={props.style} />
-);
-export const GitForkIcon = adaptIcon(IconGitFork);
+export const GitCommitIcon: LucideIcon = centralIconWrapper("commits");
+export const GitBranchIcon: LucideIcon = centralIconWrapper("branch");
+export const GitForkIcon = centralIconWrapper("fork");
+export const GitMergeIcon: LucideIcon = centralIconWrapper("merged");
+export const GitMergedSimpleIcon: LucideIcon = centralIconWrapper("merged-simple");
+export const PushIcon: LucideIcon = centralIconWrapper("cloud-simple-upload");
 export const GitHubIcon: LucideIcon = (props) => (
   <SiGithub className={props.className} style={props.style} />
 );
-export const GitPullRequestIcon = adaptIcon(IconGitPullRequest);
+export const GitPullRequestIcon = centralIconWrapper("pull-request");
 export const GlobeIcon = adaptIcon(IconWorld);
 export const McpIcon: LucideIcon = (props) => (
   <VscMcp className={props.className} style={props.style} />
 );
-export const PlugIcon: LucideIcon = (props) => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={1.5}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-    {...props}
-  >
-    <path d="M3.75 7C3.75 8.79493 5.20507 10.25 7 10.25C8.79493 10.25 10.25 8.79493 10.25 7C10.25 5.20507 8.79493 3.75 7 3.75C5.20507 3.75 3.75 5.20507 3.75 7Z" />
-    <path d="M3.75 17C3.75 18.7949 5.20507 20.25 7 20.25C8.79493 20.25 10.25 18.7949 10.25 17C10.25 15.2051 8.79493 13.75 7 13.75C5.20507 13.75 3.75 15.2051 3.75 17Z" />
-    <path d="M13.75 7C13.75 8.79493 15.2051 10.25 17 10.25C18.7949 10.25 20.25 8.79493 20.25 7C20.25 5.20507 18.7949 3.75 17 3.75C15.2051 3.75 13.75 5.20507 13.75 7Z" />
-    <path d="M13.75 17C13.75 18.7949 15.2051 20.25 17 20.25C18.7949 20.25 20.25 18.7949 20.25 17C20.25 15.2051 18.7949 13.75 17 13.75C15.2051 13.75 13.75 15.2051 13.75 17Z" />
-    <path d="M9.5 14.5L14.5 9.5" />
-  </svg>
-);
+export const PluginIcon: LucideIcon = centralIconWrapper("puzzle");
 export const HammerIcon = adaptIcon(IconTool);
-export const HandoffIcon: LucideIcon = (props) => (
-  <TbArrowsRightLeft className={props.className} style={props.style} />
-);
 export const InfoIcon = adaptIcon(IconInfoCircle);
 export const ListChecksIcon = adaptIcon(IconListCheck);
 export const ListTodoIcon = adaptIcon(IconListDetails);
@@ -197,28 +177,15 @@ export const LockOpenIcon = adaptIcon(IconLockOpen);
 export const Maximize2 = adaptIcon(IconMaximize);
 export const Minimize2 = adaptIcon(IconMinimize);
 export const MessageCircleIcon = adaptIcon(IconMessageCircle);
-export const MicIcon = adaptIcon(IconMicrophone);
-export const PanelLeftCloseIcon = adaptIcon(IconLayoutSidebarLeftCollapse);
-export const PanelLeftIcon = adaptIcon(IconLayoutSidebarLeftExpand);
-export const PanelRightCloseIcon = adaptIcon(IconLayoutSidebarRightCollapse);
-export const PinIcon: LucideIcon = (props) => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={1.5}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-    {...props}
-  >
-    <path d="M8.375 15.625L12.2092 19.4592C13.3676 20.6175 15.351 19.9682 15.6001 18.3491L16.3396 13.5425C16.44 12.8901 16.8558 12.3292 17.4509 12.0435L20.2054 10.7214C21.4483 10.1248 21.729 8.47902 20.7542 7.50413L16.4959 3.24583C15.521 2.27093 13.8752 2.55164 13.2786 3.79458L11.9564 6.54908C11.6708 7.14417 11.1099 7.55999 10.4575 7.66036L5.65092 8.39984C4.03176 8.64894 3.38243 10.6324 4.54081 11.7908L8.375 15.625Z" />
-    <path d="M8.38235 15.6176L8.375 15.625" />
-    <path d="M8.375 15.625L3.75 20.25" />
-  </svg>
-);
-export const PinnedFilledIcon = adaptIcon(IconPinnedFilled);
+export const MicIcon: LucideIcon = centralIconWrapper("microphone");
+export const SidebarHiddenLeftWideIcon = centralIconWrapper("sidebar-hidden-left-wide");
+export const SidebarHiddenRightWideIcon = centralIconWrapper("sidebar-hidden-right-wide");
+export const PanelLeftCloseIcon = SidebarHiddenLeftWideIcon;
+export const PanelLeftIcon = centralIconWrapper("sidebar-simple-left-wide");
+export const PanelRightCloseIcon = SidebarHiddenRightWideIcon;
+export const WindowIcon: LucideIcon = centralIconWrapper("window");
+export const PencilIcon: LucideIcon = centralIconWrapper("pencil");
+export const PinIcon: LucideIcon = centralIconWrapper("pin");
 export const PlayIcon = adaptIcon(IconPlayerPlay);
 export const Plus = adaptIcon(IconPlus);
 export const PlusIcon = adaptIcon(IconPlus);
@@ -226,7 +193,7 @@ export const RefreshCwIcon = adaptIcon(IconRefresh);
 export const RocketIcon = adaptIcon(IconRocket);
 export const RotateCcwIcon = adaptIcon(IconRotate2);
 export const Rows3Icon = adaptIcon(IconLayoutDistributeHorizontal);
-export const SearchIcon = adaptIcon(IconSearch);
+export const SearchIcon: LucideIcon = centralIconWrapper("magnifying-glass");
 export const SettingsIcon = adaptIcon(IconSettings);
 export const StarIcon = adaptIcon(IconStar);
 export const StarFilledIcon = adaptIcon(IconStarFilled);
@@ -241,9 +208,14 @@ export const SquareSplitHorizontal: LucideIcon = (props) => (
 export const SquareSplitVertical: LucideIcon = (props) => (
   <PiSquareSplitVertical className={props.className} style={props.style} />
 );
-export const TerminalIcon = adaptIcon(IconTerminal);
-export const TerminalSquare = adaptIcon(IconTerminal2);
-export const TerminalSquareIcon = adaptIcon(IconTerminal2);
+// react-icons/lu glyphs occupy more of the 24×24 viewBox than Tabler/Central icons at
+// the same Tailwind size — use `chromeLu` in sidebarGlyphs beside `chrome` controls.
+export const DisposableThreadIcon: LucideIcon = (props) => (
+  <LuMessageSquareDashed className={cn("size-3 shrink-0", props.className)} style={props.style} />
+);
+export const TerminalIcon = centralIconWrapper("console");
+export const TerminalSquare = centralIconWrapper("console");
+export const TerminalSquareIcon = centralIconWrapper("console");
 export const TextWrapIcon = adaptIcon(IconTextWrap);
 export const Trash2 = adaptIcon(IconTrash);
 export const TriangleAlertIcon = adaptIcon(IconAlertTriangle);

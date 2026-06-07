@@ -12,7 +12,12 @@ import {
   ProjectionThreadRepository,
   type ProjectionThreadRepositoryShape,
 } from "../Services/ProjectionThreads.ts";
-import { ModelSelection, OrchestrationThreadPullRequest, ThreadHandoff } from "@t3tools/contracts";
+import {
+  ModelSelection,
+  OrchestrationThreadPullRequest,
+  ThreadPinnedMessages,
+  ThreadHandoff,
+} from "@t3tools/contracts";
 
 const SqliteBoolean = Schema.Number.pipe(
   Schema.decodeTo(Schema.Boolean, {
@@ -27,6 +32,7 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
     isPinned: SqliteBoolean,
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
+    pinnedMessages: Schema.NullOr(Schema.fromJsonString(ThreadPinnedMessages)),
     modelSelection: Schema.fromJsonString(ModelSelection),
   }),
 );
@@ -63,6 +69,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           last_known_pr_json,
           latest_turn_id,
           handoff_json,
+          pinned_messages_json,
+          notes,
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
@@ -96,6 +104,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.lastKnownPr === null ? null : JSON.stringify(row.lastKnownPr)},
           ${row.latestTurnId},
           ${row.handoff === null ? null : JSON.stringify(row.handoff)},
+          ${row.pinnedMessages === null ? null : JSON.stringify(row.pinnedMessages)},
+          ${row.notes},
           ${row.latestUserMessageAt},
           ${row.pendingApprovalCount},
           ${row.pendingUserInputCount},
@@ -129,6 +139,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           last_known_pr_json = excluded.last_known_pr_json,
           latest_turn_id = excluded.latest_turn_id,
           handoff_json = excluded.handoff_json,
+          pinned_messages_json = excluded.pinned_messages_json,
+          notes = excluded.notes,
           latest_user_message_at = excluded.latest_user_message_at,
           pending_approval_count = excluded.pending_approval_count,
           pending_user_input_count = excluded.pending_user_input_count,
@@ -169,6 +181,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
+          pinned_messages_json AS "pinnedMessages",
+          notes,
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
@@ -211,6 +225,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
+          pinned_messages_json AS "pinnedMessages",
+          notes,
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",

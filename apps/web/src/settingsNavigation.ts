@@ -3,19 +3,6 @@
 // Layer: Route/UI support
 // Exports: section ids, nav items, and search normalization helper
 
-import {
-  AdjustmentsIcon,
-  ArchiveIcon,
-  BellIcon,
-  BrainIcon,
-  type LucideIcon,
-  PaletteIcon,
-  PlugIcon,
-  SettingsIcon,
-  WrenchIcon,
-  WorktreeIcon,
-} from "./lib/icons";
-
 export const SETTINGS_SECTION_IDS = [
   "general",
   "appearance",
@@ -29,14 +16,15 @@ export const SETTINGS_SECTION_IDS = [
 ] as const;
 
 export type SettingsSectionId = (typeof SETTINGS_SECTION_IDS)[number];
-export type SettingsNavGroupId = "app" | "dpcode";
+export type SettingsNavGroupId = "app" | "synara";
 
 export type SettingsNavItem = {
   id: SettingsSectionId;
   group: SettingsNavGroupId;
   label: string;
   description: string;
-  icon: LucideIcon;
+  /** Basename of a SVG under `/central-icons-reversed`. */
+  icon: string;
   eyebrow: string;
 };
 
@@ -45,7 +33,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   label: string;
 }> = [
   { id: "app", label: "App" },
-  { id: "dpcode", label: "DP Code" },
+  { id: "synara", label: "Synara" },
 ] as const;
 
 export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
@@ -54,7 +42,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "app",
     label: "General",
     description: "Default provider, thread mode, and sidebar organization.",
-    icon: SettingsIcon,
+    icon: "settings-gear-1",
     eyebrow: "Workflow defaults",
   },
   {
@@ -62,7 +50,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "app",
     label: "Appearance",
     description: "Theme, typography, and timestamp formatting.",
-    icon: PaletteIcon,
+    icon: "color-palette",
     eyebrow: "Visual language",
   },
   {
@@ -70,7 +58,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "app",
     label: "Notifications",
     description: "In-app toasts and desktop alerts.",
-    icon: BellIcon,
+    icon: "bell",
     eyebrow: "Alerts",
   },
   {
@@ -78,15 +66,15 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "app",
     label: "Behavior",
     description: "Streaming, diff handling, and destructive confirmations.",
-    icon: AdjustmentsIcon,
+    icon: "settings-slider-hor",
     eyebrow: "Interaction rules",
   },
   {
     id: "worktrees",
     group: "app",
     label: "Worktrees",
-    description: "Review and clean up the worktrees created by DP Code.",
-    icon: WorktreeIcon,
+    description: "Review and clean up the worktrees created by Synara.",
+    icon: "branch-simple",
     eyebrow: "Workspace management",
   },
   {
@@ -94,31 +82,31 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "app",
     label: "Archived",
     description: "View and restore archived threads.",
-    icon: ArchiveIcon,
+    icon: "archive",
     eyebrow: "Thread management",
   },
   {
     id: "models",
-    group: "dpcode",
+    group: "synara",
     label: "Models",
     description: "Git writing defaults and custom model slugs.",
-    icon: BrainIcon,
+    icon: "brain",
     eyebrow: "AI configuration",
   },
   {
     id: "providers",
-    group: "dpcode",
+    group: "synara",
     label: "Providers",
-    description: "Choose which providers show up in the composer picker.",
-    icon: PlugIcon,
+    description: "Choose visible providers, review CLI installs, and update provider tools.",
+    icon: "puzzle",
     eyebrow: "Picker visibility",
   },
   {
     id: "advanced",
-    group: "dpcode",
+    group: "synara",
     label: "Advanced",
-    description: "Provider installs, keybindings, recovery, and version info.",
-    icon: WrenchIcon,
+    description: "Keybindings, recovery, and version info.",
+    icon: "toolbox",
     eyebrow: "System tools",
   },
 ] as const;

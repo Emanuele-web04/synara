@@ -5,10 +5,14 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  buildFileDiffRenderKey,
   buildPatchCacheKey,
   getRenderablePatch,
   resolveDiffCopyText,
+  resolveFileDiffPath,
   serializeRenderablePatchText,
+  sortFileDiffsByPath,
+  splitRepoRelativePath,
   summarizePatchStats,
 } from "./diffRendering";
 
@@ -133,6 +137,106 @@ describe("serializeRenderablePatchText", () => {
   it("returns null when there is nothing to copy", () => {
     expect(serializeRenderablePatchText(null)).toBeNull();
     expect(serializeRenderablePatchText({ kind: "files", files: [] })).toBeNull();
+  });
+});
+
+describe("file diff identity helpers", () => {
+  const twoFilePatch = [
+    "diff --git a/src/one.ts b/src/one.ts",
+    "index 1111111..2222222 100644",
+    "--- a/src/one.ts",
+    "+++ b/src/one.ts",
+    "@@ -1,1 +1,1 @@",
+    "-const one = 1;",
+    "+const one = 2;",
+    "diff --git a/src/two.ts b/src/two.ts",
+    "index 3333333..4444444 100644",
+    "--- a/src/two.ts",
+    "+++ b/src/two.ts",
+    "@@ -1,1 +1,1 @@",
+    "-const two = 1;",
+    "+const two = 2;",
+    "",
+  ].join("\n");
+
+  it("strips a/ and b/ prefixes from parsed file paths", () => {
+    const renderable = getRenderablePatch(twoFilePatch, "git-pane:test");
+    expect(renderable?.kind).toBe("files");
+    if (renderable?.kind !== "files") return;
+
+    const paths = renderable.files.map((file) => resolveFileDiffPath(file));
+    expect(paths).toContain("src/one.ts");
+    expect(paths).toContain("src/two.ts");
+  });
+
+  it("derives a unique, stable render key per file", () => {
+    const renderable = getRenderablePatch(twoFilePatch, "git-pane:test");
+    expect(renderable?.kind).toBe("files");
+    if (renderable?.kind !== "files") return;
+
+    const keys = renderable.files.map((file) => buildFileDiffRenderKey(file));
+    expect(new Set(keys).size).toBe(keys.length);
+    // Re-parsing the same patch yields the same identity for selection persistence.
+    const reparsed = getRenderablePatch(twoFilePatch, "git-pane:test");
+    if (reparsed?.kind !== "files") return;
+    expect(reparsed.files.map((file) => buildFileDiffRenderKey(file))).toEqual(keys);
+  });
+});
+
+describe("splitRepoRelativePath", () => {
+  it("splits a nested path into a trailing-slash dir and leaf name", () => {
+    expect(splitRepoRelativePath("src/components/Foo.tsx")).toEqual({
+      dir: "src/components/",
+      name: "Foo.tsx",
+    });
+  });
+
+  it("treats a bare filename as having no directory", () => {
+    expect(splitRepoRelativePath("README.md")).toEqual({ dir: "", name: "README.md" });
+  });
+});
+
+describe("sortFileDiffsByPath", () => {
+  const outOfOrderPatch = [
+    "diff --git a/src/zebra.ts b/src/zebra.ts",
+    "index 1111111..2222222 100644",
+    "--- a/src/zebra.ts",
+    "+++ b/src/zebra.ts",
+    "@@ -1,1 +1,1 @@",
+    "-const z = 1;",
+    "+const z = 2;",
+    "diff --git a/src/item10.ts b/src/item10.ts",
+    "index 3333333..4444444 100644",
+    "--- a/src/item10.ts",
+    "+++ b/src/item10.ts",
+    "@@ -1,1 +1,1 @@",
+    "-const a = 1;",
+    "+const a = 2;",
+    "diff --git a/src/item2.ts b/src/item2.ts",
+    "index 5555555..6666666 100644",
+    "--- a/src/item2.ts",
+    "+++ b/src/item2.ts",
+    "@@ -1,1 +1,1 @@",
+    "-const b = 1;",
+    "+const b = 2;",
+    "",
+  ].join("\n");
+
+  it("orders files by natural path order without mutating the input", () => {
+    const renderable = getRenderablePatch(outOfOrderPatch, "git-pane:sort");
+    expect(renderable?.kind).toBe("files");
+    if (renderable?.kind !== "files") return;
+
+    const original = [...renderable.files];
+    const sorted = sortFileDiffsByPath(renderable.files);
+
+    // Numeric-aware ordering keeps item2 before item10, and the input is untouched.
+    expect(sorted.map((file) => resolveFileDiffPath(file))).toEqual([
+      "src/item2.ts",
+      "src/item10.ts",
+      "src/zebra.ts",
+    ]);
+    expect(renderable.files).toEqual(original);
   });
 });
 

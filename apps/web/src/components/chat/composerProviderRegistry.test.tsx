@@ -49,6 +49,19 @@ const CURSOR_RUNTIME_MODEL_300K: ProviderModelDescriptor = {
   defaultContextWindow: "300k",
 };
 
+const PI_RUNTIME_MODEL_WITH_REASONING: ProviderModelDescriptor = {
+  slug: "openai/gpt-5.5",
+  name: "GPT-5.5",
+  upstreamProviderId: "openai",
+  upstreamProviderName: "OpenAI",
+  supportedReasoningEfforts: [
+    { value: "off", label: "Off" },
+    { value: "medium", label: "Medium" },
+    { value: "xhigh", label: "Extra High" },
+  ],
+  defaultReasoningEffort: "medium",
+};
+
 describe("getComposerProviderState", () => {
   it("returns codex defaults when no codex draft options exist", () => {
     const state = getComposerProviderState({
@@ -216,7 +229,6 @@ describe("getComposerProviderState", () => {
         effort: "medium",
       },
       composerFrameClassName: "ultrathink-frame",
-      composerSurfaceClassName: "shadow-[0_0_0_1px_rgba(255,255,255,0.04)_inset]",
       modelPickerIconClassName: "ultrathink-chroma",
     });
   });
@@ -391,6 +403,46 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it("normalizes Grok reasoning effort options for dispatch", () => {
+    const state = getComposerProviderState({
+      provider: "grok",
+      model: "grok-build",
+      prompt: "",
+      modelOptions: {
+        grok: {
+          reasoningEffort: "high",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "grok",
+      promptEffort: "high",
+      modelOptionsForDispatch: {
+        reasoningEffort: "high",
+      },
+    });
+  });
+
+  it("drops explicit Grok default reasoning effort from dispatch", () => {
+    const state = getComposerProviderState({
+      provider: "grok",
+      model: "grok-build",
+      prompt: "",
+      modelOptions: {
+        grok: {
+          reasoningEffort: "low",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "grok",
+      promptEffort: "low",
+      modelOptionsForDispatch: undefined,
+    });
+  });
+
   it("drops stale Cursor context options once runtime metadata is authoritative", () => {
     const state = getComposerProviderState({
       provider: "cursor",
@@ -411,6 +463,37 @@ describe("getComposerProviderState", () => {
       promptEffort: "xhigh",
       modelOptionsForDispatch: {
         reasoningEffort: "xhigh",
+      },
+    });
+  });
+
+  it("keeps Pi runtime thinking selections on the thinkingLevel field", () => {
+    const selection = getComposerTraitSelection(
+      "pi",
+      "openai/gpt-5.5",
+      "",
+      { thinkingLevel: "xhigh" },
+      PI_RUNTIME_MODEL_WITH_REASONING,
+    );
+    const state = getComposerProviderState({
+      provider: "pi",
+      model: "openai/gpt-5.5",
+      runtimeModel: PI_RUNTIME_MODEL_WITH_REASONING,
+      prompt: "",
+      modelOptions: {
+        pi: {
+          thinkingLevel: "xhigh",
+        },
+      },
+    });
+
+    expect(selection.primarySelectDescriptor?.id).toBe("thinkingLevel");
+    expect(selection.effort).toBe("xhigh");
+    expect(state).toEqual({
+      provider: "pi",
+      promptEffort: "xhigh",
+      modelOptionsForDispatch: {
+        thinkingLevel: "xhigh",
       },
     });
   });

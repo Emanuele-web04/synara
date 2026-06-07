@@ -9,6 +9,7 @@ import {
   ModelSelection,
   OrchestrationCommand,
   OrchestrationEvent,
+  OrchestrationGetFullThreadDiffInput,
   OrchestrationGetTurnDiffInput,
   OrchestrationLatestTurn,
   OrchestrationReadModel,
@@ -17,6 +18,7 @@ import {
   OrchestrationProposedPlan,
   OrchestrationSession,
   ProjectCreateCommand,
+  THREAD_NOTES_MAX_CHARS,
   ThreadMetaUpdatedPayload,
   ThreadTurnStartCommand,
   ThreadCreatedPayload,
@@ -25,6 +27,7 @@ import {
 } from "./orchestration";
 
 const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffInput);
+const decodeFullThreadDiffInput = Schema.decodeUnknownEffect(OrchestrationGetFullThreadDiffInput);
 const decodeThreadTurnDiff = Schema.decodeUnknownEffect(ThreadTurnDiff);
 const decodeProjectCreateCommand = Schema.decodeUnknownEffect(ProjectCreateCommand);
 const decodeProjectCreatedPayload = Schema.decodeUnknownEffect(ProjectCreatedPayload);
@@ -161,9 +164,23 @@ it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
       threadId: "thread-1",
       fromTurnCount: 1,
       toTurnCount: 2,
+      ignoreWhitespace: true,
     });
     assert.strictEqual(parsed.fromTurnCount, 1);
     assert.strictEqual(parsed.toTurnCount, 2);
+    assert.strictEqual(parsed.ignoreWhitespace, true);
+  }),
+);
+
+it.effect("parses full thread diff input with optional whitespace flag", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeFullThreadDiffInput({
+      threadId: "thread-1",
+      toTurnCount: 2,
+      ignoreWhitespace: false,
+    });
+    assert.strictEqual(parsed.toTurnCount, 2);
+    assert.strictEqual(parsed.ignoreWhitespace, false);
   }),
 );
 
@@ -253,6 +270,7 @@ it.effect("decodes historical project.created payloads with a default provider",
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.defaultModelSelection?.provider, "codex");
+    assert.strictEqual(parsed.isPinned, false);
   }),
 );
 
@@ -264,9 +282,11 @@ it.effect("decodes project.meta-updated payloads with explicit default provider"
         provider: "claudeAgent",
         model: "claude-opus-4-6",
       },
+      isPinned: true,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.defaultModelSelection?.provider, "claudeAgent");
+    assert.strictEqual(parsed.isPinned, true);
   }),
 );
 
@@ -429,6 +449,59 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
   }),
 );
 
+it.effect("decodes pinned-message commands and events", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeClientOrchestrationCommand({
+      type: "thread.pinned-message.label.set",
+      commandId: "cmd-pin-label",
+      threadId: "thread-1",
+      messageId: "message-1",
+      label: "Review this",
+    });
+    assert.strictEqual(command.type, "thread.pinned-message.label.set");
+
+    const event = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-pin-added",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.pinned-message-added",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-pin-add",
+      causationEventId: null,
+      correlationId: "cmd-pin-add",
+      metadata: {},
+      payload: {
+        threadId: "thread-1",
+        pin: {
+          messageId: "message-1",
+          label: null,
+          done: false,
+          pinnedAt: "2026-01-01T00:00:00.000Z",
+        },
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    assert.strictEqual(event.type, "thread.pinned-message-added");
+  }),
+);
+
+it.effect("rejects oversized thread notes payloads", () =>
+  Effect.gen(function* () {
+    const failed = yield* decodeThreadMetaUpdatedPayload({
+      threadId: "thread-1",
+      notes: "x".repeat(THREAD_NOTES_MAX_CHARS + 1),
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }).pipe(
+      Effect.match({
+        onFailure: () => true,
+        onSuccess: () => false,
+      }),
+    );
+    assert.strictEqual(failed, true);
+  }),
+);
+
 it.effect("accepts provider-scoped model options in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({
@@ -581,5 +654,32 @@ it.effect("preserves proposed plan implementation metadata when present", () =>
     });
     assert.strictEqual(parsed.implementedAt, "2026-01-02T00:00:00.000Z");
     assert.strictEqual(parsed.implementationThreadId, "thread-2");
+  }),
+);
+
+it.effect("preserves user-input answer values through the RPC JSON codec", () =>
+  Effect.gen(function* () {
+    const codec = Schema.toCodecJson(ClientOrchestrationCommand);
+    const wire = {
+      type: "thread.user-input.respond",
+      commandId: "cmd-1",
+      threadId: "thread-1",
+      requestId: "req-1",
+      answers: {
+        single: "Purple",
+        multi: ["Reading", "Coding"],
+        skipped: null,
+      },
+      createdAt: "2026-05-19T16:14:28.202Z",
+    };
+    const decoded = yield* Schema.decodeUnknownEffect(codec)(wire);
+    assert.deepStrictEqual(
+      (decoded as Extract<typeof decoded, { type: "thread.user-input.respond" }>).answers,
+      {
+        single: "Purple",
+        multi: ["Reading", "Coding"],
+        skipped: null,
+      },
+    );
   }),
 );

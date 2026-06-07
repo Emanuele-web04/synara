@@ -59,7 +59,7 @@ export default function ReleaseHistoryDialog({
           <ChangelogAccordion entries={sorted} defaultExpandedVersion={defaultExpandedVersion} />
         </DialogPanel>
 
-        <DialogFooter className="px-4 py-3">
+        <DialogFooter>
           <Button size="sm" onClick={() => onOpenChange(false)}>
             Close
           </Button>

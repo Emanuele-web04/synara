@@ -25,6 +25,7 @@ import {
   GitCheckoutInput,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
+  GitHubRepositoryInput,
   GitHandoffThreadInput,
   GitPreparePullRequestThreadInput,
   GitCreateWorktreeInput,
@@ -36,13 +37,16 @@ import {
   GitRemoveWorktreeInput,
   GitRemoveIndexLockInput,
   GitRunStackedActionInput,
+  GitStageFilesInput,
   GitStashAndCheckoutInput,
   GitStashDropInput,
   GitStashInfoInput,
   GitStatusInput,
   GitSummarizeDiffInput,
+  GitUnstageFilesInput,
 } from "./git";
 import {
+  TerminalAckOutputInput,
   TerminalClearInput,
   TerminalCloseInput,
   TerminalEvent,
@@ -62,7 +66,9 @@ import { FilesystemBrowseInput } from "./filesystem";
 import { OpenInEditorInput } from "./editor";
 import {
   ServerConfigUpdatedPayload,
+  ServerGenerateThreadRecapInput,
   ServerLifecycleStreamEvent,
+  ServerProviderUpdateInput,
   ServerUpdateSettingsInput,
   ServerGetProviderUsageSnapshotInput,
   ServerProviderStatusesUpdatedPayload,
@@ -100,6 +106,7 @@ export const WS_METHODS = {
 
   // Git methods
   gitPull: "git.pull",
+  gitGithubRepository: "git.githubRepository",
   gitStatus: "git.status",
   gitReadWorkingTreeDiff: "git.readWorkingTreeDiff",
   gitSummarizeDiff: "git.summarizeDiff",
@@ -115,6 +122,8 @@ export const WS_METHODS = {
   gitStashInfo: "git.stashInfo",
   gitRemoveIndexLock: "git.removeIndexLock",
   gitInit: "git.init",
+  gitStageFiles: "git.stageFiles",
+  gitUnstageFiles: "git.unstageFiles",
   gitHandoffThread: "git.handoffThread",
   gitResolvePullRequest: "git.resolvePullRequest",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
@@ -122,6 +131,7 @@ export const WS_METHODS = {
   // Terminal methods
   terminalOpen: "terminal.open",
   terminalWrite: "terminal.write",
+  terminalAckOutput: "terminal.ackOutput",
   terminalResize: "terminal.resize",
   terminalClear: "terminal.clear",
   terminalRestart: "terminal.restart",
@@ -133,9 +143,12 @@ export const WS_METHODS = {
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverRefreshProviders: "server.refreshProviders",
+  serverUpdateProvider: "server.updateProvider",
   serverListWorktrees: "server.listWorktrees",
   serverGetProviderUsageSnapshot: "server.getProviderUsageSnapshot",
+  serverGetDiagnostics: "server.getDiagnostics",
   serverTranscribeVoice: "server.transcribeVoice",
+  serverGenerateThreadRecap: "server.generateThreadRecap",
   serverUpsertKeybinding: "server.upsertKeybinding",
   subscribeServerLifecycle: "server.subscribeLifecycle",
   subscribeServerConfig: "server.subscribeConfig",
@@ -214,6 +227,7 @@ const WebSocketRequestBody = Schema.Union([
 
   // Git methods
   tagRequestBody(WS_METHODS.gitPull, GitPullInput),
+  tagRequestBody(WS_METHODS.gitGithubRepository, GitHubRepositoryInput),
   tagRequestBody(WS_METHODS.gitStatus, GitStatusInput),
   tagRequestBody(WS_METHODS.gitReadWorkingTreeDiff, GitReadWorkingTreeDiffInput),
   tagRequestBody(WS_METHODS.gitSummarizeDiff, GitSummarizeDiffInput),
@@ -229,6 +243,8 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.gitStashInfo, GitStashInfoInput),
   tagRequestBody(WS_METHODS.gitRemoveIndexLock, GitRemoveIndexLockInput),
   tagRequestBody(WS_METHODS.gitInit, GitInitInput),
+  tagRequestBody(WS_METHODS.gitStageFiles, GitStageFilesInput),
+  tagRequestBody(WS_METHODS.gitUnstageFiles, GitUnstageFilesInput),
   tagRequestBody(WS_METHODS.gitHandoffThread, GitHandoffThreadInput),
   tagRequestBody(WS_METHODS.gitResolvePullRequest, GitPullRequestRefInput),
   tagRequestBody(WS_METHODS.gitPreparePullRequestThread, GitPreparePullRequestThreadInput),
@@ -236,6 +252,7 @@ const WebSocketRequestBody = Schema.Union([
   // Terminal methods
   tagRequestBody(WS_METHODS.terminalOpen, TerminalOpenInput),
   tagRequestBody(WS_METHODS.terminalWrite, TerminalWriteInput),
+  tagRequestBody(WS_METHODS.terminalAckOutput, TerminalAckOutputInput),
   tagRequestBody(WS_METHODS.terminalResize, TerminalResizeInput),
   tagRequestBody(WS_METHODS.terminalClear, TerminalClearInput),
   tagRequestBody(WS_METHODS.terminalRestart, TerminalRestartInput),
@@ -247,9 +264,12 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverGetSettings, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverUpdateSettings, ServerUpdateSettingsInput),
   tagRequestBody(WS_METHODS.serverRefreshProviders, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverUpdateProvider, ServerProviderUpdateInput),
   tagRequestBody(WS_METHODS.serverListWorktrees, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverGetProviderUsageSnapshot, ServerGetProviderUsageSnapshotInput),
+  tagRequestBody(WS_METHODS.serverGetDiagnostics, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverTranscribeVoice, ServerVoiceTranscriptionInput),
+  tagRequestBody(WS_METHODS.serverGenerateThreadRecap, ServerGenerateThreadRecapInput),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
 
   // Provider discovery

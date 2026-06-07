@@ -149,12 +149,23 @@ interface PendingUserInput {
   readonly answers: Deferred.Deferred<ProviderUserInputAnswers>;
 }
 
+function coerceClaudeAnswerValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === "string").join(", ");
+  }
+  return "";
+}
+
 // Claude's AskUserQuestion SDK expects answers keyed by question text; the web UI submits stable ids.
 function remapAnswersToClaudeQuestionText(
   questions: ReadonlyArray<UserInputQuestion>,
   answers: ProviderUserInputAnswers,
-): ProviderUserInputAnswers {
-  const remapped: Record<string, unknown> = { ...answers };
+): Record<string, string> {
+  const remapped: Record<string, string> = {};
+  for (const [key, value] of Object.entries(answers)) {
+    remapped[key] = coerceClaudeAnswerValue(value);
+  }
 
   for (const question of questions) {
     if (Object.hasOwn(remapped, question.question)) {
@@ -162,7 +173,7 @@ function remapAnswersToClaudeQuestionText(
     }
 
     if (Object.hasOwn(remapped, question.id)) {
-      remapped[question.question] = remapped[question.id];
+      remapped[question.question] = remapped[question.id]!;
       delete remapped[question.id];
     }
   }
@@ -204,6 +215,10 @@ interface ClaudeSessionContext {
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
   stopped: boolean;
+  // Unrecognized SDK message kinds already surfaced as a runtime warning. Newer
+  // Claude SDKs stream high-frequency telemetry (e.g. `thinking_tokens`); de-duping
+  // here keeps a single unknown kind from flooding the conversation timeline.
+  readonly warnedUnhandledSdkKinds: Set<string>;
 }
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
@@ -255,6 +270,20 @@ function isSyntheticClaudeThreadId(value: string): boolean {
   return value.startsWith("claude-thread-");
 }
 
+// Claude hook system messages can carry transient session ids; only durable
+// conversation messages should advance the resumable provider cursor.
+function hasDurableClaudeSessionId(message: SDKMessage): boolean {
+  if (message.type !== "system") {
+    return true;
+  }
+
+  return (
+    message.subtype !== "hook_started" &&
+    message.subtype !== "hook_progress" &&
+    message.subtype !== "hook_response"
+  );
+}
+
 function toMessage(cause: unknown, fallback: string): string {
   if (cause instanceof Error && cause.message.length > 0) {
     return cause.message;
@@ -280,11 +309,14 @@ function normalizeClaudeStreamMessages(cause: Cause.Cause<Error>): ReadonlyArray
 
 function getEffectiveClaudeCodeEffort(
   effort: ClaudeCodeEffort | null | undefined,
-): Exclude<ClaudeCodeEffort, "ultrathink"> | null {
+): Exclude<ClaudeCodeEffort, "ultrathink" | "ultracode"> | null {
   if (!effort) {
     return null;
   }
-  return effort === "ultrathink" ? null : effort;
+  if (effort === "ultrathink") {
+    return null;
+  }
+  return effort === "ultracode" ? "xhigh" : effort;
 }
 
 function isClaudeInterruptedMessage(message: string): boolean {
@@ -310,6 +342,30 @@ function messageFromClaudeStreamCause(cause: Cause.Cause<Error>, fallback: strin
 function interruptionMessageFromClaudeCause(cause: Cause.Cause<Error>): string {
   const message = messageFromClaudeStreamCause(cause, "Claude runtime interrupted.");
   return isClaudeInterruptedMessage(message) ? "Claude runtime interrupted." : message;
+}
+
+// SIGINT (130) and SIGTERM (143) are graceful stop requests, not crashes. When the
+// Claude subprocess receives one from outside our own stop path (an idle reaper, the
+// OS, or a parent process tearing the process group down), the SDK stream throws
+// "Claude Code process exited with code 143". Treat that as a suspend-and-resume,
+// not a hard failure with an error toast. SIGKILL (137) is intentionally excluded:
+// it usually signals an OOM/forced kill that is worth surfacing.
+const CLAUDE_BENIGN_TERMINATION_EXIT_CODES = new Set([130, 143]);
+
+const CLAUDE_BENIGN_TERMINATION_MESSAGE =
+  "Claude runtime stopped and will resume on your next message.";
+
+function isClaudeBenignTerminationMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  const exitCode = normalized.match(/exited with code (\d+)/)?.[1];
+  if (exitCode !== undefined) {
+    return CLAUDE_BENIGN_TERMINATION_EXIT_CODES.has(Number.parseInt(exitCode, 10));
+  }
+  return normalized.includes("signal sigterm") || normalized.includes("signal sigint");
+}
+
+function isClaudeBenignTerminationCause(cause: Cause.Cause<Error>): boolean {
+  return normalizeClaudeStreamMessages(cause).some(isClaudeBenignTerminationMessage);
 }
 
 function resultErrorsText(result: SDKResultMessage): string {
@@ -722,7 +778,7 @@ const CLAUDE_SETTING_SOURCES = [
   "local",
 ] as const satisfies ReadonlyArray<SettingSource>;
 const EMBEDDED_CLAUDE_SYSTEM_PROMPT_APPEND = [
-  "You are running inside DP Code, a coding app that embeds the Claude Agent SDK.",
+  "You are running inside Synara, a coding app that embeds the Claude Agent SDK.",
   "Do not present the host app as Claude Code unless the user is explicitly asking about Claude Code.",
   "Treat the current working directory as the active workspace for the task.",
   "When the user asks about the current project, codebase, or repository, proactively inspect files in the current working directory before asking the user where to look.",
@@ -1527,6 +1583,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         if (typeof message.session_id !== "string" || message.session_id.length === 0) {
           return;
         }
+        if (!hasDurableClaudeSessionId(message)) {
+          return;
+        }
         const nextThreadId = message.session_id;
         context.resumeSessionId = message.session_id;
         yield* updateResumeCursor(context);
@@ -1603,6 +1662,24 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           },
           providerRefs: nativeProviderRefs(context),
         });
+      });
+
+    // Surfaces each distinct unrecognized SDK message kind at most once per session.
+    // Without this, high-frequency telemetry the adapter doesn't model (notably the
+    // `thinking_tokens` system subtype streamed on every reasoning tick) turns into a
+    // "Runtime warning" timeline entry per message and floods the conversation.
+    const warnUnhandledSdkKind = (
+      context: ClaudeSessionContext,
+      kind: string,
+      message: string,
+      detail: unknown,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (context.warnedUnhandledSdkKinds.has(kind)) {
+          return;
+        }
+        context.warnedUnhandledSdkKinds.add(kind);
+        yield* emitRuntimeWarning(context, message, detail);
       });
 
     const emitProposedPlanCompleted = (
@@ -2401,6 +2478,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           return;
         }
 
+        // Benign high-frequency telemetry we intentionally don't project. `thinking_tokens`
+        // streams on every reasoning tick while extended thinking is active; `task_updated`
+        // is an incremental task patch already covered by task_started/progress/completed.
+        // Short-circuit before allocating an event stamp so they can't flood the timeline
+        // (or churn allocations) with "Runtime warning" entries.
+        if (message.subtype === "thinking_tokens" || message.subtype === "task_updated") {
+          return;
+        }
+
         const stamp = yield* makeEventStamp();
         const base = {
           eventId: stamp.eventId,
@@ -2582,8 +2668,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             });
             return;
           default:
-            yield* emitRuntimeWarning(
+            yield* warnUnhandledSdkKind(
               context,
+              `system:${message.subtype}`,
               `Unhandled Claude system message subtype '${message.subtype}'.`,
               message,
             );
@@ -2696,8 +2783,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             yield* handleSdkTelemetryMessage(context, message);
             return;
           default:
-            yield* emitRuntimeWarning(
+            yield* warnUnhandledSdkKind(
               context,
+              `type:${message.type}`,
               `Unhandled Claude SDK message type '${message.type}'.`,
               message,
             );
@@ -2730,6 +2818,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 "interrupted",
                 interruptionMessageFromClaudeCause(exit.cause),
               );
+            }
+          } else if (isClaudeBenignTerminationCause(exit.cause)) {
+            // External SIGTERM/SIGINT: a graceful stop, not a crash. Suspend the turn
+            // without an error toast so the session resumes on the next message.
+            yield* Effect.logInfo("claude.session.benign_termination", {
+              threadId: context.session.threadId,
+              detail: messageFromClaudeStreamCause(exit.cause, "Claude runtime terminated."),
+            });
+            if (context.turnState) {
+              yield* completeTurn(context, "interrupted", CLAUDE_BENIGN_TERMINATION_MESSAGE);
             }
           } else {
             const message = messageFromClaudeStreamCause(
@@ -3181,12 +3279,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ? modelSelection.options.thinking
             : undefined;
         const effectiveEffort = getEffectiveClaudeCodeEffort(effort);
+        const ultracode = effort === "ultracode" && hasEffortLevel(caps, "xhigh");
         const permissionMode =
           toPermissionMode(providerOptions?.permissionMode) ??
           (input.runtimeMode === "full-access" ? "bypassPermissions" : undefined);
         const settings = {
           ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
           ...(fastMode ? { fastMode: true } : {}),
+          ...(ultracode ? { ultracode: true } : {}),
         };
         const claudeSubagents = buildClaudeSdkSubagents();
 
@@ -3315,6 +3415,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           lastAssistantUuid: resumeState?.resumeSessionAt,
           lastThreadStartedId: undefined,
           stopped: false,
+          warnedUnhandledSdkKinds: new Set(),
         };
         yield* Ref.set(contextRef, context);
         sessions.set(threadId, context);
@@ -3349,6 +3450,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ? { maxThinkingTokens: providerOptions.maxThinkingTokens }
                 : {}),
               ...(fastMode ? { fastMode: true } : {}),
+              ...(ultracode ? { ultracode: true } : {}),
             },
           },
           providerRefs: {},

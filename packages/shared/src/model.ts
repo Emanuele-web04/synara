@@ -10,6 +10,8 @@ import {
   type GeminiModelOptions,
   type GeminiThinkingBudget,
   type GeminiThinkingLevel,
+  type GrokModelOptions,
+  type GrokReasoningEffort,
   type ModelCapabilities,
   type ModelSelection,
   type ModelSlug,
@@ -28,6 +30,7 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   codex: new Set(MODEL_OPTIONS_BY_PROVIDER.codex.map((option) => option.slug)),
   cursor: new Set(MODEL_OPTIONS_BY_PROVIDER.cursor.map((option) => option.slug)),
   gemini: new Set(MODEL_OPTIONS_BY_PROVIDER.gemini.map((option) => option.slug)),
+  grok: new Set(MODEL_OPTIONS_BY_PROVIDER.grok.map((option) => option.slug)),
   kilo: new Set(MODEL_OPTIONS_BY_PROVIDER.kilo.map((option) => option.slug)),
   opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
   pi: new Set<ModelSlug>(),
@@ -160,11 +163,19 @@ const MODEL_NAME_BY_SLUG = new Map(
     .map((option) => [option.slug.toLowerCase(), option.name] as const),
 );
 
-function humanizeUnknownModelSlug(slug: string): string {
-  if (!slug.toLowerCase().startsWith("gpt-")) return slug;
-  const [, version, ...rest] = slug.split("-");
-  if (rest.length === 0) return `GPT-${version}`;
-  return `GPT-${version} ${rest.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(" ")}`;
+// Turns a raw model slug into a readable label when no built-in name exists.
+// GPT slugs keep their canonical "GPT-x" casing; provider-scoped custom ids
+// ("vendor/model") stay verbatim; everything else is title-cased on -/_ .
+export function humanizeModelSlug(slug: string): string {
+  if (slug.toLowerCase().startsWith("gpt-")) {
+    const [, version, ...rest] = slug.split("-");
+    if (rest.length === 0) return `GPT-${version}`;
+    return `GPT-${version} ${rest.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(" ")}`;
+  }
+  if (slug.includes("/")) {
+    return slug;
+  }
+  return slug.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 export function formatModelDisplayName(model: string | null | undefined): string | undefined {
@@ -173,7 +184,7 @@ export function formatModelDisplayName(model: string | null | undefined): string
     return undefined;
   }
 
-  return MODEL_NAME_BY_SLUG.get(normalized.toLowerCase()) ?? humanizeUnknownModelSlug(normalized);
+  return MODEL_NAME_BY_SLUG.get(normalized.toLowerCase()) ?? humanizeModelSlug(normalized);
 }
 
 export function getGeminiThinkingSelectionValue(
@@ -233,12 +244,12 @@ export function getGeminiThinkingModelAlias(
 
   const base = sanitizeGeminiAliasSegment(model);
   if (kind === "level" && nextOptions.thinkingLevel) {
-    return `dpcode-gemini-${base}-thinking-level-${nextOptions.thinkingLevel.toLowerCase()}`;
+    return `synara-gemini-${base}-thinking-level-${nextOptions.thinkingLevel.toLowerCase()}`;
   }
   if (kind === "budget" && nextOptions.thinkingBudget !== undefined) {
     const budget =
       nextOptions.thinkingBudget === -1 ? "dynamic" : String(nextOptions.thinkingBudget);
-    return `dpcode-gemini-${base}-thinking-budget-${budget}`;
+    return `synara-gemini-${base}-thinking-budget-${budget}`;
   }
   return null;
 }
@@ -419,6 +430,9 @@ function reasoningDescriptorId(provider: ProviderKind, caps: ModelCapabilities):
     return values.length > 0 && values.every((value) => /^-?\d+$/u.test(value))
       ? "thinkingBudget"
       : "thinkingLevel";
+  }
+  if (provider === "pi") {
+    return "thinkingLevel";
   }
   return "reasoningEffort";
 }
@@ -724,6 +738,21 @@ export function normalizeGeminiModelOptions(
   }
 
   return nextOptions;
+}
+
+export function normalizeGrokModelOptions(
+  model: string | null | undefined,
+  modelOptions: GrokModelOptions | null | undefined,
+): GrokModelOptions | undefined {
+  const caps = getModelCapabilities("grok", model);
+  const reasoningEffort = trimOrNull(modelOptions?.reasoningEffort);
+  if (!reasoningEffort || !hasEffortLevel(caps, reasoningEffort)) {
+    return undefined;
+  }
+  if (reasoningEffort === getDefaultEffort(caps)) {
+    return undefined;
+  }
+  return { reasoningEffort: reasoningEffort as GrokReasoningEffort };
 }
 
 export function normalizePiModelOptions(

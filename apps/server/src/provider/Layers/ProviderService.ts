@@ -46,10 +46,11 @@ export interface ProviderServiceLiveOptions {
 }
 
 const DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS = 10 * 60 * 1000;
-const PROVIDER_RUNTIME_IDLE_STOP_MS = Number.isFinite(
-  Number(process.env.DPCODE_PROVIDER_RUNTIME_IDLE_STOP_MS),
-)
-  ? Math.max(0, Number(process.env.DPCODE_PROVIDER_RUNTIME_IDLE_STOP_MS))
+const configuredProviderRuntimeIdleStopMs =
+  process.env.SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS ??
+  process.env.DPCODE_PROVIDER_RUNTIME_IDLE_STOP_MS;
+const PROVIDER_RUNTIME_IDLE_STOP_MS = Number.isFinite(Number(configuredProviderRuntimeIdleStopMs))
+  ? Math.max(0, Number(configuredProviderRuntimeIdleStopMs))
   : DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS;
 
 const ProviderRollbackConversationInput = Schema.Struct({
@@ -183,6 +184,14 @@ function runtimeStatusForEvent(event: ProviderRuntimeEvent): "running" | "stoppe
     default:
       return "running";
   }
+}
+
+function shouldRefreshResumeCursorForEvent(event: ProviderRuntimeEvent): boolean {
+  return (
+    event.type === "thread.started" ||
+    event.type === "turn.completed" ||
+    event.type === "turn.aborted"
+  );
 }
 
 function runtimeLastErrorForEvent(event: ProviderRuntimeEvent): string | null | undefined {
@@ -324,6 +333,33 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         ),
       );
 
+    // Runtime events are where adapters surface provider-native ids; refresh
+    // from the live session before idle stop/recovery freezes an old cursor.
+    const refreshResumeCursorFromActiveSession = (
+      event: ProviderRuntimeEvent,
+      binding: ProviderRuntimeBinding,
+    ): Effect.Effect<unknown | null | undefined> => {
+      if (!shouldRefreshResumeCursorForEvent(event)) {
+        return Effect.succeed(binding.resumeCursor);
+      }
+
+      return Effect.gen(function* () {
+        const adapter = yield* registry.getByProvider(binding.provider);
+        const sessions = yield* adapter.listSessions();
+        const activeSession = sessions.find((session) => session.threadId === event.threadId);
+        return activeSession?.resumeCursor ?? binding.resumeCursor;
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider.session.resume_cursor_refresh_failed", {
+            threadId: event.threadId,
+            provider: binding.provider,
+            eventType: event.type,
+            cause: Cause.pretty(cause),
+          }).pipe(Effect.as(binding.resumeCursor)),
+        ),
+      );
+    };
+
     const updateSessionBindingFromRuntimeEvent = (
       event: ProviderRuntimeEvent,
     ): Effect.Effect<void> => {
@@ -361,6 +397,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ? null
               : (runtimePayloadRecord(binding.runtimePayload).activeTurnId ?? null);
         const lastError = runtimeLastErrorForEvent(event);
+        const resumeCursor = yield* refreshResumeCursorFromActiveSession(event, binding);
 
         yield* directory.upsert({
           threadId: event.threadId,
@@ -368,7 +405,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
           ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
           status: runtimeStatusForEvent(event),
-          ...(binding.resumeCursor !== undefined ? { resumeCursor: binding.resumeCursor } : {}),
+          ...(resumeCursor !== undefined ? { resumeCursor } : {}),
           runtimePayload: {
             activeTurnId,
             lastRuntimeEvent: event.type,
