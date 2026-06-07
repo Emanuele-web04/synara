@@ -110,8 +110,8 @@ export const COMPOSER_COLUMN_FRAME_CLASS_NAME = CHAT_COLUMN_FRAME_CLASS_NAME;
  * list). Keeps stacked activity on the same 11/12-width rail as queued rows so
  * the composer input can remain a distinct, fully rounded surface underneath.
  *
- * Prefer ComposerStackedHeaderFrame inside ComposerColumnFrame instead of using
- * this token directly so stacked panels stay relative to the composer column.
+ * Prefer ComposerStackedPanel inside ComposerColumnFrame instead of using this
+ * token directly so chrome and attached-radius behavior stay centralized.
  */
 export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-11/12 min-w-0";
 
@@ -124,6 +124,12 @@ export const COMPOSER_INPUT_SHELL_CLASS_NAME =
 /** Defined composer border: the heaviest border token nudged a bit darker with foreground. */
 export const COMPOSER_SURFACE_BORDER_CLASS_NAME =
   "border-[color:color-mix(in_srgb,var(--color-border-heavy)_95%,var(--foreground)_5%)]";
+
+/** Shared border for panels stacked above the composer; dark mode matches the live changes strip. */
+export const COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME = [
+  COMPOSER_SURFACE_BORDER_CLASS_NAME,
+  "dark:border-[color:color-mix(in_srgb,var(--color-border-heavy)_50%,transparent)]",
+].join(" ");
 
 /** Border + shadow chrome for the composer surface: a real border follows
  *  squircle/corner-shape geometry more evenly than an outer ring (box-shadow).

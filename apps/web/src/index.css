@@ -1156,7 +1156,7 @@ label:has(> select#reasoning-effort) select {
 /* Keep diff chrome aligned with the user-configured code font, not the base mono fallback. */
 diffs-container {
   --diffs-font-family: var(--font-chat-code-family);
-  --diffs-header-font-family: var(--font-chat-code-family);
+  --diffs-header-font-family: var(--font-ui-family);
 }
 
 /* Diffs theme bridge (match diff surfaces to app palette) */
@@ -1229,6 +1229,11 @@ diffs-container {
   border-bottom-right-radius: 0;
   border-top-left-radius: calc(var(--composer-radius) - 1px);
   border-top-right-radius: calc(var(--composer-radius) - 1px);
+}
+
+.chat-composer-stacked-top[data-composer-stacked-attached="true"] {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 .chat-composer-surface {

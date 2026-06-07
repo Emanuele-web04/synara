@@ -19,8 +19,8 @@ import { FileEntryIcon } from "./FileEntryIcon";
 
 // Keep diff virtualization tuning in one place so every diff surface scrolls identically.
 const DIFF_VIRTUALIZER_CONFIG = {
-  overscrollSize: 600,
-  intersectionObserverMargin: 1200,
+  overscrollSize: 400,
+  intersectionObserverMargin: 600,
 };
 
 // Virtualized scroll container shared by single-file (GitPanel) and multi-file
@@ -62,7 +62,14 @@ export function FileDiffCard(props: {
         ...(props.collapsed !== undefined ? { collapsed: props.collapsed } : {}),
       }}
       renderHeaderPrefix={() => (
-        <FileEntryIcon pathValue={filePath} kind="file" theme={props.theme} className="size-4" />
+        <span className="inline-flex items-center justify-center leading-none">
+          <FileEntryIcon
+            pathValue={filePath}
+            kind="file"
+            theme={props.theme}
+            className="size-3.5 text-muted-foreground/70"
+          />
+        </span>
       )}
       {...(props.renderHeaderMetadata ? { renderHeaderMetadata: props.renderHeaderMetadata } : {})}
     />

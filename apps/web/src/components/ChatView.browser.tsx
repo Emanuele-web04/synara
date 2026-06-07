@@ -692,6 +692,45 @@ function createSnapshotWithSettledInlinePlan(): OrchestrationReadModel {
   };
 }
 
+// A plan-mode thread whose latest turn has settled and that still has an
+// actionable (unimplemented) proposed plan. This is exactly the state where the
+// live composer shows the plan-follow-up prompt, so it's the setup that used to
+// misroute an auto-dispatched queued *chat* turn into the plan-follow-up path.
+function createSnapshotWithSettledPlanAwaitingFollowUp(): OrchestrationReadModel {
+  const snapshot = createSnapshotWithSettledInlinePlan();
+  const planMarkdown = [
+    "# Proposed plan",
+    "",
+    "- Step 1: capture the failing state",
+    "- Step 2: apply the fix",
+    "- Step 3: add regression coverage",
+  ].join("\n");
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            interactionMode: "plan",
+            proposedPlans: [
+              {
+                id: "plan-awaiting-follow-up",
+                turnId: null,
+                planMarkdown,
+                implementedAt: null,
+                implementationThreadId: null,
+                createdAt: isoAt(1_005),
+                updatedAt: isoAt(1_005),
+              },
+            ],
+            updatedAt: isoAt(1_005),
+          }
+        : thread,
+    ),
+  };
+}
+
 function createSnapshotWithInlineToolOverflow(options: {
   active: boolean;
 }): OrchestrationReadModel {
@@ -2463,6 +2502,166 @@ describe("ChatView timeline estimator parity (full app)", () => {
           // The restored image renders as a thumbnail chip whose filename lives in
           // its accessible label/title, not in text content.
           expect(document.querySelector('[aria-label="Preview queued-image.png"]')).not.toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("auto-dispatches a queued turn without wiping the live composer draft", async () => {
+    const queuedPrompt = "queued prompt that should auto-send";
+    const draftBeingTyped = "draft the user is still typing";
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-auto-dispatch-target" as MessageId,
+        targetText: "auto dispatch target",
+        // Idle session so the auto-dispatch effect (gated on phase !== "running")
+        // drains the queue, mirroring a turn that just finished.
+        sessionStatus: "ready",
+      }),
+    });
+
+    try {
+      // The user is mid-draft in the composer while a turn-completion drain fires.
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, draftBeingTyped);
+      useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, {
+        id: "queued-turn-auto",
+        kind: "chat",
+        createdAt: NOW_ISO,
+        previewText: queuedPrompt,
+        prompt: queuedPrompt,
+        images: [],
+        assistantSelections: [],
+        terminalContexts: [],
+        skills: [],
+        mentions: [],
+        selectedProvider: "codex",
+        selectedModel: "gpt-5",
+        selectedPromptEffort: null,
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5",
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        envMode: "local",
+      });
+
+      await vi.waitFor(
+        () => {
+          const turnStartRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              typeof request.command === "object" &&
+              request.command !== null &&
+              "type" in request.command &&
+              request.command.type === "thread.turn.start" &&
+              "threadId" in request.command &&
+              request.command.threadId === THREAD_ID &&
+              "message" in request.command &&
+              typeof request.command.message === "object" &&
+              request.command.message !== null &&
+              "text" in request.command.message &&
+              typeof request.command.message.text === "string" &&
+              request.command.message.text.includes(queuedPrompt),
+          );
+          expect(turnStartRequest).toBeTruthy();
+          // Queue drained...
+          expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(0);
+          // ...but the in-progress composer draft is left untouched.
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+            draftBeingTyped,
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("auto-dispatches a queued chat turn as a chat message even while a plan follow-up is pending", async () => {
+    const queuedPrompt = "queued chat turn that must stay a chat message";
+    const queuedImage = createComposerImage({
+      id: "queued-plan-image-1",
+      previewUrl: "blob:queued-plan-image-1",
+      name: "queued-plan-image.png",
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      // Plan mode, settled turn, actionable proposed plan -> the live composer is
+      // showing the plan follow-up prompt at the moment the queue drains.
+      snapshot: createSnapshotWithSettledPlanAwaitingFollowUp(),
+    });
+
+    try {
+      // Make the live composer's interaction mode explicitly "plan" so the
+      // plan-follow-up branch in onSend is live. The queued chat turn below
+      // carries its own "default" mode and an image attachment, both of which the
+      // misroute (onSubmitPlanFollowUp) would discard.
+      useComposerDraftStore.getState().setInteractionMode(THREAD_ID, "plan");
+      useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, {
+        id: "queued-turn-plan-chat",
+        kind: "chat",
+        createdAt: NOW_ISO,
+        previewText: queuedPrompt,
+        prompt: queuedPrompt,
+        images: [queuedImage],
+        assistantSelections: [],
+        terminalContexts: [],
+        skills: [],
+        mentions: [],
+        selectedProvider: "codex",
+        selectedModel: "gpt-5",
+        selectedPromptEffort: null,
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5",
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        envMode: "local",
+      });
+
+      await vi.waitFor(
+        () => {
+          const turnStartRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              typeof request.command === "object" &&
+              request.command !== null &&
+              "type" in request.command &&
+              request.command.type === "thread.turn.start" &&
+              "threadId" in request.command &&
+              request.command.threadId === THREAD_ID &&
+              "message" in request.command &&
+              typeof request.command.message === "object" &&
+              request.command.message !== null &&
+              "text" in request.command.message &&
+              typeof request.command.message.text === "string" &&
+              request.command.message.text.includes(queuedPrompt),
+          );
+          expect(turnStartRequest).toBeTruthy();
+          const command = turnStartRequest!.command as {
+            interactionMode?: unknown;
+            message?: { attachments?: Array<{ type?: unknown; name?: unknown }> };
+          };
+          // Dispatched as a normal chat turn: it keeps the queued turn's own
+          // "default" interaction mode rather than being coerced to "plan" by the
+          // plan-follow-up path.
+          expect(command.interactionMode).toBe("default");
+          // ...and the queued image survives instead of being dropped to [].
+          const attachments = command.message?.attachments ?? [];
+          expect(attachments).toHaveLength(1);
+          expect(attachments[0]?.type).toBe("image");
+          expect(attachments[0]?.name).toBe("queued-plan-image.png");
+          // Queue drained.
+          expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(0);
         },
         { timeout: 8_000, interval: 16 },
       );

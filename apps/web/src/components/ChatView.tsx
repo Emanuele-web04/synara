@@ -165,6 +165,7 @@ import {
   deriveWorkLogEntries,
   hasActionableProposedPlan,
   hasLiveTurnTailWork,
+  isProviderFileEditWorkLogEntry,
   isLatestTurnSettled,
   WORK_LOG_PRESENTATION_VERSION,
   type ActiveTaskListState,
@@ -1209,6 +1210,11 @@ export default function ChatView({
     activeThread?.session ?? null,
   );
   const latestTurnSettled = latestTurnSettledByProvider && !hasLiveTurnTail;
+  // `latestTurnSettled` is also false when there is NO started turn (a brand-new
+  // chat), because `isLatestTurnSettled` treats a non-existent turn as unsettled.
+  // Gate "live turn" UI on an actually-started turn so the working-tree diff strip
+  // doesn't leak onto a fresh chat just because the repo happens to be dirty.
+  const latestTurnLive = Boolean(activeLatestTurn?.startedAt) && !latestTurnSettled;
   const activeProjectId = activeThread?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
@@ -1243,7 +1249,7 @@ export default function ChatView({
   const diffEnvironmentPending = diffEnvironmentState.pending;
   const diffDisabledReason = diffEnvironmentState.disabledReason;
   const repoDiffBadgeRefreshIntervalMs =
-    isFocusedPane && !latestTurnSettled && !diffEnvironmentPending && !resolvedDiffOpen
+    isFocusedPane && latestTurnLive && !diffEnvironmentPending && !resolvedDiffOpen
       ? GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS
       : false;
   const activeThreadAssociatedWorktree = useMemo(
@@ -1798,6 +1804,10 @@ export default function ChatView({
   const rawWorkLogEntries = useMemo(
     () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, threadActivities, WORK_LOG_PRESENTATION_VERSION],
+  );
+  const activeTurnHasFileChangeWork = useMemo(
+    () => rawWorkLogEntries.some(isProviderFileEditWorkLogEntry),
+    [rawWorkLogEntries],
   );
   const hasWorkLogSubagents = useMemo(
     () => rawWorkLogEntries.some((entry) => (entry.subagents?.length ?? 0) > 0),
@@ -3521,7 +3531,7 @@ export default function ChatView({
     isTerminalPrimarySurface,
   });
   const [environmentPanelOpen, setEnvironmentPanelOpen] = useState(() => environmentDefaultOpen);
-  useEffect(() => {
+  useLayoutEffect(() => {
     // Terminal threads keep the Environment panel closed by default so the full
     // workspace stays untouched until the user explicitly toggles the overlay.
     // Each normal chat thread starts open; empty/disposable views stay hidden.
@@ -3530,7 +3540,6 @@ export default function ChatView({
   const environmentPanelVisible = resolveEnvironmentPanelVisible({
     environmentEnabled,
     environmentPanelOpen,
-    isCenteredEmptyLanding,
   });
   const githubRepositoryQuery = useQuery(
     gitGithubRepositoryQueryOptions(gitBranchSourceCwd, environmentPanelVisible),
@@ -5473,12 +5482,18 @@ export default function ChatView({
       assistantSelectionCount: composerAssistantSelectionsForSend.length,
       terminalContexts: composerTerminalContextsForSend,
     });
-    if (showPlanFollowUpPrompt && activeProposedPlan) {
+    // Plan-follow-up handling only applies to the live composer. An already-queued
+    // chat turn is explicitly a chat message and must always go through the normal
+    // chat path below — routing it here would drop its attachments and ignore the
+    // model/runtime/interaction mode it was queued with. (Queued plan follow-ups are
+    // a separate "plan-follow-up" kind dispatched via onSubmitPlanFollowUp directly,
+    // so they never reach onSend.)
+    if (queuedChatTurn === null && showPlanFollowUpPrompt && activeProposedPlan) {
       const followUp = resolvePlanFollowUpSubmission({
         draftText: trimmed,
         planMarkdown: activeProposedPlan.planMarkdown,
       });
-      if (hasLiveTurn && dispatchMode === "queue" && queuedChatTurn === null) {
+      if (hasLiveTurn && dispatchMode === "queue") {
         clearComposerInput(activeThread.id);
         enqueueQueuedComposerTurn(activeThread.id, {
           id: randomUUID(),
@@ -5822,11 +5837,17 @@ export default function ChatView({
         description: toastCopy.description,
       });
     }
-    promptRef.current = "";
-    clearComposerDraftContent(threadIdForSend);
-    setComposerHighlightedItemId(null);
-    setComposerCursor(0);
-    setComposerTrigger(null);
+    // A queued turn dispatches from its own stored snapshot, so the live composer
+    // may hold content the user is actively typing (or about to queue). Only reset
+    // the composer on a live send; clearing it during a queued auto-dispatch would
+    // delete the user's in-progress draft.
+    if (queuedChatTurn === null) {
+      promptRef.current = "";
+      clearComposerDraftContent(threadIdForSend);
+      setComposerHighlightedItemId(null);
+      setComposerCursor(0);
+      setComposerTrigger(null);
+    }
 
     let createdServerThreadForLocalDraft = false;
     let turnStartSucceeded = false;
@@ -7776,9 +7797,13 @@ export default function ChatView({
   };
   // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
   // column is already narrow — right dock open or a split pane (same as header compact mode).
-  // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
+  // Empty landing and terminal surfaces always float so opening Environment never shifts layout.
   const environmentUsesFloatingOverlay =
-    isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
+    isCenteredEmptyLanding ||
+    isTerminalEnvironmentContext ||
+    isMobileViewport ||
+    rightDockOpen ||
+    surfaceMode === "split";
   const environmentAppliesContentInset = environmentPanelVisible && !environmentUsesFloatingOverlay;
   const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
   const environmentHeaderState = environmentEnabled
@@ -7788,10 +7813,14 @@ export default function ChatView({
       }
     : null;
 
+  const showComposerLiveChangesHeader =
+    latestTurnLive && activeTurnHasFileChangeWork && repoDiffTotals.fileCount > 0;
+  const showComposerActiveTaskListCard = Boolean(activeTaskList && !planSidebarOpen);
+
   // Composer layout keeps the task list and footer actions in one render path so
   // follow-up prompts and normal chat mode stay visually in sync.
-  const renderActiveTaskListCard = () =>
-    activeTaskList && !planSidebarOpen ? (
+  const renderActiveTaskListCard = (attachedToPrevious: boolean) =>
+    activeTaskList && showComposerActiveTaskListCard ? (
       <ComposerActiveTaskListCard
         activeTaskList={activeTaskList}
         cardRef={activeTaskListCardRef}
@@ -7799,6 +7828,7 @@ export default function ChatView({
         compact={activeTaskListCompact}
         onCompactChange={setActiveTaskListCompact}
         onOpenSidebar={() => setPlanSidebarOpen(true)}
+        attachedToPrevious={attachedToPrevious}
       />
     ) : null;
 
@@ -7813,7 +7843,7 @@ export default function ChatView({
           data-chat-pane-scope={paneScopeId}
         >
           <ComposerColumnFrame>
-            {!latestTurnSettled && repoDiffTotals.fileCount > 0 ? (
+            {showComposerLiveChangesHeader ? (
               <ComposerLiveChangesHeader
                 fileCount={repoDiffTotals.fileCount}
                 additions={repoDiffTotals.additions}
@@ -7821,12 +7851,13 @@ export default function ChatView({
                 onReview={onOpenDiff}
               />
             ) : null}
-            {renderActiveTaskListCard()}
+            {renderActiveTaskListCard(showComposerLiveChangesHeader)}
             <ComposerQueuedHeader
               queuedTurns={queuedComposerTurns}
               onSteer={onSteerQueuedComposerTurn}
               onRemove={removeQueuedComposerTurn}
               onEdit={onEditQueuedComposerTurn}
+              attachedToPrevious={showComposerLiveChangesHeader || showComposerActiveTaskListCard}
             />
             <div
               className={cn(

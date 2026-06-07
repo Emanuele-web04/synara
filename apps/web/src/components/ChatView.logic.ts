@@ -78,13 +78,11 @@ export function resolveDefaultEnvironmentPanelOpen(input: {
   );
 }
 
-// Hides stale open state immediately on empty landing views, before reset effects run.
 export function resolveEnvironmentPanelVisible(input: {
   environmentEnabled: boolean;
   environmentPanelOpen: boolean;
-  isCenteredEmptyLanding: boolean;
 }): boolean {
-  return input.environmentEnabled && input.environmentPanelOpen && !input.isCenteredEmptyLanding;
+  return input.environmentEnabled && input.environmentPanelOpen;
 }
 
 export function buildLocalDraftThread(

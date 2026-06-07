@@ -25,7 +25,7 @@ import {
   type RefObject,
   type ReactNode,
 } from "react";
-import { deriveTimelineEntries } from "../../session-logic";
+import { deriveTimelineEntries, isFileChangeWorkLogEntry } from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import {
@@ -2065,7 +2065,7 @@ function splitWorkEntryActionText(value: string): { action: string; rest: string
 }
 
 function isFileChangeWorkEntry(workEntry: TimelineWorkEntry): boolean {
-  return workEntry.requestKind === "file-change" || workEntry.itemType === "file_change";
+  return isFileChangeWorkLogEntry(workEntry);
 }
 
 function subagentPrimaryLabel(

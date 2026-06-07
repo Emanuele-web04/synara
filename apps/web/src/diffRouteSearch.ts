@@ -1,3 +1,7 @@
+// FILE: diffRouteSearch.ts
+// Purpose: Normalizes URL search state for chat side panels and diff-file deep links.
+// Layer: Route state utility
+
 import { TurnId } from "@t3tools/contracts";
 
 export type ChatRightPanel = "browser" | "diff";
@@ -44,7 +48,7 @@ export function parseDiffRouteSearch(search: Record<string, unknown>): DiffRoute
   const resolvedPanel = panel ?? (diff ? "diff" : undefined);
   const diffTurnIdRaw = diff ? normalizeSearchString(search.diffTurnId) : undefined;
   const diffTurnId = diffTurnIdRaw ? TurnId.makeUnsafe(diffTurnIdRaw) : undefined;
-  const diffFilePath = diff && diffTurnId ? normalizeSearchString(search.diffFilePath) : undefined;
+  const diffFilePath = diff ? normalizeSearchString(search.diffFilePath) : undefined;
 
   return {
     ...(splitViewId ? { splitViewId } : {}),

@@ -111,6 +111,23 @@ export interface PendingApproval {
   detail?: string;
 }
 
+// Shared "edited files" predicate so transcript cards and composer chrome do not drift.
+export function isFileChangeWorkLogEntry(
+  workEntry: Pick<WorkLogEntry, "itemType" | "requestKind">,
+): boolean {
+  return workEntry.requestKind === "file-change" || workEntry.itemType === "file_change";
+}
+
+// Composer live chrome should count actual edit work, not bare file-change approvals.
+export function isProviderFileEditWorkLogEntry(
+  workEntry: Pick<WorkLogEntry, "changedFiles" | "itemType" | "requestKind">,
+): boolean {
+  if (workEntry.itemType === "file_change") {
+    return true;
+  }
+  return workEntry.requestKind === "file-change" && (workEntry.changedFiles?.length ?? 0) > 0;
+}
+
 export interface PendingUserInput {
   requestId: ApprovalRequestId;
   createdAt: string;

@@ -9,7 +9,7 @@ import { memo, type RefObject } from "react";
 
 import type { ActiveTaskListState } from "../../session-logic";
 import { ActiveTaskListCard } from "./ActiveTaskListCard";
-import { ComposerStackedHeaderFrame } from "./ComposerColumnFrame";
+import { ComposerStackedPanel } from "./ComposerStackedPanel";
 
 interface ComposerActiveTaskListCardProps {
   activeTaskList: ActiveTaskListState;
@@ -19,6 +19,7 @@ interface ComposerActiveTaskListCardProps {
   compact: boolean;
   onCompactChange: (compact: boolean) => void;
   onOpenSidebar: () => void;
+  attachedToPrevious?: boolean;
 }
 
 export const ComposerActiveTaskListCard = memo(function ComposerActiveTaskListCard({
@@ -28,9 +29,15 @@ export const ComposerActiveTaskListCard = memo(function ComposerActiveTaskListCa
   compact,
   onCompactChange,
   onOpenSidebar,
+  attachedToPrevious = false,
 }: ComposerActiveTaskListCardProps) {
   return (
-    <ComposerStackedHeaderFrame ref={cardRef} passthroughSideMargins>
+    <ComposerStackedPanel
+      ref={cardRef}
+      passthroughSideMargins
+      attachedToPrevious={attachedToPrevious}
+      data-testid="active-task-list-card"
+    >
       <ActiveTaskListCard
         activeTaskList={activeTaskList}
         backgroundTaskCount={backgroundTaskCount}
@@ -38,6 +45,6 @@ export const ComposerActiveTaskListCard = memo(function ComposerActiveTaskListCa
         onCompactChange={onCompactChange}
         onOpenSidebar={onOpenSidebar}
       />
-    </ComposerStackedHeaderFrame>
+    </ComposerStackedPanel>
   );
 });

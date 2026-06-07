@@ -188,12 +188,26 @@ describe("environment panel visibility", () => {
     ).toBe(false);
   });
 
-  it("never renders the panel on the centered empty landing while stale open state resets", () => {
+  it("renders the panel when the user toggles it open on empty landing", () => {
     expect(
       resolveEnvironmentPanelVisible({
         environmentEnabled: true,
         environmentPanelOpen: true,
-        isCenteredEmptyLanding: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the panel hidden when environment controls are disabled or closed", () => {
+    expect(
+      resolveEnvironmentPanelVisible({
+        environmentEnabled: false,
+        environmentPanelOpen: true,
+      }),
+    ).toBe(false);
+    expect(
+      resolveEnvironmentPanelVisible({
+        environmentEnabled: true,
+        environmentPanelOpen: false,
       }),
     ).toBe(false);
   });

@@ -105,14 +105,21 @@ export function EnvironmentRowBody({
   icon,
   label,
   trailing,
+  compact = false,
 }: {
   icon: ReactNode;
   label: ReactNode;
   trailing?: ReactNode;
+  /** Skip the 16px icon gutter — for cramped dock/diff header pickers. */
+  compact?: boolean;
 }) {
   return (
     <>
-      <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>
+      {compact ? (
+        <span className="inline-flex shrink-0 items-center justify-center">{icon}</span>
+      ) : (
+        <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>
+      )}
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {trailing ? (
         <span className="flex shrink-0 items-center gap-1 tabular-nums">{trailing}</span>
