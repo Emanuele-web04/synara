@@ -498,11 +498,27 @@ const LEGACY_KEYBINDING_COMMAND_ALIASES = {
   "thread.next": "chat.visible.next",
 } as const satisfies Record<string, KeybindingRule["command"]>;
 
+// Retired picker jump commands have no current equivalent; dropping them avoids
+// rebinding old number-key shortcuts to a different action.
+const RETIRED_LEGACY_KEYBINDING_COMMAND_PATTERN = /^(?:composer\.)?modelPicker\.jump\.[1-9]$/;
 const OUTDATED_RECENT_VIEW_TERMINAL_GUARD = "!terminalFocus";
 const RECENT_VIEW_SHORTCUT_BY_COMMAND: Partial<Record<KeybindingRule["command"], string>> = {
   "view.recent.next": "ctrl+tab",
   "view.recent.previous": "ctrl+shift+tab",
 };
+
+function readKeybindingEntryCommand(entry: unknown): string | null {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    return null;
+  }
+
+  const command = (entry as { command?: unknown }).command;
+  return typeof command === "string" ? command : null;
+}
+
+function isRetiredLegacyKeybindingCommand(command: string): boolean {
+  return RETIRED_LEGACY_KEYBINDING_COMMAND_PATTERN.test(command);
+}
 
 // Cross-device configs can lag behind command renames; normalize known aliases
 // before schema validation so stale synced files do not become warning toasts.
@@ -510,11 +526,7 @@ function normalizeLegacyKeybindingEntry(entry: unknown): {
   readonly entry: unknown;
   readonly migrated: boolean;
 } {
-  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-    return { entry, migrated: false };
-  }
-
-  const command = (entry as { command?: unknown }).command;
+  const command = readKeybindingEntryCommand(entry);
   if (typeof command !== "string" || !(command in LEGACY_KEYBINDING_COMMAND_ALIASES)) {
     return { entry, migrated: false };
   }
@@ -690,6 +702,11 @@ const makeKeybindings = Effect.gen(function* () {
 
     return yield* Effect.forEach(rawConfig, (entry) =>
       Effect.gen(function* () {
+        const command = readKeybindingEntryCommand(entry);
+        if (command !== null && isRetiredLegacyKeybindingCommand(command)) {
+          return null;
+        }
+
         const normalized = normalizeLegacyKeybindingEntry(entry);
         const decodedRule = Schema.decodeUnknownExit(KeybindingRule)(normalized.entry);
         if (decodedRule._tag === "Failure") {
@@ -749,6 +766,12 @@ const makeKeybindings = Effect.gen(function* () {
     let migratedLegacyCommandCount = 0;
     let migratedDefaultRuleCount = 0;
     for (const [index, entry] of decodedEntries.value.entries()) {
+      const command = readKeybindingEntryCommand(entry);
+      if (command !== null && isRetiredLegacyKeybindingCommand(command)) {
+        migratedLegacyCommandCount += 1;
+        continue;
+      }
+
       const normalized = normalizeLegacyKeybindingEntry(entry);
       if (normalized.migrated) {
         migratedLegacyCommandCount += 1;

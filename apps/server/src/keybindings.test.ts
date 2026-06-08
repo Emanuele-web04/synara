@@ -364,6 +364,66 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  it.effect("drops retired model picker jump keybindings without startup issues", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* fs.writeFileString(
+        keybindingsConfigPath,
+        JSON.stringify([
+          { key: "mod+1", command: "modelPicker.jump.1" },
+          { key: "mod+2", command: "composer.modelPicker.jump.2" },
+          { key: "mod+k", command: "sidebar.search" },
+        ]),
+      );
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+
+      assert.deepEqual(configState.issues, []);
+      assert.isFalse(
+        configState.keybindings.some((entry) =>
+          String(entry.command).includes("modelPicker.jump."),
+        ),
+      );
+      assert.isTrue(
+        configState.keybindings.some(
+          (entry) => entry.command === "modelPicker.toggle" && entry.shortcut.key === "m",
+        ),
+      );
+      assert.isTrue(
+        configState.keybindings.some(
+          (entry) => entry.command === "thread.jump.1" && entry.shortcut.key === "1",
+        ),
+      );
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isFalse(
+        persisted.some((entry) => String(entry.command).includes("modelPicker.jump.")),
+      );
+      assert.isFalse(
+        persisted.some(
+          (entry) => entry.command === "modelPicker.toggle" && entry.key === "mod+1",
+        ),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) => entry.key === "mod+shift+m" && entry.command === "modelPicker.toggle",
+        ),
+      );
+      assert.isTrue(
+        persisted.some((entry) => entry.key === "mod+1" && entry.command === "thread.jump.1"),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect(
     "upserts missing default keybindings on startup without overriding existing command rules",
     () =>
