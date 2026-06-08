@@ -740,15 +740,54 @@ label:has(> select#reasoning-effort) select {
   text-underline-offset: 0.18em;
 }
 
-.chat-markdown a.chat-markdown__file-link {
-  font-weight: 500;
+.chat-markdown .thread-marker {
+  border-radius: 0.22em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  transition:
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    text-decoration-color 160ms ease;
 }
 
-.chat-markdown a.chat-markdown__file-link .chat-markdown__file-link-icon {
-  width: 1em;
-  height: 1em;
-  margin-right: 0.3em;
-  vertical-align: -0.15em;
+.chat-markdown .thread-marker-highlight {
+  padding: 0.02em 0.12em;
+}
+
+.chat-markdown .thread-marker-underline {
+  text-decoration-line: underline;
+  text-decoration-thickness: 0.14em;
+  text-underline-offset: 0.18em;
+}
+
+.chat-markdown .thread-marker-yellow {
+  background-color: color-mix(in srgb, #facc15 34%, transparent);
+  text-decoration-color: color-mix(in srgb, #eab308 82%, transparent);
+}
+
+.chat-markdown .thread-marker-blue {
+  background-color: color-mix(in srgb, #38bdf8 24%, transparent);
+  text-decoration-color: color-mix(in srgb, #0ea5e9 82%, transparent);
+}
+
+.chat-markdown .thread-marker-green {
+  background-color: color-mix(in srgb, #34d399 24%, transparent);
+  text-decoration-color: color-mix(in srgb, #10b981 82%, transparent);
+}
+
+.chat-markdown .thread-marker-pink {
+  background-color: color-mix(in srgb, #f472b6 24%, transparent);
+  text-decoration-color: color-mix(in srgb, #ec4899 82%, transparent);
+}
+
+.chat-markdown .thread-marker-done {
+  opacity: 0.58;
+}
+
+.chat-markdown .thread-marker-active {
+  box-shadow:
+    0 0 0 2px var(--color-background-surface),
+    0 0 0 4px color-mix(in srgb, var(--color-text-foreground) 34%, transparent);
 }
 
 .chat-markdown blockquote {
@@ -1167,7 +1206,7 @@ label:has(> select#reasoning-effort) select {
 /* Keep diff chrome aligned with the user-configured code font, not the base mono fallback. */
 diffs-container {
   --diffs-font-family: var(--font-chat-code-family);
-  --diffs-header-font-family: var(--font-ui-family);
+  --diffs-header-font-family: var(--font-chat-code-family);
 }
 
 /* Diffs theme bridge (match diff surfaces to app palette) */
@@ -1240,11 +1279,6 @@ diffs-container {
   border-bottom-right-radius: 0;
   border-top-left-radius: calc(var(--composer-radius) - 1px);
   border-top-right-radius: calc(var(--composer-radius) - 1px);
-}
-
-.chat-composer-stacked-top[data-composer-stacked-attached="true"] {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
 }
 
 .chat-composer-surface {

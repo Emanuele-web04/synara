@@ -14,6 +14,8 @@ import type {
   PinnedMessage,
   ResolvedKeybindingsConfig,
   ThreadId,
+  ThreadMarker,
+  ThreadMarkerId,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 
@@ -30,6 +32,7 @@ import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/i
 import { cn } from "~/lib/utils";
 
 import { EnvironmentEditorSection } from "./EnvironmentEditorSection";
+import { EnvironmentMarkersSection } from "./EnvironmentMarkersSection";
 import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "./environmentPanelStyles";
@@ -88,8 +91,12 @@ export interface EnvironmentPanelProps {
   } | null;
   /** Per-thread pinned-message checklist (server-synced). */
   pinnedMessages: readonly PinnedMessage[];
+  /** Per-thread text markers (server-synced). */
+  threadMarkers: readonly ThreadMarker[];
   /** Live text of pinned messages still present in the transcript (for labels/availability). */
   pinnedMessageTextById: ReadonlyMap<MessageId, string>;
+  /** Live text of marked messages still present in the transcript (for labels/availability). */
+  markerMessageTextById: ReadonlyMap<MessageId, string>;
   /** Per-thread freeform scratchpad notes (server-synced). */
   notes: string;
   /** Toggle the Diff panel/route (same handler the header diff toggle used). */
@@ -104,6 +111,14 @@ export interface EnvironmentPanelProps {
   onUnpinMessage: (messageId: MessageId) => void;
   /** Set (`null` clears to auto) a pinned message's label. */
   onRenamePinnedMessage: (messageId: MessageId, label: string | null) => void;
+  /** Scroll the transcript to a text marker. */
+  onJumpToThreadMarker: (marker: ThreadMarker) => void;
+  /** Toggle a marker's done state. */
+  onToggleThreadMarkerDone: (markerId: ThreadMarkerId) => void;
+  /** Remove a text marker. */
+  onRemoveThreadMarker: (markerId: ThreadMarkerId) => void;
+  /** Set (`null` clears to auto) a marker label. */
+  onRenameThreadMarker: (markerId: ThreadMarkerId, label: string | null) => void;
   /** Persist updated notes for the given thread (bound per section instance, not the active thread). */
   onNotesChange: (threadId: ThreadId, notes: string) => Promise<void>;
   /** Dismiss the panel overlay — invoked after actions that open the dock. */
@@ -159,7 +174,9 @@ export function EnvironmentPanel({
   branchToolbar,
   recap = null,
   pinnedMessages,
+  threadMarkers,
   pinnedMessageTextById,
+  markerMessageTextById,
   notes,
   onToggleDiff,
   onOpenGithubRepository,
@@ -167,6 +184,10 @@ export function EnvironmentPanel({
   onTogglePinnedMessageDone,
   onUnpinMessage,
   onRenamePinnedMessage,
+  onJumpToThreadMarker,
+  onToggleThreadMarkerDone,
+  onRemoveThreadMarker,
+  onRenameThreadMarker,
   onNotesChange,
   onClose,
 }: EnvironmentPanelProps) {
@@ -263,6 +284,20 @@ export function EnvironmentPanel({
             onToggleDone={onTogglePinnedMessageDone}
             onUnpin={onUnpinMessage}
             onRename={onRenamePinnedMessage}
+          />
+        </>
+      ) : null}
+
+      {threadMarkers.length > 0 ? (
+        <>
+          <div className={PANEL_DIVIDER_CLASS_NAME} />
+          <EnvironmentMarkersSection
+            markers={threadMarkers}
+            messageTextById={markerMessageTextById}
+            onJump={onJumpToThreadMarker}
+            onToggleDone={onToggleThreadMarkerDone}
+            onRemove={onRemoveThreadMarker}
+            onRename={onRenameThreadMarker}
           />
         </>
       ) : null}

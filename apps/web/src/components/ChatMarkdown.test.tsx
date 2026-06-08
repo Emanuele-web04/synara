@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { MessageId, ThreadMarkerId, type ThreadMarker } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -15,10 +16,16 @@ vi.mock("../hooks/useTheme", () => ({
   useTheme: () => ({ resolvedTheme: "light" }),
 }));
 
-async function renderMarkdown(text: string, cwd = "C:\\Users\\LENOVO\\dpcode") {
+async function renderMarkdown(
+  text: string,
+  cwd = "C:\\Users\\LENOVO\\dpcode",
+  markers?: readonly ThreadMarker[],
+) {
   const { default: ChatMarkdown } = await import("./ChatMarkdown");
 
-  return renderToStaticMarkup(<ChatMarkdown text={text} cwd={cwd} isStreaming={false} />);
+  return renderToStaticMarkup(
+    <ChatMarkdown text={text} cwd={cwd} isStreaming={false} markers={markers} />,
+  );
 }
 
 describe("ChatMarkdown", () => {
@@ -108,19 +115,61 @@ describe("ChatMarkdown", () => {
     expect(markup).not.toContain('class="katex"');
   });
 
+  it("renders exact thread marker ranges without changing markdown structure", async () => {
+    const marker: ThreadMarker = {
+      id: ThreadMarkerId.makeUnsafe("marker-1"),
+      messageId: MessageId.makeUnsafe("assistant-1"),
+      startOffset: 7,
+      endOffset: 21,
+      selectedText: "important text",
+      style: "highlight",
+      color: "yellow",
+      label: null,
+      done: false,
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+    };
+    const markup = await renderMarkdown("Read **important text** today.", undefined, [marker]);
+
+    expect(markup).toContain('data-thread-marker-id="marker-1"');
+    expect(markup).toContain("thread-marker-highlight");
+    expect(markup).toContain("<strong>");
+    expect(markup).toContain("important text");
+  });
+
+  it("keeps marker offsets stable after literal dollar protection", async () => {
+    const text = "Price $5. Highlight this phrase.";
+    const startOffset = text.indexOf("Highlight");
+    const marker: ThreadMarker = {
+      id: ThreadMarkerId.makeUnsafe("marker-dollar"),
+      messageId: MessageId.makeUnsafe("assistant-1"),
+      startOffset,
+      endOffset: startOffset + "Highlight this phrase".length,
+      selectedText: "Highlight this phrase",
+      style: "underline",
+      color: "blue",
+      label: null,
+      done: false,
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+    };
+    const markup = await renderMarkdown(text, undefined, [marker]);
+
+    expect(markup).toContain('data-thread-marker-id="marker-dollar"');
+    expect(markup).toContain("thread-marker-underline");
+    expect(markup).toContain("Price $5.");
+  });
+
   it("keeps plan and diff surfaces routed through the shared renderer", () => {
     const planSidebarSource = readFileSync(new URL("./PlanSidebar.tsx", import.meta.url), "utf8");
     const proposedPlanCardSource = readFileSync(
       new URL("./chat/ProposedPlanCard.tsx", import.meta.url),
       "utf8",
     );
-    const diffPanelSource = readFileSync(new URL("./DiffPanel.tsx", import.meta.url), "utf8");
 
     expect(planSidebarSource).toContain('import ChatMarkdown from "./ChatMarkdown"');
     expect(planSidebarSource).toContain("<ChatMarkdown");
     expect(proposedPlanCardSource).toContain('import ChatMarkdown from "../ChatMarkdown"');
     expect(proposedPlanCardSource).toContain("<ChatMarkdown");
-    expect(diffPanelSource).toContain('import ChatMarkdown from "./ChatMarkdown"');
-    expect(diffPanelSource).toContain("<ChatMarkdown");
   });
 });

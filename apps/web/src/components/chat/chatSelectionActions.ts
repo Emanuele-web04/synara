@@ -13,9 +13,30 @@ export interface TranscriptSelectionActionLayout {
   placement: "top" | "bottom";
 }
 
-const TRANSCRIPT_SELECTION_ACTION_WIDTH_PX = 108;
+const TRANSCRIPT_SELECTION_ACTION_WIDTH_PX = 292;
 const TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX = 32;
 const TRANSCRIPT_SELECTION_ACTION_GAP_PX = 8;
+
+export function resolveTranscriptMarkerRange(input: {
+  messageText: string;
+  selectedText: string;
+}): { startOffset: number; endOffset: number } | null {
+  const selectedText = input.selectedText.trim();
+  if (selectedText.length === 0) {
+    return null;
+  }
+  const firstIndex = input.messageText.indexOf(selectedText);
+  if (firstIndex < 0) {
+    return null;
+  }
+  if (input.messageText.indexOf(selectedText, firstIndex + selectedText.length) >= 0) {
+    return null;
+  }
+  return {
+    startOffset: firstIndex,
+    endOffset: firstIndex + selectedText.length,
+  };
+}
 
 function getSelectionRect(selection: Selection): DOMRect | null {
   if (selection.rangeCount === 0 || selection.isCollapsed) {

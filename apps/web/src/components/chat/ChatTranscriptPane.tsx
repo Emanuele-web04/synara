@@ -3,7 +3,7 @@
 // Layer: Chat transcript shell
 // Depends on: MessagesTimeline and ChatView's list-owned scroll contract.
 
-import { type MessageId, type ThreadId, type TurnId } from "@t3tools/contracts";
+import { type MessageId, type ThreadId, type ThreadMarker, type TurnId } from "@t3tools/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   memo,
@@ -44,6 +44,7 @@ interface ChatTranscriptPaneProps {
   timelineControllerRef?: RefObject<MessagesTimelineController | null>;
   pinnedMessageIds?: ReadonlySet<MessageId>;
   onTogglePinMessage?: (messageId: MessageId) => void;
+  threadMarkers?: readonly ThreadMarker[];
   markdownCwd: string | undefined;
   onExpandTimelineImage: (preview: ExpandedImagePreview) => void;
   onMessagesClickCapture: MouseEventHandler<HTMLDivElement>;
@@ -94,6 +95,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   timelineControllerRef,
   pinnedMessageIds,
   onTogglePinMessage,
+  threadMarkers,
   markdownCwd,
   onExpandTimelineImage,
   onMessagesClickCapture,
@@ -162,6 +164,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             {...(timelineControllerRef ? { controllerRef: timelineControllerRef } : {})}
             {...(pinnedMessageIds ? { pinnedMessageIds } : {})}
             {...(onTogglePinMessage ? { onTogglePinMessage } : {})}
+            {...(threadMarkers ? { threadMarkers } : {})}
             timelineEntries={timelineEntries}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
             onOpenTurnDiff={onOpenTurnDiff}
