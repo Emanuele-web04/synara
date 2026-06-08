@@ -22,6 +22,52 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.1.5",
+    date: "Jun 8",
+    features: [
+      {
+        id: "desktop-update-packaging",
+        title: "Desktop updates are packaged more reliably",
+        description:
+          "The macOS release path now has stronger artifact smoke checks, zip finalization helpers, and updater download coverage so new builds are easier to trust before they ship.",
+        details:
+          "Release tooling now validates Mac update artifacts, parses boolean environment flags consistently, and tests the resumable update downloader without the older update-feed cache layer. The README and release docs were refreshed around the current Synara desktop flow too.",
+      },
+      {
+        id: "diff-panel-refactor",
+        title: "The diff panel is easier to navigate",
+        description:
+          "Diff review now has a cleaner toolbar, file list, jump menu, and patch viewport so repository and turn changes are easier to scan without losing context.",
+        details:
+          "The large diff panel was split into focused components with explicit repo-vs-turn view logic, shared selectors, searchable file filtering, and tests for the new source-resolution behavior.",
+      },
+      {
+        id: "queued-plan-dispatch",
+        title: "Queued chat turns stay chat turns",
+        description:
+          "Queued follow-ups now preserve their own mode and attachments even when the live composer is sitting in a plan follow-up state.",
+        details:
+          "Queue draining now dispatches the queued turn payload directly, keeps in-progress composer drafts intact, and has browser coverage for plan-mode threads with pending follow-ups and image attachments.",
+      },
+      {
+        id: "composer-stack-polish",
+        title: "Composer panels line up cleanly",
+        description:
+          "Plan activity, queued follow-ups, and live file-change panels now share one frame style above the composer, with consistent width, borders, radius, and dark-mode opacity.",
+        details:
+          "The stacked composer chrome now flows through a shared panel wrapper and rail sizing token, while the file-change strip only appears for active turns that actually contain provider file edits.",
+      },
+      {
+        id: "markdown-and-menu-icons",
+        title: "Markdown and mention menus got sharper",
+        description:
+          "Chat markdown spacing, composer command selection, plugin discovery, file icons, and mention rendering were tightened so selected references look the same before and after sending.",
+        details:
+          "Provider discovery now normalizes aliases and built-in metadata more carefully, command menu grouping is simpler, markdown blocks have better visual rhythm, and sent user bubbles preserve the selected file/plugin icon instead of falling back to generic text.",
+      },
+    ],
+  },
+  {
     version: "0.1.4",
     date: "Jun 7",
     features: [

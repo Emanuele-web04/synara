@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.1.5 - 2026-06-08
+
+### Added
+
+- Added macOS update artifact smoke tooling, zip finalization helpers, and boolean environment parsing tests for the desktop release path.
+- Added focused diff panel components for the toolbar, file jump menu, file list, patch viewport, and selector helpers.
+- Added browser/unit coverage for queued turn auto-dispatch, plan-mode queued chat turns, composer stacked panel framing, diff view-source logic, provider discovery, markdown rendering, and mention/file icon behavior.
+
+### Changed
+
+- Refreshed README/release messaging and Synara desktop update flow documentation around the current app positioning.
+- Reworked the diff panel around explicit repo-vs-turn state, searchable file filtering, and smaller view components.
+- Unified composer stacked panels above the input so plan activity, queued follow-ups, and live file-change rows share width, border, radius, and dark-mode opacity.
+- Refined chat markdown spacing, composer command menu selection, provider/plugin discovery normalization, and file/plugin icon rendering in sent messages.
+
+### Fixed
+
+- Fixed queued chat dispatch so queued turns preserve their own interaction mode, attachments, and prompt while a plan follow-up is pending.
+- Fixed live file-change composer chrome so it appears only for active turns with actual provider file edits.
+- Fixed draft/reference handling so selected plugin and file mentions keep their structured references and icons after navigation or reload.
+- Removed the older update-feed cache path in favor of the newer resumable update download coverage.
+
+### Verification
+
+- `bun run fmt:check`
+- `bun run lint` (passes with 145 warnings, 0 errors)
+- `bun run typecheck` (passes with TS44 informational messages about JSON usage in tests/protocol files)
+- `bun run release:smoke`
+- `bun run build` (passes; Vite still warns about large web chunks and plugin timings)
+- `bun run test` (failed once: `packages/effect-acp/src/client.test.ts` timed out in `replays buffered notifications to handlers registered after they arrive`)
+- `bun run test src/client.test.ts -t "replays buffered notifications to handlers registered after they arrive"` from `packages/effect-acp` (targeted rerun passed: 1 test passed, 4 skipped)
+- `bun run test src/whatsNew/logic.test.ts` from `apps/web`
+- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website`
+
 ## 0.1.4 - 2026-06-07
 
 ### Added
