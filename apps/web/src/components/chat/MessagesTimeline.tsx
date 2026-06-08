@@ -1048,13 +1048,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     open={isCollapsedWorkExpanded}
                     onOpenChange={(open) => {
                       setCollapsedWorkExpanded(row.message.id, open);
-                      if (open && isTailContentRow) {
-                        scrollTailExpansionToEnd();
-                      }
                     }}
                   >
                     <CollapsibleTrigger
-                      data-scroll-anchor-ignore={isTailContentRow ? true : undefined}
+                      // ChatView's click anchor preserves this trigger's screen position
+                      // while the disclosure height animates, so opening it should not tail-scroll.
                       // -ml-0.5 optically aligns the leading "W" with the reply
                       // text below: the box is already flush, but the W glyph
                       // carries a left side-bearing that reads as an inset.

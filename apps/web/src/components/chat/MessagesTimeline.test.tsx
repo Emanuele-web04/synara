@@ -974,6 +974,7 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain(formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale"));
     expect(markup).toContain("Worked for 1.0s");
+    expect(markup).not.toContain("data-scroll-anchor-ignore");
     expect(markup).not.toContain(
       `${formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale")} • 1.0s`,
     );
