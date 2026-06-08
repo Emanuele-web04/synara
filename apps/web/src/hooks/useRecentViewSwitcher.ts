@@ -4,6 +4,7 @@
 // Exports: useRecentViewSwitcher
 
 import { ThreadId, type ProjectId } from "@t3tools/contracts";
+import type { ResolvedTerminalVisualIdentity } from "@t3tools/shared/terminalThreads";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -27,6 +28,10 @@ import { useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
 import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
+import {
+  resolveTerminalVisualIdentityMap,
+  selectRepresentativeTerminalVisualIdentity,
+} from "../terminalVisualIdentity";
 import { useWorkspaceStore } from "../workspaceStore";
 import type { useHandleNewThread } from "./useHandleNewThread";
 
@@ -105,12 +110,27 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
     if (!switcherOpen) {
       return EMPTY_RECENT_VIEW_ENTRIES;
     }
-    const terminalThreadIds = new Set<ThreadId>();
+    const terminalVisualIdentityByThreadId = new Map<ThreadId, ResolvedTerminalVisualIdentity>();
     for (const view of recentViews) {
       if (view.kind !== "thread") continue;
       const terminalState = selectThreadTerminalState(terminalStateByThreadId, view.threadId);
       if (terminalState.entryPoint === "terminal") {
-        terminalThreadIds.add(view.threadId);
+        const terminalVisualIdentityById = resolveTerminalVisualIdentityMap({
+          runningTerminalIds: terminalState.runningTerminalIds,
+          terminalAttentionStatesById: terminalState.terminalAttentionStatesById,
+          terminalCliKindsById: terminalState.terminalCliKindsById,
+          terminalIds: terminalState.terminalIds,
+          terminalLabelsById: terminalState.terminalLabelsById,
+          terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
+        });
+        const representativeIdentity = selectRepresentativeTerminalVisualIdentity({
+          activeTerminalId: terminalState.activeTerminalId,
+          terminalIds: terminalState.terminalIds,
+          terminalVisualIdentityById,
+        });
+        if (representativeIdentity) {
+          terminalVisualIdentityByThreadId.set(view.threadId, representativeIdentity.identity);
+        }
       }
     }
     const draftThreadsById: Record<string, RecentViewThreadDraftSummary> = {};
@@ -134,7 +154,7 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
       projects: input.projects,
       pinnedThreadIds: persistedPinnedThreadIds,
       workspacePages,
-      terminalThreadIds,
+      terminalVisualIdentityByThreadId,
     });
   }, [
     input.activeContextThreadId,

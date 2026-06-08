@@ -1623,7 +1623,8 @@ function SettingsRouteView() {
           {renderBooleanSettingRow({
             settingKey: "showEnvironmentMarkers",
             title: "Text markers",
-            description: "Show highlighted and underlined transcript text in the Environment panel.",
+            description:
+              "Show highlighted and underlined transcript text in the Environment panel.",
             resetLabel: "text markers section",
             ariaLabel: "Show the Text markers section in the Environment panel",
           })}

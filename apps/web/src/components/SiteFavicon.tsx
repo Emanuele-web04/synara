@@ -4,14 +4,17 @@
 //          so behavior matches the actual visible <img>, and shares a module-level
 //          status cache so a known host renders immediately on re-render.
 // Layer: Shared UI component
-// Used by: markdown source links (ChatMarkdown) and read-only link chips
-//          (MessagesTimeline). The Lexical composer chip uses the same lib
-//          (siteFavicon.ts) imperatively rather than this component.
+// Used by: markdown source links (ChatMarkdown), InlineLinkChip (composer + user bubble).
 
 import { memo, useEffect, useState } from "react";
 
 import { GlobeIcon } from "~/lib/icons";
-import { extractHostname, resolveSiteFaviconUrl, siteFaviconStatusCache } from "~/lib/siteFavicon";
+import {
+  extractHostname,
+  probeSiteFavicon,
+  resolveSiteFaviconUrl,
+  siteFaviconStatusCache,
+} from "~/lib/siteFavicon";
 import { cn } from "~/lib/utils";
 
 export interface SiteFaviconProps {
@@ -31,34 +34,19 @@ export const SiteFavicon = memo(function SiteFavicon({ url, size, className }: S
     faviconSrc ? (siteFaviconStatusCache.get(faviconSrc) ?? null) : "fail",
   );
 
-  // Probe with Image() so Electron/file-origin behaves like the visible <img>.
+  // Probe with Image() (via the shared, de-duped helper) so Electron/file-origin
+  // behaves like the visible <img> and every consumer reuses one load per host.
   useEffect(() => {
     if (!faviconSrc) {
       setStatus("fail");
       return;
     }
-    const cached = siteFaviconStatusCache.get(faviconSrc);
-    if (cached !== undefined) {
-      setStatus(cached);
-      return;
-    }
     let cancelled = false;
-    const image = new Image();
-    const handleLoad = () => {
-      siteFaviconStatusCache.set(faviconSrc, "ok");
-      if (!cancelled) setStatus("ok");
-    };
-    const handleError = () => {
-      siteFaviconStatusCache.set(faviconSrc, "fail");
-      if (!cancelled) setStatus("fail");
-    };
-    image.addEventListener("load", handleLoad);
-    image.addEventListener("error", handleError);
-    image.src = faviconSrc;
+    void probeSiteFavicon(faviconSrc).then((result) => {
+      if (!cancelled) setStatus(result);
+    });
     return () => {
       cancelled = true;
-      image.removeEventListener("load", handleLoad);
-      image.removeEventListener("error", handleError);
     };
   }, [faviconSrc]);
 

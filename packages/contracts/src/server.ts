@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import {
   IsoDateTime,
   NonNegativeInt,
+  PositiveInt,
   ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -139,6 +140,47 @@ export type ServerGetProviderUsageSnapshotInput = typeof ServerGetProviderUsageS
 
 export const ServerGetProviderUsageSnapshotResult = Schema.NullOr(ServerProviderUsageSnapshot);
 export type ServerGetProviderUsageSnapshotResult = typeof ServerGetProviderUsageSnapshotResult.Type;
+
+export const ServerLocalServerAddress = Schema.Struct({
+  host: TrimmedNonEmptyString,
+  port: PositiveInt,
+  family: Schema.Literals(["tcp4", "tcp6", "tcp"]),
+  url: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ServerLocalServerAddress = typeof ServerLocalServerAddress.Type;
+
+export const ServerLocalServerProcess = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  pid: PositiveInt,
+  command: TrimmedNonEmptyString,
+  displayName: TrimmedNonEmptyString,
+  pageTitle: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
+  args: Schema.String.check(Schema.isMaxLength(1_000)),
+  ports: Schema.Array(PositiveInt),
+  addresses: Schema.Array(ServerLocalServerAddress),
+  isStoppable: Schema.Boolean,
+  stopDisabledReason: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
+});
+export type ServerLocalServerProcess = typeof ServerLocalServerProcess.Type;
+
+export const ServerListLocalServersResult = Schema.Struct({
+  generatedAt: IsoDateTime,
+  servers: Schema.Array(ServerLocalServerProcess),
+});
+export type ServerListLocalServersResult = typeof ServerListLocalServersResult.Type;
+
+export const ServerStopLocalServerInput = Schema.Struct({
+  pid: PositiveInt,
+  port: PositiveInt,
+});
+export type ServerStopLocalServerInput = typeof ServerStopLocalServerInput.Type;
+
+export const ServerStopLocalServerResult = Schema.Struct({
+  pid: PositiveInt,
+  stopped: Schema.Boolean,
+  message: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
+});
+export type ServerStopLocalServerResult = typeof ServerStopLocalServerResult.Type;
 
 export const ServerDiagnosticsMemory = Schema.Struct({
   rssBytes: NonNegativeInt,

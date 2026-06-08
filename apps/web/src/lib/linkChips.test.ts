@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { describeLinkChip, parseBareComposerLink, trimTrailingLinkPunctuation } from "./linkChips";
+import {
+  describeLinkChip,
+  normalizeComposerLinkUrl,
+  parseBareComposerLink,
+  trimTrailingLinkPunctuation,
+} from "./linkChips";
 
 describe("parseBareComposerLink", () => {
   it("returns the URL when the whole text is one bare link", () => {
@@ -13,11 +18,43 @@ describe("parseBareComposerLink", () => {
     expect(parseBareComposerLink("  https://example.com/path.  ")).toBe("https://example.com/path");
   });
 
+  it("normalizes a bare domain link so composer chips can fetch favicons", () => {
+    expect(parseBareComposerLink("linear.app/team/issue/ENG-12")).toBe(
+      "https://linear.app/team/issue/ENG-12",
+    );
+  });
+
   it("returns null for prose, multiple tokens, or non-URLs", () => {
     expect(parseBareComposerLink("see https://example.com here")).toBeNull();
     expect(parseBareComposerLink("https://a.com https://b.com")).toBeNull();
     expect(parseBareComposerLink("just text")).toBeNull();
+    expect(parseBareComposerLink("AGENTS.md")).toBeNull();
     expect(parseBareComposerLink("")).toBeNull();
+  });
+});
+
+describe("normalizeComposerLinkUrl", () => {
+  it("keeps http(s) URLs unchanged", () => {
+    expect(normalizeComposerLinkUrl("https://linear.app/team/issue/ENG-12")).toBe(
+      "https://linear.app/team/issue/ENG-12",
+    );
+  });
+
+  it("adds https:// for public-looking bare domains", () => {
+    expect(normalizeComposerLinkUrl("linear.app/team/issue/ENG-12")).toBe(
+      "https://linear.app/team/issue/ENG-12",
+    );
+    expect(normalizeComposerLinkUrl("linear.app")).toBe("https://linear.app");
+  });
+
+  it("does not treat common local filenames as bare domains", () => {
+    expect(normalizeComposerLinkUrl("AGENTS.md")).toBeNull();
+    expect(normalizeComposerLinkUrl("index.ts")).toBeNull();
+  });
+
+  it("avoids uncommon single-token dotted prose unless it has a path", () => {
+    expect(normalizeComposerLinkUrl("foo.bar")).toBeNull();
+    expect(normalizeComposerLinkUrl("foo.bar/docs")).toBe("https://foo.bar/docs");
   });
 });
 
@@ -83,6 +120,13 @@ describe("describeLinkChip", () => {
     expect(describeLinkChip("https://www.example.com/")).toEqual({
       label: "example.com",
       isGitHub: false,
+    });
+  });
+
+  it("recognizes bare GitHub domains after normalization", () => {
+    expect(describeLinkChip("github.com/openai/codex/pull/12")).toEqual({
+      label: "openai/codex#12",
+      isGitHub: true,
     });
   });
 });

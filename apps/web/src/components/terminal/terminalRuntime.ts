@@ -12,7 +12,6 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import {
   defaultTerminalTitleForCliKind,
   consumeTerminalIdentityInput,
-  deriveTerminalOutputIdentity,
 } from "@t3tools/shared/terminalThreads";
 import { describeErrorMessage } from "@t3tools/shared/errorMessages";
 import {
@@ -146,7 +145,6 @@ function scheduleFontSettleRefit(entry: TerminalRuntimeEntry): void {
 
 function resetForSnapshotReplay(entry: TerminalRuntimeEntry): void {
   entry.titleInputBuffer = "";
-  entry.outputIdentityBuffer = "";
   entry.linkMatchCache.clear();
   clearPendingWrites(entry);
   entry.terminal.write("\u001bc");
@@ -196,9 +194,6 @@ function replaySnapshot(
   onParsed?: () => void,
 ): void {
   resetForSnapshotReplay(entry);
-  if (snapshot.history.length > 0) {
-    maybePromoteTerminalIdentityFromOutput(entry, snapshot.history);
-  }
   const payload = snapshotReplayPayload(snapshot);
   if (payload.length > 0) {
     setRuntimeStatus(entry, "replaying");
@@ -594,24 +589,6 @@ function maybeLoadWebglAddon(entry: TerminalRuntimeEntry): void {
   });
 }
 
-function maybePromoteTerminalIdentityFromOutput(entry: TerminalRuntimeEntry, output: string): void {
-  if (entry.terminalCliKind !== null) {
-    return;
-  }
-  const nextOutputBuffer = `${entry.outputIdentityBuffer}${output}`;
-  const outputIdentity =
-    deriveTerminalOutputIdentity(output) ?? deriveTerminalOutputIdentity(nextOutputBuffer);
-  entry.outputIdentityBuffer = nextOutputBuffer.slice(-8192);
-  if (!outputIdentity?.cliKind) {
-    return;
-  }
-  entry.terminalCliKind = outputIdentity.cliKind;
-  entry.callbacks.onTerminalMetadataChange(entry.terminalId, {
-    cliKind: outputIdentity.cliKind,
-    label: outputIdentity.title,
-  });
-}
-
 function applyInitialVisualResize(entry: TerminalRuntimeEntry): void {
   if (!entry.viewState.isVisible) return;
 
@@ -824,7 +801,6 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     fitAddon,
     searchAddon,
     webglAddon: null,
-    outputIdentityBuffer: "",
     titleInputBuffer: "",
     hasHandledExit: false,
     runtimeStatus: "connecting",
@@ -992,11 +968,12 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     terminal.onData((data) => {
       const nextIdentityState = consumeTerminalIdentityInput(entry.titleInputBuffer, data);
       entry.titleInputBuffer = nextIdentityState.buffer;
-      if (nextIdentityState.identity?.cliKind && entry.terminalCliKind === null) {
-        entry.terminalCliKind = nextIdentityState.identity.cliKind;
+      const submittedIdentity = nextIdentityState.identity;
+      if (submittedIdentity && (submittedIdentity.cliKind || entry.terminalCliKind !== null)) {
+        entry.terminalCliKind = submittedIdentity.cliKind;
         entry.callbacks.onTerminalMetadataChange(entry.terminalId, {
-          cliKind: nextIdentityState.identity.cliKind,
-          label: nextIdentityState.identity.title,
+          cliKind: submittedIdentity.cliKind,
+          label: submittedIdentity.title,
         });
       }
       const api = readNativeApi();
@@ -1028,7 +1005,6 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
       if (event.type === "output") {
         setRuntimeStatus(entry, "ready");
         entry.outputEventVersion += 1;
-        maybePromoteTerminalIdentityFromOutput(entry, event.data);
         scheduleWrite(entry, event.data, event.byteLength ?? terminalByteLength(event.data));
         return;
       }
@@ -1047,7 +1023,6 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
 
       if (event.type === "cleared") {
         entry.titleInputBuffer = "";
-        entry.outputIdentityBuffer = "";
         entry.linkMatchCache.clear();
         clearPendingWrites(entry);
         terminal.clear();
@@ -1056,11 +1031,11 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
       }
 
       if (event.type === "activity") {
-        if (event.cliKind && entry.terminalCliKind !== event.cliKind) {
+        if (entry.terminalCliKind !== event.cliKind) {
           entry.terminalCliKind = event.cliKind;
           entry.callbacks.onTerminalMetadataChange(entry.terminalId, {
             cliKind: event.cliKind,
-            label: defaultTerminalTitleForCliKind(event.cliKind),
+            label: event.cliKind ? defaultTerminalTitleForCliKind(event.cliKind) : "Terminal",
           });
         }
         entry.callbacks.onTerminalActivityChange(entry.terminalId, {

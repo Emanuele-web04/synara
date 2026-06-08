@@ -34,6 +34,7 @@ import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/i
 import { cn } from "~/lib/utils";
 
 import { EnvironmentEditorSection } from "./EnvironmentEditorSection";
+import { EnvironmentLocalServersSection } from "./EnvironmentLocalServersSection";
 import { EnvironmentMarkersSection } from "./EnvironmentMarkersSection";
 import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
@@ -245,6 +246,8 @@ export function EnvironmentPanel({
       {showGitActions ? (
         <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} variant="panel" />
       ) : null}
+
+      <EnvironmentLocalServersSection enabled={open} />
 
       {/*
         Optional sections below the git block. Each renders its own leading divider only when it

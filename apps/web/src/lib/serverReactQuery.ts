@@ -1,5 +1,5 @@
-import type { ProviderKind } from "@t3tools/contracts";
-import { queryOptions } from "@tanstack/react-query";
+import type { ProviderKind, ServerStopLocalServerInput } from "@t3tools/contracts";
+import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
 
 export const serverQueryKeys = {
@@ -9,8 +9,13 @@ export const serverQueryKeys = {
   environment: () => ["server", "environment"] as const,
   settings: () => ["server", "settings"] as const,
   worktrees: () => ["server", "worktrees"] as const,
+  localServers: () => ["server", "localServers"] as const,
   providerUsage: (provider: ProviderKind | null | undefined, homePath?: string | null) =>
     ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
+};
+
+export const serverMutationKeys = {
+  stopLocalServer: () => ["server", "mutation", "stopLocalServer"] as const,
 };
 
 export function serverConfigQueryOptions() {
@@ -67,6 +72,34 @@ export function serverWorktreesQueryOptions() {
     staleTime: 30_000,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
+  });
+}
+
+export function serverLocalServersQueryOptions(enabled = true) {
+  return queryOptions({
+    queryKey: serverQueryKeys.localServers(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      return api.server.listLocalServers();
+    },
+    enabled,
+    staleTime: 3_000,
+    refetchInterval: enabled ? 10_000 : false,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+  });
+}
+
+export function serverStopLocalServerMutationOptions(input: { queryClient: QueryClient }) {
+  return mutationOptions({
+    mutationKey: serverMutationKeys.stopLocalServer(),
+    mutationFn: async (server: ServerStopLocalServerInput) => {
+      const api = ensureNativeApi();
+      return api.server.stopLocalServer(server);
+    },
+    onSettled: () => {
+      void input.queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
+    },
   });
 }
 

@@ -41,14 +41,17 @@ import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../ma
 import { readNativeApi } from "../nativeApi";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
-import { COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME } from "./composerInlineChip";
+import {
+  COMPOSER_INLINE_CHIP_ICON_LABEL_GAP_CLASS_NAME,
+  COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+} from "./composerInlineChip";
 import { LinkChipIcon } from "./LinkChipIcon";
 import { IconButton } from "./ui/icon-button";
 
 const EXTERNAL_HTTP_HREF_PATTERN = /^https?:\/\//i;
 const MARKDOWN_EXTERNAL_LINK_CLASS_NAME =
   "inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline";
-const MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME = `${COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} mr-1 inline-block align-[-0.125em]`;
+const MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME = `${COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} ${COMPOSER_INLINE_CHIP_ICON_LABEL_GAP_CLASS_NAME}`;
 
 function isExternalHttpHref(href: string | undefined): href is string {
   return typeof href === "string" && EXTERNAL_HTTP_HREF_PATTERN.test(href);
@@ -160,6 +163,10 @@ type MarkdownParentNode = {
 };
 type MarkdownNode = MarkdownTextNode | MarkdownParentNode | Record<string, unknown>;
 type RenderableThreadMarker = ThreadMarker & { className: string };
+type ThreadMarkerFragmentContinuity = {
+  readonly continuesBefore: boolean;
+  readonly continuesAfter: boolean;
+};
 
 // The "active" ring (a transient deep-link highlight) is applied imperatively by the timeline so
 // it never re-parses the markdown tree; this className is the stable, parse-time-only part.
@@ -169,6 +176,20 @@ function markerClassNameFor(marker: ThreadMarker) {
     marker.style === "highlight" ? "thread-marker-highlight" : "thread-marker-underline",
     `thread-marker-${marker.color}`,
     marker.done ? "thread-marker-done" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+// Joins marker fragments split by markdown nodes so bold/code boundaries still read as one mark.
+function markerFragmentClassNameFor(
+  marker: RenderableThreadMarker,
+  continuity: ThreadMarkerFragmentContinuity,
+): string {
+  return [
+    marker.className,
+    continuity.continuesBefore ? "thread-marker-continues-before" : "",
+    continuity.continuesAfter ? "thread-marker-continues-after" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -260,6 +281,8 @@ function splitTextNodeWithMarkers(
     if (markerStart < cursor || markerEnd > node.value.length) {
       continue;
     }
+    const absoluteFragmentStart = startOffset + markerStart;
+    const absoluteFragmentEnd = startOffset + markerEnd;
     if (markerStart > cursor) {
       nodes.push({ type: "text", value: node.value.slice(cursor, markerStart) });
     }
@@ -268,7 +291,10 @@ function splitTextNodeWithMarkers(
       data: {
         hName: "span",
         hProperties: {
-          className: marker.className,
+          className: markerFragmentClassNameFor(marker, {
+            continuesBefore: absoluteFragmentStart > marker.startOffset,
+            continuesAfter: absoluteFragmentEnd < marker.endOffset,
+          }),
           "data-thread-marker-id": marker.id,
           "data-thread-marker-style": marker.style,
           "data-thread-marker-color": marker.color,
@@ -872,9 +898,7 @@ function ChatMarkdown({
               href={restoredHref}
               target="_blank"
               rel="noopener noreferrer"
-              className={
-                isExternalHttp ? MARKDOWN_EXTERNAL_LINK_CLASS_NAME : props.className
-              }
+              className={isExternalHttp ? MARKDOWN_EXTERNAL_LINK_CLASS_NAME : props.className}
             >
               {isExternalHttp ? (
                 <LinkChipIcon

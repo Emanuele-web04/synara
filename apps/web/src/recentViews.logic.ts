@@ -4,6 +4,10 @@
 // Exports: recent view types plus MRU update, pruning, and display derivation helpers
 
 import type { ProjectId, ProviderKind, ThreadId } from "@t3tools/contracts";
+import type {
+  ResolvedTerminalVisualIdentity,
+  TerminalIconKey,
+} from "@t3tools/shared/terminalThreads";
 import type { Project, SidebarThreadSummary } from "./types";
 
 export const MAX_RECENT_VIEWS = 5;
@@ -30,6 +34,7 @@ export interface RecentViewDisplayEntry {
   key: string;
   view: RecentView;
   kind: RecentView["kind"];
+  icon: RecentViewDisplayIcon;
   title: string;
   subtitle: string;
   isCurrent: boolean;
@@ -37,7 +42,16 @@ export interface RecentViewDisplayEntry {
   isSplit: boolean;
   isTerminal: boolean;
   provider?: ProviderKind | undefined;
+  terminalVisualIdentity?: ResolvedTerminalVisualIdentity | undefined;
 }
+
+export type RecentViewDisplayIcon =
+  | { kind: "chat" }
+  | { kind: "provider"; provider: ProviderKind }
+  | { kind: "terminal"; iconKey: TerminalIconKey }
+  | { kind: "workspace" }
+  | { kind: "settings" }
+  | { kind: "plugins" };
 
 export interface RecentViewWorkspaceSummary {
   id: string;
@@ -187,6 +201,19 @@ function normalizeAvailableView(
   }
 }
 
+function resolveThreadDisplayIcon(input: {
+  provider?: ProviderKind | undefined;
+  terminalVisualIdentity?: ResolvedTerminalVisualIdentity | null | undefined;
+}): RecentViewDisplayIcon {
+  if (input.terminalVisualIdentity) {
+    return { kind: "terminal", iconKey: input.terminalVisualIdentity.iconKey };
+  }
+  if (input.provider) {
+    return { kind: "provider", provider: input.provider };
+  }
+  return { kind: "chat" };
+}
+
 export function resolveRecentViewNavigationIndex(input: {
   recentViews: readonly RecentView[];
   currentView: RecentView | null;
@@ -216,7 +243,7 @@ export function buildRecentViewDisplayEntries(input: {
   projects: readonly Project[];
   pinnedThreadIds: readonly ThreadId[];
   workspacePages: readonly RecentViewWorkspaceSummary[];
-  terminalThreadIds?: ReadonlySet<ThreadId>;
+  terminalVisualIdentityByThreadId?: ReadonlyMap<ThreadId, ResolvedTerminalVisualIdentity>;
 }): RecentViewDisplayEntry[] {
   const currentKey = input.currentView ? recentViewKey(input.currentView) : null;
   const projectNameById = new Map(input.projects.map((project) => [project.id, project.name]));
@@ -227,6 +254,8 @@ export function buildRecentViewDisplayEntries(input: {
 
   return input.recentViews.map((view) => {
     const key = recentViewKey(view);
+    const terminalVisualIdentity =
+      view.kind === "thread" ? input.terminalVisualIdentityByThreadId?.get(view.threadId) : null;
     const base = {
       key,
       view,
@@ -234,7 +263,8 @@ export function buildRecentViewDisplayEntries(input: {
       isCurrent: key === currentKey,
       isPinned: false,
       isSplit: view.kind === "thread" && Boolean(view.splitViewId),
-      isTerminal: view.kind === "thread" && (input.terminalThreadIds?.has(view.threadId) ?? false),
+      isTerminal: Boolean(terminalVisualIdentity),
+      ...(terminalVisualIdentity ? { terminalVisualIdentity } : {}),
     };
 
     switch (view.kind) {
@@ -251,6 +281,7 @@ export function buildRecentViewDisplayEntries(input: {
         ].filter((part): part is string => Boolean(part));
         return {
           ...base,
+          icon: resolveThreadDisplayIcon({ provider, terminalVisualIdentity }),
           provider,
           title,
           subtitle: subtitleParts.join(" · "),
@@ -260,18 +291,21 @@ export function buildRecentViewDisplayEntries(input: {
       case "workspace":
         return {
           ...base,
+          icon: { kind: "workspace" },
           title: workspaceNameById.get(view.workspaceId) ?? "Workspace",
           subtitle: "Terminal workspace",
         };
       case "settings":
         return {
           ...base,
+          icon: { kind: "settings" },
           title: "Settings",
           subtitle: view.section ? (SETTINGS_LABELS[view.section] ?? view.section) : "App settings",
         };
       case "plugins":
         return {
           ...base,
+          icon: { kind: "plugins" },
           title: "Plugins",
           subtitle: "Extensions and integrations",
         };

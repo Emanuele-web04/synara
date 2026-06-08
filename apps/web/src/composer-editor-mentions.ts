@@ -8,7 +8,11 @@ import {
   extractComposerMentionPath,
   providerMentionMatchesToken,
 } from "./lib/composerMentions";
-import { LINK_TOKEN_SOURCE, trimTrailingLinkPunctuation } from "./lib/linkChips";
+import {
+  LINK_TOKEN_SOURCE,
+  normalizeComposerLinkUrl,
+  trimTrailingLinkPunctuation,
+} from "./lib/linkChips";
 import { resolveAgentAlias } from "@t3tools/contracts";
 import type { ProviderMentionReference } from "@t3tools/contracts";
 
@@ -38,7 +42,7 @@ export type ComposerPromptSegment =
       color: string;
     }
   | {
-      /** Bare http(s) URL rendered as a tappable link chip. */
+      /** URL/domain rendered as a tappable link chip. */
       type: "link";
       url: string;
     };
@@ -74,9 +78,9 @@ export function matchComposerLinkToken(
   text: string,
   options: { includeTrailingTokenAtEnd: boolean },
 ): { url: string; start: number; end: number } | null {
-  // Fast reject: every URL begins with `http`, so ordinary prose/typing skips the regex entirely
-  // and costs no more than a substring scan — keeping the live transform as light as plain text.
-  if (!text.includes("http")) {
+  // Fast reject: links either have a scheme or a dotted host, so ordinary prose/typing skips the
+  // regex entirely and keeps the live transform as light as plain text.
+  if (!text.includes("http") && !text.includes(".")) {
     return null;
   }
   const regex = options.includeTrailingTokenAtEnd
@@ -86,12 +90,13 @@ export function matchComposerLinkToken(
   if (!match) {
     return null;
   }
-  const url = trimTrailingLinkPunctuation(match[0]);
-  if (url.length === 0) {
+  const rawUrl = trimTrailingLinkPunctuation(match[0]);
+  const url = normalizeComposerLinkUrl(rawUrl);
+  if (!url) {
     return null;
   }
   const start = match.index ?? 0;
-  return { url, start, end: start + url.length };
+  return { url, start, end: start + rawUrl.length };
 }
 
 function pushTextSegment(segments: ComposerPromptSegment[], text: string): void {
@@ -150,9 +155,10 @@ function collectInlineTokenMatches(
   // Links win first: a URL is an opaque span that other token kinds must skip.
   for (const match of text.matchAll(linkRegex)) {
     const start = match.index ?? 0;
-    const url = trimTrailingLinkPunctuation(match[0]);
-    if (url.length === 0) continue;
-    const end = start + url.length;
+    const rawUrl = trimTrailingLinkPunctuation(match[0]);
+    const url = normalizeComposerLinkUrl(rawUrl);
+    if (!url) continue;
+    const end = start + rawUrl.length;
     reservedRanges.push({ start, end });
     matches.push({ kind: "link", url, start, end });
   }

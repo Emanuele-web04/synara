@@ -10,33 +10,18 @@
 
 import type { ReactNode } from "react";
 
-import type {
-  ResolvedTerminalVisualIdentity,
-  TerminalVisualState,
-} from "@t3tools/shared/terminalThreads";
+import type { ResolvedTerminalVisualIdentity } from "@t3tools/shared/terminalThreads";
 
 import { IconButton } from "~/components/ui/icon-button";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { selectRepresentativeTerminalVisualIdentity } from "~/terminalVisualIdentity";
 
 import { DOCK_HEADER_ICON_BUTTON_CLASS, SurfaceTabChip } from "../chat/chatHeaderControls";
 import type { ResolvedTerminalGroupLayout } from "./TerminalLayout";
 import TerminalActivityIndicator from "./TerminalActivityIndicator";
 import TerminalIdentityIcon from "./TerminalIdentityIcon";
-
-function terminalVisualStatePriority(state: TerminalVisualState): number {
-  switch (state) {
-    case "attention":
-      return 4;
-    case "running":
-      return 3;
-    case "review":
-      return 2;
-    case "idle":
-      return 1;
-  }
-}
 
 export interface TerminalChromeActionItem {
   disabled?: boolean;
@@ -92,19 +77,11 @@ export function TerminalWorkspaceTabBar(props: {
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {props.terminalGroups.map((terminalGroup) => {
           const isActive = terminalGroup.id === props.activeGroupId;
-          const previewTerminalId =
-            terminalGroup.terminalIds.reduce<string | null>((bestTerminalId, terminalId) => {
-              const bestPriority = terminalVisualStatePriority(
-                props.terminalVisualIdentityById.get(
-                  bestTerminalId ?? terminalGroup.activeTerminalId,
-                )?.state ?? "idle",
-              );
-              const nextPriority = terminalVisualStatePriority(
-                props.terminalVisualIdentityById.get(terminalId)?.state ?? "idle",
-              );
-              return nextPriority > bestPriority ? terminalId : bestTerminalId;
-            }, null) ?? terminalGroup.activeTerminalId;
-          const visualIdentity = props.terminalVisualIdentityById.get(previewTerminalId);
+          const visualIdentity = selectRepresentativeTerminalVisualIdentity({
+            activeTerminalId: terminalGroup.activeTerminalId,
+            terminalIds: terminalGroup.terminalIds,
+            terminalVisualIdentityById: props.terminalVisualIdentityById,
+          })?.identity;
           const groupTitle = visualIdentity?.title ?? "Terminal";
           const closeTabLabel = `Close ${visualIdentity?.title ?? "Terminal tab"}`;
           return (

@@ -832,7 +832,8 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("@spark");
-    expect(markup).toContain("inline-flex max-w-full select-none items-center gap-1 mx-0.5");
+    expect(markup).toContain("inline-flex max-w-full select-none items-center gap-0.5");
+    expect(markup).toContain("mx-0.5");
     expect(markup).toContain("rounded-md px-1.5 py-0.5");
     expect(markup).toContain("(check the UI)");
     expect(markup).not.toContain("@spark(check the UI)</div>");

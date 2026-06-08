@@ -19,9 +19,7 @@ import {
 import { describeErrorMessage } from "@t3tools/shared/errorMessages";
 import {
   consumeTerminalIdentityInput,
-  deriveTerminalOutputIdentity,
   deriveTerminalProcessIdentity,
-  deriveTerminalTitleSignalIdentity,
   terminalCliKindFromValue,
   T3CODE_TERMINAL_HOOK_OSC_PREFIX,
   T3CODE_TERMINAL_CLI_KIND_ENV_KEY,
@@ -849,6 +847,7 @@ function resetSessionHistory(session: TerminalSessionState): void {
   session.managedAgentRunning = false;
   session.managedAgentState = null;
   session.managedAgentObserved = false;
+  session.providerDescendantObserved = false;
 }
 
 function deriveActivityAgentState(session: TerminalSessionState): TerminalActivityState | null {
@@ -1011,6 +1010,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           unsubscribeExit: null,
           hasRunningSubprocess: false,
           detectedCliKind: cliKindFromRuntimeEnv(normalizedRuntimeEnv(input.env)),
+          providerDescendantObserved: false,
           managedAgentRunning: false,
           managedAgentState: null,
           managedAgentObserved: false,
@@ -1119,8 +1119,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
     const nextIdentityState = consumeTerminalIdentityInput(session.pendingInputBuffer, input.data);
     session.pendingInputBuffer = nextIdentityState.buffer;
-    if (nextIdentityState.identity?.cliKind && session.detectedCliKind === null) {
+    if (
+      nextIdentityState.identity &&
+      nextIdentityState.identity.cliKind !== session.detectedCliKind
+    ) {
       session.detectedCliKind = nextIdentityState.identity.cliKind;
+      session.providerDescendantObserved = false;
       this.emitActivityEvent(session);
     }
     const submittedPrompt = input.data.includes("\r") || input.data.includes("\n");
@@ -1209,6 +1213,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           unsubscribeExit: null,
           hasRunningSubprocess: false,
           detectedCliKind: cliKindFromRuntimeEnv(normalizedRuntimeEnv(input.env)),
+          providerDescendantObserved: false,
           managedAgentRunning: false,
           managedAgentState: null,
           managedAgentObserved: false,
@@ -1316,6 +1321,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.exitSignal = null;
     session.hasRunningSubprocess = false;
     session.detectedCliKind = cliKindFromRuntimeEnv(session.runtimeEnv);
+    session.providerDescendantObserved = false;
     session.managedAgentRunning = false;
     session.managedAgentState = null;
     session.managedAgentObserved = false;
@@ -1419,6 +1425,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       session.process = null;
       session.hasRunningSubprocess = false;
       session.detectedCliKind = null;
+      session.providerDescendantObserved = false;
       session.managedAgentRunning = false;
       session.managedAgentState = null;
       session.managedAgentObserved = false;
@@ -1486,25 +1493,22 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       session.managedAgentObserved = true;
       const nextManagedAgentRunning = latestHookEvent !== "Stop";
       const nextManagedAgentState = agentStateFromHookEvent(latestHookEvent);
+      const nextDetectedCliKind = latestHookEvent === "Stop" ? null : session.detectedCliKind;
+      const nextProviderDescendantObserved =
+        latestHookEvent === "Stop" ? false : session.providerDescendantObserved;
       if (
         session.managedAgentRunning !== nextManagedAgentRunning ||
-        session.managedAgentState !== nextManagedAgentState
+        session.managedAgentState !== nextManagedAgentState ||
+        session.detectedCliKind !== nextDetectedCliKind ||
+        session.providerDescendantObserved !== nextProviderDescendantObserved
       ) {
         session.managedAgentRunning = nextManagedAgentRunning;
         session.managedAgentState = nextManagedAgentState;
+        session.detectedCliKind = nextDetectedCliKind;
+        session.providerDescendantObserved = nextProviderDescendantObserved;
         session.hasRunningSubprocess = nextManagedAgentRunning;
         this.emitActivityEvent(session);
       }
-    }
-    const titleSignalCliKind =
-      sanitized.titleSignals
-        .map((titleSignal) => deriveTerminalTitleSignalIdentity(titleSignal)?.cliKind ?? null)
-        .find((cliKind): cliKind is TerminalCliKind => cliKind !== null) ?? null;
-    const outputCliKind = deriveTerminalOutputIdentity(sanitized.visibleText)?.cliKind ?? null;
-    const detectedCliKind = outputCliKind ?? titleSignalCliKind;
-    if (detectedCliKind && session.detectedCliKind === null) {
-      session.detectedCliKind = detectedCliKind;
-      this.emitActivityEvent(session);
     }
     if (sanitized.visibleText.length > 0) {
       session.history.append(sanitized.visibleText);
@@ -1694,6 +1698,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.pid = null;
     session.hasRunningSubprocess = false;
     session.detectedCliKind = null;
+    session.providerDescendantObserved = false;
     session.managedAgentRunning = false;
     session.managedAgentState = null;
     session.managedAgentObserved = false;
@@ -1729,6 +1734,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.pid = null;
     session.hasRunningSubprocess = false;
     session.detectedCliKind = null;
+    session.providerDescendantObserved = false;
     session.managedAgentRunning = false;
     session.managedAgentState = null;
     session.managedAgentObserved = false;
@@ -2155,13 +2161,22 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         runningSessions.map(async (session) => {
           const terminalPid = session.pid;
           let hasRunningSubprocess = false;
-          let terminalCliKind: TerminalCliKind | null = null;
+          let shouldClearDetectedCliKind = false;
           try {
             const subprocessActivity =
               sharedChildrenMap !== null
                 ? inspectSubprocessActivity(terminalPid, sharedChildrenMap)
                 : normalizeSubprocessActivity(await this.subprocessChecker(terminalPid));
-            terminalCliKind = subprocessActivity.cliKind ?? session.detectedCliKind;
+            const providerDescendantObserved =
+              session.providerDescendantObserved ||
+              (session.detectedCliKind !== null && subprocessActivity.hasProviderDescendant);
+            // Process-tree provider matches affect busy-state only. Branding follows explicit
+            // env/input/hook signals so dev servers that spawn agents stay generic.
+            shouldClearDetectedCliKind =
+              session.detectedCliKind !== null &&
+              !subprocessActivity.hasProviderDescendant &&
+              (providerDescendantObserved || !isProviderSessionBusy(session, Date.now()));
+            session.providerDescendantObserved = providerDescendantObserved;
             if (session.managedAgentObserved) {
               // Hooks have fired — trust them as the sole source of truth (superset model).
               // Only override with non-provider subprocesses (e.g. user spawned a build).
@@ -2188,15 +2203,23 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           if (!liveSession || liveSession.status !== "running" || liveSession.pid !== terminalPid) {
             return;
           }
+          const nextDetectedCliKind =
+            shouldClearDetectedCliKind && liveSession.detectedCliKind === session.detectedCliKind
+              ? null
+              : liveSession.detectedCliKind;
+          const nextProviderDescendantObserved =
+            nextDetectedCliKind === null ? false : session.providerDescendantObserved;
           if (
             liveSession.hasRunningSubprocess === hasRunningSubprocess &&
-            liveSession.detectedCliKind === terminalCliKind
+            liveSession.detectedCliKind === nextDetectedCliKind &&
+            liveSession.providerDescendantObserved === nextProviderDescendantObserved
           ) {
             return;
           }
 
           liveSession.hasRunningSubprocess = hasRunningSubprocess;
-          liveSession.detectedCliKind = terminalCliKind;
+          liveSession.detectedCliKind = nextDetectedCliKind;
+          liveSession.providerDescendantObserved = nextProviderDescendantObserved;
           liveSession.updatedAt = new Date().toISOString();
           this.emitActivityEvent(liveSession);
         }),

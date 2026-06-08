@@ -211,12 +211,10 @@ const DEFAULT_BINDINGS = compile([
   {
     shortcut: ctrlShortcut("tab"),
     command: "view.recent.next",
-    whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
     shortcut: ctrlShortcut("tab", { shiftKey: true }),
     command: "view.recent.previous",
-    whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
     shortcut: modShortcut("1"),
@@ -482,12 +480,24 @@ describe("recent view shortcuts", () => {
     );
   });
 
-  it("does not resolve Ctrl+Tab while a terminal has focus", () => {
-    assert.isNull(
+  it("resolves Ctrl+Tab while a terminal has focus", () => {
+    assert.strictEqual(
       resolveShortcutCommand(event({ key: "Tab", ctrlKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
         context: { terminalFocus: true },
       }),
+      "view.recent.next",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "Tab", ctrlKey: true, shiftKey: true }),
+        DEFAULT_BINDINGS,
+        {
+          platform: "MacIntel",
+          context: { terminalFocus: true },
+        },
+      ),
+      "view.recent.previous",
     );
   });
 });

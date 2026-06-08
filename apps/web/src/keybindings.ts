@@ -117,15 +117,15 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   // Ctrl+Shift+Tab for tab switching and won't deliver them to the page, so the
   // recent-view switcher does not open in a normal browser tab. Uses literal Ctrl
   // (not mod) on purpose so it stays Ctrl+Tab on macOS too, matching Arc/Helium.
+  // This intentionally ignores terminal focus; the chat route captures the chord
+  // before xterm can pass it through to the shell.
   {
     command: "view.recent.next",
     shortcut: commandShortcut("tab", { ctrlKey: true, modKey: false }),
-    whenAst: whenNotTerminalFocus,
   },
   {
     command: "view.recent.previous",
     shortcut: commandShortcut("tab", { ctrlKey: true, shiftKey: true, modKey: false }),
-    whenAst: whenNotTerminalFocus,
   },
   {
     command: "modelPicker.toggle",

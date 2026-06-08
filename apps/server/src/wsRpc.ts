@@ -31,6 +31,7 @@ import { GitManager } from "./git/Services/GitManager";
 import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
 import { TextGeneration } from "./git/Services/TextGeneration";
 import { Keybindings } from "./keybindings";
+import { listLocalServers, stopLocalServer } from "./localServerMonitor";
 import { Open, resolveAvailableEditors } from "./open";
 import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
@@ -717,6 +718,16 @@ export const makeWsRpcLayer = () =>
           ),
         [WS_METHODS.serverUpdateProvider]: (input) => providerHealth.updateProvider(input),
         [WS_METHODS.serverListWorktrees]: () => Effect.succeed({ worktrees: [] }),
+        [WS_METHODS.serverListLocalServers]: () =>
+          rpcEffect(
+            Effect.promise(() => listLocalServers()),
+            "Failed to list local servers",
+          ),
+        [WS_METHODS.serverStopLocalServer]: (input) =>
+          rpcEffect(
+            Effect.promise(() => stopLocalServer(input)),
+            "Failed to stop local server",
+          ),
         [WS_METHODS.serverGetProviderUsageSnapshot]: (input) =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
         [WS_METHODS.serverGetDiagnostics]: () =>

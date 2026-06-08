@@ -262,6 +262,60 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  it.effect("migrates old recent-view defaults to work with terminal focus", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "ctrl+tab", command: "view.recent.next", when: "!terminalFocus" },
+        { key: "ctrl+shift+tab", command: "view.recent.previous", when: "!terminalFocus" },
+      ]);
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+      const next = configState.keybindings.find((entry) => entry.command === "view.recent.next");
+      const previous = configState.keybindings.find(
+        (entry) => entry.command === "view.recent.previous",
+      );
+      assert.isUndefined(next?.whenAst);
+      assert.isUndefined(previous?.whenAst);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "ctrl+tab" &&
+            entry.command === "view.recent.next" &&
+            entry.when === undefined,
+        ),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "ctrl+shift+tab" &&
+            entry.command === "view.recent.previous" &&
+            entry.when === undefined,
+        ),
+      );
+      assert.isFalse(
+        persisted.some(
+          (entry) => entry.command === "view.recent.next" && entry.when === "!terminalFocus",
+        ),
+      );
+      assert.isFalse(
+        persisted.some(
+          (entry) => entry.command === "view.recent.previous" && entry.when === "!terminalFocus",
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect("accepts synced composer picker keybindings without startup issues", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

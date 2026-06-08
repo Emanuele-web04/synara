@@ -36,6 +36,22 @@ describe("matchComposerLinkToken", () => {
       }),
     ).toEqual({ url: "https://example.com", start: 0, end: 19 });
   });
+
+  it("normalizes a bare domain once a delimiter follows it while typing", () => {
+    expect(
+      matchComposerLinkToken("linear.app/team/issue/ENG-12 ", {
+        includeTrailingTokenAtEnd: false,
+      }),
+    ).toEqual({ url: "https://linear.app/team/issue/ENG-12", start: 0, end: 28 });
+  });
+
+  it("does not treat local filenames as bare domain links", () => {
+    expect(
+      matchComposerLinkToken("AGENTS.md ", {
+        includeTrailingTokenAtEnd: false,
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("splitPromptIntoComposerSegments", () => {
@@ -157,6 +173,14 @@ describe("splitPromptIntoComposerSegments", () => {
     ]);
   });
 
+  it("converts a bare domain into a normalized link segment once a delimiter follows it", () => {
+    expect(splitPromptIntoComposerSegments("see linear.app/team/issue/ENG-12 thanks")).toEqual([
+      { type: "text", text: "see " },
+      { type: "link", url: "https://linear.app/team/issue/ENG-12" },
+      { type: "text", text: " thanks" },
+    ]);
+  });
+
   it("does not convert an incomplete trailing URL while typing", () => {
     expect(splitPromptIntoComposerSegments("see https://github.com/openai/codex")).toEqual([
       { type: "text", text: "see https://github.com/openai/codex" },
@@ -168,6 +192,12 @@ describe("splitPromptIntoComposerSegments", () => {
       { type: "text", text: "ping " },
       { type: "link", url: "https://user@example.com/path" },
       { type: "text", text: " here" },
+    ]);
+  });
+
+  it("does not convert common local files into links", () => {
+    expect(splitPromptIntoComposerSegments("open AGENTS.md please")).toEqual([
+      { type: "text", text: "open AGENTS.md please" },
     ]);
   });
 });
@@ -197,6 +227,12 @@ describe("splitPromptIntoDisplaySegments", () => {
     expect(
       splitPromptIntoDisplaySegments("https://github.com/Emanuele-web04/synara/pull/155"),
     ).toEqual([{ type: "link", url: "https://github.com/Emanuele-web04/synara/pull/155" }]);
+  });
+
+  it("converts a trailing bare domain into a normalized link segment for read-only rendering", () => {
+    expect(splitPromptIntoDisplaySegments("linear.app/team/issue/ENG-12")).toEqual([
+      { type: "link", url: "https://linear.app/team/issue/ENG-12" },
+    ]);
   });
 
   it("renders a URL on its own line followed by trailing prose", () => {

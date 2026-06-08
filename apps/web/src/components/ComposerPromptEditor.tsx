@@ -223,19 +223,19 @@ function getAbsoluteOffsetForPoint(node: LexicalNode, pointOffset: number): numb
     current = nextParent;
   }
 
+  if (node instanceof ComposerLinkNode || node instanceof ComposerTerminalContextNode) {
+    return getAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
+  }
+
   if ($isTextNode(node)) {
     if (
       node instanceof ComposerMentionNode ||
       node instanceof ComposerSkillNode ||
-      node instanceof ComposerAgentMentionNode ||
-      node instanceof ComposerLinkNode
+      node instanceof ComposerAgentMentionNode
     ) {
       return getAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
     }
     return offset + Math.min(pointOffset, node.getTextContentSize());
-  }
-  if (node instanceof ComposerTerminalContextNode) {
-    return getAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
   }
 
   if ($isLineBreakNode(node)) {
@@ -275,19 +275,19 @@ function getExpandedAbsoluteOffsetForPoint(node: LexicalNode, pointOffset: numbe
     current = nextParent;
   }
 
+  if (node instanceof ComposerLinkNode || node instanceof ComposerTerminalContextNode) {
+    return getExpandedAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
+  }
+
   if ($isTextNode(node)) {
     if (
       node instanceof ComposerMentionNode ||
       node instanceof ComposerSkillNode ||
-      node instanceof ComposerAgentMentionNode ||
-      node instanceof ComposerLinkNode
+      node instanceof ComposerAgentMentionNode
     ) {
       return getExpandedAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
     }
     return offset + Math.min(pointOffset, node.getTextContentSize());
-  }
-  if (node instanceof ComposerTerminalContextNode) {
-    return getExpandedAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
   }
 
   if ($isLineBreakNode(node)) {
@@ -316,11 +316,9 @@ function findSelectionPointAtOffset(
     node instanceof ComposerMentionNode ||
     node instanceof ComposerSkillNode ||
     node instanceof ComposerAgentMentionNode ||
-    node instanceof ComposerLinkNode
+    node instanceof ComposerLinkNode ||
+    node instanceof ComposerTerminalContextNode
   ) {
-    return findSelectionPointForInlineToken(node, remainingRef);
-  }
-  if (node instanceof ComposerTerminalContextNode) {
     return findSelectionPointForInlineToken(node, remainingRef);
   }
 

@@ -754,6 +754,19 @@ label:has(> select#reasoning-effort) select {
   padding: 0.02em 0.12em;
 }
 
+/* Markdown can split one marker across inline nodes; only outer edges keep padding/radius. */
+.chat-markdown .thread-marker-highlight.thread-marker-continues-before {
+  padding-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.chat-markdown .thread-marker-highlight.thread-marker-continues-after {
+  padding-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
 .chat-markdown .thread-marker-underline {
   text-decoration-line: underline;
   text-decoration-thickness: 0.14em;
@@ -788,6 +801,11 @@ label:has(> select#reasoning-effort) select {
   box-shadow:
     0 0 0 2px var(--color-background-surface),
     0 0 0 4px color-mix(in srgb, var(--color-text-foreground) 34%, transparent);
+}
+
+.chat-markdown .thread-marker-active.thread-marker-continues-before,
+.chat-markdown .thread-marker-active.thread-marker-continues-after {
+  box-shadow: none;
 }
 
 .chat-markdown blockquote {

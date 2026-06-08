@@ -92,11 +92,14 @@ import {
   ServerGetProviderUsageSnapshotResult,
   ServerLifecycleStreamEvent,
   ServerGetSettingsResult,
+  ServerListLocalServersResult,
   ServerListWorktreesResult,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
   ServerProviderUpdateResult,
   ServerRefreshProvidersResult,
+  ServerStopLocalServerInput,
+  ServerStopLocalServerResult,
   ServerUpdateSettingsInput,
   ServerUpdateSettingsResult,
   ServerUpsertKeybindingResult,
@@ -483,6 +486,18 @@ export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees,
   error: WsRpcError,
 });
 
+export const WsServerListLocalServersRpc = Rpc.make(WS_METHODS.serverListLocalServers, {
+  payload: Schema.Struct({}),
+  success: ServerListLocalServersResult,
+  error: WsRpcError,
+});
+
+export const WsServerStopLocalServerRpc = Rpc.make(WS_METHODS.serverStopLocalServer, {
+  payload: ServerStopLocalServerInput,
+  success: ServerStopLocalServerResult,
+  error: WsRpcError,
+});
+
 export const WsServerGetProviderUsageSnapshotRpc = Rpc.make(
   WS_METHODS.serverGetProviderUsageSnapshot,
   {
@@ -655,6 +670,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
   WsServerListWorktreesRpc,
+  WsServerListLocalServersRpc,
+  WsServerStopLocalServerRpc,
   WsServerGetProviderUsageSnapshotRpc,
   WsServerGetDiagnosticsRpc,
   WsServerTranscribeVoiceRpc,

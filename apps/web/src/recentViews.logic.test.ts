@@ -3,8 +3,10 @@
 // Layer: UI state logic test
 
 import { describe, expect, it } from "vitest";
-import { ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@t3tools/contracts";
+import type { ResolvedTerminalVisualIdentity } from "@t3tools/shared/terminalThreads";
 import {
+  buildRecentViewDisplayEntries,
   deriveCurrentRecentView,
   pruneRecentViews,
   recentViewKey,
@@ -12,9 +14,14 @@ import {
   upsertRecentView,
   type RecentView,
 } from "./recentViews.logic";
+import type { Project, SidebarThreadSummary } from "./types";
 
 function threadId(value: string): ThreadId {
   return ThreadId.makeUnsafe(value);
+}
+
+function projectId(value: string): ProjectId {
+  return ProjectId.makeUnsafe(value);
 }
 
 describe("recent view MRU logic", () => {
@@ -130,5 +137,49 @@ describe("recent view MRU logic", () => {
         routeWorkspaceId: null,
       }),
     ).toBeNull();
+  });
+
+  it("prefers terminal visual identity over thread provider for display icons", () => {
+    const terminalThreadId = threadId("thread-terminal");
+    const project = { id: projectId("project-1"), name: "Synara" } as Project;
+    const threadSummary = {
+      id: terminalThreadId,
+      projectId: project.id,
+      title: "Dev server",
+      modelSelection: { provider: "codex", model: "gpt-5" },
+    } as SidebarThreadSummary;
+
+    const entries = buildRecentViewDisplayEntries({
+      recentViews: [{ kind: "thread", threadId: terminalThreadId }],
+      currentView: null,
+      threadsById: { [terminalThreadId]: threadSummary },
+      projects: [project],
+      pinnedThreadIds: [],
+      workspacePages: [],
+      terminalVisualIdentityByThreadId: new Map<ThreadId, ResolvedTerminalVisualIdentity>([
+        [
+          terminalThreadId,
+          {
+            cliKind: null,
+            iconKey: "terminal",
+            state: "running",
+            title: "bun dev",
+          },
+        ],
+      ]),
+    });
+
+    expect(entries[0]).toMatchObject({
+      icon: { kind: "terminal", iconKey: "terminal" },
+      isTerminal: true,
+      provider: "codex",
+      subtitle: "Synara · Terminal",
+      terminalVisualIdentity: {
+        cliKind: null,
+        iconKey: "terminal",
+        state: "running",
+        title: "bun dev",
+      },
+    });
   });
 });

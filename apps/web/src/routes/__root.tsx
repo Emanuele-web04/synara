@@ -1099,10 +1099,14 @@ function EventRouter() {
     const unsubTerminalEvent = api.terminal.onEvent((event) => {
       const terminalThreadId = ThreadId.makeUnsafe(event.threadId);
       if (event.type === "activity") {
-        if (event.cliKind) {
-          useTerminalStateStore.getState().setTerminalMetadata(terminalThreadId, event.terminalId, {
+        const terminalStore = useTerminalStateStore.getState();
+        const currentCliKind =
+          selectThreadTerminalState(terminalStore.terminalStateByThreadId, terminalThreadId)
+            .terminalCliKindsById[event.terminalId] ?? null;
+        if (event.cliKind || currentCliKind !== null) {
+          terminalStore.setTerminalMetadata(terminalThreadId, event.terminalId, {
             cliKind: event.cliKind,
-            label: defaultTerminalTitleForCliKind(event.cliKind),
+            label: event.cliKind ? defaultTerminalTitleForCliKind(event.cliKind) : "Terminal",
           });
         }
       }

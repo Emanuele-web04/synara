@@ -29,19 +29,17 @@ import {
 import { formatComposerMentionToken } from "~/lib/composerMentions";
 import { basenameOfPath } from "~/file-icons";
 import { createCentralIconElement } from "~/lib/central-icons";
-import { GitHubIcon, GlobeIcon } from "~/lib/icons";
-import { describeLinkChip, openExternalLink } from "~/lib/linkChips";
-import { resolveSiteFaviconUrl, siteFaviconStatusCache } from "~/lib/siteFavicon";
 import {
+  COMPOSER_INLINE_DECORATOR_HOST_CLASS_NAME,
   COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
   COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
-  COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
-  COMPOSER_INLINE_LINK_CHIP_CLASS_NAME,
+  COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
   formatComposerSkillChipLabel,
 } from "../composerInlineChip";
+import { InlineLinkChip } from "../InlineLinkChip";
 import { ComposerPendingTerminalContextChip } from "../chat/ComposerPendingTerminalContexts";
 import { createMentionChipIconElement, type MentionChipKind } from "../chat/MentionChipIcon";
 
@@ -82,7 +80,7 @@ export type SerializedComposerLinkNode = Spread<
     type: "composer-link";
     version: 1;
   },
-  SerializedTextNode
+  SerializedLexicalNode
 >;
 
 export type SerializedComposerTerminalContextNode = Spread<
@@ -108,7 +106,7 @@ function renderMentionChipDom(
   const icon = createMentionChipIconElement(
     pathValue,
     kind,
-    COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+    COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   );
 
   const label = document.createElement("span");
@@ -125,7 +123,7 @@ function renderSkillChipDom(container: HTMLElement, name: string): void {
 
   const icon = createCentralIconElement(
     COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
-    COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+    COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   );
 
   const label = document.createElement("span");
@@ -176,93 +174,8 @@ function renderAgentMentionChipDom(container: HTMLElement, alias: string, color:
   container.append(icon, label);
 }
 
-const LINK_GITHUB_ICON_SVG = renderToStaticMarkup(
-  <GitHubIcon aria-hidden="true" className={COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} />,
-);
-const LINK_GLOBE_ICON_SVG = renderToStaticMarkup(
-  <GlobeIcon aria-hidden="true" className={COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} />,
-);
-
-// Tracks favicon probes in flight (keyed by favicon src) so multiple chips for the
-// same host don't each kick off a redundant Image() load. The resolved 'ok'/'fail'
-// outcome lives in the shared siteFaviconStatusCache (same cache the React
-// <SiteFavicon> uses), so a host seen in markdown renders instantly here too.
-const composerFaviconProbing = new Set<string>();
-
-// Imperatively swaps the chip's icon span over to a favicon <img>. Built via the
-// DOM API (no inline onerror) so it stays CSP-safe; reverts to the globe if the
-// cached favicon later fails to render.
-function setLinkChipFaviconImg(iconSpan: HTMLElement, faviconSrc: string): void {
-  const img = document.createElement("img");
-  img.src = faviconSrc;
-  img.alt = "";
-  img.ariaHidden = "true";
-  img.className = COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME;
-  img.style.borderRadius = "2px";
-  img.style.objectFit = "contain";
-  img.addEventListener("error", () => {
-    iconSpan.innerHTML = LINK_GLOBE_ICON_SVG;
-  });
-  iconSpan.replaceChildren(img);
-}
-
-// Replaces the globe glyph with the site favicon once it loads. The icon span is
-// not a Lexical-tracked node (updateDOM returns false and only re-renders on URL
-// change), so mutating it after the commit is safe.
-function tryPatchLinkChipFavicon(iconSpan: HTMLElement, url: string): void {
-  let faviconSrc: string;
-  try {
-    const host = new URL(url).hostname;
-    if (!host) return;
-    faviconSrc = resolveSiteFaviconUrl(host);
-  } catch {
-    return;
-  }
-
-  const cached = siteFaviconStatusCache.get(faviconSrc);
-  if (cached === "ok") {
-    setLinkChipFaviconImg(iconSpan, faviconSrc);
-    return;
-  }
-  if (cached === "fail" || composerFaviconProbing.has(faviconSrc)) return;
-
-  composerFaviconProbing.add(faviconSrc);
-  const probe = new Image();
-  probe.addEventListener("load", () => {
-    composerFaviconProbing.delete(faviconSrc);
-    siteFaviconStatusCache.set(faviconSrc, "ok");
-    setLinkChipFaviconImg(iconSpan, faviconSrc);
-  });
-  probe.addEventListener("error", () => {
-    composerFaviconProbing.delete(faviconSrc);
-    siteFaviconStatusCache.set(faviconSrc, "fail");
-  });
-  probe.src = faviconSrc;
-}
-
-function renderLinkChipDom(container: HTMLElement, url: string): void {
-  container.textContent = "";
-  container.style.setProperty("user-select", "none");
-  container.style.setProperty("-webkit-user-select", "none");
-
-  const { label: labelText, isGitHub } = describeLinkChip(url);
-
-  const icon = document.createElement("span");
-  icon.ariaHidden = "true";
-  icon.className = "inline-flex shrink-0 items-center";
-  icon.innerHTML = isGitHub ? LINK_GITHUB_ICON_SVG : LINK_GLOBE_ICON_SVG;
-
-  const label = document.createElement("span");
-  label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;
-  label.textContent = labelText;
-
-  container.title = url;
-  container.dataset.linkUrl = url;
-  container.append(icon, label);
-
-  if (!isGitHub) {
-    tryPatchLinkChipFavicon(icon, url);
-  }
+function ComposerLinkDecorator(props: { url: string }) {
+  return <InlineLinkChip url={props.url} />;
 }
 
 // ── ComposerMentionNode ───────────────────────────────────────────────
@@ -508,7 +421,7 @@ export function $createComposerAgentMentionNode(
 
 // ── ComposerLinkNode ──────────────────────────────────────────────────
 
-export class ComposerLinkNode extends TextNode {
+export class ComposerLinkNode extends DecoratorNode<ReactElement> {
   __url: string;
 
   static override getType(): string {
@@ -524,59 +437,37 @@ export class ComposerLinkNode extends TextNode {
   }
 
   constructor(url: string, key?: NodeKey) {
-    // The text content is the raw URL so the sent prompt round-trips exactly.
-    super(url, key);
+    super(key);
     this.__url = url;
   }
 
   override exportJSON(): SerializedComposerLinkNode {
     return {
-      ...super.exportJSON(),
       url: this.__url,
       type: "composer-link",
       version: 1,
     };
   }
 
-  override createDOM(_config: EditorConfig): HTMLElement {
+  override createDOM(): HTMLElement {
     const dom = document.createElement("span");
-    dom.className = COMPOSER_INLINE_LINK_CHIP_CLASS_NAME;
-    dom.contentEditable = "false";
-    dom.setAttribute("spellcheck", "false");
-    renderLinkChipDom(dom, this.__url);
-    // Open externally on click; the chip is non-editable so this never competes
-    // with caret placement inside the token. Read the URL from the DOM so the
-    // handler stays correct if the node's URL is later updated in place.
-    dom.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const url = dom.dataset.linkUrl;
-      if (url) openExternalLink(url);
-    });
+    dom.className = COMPOSER_INLINE_DECORATOR_HOST_CLASS_NAME;
     return dom;
   }
 
-  override updateDOM(prevNode: ComposerLinkNode, dom: HTMLElement, _config: EditorConfig): boolean {
-    dom.contentEditable = "false";
-    if (prevNode.__url !== this.__url) {
-      renderLinkChipDom(dom, this.__url);
-    }
+  override updateDOM(): false {
     return false;
   }
 
-  override canInsertTextBefore(): false {
-    return false;
+  override decorate(): ReactElement {
+    return <ComposerLinkDecorator url={this.__url} />;
   }
 
-  override canInsertTextAfter(): false {
-    return false;
+  override getTextContent(): string {
+    return this.__url;
   }
 
-  override isTextEntity(): true {
-    return true;
-  }
-
-  override isToken(): true {
+  override isInline(): true {
     return true;
   }
 }
@@ -624,7 +515,7 @@ export class ComposerTerminalContextNode extends DecoratorNode<ReactElement> {
 
   override createDOM(): HTMLElement {
     const dom = document.createElement("span");
-    dom.className = "inline-flex align-middle leading-none";
+    dom.className = COMPOSER_INLINE_DECORATOR_HOST_CLASS_NAME;
     return dom;
   }
 

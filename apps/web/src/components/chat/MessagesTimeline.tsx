@@ -29,7 +29,7 @@ import {
 import { deriveTimelineEntries, isFileChangeWorkLogEntry } from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
-import { LinkChipIcon } from "../LinkChipIcon";
+import { InlineLinkChip } from "../InlineLinkChip";
 import {
   BotIcon,
   CheckIcon,
@@ -79,7 +79,6 @@ import {
   type ParsedTerminalContextEntry,
 } from "~/lib/terminalContext";
 import { cn } from "~/lib/utils";
-import { describeLinkChip, openExternalLink } from "~/lib/linkChips";
 import {
   DEFAULT_CHAT_FONT_SIZE_PX,
   normalizeChatFontSizePx,
@@ -99,10 +98,9 @@ import {
 import { splitPromptIntoDisplaySegments } from "~/composer-editor-mentions";
 import {
   COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
-  COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+  COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
-  COMPOSER_INLINE_LINK_CHIP_CLASS_NAME,
   COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
@@ -1615,7 +1613,7 @@ const UserMessageInlineSkillChip = memo(function UserMessageInlineSkillChip(prop
     <span className={COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME}>
       <CentralIcon
         name={COMPOSER_INLINE_SKILL_CHIP_ICON_NAME}
-        className={COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME}
+        className={COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME}
       />
       <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>
         {formatComposerSkillChipLabel(props.skillName)}
@@ -1709,22 +1707,7 @@ function renderUserMessageInlineText(
 }
 
 const UserMessageInlineLinkChip = memo(function UserMessageInlineLinkChip(props: { url: string }) {
-  const { label } = describeLinkChip(props.url);
-  return (
-    <button
-      type="button"
-      className={COMPOSER_INLINE_LINK_CHIP_CLASS_NAME}
-      title={props.url}
-      onClick={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        openExternalLink(props.url);
-      }}
-    >
-      <LinkChipIcon url={props.url} className={COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} />
-      <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>{label}</span>
-    </button>
-  );
+  return <InlineLinkChip url={props.url} interactive />;
 });
 
 const UserMessageInlineMentionChip = memo(function UserMessageInlineMentionChip(props: {

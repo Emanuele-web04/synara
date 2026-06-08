@@ -12,12 +12,12 @@ import {
   PinIcon,
   PluginIcon,
   SettingsIcon,
-  TerminalSquareIcon,
   WindowIcon,
 } from "../lib/icons";
 import { cn } from "../lib/utils";
 import type { RecentViewDisplayEntry } from "../recentViews.logic";
 import { ProviderIcon } from "./ProviderIcon";
+import TerminalIdentityIcon from "./terminal/TerminalIdentityIcon";
 import { Kbd } from "./ui/kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
@@ -66,21 +66,15 @@ function footerTooltipLabel(shortcut: KeybindingShortcut): string {
 }
 
 function EntryIcon(props: { entry: RecentViewDisplayEntry }) {
-  const { entry } = props;
   const className = "size-[18px]";
 
-  if (entry.kind === "thread") {
-    if (entry.provider) {
-      return <ProviderIcon provider={entry.provider} className={className} />;
-    }
-    return entry.isTerminal ? (
-      <TerminalSquareIcon className={className} aria-hidden="true" />
-    ) : (
-      <MessageCircleIcon className={className} aria-hidden="true" />
-    );
-  }
-
-  switch (entry.kind) {
+  switch (props.entry.icon.kind) {
+    case "terminal":
+      return <TerminalIdentityIcon className={className} iconKey={props.entry.icon.iconKey} />;
+    case "provider":
+      return <ProviderIcon provider={props.entry.icon.provider} className={className} />;
+    case "chat":
+      return <MessageCircleIcon className={className} aria-hidden="true" />;
     case "workspace":
       return <WindowIcon className={className} aria-hidden="true" />;
     case "settings":

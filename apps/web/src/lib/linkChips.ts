@@ -1,16 +1,60 @@
 // FILE: linkChips.ts
-// Purpose: Single source of truth for turning a bare URL into an inline link
-//          chip — GitHub-aware shortening, the icon variant (github vs globe),
-//          and opening the URL externally. Shared by the composer Lexical link
-//          node and the read-only user-message link chip so both render and
-//          behave identically.
+// Purpose: Single source of truth for turning URLs/domains into inline link
+//          chips — normalizing bare domains, GitHub-aware shortening, the icon
+//          variant (github vs favicon), and opening links externally. Shared by
+//          the composer Lexical link node and read-only message chips.
 // Layer: UI utilities
 
 import { readNativeApi } from "~/nativeApi";
 
-/** Matches http(s) URLs. Parentheses and brackets terminate the match so prose
- *  like `(see https://example.com)` keeps the wrapping punctuation as text. */
-export const LINK_TOKEN_SOURCE = String.raw`https?:\/\/[^\s<>()\[\]]+`;
+const LINK_BODY_SOURCE = String.raw`[^\s<>()\[\]]+`;
+const BARE_DOMAIN_SOURCE = String.raw`(?<![A-Za-z0-9@._/-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}(?::\d{2,5})?(?:[/?#][^\s<>()\[\]]*)?`;
+const HTTP_URL_PATTERN = /^https?:\/\//i;
+const COMMON_PUBLIC_BARE_DOMAIN_TLDS = new Set([
+  "ai",
+  "app",
+  "co",
+  "com",
+  "dev",
+  "io",
+  "net",
+  "org",
+]);
+const COMMON_FILE_EXTENSION_TLDS = new Set([
+  "c",
+  "cc",
+  "conf",
+  "cpp",
+  "css",
+  "go",
+  "h",
+  "hpp",
+  "html",
+  "java",
+  "js",
+  "json",
+  "jsx",
+  "kt",
+  "lock",
+  "md",
+  "mjs",
+  "py",
+  "rb",
+  "rs",
+  "sql",
+  "swift",
+  "toml",
+  "ts",
+  "tsx",
+  "txt",
+  "xml",
+  "yaml",
+  "yml",
+]);
+
+/** Matches http(s) URLs and public-looking bare domains. Parentheses and brackets
+ *  terminate the match so prose like `(see example.com)` keeps wrappers as text. */
+export const LINK_TOKEN_SOURCE = String.raw`(?:https?:\/\/${LINK_BODY_SOURCE}|${BARE_DOMAIN_SOURCE})`;
 
 // Trailing sentence punctuation that should not be swallowed into the URL.
 const TRAILING_PUNCTUATION_REGEX = /[.,;:!?'"]+$/;
@@ -22,15 +66,56 @@ export function trimTrailingLinkPunctuation(url: string): string {
 
 const BARE_LINK_REGEX = new RegExp(`^${LINK_TOKEN_SOURCE}$`);
 
+function parseUrlForLinkChip(url: string): URL | null {
+  try {
+    return new URL(HTTP_URL_PATTERN.test(url) ? url : `https://${url}`);
+  } catch {
+    return null;
+  }
+}
+
+function isLikelyBareDomainLink(url: string): boolean {
+  const parsed = parseUrlForLinkChip(url);
+  if (!parsed) return false;
+  const host = parsed.hostname.toLowerCase();
+  if (!host.includes(".")) return false;
+
+  const labels = host.split(".");
+  const tld = labels.at(-1) ?? "";
+  if (!/^[a-z]{2,63}$/.test(tld)) return false;
+  if (labels.some((label) => label.length === 0 || label.startsWith("-") || label.endsWith("-"))) {
+    return false;
+  }
+
+  const hasPathOrQuery = /[/?#]/.test(url);
+  if (!hasPathOrQuery && COMMON_FILE_EXTENSION_TLDS.has(tld)) {
+    return false;
+  }
+  if (!hasPathOrQuery && !host.startsWith("www.") && !COMMON_PUBLIC_BARE_DOMAIN_TLDS.has(tld)) {
+    return false;
+  }
+  return true;
+}
+
+/** Normalizes a matched link token to a browser-openable URL. Bare domains get https://. */
+export function normalizeComposerLinkUrl(rawUrl: string): string | null {
+  const url = trimTrailingLinkPunctuation(rawUrl.trim());
+  if (url.length === 0) return null;
+  if (HTTP_URL_PATTERN.test(url)) return url;
+  return isLikelyBareDomainLink(url) ? `https://${url}` : null;
+}
+
 /**
- * Returns the URL when `text` is exactly one bare http(s) link — ignoring surrounding
+ * Returns the normalized URL when `text` is exactly one link/domain — ignoring surrounding
  * whitespace and trailing sentence punctuation — otherwise null. Used to chip a pasted URL
  * immediately, the way the read-only message bubble renders it, without waiting for a
  * trailing delimiter the way live typing does.
  */
 export function parseBareComposerLink(text: string): string | null {
-  const url = trimTrailingLinkPunctuation(text.trim());
-  return url.length > 0 && BARE_LINK_REGEX.test(url) ? url : null;
+  const candidate = trimTrailingLinkPunctuation(text.trim());
+  return candidate.length > 0 && BARE_LINK_REGEX.test(candidate)
+    ? normalizeComposerLinkUrl(candidate)
+    : null;
 }
 
 export interface LinkChipDescriptor {
@@ -49,12 +134,8 @@ function stripGitSuffix(repo: string): string {
 //   repo root  → owner/repo,      user/org → owner.
 // Any other GitHub path returns null so it renders as a plain globe link.
 function shortenGitHubLink(url: string): string | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return null;
-  }
+  const parsed = parseUrlForLinkChip(url);
+  if (!parsed) return null;
 
   const host = parsed.hostname.toLowerCase();
   if (host !== "github.com" && host !== "www.github.com") {
@@ -111,12 +192,13 @@ export function describeLinkChip(url: string): LinkChipDescriptor {
 
 /** Opens a URL in the user's external browser, falling back to a new tab. */
 export function openExternalLink(url: string): void {
+  const href = normalizeComposerLinkUrl(url) ?? url;
   const api = readNativeApi();
   if (api) {
-    void api.shell.openExternal(url).catch(() => {
-      window.open(url, "_blank", "noopener,noreferrer");
+    void api.shell.openExternal(href).catch(() => {
+      window.open(href, "_blank", "noopener,noreferrer");
     });
     return;
   }
-  window.open(url, "_blank", "noopener,noreferrer");
+  window.open(href, "_blank", "noopener,noreferrer");
 }

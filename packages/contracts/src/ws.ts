@@ -73,6 +73,7 @@ import {
   ServerGetProviderUsageSnapshotInput,
   ServerProviderStatusesUpdatedPayload,
   ServerSettingsUpdatedPayload,
+  ServerStopLocalServerInput,
   ServerVoiceTranscriptionInput,
 } from "./server";
 import {
@@ -145,6 +146,8 @@ export const WS_METHODS = {
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
   serverListWorktrees: "server.listWorktrees",
+  serverListLocalServers: "server.listLocalServers",
+  serverStopLocalServer: "server.stopLocalServer",
   serverGetProviderUsageSnapshot: "server.getProviderUsageSnapshot",
   serverGetDiagnostics: "server.getDiagnostics",
   serverTranscribeVoice: "server.transcribeVoice",
@@ -266,6 +269,8 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverRefreshProviders, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverUpdateProvider, ServerProviderUpdateInput),
   tagRequestBody(WS_METHODS.serverListWorktrees, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverListLocalServers, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverStopLocalServer, ServerStopLocalServerInput),
   tagRequestBody(WS_METHODS.serverGetProviderUsageSnapshot, ServerGetProviderUsageSnapshotInput),
   tagRequestBody(WS_METHODS.serverGetDiagnostics, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverTranscribeVoice, ServerVoiceTranscriptionInput),

@@ -46,8 +46,6 @@ describe("resolveSiteFaviconUrl", () => {
 
     const url = resolveSiteFaviconUrl("https://openai.com/research");
 
-    expect(url).toBe(
-      "http://127.0.0.1:4567/api/site-favicon?domain=openai.com&token=dev-secret",
-    );
+    expect(url).toBe("http://127.0.0.1:4567/api/site-favicon?domain=openai.com&token=dev-secret");
   });
 });
