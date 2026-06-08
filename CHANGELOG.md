@@ -32,6 +32,8 @@
 - `bun run test` (failed once: `packages/effect-acp/src/client.test.ts` timed out in `replays buffered notifications to handlers registered after they arrive`)
 - `bun run test src/client.test.ts -t "replays buffered notifications to handlers registered after they arrive"` from `packages/effect-acp` (targeted rerun passed: 1 test passed, 4 skipped)
 - `bun run test src/whatsNew/logic.test.ts` from `apps/web`
+- `bun run test src/components/ChatMarkdown.test.tsx` from `apps/web`
+- `bun run test` from `apps/web` (132 test files passed; 1588 tests passed)
 - `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website`
 
 ## 0.1.4 - 2026-06-07
