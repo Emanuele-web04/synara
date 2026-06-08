@@ -19,6 +19,7 @@ import {
   OrchestrationSession,
   ProjectCreateCommand,
   THREAD_NOTES_MAX_CHARS,
+  THREAD_MARKER_LABEL_MAX_CHARS,
   ThreadMetaUpdatedPayload,
   ThreadTurnStartCommand,
   ThreadCreatedPayload,
@@ -483,6 +484,78 @@ it.effect("decodes pinned-message commands and events", () =>
       },
     });
     assert.strictEqual(event.type, "thread.pinned-message-added");
+  }),
+);
+
+it.effect("decodes thread marker commands and events", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeClientOrchestrationCommand({
+      type: "thread.marker.add",
+      commandId: "cmd-marker-add",
+      threadId: "thread-1",
+      markerId: "marker-1",
+      messageId: "message-1",
+      startOffset: 7,
+      endOffset: 21,
+      selectedText: "important text",
+      style: "highlight",
+      color: "yellow",
+    });
+    assert.strictEqual(command.type, "thread.marker.add");
+    assert.strictEqual(command.selectedText, "important text");
+    assert.strictEqual(command.style, "highlight");
+    assert.strictEqual(command.color, "yellow");
+
+    const event = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-marker-added",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.marker-added",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-marker-add",
+      causationEventId: null,
+      correlationId: "cmd-marker-add",
+      metadata: {},
+      payload: {
+        threadId: "thread-1",
+        marker: {
+          id: "marker-1",
+          messageId: "message-1",
+          startOffset: 7,
+          endOffset: 21,
+          selectedText: "important text",
+          style: "highlight",
+          color: "yellow",
+          label: null,
+          done: false,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    assert.strictEqual(event.type, "thread.marker-added");
+    assert.strictEqual(event.payload.marker.id, "marker-1");
+
+    const doneCommand = yield* decodeClientOrchestrationCommand({
+      type: "thread.marker.done.set",
+      commandId: "cmd-marker-done",
+      threadId: "thread-1",
+      markerId: "marker-1",
+      done: true,
+    });
+    assert.strictEqual(doneCommand.type, "thread.marker.done.set");
+    assert.strictEqual(doneCommand.done, true);
+
+    const labelCommand = yield* decodeClientOrchestrationCommand({
+      type: "thread.marker.label.set",
+      commandId: "cmd-marker-label",
+      threadId: "thread-1",
+      markerId: "marker-1",
+      label: "x".repeat(THREAD_MARKER_LABEL_MAX_CHARS),
+    });
+    assert.strictEqual(labelCommand.type, "thread.marker.label.set");
   }),
 );
 
