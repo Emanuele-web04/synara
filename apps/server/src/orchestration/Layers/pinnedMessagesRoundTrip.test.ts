@@ -4,6 +4,7 @@ import {
   MessageId,
   ProjectId,
   ThreadId,
+  ThreadMarkerId,
 } from "@t3tools/contracts";
 import { Effect, Layer, ManagedRuntime, Option } from "effect";
 import { describe, expect, it } from "vitest";
@@ -142,6 +143,129 @@ describe("pinned messages round-trip", () => {
       expect(shellThread).not.toBeUndefined();
       expect("pinnedMessages" in (shellThread ?? {})).toBe(false);
       expect("notes" in (shellThread ?? {})).toBe(false);
+    } finally {
+      await system.dispose();
+    }
+  });
+
+  it("persists thread marker commands into projected thread detail and snapshots", async () => {
+    const system = await createSystem();
+    const createdAt = "2026-06-06T00:00:00.000Z";
+    const projectId = ProjectId.makeUnsafe("project-markers");
+    const threadId = ThreadId.makeUnsafe("thread-markers");
+    const messageId = MessageId.makeUnsafe("assistant-marker-msg-1");
+    const firstMarkerId = ThreadMarkerId.makeUnsafe("marker-1");
+    const secondMarkerId = ThreadMarkerId.makeUnsafe("marker-2");
+
+    try {
+      await system.run(
+        system.engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-project-markers"),
+          projectId,
+          title: "Markers project",
+          workspaceRoot: "/tmp/project-markers",
+          defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+          createdAt,
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("cmd-thread-markers"),
+          threadId,
+          projectId,
+          title: "Markers thread",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.marker.add",
+          commandId: CommandId.makeUnsafe("cmd-marker-add"),
+          threadId,
+          markerId: firstMarkerId,
+          messageId,
+          startOffset: 6,
+          endOffset: 20,
+          selectedText: "important text",
+          style: "highlight",
+          color: "yellow",
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.marker.add",
+          commandId: CommandId.makeUnsafe("cmd-marker-add-second"),
+          threadId,
+          markerId: secondMarkerId,
+          messageId,
+          startOffset: 30,
+          endOffset: 39,
+          selectedText: "underline",
+          style: "underline",
+          color: "blue",
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.marker.done.set",
+          commandId: CommandId.makeUnsafe("cmd-marker-done"),
+          threadId,
+          markerId: firstMarkerId,
+          done: true,
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.marker.label.set",
+          commandId: CommandId.makeUnsafe("cmd-marker-label"),
+          threadId,
+          markerId: firstMarkerId,
+          label: "Research later",
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.marker.remove",
+          commandId: CommandId.makeUnsafe("cmd-marker-remove"),
+          threadId,
+          markerId: secondMarkerId,
+        }),
+      );
+
+      const detail = await system.run(system.query.getThreadDetailById(threadId));
+      const thread = Option.getOrNull(detail);
+      expect(thread).not.toBeNull();
+      expect(thread?.threadMarkers).toHaveLength(1);
+      expect(thread?.threadMarkers?.[0]).toMatchObject({
+        id: firstMarkerId,
+        messageId,
+        startOffset: 6,
+        endOffset: 20,
+        selectedText: "important text",
+        style: "highlight",
+        color: "yellow",
+        label: "Research later",
+        done: true,
+      });
+      expect(thread?.threadMarkers?.[0]?.createdAt).toEqual(expect.any(String));
+      expect(thread?.threadMarkers?.[0]?.updatedAt).toEqual(expect.any(String));
+
+      const snapshot = await system.run(system.query.getSnapshot());
+      const snapshotThread = snapshot.threads.find((candidate) => candidate.id === threadId);
+      expect(snapshotThread?.threadMarkers).toEqual(thread?.threadMarkers);
+
+      const shellSnapshot = await system.run(system.query.getShellSnapshot());
+      const shellThread = shellSnapshot.threads.find((candidate) => candidate.id === threadId);
+      expect(shellThread).not.toBeUndefined();
+      expect("threadMarkers" in (shellThread ?? {})).toBe(false);
     } finally {
       await system.dispose();
     }

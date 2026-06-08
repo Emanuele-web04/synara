@@ -12,6 +12,7 @@ import {
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadPullRequest,
   ThreadPinnedMessages,
+  ThreadMarkers,
   ProjectScript,
   ProjectId,
   ProviderMentionReference,
@@ -94,11 +95,13 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
     pinnedMessages: Schema.NullOr(Schema.fromJsonString(ThreadPinnedMessages)),
+    threadMarkers: Schema.NullOr(Schema.fromJsonString(ThreadMarkers)),
     modelSelection: ModelSelectionJsonUnknown,
   }),
 );
 const {
   pinnedMessages: _projectionThreadPinnedMessagesField,
+  threadMarkers: _projectionThreadMarkersField,
   notes: _projectionThreadNotesField,
   ...ProjectionThreadShellFields
 } = ProjectionThread.fields;
@@ -541,6 +544,7 @@ function toProjectedThread(input: {
     activities: input.activities,
     checkpoints: input.checkpoints,
     ...(threadRow.pinnedMessages !== null ? { pinnedMessages: threadRow.pinnedMessages } : {}),
+    ...(threadRow.threadMarkers !== null ? { threadMarkers: threadRow.threadMarkers } : {}),
     ...(threadRow.notes !== null ? { notes: threadRow.notes } : {}),
     session: input.session,
   };
@@ -622,6 +626,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           create_branch_flow_completed AS "createBranchFlowCompleted",
           is_pinned AS "isPinned",
           pinned_messages_json AS "pinnedMessages",
+          thread_markers_json AS "threadMarkers",
           notes,
           parent_thread_id AS "parentThreadId",
           subagent_agent_id AS "subagentAgentId",
@@ -1008,6 +1013,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           create_branch_flow_completed AS "createBranchFlowCompleted",
           is_pinned AS "isPinned",
           pinned_messages_json AS "pinnedMessages",
+          thread_markers_json AS "threadMarkers",
           notes,
           parent_thread_id AS "parentThreadId",
           subagent_agent_id AS "subagentAgentId",
@@ -1054,6 +1060,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           create_branch_flow_completed AS "createBranchFlowCompleted",
           is_pinned AS "isPinned",
           pinned_messages_json AS "pinnedMessages",
+          thread_markers_json AS "threadMarkers",
           notes,
           parent_thread_id AS "parentThreadId",
           subagent_agent_id AS "subagentAgentId",

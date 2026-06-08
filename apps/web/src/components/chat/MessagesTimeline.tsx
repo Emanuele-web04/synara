@@ -7,6 +7,7 @@ import {
   type MessageId,
   type ProviderMentionReference,
   ThreadId,
+  type ThreadMarker,
   type TurnId,
 } from "@t3tools/contracts";
 import { resolveLatestTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
@@ -145,6 +146,7 @@ const JUMP_HIGHLIGHT_DURATION_MS = 1200;
  */
 export interface MessagesTimelineController {
   scrollToMessage: (messageId: MessageId) => void;
+  scrollToMarker: (marker: ThreadMarker) => void;
 }
 
 const AgentTaskIcon: LucideIcon = (props) => (
@@ -205,6 +207,8 @@ interface MessagesTimelineProps {
   pinnedMessageIds?: ReadonlySet<MessageId>;
   /** Toggle a message's pinned state from the assistant footer. */
   onTogglePinMessage?: (messageId: MessageId) => void;
+  /** Text markers for assistant messages in the active thread. */
+  threadMarkers?: readonly ThreadMarker[];
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso?: string;
@@ -254,6 +258,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   controllerRef,
   pinnedMessageIds,
   onTogglePinMessage,
+  threadMarkers = [],
   timelineEntries,
   turnDiffSummaryByAssistantMessageId,
   nowIso,
@@ -351,6 +356,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     useState<MessageId | null>(null);
   // Transient highlight applied to a message jumped-to from the pinned-message checklist.
   const [highlightedMessageId, setHighlightedMessageId] = useState<MessageId | null>(null);
+  const [highlightedMarkerId, setHighlightedMarkerId] = useState<string | null>(null);
   const timelineExtraData = useMemo(
     () => ({
       editingUserMessageId,
@@ -359,9 +365,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedFileListByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
+      highlightedMarkerId,
       highlightedMessageId,
       pinnedMessageIds,
       submittingEditedUserMessageId,
+      threadMarkers,
     }),
     [
       editingUserMessageId,
@@ -370,9 +378,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedFileListByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
+      highlightedMarkerId,
       highlightedMessageId,
       pinnedMessageIds,
       submittingEditedUserMessageId,
+      threadMarkers,
     ],
   );
   const fallbackListRef = useRef<LegendListRef | null>(null);
@@ -424,27 +434,46 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     if (!controllerRef) {
       return;
     }
+    const scrollToMessage = (messageId: MessageId) => {
+      const index = rowsRef.current.findIndex(
+        (row) => row.kind === "message" && row.message.id === messageId,
+      );
+      if (index < 0) {
+        return false;
+      }
+      void resolvedListRef.current?.scrollToIndex({
+        index,
+        animated: true,
+        viewPosition: 0.2,
+      });
+      return true;
+    };
+    const clearJumpHighlightAfterDelay = () => {
+      if (jumpHighlightTimeoutRef.current !== null) {
+        window.clearTimeout(jumpHighlightTimeoutRef.current);
+      }
+      jumpHighlightTimeoutRef.current = window.setTimeout(() => {
+        setHighlightedMessageId(null);
+        setHighlightedMarkerId(null);
+        jumpHighlightTimeoutRef.current = null;
+      }, JUMP_HIGHLIGHT_DURATION_MS);
+    };
     const controller: MessagesTimelineController = {
       scrollToMessage: (messageId) => {
-        const index = rowsRef.current.findIndex(
-          (row) => row.kind === "message" && row.message.id === messageId,
-        );
-        if (index < 0) {
+        if (!scrollToMessage(messageId)) {
           return;
         }
-        void resolvedListRef.current?.scrollToIndex({
-          index,
-          animated: true,
-          viewPosition: 0.2,
-        });
         setHighlightedMessageId(messageId);
-        if (jumpHighlightTimeoutRef.current !== null) {
-          window.clearTimeout(jumpHighlightTimeoutRef.current);
+        setHighlightedMarkerId(null);
+        clearJumpHighlightAfterDelay();
+      },
+      scrollToMarker: (marker) => {
+        if (!scrollToMessage(marker.messageId)) {
+          return;
         }
-        jumpHighlightTimeoutRef.current = window.setTimeout(() => {
-          setHighlightedMessageId(null);
-          jumpHighlightTimeoutRef.current = null;
-        }, JUMP_HIGHLIGHT_DURATION_MS);
+        setHighlightedMessageId(marker.messageId);
+        setHighlightedMarkerId(marker.id);
+        clearJumpHighlightAfterDelay();
       },
     };
     controllerRef.current = controller;
@@ -830,6 +859,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         row.message.role === "assistant" &&
         (() => {
           const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+          const messageMarkers = threadMarkers.filter(
+            (marker) => marker.messageId === row.message.id,
+          );
           const inlineWorkEntries = row.inlineWorkEntries ?? [];
           const inlineToolEntries = inlineWorkEntries.filter((entry) => entry.tone === "tool");
           const inlineStatusEntries = inlineWorkEntries.filter((entry) => entry.tone !== "tool");
@@ -985,6 +1017,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     isStreaming={Boolean(row.message.streaming)}
                     style={chatTypographyStyle}
                     onImageExpand={onImageExpand}
+                    markers={messageMarkers}
+                    activeMarkerId={highlightedMarkerId}
                   />
                 </div>
                 {!hasCollapsedWork && visibleRenderableInlineToolEntries.length > 0 && (
