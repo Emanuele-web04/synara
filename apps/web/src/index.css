@@ -761,13 +761,13 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown .thread-marker-yellow {
-  background-color: color-mix(in srgb, #facc15 34%, transparent);
-  text-decoration-color: color-mix(in srgb, #eab308 82%, transparent);
+  background-color: color-mix(in srgb, var(--color-text-accent) 12%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--color-text-foreground) 22%, transparent);
 }
 
 .chat-markdown .thread-marker-blue {
-  background-color: color-mix(in srgb, #38bdf8 24%, transparent);
-  text-decoration-color: color-mix(in srgb, #0ea5e9 82%, transparent);
+  background-color: transparent;
+  text-decoration-color: color-mix(in srgb, var(--color-text-foreground) 22%, transparent);
 }
 
 .chat-markdown .thread-marker-green {

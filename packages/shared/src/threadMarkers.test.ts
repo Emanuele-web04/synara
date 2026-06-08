@@ -42,6 +42,36 @@ describe("threadMarkers", () => {
     ]);
   });
 
+  it("replaces overlapping markers so only one marker owns a text range", () => {
+    const markers = [
+      marker("a"),
+      marker("b", {
+        startOffset: 24,
+        endOffset: 31,
+        selectedText: "follow",
+        style: "underline",
+      }),
+    ];
+    const replaced = addThreadMarker(
+      markers,
+      marker("c", {
+        startOffset: 10,
+        endOffset: 28,
+        selectedText: "ortant text today",
+        style: "underline",
+        color: "blue",
+      }),
+    );
+
+    expect(replaced.map((entry) => entry.id)).toEqual([markerId("c")]);
+    expect(replaced[0]).toMatchObject({
+      startOffset: 10,
+      endOffset: 28,
+      style: "underline",
+      color: "blue",
+    });
+  });
+
   it("updates done state and labels with copy-on-write behavior", () => {
     const markers = [marker("a"), marker("b", { startOffset: 24, endOffset: 31 })];
     const setDone = setThreadMarkerDone(markers, markerId("a"), true, "2026-06-06T00:01:00.000Z");

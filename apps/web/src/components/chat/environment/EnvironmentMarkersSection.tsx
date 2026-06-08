@@ -23,8 +23,8 @@ import { deriveThreadMarkerLabel } from "~/threadMarkers";
 import { EnvironmentCollapsibleSection } from "./EnvironmentRow";
 
 const MARKER_SWATCH_CLASS: Record<ThreadMarker["color"], string> = {
-  yellow: "bg-[#facc15]",
-  blue: "bg-[#38bdf8]",
+  yellow: "bg-[color-mix(in_srgb,var(--color-text-accent)_14%,transparent)]",
+  blue: "border border-[color-mix(in_srgb,var(--color-text-foreground)_22%,transparent)] bg-transparent",
   green: "bg-[#34d399]",
   pink: "bg-[#f472b6]",
 };

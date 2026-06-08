@@ -139,6 +139,13 @@ const MESSAGE_HOVER_REVEAL_CLASS_NAME =
   "opacity-0 transition-opacity pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto";
 // How long a jumped-to message keeps its highlight tint before fading back out.
 const JUMP_HIGHLIGHT_DURATION_MS = 1200;
+const MARKER_FINE_SCROLL_RETRY_TIMEOUT_MS = 900;
+const MARKER_FINE_SCROLL_MAX_RETRY_FRAMES = 90;
+// The deep-link "active" ring is applied imperatively to the rendered marker spans so jumping
+// never re-parses a message's markdown tree (the className is purely a CSS box-shadow).
+const ACTIVE_MARKER_CLASS_NAME = "thread-marker-active";
+const EMPTY_MESSAGE_MARKERS: readonly ThreadMarker[] = [];
+const EMPTY_THREAD_MARKERS_BY_MESSAGE_ID = new Map<MessageId, readonly ThreadMarker[]>();
 
 /**
  * Imperative handle the transcript exposes so the Environment panel's pinned-message
@@ -191,6 +198,38 @@ function UserDispatchModeChip({
 function basename(value: string): string {
   const slash = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
   return slash >= 0 ? value.slice(slash + 1) : value;
+}
+
+function cssAttributeSelectorValue(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function getMonotonicTimeMs(): number {
+  return typeof performance === "undefined" ? Date.now() : performance.now();
+}
+
+// A marker can split into several spans when its range crosses markdown nodes, so collect every
+// rendered span for the marker (used both to scroll into view and to decorate the active ring).
+function collectThreadMarkerElements(
+  root: ParentNode | null,
+  marker: Pick<ThreadMarker, "id" | "messageId">,
+): HTMLElement[] {
+  if (!root) {
+    return [];
+  }
+  const messageId = cssAttributeSelectorValue(marker.messageId);
+  const markerId = cssAttributeSelectorValue(marker.id);
+  const selector = `[data-assistant-message-id="${messageId}"] [data-thread-marker-id="${markerId}"]`;
+  return Array.from(root.querySelectorAll<HTMLElement>(selector));
+}
+
+function findVisibleThreadMarkerElement(elements: readonly HTMLElement[]): HTMLElement | null {
+  for (const element of elements) {
+    if (element.getClientRects().length > 0) {
+      return element;
+    }
+  }
+  return null;
 }
 
 interface MessagesTimelineProps {
@@ -356,7 +395,22 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     useState<MessageId | null>(null);
   // Transient highlight applied to a message jumped-to from the pinned-message checklist.
   const [highlightedMessageId, setHighlightedMessageId] = useState<MessageId | null>(null);
-  const [highlightedMarkerId, setHighlightedMarkerId] = useState<string | null>(null);
+  // Index markers once per update so each assistant row avoids a full marker scan.
+  const threadMarkersByMessageId = useMemo<ReadonlyMap<MessageId, readonly ThreadMarker[]>>(() => {
+    if (threadMarkers.length === 0) {
+      return EMPTY_THREAD_MARKERS_BY_MESSAGE_ID;
+    }
+    const byMessageId = new Map<MessageId, ThreadMarker[]>();
+    for (const marker of threadMarkers) {
+      const messageMarkers = byMessageId.get(marker.messageId);
+      if (messageMarkers) {
+        messageMarkers.push(marker);
+      } else {
+        byMessageId.set(marker.messageId, [marker]);
+      }
+    }
+    return byMessageId;
+  }, [threadMarkers]);
   const timelineExtraData = useMemo(
     () => ({
       editingUserMessageId,
@@ -365,11 +419,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedFileListByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
-      highlightedMarkerId,
       highlightedMessageId,
       pinnedMessageIds,
       submittingEditedUserMessageId,
-      threadMarkers,
+      threadMarkersByMessageId,
     }),
     [
       editingUserMessageId,
@@ -378,15 +431,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedFileListByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
-      highlightedMarkerId,
       highlightedMessageId,
       pinnedMessageIds,
       submittingEditedUserMessageId,
-      threadMarkers,
+      threadMarkersByMessageId,
     ],
   );
   const fallbackListRef = useRef<LegendListRef | null>(null);
   const resolvedListRef = listRef ?? fallbackListRef;
+  const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const bottomSpacerHeightPx = Math.max(bottomContentInsetPx ?? 0, MIN_BOTTOM_CONTENT_INSET_PX);
   const listFooter = useMemo(
     () => <div aria-hidden="true" style={{ height: bottomSpacerHeightPx }} />,
@@ -422,13 +475,37 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     rowsRef.current = rows;
   }, [rows]);
   const jumpHighlightTimeoutRef = useRef<number | null>(null);
+  const markerFineScrollFrameRef = useRef<number | null>(null);
+  // Marker spans currently carrying the deep-link "active" ring, tracked so the decoration can be
+  // toggled imperatively (no markdown re-parse) and reliably cleared on the next jump or teardown.
+  const decoratedMarkerElementsRef = useRef<HTMLElement[]>([]);
+  const clearActiveMarkerDecoration = useCallback(() => {
+    for (const element of decoratedMarkerElementsRef.current) {
+      element.classList.remove(ACTIVE_MARKER_CLASS_NAME);
+    }
+    decoratedMarkerElementsRef.current = [];
+  }, []);
+  const applyActiveMarkerDecoration = useCallback(
+    (elements: readonly HTMLElement[]) => {
+      clearActiveMarkerDecoration();
+      for (const element of elements) {
+        element.classList.add(ACTIVE_MARKER_CLASS_NAME);
+      }
+      decoratedMarkerElementsRef.current = [...elements];
+    },
+    [clearActiveMarkerDecoration],
+  );
   useEffect(
     () => () => {
       if (jumpHighlightTimeoutRef.current !== null) {
         window.clearTimeout(jumpHighlightTimeoutRef.current);
       }
+      if (markerFineScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(markerFineScrollFrameRef.current);
+      }
+      clearActiveMarkerDecoration();
     },
-    [],
+    [clearActiveMarkerDecoration],
   );
   useEffect(() => {
     if (!controllerRef) {
@@ -454,26 +531,54 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       }
       jumpHighlightTimeoutRef.current = window.setTimeout(() => {
         setHighlightedMessageId(null);
-        setHighlightedMarkerId(null);
+        clearActiveMarkerDecoration();
         jumpHighlightTimeoutRef.current = null;
       }, JUMP_HIGHLIGHT_DURATION_MS);
     };
+    const cancelPendingMarkerFineScroll = () => {
+      if (markerFineScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(markerFineScrollFrameRef.current);
+        markerFineScrollFrameRef.current = null;
+      }
+    };
+    const scheduleMarkerFineScroll = (marker: ThreadMarker) => {
+      cancelPendingMarkerFineScroll();
+      const deadlineMs = getMonotonicTimeMs() + MARKER_FINE_SCROLL_RETRY_TIMEOUT_MS;
+      let attempts = 0;
+      const tick = () => {
+        markerFineScrollFrameRef.current = null;
+        const elements = collectThreadMarkerElements(timelineRootRef.current, marker);
+        const visibleElement = findVisibleThreadMarkerElement(elements);
+        if (visibleElement) {
+          applyActiveMarkerDecoration(elements);
+          visibleElement.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+          return;
+        }
+        attempts += 1;
+        if (getMonotonicTimeMs() <= deadlineMs && attempts < MARKER_FINE_SCROLL_MAX_RETRY_FRAMES) {
+          markerFineScrollFrameRef.current = window.requestAnimationFrame(tick);
+        }
+      };
+      markerFineScrollFrameRef.current = window.requestAnimationFrame(tick);
+    };
     const controller: MessagesTimelineController = {
       scrollToMessage: (messageId) => {
+        cancelPendingMarkerFineScroll();
+        clearActiveMarkerDecoration();
         if (!scrollToMessage(messageId)) {
           return;
         }
         setHighlightedMessageId(messageId);
-        setHighlightedMarkerId(null);
         clearJumpHighlightAfterDelay();
       },
       scrollToMarker: (marker) => {
+        clearActiveMarkerDecoration();
         if (!scrollToMessage(marker.messageId)) {
           return;
         }
         setHighlightedMessageId(marker.messageId);
-        setHighlightedMarkerId(marker.id);
         clearJumpHighlightAfterDelay();
+        scheduleMarkerFineScroll(marker);
       },
     };
     controllerRef.current = controller;
@@ -482,7 +587,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         controllerRef.current = null;
       }
     };
-  }, [controllerRef, resolvedListRef]);
+  }, [controllerRef, resolvedListRef, applyActiveMarkerDecoration, clearActiveMarkerDecoration]);
   const tailContentRowId = useMemo(() => {
     for (let index = rows.length - 1; index >= 0; index -= 1) {
       const row = rows[index]!;
@@ -859,9 +964,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         row.message.role === "assistant" &&
         (() => {
           const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
-          const messageMarkers = threadMarkers.filter(
-            (marker) => marker.messageId === row.message.id,
-          );
+          const messageMarkers =
+            threadMarkersByMessageId.get(row.message.id) ?? EMPTY_MESSAGE_MARKERS;
           const inlineWorkEntries = row.inlineWorkEntries ?? [];
           const inlineToolEntries = inlineWorkEntries.filter((entry) => entry.tone === "tool");
           const inlineStatusEntries = inlineWorkEntries.filter((entry) => entry.tone !== "tool");
@@ -1018,7 +1122,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     style={chatTypographyStyle}
                     onImageExpand={onImageExpand}
                     markers={messageMarkers}
-                    activeMarkerId={highlightedMarkerId}
                   />
                 </div>
                 {!hasCollapsedWork && visibleRenderableInlineToolEntries.length > 0 && (
@@ -1383,38 +1486,40 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }
 
   return (
-    <LegendList<MessagesTimelineRow>
-      ref={resolvedListRef}
-      data={rows}
-      keyExtractor={(row) => row.id}
-      renderItem={({ item }) => renderRowContent(item)}
-      estimatedItemSize={90}
-      // LegendList caches rendered rows, so every local expansion map that changes row content
-      // has to be surfaced through extraData.
-      extraData={timelineExtraData}
-      initialScrollAtEnd
-      maintainScrollAtEnd={followLiveOutput}
-      maintainScrollAtEndThreshold={0.1}
-      maintainVisibleContentPosition
-      onClickCapture={onMessagesClickCapture}
-      onMouseUp={onMessagesMouseUp}
-      onPointerCancel={onMessagesPointerCancel}
-      onPointerDown={onMessagesPointerDown}
-      onPointerUp={onMessagesPointerUp}
-      onScroll={handleListScroll}
-      onTouchEnd={onMessagesTouchEnd}
-      onTouchMove={onMessagesTouchMove}
-      onTouchStart={onMessagesTouchStart}
-      onWheel={onMessagesWheel}
-      data-chat-scroll-container="true"
-      ListFooterComponent={listFooter}
-      className={cn(
-        "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
-        ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
-        CHAT_COLUMN_GUTTER_CLASS_NAME,
-      )}
-      {...(listScrollStyle ? { style: listScrollStyle } : {})}
-    />
+    <div ref={timelineRootRef} className="contents" data-messages-timeline-root="true">
+      <LegendList<MessagesTimelineRow>
+        ref={resolvedListRef}
+        data={rows}
+        keyExtractor={(row) => row.id}
+        renderItem={({ item }) => renderRowContent(item)}
+        estimatedItemSize={90}
+        // LegendList caches rendered rows, so every local expansion map that changes row content
+        // has to be surfaced through extraData.
+        extraData={timelineExtraData}
+        initialScrollAtEnd
+        maintainScrollAtEnd={followLiveOutput}
+        maintainScrollAtEndThreshold={0.1}
+        maintainVisibleContentPosition
+        onClickCapture={onMessagesClickCapture}
+        onMouseUp={onMessagesMouseUp}
+        onPointerCancel={onMessagesPointerCancel}
+        onPointerDown={onMessagesPointerDown}
+        onPointerUp={onMessagesPointerUp}
+        onScroll={handleListScroll}
+        onTouchEnd={onMessagesTouchEnd}
+        onTouchMove={onMessagesTouchMove}
+        onTouchStart={onMessagesTouchStart}
+        onWheel={onMessagesWheel}
+        data-chat-scroll-container="true"
+        ListFooterComponent={listFooter}
+        className={cn(
+          "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
+          ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
+          CHAT_COLUMN_GUTTER_CLASS_NAME,
+        )}
+        {...(listScrollStyle ? { style: listScrollStyle } : {})}
+      />
+    </div>
   );
 });
 

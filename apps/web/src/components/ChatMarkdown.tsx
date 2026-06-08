@@ -72,7 +72,6 @@ interface ChatMarkdownProps {
   style?: CSSProperties | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
   markers?: readonly ThreadMarker[] | undefined;
-  activeMarkerId?: string | null | undefined;
 }
 
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
@@ -94,10 +93,19 @@ const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
   [remarkMath, { singleDollarTextMath: true }],
 ];
 const LITERAL_DOLLAR_PLACEHOLDER = "\uE000";
+// `\$` is two source characters that render as a single `$`. Collapsing it to one placeholder used
+// to shorten the protected string, which shifted every downstream offset (thread-marker positions
+// are resolved against the raw text but applied against the parsed mdast positions). A two-character
+// placeholder keeps `protectLiteralMarkdownDollars` length-preserving so those offsets stay aligned;
+// it is restored ahead of the single-char placeholder (the two share no characters, so order is
+// only for clarity).
+const ESCAPED_DOLLAR_PLACEHOLDER = "\uE001\uE002";
 
 function restoreLiteralDollarPlaceholders(value: string): string {
   return value
+    .replaceAll(ESCAPED_DOLLAR_PLACEHOLDER, "$")
     .replaceAll(LITERAL_DOLLAR_PLACEHOLDER, "$")
+    .replaceAll(encodeURIComponent(ESCAPED_DOLLAR_PLACEHOLDER), "$")
     .replaceAll(encodeURIComponent(LITERAL_DOLLAR_PLACEHOLDER), "$");
 }
 
@@ -140,15 +148,16 @@ type MarkdownParentNode = {
   children?: MarkdownNode[];
 };
 type MarkdownNode = MarkdownTextNode | MarkdownParentNode | Record<string, unknown>;
-type ActiveThreadMarker = ThreadMarker & { className: string };
+type RenderableThreadMarker = ThreadMarker & { className: string };
 
-function markerClassNameFor(marker: ThreadMarker, activeMarkerId: string | null | undefined) {
+// The "active" ring (a transient deep-link highlight) is applied imperatively by the timeline so
+// it never re-parses the markdown tree; this className is the stable, parse-time-only part.
+function markerClassNameFor(marker: ThreadMarker) {
   return [
     "thread-marker",
     marker.style === "highlight" ? "thread-marker-highlight" : "thread-marker-underline",
     `thread-marker-${marker.color}`,
     marker.done ? "thread-marker-done" : "",
-    marker.id === activeMarkerId ? "thread-marker-active" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -157,10 +166,9 @@ function markerClassNameFor(marker: ThreadMarker, activeMarkerId: string | null 
 function normalizeRenderableMarkers(input: {
   text: string;
   markers: readonly ThreadMarker[] | undefined;
-  activeMarkerId: string | null | undefined;
-}): ActiveThreadMarker[] {
+}): RenderableThreadMarker[] {
   const markers = input.markers ?? [];
-  const result: ActiveThreadMarker[] = [];
+  const result: RenderableThreadMarker[] = [];
   let previousEnd = -1;
   for (const marker of [...markers].sort((left, right) => left.startOffset - right.startOffset)) {
     if (marker.startOffset < previousEnd) {
@@ -174,7 +182,7 @@ function normalizeRenderableMarkers(input: {
     }
     result.push({
       ...marker,
-      className: markerClassNameFor(marker, input.activeMarkerId),
+      className: markerClassNameFor(marker),
     });
     previousEnd = marker.endOffset;
   }
@@ -184,7 +192,6 @@ function normalizeRenderableMarkers(input: {
 function createThreadMarkerRemarkPlugin(input: {
   text: string;
   markers: readonly ThreadMarker[] | undefined;
-  activeMarkerId: string | null | undefined;
 }) {
   const markers = normalizeRenderableMarkers(input);
   return () => (tree: MarkdownNode) => {
@@ -195,13 +202,14 @@ function createThreadMarkerRemarkPlugin(input: {
   };
 }
 
-function applyThreadMarkersToNode(node: MarkdownNode, markers: readonly ActiveThreadMarker[]) {
+function applyThreadMarkersToNode(node: MarkdownNode, markers: readonly RenderableThreadMarker[]) {
   if (!node || typeof node !== "object" || !("children" in node) || !Array.isArray(node.children)) {
     return;
   }
 
   const parent = node as MarkdownParentNode;
-  parent.children = parent.children?.flatMap((child) => {
+  // The guard above already proved `children` is an array; `?? []` only satisfies the optional type.
+  parent.children = (parent.children ?? []).flatMap((child) => {
     if (child && typeof child === "object" && "type" in child && child.type === "text") {
       return splitTextNodeWithMarkers(child as MarkdownTextNode, markers);
     }
@@ -212,16 +220,23 @@ function applyThreadMarkersToNode(node: MarkdownNode, markers: readonly ActiveTh
 
 function splitTextNodeWithMarkers(
   node: MarkdownTextNode,
-  markers: readonly ActiveThreadMarker[],
+  markers: readonly RenderableThreadMarker[],
 ): MarkdownNode[] {
   const startOffset = node.position?.start?.offset;
   const endOffset = node.position?.end?.offset;
   if (startOffset === undefined || endOffset === undefined) {
     return [node];
   }
-  const overlappingMarkers = markers.filter(
-    (marker) => marker.startOffset < endOffset && marker.endOffset > startOffset,
-  );
+  const overlappingMarkers: RenderableThreadMarker[] = [];
+  for (const marker of markers) {
+    if (marker.endOffset <= startOffset) {
+      continue;
+    }
+    if (marker.startOffset >= endOffset) {
+      break;
+    }
+    overlappingMarkers.push(marker);
+  }
   if (overlappingMarkers.length === 0) {
     return [node];
   }
@@ -394,7 +409,7 @@ function protectLiteralDollarsInPlainText(value: string): string {
 
   while (cursor < value.length) {
     if (value[cursor] === "\\" && value[cursor + 1] === "$") {
-      result += LITERAL_DOLLAR_PLACEHOLDER;
+      result += ESCAPED_DOLLAR_PLACEHOLDER;
       cursor += 2;
       continue;
     }
@@ -807,7 +822,6 @@ function ChatMarkdown({
   style,
   onImageExpand,
   markers,
-  activeMarkerId,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
@@ -819,15 +833,16 @@ function ChatMarkdown({
   const deferredNormalizedText = useDeferredValue(normalizedText);
   const renderedText = isStreaming ? deferredNormalizedText : normalizedText;
   const threadMarkerRemarkPlugin = useMemo(
-    () => createThreadMarkerRemarkPlugin({ text, markers, activeMarkerId }),
-    [activeMarkerId, markers, text],
+    () =>
+      markers && markers.length > 0 ? createThreadMarkerRemarkPlugin({ text, markers }) : null,
+    [markers, text],
   );
   const remarkPlugins = useMemo<MarkdownRemarkPlugins>(
     () =>
-      markers && markers.length > 0
+      threadMarkerRemarkPlugin
         ? [...MARKDOWN_REMARK_PLUGINS, threadMarkerRemarkPlugin]
         : MARKDOWN_REMARK_PLUGINS,
-    [markers, threadMarkerRemarkPlugin],
+    [threadMarkerRemarkPlugin],
   );
   const markdownUrlTransform = useCallback((href: string) => {
     const restoredHref = restoreLiteralDollarPlaceholders(href);

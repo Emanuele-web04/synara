@@ -2,6 +2,7 @@ import type {
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
+  ThreadMarker,
 } from "@t3tools/contracts";
 import {
   MAX_PINNED_PROJECTS,
@@ -13,6 +14,7 @@ import {
   deriveAssociatedWorktreeMetadata,
   deriveAssociatedWorktreeMetadataPatch,
 } from "@t3tools/shared/threadWorkspace";
+import { doThreadMarkerRangesOverlap } from "@t3tools/shared/threadMarkers";
 import {
   collectTailTurnIds,
   resolveTailUserMessageEditTarget,
@@ -877,15 +879,32 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Marker end offset must be greater than start offset.`,
         });
       }
-      const existingMarker = thread.threadMarkers?.find(
-        (marker) =>
+      let existingMarker: ThreadMarker | undefined = undefined;
+      let replacedMarkerCount = 0;
+      for (const marker of thread.threadMarkers ?? []) {
+        if (
           marker.id === command.markerId ||
           (marker.messageId === command.messageId &&
             marker.startOffset === command.startOffset &&
             marker.endOffset === command.endOffset &&
-            marker.style === command.style),
-      );
-      if (!existingMarker && (thread.threadMarkers?.length ?? 0) >= THREAD_MARKERS_MAX_COUNT) {
+            marker.style === command.style)
+        ) {
+          existingMarker = marker;
+        }
+        if (
+          doThreadMarkerRangesOverlap(marker, {
+            messageId: command.messageId,
+            startOffset: command.startOffset,
+            endOffset: command.endOffset,
+          })
+        ) {
+          replacedMarkerCount += 1;
+        }
+      }
+      if (
+        !existingMarker &&
+        (thread.threadMarkers?.length ?? 0) - replacedMarkerCount >= THREAD_MARKERS_MAX_COUNT
+      ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Thread '${command.threadId}' already has the maximum of ${THREAD_MARKERS_MAX_COUNT} markers.`,

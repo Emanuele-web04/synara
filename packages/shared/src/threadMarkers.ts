@@ -21,16 +21,37 @@ function isSameMarkerRange(left: ThreadMarker, right: ThreadMarker): boolean {
   );
 }
 
+type ThreadMarkerRange = Pick<ThreadMarker, "messageId" | "startOffset" | "endOffset">;
+
+export function doThreadMarkerRangesOverlap(
+  left: ThreadMarkerRange,
+  right: ThreadMarkerRange,
+): boolean {
+  return (
+    left.messageId === right.messageId &&
+    left.startOffset < right.endOffset &&
+    right.startOffset < left.endOffset
+  );
+}
+
 export function addThreadMarker(
   markers: readonly ThreadMarker[] | null | undefined,
   marker: ThreadMarker,
 ): ThreadMarker[] {
   const existingMarkers = markers ?? [];
-  return existingMarkers.some(
-    (entry) => entry.id === marker.id || isSameMarkerRange(entry, marker),
-  )
-    ? keepExistingMarkers(existingMarkers)
-    : [...existingMarkers, marker];
+  const retainedMarkers: ThreadMarker[] = [];
+  for (const entry of existingMarkers) {
+    if (entry.id === marker.id || isSameMarkerRange(entry, marker)) {
+      return keepExistingMarkers(existingMarkers);
+    }
+    if (!doThreadMarkerRangesOverlap(entry, marker)) {
+      retainedMarkers.push(entry);
+    }
+  }
+  // Keep transcript rendering deterministic: overlapping markers are replaced instead of hidden.
+  return retainedMarkers.length === existingMarkers.length
+    ? [...existingMarkers, marker]
+    : [...retainedMarkers, marker];
 }
 
 export function removeThreadMarker(

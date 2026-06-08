@@ -137,6 +137,30 @@ describe("ChatMarkdown", () => {
     expect(markup).toContain("important text");
   });
 
+  it("renders marker ranges resolved from visual text across markdown delimiters", async () => {
+    const text = "**Ho letto tutto il progetto.**\n\n**L'app è bella e curata:** UI dark coerente.";
+    const startOffset = text.indexOf("Ho letto");
+    const endOffset = text.indexOf(":** UI") + 1;
+    const marker: ThreadMarker = {
+      id: ThreadMarkerId.makeUnsafe("marker-markdown-range"),
+      messageId: MessageId.makeUnsafe("assistant-1"),
+      startOffset,
+      endOffset,
+      selectedText: text.slice(startOffset, endOffset),
+      style: "highlight",
+      color: "yellow",
+      label: null,
+      done: false,
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+    };
+    const markup = await renderMarkdown(text, undefined, [marker]);
+
+    expect(markup.match(/data-thread-marker-id="marker-markdown-range"/g) ?? []).toHaveLength(2);
+    expect(markup).toContain("Ho letto tutto il progetto.");
+    expect(markup).toContain("L&#x27;app è bella e curata:");
+  });
+
   it("keeps marker offsets stable after literal dollar protection", async () => {
     const text = "Price $5. Highlight this phrase.";
     const startOffset = text.indexOf("Highlight");
@@ -158,6 +182,33 @@ describe("ChatMarkdown", () => {
     expect(markup).toContain('data-thread-marker-id="marker-dollar"');
     expect(markup).toContain("thread-marker-underline");
     expect(markup).toContain("Price $5.");
+  });
+
+  it("keeps marker offsets aligned when an escaped dollar precedes the marker", async () => {
+    // `\$` is two raw characters that render as one `$`; the dollar-protection transform must stay
+    // length-preserving or every offset after it shifts and the marker wraps the wrong substring.
+    const text = "Cost is \\$5 here. Highlight this phrase.";
+    const startOffset = text.indexOf("Highlight");
+    const selectedText = "Highlight this phrase";
+    const marker: ThreadMarker = {
+      id: ThreadMarkerId.makeUnsafe("marker-escaped-dollar"),
+      messageId: MessageId.makeUnsafe("assistant-1"),
+      startOffset,
+      endOffset: startOffset + selectedText.length,
+      selectedText,
+      style: "underline",
+      color: "blue",
+      label: null,
+      done: false,
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+    };
+    const markup = await renderMarkdown(text, undefined, [marker]);
+
+    expect(markup).toContain('data-thread-marker-id="marker-escaped-dollar"');
+    expect(markup).toContain(">Highlight this phrase</span>");
+    expect(markup).toContain("Cost is $5 here.");
+    expect(markup).not.toContain('class="katex"');
   });
 
   it("keeps plan, diff, and transcript surfaces routed through the shared renderer", () => {

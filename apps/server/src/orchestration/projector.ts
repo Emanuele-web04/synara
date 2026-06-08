@@ -447,7 +447,9 @@ export function projectEvent(
               ...(payload.pinnedMessages !== undefined
                 ? { pinnedMessages: payload.pinnedMessages }
                 : {}),
-              ...(payload.threadMarkers !== undefined ? { threadMarkers: payload.threadMarkers } : {}),
+              ...(payload.threadMarkers !== undefined
+                ? { threadMarkers: payload.threadMarkers }
+                : {}),
               ...(payload.notes !== undefined ? { notes: payload.notes } : {}),
               updatedAt: payload.updatedAt,
             }),

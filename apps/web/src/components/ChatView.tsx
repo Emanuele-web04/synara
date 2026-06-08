@@ -2288,32 +2288,31 @@ export default function ChatView({
     () => new Set(threadMarkers.map((marker) => marker.messageId)),
     [threadMarkers],
   );
-  // Resolve the live text of currently-pinned messages so the panel can derive auto-labels
-  // and flag pins whose source message is no longer in the transcript.
-  const pinnedMessageTextById = useMemo(() => {
-    if (pinnedMessageIds.size === 0) {
-      return EMPTY_PINNED_TEXT;
+  // Resolve live text for the Environment panel in one transcript pass.
+  const { markerMessageTextById, pinnedMessageTextById } = useMemo(() => {
+    const needsPinnedText = pinnedMessageIds.size > 0;
+    const needsMarkerText = markerMessageIds.size > 0;
+    if (!needsPinnedText && !needsMarkerText) {
+      return {
+        pinnedMessageTextById: EMPTY_PINNED_TEXT,
+        markerMessageTextById: EMPTY_PINNED_TEXT,
+      };
     }
-    const map = new Map<MessageId, string>();
+    const pinnedTextById = new Map<MessageId, string>();
+    const markerTextById = new Map<MessageId, string>();
     for (const message of timelineMessages) {
-      if (pinnedMessageIds.has(message.id)) {
-        map.set(message.id, message.text);
+      if (needsPinnedText && pinnedMessageIds.has(message.id)) {
+        pinnedTextById.set(message.id, message.text);
+      }
+      if (needsMarkerText && markerMessageIds.has(message.id)) {
+        markerTextById.set(message.id, message.text);
       }
     }
-    return map;
-  }, [pinnedMessageIds, timelineMessages]);
-  const markerMessageTextById = useMemo(() => {
-    if (markerMessageIds.size === 0) {
-      return EMPTY_PINNED_TEXT;
-    }
-    const map = new Map<MessageId, string>();
-    for (const message of timelineMessages) {
-      if (markerMessageIds.has(message.id)) {
-        map.set(message.id, message.text);
-      }
-    }
-    return map;
-  }, [markerMessageIds, timelineMessages]);
+    return {
+      pinnedMessageTextById: needsPinnedText ? pinnedTextById : EMPTY_PINNED_TEXT,
+      markerMessageTextById: needsMarkerText ? markerTextById : EMPTY_PINNED_TEXT,
+    };
+  }, [markerMessageIds, pinnedMessageIds, timelineMessages]);
   const {
     handleTogglePinMessage,
     handleTogglePinnedMessageDone,
@@ -3588,7 +3587,6 @@ export default function ChatView({
   const environmentPanelVisible = resolveEnvironmentPanelVisible({
     environmentEnabled,
     environmentPanelOpen,
-    isCenteredEmptyLanding,
   });
   const githubRepositoryQuery = useQuery(
     gitGithubRepositoryQueryOptions(gitBranchSourceCwd, environmentPanelVisible),
@@ -4316,6 +4314,25 @@ export default function ChatView({
       }
       dismissTranscriptSelectionAction();
       window.getSelection()?.removeAllRanges();
+      const sameStyleOverlappingMarkers = threadMarkers.filter(
+        (marker) =>
+          marker.messageId === messageId &&
+          marker.style === style &&
+          marker.startOffset < range.endOffset &&
+          range.startOffset < marker.endOffset,
+      );
+      if (sameStyleOverlappingMarkers.length > 0) {
+        for (const marker of sameStyleOverlappingMarkers) {
+          void dispatchThreadMarkerRemove(activeThreadId, marker.id).catch((error) => {
+            console.error("Failed to remove thread marker", error);
+            toastManager.add({
+              type: "error",
+              title: "Could not remove marker.",
+            });
+          });
+        }
+        return;
+      }
       void dispatchThreadMarkerAdd({
         threadId: activeThreadId,
         markerId: ThreadMarkerId.makeUnsafe(crypto.randomUUID()),
@@ -4325,16 +4342,21 @@ export default function ChatView({
         selectedText: message.text.slice(range.startOffset, range.endOffset),
         style,
         color,
-      })
-        .catch((error) => {
-          console.error("Failed to create thread marker", error);
-          toastManager.add({
-            type: "error",
-            title: "Could not create marker.",
-          });
+      }).catch((error) => {
+        console.error("Failed to create thread marker", error);
+        toastManager.add({
+          type: "error",
+          title: "Could not create marker.",
         });
+      });
     },
-    [activeThreadId, dismissTranscriptSelectionAction, pendingTranscriptSelectionAction, timelineMessages],
+    [
+      activeThreadId,
+      dismissTranscriptSelectionAction,
+      pendingTranscriptSelectionAction,
+      threadMarkers,
+      timelineMessages,
+    ],
   );
   const createHighlightFromPendingSelection = useCallback(() => {
     createMarkerFromPendingSelection("highlight", "yellow");

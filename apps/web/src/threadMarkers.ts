@@ -21,7 +21,10 @@ const INLINE_EMPHASIS_PATTERN = /[*_`~]+/g;
 export { normalizeThreadMarkerLabel };
 
 export function deriveThreadMarkerLabel(marker: ThreadMarker): string {
-  const cleaned = marker.selectedText.replace(INLINE_EMPHASIS_PATTERN, "").replace(/\s+/g, " ").trim();
+  const cleaned = marker.selectedText
+    .replace(INLINE_EMPHASIS_PATTERN, "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (cleaned.length === 0) {
     return "Marked text";
   }
