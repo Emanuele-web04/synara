@@ -29,12 +29,15 @@ import {
 import { formatComposerMentionToken } from "~/lib/composerMentions";
 import { basenameOfPath } from "~/file-icons";
 import { createCentralIconElement } from "~/lib/central-icons";
+import { GitHubIcon, GlobeIcon } from "~/lib/icons";
+import { describeLinkChip, openExternalLink } from "~/lib/linkChips";
 import {
   COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
   COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
   COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+  COMPOSER_INLINE_LINK_CHIP_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
   formatComposerSkillChipLabel,
 } from "../composerInlineChip";
@@ -67,6 +70,15 @@ export type SerializedComposerAgentMentionNode = Spread<
     alias: string;
     color: string;
     type: "composer-agent-mention";
+    version: 1;
+  },
+  SerializedTextNode
+>;
+
+export type SerializedComposerLinkNode = Spread<
+  {
+    url: string;
+    type: "composer-link";
     version: 1;
   },
   SerializedTextNode
@@ -160,6 +172,34 @@ function renderAgentMentionChipDom(container: HTMLElement, alias: string, color:
   label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;
   label.textContent = `@${alias}`;
 
+  container.append(icon, label);
+}
+
+const LINK_GITHUB_ICON_SVG = renderToStaticMarkup(
+  <GitHubIcon aria-hidden="true" className={COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} />,
+);
+const LINK_GLOBE_ICON_SVG = renderToStaticMarkup(
+  <GlobeIcon aria-hidden="true" className={COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} />,
+);
+
+function renderLinkChipDom(container: HTMLElement, url: string): void {
+  container.textContent = "";
+  container.style.setProperty("user-select", "none");
+  container.style.setProperty("-webkit-user-select", "none");
+
+  const { label: labelText, isGitHub } = describeLinkChip(url);
+
+  const icon = document.createElement("span");
+  icon.ariaHidden = "true";
+  icon.className = "inline-flex shrink-0 items-center";
+  icon.innerHTML = isGitHub ? LINK_GITHUB_ICON_SVG : LINK_GLOBE_ICON_SVG;
+
+  const label = document.createElement("span");
+  label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;
+  label.textContent = labelText;
+
+  container.title = url;
+  container.dataset.linkUrl = url;
   container.append(icon, label);
 }
 
@@ -404,6 +444,85 @@ export function $createComposerAgentMentionNode(
   return $applyNodeReplacement(new ComposerAgentMentionNode(alias, color));
 }
 
+// ── ComposerLinkNode ──────────────────────────────────────────────────
+
+export class ComposerLinkNode extends TextNode {
+  __url: string;
+
+  static override getType(): string {
+    return "composer-link";
+  }
+
+  static override clone(node: ComposerLinkNode): ComposerLinkNode {
+    return new ComposerLinkNode(node.__url, node.__key);
+  }
+
+  static override importJSON(serializedNode: SerializedComposerLinkNode): ComposerLinkNode {
+    return $createComposerLinkNode(serializedNode.url);
+  }
+
+  constructor(url: string, key?: NodeKey) {
+    // The text content is the raw URL so the sent prompt round-trips exactly.
+    super(url, key);
+    this.__url = url;
+  }
+
+  override exportJSON(): SerializedComposerLinkNode {
+    return {
+      ...super.exportJSON(),
+      url: this.__url,
+      type: "composer-link",
+      version: 1,
+    };
+  }
+
+  override createDOM(_config: EditorConfig): HTMLElement {
+    const dom = document.createElement("span");
+    dom.className = COMPOSER_INLINE_LINK_CHIP_CLASS_NAME;
+    dom.contentEditable = "false";
+    dom.setAttribute("spellcheck", "false");
+    renderLinkChipDom(dom, this.__url);
+    // Open externally on click; the chip is non-editable so this never competes
+    // with caret placement inside the token. Read the URL from the DOM so the
+    // handler stays correct if the node's URL is later updated in place.
+    dom.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const url = dom.dataset.linkUrl;
+      if (url) openExternalLink(url);
+    });
+    return dom;
+  }
+
+  override updateDOM(prevNode: ComposerLinkNode, dom: HTMLElement, _config: EditorConfig): boolean {
+    dom.contentEditable = "false";
+    if (prevNode.__url !== this.__url) {
+      renderLinkChipDom(dom, this.__url);
+    }
+    return false;
+  }
+
+  override canInsertTextBefore(): false {
+    return false;
+  }
+
+  override canInsertTextAfter(): false {
+    return false;
+  }
+
+  override isTextEntity(): true {
+    return true;
+  }
+
+  override isToken(): true {
+    return true;
+  }
+}
+
+export function $createComposerLinkNode(url: string): ComposerLinkNode {
+  return $applyNodeReplacement(new ComposerLinkNode(url));
+}
+
 // ── ComposerTerminalContextNode ───────────────────────────────────────
 
 function ComposerTerminalContextDecorator(props: { context: TerminalContextDraft }) {
@@ -476,7 +595,8 @@ export type ComposerInlineTokenNode =
   | ComposerMentionNode
   | ComposerSkillNode
   | ComposerTerminalContextNode
-  | ComposerAgentMentionNode;
+  | ComposerAgentMentionNode
+  | ComposerLinkNode;
 
 export function isComposerInlineTokenNode(
   candidate: unknown,
@@ -485,7 +605,8 @@ export function isComposerInlineTokenNode(
     candidate instanceof ComposerMentionNode ||
     candidate instanceof ComposerSkillNode ||
     candidate instanceof ComposerTerminalContextNode ||
-    candidate instanceof ComposerAgentMentionNode
+    candidate instanceof ComposerAgentMentionNode ||
+    candidate instanceof ComposerLinkNode
   );
 }
 
@@ -495,4 +616,5 @@ export const COMPOSER_NODE_CLASSES = [
   ComposerSkillNode,
   ComposerTerminalContextNode,
   ComposerAgentMentionNode,
+  ComposerLinkNode,
 ] as const;

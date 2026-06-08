@@ -63,6 +63,15 @@ export const COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME = composerInlineChipClassNam
   tone: "accent",
 });
 
+/** Tappable link token (bare URL / shortened GitHub reference). Shares the
+ *  plain accent look of the other inline tokens, adding pointer affordance and a
+ *  hover underline so it reads as openable in both the composer and timeline. */
+export const COMPOSER_INLINE_LINK_CHIP_CLASS_NAME = composerInlineChipClassName({
+  fill: "plain",
+  tone: "accent",
+  className: "cursor-pointer hover:underline",
+});
+
 // ── Shared icon / label ───────────────────────────────────────────────
 /** Icon slot for inline composer chips (skill, file, folder, plugin). */
 export const COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME = "size-3.5 shrink-0";

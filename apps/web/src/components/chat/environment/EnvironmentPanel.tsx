@@ -19,6 +19,8 @@ import type {
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 
+import { useAppSettings } from "~/appSettings";
+import { SETTINGS_TARGETS } from "~/settingsNavigation";
 import {
   ENVIRONMENT_PANEL_MOTION_CLASS,
   ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
@@ -41,6 +43,7 @@ import {
   EnvironmentCollapsibleSection,
   EnvironmentPanelTitle,
   EnvironmentRow,
+  EnvironmentSectionDivider,
   EnvironmentSectionLabel,
 } from "./EnvironmentRow";
 
@@ -125,8 +128,6 @@ export interface EnvironmentPanelProps {
   onClose: () => void;
 }
 
-const PANEL_DIVIDER_CLASS_NAME = "my-1 border-t border-[color:var(--color-border-light)]";
-
 function EnvironmentRecapSection({
   recap,
   markdownCwd,
@@ -192,6 +193,7 @@ export function EnvironmentPanel({
   onClose,
 }: EnvironmentPanelProps) {
   const navigate = useNavigate();
+  const { settings } = useAppSettings();
   const { additions, deletions, hasChanges } = diffTotals;
 
   // Disable the Changes row only when the diff cannot be opened *and* is not already open
@@ -205,9 +207,14 @@ export function EnvironmentPanel({
       <div className="flex items-center justify-between gap-2 px-2 pb-0.5 pt-0.5">
         <EnvironmentPanelTitle>Environment</EnvironmentPanelTitle>
         <IconButton
-          label="Environment settings"
-          tooltip="Environment settings"
-          onClick={() => void navigate({ to: "/settings" })}
+          label="Panel sections"
+          tooltip="Panel sections"
+          onClick={() =>
+            void navigate({
+              to: "/settings",
+              search: { target: SETTINGS_TARGETS.environmentPanel },
+            })
+          }
         >
           <SettingsIcon className="size-3.5" />
         </IconButton>
@@ -239,10 +246,14 @@ export function EnvironmentPanel({
         <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} variant="panel" />
       ) : null}
 
-      <div className={PANEL_DIVIDER_CLASS_NAME} />
-
-      {githubRepository && onOpenGithubRepository ? (
+      {/*
+        Optional sections below the git block. Each renders its own leading divider only when it
+        actually shows, so toggling any section via the header gear menu never leaves a doubled or
+        dangling rule. Visibility is gated on the per-section AppSettings flags.
+      */}
+      {settings.showEnvironmentRepository && githubRepository && onOpenGithubRepository ? (
         <>
+          <EnvironmentSectionDivider />
           <div className="flex flex-col gap-0.5">
             <EnvironmentSectionLabel>Repository</EnvironmentSectionLabel>
             <EnvironmentRow
@@ -257,26 +268,27 @@ export function EnvironmentPanel({
               }}
             />
           </div>
-          <div className={PANEL_DIVIDER_CLASS_NAME} />
         </>
       ) : null}
 
-      <EnvironmentEditorSection
-        keybindings={keybindings}
-        availableEditors={availableEditors}
-        openInCwd={openInCwd}
-      />
+      {settings.showEnvironmentEditor ? (
+        <EnvironmentEditorSection
+          keybindings={keybindings}
+          availableEditors={availableEditors}
+          openInCwd={openInCwd}
+        />
+      ) : null}
 
-      {showRecap && recap ? (
+      {settings.showEnvironmentRecap && showRecap && recap ? (
         <>
-          <div className={PANEL_DIVIDER_CLASS_NAME} />
+          <EnvironmentSectionDivider />
           <EnvironmentRecapSection recap={recap} markdownCwd={markdownCwd} />
         </>
       ) : null}
 
-      {pinnedMessages.length > 0 ? (
+      {settings.showEnvironmentPinned && pinnedMessages.length > 0 ? (
         <>
-          <div className={PANEL_DIVIDER_CLASS_NAME} />
+          <EnvironmentSectionDivider />
           <EnvironmentPinnedSection
             pins={pinnedMessages}
             messageTextById={pinnedMessageTextById}
@@ -288,9 +300,9 @@ export function EnvironmentPanel({
         </>
       ) : null}
 
-      {threadMarkers.length > 0 ? (
+      {settings.showEnvironmentMarkers && threadMarkers.length > 0 ? (
         <>
-          <div className={PANEL_DIVIDER_CLASS_NAME} />
+          <EnvironmentSectionDivider />
           <EnvironmentMarkersSection
             markers={threadMarkers}
             messageTextById={markerMessageTextById}
@@ -302,9 +314,9 @@ export function EnvironmentPanel({
         </>
       ) : null}
 
-      {activeThreadId ? (
+      {settings.showEnvironmentNotepad && activeThreadId ? (
         <>
-          <div className={PANEL_DIVIDER_CLASS_NAME} />
+          <EnvironmentSectionDivider />
           <EnvironmentNotesSection
             key={activeThreadId}
             threadId={activeThreadId}

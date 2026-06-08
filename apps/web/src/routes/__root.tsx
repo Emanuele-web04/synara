@@ -22,6 +22,7 @@ import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME } from "../branding";
+import { SETTINGS_TARGETS } from "../settingsNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import WhatsNewDialog from "../components/WhatsNewDialog";
 import { useWhatsNew } from "../whatsNew/useWhatsNew";
@@ -412,7 +413,7 @@ function ProviderUpdateNotifications() {
           }
           void navigate({
             to: "/settings",
-            search: { section: "providers", target: "provider-updates" },
+            search: { section: "providers", target: SETTINGS_TARGETS.providerUpdates },
           });
         },
       },

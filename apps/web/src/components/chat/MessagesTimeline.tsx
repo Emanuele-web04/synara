@@ -78,6 +78,7 @@ import {
   type ParsedTerminalContextEntry,
 } from "~/lib/terminalContext";
 import { cn } from "~/lib/utils";
+import { describeLinkChip, openExternalLink } from "~/lib/linkChips";
 import {
   DEFAULT_CHAT_FONT_SIZE_PX,
   normalizeChatFontSizePx,
@@ -100,6 +101,7 @@ import {
   COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
+  COMPOSER_INLINE_LINK_CHIP_CLASS_NAME,
   COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
@@ -1698,9 +1700,32 @@ function renderUserMessageInlineText(
         />,
       ];
     }
+    if (segment.type === "link") {
+      return [<UserMessageInlineLinkChip key={`${key}:link`} url={segment.url} />];
+    }
     return [];
   });
 }
+
+const UserMessageInlineLinkChip = memo(function UserMessageInlineLinkChip(props: { url: string }) {
+  const { label, isGitHub } = describeLinkChip(props.url);
+  const Icon = isGitHub ? GitHubIcon : GlobeIcon;
+  return (
+    <button
+      type="button"
+      className={COMPOSER_INLINE_LINK_CHIP_CLASS_NAME}
+      title={props.url}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openExternalLink(props.url);
+      }}
+    >
+      <Icon className={COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} />
+      <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>{label}</span>
+    </button>
+  );
+});
 
 const UserMessageInlineMentionChip = memo(function UserMessageInlineMentionChip(props: {
   path: string;
