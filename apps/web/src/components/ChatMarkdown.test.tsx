@@ -76,6 +76,18 @@ describe("ChatMarkdown", () => {
     expect(markup.match(/class="katex"/g) ?? []).toHaveLength(1);
   });
 
+  it("renders external assistant links with the shared favicon icon slot", async () => {
+    const markup = await renderMarkdown(
+      "Closest source: [OpenAI benchmark](https://openai.com/research).",
+    );
+
+    expect(markup).toContain(
+      'class="inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline"',
+    );
+    expect(markup).toContain("size-3.5 shrink-0 mr-1 inline-block align-[-0.125em]");
+    expect(markup).toContain("OpenAI benchmark");
+  });
+
   it("keeps dollar signs in markdown file links from becoming math", async () => {
     const source =
       "Files touched:\n\n- [_chat.$threadId.tsx](/Users/julius/project/apps/web/src/routes/_chat.$threadId.tsx:1192)";

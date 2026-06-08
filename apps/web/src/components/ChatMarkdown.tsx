@@ -41,7 +41,18 @@ import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../ma
 import { readNativeApi } from "../nativeApi";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
+import { COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME } from "./composerInlineChip";
+import { LinkChipIcon } from "./LinkChipIcon";
 import { IconButton } from "./ui/icon-button";
+
+const EXTERNAL_HTTP_HREF_PATTERN = /^https?:\/\//i;
+const MARKDOWN_EXTERNAL_LINK_CLASS_NAME =
+  "inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline";
+const MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME = `${COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} mr-1 inline-block align-[-0.125em]`;
+
+function isExternalHttpHref(href: string | undefined): href is string {
+  return typeof href === "string" && EXTERNAL_HTTP_HREF_PATTERN.test(href);
+}
 
 class CodeHighlightErrorBoundary extends React.Component<
   { fallback: ReactNode; children: ReactNode },
@@ -850,11 +861,30 @@ function ChatMarkdown({
   }, []);
   const markdownComponents = useMemo<Components>(
     () => ({
-      a({ node: _node, href, ...props }) {
+      a({ node: _node, href, children, ...props }) {
         const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
-        const targetPath = resolveMarkdownFileLinkTarget(restoredHref, cwd);
+        const isExternalHttp = isExternalHttpHref(restoredHref);
+        const targetPath = isExternalHttp ? null : resolveMarkdownFileLinkTarget(restoredHref, cwd);
         if (!targetPath) {
-          return <a {...props} href={restoredHref} target="_blank" rel="noopener noreferrer" />;
+          return (
+            <a
+              {...props}
+              href={restoredHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={
+                isExternalHttp ? MARKDOWN_EXTERNAL_LINK_CLASS_NAME : props.className
+              }
+            >
+              {isExternalHttp ? (
+                <LinkChipIcon
+                  url={restoredHref}
+                  className={MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME}
+                />
+              ) : null}
+              {children}
+            </a>
+          );
         }
 
         return (
@@ -871,7 +901,9 @@ function ChatMarkdown({
                 console.warn("Native API not found. Unable to open file in editor.");
               }
             }}
-          />
+          >
+            {children}
+          </a>
         );
       },
       pre({ node: _node, children, ...props }) {

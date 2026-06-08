@@ -31,6 +31,7 @@ import { basenameOfPath } from "~/file-icons";
 import { createCentralIconElement } from "~/lib/central-icons";
 import { GitHubIcon, GlobeIcon } from "~/lib/icons";
 import { describeLinkChip, openExternalLink } from "~/lib/linkChips";
+import { resolveSiteFaviconUrl, siteFaviconStatusCache } from "~/lib/siteFavicon";
 import {
   COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
@@ -182,6 +183,63 @@ const LINK_GLOBE_ICON_SVG = renderToStaticMarkup(
   <GlobeIcon aria-hidden="true" className={COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} />,
 );
 
+// Tracks favicon probes in flight (keyed by favicon src) so multiple chips for the
+// same host don't each kick off a redundant Image() load. The resolved 'ok'/'fail'
+// outcome lives in the shared siteFaviconStatusCache (same cache the React
+// <SiteFavicon> uses), so a host seen in markdown renders instantly here too.
+const composerFaviconProbing = new Set<string>();
+
+// Imperatively swaps the chip's icon span over to a favicon <img>. Built via the
+// DOM API (no inline onerror) so it stays CSP-safe; reverts to the globe if the
+// cached favicon later fails to render.
+function setLinkChipFaviconImg(iconSpan: HTMLElement, faviconSrc: string): void {
+  const img = document.createElement("img");
+  img.src = faviconSrc;
+  img.alt = "";
+  img.ariaHidden = "true";
+  img.className = COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME;
+  img.style.borderRadius = "2px";
+  img.style.objectFit = "contain";
+  img.addEventListener("error", () => {
+    iconSpan.innerHTML = LINK_GLOBE_ICON_SVG;
+  });
+  iconSpan.replaceChildren(img);
+}
+
+// Replaces the globe glyph with the site favicon once it loads. The icon span is
+// not a Lexical-tracked node (updateDOM returns false and only re-renders on URL
+// change), so mutating it after the commit is safe.
+function tryPatchLinkChipFavicon(iconSpan: HTMLElement, url: string): void {
+  let faviconSrc: string;
+  try {
+    const host = new URL(url).hostname;
+    if (!host) return;
+    faviconSrc = resolveSiteFaviconUrl(host);
+  } catch {
+    return;
+  }
+
+  const cached = siteFaviconStatusCache.get(faviconSrc);
+  if (cached === "ok") {
+    setLinkChipFaviconImg(iconSpan, faviconSrc);
+    return;
+  }
+  if (cached === "fail" || composerFaviconProbing.has(faviconSrc)) return;
+
+  composerFaviconProbing.add(faviconSrc);
+  const probe = new Image();
+  probe.addEventListener("load", () => {
+    composerFaviconProbing.delete(faviconSrc);
+    siteFaviconStatusCache.set(faviconSrc, "ok");
+    setLinkChipFaviconImg(iconSpan, faviconSrc);
+  });
+  probe.addEventListener("error", () => {
+    composerFaviconProbing.delete(faviconSrc);
+    siteFaviconStatusCache.set(faviconSrc, "fail");
+  });
+  probe.src = faviconSrc;
+}
+
 function renderLinkChipDom(container: HTMLElement, url: string): void {
   container.textContent = "";
   container.style.setProperty("user-select", "none");
@@ -201,6 +259,10 @@ function renderLinkChipDom(container: HTMLElement, url: string): void {
   container.title = url;
   container.dataset.linkUrl = url;
   container.append(icon, label);
+
+  if (!isGitHub) {
+    tryPatchLinkChipFavicon(icon, url);
+  }
 }
 
 // ── ComposerMentionNode ───────────────────────────────────────────────

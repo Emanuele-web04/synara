@@ -29,6 +29,7 @@ import {
 import { deriveTimelineEntries, isFileChangeWorkLogEntry } from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
+import { LinkChipIcon } from "../LinkChipIcon";
 import {
   BotIcon,
   CheckIcon,
@@ -1708,8 +1709,7 @@ function renderUserMessageInlineText(
 }
 
 const UserMessageInlineLinkChip = memo(function UserMessageInlineLinkChip(props: { url: string }) {
-  const { label, isGitHub } = describeLinkChip(props.url);
-  const Icon = isGitHub ? GitHubIcon : GlobeIcon;
+  const { label } = describeLinkChip(props.url);
   return (
     <button
       type="button"
@@ -1721,7 +1721,7 @@ const UserMessageInlineLinkChip = memo(function UserMessageInlineLinkChip(props:
         openExternalLink(props.url);
       }}
     >
-      <Icon className={COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} />
+      <LinkChipIcon url={props.url} className={COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} />
       <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>{label}</span>
     </button>
   );
