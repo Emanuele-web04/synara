@@ -138,6 +138,11 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     whenAst: whenNotTerminalFocus,
   },
   {
+    command: "settings.usage",
+    shortcut: commandShortcut("u", { shiftKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
     command: "thread.jump.1",
     shortcut: commandShortcut("1"),
     whenAst: whenThreadJumpAvailable,

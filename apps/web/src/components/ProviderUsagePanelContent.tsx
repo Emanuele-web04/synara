@@ -11,12 +11,12 @@ import type { OpenUsageUsageLine } from "~/lib/openUsageRateLimits";
 import {
   deriveProviderUsageLearnMoreHref,
   deriveRateLimitLearnMoreHref,
-  deriveVisibleRateLimitRows,
   type ProviderRateLimit,
 } from "~/lib/rateLimits";
+import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
 import { cn } from "~/lib/utils";
 
-import { RateLimitSummaryList } from "./RateLimitSummaryList";
+import { ProviderUsageLimitRows } from "./ProviderUsageLimitRows";
 import { ProviderUsageLineList } from "./ProviderUsageLineList";
 
 export { providerUsageLabel };
@@ -27,11 +27,12 @@ export const ProviderUsagePanelContent = memo(function ProviderUsagePanelContent
   usageLines?: ReadonlyArray<OpenUsageUsageLine> | undefined;
   isLoading?: boolean | undefined;
   learnMoreHref?: string | null | undefined;
+  showUsageLines?: boolean | undefined;
   showTitle?: boolean | undefined;
   className?: string | undefined;
 }) {
   const visibleRows = useMemo(
-    () => deriveVisibleRateLimitRows(props.rateLimits),
+    () => deriveProviderUsageDisplayRows(props.rateLimits),
     [props.rateLimits],
   );
   const learnMoreHref = useMemo(
@@ -49,9 +50,13 @@ export const ProviderUsagePanelContent = memo(function ProviderUsagePanelContent
           {providerUsageLabel(props.provider)}
         </div>
       ) : null}
-      {visibleRows.length > 0 ? <RateLimitSummaryList rateLimits={props.rateLimits} /> : null}
-      {props.usageLines && props.usageLines.length > 0 ? (
-        <ProviderUsageLineList lines={props.usageLines} surface="popover" />
+      <ProviderUsageLimitRows rows={visibleRows} surface="popover" />
+      {props.showUsageLines !== false && props.usageLines && props.usageLines.length > 0 ? (
+        <ProviderUsageLineList
+          className={cn(visibleRows.length > 0 && "pt-0.5")}
+          lines={props.usageLines}
+          surface="popover"
+        />
       ) : visibleRows.length === 0 && props.isLoading ? (
         <p className="text-[length:var(--app-font-size-chat-meta,10px)] leading-relaxed text-muted-foreground">
           Scanning local usage data for the selected provider.

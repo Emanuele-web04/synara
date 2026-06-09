@@ -12,17 +12,16 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 
+import { useAppSettings } from "~/appSettings";
 import { ProviderIcon } from "~/components/ProviderIcon";
+import { ProviderUsageLimitRows } from "~/components/ProviderUsageLimitRows";
 import { ProviderUsageLineList } from "~/components/ProviderUsageLineList";
 import { SettingsCard } from "~/components/settings/SettingsPanelPrimitives";
-import { UsageMeter } from "~/components/settings/UsageMeter";
 import { Button } from "~/components/ui/button";
+import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
 import { RotateCcwIcon } from "~/lib/icons";
-import {
-  normalizeServerProviderUsageLines,
-  normalizeServerProviderUsageRateLimit,
-} from "~/lib/providerUsageSnapshot";
-import { deriveVisibleRateLimitRows } from "~/lib/rateLimits";
+import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
+import { deriveAccountRateLimits, type ProviderRateLimit } from "~/lib/rateLimits";
 import {
   fetchAllProviderUsage,
   serverAllProviderUsageQueryOptions,
@@ -33,6 +32,8 @@ import {
   SETTINGS_PANEL_SECTION_CLASS_NAME,
   SETTINGS_SECTION_LABEL_CLASS_NAME,
 } from "~/settingsPanelStyles";
+import { useStore } from "~/store";
+import { createAllThreadsSelector } from "~/storeSelectors";
 
 const PILL_CLASS_NAME = "shrink-0 rounded-full px-2 py-1 text-[11px] font-medium leading-none";
 
@@ -57,15 +58,28 @@ function statusPill(status: ServerProviderUsageSnapshot["status"]): StatusPill |
   }
 }
 
-function ProviderUsageCard({ snapshot }: { snapshot: ServerProviderUsageSnapshot }) {
+function ProviderUsageCard({
+  snapshot,
+  threadRateLimits,
+  codexHomePath,
+}: {
+  snapshot: ServerProviderUsageSnapshot;
+  threadRateLimits: ReadonlyArray<ProviderRateLimit>;
+  codexHomePath: string | null;
+}) {
   const provider = snapshot.provider;
   const status = snapshot.status ?? "ok";
-
-  const meterRows = useMemo(() => {
-    const normalized = normalizeServerProviderUsageRateLimit(snapshot);
-    return normalized ? deriveVisibleRateLimitRows([normalized]) : [];
-  }, [snapshot]);
-  const usageLines = useMemo(() => normalizeServerProviderUsageLines(snapshot), [snapshot]);
+  const usageSummary = useProviderUsageSummary({
+    provider,
+    threadRateLimits,
+    codexHomePath,
+    providerSnapshot: snapshot,
+  });
+  const meterRows = useMemo(
+    () => deriveProviderUsageDisplayRows(usageSummary.rateLimits),
+    [usageSummary.rateLimits],
+  );
+  const usageLines = usageSummary.usageLines;
 
   const hasUsage = meterRows.length > 0 || usageLines.length > 0;
   const pill = status === "ok" ? null : statusPill(snapshot.status);
@@ -94,17 +108,7 @@ function ProviderUsageCard({ snapshot }: { snapshot: ServerProviderUsageSnapshot
         {status === "ok" && hasUsage ? (
           <>
             {meterRows.length > 0 ? (
-              <div className="space-y-3">
-                {meterRows.map((row) => (
-                  <UsageMeter
-                    key={row.id}
-                    label={row.label}
-                    remainingPercent={row.remainingPercent}
-                    resetsAt={row.resetsAt}
-                    windowDurationMins={row.windowDurationMins}
-                  />
-                ))}
-              </div>
+              <ProviderUsageLimitRows rows={meterRows} surface="settings" />
             ) : null}
             {usageLines.length > 0 ? (
               <ProviderUsageLineList
@@ -156,6 +160,11 @@ function mergeProviderUsageRefresh(
 
 export function ProviderUsageSettingsPanel() {
   const queryClient = useQueryClient();
+  const { settings } = useAppSettings();
+  const codexHomePath = settings.codexHomePath || null;
+  const threads = useStore(useMemo(() => createAllThreadsSelector(), []));
+  // Account/thread fallback rows are shared by every provider card; derive them once per panel.
+  const threadRateLimits = useMemo(() => deriveAccountRateLimits(threads), [threads]);
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   const refreshMutation = useMutation({
     mutationFn: () => fetchAllProviderUsage({ forceRefresh: true }),
@@ -206,7 +215,12 @@ export function ProviderUsageSettingsPanel() {
       ) : (
         <div className="flex flex-col gap-3">
           {cards.map((snapshot) => (
-            <ProviderUsageCard key={snapshot.provider} snapshot={snapshot} />
+            <ProviderUsageCard
+              key={snapshot.provider}
+              snapshot={snapshot}
+              threadRateLimits={threadRateLimits}
+              codexHomePath={codexHomePath}
+            />
           ))}
         </div>
       )}

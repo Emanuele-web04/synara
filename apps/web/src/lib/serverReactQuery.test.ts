@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   LOCAL_SERVERS_BACKGROUND_REFETCH_INTERVAL_MS,
   LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS,
+  serverAllProviderUsageQueryOptions,
   serverLocalServersQueryOptions,
 } from "./serverReactQuery";
 
@@ -32,5 +33,13 @@ describe("serverLocalServersQueryOptions", () => {
     });
 
     expect(options.refetchInterval).toBe(LOCAL_SERVERS_BACKGROUND_REFETCH_INTERVAL_MS);
+  });
+});
+
+describe("serverAllProviderUsageQueryOptions", () => {
+  it("can be disabled by provider-scoped usage surfaces", () => {
+    const options = serverAllProviderUsageQueryOptions(false);
+
+    expect(options.enabled).toBe(false);
   });
 });

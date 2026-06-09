@@ -12,6 +12,7 @@ const SURFACE_CLASSES: Record<
   {
     item: string;
     row: string;
+    label: string;
     value: string;
     subtitle: string;
   }
@@ -19,14 +20,16 @@ const SURFACE_CLASSES: Record<
   settings: {
     item: "space-y-0.5",
     row: "flex items-center justify-between gap-2 text-xs",
+    label: "font-medium text-foreground",
     value: "text-right tabular-nums text-muted-foreground",
     subtitle: "text-[11px] text-muted-foreground/80",
   },
   popover: {
-    item: "space-y-0.5 text-[length:var(--app-font-size-chat,12px)]",
-    row: "flex items-center justify-between gap-2",
+    item: "space-y-0.5",
+    row: "flex items-center justify-between gap-2 leading-tight",
+    label: "text-[11px] font-medium text-foreground",
     value: "text-right text-[length:var(--app-font-size-chat-meta,10px)] text-muted-foreground",
-    subtitle: "text-[length:var(--app-font-size-chat-meta,10px)] text-muted-foreground/80",
+    subtitle: "text-[length:var(--app-font-size-chat-meta,10px)] leading-tight text-muted-foreground/80",
   },
 };
 
@@ -46,7 +49,7 @@ export function ProviderUsageLineList({
       {lines.map((line) => (
         <div key={`${line.label}:${line.value}`} className={classes.item}>
           <div className={classes.row}>
-            <span className="font-medium text-foreground">{line.label}</span>
+            <span className={classes.label}>{line.label}</span>
             <span className={classes.value}>{line.value}</span>
           </div>
           {line.subtitle ? <div className={classes.subtitle}>{line.subtitle}</div> : null}

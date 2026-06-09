@@ -151,10 +151,18 @@ export async function fetchAllProviderUsage(input: ServerListProviderUsageInput 
   return api.server.listProviderUsage(input);
 }
 
-// Live remaining-usage for every supported provider at once, powering Settings → Usage.
-export function serverAllProviderUsageQueryOptions() {
+// Live remaining-usage for every supported provider at once, powering Settings and active usage UI.
+export function serverAllProviderUsageQueryOptions(
+  input:
+    | boolean
+    | {
+        enabled?: boolean;
+      } = true,
+) {
+  const enabled = typeof input === "boolean" ? input : (input.enabled ?? true);
   return queryOptions({
     queryKey: serverQueryKeys.allProviderUsage(),
+    enabled,
     staleTime: 60_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false,

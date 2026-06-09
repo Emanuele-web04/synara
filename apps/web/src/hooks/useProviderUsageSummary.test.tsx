@@ -1,0 +1,151 @@
+// FILE: useProviderUsageSummary.test.tsx
+// Purpose: Verifies how the shared provider-usage summary hook arbitrates live,
+// local, OpenUsage, and thread-derived fallback usage signals.
+
+import type { ServerProviderUsageSnapshot } from "@t3tools/contracts";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+
+import type { ProviderRateLimit } from "~/lib/rateLimits";
+import { serverQueryKeys } from "~/lib/serverReactQuery";
+import { useProviderUsageSummary } from "./useProviderUsageSummary";
+
+function snapshot(
+  input: Partial<ServerProviderUsageSnapshot> = {},
+): ServerProviderUsageSnapshot {
+  return {
+    provider: "claudeAgent",
+    updatedAt: "2026-06-09T12:00:00.000Z",
+    limits: [],
+    usageLines: [],
+    source: "test",
+    ...input,
+  };
+}
+
+function fallbackSnapshot(): ServerProviderUsageSnapshot {
+  return snapshot({
+    limits: [
+      {
+        window: "Weekly",
+        usedPercent: 64,
+        resetsAt: "2026-06-15T12:00:00.000Z",
+        windowDurationMins: 10080,
+      },
+    ],
+    usageLines: [{ label: "24h", value: "123M tokens", subtitle: "12 recent sessions" }],
+  });
+}
+
+function renderWithQueryClient(queryClient: QueryClient, node: ReactNode) {
+  return renderToStaticMarkup(
+    <QueryClientProvider client={queryClient}>{node}</QueryClientProvider>,
+  );
+}
+
+function readProviderUsageSummary(input: {
+  queryClient: QueryClient;
+  threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
+  providerSnapshot?: ServerProviderUsageSnapshot | undefined;
+}) {
+  let summary: ReturnType<typeof useProviderUsageSummary> | null = null;
+
+  function Probe() {
+    summary = useProviderUsageSummary({
+      provider: "claudeAgent",
+      threads: [],
+      threadRateLimits: input.threadRateLimits,
+      providerSnapshot: input.providerSnapshot,
+    });
+    return <span />;
+  }
+
+  renderWithQueryClient(input.queryClient, <Probe />);
+
+  if (!summary) {
+    throw new Error("Provider usage summary probe did not render.");
+  }
+  return summary;
+}
+
+function createQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+}
+
+describe("useProviderUsageSummary", () => {
+  it("does not show local fallback rows when the live batch reports a non-ok status", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+      snapshot({ status: "needs-auth", detail: "Sign in with claude to see usage." }),
+    ]);
+    queryClient.setQueryData(serverQueryKeys.providerUsage("claudeAgent", null), fallbackSnapshot());
+
+    const summary = readProviderUsageSummary({ queryClient });
+
+    expect(summary.rateLimits).toEqual([]);
+    expect(summary.usageLines).toEqual([]);
+  });
+
+  it("still uses local fallback rows when no live snapshot exists", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+    queryClient.setQueryData(serverQueryKeys.providerUsage("claudeAgent", null), fallbackSnapshot());
+
+    const summary = readProviderUsageSummary({ queryClient });
+
+    expect(summary.rateLimits).toHaveLength(1);
+    expect(summary.rateLimits[0]?.limits[0]?.window).toBe("Weekly");
+    expect(summary.usageLines).toEqual([
+      { label: "24h", value: "123M tokens", subtitle: "12 recent sessions" },
+    ]);
+  });
+
+  it("accepts precomputed thread fallback rows from aggregate provider surfaces", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+
+    const summary = readProviderUsageSummary({
+      queryClient,
+      threadRateLimits: [
+        {
+          provider: "claudeAgent",
+          updatedAt: "2026-06-09T12:00:00.000Z",
+          limits: [
+            {
+              window: "5h",
+              usedPercent: 12,
+              resetsAt: "2026-06-09T17:00:00.000Z",
+              windowDurationMins: 300,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(summary.rateLimits).toHaveLength(1);
+    expect(summary.rateLimits[0]?.limits?.[0]?.window).toBe("5h");
+    expect(summary.rateLimits[0]?.limits?.[0]?.usedPercent).toBe(12);
+  });
+
+  it("does not show fallback rows when an explicit provider card snapshot is non-ok", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+    queryClient.setQueryData(serverQueryKeys.providerUsage("claudeAgent", null), fallbackSnapshot());
+
+    const summary = readProviderUsageSummary({
+      queryClient,
+      providerSnapshot: snapshot({ status: "error", detail: "Usage is currently unavailable." }),
+    });
+
+    expect(summary.rateLimits).toEqual([]);
+    expect(summary.usageLines).toEqual([]);
+  });
+});

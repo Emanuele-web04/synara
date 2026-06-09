@@ -28,6 +28,7 @@ const STATIC_KEYBINDING_COMMANDS = [
   "diff.toggle",
   "modelPicker.toggle",
   "traitsPicker.toggle",
+  "settings.usage",
   "chat.new",
   "chat.newLatestProject",
   "chat.newChat",

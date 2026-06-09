@@ -420,11 +420,20 @@ export function deriveProviderUsageLearnMoreHref(
   return providerUsageLearnMoreHref(provider);
 }
 
+function timestampMs(value: string | undefined): number {
+  if (!value) return Number.NEGATIVE_INFINITY;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+}
+
 function mergeRateLimitWindowSets(
   preferred: ReadonlyArray<RateLimitWindow>,
   fallback: ReadonlyArray<RateLimitWindow>,
+  preferredUpdatedAt?: string,
+  fallbackUpdatedAt?: string,
 ): RateLimitWindow[] {
   const merged = new Map<string, RateLimitWindow>();
+  const preferredIsNewerOrSame = timestampMs(preferredUpdatedAt) >= timestampMs(fallbackUpdatedAt);
 
   for (const limit of fallback) {
     const label = normalizeRateLimitLabel(limit.window, limit.windowDurationMins);
@@ -437,6 +446,14 @@ function mergeRateLimitWindowSets(
   for (const limit of preferred) {
     const label = normalizeRateLimitLabel(limit.window, limit.windowDurationMins);
     const existing = merged.get(label);
+    if (existing && !preferredIsNewerOrSame) {
+      merged.set(label, {
+        ...limit,
+        ...existing,
+        window: label,
+      });
+      continue;
+    }
     merged.set(label, {
       ...existing,
       ...limit,
@@ -455,8 +472,16 @@ function mergeProviderRateLimit(
 
   return {
     provider: preferred.provider,
-    updatedAt: preferred.updatedAt,
-    limits: mergeRateLimitWindowSets(preferred.limits ?? [], fallback.limits ?? []),
+    updatedAt:
+      timestampMs(preferred.updatedAt) >= timestampMs(fallback.updatedAt)
+        ? preferred.updatedAt
+        : fallback.updatedAt,
+    limits: mergeRateLimitWindowSets(
+      preferred.limits ?? [],
+      fallback.limits ?? [],
+      preferred.updatedAt,
+      fallback.updatedAt,
+    ),
     ...((preferred.status ?? fallback.status)
       ? { status: preferred.status ?? fallback.status }
       : {}),

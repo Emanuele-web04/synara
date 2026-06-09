@@ -159,6 +159,11 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
+    shortcut: modShortcut("u", { shiftKey: true }),
+    command: "settings.usage",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
     shortcut: modShortcut("o", { shiftKey: true }),
     command: "sidebar.addProject",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
@@ -453,6 +458,24 @@ describe("split/new/close terminal shortcuts", () => {
     assert.isFalse(
       isTerminalNewShortcut(event({ key: "m", ctrlKey: true }), keybindings, {
         platform: "Linux",
+      }),
+    );
+  });
+});
+
+describe("settings shortcuts", () => {
+  it("opens usage settings with Cmd+Shift+U outside terminal focus", () => {
+    assert.equal(
+      resolveShortcutCommand(event({ key: "u", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "settings.usage",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "u", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
       }),
     );
   });

@@ -11,7 +11,7 @@ export interface UsagePaceSummary {
   etaText: string | null;
 }
 
-const MIN_ELAPSED_FRACTION = 0.05;
+const MIN_PROJECTION_ELAPSED_FRACTION = 0.05;
 
 function clampPercent(value: number): number {
   return Math.min(100, Math.max(0, value));
@@ -81,10 +81,7 @@ export function deriveUsagePace(input: {
   }
 
   const usedPercent = clampPercent(100 - input.remainingPercent);
-  const elapsedFraction = elapsedMs / durationMs;
-  if (elapsedFraction < MIN_ELAPSED_FRACTION && usedPercent > 0 && usedPercent < 100) {
-    return null;
-  }
+  const elapsedFraction = Math.max(elapsedMs / durationMs, MIN_PROJECTION_ELAPSED_FRACTION);
 
   const expectedUsedPercent = clampPercent(elapsedFraction * 100);
   const expectedRemainingPercent = clampPercent(100 - expectedUsedPercent);
