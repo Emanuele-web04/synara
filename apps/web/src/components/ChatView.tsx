@@ -333,6 +333,7 @@ import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./chat/ProviderModelPicker";
+import { ComposerModelEffortPicker } from "./chat/ComposerModelEffortPicker";
 import { TraitsPicker } from "./chat/TraitsPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
 import {
@@ -6909,18 +6910,38 @@ export default function ChatView({
       }),
     [runtimeUsageContextWindow, composerTraitSelection.contextWindow, selectedProvider],
   );
+  const useSplitComposerPickerControls = isLocalDraftThread && !hasThreadStarted;
   const composerModelPickerWidthClassName = isComposerFooterCompact ? "w-32" : "w-36 sm:w-44";
   const composerOptionsPickerWidthClassName = isComposerFooterCompact ? "w-28" : "w-32";
+  const composerModelEffortPickerWidthClassName = isComposerFooterCompact ? "w-40" : "w-44 sm:w-52";
+  const isComposerModelEffortPickerOpen = isModelPickerOpen || isTraitsPickerOpen;
+  const handleComposerModelEffortPickerOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) {
+        handleModelPickerOpenChange(true);
+      } else {
+        setIsModelPickerOpen(false);
+        setIsTraitsPickerOpen(false);
+      }
+    },
+    [handleModelPickerOpenChange],
+  );
   const composerPickerControls = showComposerModelBootstrapSkeleton ? (
-    <>
-      {selectedProviderRuntimeModelDiscoveryPending ? (
-        <ComposerModelLoadingControl widthClassName={composerModelPickerWidthClassName} />
-      ) : (
-        <ComposerControlSkeleton widthClassName={composerModelPickerWidthClassName} />
-      )}
-      <ComposerControlSkeleton widthClassName={composerOptionsPickerWidthClassName} />
-    </>
-  ) : (
+    useSplitComposerPickerControls ? (
+      <>
+        {selectedProviderRuntimeModelDiscoveryPending ? (
+          <ComposerModelLoadingControl widthClassName={composerModelPickerWidthClassName} />
+        ) : (
+          <ComposerControlSkeleton widthClassName={composerModelPickerWidthClassName} />
+        )}
+        <ComposerControlSkeleton widthClassName={composerOptionsPickerWidthClassName} />
+      </>
+    ) : selectedProviderRuntimeModelDiscoveryPending ? (
+      <ComposerModelLoadingControl widthClassName={composerModelEffortPickerWidthClassName} />
+    ) : (
+      <ComposerControlSkeleton widthClassName={composerModelEffortPickerWidthClassName} />
+    )
+  ) : useSplitComposerPickerControls ? (
     <>
       <ProviderModelPicker
         compact={isComposerFooterCompact}
@@ -6957,6 +6978,33 @@ export default function ChatView({
         shortcutLabel={traitsPickerShortcutLabel}
       />
     </>
+  ) : (
+    <ComposerModelEffortPicker
+      compact={isComposerFooterCompact}
+      provider={selectedProvider}
+      model={selectedModelForPickerWithCustomFallback}
+      lockedProvider={lockedProvider}
+      providers={providerStatuses}
+      modelOptionsByProvider={modelOptionsByProvider}
+      loadingModelProviders={{
+        cursor: cursorModelDiscoveryPending,
+        kilo: kiloModelDiscoveryPending,
+      }}
+      hiddenProviders={settings.hiddenProviders}
+      providerOrder={settings.providerOrder}
+      threadId={threadId}
+      runtimeModel={selectedRuntimeModel}
+      runtimeModels={runtimeModelsByProvider[selectedProvider]}
+      runtimeAgents={dynamicAgents}
+      modelOptions={selectedProviderModelOptions}
+      prompt={prompt}
+      onPromptChange={setPromptFromTraits}
+      onProviderModelChange={onProviderModelSelect}
+      onSelectionCommitted={scheduleComposerFocus}
+      open={isComposerModelEffortPickerOpen}
+      onOpenChange={handleComposerModelEffortPickerOpenChange}
+      shortcutLabel={modelPickerShortcutLabel}
+    />
   );
   const toggleFastMode = useCallback(() => {
     if (!composerTraitSelection.caps.supportsFastMode) {
