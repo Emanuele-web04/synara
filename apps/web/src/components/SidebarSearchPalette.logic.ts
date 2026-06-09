@@ -403,3 +403,125 @@ export function hasSidebarSearchResults(input: {
 }): boolean {
   return input.actions.length > 0 || input.projects.length > 0 || input.threads.length > 0;
 }
+
+export function expandHomeInPath(value: string, homeDir: string | null): string {
+  if (!homeDir) return value;
+  if (value === "~") return homeDir;
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return `${homeDir}${value.slice(1)}`;
+  }
+  return value;
+}
+
+export interface ThemeCommandItem {
+  description: string;
+  id: string;
+  isActive: boolean;
+  label: string;
+  mode: "system" | "light" | "dark";
+}
+
+function paletteQueryTokens(query: string): string[] {
+  return query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((token) => token.length > 0);
+}
+
+function hasTokenEqual(query: string, token: string): boolean {
+  return paletteQueryTokens(query).includes(token);
+}
+
+// Treat any token of length >= 2 that is a prefix of `keyword` as a match,
+// so typing `th` / `the` already starts surfacing theme actions.
+function hasTokenPrefixOf(query: string, keyword: string): boolean {
+  return paletteQueryTokens(query).some((token) => token.length >= 2 && keyword.startsWith(token));
+}
+
+// Keep the palette quiet by default, then expose one focused appearance action
+// once the user is clearly asking about themes.
+export function buildThemeCommandItem(input: {
+  query: string;
+  resolvedTheme: "light" | "dark";
+  theme: "system" | "light" | "dark";
+}): ThemeCommandItem | null {
+  const normalizedQuery = input.query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return null;
+  }
+
+  if (hasTokenEqual(normalizedQuery, "system")) {
+    return {
+      id: "theme-command:system",
+      label: "Follow system theme",
+      description: "Match your OS appearance setting.",
+      mode: "system",
+      isActive: input.theme === "system",
+    };
+  }
+
+  if (hasTokenEqual(normalizedQuery, "light")) {
+    return {
+      id: "theme-command:light",
+      label: "Switch to light theme",
+      description: "Always use the light theme.",
+      mode: "light",
+      isActive: input.theme === "light",
+    };
+  }
+
+  if (hasTokenEqual(normalizedQuery, "dark")) {
+    return {
+      id: "theme-command:dark",
+      label: "Switch to dark theme",
+      description: "Always use the dark theme.",
+      mode: "dark",
+      isActive: input.theme === "dark",
+    };
+  }
+
+  if (
+    hasTokenPrefixOf(normalizedQuery, "theme") ||
+    hasTokenPrefixOf(normalizedQuery, "appearance")
+  ) {
+    const nextMode = input.resolvedTheme === "dark" ? "light" : "dark";
+    return {
+      id: `theme-command:${nextMode}`,
+      label: `Switch to ${nextMode} theme`,
+      description:
+        nextMode === "light" ? "Always use the light theme." : "Always use the dark theme.",
+      mode: nextMode,
+      isActive: input.theme === nextMode,
+    };
+  }
+
+  return null;
+}
+
+export function threadMatchLabel(input: {
+  matchKind: "message" | "project" | "title";
+  messageMatchCount: number;
+}): string | null {
+  if (input.matchKind === "message") {
+    return input.messageMatchCount > 1 ? `${input.messageMatchCount} chat hits` : "Chat match";
+  }
+  if (input.matchKind === "project") {
+    return "Project match";
+  }
+  return null;
+}
+
+export function tokenizeHighlightQuery(query: string): string[] {
+  const tokens = query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((token) => token.length > 0)
+    .filter((token, index, allTokens) => allTokens.indexOf(token) === index);
+  return tokens.toSorted((left, right) => right.length - left.length);
+}
+
+export function escapeRegExp(value: string): string {
+  return value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
