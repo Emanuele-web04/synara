@@ -4,12 +4,8 @@
 // Exports: normalizeProjectFromReadModel/Shell, upsertProjectFromReadModel/Shell.
 
 import { type OrchestrationReadModel, type OrchestrationShellSnapshot } from "@t3tools/contracts";
-import {
-  type AppState,
-  arraysShallowEqual,
-  deepEqualJson,
-  normalizeModelSelection,
-} from "../store";
+import { type AppState } from "../store";
+import { arraysShallowEqual, deepEqualJson, normalizeModelSelection } from "./equality";
 import {
   basenameOfPath,
   persistedExpandedProjectCwds,

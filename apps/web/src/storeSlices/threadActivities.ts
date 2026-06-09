@@ -7,7 +7,7 @@
 //   PENDING_INTERACTION_REQUEST_KINDS, MAX_THREAD_ACTIVITIES constants.
 
 import { isStalePendingRequestFailureDetail } from "../lib/pendingInteraction";
-import { arraysShallowEqual, deepEqualJson } from "../store";
+import { arraysShallowEqual, deepEqualJson } from "./equality";
 import { type Thread } from "../types";
 
 export const MAX_THREAD_ACTIVITIES = 500;

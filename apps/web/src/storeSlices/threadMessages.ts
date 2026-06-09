@@ -7,7 +7,7 @@
 //   hasLiveAssistantIntro, shouldPreserveRunningTurn, buildMessageSlice, MAX_THREAD_MESSAGES.
 
 import { MessageId, type OrchestrationReadModel } from "@t3tools/contracts";
-import { arraysShallowEqual } from "../store";
+import { arraysShallowEqual } from "./equality";
 import { toAttachmentPreviewUrl } from "../lib/wsHttpUrl";
 import { type ChatAttachment, type ChatMessage, type Thread } from "../types";
 

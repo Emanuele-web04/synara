@@ -4,7 +4,7 @@
 // Exports: normalizeProposedPlans, sourceProposedPlansEqual, buildProposedPlanSlice.
 
 import { type OrchestrationReadModel } from "@t3tools/contracts";
-import { arraysShallowEqual } from "../store";
+import { arraysShallowEqual } from "./equality";
 import { type Thread } from "../types";
 
 type ReadModelThread = OrchestrationReadModel["threads"][number];

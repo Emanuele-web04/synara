@@ -7,7 +7,7 @@
 
 import { EventId, type OrchestrationEvent } from "@t3tools/contracts";
 import { deriveThreadSummaryMetadata } from "@t3tools/shared/threadSummary";
-import { deepEqualJson } from "../store";
+import { deepEqualJson } from "./equality";
 import { hasLiveTurnTailWork } from "../session-logic";
 import { type SidebarThreadSummary, type Thread } from "../types";
 

@@ -5,7 +5,7 @@
 // Note: threadTurnStatesEqual stays in store.ts — it depends on latestTurnsEqual (turn-lifecycle,
 //   not extracted this phase), so moving it would create a store.ts import cycle.
 
-import { deepEqualJson } from "../store";
+import { deepEqualJson } from "./equality";
 import { type Thread, type ThreadSession, type ThreadShell, type ThreadTurnState } from "../types";
 
 export function threadSessionsEqual(
