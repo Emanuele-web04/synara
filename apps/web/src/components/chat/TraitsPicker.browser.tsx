@@ -159,7 +159,7 @@ describe("TraitsPicker (Claude)", () => {
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Fast Mode");
+      expect(text).toContain("Speed");
       expect(text).toContain("Default");
       expect(text).toContain("Fast");
     });
@@ -172,7 +172,7 @@ describe("TraitsPicker (Claude)", () => {
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Context Window");
+      expect(text).toContain("Context");
       expect(text).toContain("200k");
       expect(text).toContain("1M");
     });
@@ -184,7 +184,7 @@ describe("TraitsPicker (Claude)", () => {
     await page.getByRole("button").click();
 
     await vi.waitFor(() => {
-      expect(document.body.textContent ?? "").not.toContain("Fast Mode");
+      expect(document.body.textContent ?? "").not.toContain("Speed");
     });
   });
 
@@ -391,7 +391,7 @@ describe("TraitsPicker (Codex)", () => {
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Fast Mode");
+      expect(text).toContain("Speed");
       expect(text).toContain("Default");
       expect(text).toContain("Fast");
     });
@@ -521,7 +521,7 @@ describe("TraitsPicker (Cursor)", () => {
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Fast Mode");
+      expect(text).toContain("Speed");
       expect(text).toContain("Default");
       expect(text).toContain("Fast");
       expect(text).not.toMatch(/\bThinking\b/u);

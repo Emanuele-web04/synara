@@ -334,8 +334,9 @@ import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimelin
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
-import { AVAILABLE_PROVIDER_OPTIONS } from "./chat/ProviderModelPicker";
+import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./chat/ProviderModelPicker";
 import { ComposerModelEffortPicker } from "./chat/ComposerModelEffortPicker";
+import { TraitsPicker } from "./chat/TraitsPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
 import {
   ComposerLocalDirectoryMenu,
@@ -2962,8 +2963,6 @@ export default function ChatView({
     () => shortcutLabelForCommand(keybindings, "chat.split"),
     [keybindings],
   );
-  // The combined picker uses the same configurable keybinding command that the
-  // keydown handler resolves, keeping synced keybindings and tooltip labels aligned.
   const modelPickerShortcutLabel = useMemo(
     () =>
       shortcutLabelForCommand(keybindings, "modelPicker.toggle") ??
@@ -2975,6 +2974,10 @@ export default function ChatView({
         altKey: false,
         modKey: true,
       }),
+    [keybindings],
+  );
+  const traitsPickerShortcutLabel = useMemo(
+    () => shortcutLabelForCommand(keybindings, "traitsPicker.toggle"),
     [keybindings],
   );
   const onToggleDiff = useCallback(() => {
@@ -6940,11 +6943,11 @@ export default function ChatView({
       }),
     [runtimeUsageContextWindow, composerTraitSelection.contextWindow, selectedProvider],
   );
+  const useSplitComposerPickerControls = isLocalDraftThread && !hasThreadStarted;
+  const composerModelPickerWidthClassName = isComposerFooterCompact ? "w-32" : "w-36 sm:w-44";
+  const composerOptionsPickerWidthClassName = isComposerFooterCompact ? "w-28" : "w-32";
   const composerModelEffortPickerWidthClassName = isComposerFooterCompact ? "w-40" : "w-44 sm:w-52";
   const isComposerModelEffortPickerOpen = isModelPickerOpen || isTraitsPickerOpen;
-  // Both shortcuts (Mod+Shift+M and Mod+Shift+E) now drop into the same combined
-  // surface; clear both mirrors on close so the existing keyboard handler stays
-  // in sync without needing to know about the new picker.
   const handleComposerModelEffortPickerOpenChange = useCallback(
     (open: boolean) => {
       if (open) {
@@ -6956,12 +6959,58 @@ export default function ChatView({
     },
     [handleModelPickerOpenChange],
   );
-  const composerModelEffortPickerControl = showComposerModelBootstrapSkeleton ? (
-    selectedProviderRuntimeModelDiscoveryPending ? (
+  const composerPickerControls = showComposerModelBootstrapSkeleton ? (
+    useSplitComposerPickerControls ? (
+      <>
+        {selectedProviderRuntimeModelDiscoveryPending ? (
+          <ComposerModelLoadingControl widthClassName={composerModelPickerWidthClassName} />
+        ) : (
+          <ComposerControlSkeleton widthClassName={composerModelPickerWidthClassName} />
+        )}
+        <ComposerControlSkeleton widthClassName={composerOptionsPickerWidthClassName} />
+      </>
+    ) : selectedProviderRuntimeModelDiscoveryPending ? (
       <ComposerModelLoadingControl widthClassName={composerModelEffortPickerWidthClassName} />
     ) : (
       <ComposerControlSkeleton widthClassName={composerModelEffortPickerWidthClassName} />
     )
+  ) : useSplitComposerPickerControls ? (
+    <>
+      <ProviderModelPicker
+        compact={isComposerFooterCompact}
+        provider={selectedProvider}
+        model={selectedModelForPickerWithCustomFallback}
+        lockedProvider={lockedProvider}
+        providers={providerStatuses}
+        modelOptionsByProvider={modelOptionsByProvider}
+        loadingModelProviders={{
+          cursor: cursorModelDiscoveryPending,
+          kilo: kiloModelDiscoveryPending,
+        }}
+        hiddenProviders={settings.hiddenProviders}
+        providerOrder={settings.providerOrder}
+        onProviderModelChange={onProviderModelSelect}
+        onSelectionCommitted={scheduleComposerFocus}
+        open={isModelPickerOpen}
+        onOpenChange={handleModelPickerOpenChange}
+        shortcutLabel={modelPickerShortcutLabel}
+      />
+      <TraitsPicker
+        provider={selectedProvider}
+        threadId={threadId}
+        model={selectedModelForPickerWithCustomFallback}
+        runtimeModel={selectedRuntimeModel}
+        runtimeModels={runtimeModelsByProvider[selectedProvider]}
+        runtimeAgents={dynamicAgents}
+        modelOptions={selectedProviderModelOptions}
+        prompt={prompt}
+        onPromptChange={setPromptFromTraits}
+        open={isTraitsPickerOpen}
+        onOpenChange={handleTraitsPickerOpenChange}
+        onSelectionCommitted={scheduleComposerFocus}
+        shortcutLabel={traitsPickerShortcutLabel}
+      />
+    </>
   ) : (
     <ComposerModelEffortPicker
       compact={isComposerFooterCompact}
@@ -8234,7 +8283,7 @@ export default function ChatView({
                         />
                       ) : null}
                       {!isVoiceRecording && !isVoiceTranscribing
-                        ? composerModelEffortPickerControl
+                        ? composerPickerControls
                         : null}
                       {showVoiceNotesControl && (isVoiceRecording || isVoiceTranscribing) ? (
                         <ComposerVoiceRecorderBar
