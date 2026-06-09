@@ -2,30 +2,21 @@ import { randomUUID } from "node:crypto";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
-  EventId,
   type ProviderKind,
   type ProviderComposerCapabilities,
-  type ProviderListAgentsResult,
-  type ProviderListModelsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
-  RuntimeItemId,
-  RuntimeRequestId,
   type ThreadTokenUsageSnapshot,
   ThreadId,
-  type ToolLifecycleItemType,
   TurnId,
-  type UserInputQuestion,
 } from "@t3tools/contracts";
 import { Cause, Deferred, Effect, Exit, Layer, Queue, Ref, Scope, Stream } from "effect";
 import type {
-  Agent,
   AssistantMessage,
   OpencodeClient,
   Part,
   PermissionRequest,
   QuestionRequest,
-  Todo,
 } from "@opencode-ai/sdk/v2";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -42,11 +33,7 @@ import { KiloAdapter, type KiloAdapterShape } from "../Services/KiloAdapter.ts";
 import { OpenCodeAdapter, type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
   buildOpenCodePermissionRules,
-  KILO_CLI_SPEC,
-  type OpenCodeCliModelDescriptor,
-  type OpenCodeCompatibleCliSpec,
   type OpenCodeInventory,
-  OPENCODE_CLI_SPEC,
   type OpenCodeRuntimeShape,
   OpenCodeRuntime,
   OpenCodeRuntimeLive,
@@ -61,54 +48,69 @@ import {
   type OpenCodeServerConnection,
 } from "../opencodeRuntime.ts";
 import { extractProposedPlanMarkdown, withProviderPlanModePrompt } from "../planMode.ts";
+import type {
+  OpenCodeCompatibleAdapterConfig,
+  OpenCodeCompatibleProvider,
+  OpenCodeMessageSnapshot,
+} from "./OpenCodeAdapter.types.ts";
+import {
+  KILO_ADAPTER_CONFIG,
+  OPENCODE_ADAPTER_CONFIG,
+  OPENCODE_PROMPT_ACCEPTED_ACTIVITY_TIMEOUT_MS,
+  OPENCODE_PROMPT_ACCEPTED_RECOVERY_DELAYS_MS,
+  OPENCODE_PROMPT_SUBMISSION_INLINE_WAIT_MS,
+} from "./OpenCodeAdapter.config.ts";
+import {
+  asFiniteNonNegativeNumber,
+  asPositiveInteger,
+  buildOpenCodeTokenUsageKey,
+  normalizeOpenCodeTokenUsage,
+} from "./OpenCodeAdapter.token.ts";
+import {
+  buildOpenCodeModelContextLimitMap,
+  compareOpenCodeModelDescriptors,
+  flattenOpenCodeAgents,
+  flattenOpenCodeCliModels,
+  flattenOpenCodeModels,
+  mergeOpenCodeCliModelDescriptors,
+  resolvePreferredOpenCodeModelProviders,
+  trimNonEmptyString,
+} from "./OpenCodeAdapter.models.ts";
+import {
+  appendOpenCodeAssistantTextDelta,
+  buildOpenCodeThreadSnapshot,
+  buildProviderEventBase,
+  extractResumeSessionId,
+  isFinalAssistantMessageSnapshot,
+  isOpenCodeContextOverflowError,
+  isOpenCodeTerminalStepFinish,
+  isOpenCodeToolCallFinish,
+  isoFromEpochMs,
+  isoFromOpenCodeTimestamp,
+  mapPermissionDecision,
+  mapPermissionToRequestType,
+  mergeOpenCodeAssistantText,
+  normalizeOpenCodeTodoTasks,
+  normalizeQuestionRequest,
+  nowIso,
+  openCodeMessageSnapshotFromEntry,
+  openCodeMessageSnapshotsFromResponse,
+  openCodeSnapshotKey,
+  openCodeToolContentText,
+  resolveLatestAssistantText,
+  resolveTextStreamKind,
+  sessionErrorMessage,
+  shouldProjectOpenCodeTextPart,
+  textFromPart,
+  toToolLifecycleItemType,
+} from "./OpenCodeAdapter.events.ts";
 
-type OpenCodeCompatibleProvider = Extract<ProviderKind, "opencode" | "kilo">;
-
-interface OpenCodeCompatibleAdapterConfig {
-  readonly provider: OpenCodeCompatibleProvider;
-  readonly displayName: string;
-  readonly defaultBinaryPath: string;
-  readonly providerOptionsKey: OpenCodeCompatibleProvider;
-  readonly runtimeEventSource: "opencode.sdk.event" | "kilo.sdk.event";
-  readonly turnIdPrefix: string;
-  readonly cliModelSource: string;
-  readonly fallbackModelSource: string;
-  readonly defaultAgent: string;
-  readonly planAgent: string;
-  readonly cliSpec: OpenCodeCompatibleCliSpec;
-}
-
-const OPENCODE_ADAPTER_CONFIG: OpenCodeCompatibleAdapterConfig = {
-  provider: "opencode",
-  displayName: "OpenCode",
-  defaultBinaryPath: "opencode",
-  providerOptionsKey: "opencode",
-  runtimeEventSource: "opencode.sdk.event",
-  turnIdPrefix: "opencode-turn",
-  cliModelSource: "opencode-cli",
-  fallbackModelSource: "opencode",
-  defaultAgent: "build",
-  planAgent: "plan",
-  cliSpec: OPENCODE_CLI_SPEC,
-};
-
-const KILO_ADAPTER_CONFIG: OpenCodeCompatibleAdapterConfig = {
-  provider: "kilo",
-  displayName: "Kilo",
-  defaultBinaryPath: "kilo",
-  providerOptionsKey: "kilo",
-  runtimeEventSource: "kilo.sdk.event",
-  turnIdPrefix: "kilo-turn",
-  cliModelSource: "kilo-cli",
-  fallbackModelSource: "kilo",
-  defaultAgent: "code",
-  planAgent: "plan",
-  cliSpec: KILO_CLI_SPEC,
-};
-
-const OPENCODE_PROMPT_ACCEPTED_ACTIVITY_TIMEOUT_MS = 60_000;
-const OPENCODE_PROMPT_ACCEPTED_RECOVERY_DELAYS_MS = [2_000, 5_000, 10_000, 20_000] as const;
-const OPENCODE_PROMPT_SUBMISSION_INLINE_WAIT_MS = 500;
+export {
+  flattenOpenCodeCliModels,
+  flattenOpenCodeModels,
+  resolvePreferredOpenCodeModelProviders,
+} from "./OpenCodeAdapter.models.ts";
+export { normalizeOpenCodeTokenUsage } from "./OpenCodeAdapter.token.ts";
 
 type OpenCodeSubscribedEvent =
   Awaited<ReturnType<OpencodeClient["event"]["subscribe"]>> extends {
@@ -156,18 +158,6 @@ interface OpenCodeSessionContext {
   readonly sessionScope: Scope.Closeable;
 }
 
-interface OpenCodeMessageSnapshot {
-  readonly info: {
-    readonly id: string;
-    readonly role: "user" | "assistant";
-    readonly time?: {
-      readonly completed?: number;
-    };
-    readonly finish?: string;
-  };
-  readonly parts: ReadonlyArray<Part>;
-}
-
 export interface OpenCodeAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
@@ -176,10 +166,6 @@ export interface OpenCodeAdapterLiveOptions {
   readonly promptAcceptedActivityTimeoutMs?: number;
   readonly promptAcceptedRecoveryDelaysMs?: ReadonlyArray<number>;
   readonly promptSubmissionInlineWaitMs?: number;
-}
-
-function nowIso(): string {
-  return new Date().toISOString();
 }
 
 function toRequestError(
@@ -207,93 +193,6 @@ function toProcessError(
   });
 }
 
-function asRuntimeItemId(value: string) {
-  return RuntimeItemId.makeUnsafe(value);
-}
-
-function buildProviderEventBase(input: {
-  readonly provider: OpenCodeCompatibleProvider;
-  readonly runtimeEventSource: "opencode.sdk.event" | "kilo.sdk.event";
-  readonly threadId: ThreadId;
-  readonly turnId?: TurnId | undefined;
-  readonly itemId?: string | undefined;
-  readonly requestId?: string | undefined;
-  readonly createdAt?: string | undefined;
-  readonly raw?: unknown;
-}): Pick<
-  ProviderRuntimeEvent,
-  "eventId" | "provider" | "threadId" | "createdAt" | "turnId" | "itemId" | "requestId" | "raw"
-> {
-  return {
-    eventId: EventId.makeUnsafe(randomUUID()),
-    provider: input.provider,
-    threadId: input.threadId,
-    createdAt: input.createdAt ?? nowIso(),
-    ...(input.turnId ? { turnId: input.turnId } : {}),
-    ...(input.itemId ? { itemId: asRuntimeItemId(input.itemId) } : {}),
-    ...(input.requestId ? { requestId: RuntimeRequestId.makeUnsafe(input.requestId) } : {}),
-    ...(input.raw !== undefined
-      ? {
-          raw: {
-            source: input.runtimeEventSource,
-            payload: input.raw,
-          },
-        }
-      : {}),
-  };
-}
-
-function toToolLifecycleItemType(toolName: string): ToolLifecycleItemType {
-  const normalized = toolName.toLowerCase();
-  if (normalized.includes("bash") || normalized.includes("command")) return "command_execution";
-  if (
-    normalized.includes("edit") ||
-    normalized.includes("write") ||
-    normalized.includes("patch") ||
-    normalized.includes("multiedit")
-  ) {
-    return "file_change";
-  }
-  if (normalized.includes("web")) return "web_search";
-  if (normalized.includes("mcp")) return "mcp_tool_call";
-  if (normalized.includes("image")) return "image_view";
-  if (
-    normalized.includes("task") ||
-    normalized.includes("agent") ||
-    normalized.includes("subtask")
-  ) {
-    return "collab_agent_tool_call";
-  }
-  return "dynamic_tool_call";
-}
-
-function mapPermissionToRequestType(
-  permission: string,
-): "command_execution_approval" | "file_read_approval" | "file_change_approval" | "unknown" {
-  switch (permission) {
-    case "bash":
-      return "command_execution_approval";
-    case "read":
-      return "file_read_approval";
-    case "edit":
-      return "file_change_approval";
-    default:
-      return "unknown";
-  }
-}
-
-function mapPermissionDecision(reply: "once" | "always" | "reject"): string {
-  switch (reply) {
-    case "once":
-      return "accept";
-    case "always":
-      return "acceptForSession";
-    case "reject":
-    default:
-      return "decline";
-  }
-}
-
 function resolveTurnSnapshot(
   context: OpenCodeSessionContext,
   turnId: TurnId,
@@ -317,14 +216,6 @@ function appendTurnItem(
     return;
   }
   resolveTurnSnapshot(context, turnId).items.push(item);
-}
-
-function openCodeSnapshotKey(value: unknown): string {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
 }
 
 function rememberOpenCodeMessageSnapshot(
@@ -352,58 +243,6 @@ function rememberOpenCodeMessageSnapshot(
   }
 }
 
-function openCodeMessageSnapshotFromEntry(entry: {
-  readonly info: {
-    readonly id: string;
-    readonly role: string;
-    readonly time?: {
-      readonly created?: number;
-      readonly completed?: number;
-    };
-    readonly finish?: string;
-  };
-  readonly parts: ReadonlyArray<Part>;
-}): OpenCodeMessageSnapshot | undefined {
-  if (entry.info.role !== "user" && entry.info.role !== "assistant") {
-    return undefined;
-  }
-  return {
-    info: {
-      ...entry.info,
-      role: entry.info.role,
-    },
-    parts: entry.parts,
-  };
-}
-
-function openCodeMessageSnapshotsFromResponse(
-  entries: ReadonlyArray<{
-    readonly info: {
-      readonly id: string;
-      readonly role: string;
-      readonly time?: {
-        readonly created?: number;
-        readonly completed?: number;
-      };
-      readonly finish?: string;
-    };
-    readonly parts: ReadonlyArray<Part>;
-  }>,
-): ReadonlyArray<OpenCodeMessageSnapshot> {
-  return entries.flatMap((entry) => {
-    const snapshot = openCodeMessageSnapshotFromEntry(entry);
-    return snapshot ? [snapshot] : [];
-  });
-}
-
-function isFinalAssistantMessageSnapshot(snapshot: OpenCodeMessageSnapshot): boolean {
-  return (
-    snapshot.info.role === "assistant" &&
-    typeof snapshot.info.time?.completed === "number" &&
-    snapshot.info.finish !== "tool-calls"
-  );
-}
-
 function ensureSessionContext(
   provider: OpenCodeCompatibleProvider,
   sessions: ReadonlyMap<ThreadId, OpenCodeSessionContext>,
@@ -423,125 +262,6 @@ function ensureSessionContext(
     });
   }
   return session;
-}
-
-function normalizeQuestionRequest(request: QuestionRequest): ReadonlyArray<UserInputQuestion> {
-  return request.questions.map((question, index) => ({
-    id: openCodeQuestionId(index, question),
-    header: question.header,
-    question: question.question,
-    options: question.options.map((option) => ({
-      label: option.label,
-      description: option.description,
-    })),
-    ...(question.multiple ? { multiSelect: true } : {}),
-  }));
-}
-
-function normalizeOpenCodeTodoStatus(value: unknown): "pending" | "inProgress" | "completed" {
-  if (value === "completed") {
-    return "completed";
-  }
-  if (value === "in_progress") {
-    return "inProgress";
-  }
-  return "pending";
-}
-
-function normalizeOpenCodeTodoTasks(todos: ReadonlyArray<Todo>): {
-  readonly tasks: ReadonlyArray<{
-    readonly task: string;
-    readonly status: "pending" | "inProgress" | "completed";
-  }>;
-} | null {
-  const tasks = todos
-    .map((todo) => {
-      const task = todo.content.trim();
-      if (task.length === 0) {
-        return null;
-      }
-      return {
-        task,
-        status: normalizeOpenCodeTodoStatus(todo.status),
-      };
-    })
-    .filter(
-      (
-        task,
-      ): task is {
-        readonly task: string;
-        readonly status: "pending" | "inProgress" | "completed";
-      } => task !== null,
-    );
-
-  return tasks.length > 0 ? { tasks } : null;
-}
-
-function resolveTextStreamKind(part: Part | undefined): "assistant_text" | "reasoning_text" {
-  return part?.type === "reasoning" ? "reasoning_text" : "assistant_text";
-}
-
-function shouldProjectOpenCodeTextPart(part: Part): boolean {
-  // Kilo uses synthetic/ignored text parts for local UI progress such as snapshot setup.
-  return part.type !== "text" || (!part.synthetic && !part.ignored);
-}
-
-function textFromPart(part: Part): string | undefined {
-  switch (part.type) {
-    case "text":
-      return shouldProjectOpenCodeTextPart(part) ? part.text : undefined;
-    case "reasoning":
-      return part.text;
-    default:
-      return undefined;
-  }
-}
-
-function commonPrefixLength(left: string, right: string): number {
-  let index = 0;
-  while (index < left.length && index < right.length && left[index] === right[index]) {
-    index += 1;
-  }
-  return index;
-}
-
-function suffixPrefixOverlap(text: string, delta: string): number {
-  const maxLength = Math.min(text.length, delta.length);
-  for (let length = maxLength; length > 0; length -= 1) {
-    if (text.endsWith(delta.slice(0, length))) {
-      return length;
-    }
-  }
-  return 0;
-}
-
-function resolveLatestAssistantText(previousText: string | undefined, nextText: string): string {
-  if (previousText && previousText.length > nextText.length && previousText.startsWith(nextText)) {
-    return previousText;
-  }
-  return nextText;
-}
-
-function mergeOpenCodeAssistantText(
-  previousText: string | undefined,
-  nextText: string,
-): { readonly latestText: string; readonly deltaToEmit: string } {
-  const latestText = resolveLatestAssistantText(previousText, nextText);
-  return {
-    latestText,
-    deltaToEmit: latestText.slice(commonPrefixLength(previousText ?? "", latestText)),
-  };
-}
-
-function appendOpenCodeAssistantTextDelta(
-  previousText: string,
-  delta: string,
-): { readonly nextText: string; readonly deltaToEmit: string } {
-  const deltaToEmit = delta.slice(suffixPrefixOverlap(previousText, delta));
-  return {
-    nextText: previousText + deltaToEmit,
-    deltaToEmit,
-  };
 }
 
 function bufferPendingTextDelta(
@@ -571,13 +291,6 @@ function applyPendingTextDeltaToPart(context: OpenCodeSessionContext, part: Part
   const { nextText } = appendOpenCodeAssistantTextDelta(part.text, pendingDelta);
   context.pendingTextDeltasByPartId.delete(part.id);
   return nextText === part.text ? part : { ...part, text: nextText };
-}
-
-function isoFromEpochMs(value: number | undefined): string | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return new Date(value).toISOString();
 }
 
 function messageRoleForPart(
@@ -614,40 +327,6 @@ function toolStateCreatedAt(part: Extract<Part, { type: "tool" }>): string | und
     default:
       return undefined;
   }
-}
-
-function sessionErrorMessage(error: unknown): string {
-  if (!error || typeof error !== "object") {
-    return "OpenCode session failed.";
-  }
-  const data = "data" in error && error.data && typeof error.data === "object" ? error.data : null;
-  const message =
-    data && "message" in data
-      ? data.message
-      : "message" in error
-        ? error.message
-        : "error" in error
-          ? error.error
-          : null;
-  return typeof message === "string" && message.trim().length > 0
-    ? message
-    : "OpenCode session failed.";
-}
-
-function isOpenCodeContextOverflowError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  if ("name" in error && error.name === "ContextOverflowError") {
-    return true;
-  }
-  const data = "data" in error && error.data && typeof error.data === "object" ? error.data : null;
-  const message = data && "message" in data ? data.message : undefined;
-  return (
-    typeof message === "string" &&
-    /context|token/i.test(message) &&
-    /overflow|too large|maximum context|context length|size limit/i.test(message)
-  );
 }
 
 function updateProviderSession(
@@ -712,40 +391,6 @@ function openCodeNextTextItemId(turnId: TurnId): string {
   return `${turnId}-next-text`;
 }
 
-function isoFromOpenCodeTimestamp(value: unknown): string | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? new Date(value).toISOString()
-    : undefined;
-}
-
-function openCodeToolContentText(content: unknown): string | undefined {
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const text = content
-    .flatMap((item) =>
-      item && typeof item === "object" && "type" in item && item.type === "text"
-        ? [String((item as { text?: unknown }).text ?? "")]
-        : [],
-    )
-    .join("\n")
-    .trim();
-  return text.length > 0 ? text : undefined;
-}
-
-function isOpenCodeTerminalStepFinish(value: unknown): boolean {
-  const finish = trimNonEmptyString(value)?.toLowerCase().replace(/_/gu, "-");
-  if (!finish) {
-    return false;
-  }
-  return !["tool-call", "tool-calls", "function-call", "continue", "unknown"].includes(finish);
-}
-
-function isOpenCodeToolCallFinish(value: unknown): boolean {
-  const finish = trimNonEmptyString(value)?.toLowerCase().replace(/_/gu, "-");
-  return finish === "tool-call" || finish === "tool-calls" || finish === "function-call";
-}
-
 function isOpenCodeCompletedAssistantMessage(
   entry: OpenCodeMessageSnapshot & { readonly info: Record<string, unknown> },
 ): boolean {
@@ -783,77 +428,6 @@ function trackActiveTurnAssistantFinish(
     context.activeTurnSawFinalAssistant = true;
     markOpenCodeTurnCompletionActivity(context, turnId);
   }
-}
-
-function extractResumeSessionId(resumeCursor: unknown): string | undefined {
-  if (typeof resumeCursor === "string" && resumeCursor.trim().length > 0) {
-    return resumeCursor.trim();
-  }
-  if (
-    resumeCursor &&
-    typeof resumeCursor === "object" &&
-    "openCodeSessionId" in resumeCursor &&
-    typeof resumeCursor.openCodeSessionId === "string" &&
-    resumeCursor.openCodeSessionId.trim().length > 0
-  ) {
-    return resumeCursor.openCodeSessionId.trim();
-  }
-  return undefined;
-}
-
-type OpenCodeModelInventory = {
-  readonly providerList: {
-    readonly connected: ReadonlyArray<string>;
-    readonly all: ReadonlyArray<{
-      readonly id: string;
-      readonly name: string;
-      readonly source?: string;
-      readonly env?: ReadonlyArray<string>;
-      readonly options?: Record<string, unknown>;
-      readonly models: Record<
-        string,
-        {
-          readonly id: string;
-          readonly name: string;
-          readonly options?: Record<string, unknown>;
-          readonly capabilities?: {
-            readonly reasoning?: boolean;
-          };
-          readonly limit?: {
-            readonly context?: number;
-            readonly output?: number;
-          };
-          readonly variants?: Record<string, Record<string, unknown>>;
-          readonly isFree?: boolean;
-        }
-      >;
-    }>;
-  };
-  readonly consoleState?: {
-    readonly consoleManagedProviders: ReadonlyArray<string>;
-  } | null;
-};
-
-type OpenCodeInventoryProvider = OpenCodeModelInventory["providerList"]["all"][number];
-type OpenCodeModelDescriptor = ProviderListModelsResult["models"][number];
-
-function asNonNegativeInteger(value: unknown): number | undefined {
-  return typeof value === "number" &&
-    Number.isFinite(value) &&
-    Number.isInteger(value) &&
-    value >= 0
-    ? value
-    : undefined;
-}
-
-function asPositiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value > 0
-    ? value
-    : undefined;
-}
-
-function asFiniteNonNegativeNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function subscribedEventSessionId(event: OpenCodeSubscribedEvent): string | undefined {
@@ -912,121 +486,6 @@ function isOpenCodeTurnProviderActivityEvent(
   }
 }
 
-type OpenCodeAssistantTokens = AssistantMessage["tokens"];
-
-interface NormalizedOpenCodeTokens {
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly reasoningOutputTokens: number;
-  readonly cacheReadTokens: number;
-  readonly cacheWriteTokens: number;
-}
-
-function readOpenCodeTokens(tokens: unknown): NormalizedOpenCodeTokens | undefined {
-  if (!tokens || typeof tokens !== "object" || Array.isArray(tokens)) {
-    return undefined;
-  }
-  const tokenRecord = tokens as Partial<OpenCodeAssistantTokens>;
-  const inputTokens = asNonNegativeInteger(tokenRecord.input);
-  const outputTokens = asNonNegativeInteger(tokenRecord.output);
-  const reasoningOutputTokens = asNonNegativeInteger(tokenRecord.reasoning);
-  const cacheReadTokens = asNonNegativeInteger(tokenRecord.cache?.read);
-  const cacheWriteTokens = asNonNegativeInteger(tokenRecord.cache?.write);
-  if (
-    inputTokens === undefined ||
-    outputTokens === undefined ||
-    reasoningOutputTokens === undefined ||
-    cacheReadTokens === undefined ||
-    cacheWriteTokens === undefined
-  ) {
-    return undefined;
-  }
-
-  return {
-    inputTokens,
-    outputTokens,
-    reasoningOutputTokens,
-    cacheReadTokens,
-    cacheWriteTokens,
-  };
-}
-
-export function normalizeOpenCodeTokenUsage(
-  tokens: unknown,
-  maxTokens?: number | undefined,
-): ThreadTokenUsageSnapshot | undefined {
-  const normalizedTokens = readOpenCodeTokens(tokens);
-  if (!normalizedTokens) {
-    return undefined;
-  }
-
-  const { inputTokens, outputTokens, reasoningOutputTokens, cacheReadTokens, cacheWriteTokens } =
-    normalizedTokens;
-  const cachedInputTokens = cacheReadTokens + cacheWriteTokens;
-  const totalProcessedTokens =
-    inputTokens + cachedInputTokens + outputTokens + reasoningOutputTokens;
-  if (totalProcessedTokens <= 0) {
-    return undefined;
-  }
-
-  const normalizedMaxTokens = asPositiveInteger(maxTokens);
-  const usedTokens =
-    normalizedMaxTokens !== undefined
-      ? Math.min(totalProcessedTokens, normalizedMaxTokens)
-      : totalProcessedTokens;
-
-  return {
-    usedTokens,
-    totalProcessedTokens,
-    ...(normalizedMaxTokens !== undefined ? { maxTokens: normalizedMaxTokens } : {}),
-    inputTokens,
-    cachedInputTokens,
-    outputTokens,
-    reasoningOutputTokens,
-    lastUsedTokens: usedTokens,
-    lastInputTokens: inputTokens,
-    lastCachedInputTokens: cachedInputTokens,
-    lastOutputTokens: outputTokens,
-    lastReasoningOutputTokens: reasoningOutputTokens,
-  };
-}
-
-function buildOpenCodeTokenUsageKey(input: {
-  readonly messageId: string;
-  readonly tokens: OpenCodeAssistantTokens;
-  readonly maxTokens?: number | undefined;
-}): string | undefined {
-  const normalizedTokens = readOpenCodeTokens(input.tokens);
-  if (!normalizedTokens) {
-    return undefined;
-  }
-
-  const { inputTokens, outputTokens, reasoningOutputTokens, cacheReadTokens, cacheWriteTokens } =
-    normalizedTokens;
-  return [
-    input.messageId,
-    inputTokens,
-    cacheReadTokens,
-    cacheWriteTokens,
-    outputTokens,
-    reasoningOutputTokens,
-    asPositiveInteger(input.maxTokens) ?? "",
-  ].join(":");
-}
-
-function buildOpenCodeModelContextLimitMap(inventory: OpenCodeModelInventory): Map<string, number> {
-  const limits = new Map<string, number>();
-  for (const provider of inventory.providerList.all) {
-    for (const model of Object.values(provider.models)) {
-      const contextLimit = asPositiveInteger(model.limit?.context);
-      if (contextLimit !== undefined) {
-        limits.set(`${provider.id}/${model.id}`, contextLimit);
-      }
-    }
-  }
-  return limits;
-}
-
 function replaceModelContextLimits(
   context: OpenCodeSessionContext,
   limits: ReadonlyMap<string, number>,
@@ -1035,580 +494,6 @@ function replaceModelContextLimits(
   for (const [slug, limit] of limits) {
     context.modelContextLimitBySlug.set(slug, limit);
   }
-}
-
-function isOpenCodeManagedProvider(provider: OpenCodeInventoryProvider) {
-  const normalizedId = provider.id.trim().toLowerCase();
-  const normalizedName = provider.name.trim().toLowerCase();
-  const envVars = new Set((provider.env ?? []).map((value) => value.trim().toUpperCase()));
-
-  return (
-    envVars.has("OPENCODE_API_KEY") ||
-    normalizedId === "opencode" ||
-    normalizedId.startsWith("opencode-") ||
-    normalizedName.startsWith("opencode")
-  );
-}
-
-export function resolvePreferredOpenCodeModelProviders(input: {
-  readonly inventory: OpenCodeModelInventory;
-  readonly credentialProviderIDs?: ReadonlyArray<string>;
-}) {
-  const { inventory } = input;
-  const connected = new Set(inventory.providerList.connected);
-  const connectedProviders = inventory.providerList.all.filter((provider) =>
-    connected.has(provider.id),
-  );
-  if (connectedProviders.length === 0) {
-    return [];
-  }
-
-  const credentialProviders = new Set(input.credentialProviderIDs ?? []);
-  const authenticatedConnectedProviders = connectedProviders.filter((provider) =>
-    credentialProviders.has(provider.id),
-  );
-
-  const consoleManagedProviders = new Set(inventory.consoleState?.consoleManagedProviders ?? []);
-  const consoleManagedConnectedProviders = connectedProviders.filter((provider) =>
-    consoleManagedProviders.has(provider.id),
-  );
-
-  const openCodeManagedConnectedProviders = connectedProviders.filter(isOpenCodeManagedProvider);
-
-  const preferredProviderIDs = new Set(
-    [
-      ...authenticatedConnectedProviders,
-      ...consoleManagedConnectedProviders,
-      ...openCodeManagedConnectedProviders,
-    ].map((provider) => provider.id),
-  );
-  if (preferredProviderIDs.size > 0) {
-    return connectedProviders.filter((provider) => preferredProviderIDs.has(provider.id));
-  }
-
-  const nonEnvironmentConnectedProviders = connectedProviders.filter(
-    (provider) => provider.source !== "env",
-  );
-  if (nonEnvironmentConnectedProviders.length > 0) {
-    return nonEnvironmentConnectedProviders;
-  }
-
-  return connectedProviders;
-}
-
-function compareOpenCodeModelDescriptors(
-  left: OpenCodeModelDescriptor,
-  right: OpenCodeModelDescriptor,
-) {
-  const leftProvider =
-    left.upstreamProviderName?.trim() || left.upstreamProviderId?.trim() || "\uffff";
-  const rightProvider =
-    right.upstreamProviderName?.trim() || right.upstreamProviderId?.trim() || "\uffff";
-  return (
-    leftProvider.localeCompare(rightProvider) ||
-    left.name.localeCompare(right.name) ||
-    left.slug.localeCompare(right.slug)
-  );
-}
-
-function trimNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function readOpenCodeInventoryVariantValue(
-  variantKey: string,
-  variant: Record<string, unknown>,
-): string | undefined {
-  const directValue =
-    trimNonEmptyString(variant.reasoningEffort) ??
-    trimNonEmptyString(variant.reasoning_effort) ??
-    trimNonEmptyString(variant.effort);
-  if (directValue) {
-    return directValue;
-  }
-
-  const thinkingConfig =
-    variant.thinkingConfig &&
-    typeof variant.thinkingConfig === "object" &&
-    !Array.isArray(variant.thinkingConfig)
-      ? (variant.thinkingConfig as Record<string, unknown>)
-      : variant.thinking_config &&
-          typeof variant.thinking_config === "object" &&
-          !Array.isArray(variant.thinking_config)
-        ? (variant.thinking_config as Record<string, unknown>)
-        : null;
-  const thinkingLevel =
-    trimNonEmptyString(thinkingConfig?.thinkingLevel) ??
-    trimNonEmptyString(thinkingConfig?.thinking_level);
-  if (thinkingLevel) {
-    return thinkingLevel;
-  }
-
-  const reasoning =
-    variant.reasoning && typeof variant.reasoning === "object" && !Array.isArray(variant.reasoning)
-      ? (variant.reasoning as Record<string, unknown>)
-      : null;
-  const reasoningConfig =
-    variant.reasoningConfig &&
-    typeof variant.reasoningConfig === "object" &&
-    !Array.isArray(variant.reasoningConfig)
-      ? (variant.reasoningConfig as Record<string, unknown>)
-      : variant.reasoning_config &&
-          typeof variant.reasoning_config === "object" &&
-          !Array.isArray(variant.reasoning_config)
-        ? (variant.reasoning_config as Record<string, unknown>)
-        : null;
-  const nestedReasoningEffort =
-    trimNonEmptyString(reasoning?.effort) ??
-    trimNonEmptyString(reasoningConfig?.maxReasoningEffort) ??
-    trimNonEmptyString(reasoningConfig?.max_reasoning_effort);
-  if (nestedReasoningEffort) {
-    return nestedReasoningEffort;
-  }
-
-  if (
-    "thinking" in variant ||
-    "thinkingConfig" in variant ||
-    "thinking_config" in variant ||
-    "reasoning" in variant ||
-    "reasoningConfig" in variant ||
-    "reasoning_config" in variant ||
-    Object.keys(variant).length === 0
-  ) {
-    return trimNonEmptyString(variantKey);
-  }
-  return undefined;
-}
-
-function normalizeOpenCodeReasoningDescriptors(input: {
-  readonly descriptors: ReadonlyArray<{
-    readonly value: string;
-    readonly label?: string;
-    readonly description?: string;
-  }>;
-  readonly defaultReasoningEffort?: string | undefined;
-}) {
-  const descriptors = Array.from(
-    new Map(
-      input.descriptors
-        .map((descriptor) => {
-          const value = descriptor.value.trim();
-          if (value.length === 0) {
-            return null;
-          }
-
-          const label = trimNonEmptyString(descriptor.label);
-          const description = trimNonEmptyString(descriptor.description);
-          return [
-            value,
-            {
-              value,
-              ...(label ? { label } : {}),
-              ...(description ? { description } : {}),
-            },
-          ] as const;
-        })
-        .filter((descriptor) => descriptor !== null),
-    ).values(),
-  );
-  const defaultReasoningEffort = trimNonEmptyString(input.defaultReasoningEffort);
-
-  return {
-    descriptors,
-    defaultReasoningEffort:
-      defaultReasoningEffort &&
-      descriptors.some((descriptor) => descriptor.value === defaultReasoningEffort)
-        ? defaultReasoningEffort
-        : undefined,
-  };
-}
-
-function inferOpenCodeDefaultReasoningEffort(
-  providerId: string,
-  descriptors: ReadonlyArray<{ readonly value: string }>,
-): string | undefined {
-  const values = descriptors.map((descriptor) => descriptor.value);
-  if (values.length === 1) {
-    return values[0];
-  }
-
-  const normalizedProviderId = providerId.trim().toLowerCase();
-  if (normalizedProviderId === "anthropic" || normalizedProviderId.startsWith("google")) {
-    return values.includes("high") ? "high" : undefined;
-  }
-  if (normalizedProviderId === "openai" || normalizedProviderId === "opencode") {
-    return values.includes("medium") ? "medium" : values.includes("high") ? "high" : undefined;
-  }
-  return undefined;
-}
-
-function resolveOpenCodeModelReasoningSupport(
-  model: OpenCodeInventoryProvider["models"][string] | undefined,
-) {
-  if (!model) {
-    return {
-      descriptors: [] as Array<{
-        readonly value: string;
-        readonly label?: string;
-        readonly description?: string;
-      }>,
-      defaultReasoningEffort: undefined as string | undefined,
-    };
-  }
-
-  const descriptors = Object.entries(model.variants ?? {}).flatMap(([variantKey, variant]) => {
-    const value = readOpenCodeInventoryVariantValue(variantKey, variant);
-    if (!value) {
-      return [];
-    }
-
-    const label = trimNonEmptyString(variant.label);
-    const description = trimNonEmptyString(variant.description);
-    return [
-      {
-        value,
-        ...(label ? { label } : {}),
-        ...(description ? { description } : {}),
-      },
-    ];
-  });
-  if (descriptors.length > 0) {
-    return normalizeOpenCodeReasoningDescriptors({
-      descriptors,
-      defaultReasoningEffort:
-        trimNonEmptyString(model.options?.reasoningEffort) ??
-        trimNonEmptyString(model.options?.reasoning_effort) ??
-        trimNonEmptyString(model.options?.effort),
-    });
-  }
-
-  if (model.capabilities?.reasoning !== true) {
-    return {
-      descriptors: [] as Array<{
-        readonly value: string;
-        readonly label?: string;
-        readonly description?: string;
-      }>,
-      defaultReasoningEffort: undefined as string | undefined,
-    };
-  }
-
-  return {
-    descriptors: [] as Array<{
-      readonly value: string;
-      readonly label?: string;
-      readonly description?: string;
-    }>,
-    defaultReasoningEffort: undefined as string | undefined,
-  };
-}
-
-function numberToContextWindowValue(value: unknown): string | null {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  }
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return null;
-  }
-  if (value >= 1_000_000 && value % 1_000_000 === 0) return `${value / 1_000_000}m`;
-  if (value >= 1_000 && value % 1_000 === 0) return `${value / 1_000}k`;
-  return String(value);
-}
-
-function resolveOpenCodeContextWindowSupport(
-  model: OpenCodeInventoryProvider["models"][string] | undefined,
-): {
-  readonly contextWindowOptions: ReadonlyArray<{
-    readonly value: string;
-    readonly label: string;
-    readonly isDefault?: true;
-  }>;
-  readonly defaultContextWindow: string | undefined;
-} {
-  const context = numberToContextWindowValue(model?.limit?.context);
-  if (!context) {
-    return { contextWindowOptions: [], defaultContextWindow: undefined };
-  }
-  return {
-    contextWindowOptions: [{ value: context, label: context.toUpperCase(), isDefault: true }],
-    defaultContextWindow: context,
-  };
-}
-
-function toOpenCodeModelDescriptor(input: {
-  readonly slug: string;
-  readonly name: string;
-  readonly provider: Pick<OpenCodeInventoryProvider, "id" | "name">;
-  readonly model?: OpenCodeInventoryProvider["models"][string];
-  readonly cliModel?: Pick<
-    OpenCodeCliModelDescriptor,
-    | "supportedReasoningEfforts"
-    | "defaultReasoningEffort"
-    | "contextWindowOptions"
-    | "defaultContextWindow"
-  >;
-}): OpenCodeModelDescriptor | null {
-  const name = input.name.trim();
-  if (name.length === 0) {
-    return null;
-  }
-
-  const upstreamProviderName = input.provider.name.trim();
-  const contextSupport =
-    input.cliModel?.contextWindowOptions && input.cliModel.contextWindowOptions.length > 0
-      ? {
-          contextWindowOptions: input.cliModel.contextWindowOptions,
-          defaultContextWindow: input.cliModel.defaultContextWindow,
-        }
-      : resolveOpenCodeContextWindowSupport(input.model);
-  const reasoningSupport =
-    input.cliModel && input.cliModel.supportedReasoningEfforts.length > 0
-      ? {
-          descriptors: input.cliModel.supportedReasoningEfforts,
-          defaultReasoningEffort:
-            input.cliModel.defaultReasoningEffort ??
-            inferOpenCodeDefaultReasoningEffort(
-              input.provider.id,
-              input.cliModel.supportedReasoningEfforts,
-            ),
-        }
-      : (() => {
-          const resolved = resolveOpenCodeModelReasoningSupport(input.model);
-          return {
-            descriptors: resolved.descriptors,
-            defaultReasoningEffort:
-              resolved.defaultReasoningEffort ??
-              inferOpenCodeDefaultReasoningEffort(input.provider.id, resolved.descriptors),
-          };
-        })();
-  return {
-    slug: input.slug,
-    name,
-    upstreamProviderId: input.provider.id,
-    ...(upstreamProviderName.length > 0 ? { upstreamProviderName } : {}),
-    ...(reasoningSupport.descriptors.length > 0
-      ? { supportedReasoningEfforts: reasoningSupport.descriptors }
-      : {}),
-    ...(reasoningSupport.defaultReasoningEffort
-      ? { defaultReasoningEffort: reasoningSupport.defaultReasoningEffort }
-      : {}),
-    ...(contextSupport.contextWindowOptions.length > 0
-      ? {
-          contextWindowOptions: contextSupport.contextWindowOptions,
-          ...(contextSupport.defaultContextWindow
-            ? { defaultContextWindow: contextSupport.defaultContextWindow }
-            : {}),
-        }
-      : {}),
-  };
-}
-
-function formatOpenCodeCliProviderName(providerId: string): string {
-  const normalizedProviderId = providerId.trim();
-  const knownNames: Record<string, string> = {
-    "302-ai": "302.AI",
-    "amazon-bedrock": "Amazon Bedrock",
-    anthropic: "Anthropic",
-    "atomic-chat": "Atomic Chat",
-    "azure-openai": "Azure OpenAI",
-    "azure-cognitive-services": "Azure Cognitive Services",
-    baseten: "Baseten",
-    cerebras: "Cerebras",
-    "cloudflare-ai-gateway": "Cloudflare AI Gateway",
-    "cloudflare-workers-ai": "Cloudflare Workers AI",
-    cortecs: "Cortecs",
-    deepinfra: "Deep Infra",
-    deepseek: "DeepSeek",
-    fireworks: "Fireworks AI",
-    "fireworks-ai": "Fireworks AI",
-    frogbot: "FrogBot",
-    "github-copilot": "GitHub Copilot",
-    "gitlab-duo": "GitLab Duo",
-    "google-vertex": "Google Vertex AI",
-    "google-vertex-ai": "Google Vertex AI",
-    groq: "Groq",
-    "hugging-face": "Hugging Face",
-    huggingface: "Hugging Face",
-    "io-net": "IO.NET",
-    "kimi-for-coding": "Kimi For Coding",
-    "llama.cpp": "llama.cpp",
-    lmstudio: "LM Studio",
-    minimax: "MiniMax",
-    "moonshot-ai": "Moonshot AI",
-    "nebius-token-factory": "Nebius Token Factory",
-    nvidia: "NVIDIA",
-    ollama: "Ollama",
-    "ollama-cloud": "Ollama Cloud",
-    openai: "OpenAI",
-    opencode: "OpenCode",
-    "opencode-go": "OpenCode Go",
-    "opencode-zen": "OpenCode Zen",
-    openrouter: "OpenRouter",
-    "ovhcloud-ai-endpoints": "OVHcloud AI Endpoints",
-    "sap-ai-core": "SAP AI Core",
-    scaleway: "Scaleway",
-    stackit: "STACKIT",
-    "together-ai": "Together AI",
-    "venice-ai": "Venice AI",
-    "vercel-ai-gateway": "Vercel AI Gateway",
-    xai: "xAI",
-    "z-ai": "Z.AI",
-    zenmux: "ZenMux",
-  };
-  const knownName = knownNames[normalizedProviderId.toLowerCase()];
-  if (knownName) {
-    return knownName;
-  }
-
-  return normalizedProviderId
-    .split(/[-_/]+/u)
-    .filter((segment) => segment.length > 0)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-}
-
-export function flattenOpenCodeCliModels(input: {
-  readonly models: ReadonlyArray<OpenCodeCliModelDescriptor>;
-}): ProviderListModelsResult["models"] {
-  return input.models
-    .flatMap((model) => {
-      const descriptor = toOpenCodeModelDescriptor({
-        slug: model.slug,
-        name: model.name,
-        provider: {
-          id: model.providerID,
-          name: formatOpenCodeCliProviderName(model.providerID),
-        },
-        cliModel: model,
-      });
-      return descriptor ? [descriptor] : [];
-    })
-    .toSorted(compareOpenCodeModelDescriptors);
-}
-
-export function flattenOpenCodeModels(input: {
-  readonly inventory: OpenCodeModelInventory;
-  readonly credentialProviderIDs?: ReadonlyArray<string>;
-  readonly freeOnlyProviderID?: string;
-}): ProviderListModelsResult["models"] {
-  return resolvePreferredOpenCodeModelProviders(input)
-    .flatMap((provider) =>
-      Object.values(provider.models).flatMap((model) => {
-        if (
-          input.freeOnlyProviderID &&
-          provider.id === input.freeOnlyProviderID &&
-          model.isFree !== true
-        ) {
-          return [];
-        }
-        const descriptor = toOpenCodeModelDescriptor({
-          slug: `${provider.id}/${model.id}`,
-          name: model.name,
-          provider,
-          model,
-        });
-        return descriptor ? [descriptor] : [];
-      }),
-    )
-    .toSorted(compareOpenCodeModelDescriptors);
-}
-
-function fallbackOpenCodeProviderName(providerId: string): string {
-  return providerId
-    .split(/[-_/]+/u)
-    .filter((segment) => segment.length > 0)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-}
-
-function mergeOpenCodeCliModelDescriptors(input: {
-  readonly inventory: OpenCodeModelInventory;
-  readonly models: ReadonlyArray<OpenCodeModelDescriptor>;
-  readonly cliModels: ReadonlyArray<OpenCodeCliModelDescriptor>;
-  readonly freeOnlyProviderID?: string;
-}): ProviderListModelsResult["models"] {
-  const providerById = new Map(
-    input.inventory.providerList.all.map((provider) => [provider.id, provider] as const),
-  );
-  const mergedBySlug = new Map(input.models.map((model) => [model.slug, model] as const));
-
-  for (const cliModel of input.cliModels) {
-    if (
-      input.freeOnlyProviderID &&
-      cliModel.providerID === input.freeOnlyProviderID &&
-      cliModel.isFree !== true
-    ) {
-      continue;
-    }
-    if (mergedBySlug.has(cliModel.slug)) {
-      continue;
-    }
-    const provider =
-      providerById.get(cliModel.providerID) ??
-      ({
-        id: cliModel.providerID,
-        name: fallbackOpenCodeProviderName(cliModel.providerID) || cliModel.providerID,
-      } satisfies Pick<OpenCodeInventoryProvider, "id" | "name">);
-    const descriptor = toOpenCodeModelDescriptor({
-      slug: cliModel.slug,
-      name: cliModel.name,
-      provider,
-      ...(providerById.get(cliModel.providerID)?.models[cliModel.modelID]
-        ? { model: providerById.get(cliModel.providerID)!.models[cliModel.modelID] }
-        : {}),
-      cliModel,
-    });
-    if (descriptor) {
-      mergedBySlug.set(descriptor.slug, descriptor);
-    }
-  }
-
-  return [...mergedBySlug.values()].toSorted(compareOpenCodeModelDescriptors);
-}
-
-function flattenOpenCodeAgents(agents: ReadonlyArray<Agent>): ProviderListAgentsResult["agents"] {
-  return agents
-    .filter((agent) => !agent.hidden && (agent.mode === "primary" || agent.mode === "all"))
-    .map((agent) => {
-      const displayName =
-        "displayName" in agent &&
-        typeof agent.displayName === "string" &&
-        agent.displayName.trim().length > 0
-          ? agent.displayName.trim()
-          : agent.name
-              .split(/[-_/]+/)
-              .filter((segment) => segment.length > 0)
-              .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-              .join(" ");
-      return {
-        name: agent.name,
-        displayName,
-        ...(agent.description ? { description: agent.description } : {}),
-        ...(agent.model ? { model: `${agent.model.providerID}/${agent.model.modelID}` } : {}),
-      };
-    })
-    .toSorted((left, right) => left.displayName.localeCompare(right.displayName));
-}
-
-function buildOpenCodeThreadSnapshot(input: {
-  readonly threadId: ThreadId;
-  readonly messages: ReadonlyArray<OpenCodeMessageSnapshot>;
-  readonly cwd?: string | null;
-}) {
-  return {
-    threadId: input.threadId,
-    turns: input.messages.map((entry) => ({
-      id: TurnId.makeUnsafe(entry.info.id),
-      items: [entry],
-    })),
-    cwd: input.cwd ?? null,
-  };
 }
 
 const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
