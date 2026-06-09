@@ -54,6 +54,7 @@ import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
+import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackpressure";
 
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
 const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
@@ -248,6 +249,28 @@ function toWsRpcError(cause: unknown, fallbackMessage: string) {
           cause instanceof Error && cause.message.length > 0 ? cause.message : fallbackMessage,
         cause,
       });
+}
+
+const failLiveUiStreamForSnapshotResync = (report: LiveUiStreamDropReport) =>
+  Effect.fail(
+    new WsRpcError({
+      message: `${report.message}; restarting stream to refresh snapshot.`,
+    }),
+  );
+
+// Must mirror the cases of toShellStreamEvent: events rejected here are dropped
+// before the live-UI buffer so the sliding window only holds events that can
+// actually project to a shell update.
+function isShellRelevantEvent(event: OrchestrationEvent): boolean {
+  switch (event.type) {
+    case "project.created":
+    case "project.meta-updated":
+    case "project.deleted":
+    case "thread.deleted":
+      return true;
+    default:
+      return event.aggregateKind === "thread";
+  }
 }
 
 function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
@@ -578,7 +601,16 @@ export const makeWsRpcLayer = () =>
                 Effect.mapError((cause) => toWsRpcError(cause, "Failed to load shell snapshot")),
               ),
             ),
-            orchestrationEngine.streamDomainEvents.pipe(
+            // Filter before buffering so the sliding window only evicts shell-relevant
+            // events; project after it so a stalled subscriber does not keep driving
+            // read-model queries for events it will never receive.
+            bufferLiveUiStream(
+              orchestrationEngine.streamDomainEvents.pipe(Stream.filter(isShellRelevantEvent)),
+              {
+                label: "orchestration.shell",
+                onDroppedEvents: failLiveUiStreamForSnapshotResync,
+              },
+            ).pipe(
               Stream.mapEffect(toShellStreamEvent),
               Stream.flatMap((event) =>
                 Option.isSome(event) ? Stream.succeed(event.value) : Stream.empty,
@@ -603,8 +635,17 @@ export const makeWsRpcLayer = () =>
                 Option.isSome(snapshot) ? Stream.succeed(snapshot.value) : Stream.empty,
               ),
             ),
-            orchestrationEngine.streamDomainEvents.pipe(
-              Stream.filter((event) => isThreadDetailEventFor(input.threadId, event)),
+            // Filter to this thread before buffering: otherwise a burst on another
+            // thread evicts this subscriber's own events from the sliding window.
+            bufferLiveUiStream(
+              orchestrationEngine.streamDomainEvents.pipe(
+                Stream.filter((event) => isThreadDetailEventFor(input.threadId, event)),
+              ),
+              {
+                label: "orchestration.thread-detail",
+                onDroppedEvents: failLiveUiStreamForSnapshotResync,
+              },
+            ).pipe(
               Stream.map(
                 (event): OrchestrationThreadStreamItem => ({
                   kind: "event",
@@ -615,7 +656,9 @@ export const makeWsRpcLayer = () =>
           ),
         [ORCHESTRATION_WS_METHODS.unsubscribeThread]: () => Effect.void,
         [WS_METHODS.subscribeOrchestrationDomainEvents]: () =>
-          orchestrationEngine.streamDomainEvents,
+          bufferLiveUiStream(orchestrationEngine.streamDomainEvents, {
+            label: "orchestration.domain-events",
+          }),
 
         [WS_METHODS.projectsListDirectories]: (input) =>
           rpcEffect(
@@ -648,7 +691,10 @@ export const makeWsRpcLayer = () =>
                 ),
               ),
             ),
-            devServerManager.stream,
+            bufferLiveUiStream(devServerManager.stream, {
+              label: "projects.dev-servers",
+              onDroppedEvents: failLiveUiStreamForSnapshotResync,
+            }),
           ),
         [WS_METHODS.filesystemBrowse]: (input) =>
           rpcEffect(workspaceEntries.browse(input), "Failed to browse filesystem"),
@@ -669,21 +715,25 @@ export const makeWsRpcLayer = () =>
             "Failed to pull branch",
           ),
         [WS_METHODS.gitRunStackedAction]: (input) =>
-          Stream.callback<GitActionProgressEvent, WsRpcError>((queue) =>
-            gitManager
-              .runStackedAction(input, {
-                actionId: input.actionId,
-                progressReporter: {
-                  publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
-                },
-              })
-              .pipe(
-                Effect.tap(() => refreshGitStatus(input.cwd)),
-                Effect.matchCauseEffect({
-                  onFailure: (cause) => Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
-                  onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
-                }),
-              ),
+          bufferLiveUiStream(
+            Stream.callback<GitActionProgressEvent, WsRpcError>((queue) =>
+              gitManager
+                .runStackedAction(input, {
+                  actionId: input.actionId,
+                  progressReporter: {
+                    publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
+                  },
+                })
+                .pipe(
+                  Effect.tap(() => refreshGitStatus(input.cwd)),
+                  Effect.matchCauseEffect({
+                    onFailure: (cause) =>
+                      Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
+                    onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
+                  }),
+                ),
+            ),
+            { label: "git.stacked-action" },
           ),
         [WS_METHODS.gitResolvePullRequest]: (input) =>
           rpcEffect(gitManager.resolvePullRequest(input), "Failed to resolve pull request"),
@@ -807,6 +857,8 @@ export const makeWsRpcLayer = () =>
             "Failed to close terminal",
           ),
         [WS_METHODS.subscribeTerminalEvents]: () =>
+          // Terminal output is an ordered byte stream with renderer ACK accounting.
+          // Keep this lossless: dropping chunks would create holes until reattach.
           Stream.callback((queue) =>
             Effect.gen(function* () {
               const unsubscribe = yield* terminalManager.subscribe((event) => {
@@ -932,7 +984,10 @@ export const makeWsRpcLayer = () =>
                 ),
               ),
             ).pipe(Stream.flatMap(Stream.fromIterable)),
-            lifecycleEvents.stream,
+            bufferLiveUiStream(lifecycleEvents.stream, {
+              label: "server.lifecycle",
+              onDroppedEvents: failLiveUiStreamForSnapshotResync,
+            }),
           ).pipe(
             Stream.map(
               (event): ServerLifecycleStreamEvent =>
@@ -953,20 +1008,29 @@ export const makeWsRpcLayer = () =>
               ),
             ),
             Stream.merge(
-              keybindings.streamChanges.pipe(
+              bufferLiveUiStream(keybindings.streamChanges, {
+                label: "server.keybindings",
+                onDroppedEvents: failLiveUiStreamForSnapshotResync,
+              }).pipe(
                 Stream.map((event) => ({
                   type: "configUpdated" as const,
                   payload: { issues: event.issues, providers: [] },
                 })),
               ),
               Stream.merge(
-                providerHealth.streamChanges.pipe(
+                bufferLiveUiStream(providerHealth.streamChanges, {
+                  label: "server.provider-statuses",
+                  onDroppedEvents: failLiveUiStreamForSnapshotResync,
+                }).pipe(
                   Stream.map((providers) => ({
                     type: "providerStatuses" as const,
                     payload: { providers },
                   })),
                 ),
-                serverSettings.streamChanges.pipe(
+                bufferLiveUiStream(serverSettings.streamChanges, {
+                  label: "server.settings",
+                  onDroppedEvents: failLiveUiStreamForSnapshotResync,
+                }).pipe(
                   Stream.map((settings) => ({
                     type: "settingsUpdated" as const,
                     payload: { settings },
@@ -976,9 +1040,25 @@ export const makeWsRpcLayer = () =>
             ),
           ).pipe(Stream.mapError((cause) => toWsRpcError(cause, "Server config stream failed"))),
         [WS_METHODS.subscribeServerProviderStatuses]: () =>
-          providerHealth.streamChanges.pipe(Stream.map((providers) => ({ providers }))),
+          Stream.concat(
+            Stream.fromEffect(
+              providerHealth.getStatuses.pipe(Effect.map((providers) => ({ providers }))),
+            ),
+            bufferLiveUiStream(providerHealth.streamChanges, {
+              label: "server.provider-statuses",
+              onDroppedEvents: failLiveUiStreamForSnapshotResync,
+            }).pipe(Stream.map((providers) => ({ providers }))),
+          ),
         [WS_METHODS.subscribeServerSettings]: () =>
-          serverSettings.streamChanges.pipe(Stream.map((settings) => ({ settings }))),
+          Stream.concat(
+            Stream.fromEffect(
+              serverSettings.getSettings.pipe(Effect.map((settings) => ({ settings }))),
+            ),
+            bufferLiveUiStream(serverSettings.streamChanges, {
+              label: "server.settings",
+              onDroppedEvents: failLiveUiStreamForSnapshotResync,
+            }).pipe(Stream.map((settings) => ({ settings }))),
+          ),
 
         [WS_METHODS.providerGetComposerCapabilities]: (input) =>
           rpcEffect(

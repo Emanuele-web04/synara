@@ -52,18 +52,20 @@ const providerCommandId = (event: ProviderRuntimeEvent, tag: string): CommandId 
   CommandId.makeUnsafe(`provider:${event.eventId}:${tag}:${crypto.randomUUID()}`);
 
 const DEFAULT_ASSISTANT_DELIVERY_MODE: AssistantDeliveryMode = "buffered";
-const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 10_000;
-const TURN_MESSAGE_IDS_BY_TURN_TTL = Duration.minutes(120);
-const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY = 20_000;
-const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(120);
-const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 10_000;
-const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
+const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 2_048;
+const TURN_MESSAGE_IDS_BY_TURN_TTL = Duration.minutes(60);
+const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY = 1_024;
+const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(60);
+const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 1_024;
+const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(60);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
+const MAX_BUFFERED_PROPOSED_PLAN_CHARS = 64_000;
 const MAX_ACTIVITY_DATA_JSON_CHARS = 16_000;
 const MAX_ACTIVITY_DATA_STRING_CHARS = 2_000;
 const MAX_ACTIVITY_DATA_ARRAY_ITEMS = 24;
 const MAX_ACTIVITY_DATA_OBJECT_KEYS = 64;
 const ACTIVITY_DATA_TRUNCATION_MARKER = "__synaraTruncated";
+const BUFFERED_TEXT_TRUNCATION_MARKER = "... [truncated]";
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
 type TurnStartRequestedDomainEvent = Extract<
@@ -157,6 +159,24 @@ function stringifyJsonLike(value: unknown): string {
 
 function truncateJsonString(value: string, limit: number): string {
   return value.length > limit ? `${value.slice(0, Math.max(0, limit - 15))}... [truncated]` : value;
+}
+
+export function appendCappedBufferedText(existing: string, delta: string, limit: number): string {
+  const normalizedLimit = Math.max(0, Math.floor(limit));
+  if (normalizedLimit === 0) {
+    return "";
+  }
+  const next = `${existing}${delta}`;
+  if (next.length <= normalizedLimit) {
+    return next;
+  }
+  if (normalizedLimit <= BUFFERED_TEXT_TRUNCATION_MARKER.length) {
+    return BUFFERED_TEXT_TRUNCATION_MARKER.slice(0, normalizedLimit);
+  }
+  return `${next.slice(
+    0,
+    normalizedLimit - BUFFERED_TEXT_TRUNCATION_MARKER.length,
+  )}${BUFFERED_TEXT_TRUNCATION_MARKER}`;
 }
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
@@ -1248,7 +1268,11 @@ const make = Effect.gen(function* () {
       Effect.flatMap((existingEntry) => {
         const existing = Option.getOrUndefined(existingEntry);
         return Cache.set(bufferedProposedPlanById, planId, {
-          text: `${existing?.text ?? ""}${delta}`,
+          text: appendCappedBufferedText(
+            existing?.text ?? "",
+            delta,
+            MAX_BUFFERED_PROPOSED_PLAN_CHARS,
+          ),
           createdAt:
             existing?.createdAt && existing.createdAt.length > 0 ? existing.createdAt : createdAt,
         });

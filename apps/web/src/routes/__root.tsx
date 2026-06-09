@@ -87,6 +87,9 @@ import {
 
 const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
+const PENDING_SHELL_EVENT_BUFFER_LIMIT = 1_024;
+const PENDING_THREAD_EVENT_BUFFER_LIMIT = 512;
+const IMMEDIATE_ASSISTANT_FLUSH_ID_LIMIT = 512;
 const seenProviderUpdateNotificationKeys = new Set<string>();
 
 type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
@@ -660,6 +663,29 @@ function coalesceOrchestrationUiEvents(
   return coalesced;
 }
 
+function appendBounded<T>(items: T[], item: T, limit: number): void {
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  if (items.length >= normalizedLimit) {
+    items.splice(0, items.length - normalizedLimit + 1);
+  }
+  items.push(item);
+}
+
+function addBoundedSetValue<T>(set: Set<T>, value: T, limit: number): void {
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  if (set.has(value)) {
+    set.delete(value);
+  }
+  while (set.size >= normalizedLimit) {
+    const oldestValue = set.values().next().value as T | undefined;
+    if (oldestValue === undefined) {
+      break;
+    }
+    set.delete(oldestValue);
+  }
+  set.add(value);
+}
+
 function shouldFlushDomainEventImmediately(
   event: OrchestrationEvent,
   immediatelyFlushedAssistantMessageIds: Set<string>,
@@ -677,7 +703,11 @@ function shouldFlushDomainEventImmediately(
     return false;
   }
 
-  immediatelyFlushedAssistantMessageIds.add(event.payload.messageId);
+  addBoundedSetValue(
+    immediatelyFlushedAssistantMessageIds,
+    event.payload.messageId,
+    IMMEDIATE_ASSISTANT_FLUSH_ID_LIMIT,
+  );
   return true;
 }
 
@@ -1071,7 +1101,7 @@ function EventRouter() {
       }
 
       if (shellSnapshotSequence < 0) {
-        pendingShellEvents.push(item);
+        appendBounded(pendingShellEvents, item, PENDING_SHELL_EVENT_BUFFER_LIMIT);
         return;
       }
       if (item.sequence <= shellSnapshotSequence) {
@@ -1108,7 +1138,7 @@ function EventRouter() {
       const latestThreadSequence = threadSnapshotSequenceById.get(threadId);
       if (latestThreadSequence === undefined) {
         const pendingThreadEvents = pendingThreadEventsById.get(threadId) ?? [];
-        pendingThreadEvents.push(item.event);
+        appendBounded(pendingThreadEvents, item.event, PENDING_THREAD_EVENT_BUFFER_LIMIT);
         pendingThreadEventsById.set(threadId, pendingThreadEvents);
         if (subscribedThreadIds.has(threadId)) {
           void requestThreadSnapshot(threadId);

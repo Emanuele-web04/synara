@@ -42,6 +42,7 @@ import { getMacTrafficLightPosition } from "@t3tools/shared/desktopChrome";
 import { NetService } from "@t3tools/shared/Net";
 import { RotatingFileSink } from "@t3tools/shared/logging";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
+import { resolveBackendNodeArgs } from "./backendNodeOptions";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
@@ -166,6 +167,11 @@ const AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS = 2 * 60 * 1000;
 const AUTO_UPDATE_INSTALL_WATCHDOG_MS = 15 * 1000;
 const BACKEND_FORCE_KILL_DELAY_MS = 8_000;
 const BACKEND_SHUTDOWN_TIMEOUT_MS = 10_000;
+const BACKEND_MAX_OLD_SPACE_ENV_KEYS = [
+  "SYNARA_BACKEND_MAX_OLD_SPACE_MB",
+  "T3CODE_BACKEND_MAX_OLD_SPACE_MB",
+  "DPCODE_BACKEND_MAX_OLD_SPACE_MB",
+] as const;
 const DESKTOP_UPDATE_CHANNEL = "latest";
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
@@ -1824,6 +1830,19 @@ function configureAutoUpdater(): void {
 
   scheduleUpdatePoll();
 }
+// Builds process-local Node args so provider/tool children do not inherit Synara's heap guard.
+function backendNodeArgs(): string[] {
+  const configuredMaxOldSpaceMb =
+    BACKEND_MAX_OLD_SPACE_ENV_KEYS.map((key) => process.env[key]).find(
+      (value) => value !== undefined && value.trim().length > 0,
+    ) ?? null;
+  return resolveBackendNodeArgs({
+    configuredMaxOldSpaceMb,
+    existingNodeOptions: process.env.NODE_OPTIONS,
+    totalMemoryBytes: OS.totalmem(),
+  });
+}
+
 function backendEnv(): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -1886,7 +1905,7 @@ function startBackend(): void {
   }
 
   const captureBackendLogs = app.isPackaged && backendLogSink !== null;
-  const child = ChildProcess.spawn(process.execPath, [backendEntry], {
+  const child = ChildProcess.spawn(process.execPath, [...backendNodeArgs(), backendEntry], {
     cwd: resolveBackendCwd(),
     // In Electron main, process.execPath points to the Electron binary.
     // Run the child in Node mode so this backend process does not become a GUI app instance.
