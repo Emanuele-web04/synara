@@ -93,6 +93,23 @@ export function selectAcpFullAccessPermissionOptionId(
   return selectAcpPermissionOptionId("acceptForSession", options);
 }
 
+export type AcpRequestPermissionOutcome =
+  | { readonly outcome: "cancelled" }
+  | { readonly outcome: "selected"; readonly optionId: string };
+
+export function resolveAcpPermissionOutcome(
+  decision: ProviderApprovalDecision,
+  options: ReadonlyArray<AcpPermissionOptionLike>,
+): AcpRequestPermissionOutcome {
+  if (decision === "cancel") {
+    return { outcome: "cancelled" };
+  }
+  const selectedOptionId = selectAcpPermissionOptionId(decision, options);
+  return selectedOptionId === undefined
+    ? { outcome: "cancelled" }
+    : { outcome: "selected", optionId: selectedOptionId };
+}
+
 type AcpToolCallLike = {
   readonly status?: string;
   readonly detail?: string | null;
