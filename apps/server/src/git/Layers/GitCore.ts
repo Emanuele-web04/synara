@@ -2,24 +2,7 @@
 // Purpose: Implements low-level Git operations used by server orchestration and UI status.
 // Layer: Server Git service
 // Exports: GitCoreLive plus makeGitCore test factory.
-import {
-  Cache,
-  Data,
-  Duration,
-  Effect,
-  Exit,
-  FileSystem,
-  Layer,
-  Option,
-  Path,
-  PlatformError,
-  Ref,
-  Result,
-  Schema,
-  Scope,
-  Semaphore,
-  Stream,
-} from "effect";
+import { Cache, Data, Duration, Effect, Exit, FileSystem, Layer, Option, Path } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { randomUUID } from "node:crypto";
 import * as nodeFs from "node:fs/promises";
@@ -28,44 +11,61 @@ import * as nodePath from "node:path";
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
 import {
   GitCore,
-  type ExecuteGitProgress,
   type GitCommitOptions,
   type GitCoreShape,
-  type ExecuteGitInput,
   type ExecuteGitResult,
 } from "../Services/GitCore.ts";
 import { ServerConfig } from "../../config.ts";
-import { decodeJsonResult } from "@t3tools/shared/schemaJson";
-
-const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
-const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
-const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
-const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
-const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
-const EMPTY_TREE_OBJECT_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-const WORKING_TREE_DIFF_TIMEOUT_MS = 15_000;
-const MAX_UNTRACKED_DIFF_CONCURRENCY = 4;
-const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
-const AUTO_DETACHED_WORKTREE_DIRNAME = "synara";
-const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
-  isRepo: false,
-  hasOriginRemote: false,
-  isDefaultBranch: false,
-  branch: null,
-  upstreamRef: null,
-  upstreamBranch: null,
-  hasWorkingTreeChanges: false,
-  workingTree: { files: [], insertions: 0, deletions: 0 },
-  hasUpstream: false,
-  aheadCount: 0,
-  behindCount: 0,
-});
-
-type TraceTailState = {
-  processedChars: number;
-  remainder: string;
-};
+import { collectOutput, createTrace2Monitor } from "./GitCore.process.ts";
+import {
+  AUTO_DETACHED_WORKTREE_DIRNAME,
+  DEFAULT_BASE_BRANCH_CANDIDATES,
+  DEFAULT_MAX_OUTPUT_BYTES,
+  DEFAULT_TIMEOUT_MS,
+  EMPTY_TREE_OBJECT_ID,
+  MAX_UNTRACKED_DIFF_CONCURRENCY,
+  MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS,
+  NON_REPOSITORY_STATUS_DETAILS,
+  STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY,
+  STATUS_UPSTREAM_REFRESH_INTERVAL,
+  STATUS_UPSTREAM_REFRESH_TIMEOUT,
+  WORKING_TREE_DIFF_TIMEOUT_MS,
+  type ExecuteGitOptions,
+  type StashEntry,
+  type TraceTailState,
+  type WorkingTreeStatSummary,
+} from "./GitCore.types.ts";
+import {
+  countTextLines,
+  deriveLocalBranchNameFromRemoteRef,
+  joinPatchSegments,
+  normalizeConfiguredMergeBranch,
+  normalizeRemoteUrl,
+  parseBranchAb,
+  parseBranchLine,
+  parseDefaultBranchFromRemoteHeadRef,
+  parseDirtyWorktreeFiles,
+  parseNonEmptyLineList,
+  parseNumstatEntries,
+  parsePorcelainPath,
+  parseRemoteFetchUrls,
+  parseRemoteNames,
+  parseRemoteRefWithRemoteNames,
+  parseStashEntries,
+  parseTrackingBranchByUpstreamRef,
+  sanitizeRemoteName,
+  summarizeNumstatEntries,
+} from "./GitCore.parsing.ts";
+import {
+  commandLabel,
+  createGitCommandError,
+  explainPullBlockedByLocalChanges,
+  hasNodeErrorCode,
+  isMissingGitCwdError,
+  quoteGitCommand,
+  resolveGitPath,
+  toGitCommandError,
+} from "./GitCore.commands.ts";
 
 class StatusUpstreamRefreshCacheKey extends Data.Class<{
   cwd: string;
@@ -73,596 +73,6 @@ class StatusUpstreamRefreshCacheKey extends Data.Class<{
   remoteName: string;
   upstreamBranch: string;
 }> {}
-
-interface ExecuteGitOptions {
-  timeoutMs?: number | undefined;
-  allowNonZeroExit?: boolean | undefined;
-  fallbackErrorMessage?: string | undefined;
-  env?: NodeJS.ProcessEnv | undefined;
-  progress?: ExecuteGitProgress | undefined;
-}
-
-type WorkingTreeFileStat = { path: string; insertions: number; deletions: number };
-
-type WorkingTreeStatSummary = {
-  files: WorkingTreeFileStat[];
-  insertions: number;
-  deletions: number;
-};
-
-function parseBranchAb(value: string): { ahead: number; behind: number } {
-  const match = value.match(/^\+(\d+)\s+-(\d+)$/);
-  if (!match) return { ahead: 0, behind: 0 };
-  return {
-    ahead: Number(match[1] ?? "0"),
-    behind: Number(match[2] ?? "0"),
-  };
-}
-
-function normalizeConfiguredMergeBranch(value: string): string | null {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return null;
-  const normalized = trimmed.replace(/^refs\/heads\//, "");
-  return normalized.length > 0 ? normalized : null;
-}
-
-function normalizeNumstatPath(rawPath: string): string {
-  const renameArrowIndex = rawPath.indexOf(" => ");
-  if (renameArrowIndex < 0) return rawPath;
-
-  const compactRenameMatch = /^(.*)\{[^{}]* => ([^{}]*)\}(.*)$/.exec(rawPath);
-  if (compactRenameMatch) {
-    const [, prefix = "", targetSegment = "", suffix = ""] = compactRenameMatch;
-    const normalized = `${prefix}${targetSegment}${suffix}`.trim();
-    return normalized.length > 0 ? normalized : rawPath;
-  }
-
-  const normalized = rawPath.slice(renameArrowIndex + " => ".length).trim();
-  return normalized.length > 0 ? normalized : rawPath;
-}
-
-function parseNumstatEntries(stdout: string): Array<WorkingTreeFileStat> {
-  const entries: Array<WorkingTreeFileStat> = [];
-  for (const line of stdout.split(/\r?\n/g)) {
-    if (line.trim().length === 0) continue;
-    const [addedRaw, deletedRaw, ...pathParts] = line.split("\t");
-    const rawPath =
-      pathParts.length > 1 ? (pathParts.at(-1) ?? "").trim() : pathParts.join("\t").trim();
-    if (rawPath.length === 0) continue;
-    const added = Number.parseInt(addedRaw ?? "0", 10);
-    const deleted = Number.parseInt(deletedRaw ?? "0", 10);
-    const normalizedPath = normalizeNumstatPath(rawPath);
-    entries.push({
-      path: normalizedPath.length > 0 ? normalizedPath : rawPath,
-      insertions: Number.isFinite(added) ? added : 0,
-      deletions: Number.isFinite(deleted) ? deleted : 0,
-    });
-  }
-  return entries;
-}
-
-function summarizeNumstatEntries(
-  entries: ReadonlyArray<WorkingTreeFileStat>,
-): WorkingTreeStatSummary {
-  const fileStatMap = new Map<string, { insertions: number; deletions: number }>();
-  for (const entry of entries) {
-    const existing = fileStatMap.get(entry.path) ?? { insertions: 0, deletions: 0 };
-    existing.insertions += entry.insertions;
-    existing.deletions += entry.deletions;
-    fileStatMap.set(entry.path, existing);
-  }
-
-  let insertions = 0;
-  let deletions = 0;
-  const files = Array.from(fileStatMap.entries())
-    .map(([filePath, stat]) => {
-      insertions += stat.insertions;
-      deletions += stat.deletions;
-      return { path: filePath, insertions: stat.insertions, deletions: stat.deletions };
-    })
-    .toSorted((a, b) => a.path.localeCompare(b.path));
-
-  return { files, insertions, deletions };
-}
-
-function resolveGitPath(cwd: string, gitPath: string): string {
-  return nodePath.isAbsolute(gitPath) ? gitPath : nodePath.join(cwd, gitPath);
-}
-
-function hasNodeErrorCode(cause: unknown, code: string): boolean {
-  return (
-    typeof cause === "object" &&
-    cause !== null &&
-    "code" in cause &&
-    (cause as { code?: unknown }).code === code
-  );
-}
-
-function parsePorcelainPath(line: string): string | null {
-  if (line.startsWith("? ") || line.startsWith("! ")) {
-    const simple = line.slice(2).trim();
-    return simple.length > 0 ? simple : null;
-  }
-
-  if (!(line.startsWith("1 ") || line.startsWith("2 ") || line.startsWith("u "))) {
-    return null;
-  }
-
-  const tabIndex = line.indexOf("\t");
-  if (tabIndex >= 0) {
-    const fromTab = line.slice(tabIndex + 1);
-    const [filePath] = fromTab.split("\t");
-    return filePath?.trim().length ? filePath.trim() : null;
-  }
-
-  const parts = line.trim().split(/\s+/g);
-  const filePath = parts.at(-1) ?? "";
-  return filePath.length > 0 ? filePath : null;
-}
-
-function countTextLines(contents: Uint8Array): number {
-  if (contents.length === 0) return 0;
-
-  let lineFeeds = 0;
-  for (const byte of contents) {
-    if (byte === 0) {
-      return 0;
-    }
-    if (byte === 10) {
-      lineFeeds += 1;
-    }
-  }
-
-  return contents.at(-1) === 10 ? lineFeeds : lineFeeds + 1;
-}
-
-function joinPatchSegments(segments: ReadonlyArray<string>): string {
-  let combined = "";
-  for (const segment of segments) {
-    if (segment.length === 0) continue;
-    if (combined.length > 0 && !combined.endsWith("\n")) {
-      combined += "\n";
-    }
-    combined += segment;
-    if (!combined.endsWith("\n")) {
-      combined += "\n";
-    }
-  }
-  return combined;
-}
-
-function parseBranchLine(line: string): { name: string; current: boolean } | null {
-  const trimmed = line.trim();
-  if (trimmed.length === 0) return null;
-
-  const name = trimmed.replace(/^[*+]\s+/, "");
-  // Exclude symbolic refs like: "origin/HEAD -> origin/main".
-  // Exclude detached HEAD pseudo-refs like: "(HEAD detached at origin/main)".
-  if (name.includes(" -> ") || name.startsWith("(")) return null;
-
-  return {
-    name,
-    current: trimmed.startsWith("* "),
-  };
-}
-
-function parseRemoteNames(stdout: string): ReadonlyArray<string> {
-  return stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .toSorted((a, b) => b.length - a.length);
-}
-
-function sanitizeRemoteName(value: string): string {
-  const sanitized = value
-    .trim()
-    .replace(/[^A-Za-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return sanitized.length > 0 ? sanitized : "fork";
-}
-
-function normalizeRemoteUrl(value: string): string {
-  return value
-    .trim()
-    .replace(/\/+$/g, "")
-    .replace(/\.git$/i, "")
-    .toLowerCase();
-}
-
-function parseRemoteFetchUrls(stdout: string): Map<string, string> {
-  const remotes = new Map<string, string>();
-  for (const line of stdout.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) continue;
-    const match = /^(\S+)\s+(\S+)\s+\((fetch|push)\)$/.exec(trimmed);
-    if (!match) continue;
-    const [, remoteName = "", remoteUrl = "", direction = ""] = match;
-    if (direction !== "fetch" || remoteName.length === 0 || remoteUrl.length === 0) {
-      continue;
-    }
-    remotes.set(remoteName, remoteUrl);
-  }
-  return remotes;
-}
-
-function parseRemoteRefWithRemoteNames(
-  branchName: string,
-  remoteNames: ReadonlyArray<string>,
-): { remoteRef: string; remoteName: string; localBranch: string } | null {
-  const trimmedBranchName = branchName.trim();
-  if (trimmedBranchName.length === 0) return null;
-
-  for (const remoteName of remoteNames) {
-    const remotePrefix = `${remoteName}/`;
-    if (!trimmedBranchName.startsWith(remotePrefix)) {
-      continue;
-    }
-    const localBranch = trimmedBranchName.slice(remotePrefix.length).trim();
-    if (localBranch.length === 0) {
-      return null;
-    }
-    return {
-      remoteRef: trimmedBranchName,
-      remoteName,
-      localBranch,
-    };
-  }
-
-  return null;
-}
-
-function parseTrackingBranchByUpstreamRef(stdout: string, upstreamRef: string): string | null {
-  for (const line of stdout.split("\n")) {
-    const trimmedLine = line.trim();
-    if (trimmedLine.length === 0) {
-      continue;
-    }
-    const [branchNameRaw, upstreamBranchRaw = ""] = trimmedLine.split("\t");
-    const branchName = branchNameRaw?.trim() ?? "";
-    const upstreamBranch = upstreamBranchRaw.trim();
-    if (branchName.length === 0 || upstreamBranch.length === 0) {
-      continue;
-    }
-    if (upstreamBranch === upstreamRef) {
-      return branchName;
-    }
-  }
-
-  return null;
-}
-
-function deriveLocalBranchNameFromRemoteRef(branchName: string): string | null {
-  const separatorIndex = branchName.indexOf("/");
-  if (separatorIndex <= 0 || separatorIndex === branchName.length - 1) {
-    return null;
-  }
-  const localBranch = branchName.slice(separatorIndex + 1).trim();
-  return localBranch.length > 0 ? localBranch : null;
-}
-
-function commandLabel(args: readonly string[]): string {
-  return `git ${args.join(" ")}`;
-}
-
-function isMissingGitCwdError(error: GitCommandError): boolean {
-  const normalized = `${error.detail}\n${error.message}`.toLowerCase();
-  return (
-    normalized.includes("no such file or directory") ||
-    normalized.includes("notfound: filesystem.access") ||
-    normalized.includes("enoent") ||
-    normalized.includes("not a directory")
-  );
-}
-
-function parseDefaultBranchFromRemoteHeadRef(value: string, remoteName: string): string | null {
-  const trimmed = value.trim();
-  const prefix = `refs/remotes/${remoteName}/`;
-  if (!trimmed.startsWith(prefix)) {
-    return null;
-  }
-  const branch = trimmed.slice(prefix.length).trim();
-  return branch.length > 0 ? branch : null;
-}
-
-function createGitCommandError(
-  operation: string,
-  cwd: string,
-  args: readonly string[],
-  detail: string,
-  cause?: unknown,
-): GitCommandError {
-  return new GitCommandError({
-    operation,
-    command: commandLabel(args),
-    cwd,
-    detail,
-    ...(cause !== undefined ? { cause } : {}),
-  });
-}
-
-const DIRTY_WORKTREE_PATTERN =
-  /Your local changes to the following files would be overwritten by (?:checkout|merge):\s*([\s\S]*?)Please commit your changes or stash them/;
-const UNTRACKED_OVERWRITE_PATTERN =
-  /The following untracked working tree files would be overwritten by (?:checkout|merge):\s*([\s\S]*?)Please move or remove them/;
-
-function parseDirtyWorktreeFiles(stderr: string): string[] | null {
-  const match = DIRTY_WORKTREE_PATTERN.exec(stderr) ?? UNTRACKED_OVERWRITE_PATTERN.exec(stderr);
-  if (!match?.[1]) return null;
-  const files = match[1]
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  return files.length > 0 ? files : null;
-}
-
-function explainPullBlockedByLocalChanges(error: GitCommandError): string | null {
-  const files = parseDirtyWorktreeFiles(error.detail);
-  if (!files) return null;
-  const fileList = files.map((file) => `  - ${file}`).join("\n");
-  return `Local changes block pull. Commit or stash these files first:\n${fileList}`;
-}
-
-function parseNonEmptyLineList(input: string): string[] {
-  return input
-    .trim()
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-}
-
-type StashEntry = {
-  ref: string;
-  hash: string;
-};
-
-function parseStashEntries(input: string): StashEntry[] {
-  return parseNonEmptyLineList(input).flatMap((line) => {
-    const [ref, hash] = line.split(" ");
-    return ref && hash ? [{ ref, hash }] : [];
-  });
-}
-
-function quoteGitCommand(args: ReadonlyArray<string>): string {
-  return `git ${args.join(" ")}`;
-}
-
-function toGitCommandError(
-  input: Pick<ExecuteGitInput, "operation" | "cwd" | "args">,
-  detail: string,
-) {
-  return (cause: unknown) =>
-    Schema.is(GitCommandError)(cause)
-      ? cause
-      : new GitCommandError({
-          operation: input.operation,
-          command: quoteGitCommand(input.args),
-          cwd: input.cwd,
-          detail: `${cause instanceof Error && cause.message.length > 0 ? cause.message : "Unknown error"} - ${detail}`,
-          ...(cause !== undefined ? { cause } : {}),
-        });
-}
-
-interface Trace2Monitor {
-  readonly env: NodeJS.ProcessEnv;
-  readonly flush: Effect.Effect<void, never>;
-}
-
-function trace2ChildKey(record: Record<string, unknown>): string | null {
-  const childId = record.child_id;
-  if (typeof childId === "number" || typeof childId === "string") {
-    return String(childId);
-  }
-  const hookName = record.hook_name;
-  return typeof hookName === "string" && hookName.trim().length > 0 ? hookName.trim() : null;
-}
-
-const Trace2Record = Schema.Record(Schema.String, Schema.Unknown);
-
-const createTrace2Monitor = Effect.fn(function* (
-  input: Pick<ExecuteGitInput, "operation" | "cwd" | "args">,
-  progress: ExecuteGitProgress | undefined,
-): Effect.fn.Return<
-  Trace2Monitor,
-  PlatformError.PlatformError,
-  Scope.Scope | FileSystem.FileSystem | Path.Path
-> {
-  if (!progress?.onHookStarted && !progress?.onHookFinished) {
-    return {
-      env: {},
-      flush: Effect.void,
-    };
-  }
-
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const traceFilePath = yield* fs.makeTempFileScoped({
-    prefix: `t3code-git-trace2-${process.pid}-`,
-    suffix: ".json",
-  });
-  const hookStartByChildKey = new Map<string, { hookName: string; startedAtMs: number }>();
-  const traceTailState = yield* Ref.make<TraceTailState>({
-    processedChars: 0,
-    remainder: "",
-  });
-
-  const handleTraceLine = (line: string) =>
-    Effect.gen(function* () {
-      const trimmedLine = line.trim();
-      if (trimmedLine.length === 0) {
-        return;
-      }
-
-      const traceRecord = decodeJsonResult(Trace2Record)(trimmedLine);
-      if (Result.isFailure(traceRecord)) {
-        yield* Effect.logDebug(
-          `GitCore.trace2: failed to parse trace line for ${quoteGitCommand(input.args)} in ${input.cwd}`,
-          traceRecord.failure,
-        );
-        return;
-      }
-
-      if (traceRecord.success.child_class !== "hook") {
-        return;
-      }
-
-      const event = traceRecord.success.event;
-      const childKey = trace2ChildKey(traceRecord.success);
-      if (childKey === null) {
-        return;
-      }
-      const started = hookStartByChildKey.get(childKey);
-      const hookNameFromEvent =
-        typeof traceRecord.success.hook_name === "string"
-          ? traceRecord.success.hook_name.trim()
-          : "";
-      const hookName = hookNameFromEvent.length > 0 ? hookNameFromEvent : (started?.hookName ?? "");
-      if (hookName.length === 0) {
-        return;
-      }
-
-      if (event === "child_start") {
-        hookStartByChildKey.set(childKey, { hookName, startedAtMs: Date.now() });
-        if (progress.onHookStarted) {
-          yield* progress.onHookStarted(hookName);
-        }
-        return;
-      }
-
-      if (event === "child_exit") {
-        hookStartByChildKey.delete(childKey);
-        if (progress.onHookFinished) {
-          const code = traceRecord.success.code;
-          yield* progress.onHookFinished({
-            hookName: started?.hookName ?? hookName,
-            exitCode: typeof code === "number" && Number.isInteger(code) ? code : null,
-            durationMs: started ? Math.max(0, Date.now() - started.startedAtMs) : null,
-          });
-        }
-      }
-    });
-
-  const deltaMutex = yield* Semaphore.make(1);
-  const readTraceDelta = deltaMutex.withPermit(
-    fs.readFileString(traceFilePath).pipe(
-      Effect.flatMap((contents) =>
-        Effect.uninterruptible(
-          Ref.modify(traceTailState, ({ processedChars, remainder }) => {
-            if (contents.length <= processedChars) {
-              return [[], { processedChars, remainder }];
-            }
-
-            const appended = contents.slice(processedChars);
-            const combined = remainder + appended;
-            const lines = combined.split("\n");
-            const nextRemainder = lines.pop() ?? "";
-
-            return [
-              lines.map((line) => line.replace(/\r$/, "")),
-              {
-                processedChars: contents.length,
-                remainder: nextRemainder,
-              },
-            ];
-          }).pipe(
-            Effect.flatMap((lines) => Effect.forEach(lines, handleTraceLine, { discard: true })),
-          ),
-        ),
-      ),
-      Effect.ignore({ log: true }),
-    ),
-  );
-  const traceFileName = path.basename(traceFilePath);
-  yield* Stream.runForEach(fs.watch(traceFilePath), (event) => {
-    const eventPath = event.path;
-    const isTargetTraceEvent =
-      eventPath === traceFilePath ||
-      eventPath === traceFileName ||
-      path.basename(eventPath) === traceFileName;
-    if (!isTargetTraceEvent) return Effect.void;
-    return readTraceDelta;
-  }).pipe(Effect.ignoreCause({ log: true }), Effect.forkScoped);
-
-  yield* Effect.addFinalizer(() =>
-    Effect.gen(function* () {
-      yield* readTraceDelta;
-      const finalLine = yield* Ref.modify(traceTailState, ({ processedChars, remainder }) => [
-        remainder.trim(),
-        {
-          processedChars,
-          remainder: "",
-        },
-      ]);
-      if (finalLine.length > 0) {
-        yield* handleTraceLine(finalLine);
-      }
-    }),
-  );
-
-  return {
-    env: {
-      GIT_TRACE2_EVENT: traceFilePath,
-    },
-    flush: readTraceDelta,
-  };
-});
-
-const collectOutput = Effect.fn(function* <E>(
-  input: Pick<ExecuteGitInput, "operation" | "cwd" | "args">,
-  stream: Stream.Stream<Uint8Array, E>,
-  maxOutputBytes: number,
-  onLine: ((line: string) => Effect.Effect<void, never>) | undefined,
-): Effect.fn.Return<string, GitCommandError> {
-  const decoder = new TextDecoder();
-  let bytes = 0;
-  let text = "";
-  let lineBuffer = "";
-
-  const emitCompleteLines = (flush: boolean) =>
-    Effect.gen(function* () {
-      let newlineIndex = lineBuffer.indexOf("\n");
-      while (newlineIndex >= 0) {
-        const line = lineBuffer.slice(0, newlineIndex).replace(/\r$/, "");
-        lineBuffer = lineBuffer.slice(newlineIndex + 1);
-        if (line.length > 0 && onLine) {
-          yield* onLine(line);
-        }
-        newlineIndex = lineBuffer.indexOf("\n");
-      }
-
-      if (flush) {
-        const trailing = lineBuffer.replace(/\r$/, "");
-        lineBuffer = "";
-        if (trailing.length > 0 && onLine) {
-          yield* onLine(trailing);
-        }
-      }
-    });
-
-  yield* Stream.runForEach(stream, (chunk) =>
-    Effect.gen(function* () {
-      bytes += chunk.byteLength;
-      if (bytes > maxOutputBytes) {
-        return yield* new GitCommandError({
-          operation: input.operation,
-          command: quoteGitCommand(input.args),
-          cwd: input.cwd,
-          detail: `${quoteGitCommand(input.args)} output exceeded ${maxOutputBytes} bytes and was truncated.`,
-        });
-      }
-      const decoded = decoder.decode(chunk, { stream: true });
-      text += decoded;
-      lineBuffer += decoded;
-      yield* emitCompleteLines(false);
-    }),
-  ).pipe(Effect.mapError(toGitCommandError(input, "output stream failed.")));
-
-  const remainder = decoder.decode();
-  text += remainder;
-  lineBuffer += remainder;
-  yield* emitCompleteLines(true);
-  return text;
-});
 
 export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"] }) =>
   Effect.gen(function* () {
