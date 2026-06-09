@@ -213,7 +213,10 @@ export function parseRemoteRefWithRemoteNames(
   return null;
 }
 
-export function parseTrackingBranchByUpstreamRef(stdout: string, upstreamRef: string): string | null {
+export function parseTrackingBranchByUpstreamRef(
+  stdout: string,
+  upstreamRef: string,
+): string | null {
   for (const line of stdout.split("\n")) {
     const trimmedLine = line.trim();
     if (trimmedLine.length === 0) {
@@ -242,7 +245,10 @@ export function deriveLocalBranchNameFromRemoteRef(branchName: string): string |
   return localBranch.length > 0 ? localBranch : null;
 }
 
-export function parseDefaultBranchFromRemoteHeadRef(value: string, remoteName: string): string | null {
+export function parseDefaultBranchFromRemoteHeadRef(
+  value: string,
+  remoteName: string,
+): string | null {
   const trimmed = value.trim();
   const prefix = `refs/remotes/${remoteName}/`;
   if (!trimmed.startsWith(prefix)) {

@@ -239,9 +239,7 @@ export function turnHasReviewItem(
 ): boolean {
   return turn.items.some((item) => {
     const record = readObject(item);
-    const normalized = normalizeItemType(
-      readString(record, "type") ?? readString(record, "kind"),
-    );
+    const normalized = normalizeItemType(readString(record, "type") ?? readString(record, "kind"));
     return itemType === "entered"
       ? normalized.includes("entered review mode")
       : normalized.includes("exited review mode");
@@ -543,8 +541,7 @@ export function parseModelListResponse(response: unknown): ProviderListModelsRes
       return [];
     }
 
-    const slug =
-      readString(model, "id") ?? readString(model, "slug") ?? readString(model, "model");
+    const slug = readString(model, "id") ?? readString(model, "slug") ?? readString(model, "model");
     const trimmedSlug = slug?.trim();
     if (!trimmedSlug) {
       return [];
@@ -588,8 +585,7 @@ export function parseModelListResponse(response: unknown): ProviderListModelsRes
               return [];
             }
 
-            const label =
-              readString(descriptor, "description") ?? readString(descriptor, "label");
+            const label = readString(descriptor, "description") ?? readString(descriptor, "label");
             const trimmedLabel = label?.trim();
             return [
               {
@@ -602,13 +598,10 @@ export function parseModelListResponse(response: unknown): ProviderListModelsRes
       ).values(),
     );
     const defaultReasoningEffort =
-      readString(model, "defaultReasoningEffort") ??
-      readString(model, "default_reasoning_effort");
+      readString(model, "defaultReasoningEffort") ?? readString(model, "default_reasoning_effort");
     const trimmedDefaultReasoningEffort = defaultReasoningEffort?.trim();
     const additionalSpeedTiers =
-      readArray(model, "additionalSpeedTiers") ??
-      readArray(model, "additional_speed_tiers") ??
-      [];
+      readArray(model, "additionalSpeedTiers") ?? readArray(model, "additional_speed_tiers") ?? [];
     const hasFastSpeedTier = additionalSpeedTiers.some(
       (tier) => typeof tier === "string" && tier.trim().toLowerCase() === "fast",
     );

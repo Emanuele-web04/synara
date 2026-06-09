@@ -2,7 +2,17 @@
 // Purpose: Effect-bound git subprocess helpers — trace2 hook monitoring and bounded output collection.
 // Layer: Server Git service (process-bound, services supplied via Effect context)
 // Exports: createTrace2Monitor, collectOutput, and the Trace2Monitor shape.
-import { Effect, FileSystem, Path, PlatformError, Ref, Result, Scope, Semaphore, Stream } from "effect";
+import {
+  Effect,
+  FileSystem,
+  Path,
+  PlatformError,
+  Ref,
+  Result,
+  Scope,
+  Semaphore,
+  Stream,
+} from "effect";
 
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { GitCommandError } from "../Errors.ts";

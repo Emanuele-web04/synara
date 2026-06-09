@@ -2,10 +2,7 @@
 // Layer: types only — no values, no Effect, no session-context bindings.
 // Exports: stream-kind aliases, prompt-queue/resume/turn/block/approval/tool-in-flight types.
 
-import type {
-  PermissionUpdate,
-  SDKUserMessage,
-} from "@anthropic-ai/claude-agent-sdk";
+import type { PermissionUpdate, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
   CanonicalItemType,
   CanonicalRequestType,

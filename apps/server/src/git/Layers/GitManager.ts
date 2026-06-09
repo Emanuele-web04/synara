@@ -12,10 +12,7 @@ import type {
   GitStackedAction,
   ProviderStartOptions,
 } from "@t3tools/contracts";
-import {
-  resolveAutoFeatureBranchName,
-  sanitizeFeatureBranchName,
-} from "@t3tools/shared/git";
+import { resolveAutoFeatureBranchName, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { resolveWorktreeHandoffIntent } from "@t3tools/shared/worktreeHandoff";
 
 import { GitManagerError } from "../Errors.ts";

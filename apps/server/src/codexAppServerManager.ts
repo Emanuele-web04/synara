@@ -26,10 +26,7 @@ import { getModelSelectionBooleanOptionValue } from "@t3tools/shared/model";
 import { Deferred, Effect, ServiceMap, Stream } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 
-import {
-  CODEX_DEFAULT_MODEL,
-  CODEX_DISCOVERY_SESSION_IDLE_MS,
-} from "./codexAppServer.config.ts";
+import { CODEX_DEFAULT_MODEL, CODEX_DISCOVERY_SESSION_IDLE_MS } from "./codexAppServer.config.ts";
 import {
   classifyCodexStderrLine,
   isIgnorableCodexProcessLine,
@@ -220,9 +217,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       try {
         const modelListResponse = await this.sendRequest(context, "model/list", {});
         console.log("codex model/list response", modelListResponse);
-        advertisedModelSlugs = parseModelListResponse(modelListResponse).map(
-          (model) => model.slug,
-        );
+        advertisedModelSlugs = parseModelListResponse(modelListResponse).map((model) => model.slug);
       } catch (error) {
         console.log("codex model/list failed", error);
       }
@@ -1950,9 +1945,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private handleServerRequest(context: CodexSessionContext, request: JsonRpcRequest): void {
     const rawRoute = readRouteFields(request.params);
     const childParentTurnId = this.readChildParentTurnId(context, request.params);
-    const providerThreadId = normalizeProviderThreadId(
-      readProviderConversationId(request.params),
-    );
+    const providerThreadId = normalizeProviderThreadId(readProviderConversationId(request.params));
     const providerParentThreadId = this.readChildParentProviderThreadId(context, request.params);
     const requestKind = requestKindForMethod(request.method);
     let requestId: ApprovalRequestId | undefined;

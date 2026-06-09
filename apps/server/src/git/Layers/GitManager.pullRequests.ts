@@ -8,10 +8,7 @@
 //   normalizePullRequestReference, toResolvedPullRequest, shouldPreferSshRemote,
 //   toPullRequestHeadRemoteInfo, inferPullRequestHeadRemoteInfoFromSelector.
 
-import {
-  parseRepositoryNameFromPullRequestUrl,
-  sanitizeBranchFragment,
-} from "@t3tools/shared/git";
+import { parseRepositoryNameFromPullRequestUrl, sanitizeBranchFragment } from "@t3tools/shared/git";
 
 import type { GitHubPullRequestSummary } from "../Services/GitHubCli.ts";
 import type {
@@ -54,9 +51,7 @@ export function resolvePullRequestWorktreeLocalBranchName(
   return `t3code/pr-${pullRequest.number}/${suffix}`;
 }
 
-export function parseGitHubRepositoryNameWithOwnerFromRemoteUrl(
-  url: string | null,
-): string | null {
+export function parseGitHubRepositoryNameWithOwnerFromRemoteUrl(url: string | null): string | null {
   const trimmed = url?.trim() ?? "";
   if (trimmed.length === 0) {
     return null;
@@ -85,9 +80,7 @@ export function normalizeOptionalString(value: string | null | undefined): strin
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function normalizeOptionalRepositoryNameWithOwner(
-  value: string | null | undefined,
-): string | null {
+function normalizeOptionalRepositoryNameWithOwner(value: string | null | undefined): string | null {
   const normalized = normalizeOptionalString(value);
   return normalized ? normalized.toLowerCase() : null;
 }
