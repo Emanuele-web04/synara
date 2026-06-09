@@ -85,6 +85,7 @@ import {
   SettingsSection,
   SettingsSelectPopup,
 } from "../components/settings/SettingsPanelPrimitives";
+import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
@@ -3088,6 +3089,8 @@ function SettingsRouteView() {
         return renderModelsPanel();
       case "providers":
         return renderProvidersPanel();
+      case "usage":
+        return <ProviderUsageSettingsPanel />;
       case "advanced":
         return renderAdvancedPanel();
       default:

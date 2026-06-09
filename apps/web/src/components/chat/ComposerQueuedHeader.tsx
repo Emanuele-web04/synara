@@ -43,7 +43,7 @@ export const ComposerQueuedHeader = memo(function ComposerQueuedHeader({
           key={queuedTurn.id}
           data-testid="queued-follow-up-row"
           className={cn(
-            "flex items-center gap-2 px-3 pt-2.5 pb-2.5 text-[12px]",
+            "flex items-center gap-2 px-3 pt-1.5 pb-1.5 text-[12px]",
             queuedTurnIndex > 0 && COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME,
           )}
         >

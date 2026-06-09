@@ -115,6 +115,10 @@
     "./localImage": {
       "types": "./src/localImage.ts",
       "import": "./src/localImage.ts"
+    },
+    "./providerUsage": {
+      "types": "./src/providerUsage.ts",
+      "import": "./src/providerUsage.ts"
     }
   },
   "scripts": {

@@ -123,12 +123,24 @@ export const ServerProviderUsageLine = Schema.Struct({
 });
 export type ServerProviderUsageLine = typeof ServerProviderUsageLine.Type;
 
+// Lifecycle of a live provider usage fetch. Absent status is treated as "ok" so
+// existing local-archive snapshots stay valid without setting it.
+//   ok          – fetched fresh usage from the provider backend
+//   needs-auth  – no/expired credential, or the backend rejected the token (read-only mode never refreshes)
+//   unsupported – the provider has no fetchable usage source for the current auth (e.g. API-key-only)
+//   error       – the fetch failed unexpectedly (network/parse); detail carries the reason
+export const ProviderUsageStatus = Schema.Literals(["ok", "needs-auth", "unsupported", "error"]);
+export type ProviderUsageStatus = typeof ProviderUsageStatus.Type;
+
 export const ServerProviderUsageSnapshot = Schema.Struct({
   provider: ProviderKind,
   updatedAt: IsoDateTime,
   limits: Schema.Array(ServerProviderUsageLimit),
   usageLines: Schema.Array(ServerProviderUsageLine),
   source: TrimmedNonEmptyString,
+  status: Schema.optional(ProviderUsageStatus),
+  planName: Schema.optional(TrimmedNonEmptyString),
+  detail: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderUsageSnapshot = typeof ServerProviderUsageSnapshot.Type;
 
@@ -140,6 +152,16 @@ export type ServerGetProviderUsageSnapshotInput = typeof ServerGetProviderUsageS
 
 export const ServerGetProviderUsageSnapshotResult = Schema.NullOr(ServerProviderUsageSnapshot);
 export type ServerGetProviderUsageSnapshotResult = typeof ServerGetProviderUsageSnapshotResult.Type;
+
+// Batch live-usage fetch for every supported provider, powering the Settings → Usage section.
+// Returns one entry per supported provider (including needs-auth/error) so the UI can render a row each.
+export const ServerListProviderUsageInput = Schema.Struct({
+  forceRefresh: Schema.optional(Schema.Boolean),
+});
+export type ServerListProviderUsageInput = typeof ServerListProviderUsageInput.Type;
+
+export const ServerListProviderUsageResult = Schema.Array(ServerProviderUsageSnapshot);
+export type ServerListProviderUsageResult = typeof ServerListProviderUsageResult.Type;
 
 export const ServerLocalServerAddress = Schema.Struct({
   host: TrimmedNonEmptyString,

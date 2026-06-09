@@ -12,6 +12,7 @@ export const SETTINGS_SECTION_IDS = [
   "archived",
   "models",
   "providers",
+  "usage",
   "advanced",
 ] as const;
 
@@ -114,6 +115,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "Choose visible providers, review CLI installs, and update provider tools.",
     icon: "puzzle",
     eyebrow: "Picker visibility",
+  },
+  {
+    id: "usage",
+    group: "synara",
+    label: "Usage",
+    description: "Remaining quota and credits for each signed-in provider.",
+    icon: "gauge",
+    eyebrow: "Limits & credits",
   },
   {
     id: "advanced",

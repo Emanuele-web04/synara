@@ -3,6 +3,7 @@
 // for provider runtime events so UI components can stay presentation-only.
 
 import type { OrchestrationThread } from "@t3tools/contracts";
+import { providerUsageLearnMoreHref } from "@t3tools/shared/providerUsage";
 
 export interface RateLimitWindow {
   window: string;
@@ -35,7 +36,8 @@ const WINDOW_ORDER = new Map([
   ["5h", 0],
   ["Weekly", 1],
   ["Sonnet", 2],
-  ["Current", 3],
+  ["Opus", 3],
+  ["Current", 4],
 ]);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -107,6 +109,9 @@ export function normalizeRateLimitLabel(
     normalized === "sonnet"
   ) {
     return "Sonnet";
+  }
+  if (normalized === "seven_day_opus" || normalized === "weekly_opus" || normalized === "opus") {
+    return "Opus";
   }
   return label;
 }
@@ -355,6 +360,32 @@ export function formatRateLimitRemainingPercent(remainingPercent: number | undef
   return `${Math.round(Math.min(100, Math.max(0, remainingPercent)))}%`;
 }
 
+/** Relative reset countdown, e.g. "Resets in 2h 16m" / "Resets in 5d 11h". */
+export function formatRateLimitResetCountdown(resetsAt: string): string {
+  const resetMs = Date.parse(resetsAt);
+  if (Number.isNaN(resetMs)) {
+    return "";
+  }
+  const diffMs = resetMs - Date.now();
+  if (diffMs <= 0) {
+    return "Resets soon";
+  }
+  const totalMinutes = Math.floor(diffMs / 60_000);
+  const days = Math.floor(totalMinutes / 1_440);
+  const hours = Math.floor((totalMinutes % 1_440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) {
+    return `Resets in ${days}d ${hours}h`;
+  }
+  if (hours > 0) {
+    return `Resets in ${hours}h ${minutes}m`;
+  }
+  if (minutes > 0) {
+    return `Resets in ${minutes}m`;
+  }
+  return "Resets soon";
+}
+
 export function formatRateLimitResetTime(resetsAt: string): string {
   const resetMs = Date.parse(resetsAt);
   if (Number.isNaN(resetMs)) return "";
@@ -386,12 +417,7 @@ export function deriveRateLimitLearnMoreHref(
 export function deriveProviderUsageLearnMoreHref(
   provider: string | null | undefined,
 ): string | null {
-  if (provider === "codex") return "https://platform.openai.com/usage";
-  if (provider === "claudeAgent") {
-    return "https://docs.anthropic.com/en/docs/about-claude/models#rate-limits";
-  }
-  if (provider === "gemini") return "https://ai.google.dev/gemini-api/docs/quota";
-  return null;
+  return providerUsageLearnMoreHref(provider);
 }
 
 function mergeRateLimitWindowSets(

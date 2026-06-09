@@ -78,6 +78,8 @@ import type {
   ServerGetEnvironmentResult,
   ServerGetProviderUsageSnapshotInput,
   ServerGetProviderUsageSnapshotResult,
+  ServerListProviderUsageInput,
+  ServerListProviderUsageResult,
   ServerGetSettingsResult,
   ServerListLocalServersResult,
   ServerListWorktreesResult,
@@ -442,6 +444,9 @@ export interface NativeApi {
     getProviderUsageSnapshot: (
       input: ServerGetProviderUsageSnapshotInput,
     ) => Promise<ServerGetProviderUsageSnapshotResult>;
+    listProviderUsage: (
+      input: ServerListProviderUsageInput,
+    ) => Promise<ServerListProviderUsageResult>;
     getDiagnostics: () => Promise<ServerDiagnosticsResult>;
     generateThreadRecap: (
       input: ServerGenerateThreadRecapInput,
