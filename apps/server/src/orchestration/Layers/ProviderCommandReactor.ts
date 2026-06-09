@@ -1,13 +1,10 @@
 import {
   type ChatAttachment,
-  CommandId,
   EventId,
   type ModelSelection,
   MessageId,
-  type OrchestrationEvent,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProviderMentionReference,
-  type ProviderRuntimeEvent,
   ProviderKind,
   type ProviderReviewTarget,
   type ProviderStartOptions,
@@ -23,7 +20,6 @@ import {
 import {
   Cache,
   Cause,
-  Duration,
   Effect,
   Equal,
   Fiber,
@@ -41,7 +37,7 @@ import {
   collectTailTurnIds,
   resolveTailUserMessageEditTarget,
 } from "@t3tools/shared/conversationEdit";
-import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
+import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import { resolveThreadWorkspaceState } from "@t3tools/shared/threadEnvironment";
 
 import {
@@ -74,208 +70,38 @@ import {
   ProviderCommandReactor,
   type ProviderCommandReactorShape,
 } from "../Services/ProviderCommandReactor.ts";
+import {
+  DEFAULT_RUNTIME_MODE,
+  HANDLED_TURN_START_KEY_MAX,
+  HANDLED_TURN_START_KEY_TTL,
+  HANDOFF_CONTEXT_WRAPPER_OVERHEAD,
+  RECENT_SESSION_ENSURE_REUSE_WINDOW_MS,
+  SIDECHAT_BOUNDARY_INSTRUCTION,
+} from "./ProviderCommandReactor.config.ts";
+import {
+  attachmentTitleSeed,
+  buildGeneratedWorktreeBranchName,
+  editResendTurnStartKey,
+  hasDedicatedTextGenerationProvider,
+  isRollbackStillInProgressError,
+  isStaleCodexResumeError,
+  isUnknownPendingApprovalRequestError,
+  isUnknownPendingUserInputRequestError,
+  mapProviderSessionStatusToOrchestrationStatus,
+  normalizeSkillMentionTextForProvider,
+  resolveSubagentProviderThreadId,
+  serverCommandId,
+  stalePendingRequestDetail,
+  toNonEmptyProviderInput,
+  turnStartKeyForEvent,
+  wrapSidechatInput,
+} from "./ProviderCommandReactor.helpers.ts";
+import type {
+  ProviderIntentEvent,
+  ProviderQueueDrainEvent,
+} from "./ProviderCommandReactor.types.ts";
 
-type ProviderIntentEvent = Extract<
-  OrchestrationEvent,
-  {
-    type:
-      | "thread.created"
-      | "thread.meta-updated"
-      | "thread.runtime-mode-set"
-      | "thread.turn-queued"
-      | "thread.turn-start-requested"
-      | "thread.turn-interrupt-requested"
-      | "thread.approval-response-requested"
-      | "thread.user-input-response-requested"
-      | "thread.conversation-rollback-requested"
-      | "thread.message-edit-resend-requested"
-      | "thread.session-stop-requested"
-      | "thread.session-ensure-requested"
-      | "thread.runtime-action-requested";
-  }
->;
-
-type ProviderQueueDrainEvent = Extract<
-  ProviderRuntimeEvent,
-  {
-    type: "turn.completed" | "turn.aborted";
-  }
->;
-
-function toNonEmptyProviderInput(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized && normalized.length > 0 ? normalized : undefined;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-// Codex app-server still expects `$skill` text next to the structured skill item.
-export function normalizeSkillMentionTextForProvider(input: {
-  readonly provider: ProviderKind;
-  readonly messageText: string;
-  readonly skills?: ReadonlyArray<ProviderSkillReference>;
-}): string {
-  if (input.provider !== "codex" || !input.skills || input.skills.length === 0) {
-    return input.messageText;
-  }
-
-  let nextText = input.messageText;
-  for (const skill of input.skills) {
-    const escapedName = escapeRegExp(skill.name);
-    nextText = nextText.replace(
-      new RegExp(`(^|\\s)/${escapedName}(?=\\s|$)`, "gi"),
-      `$1$${skill.name}`,
-    );
-  }
-  return nextText;
-}
-
-function attachmentTitleSeed(attachment: ChatAttachment | undefined): string {
-  if (!attachment) {
-    return "";
-  }
-  if (attachment.type === "image") {
-    return attachment.name;
-  }
-  return attachment.text.trim();
-}
-
-function mapProviderSessionStatusToOrchestrationStatus(
-  status: "connecting" | "ready" | "running" | "error" | "closed",
-): OrchestrationSession["status"] {
-  switch (status) {
-    case "connecting":
-      return "starting";
-    case "running":
-      return "running";
-    case "error":
-      return "error";
-    case "closed":
-      return "stopped";
-    case "ready":
-    default:
-      return "ready";
-  }
-}
-
-const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
-  event.commandId !== null ? `command:${event.commandId}` : `event:${event.eventId}`;
-
-const serverCommandId = (tag: string): CommandId =>
-  CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
-
-const resolveSubagentProviderThreadId = (
-  threadId: ThreadId,
-  parentThreadId: ThreadId | null | undefined,
-): string | undefined => {
-  if (!parentThreadId) {
-    return undefined;
-  }
-
-  const prefix = `subagent:${parentThreadId}:`;
-  const rawThreadId = threadId as string;
-  return rawThreadId.startsWith(prefix) ? rawThreadId.slice(prefix.length) : undefined;
-};
-
-const editResendTurnStartKey = (threadId: ThreadId, messageId: string) =>
-  `${threadId}:${messageId}`;
-
-const HANDLED_TURN_START_KEY_MAX = 10_000;
-const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
-const RECENT_SESSION_ENSURE_REUSE_WINDOW_MS = 30_000;
-const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
-const HANDOFF_CONTEXT_WRAPPER_OVERHEAD =
-  "<handoff_context>\n\n</handoff_context>\n\n<latest_user_message>\n\n</latest_user_message>"
-    .length;
-const SIDECHAT_BOUNDARY_INSTRUCTION =
-  "You are in a sidechat. Treat all prior conversation as reference-only context. Do not continue any prior task automatically. Do not mutate files, git, or the workspace and do not run workspace-changing commands unless the latest user message explicitly asks you to do so after this boundary. Use this sidechat for focused explanation, safety checks, summaries, and alternatives.";
-
-function wrapSidechatInput(messageText: string): string {
-  return `<sidechat_boundary>\n${SIDECHAT_BOUNDARY_INSTRUCTION}\n</sidechat_boundary>\n\n<latest_user_message>\n${messageText}\n</latest_user_message>`;
-}
-
-function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
-  const error = Cause.squash(cause);
-  if (Schema.is(ProviderAdapterRequestError)(error)) {
-    const detail = error.detail.toLowerCase();
-    return (
-      detail.includes("unknown pending approval request") ||
-      detail.includes("unknown pending permission request")
-    );
-  }
-  const message = Cause.pretty(cause);
-  return (
-    message.includes("unknown pending approval request") ||
-    message.includes("unknown pending permission request")
-  );
-}
-
-function isUnknownPendingUserInputRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
-  const error = Cause.squash(cause);
-  if (Schema.is(ProviderAdapterRequestError)(error)) {
-    return error.detail.toLowerCase().includes("unknown pending user-input request");
-  }
-  return Cause.pretty(cause).toLowerCase().includes("unknown pending user-input request");
-}
-
-function isStaleCodexResumeError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("thread/resume") &&
-    (normalized.includes("no rollout found") ||
-      normalized.includes("thread not found") ||
-      normalized.includes("missing thread") ||
-      normalized.includes("unknown thread"))
-  );
-}
-
-function isRollbackStillInProgressError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("rollback") &&
-    (normalized.includes("turn is in progress") ||
-      normalized.includes("turn in progress") ||
-      normalized.includes("active turn"))
-  );
-}
-
-function stalePendingRequestDetail(
-  requestKind: "approval" | "user-input",
-  requestId: string,
-): string {
-  return `Stale pending ${requestKind} request: ${requestId}. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.`;
-}
-
-function buildGeneratedWorktreeBranchName(raw: string): string {
-  const normalized = raw
-    .trim()
-    .toLowerCase()
-    .replace(/^refs\/heads\//, "")
-    .replace(/['"`]/g, "");
-
-  const withoutPrefix = normalized.replace(/^(synara|dpcode|t3code)\//, "");
-
-  const branchFragment = withoutPrefix
-    .replace(/[^a-z0-9/_-]+/g, "-")
-    .replace(/\/+/g, "/")
-    .replace(/-+/g, "-")
-    .replace(/^[./_-]+|[./_-]+$/g, "")
-    .slice(0, 64)
-    .replace(/[./_-]+$/g, "");
-
-  const safeFragment = branchFragment.length > 0 ? branchFragment : "update";
-  return `${WORKTREE_BRANCH_PREFIX}/${safeFragment}`;
-}
-
-function hasDedicatedTextGenerationProvider(provider: ProviderKind | undefined): boolean {
-  return (
-    provider === "codex" || provider === "cursor" || provider === "kilo" || provider === "opencode"
-  );
-}
+export { normalizeSkillMentionTextForProvider } from "./ProviderCommandReactor.helpers.ts";
 
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
@@ -1124,7 +950,7 @@ const make = Effect.gen(function* () {
         ? buildPriorTranscriptBootstrapText(thread, input.messageId, availableBootstrapChars)
         : null;
     const boundaryMessageText = thread.sidechatSourceThreadId
-      ? wrapSidechatInput(input.messageText)
+      ? wrapSidechatInput(input.messageText, SIDECHAT_BOUNDARY_INSTRUCTION)
       : input.messageText;
     const providerInput = handoffBootstrapText
       ? `<handoff_context>\n${handoffBootstrapText}\n</handoff_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
