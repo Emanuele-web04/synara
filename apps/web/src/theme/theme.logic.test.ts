@@ -20,6 +20,7 @@ import {
   setThemeCodeThemeId,
   updateThemePackFromShareString,
 } from "./theme.logic";
+import { DEFAULT_MONOSPACE_FONT_FAMILY_STACK } from "../lib/fontFamily";
 
 const PROVIDED_THEME_STRING =
   'codex-theme-v1:{"codeThemeId":"linear","theme":{"accent":"#606acc","contrast":30,"fonts":{"code":"\\"Jetbrains Mono\\"","ui":"Inter"},"ink":"#e3e4e6","opaqueWindows":true,"semanticColors":{"diffAdded":"#69c967","diffRemoved":"#ff7e78","skill":"#c2a1ff"},"surface":"#0f0f11"},"variant":"dark"}';
@@ -298,7 +299,9 @@ describe("buildThemeCssVariables", () => {
     expect(cssVariables.variables["--sidebar-accent"]).toBe("rgba(227, 228, 230, 0.058)");
     expect(cssVariables.variables["--sidebar-accent-active"]).toBe("rgba(227, 228, 230, 0.058)");
     expect(cssVariables.variables["--theme-font-ui-family"]).toBe("Inter");
-    expect(cssVariables.variables["--theme-font-code-family"]).toBe('"Jetbrains Mono"');
+    expect(cssVariables.variables["--theme-font-code-family"]).toBe(
+      `"Jetbrains Mono", ${DEFAULT_MONOSPACE_FONT_FAMILY_STACK}`,
+    );
     expect(cssVariables.variables["--vscode-terminal-ansiBlue"]).toBe("#606acc");
     expect(cssVariables.variables["--vscode-terminal-ansiGreen"]).toBe("#56a554");
     expect(cssVariables.variables["--vscode-terminal-ansiMagenta"]).toBe("#c2a1ff");

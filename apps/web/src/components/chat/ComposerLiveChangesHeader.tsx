@@ -10,7 +10,13 @@ import { pluralize } from "@t3tools/shared/text";
 import { memo } from "react";
 
 import { ChangesIcon } from "~/lib/icons";
+import {
+  ComposerStackedPanelRow,
+  ComposerStackedPanelRowLabel,
+  ComposerStackedPanelRowMain,
+} from "./ComposerStackedPanelContent";
 import { ComposerStackedPanel } from "./ComposerStackedPanel";
+import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME } from "./composerStackedPanelStyles";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { ReviewChangesButton } from "./ReviewChangesButton";
 
@@ -34,22 +40,21 @@ export const ComposerLiveChangesHeader = memo(function ComposerLiveChangesHeader
   }
 
   return (
-    <ComposerStackedPanel
-      attachedToPrevious={attachedToPrevious}
-      className="flex items-center gap-2 px-3 pt-2.5 pb-2.5 text-[12px]"
-    >
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <ChangesIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground-secondary)]" />
-        <span className="truncate font-medium text-foreground/85">
-          {`${fileCount} ${pluralize(fileCount, "file")} changed`}
-        </span>
-        {additions + deletions > 0 ? (
-          <span className="shrink-0 tabular-nums">
-            <DiffStatLabel additions={additions} deletions={deletions} />
-          </span>
-        ) : null}
-      </div>
-      <ReviewChangesButton onClick={onReview} />
+    <ComposerStackedPanel attachedToPrevious={attachedToPrevious}>
+      <ComposerStackedPanelRow>
+        <ComposerStackedPanelRowMain>
+          <ChangesIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
+          <ComposerStackedPanelRowLabel>
+            {`${fileCount} ${pluralize(fileCount, "file")} changed`}
+          </ComposerStackedPanelRowLabel>
+          {additions + deletions > 0 ? (
+            <span className="shrink-0 tabular-nums">
+              <DiffStatLabel additions={additions} deletions={deletions} />
+            </span>
+          ) : null}
+        </ComposerStackedPanelRowMain>
+        <ReviewChangesButton onClick={onReview} />
+      </ComposerStackedPanelRow>
     </ComposerStackedPanel>
   );
 });

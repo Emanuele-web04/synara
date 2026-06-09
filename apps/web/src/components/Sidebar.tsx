@@ -221,6 +221,7 @@ import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "
 import { isNonEmpty as isNonEmptyString } from "effect/String";
 import {
   describeAddProjectError,
+  buildSettingsBackAvailableThreadIds,
   buildProjectThreadTree,
   derivePinnedProjectIdsForSidebar,
   deriveSidebarProjectData,
@@ -2117,7 +2118,10 @@ export default function Sidebar() {
       sortThreadsForSidebar(sidebarThreads, appSettings.sidebarThreadSortOrder)[0] ?? null;
     return resolveSettingsBackTarget({
       lastThreadRoute,
-      availableThreadIds: new Set(Object.keys(sidebarThreadSummaryById)),
+      availableThreadIds: buildSettingsBackAvailableThreadIds({
+        sidebarThreadSummaryById,
+        draftThreadsByThreadId,
+      }),
       availableSplitViewIds: new Set(
         Object.keys(splitViewsById).filter((splitViewId) => splitViewsById[splitViewId]),
       ),
@@ -2126,6 +2130,7 @@ export default function Sidebar() {
   }, [
     appSettings.sidebarThreadSortOrder,
     lastThreadRoute,
+    draftThreadsByThreadId,
     sidebarThreadSummaryById,
     sidebarThreads,
     splitViewsById,

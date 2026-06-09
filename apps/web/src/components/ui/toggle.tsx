@@ -25,7 +25,8 @@ const toggleVariants = cva(
         ),
       },
       variant: {
-        default: "border-transparent",
+        default:
+          "border-[color:var(--color-border-light)] bg-[var(--color-background-control-opaque)]",
         outline:
           "border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] dark:data-pressed:bg-[var(--color-background-button-secondary)] dark:hover:bg-[var(--color-background-button-secondary-hover)]",
       },

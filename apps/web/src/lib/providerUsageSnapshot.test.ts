@@ -7,9 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { isProviderUsageSnapshotNonOk } from "./providerUsageSnapshot";
 
-function snapshot(
-  input: Partial<ServerProviderUsageSnapshot> = {},
-): ServerProviderUsageSnapshot {
+function snapshot(input: Partial<ServerProviderUsageSnapshot> = {}): ServerProviderUsageSnapshot {
   return {
     provider: "claudeAgent",
     updatedAt: "2026-06-09T12:00:00.000Z",

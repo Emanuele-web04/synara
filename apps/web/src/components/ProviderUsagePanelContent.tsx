@@ -29,6 +29,7 @@ export const ProviderUsagePanelContent = memo(function ProviderUsagePanelContent
   learnMoreHref?: string | null | undefined;
   showUsageLines?: boolean | undefined;
   showTitle?: boolean | undefined;
+  showLearnMore?: boolean | undefined;
   className?: string | undefined;
 }) {
   const visibleRows = useMemo(
@@ -68,7 +69,7 @@ export const ProviderUsagePanelContent = memo(function ProviderUsagePanelContent
             : "No local usage data was found yet."}
         </p>
       ) : null}
-      {learnMoreHref ? (
+      {props.showLearnMore === true && learnMoreHref ? (
         <a
           href={learnMoreHref}
           target="_blank"

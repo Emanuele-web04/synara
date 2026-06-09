@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildSettingsBackAvailableThreadIds,
   buildProjectThreadTree,
   derivePinnedProjectIdsForSidebar,
   derivePinnedThreadIdsForSidebar,
@@ -167,6 +168,30 @@ describe("resolveSidebarNewThreadEnvMode", () => {
 });
 
 describe("resolveSettingsBackTarget", () => {
+  it("keeps fresh draft chats available as settings back targets", () => {
+    const availableThreadIds = buildSettingsBackAvailableThreadIds({
+      sidebarThreadSummaryById: {
+        "thread-latest": {},
+      },
+      draftThreadsByThreadId: {
+        "thread-draft": {},
+      },
+    });
+
+    expect(
+      resolveSettingsBackTarget({
+        lastThreadRoute: {
+          threadId: "thread-draft",
+        },
+        availableThreadIds,
+        latestThreadId: "thread-latest",
+      }),
+    ).toEqual({
+      kind: "thread",
+      threadId: "thread-draft",
+    });
+  });
+
   it("returns the remembered live thread route", () => {
     expect(
       resolveSettingsBackTarget({

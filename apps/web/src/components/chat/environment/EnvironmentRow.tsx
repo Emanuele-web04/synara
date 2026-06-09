@@ -60,6 +60,25 @@ export function EnvironmentSectionLabel({ children }: { children: ReactNode }) {
   return <p className={ENVIRONMENT_PANEL_SECTION_LABEL_CLASS_NAME}>{children}</p>;
 }
 
+/** Section label plus one or more rows beneath it — shared by Editor, Usage, Repository, etc. */
+export function EnvironmentLabeledSection({
+  label,
+  children,
+}: {
+  label: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <>
+      <EnvironmentSectionDivider />
+      <div className="flex flex-col gap-0.5">
+        <EnvironmentSectionLabel>{label}</EnvironmentSectionLabel>
+        {children}
+      </div>
+    </>
+  );
+}
+
 /**
  * Collapsible section: a folder-style header (rotating chevron + section label) that shows or
  * hides its children, mirroring the sidebar's project/thread-list disclosure. Built on the shared

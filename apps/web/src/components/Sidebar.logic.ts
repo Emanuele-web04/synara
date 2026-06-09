@@ -194,6 +194,29 @@ export type SettingsBackTarget =
       kind: "home";
     };
 
+export function buildSettingsBackAvailableThreadIds(input: {
+  sidebarThreadSummaryById: Readonly<Record<string, unknown>>;
+  draftThreadsByThreadId: Readonly<Record<string, unknown>>;
+}): ReadonlySet<string> {
+  const availableThreadIds = new Set<string>();
+
+  for (const threadId of Object.keys(input.sidebarThreadSummaryById)) {
+    if (threadId.length > 0) {
+      availableThreadIds.add(threadId);
+    }
+  }
+
+  // Settings can be opened from a fresh unsent chat, which has a route id but
+  // no persisted sidebar summary yet. Keep that draft route as a valid return target.
+  for (const threadId of Object.keys(input.draftThreadsByThreadId)) {
+    if (threadId.length > 0) {
+      availableThreadIds.add(threadId);
+    }
+  }
+
+  return availableThreadIds;
+}
+
 export function resolveSettingsBackTarget(input: {
   lastThreadRoute: LastThreadRoute | null;
   availableThreadIds: ReadonlySet<string>;

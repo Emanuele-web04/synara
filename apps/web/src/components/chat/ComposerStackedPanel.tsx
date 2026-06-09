@@ -7,9 +7,9 @@ import { memo, type HTMLAttributes, type ReactNode, type Ref } from "react";
 
 import { cn } from "~/lib/utils";
 import { ComposerStackedHeaderFrame } from "./ComposerColumnFrame";
-import { COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME } from "./composerPickerStyles";
+import { COMPOSER_STACKED_PANEL_CHROME_CLASS_NAME } from "./composerStackedPanelStyles";
 
-export const COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME = `border-t ${COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME}`;
+export { COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME } from "./composerStackedPanelStyles";
 
 interface ComposerStackedPanelProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
@@ -34,11 +34,7 @@ export const ComposerStackedPanel = memo(function ComposerStackedPanel({
       ref={ref}
       passthroughSideMargins={passthroughSideMargins}
       data-composer-stacked-attached={attachedToPrevious ? "true" : undefined}
-      className={cn(
-        "chat-composer-surface chat-composer-stacked-top relative z-[1] overflow-hidden border border-b-0",
-        COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME,
-        className,
-      )}
+      className={cn(COMPOSER_STACKED_PANEL_CHROME_CLASS_NAME, className)}
       {...rest}
     >
       {children}

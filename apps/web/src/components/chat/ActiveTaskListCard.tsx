@@ -16,7 +16,18 @@ import type { ActiveTaskListState } from "../../session-logic";
 import { BotIcon, CheckIcon, LoaderIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
+import {
+  ComposerStackedPanelHeaderRow,
+  ComposerStackedPanelRowLabel,
+  ComposerStackedPanelRowMain,
+} from "./ComposerStackedPanelContent";
 import { COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME } from "./ComposerStackedPanel";
+import {
+  COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME,
+  COMPOSER_STACKED_PANEL_FOOTER_ROW_CLASS_NAME,
+  COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME,
+  COMPOSER_STACKED_PANEL_ICON_CLASS_NAME,
+} from "./composerStackedPanelStyles";
 
 interface ActiveTaskListCardProps {
   activeTaskList: ActiveTaskListState;
@@ -51,23 +62,23 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
 
   return (
     <>
-      <div className="flex items-center justify-between gap-2 px-3 pt-2.5 pb-2">
-        <div className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground/80">
+      <ComposerStackedPanelHeaderRow>
+        <ComposerStackedPanelRowMain>
           {compact && hasInProgressTask ? (
-            <LoaderIcon className="size-3.5 shrink-0 animate-spin" />
+            <LoaderIcon className={cn(COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, "animate-spin")} />
           ) : (
-            <PiSlidersHorizontal className="size-3.5 shrink-0" />
+            <PiSlidersHorizontal className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
           )}
-          <span className="truncate">
+          <ComposerStackedPanelRowLabel tone="meta">
             {completedCount} out of {totalCount} tasks completed
-          </span>
-        </div>
+          </ComposerStackedPanelRowLabel>
+        </ComposerStackedPanelRowMain>
         <div className="flex shrink-0 items-center gap-0.5">
           <Button
             type="button"
             variant="ghost"
             size="icon-xs"
-            className="size-5 rounded-md text-[var(--color-text-foreground-tertiary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
+            className={COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME}
             onClick={onOpenSidebar}
             aria-label="Open tasks sidebar"
             title="Open tasks sidebar"
@@ -78,7 +89,7 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
             type="button"
             variant="ghost"
             size="icon-xs"
-            className="size-5 rounded-md text-[var(--color-text-foreground-tertiary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
+            className={COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME}
             onClick={() => onCompactChange(!compact)}
             aria-label={compact ? "Expand task banner" : "Collapse task banner"}
             title={compact ? "Expand task banner" : "Collapse task banner"}
@@ -90,11 +101,11 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
             )}
           </Button>
         </div>
-      </div>
+      </ComposerStackedPanelHeaderRow>
 
       {compact ? null : (
         <>
-          <ol className="space-y-0 px-3 pb-2.5">
+          <ol className={cn("space-y-0", COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME)}>
             {activeTaskList.tasks.map((task, index) => {
               const occurrence = (taskOccurrenceCount.get(task.task) ?? 0) + 1;
               taskOccurrenceCount.set(task.task, occurrence);
@@ -132,7 +143,7 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
           {backgroundTaskCount > 0 ? (
             <div
               className={cn(
-                "flex items-center justify-between gap-2 px-3 pt-2 pb-2 text-[11px] text-muted-foreground/70",
+                COMPOSER_STACKED_PANEL_FOOTER_ROW_CLASS_NAME,
                 COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME,
               )}
             >

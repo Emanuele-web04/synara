@@ -1589,6 +1589,14 @@ function SettingsRouteView() {
       <div ref={environmentPanelRef} id={SETTINGS_TARGETS.environmentPanel}>
         <SettingsSection title="Environment panel">
           {renderBooleanSettingRow({
+            settingKey: "showEnvironmentUsage",
+            title: "Usage",
+            description: "Show the provider usage row in the chat Environment panel.",
+            resetLabel: "usage section",
+            ariaLabel: "Show the Usage section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
             settingKey: "showEnvironmentRepository",
             title: "Repository",
             description:

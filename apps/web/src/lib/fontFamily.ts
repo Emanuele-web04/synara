@@ -1,9 +1,12 @@
 // FILE: fontFamily.ts
 // Purpose: Convert user-entered font family names into valid CSS font-family values.
 // Layer: Web appearance utilities
-// Exports: normalizeFontFamilyCssValue
+// Exports: font family normalization helpers
 
 const CSS_WIDE_KEYWORDS = new Set(["inherit", "initial", "revert", "revert-layer", "unset"]);
+
+export const DEFAULT_MONOSPACE_FONT_FAMILY_STACK =
+  '"JetBrains Mono Variable", "JetBrains Mono", "SF Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace';
 
 const GENERIC_FONT_FAMILIES = new Set([
   "cursive",
@@ -88,6 +91,22 @@ function normalizeSingleFontFamily(family: string): string {
   return /\s/.test(trimmedFamily) ? quoteFontFamily(trimmedFamily) : trimmedFamily;
 }
 
+function unquoteFontFamily(family: string): string {
+  const trimmedFamily = family.trim();
+  const quote = trimmedFamily[0];
+  if ((quote === '"' || quote === "'") && trimmedFamily.endsWith(quote)) {
+    return trimmedFamily.slice(1, -1);
+  }
+
+  return trimmedFamily;
+}
+
+function hasGenericFontFamily(value: string): boolean {
+  return splitFontFamilyList(value).some((family) =>
+    GENERIC_FONT_FAMILIES.has(unquoteFontFamily(family).toLowerCase()),
+  );
+}
+
 export function normalizeFontFamilyCssValue(value: string | null | undefined): string | null {
   const trimmedValue = value?.trim() ?? "";
   if (trimmedValue.length === 0) {
@@ -95,4 +114,18 @@ export function normalizeFontFamilyCssValue(value: string | null | undefined): s
   }
 
   return splitFontFamilyList(trimmedValue).map(normalizeSingleFontFamily).join(", ");
+}
+
+// Keeps theme-provided code fonts from falling through to the browser's serif default.
+export function normalizeMonospaceFontFamilyCssValue(
+  value: string | null | undefined,
+): string | null {
+  const normalizedValue = normalizeFontFamilyCssValue(value);
+  if (normalizedValue === null || CSS_WIDE_KEYWORDS.has(normalizedValue.toLowerCase())) {
+    return normalizedValue;
+  }
+
+  return hasGenericFontFamily(normalizedValue)
+    ? normalizedValue
+    : `${normalizedValue}, ${DEFAULT_MONOSPACE_FONT_FAMILY_STACK}`;
 }

@@ -12,6 +12,7 @@ import type {
   EditorId,
   MessageId,
   PinnedMessage,
+  ProviderKind,
   ResolvedKeybindingsConfig,
   ThreadId,
   ThreadMarker,
@@ -34,6 +35,7 @@ import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/i
 import { cn } from "~/lib/utils";
 
 import { EnvironmentEditorSection } from "./EnvironmentEditorSection";
+import { EnvironmentUsageSection } from "./EnvironmentUsageSection";
 import { EnvironmentLocalServersSection } from "./EnvironmentLocalServersSection";
 import { EnvironmentMarkersSection } from "./EnvironmentMarkersSection";
 import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
@@ -42,10 +44,10 @@ import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "./environmentPanelS
 import {
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
   EnvironmentCollapsibleSection,
+  EnvironmentLabeledSection,
   EnvironmentPanelTitle,
   EnvironmentRow,
   EnvironmentSectionDivider,
-  EnvironmentSectionLabel,
 } from "./EnvironmentRow";
 
 // Horizontal space (px) the docked card reserves on the right edge of the chat area.
@@ -77,6 +79,8 @@ export interface EnvironmentPanelProps {
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   activeThreadId: ThreadId | null;
+  /** Active provider for the usage row (same chip the header used to show). */
+  activeProvider: ProviderKind;
   /** Whether the active runtime exposes git actions (hides "Commit and Push" otherwise). */
   showGitActions: boolean;
   /** Current diff-panel open state, so the "Changes" row reflects/toggles it. */
@@ -169,6 +173,7 @@ export function EnvironmentPanel({
   keybindings,
   availableEditors,
   activeThreadId,
+  activeProvider,
   showGitActions,
   diffOpen,
   diffDisabledReason = null,
@@ -254,24 +259,22 @@ export function EnvironmentPanel({
         actually shows, so toggling any section via the header gear menu never leaves a doubled or
         dangling rule. Visibility is gated on the per-section AppSettings flags.
       */}
+      {settings.showEnvironmentUsage ? (
+        <EnvironmentUsageSection provider={activeProvider} />
+      ) : null}
+
       {settings.showEnvironmentRepository && githubRepository && onOpenGithubRepository ? (
-        <>
-          <EnvironmentSectionDivider />
-          <div className="flex flex-col gap-0.5">
-            <EnvironmentSectionLabel>Repository</EnvironmentSectionLabel>
-            <EnvironmentRow
-              icon={<GitHubIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-              label={<span className="truncate">{githubRepository.nameWithOwner}</span>}
-              trailing={
-                <ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />
-              }
-              onClick={() => {
-                onOpenGithubRepository(githubRepository.url);
-                onClose();
-              }}
-            />
-          </div>
-        </>
+        <EnvironmentLabeledSection label="Repository">
+          <EnvironmentRow
+            icon={<GitHubIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+            label={<span className="truncate">{githubRepository.nameWithOwner}</span>}
+            trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+            onClick={() => {
+              onOpenGithubRepository(githubRepository.url);
+              onClose();
+            }}
+          />
+        </EnvironmentLabeledSection>
       ) : null}
 
       {settings.showEnvironmentEditor ? (

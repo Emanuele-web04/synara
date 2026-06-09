@@ -12,9 +12,7 @@ import type { ProviderRateLimit } from "~/lib/rateLimits";
 import { serverQueryKeys } from "~/lib/serverReactQuery";
 import { useProviderUsageSummary } from "./useProviderUsageSummary";
 
-function snapshot(
-  input: Partial<ServerProviderUsageSnapshot> = {},
-): ServerProviderUsageSnapshot {
+function snapshot(input: Partial<ServerProviderUsageSnapshot> = {}): ServerProviderUsageSnapshot {
   return {
     provider: "claudeAgent",
     updatedAt: "2026-06-09T12:00:00.000Z",
@@ -50,10 +48,14 @@ function readProviderUsageSummary(input: {
   threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
   providerSnapshot?: ServerProviderUsageSnapshot | undefined;
 }) {
-  let summary: ReturnType<typeof useProviderUsageSummary> | null = null;
+  // Capture into a ref-style holder: the hook only runs inside the closure, so a
+  // plain `let` would narrow to `never` after the guard (TS can't see <Probe/> run).
+  const captured: { current: ReturnType<typeof useProviderUsageSummary> | null } = {
+    current: null,
+  };
 
   function Probe() {
-    summary = useProviderUsageSummary({
+    captured.current = useProviderUsageSummary({
       provider: "claudeAgent",
       threads: [],
       threadRateLimits: input.threadRateLimits,
@@ -64,10 +66,10 @@ function readProviderUsageSummary(input: {
 
   renderWithQueryClient(input.queryClient, <Probe />);
 
-  if (!summary) {
+  if (!captured.current) {
     throw new Error("Provider usage summary probe did not render.");
   }
-  return summary;
+  return captured.current;
 }
 
 function createQueryClient() {
@@ -86,7 +88,10 @@ describe("useProviderUsageSummary", () => {
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
       snapshot({ status: "needs-auth", detail: "Sign in with claude to see usage." }),
     ]);
-    queryClient.setQueryData(serverQueryKeys.providerUsage("claudeAgent", null), fallbackSnapshot());
+    queryClient.setQueryData(
+      serverQueryKeys.providerUsage("claudeAgent", null),
+      fallbackSnapshot(),
+    );
 
     const summary = readProviderUsageSummary({ queryClient });
 
@@ -97,12 +102,15 @@ describe("useProviderUsageSummary", () => {
   it("still uses local fallback rows when no live snapshot exists", () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
-    queryClient.setQueryData(serverQueryKeys.providerUsage("claudeAgent", null), fallbackSnapshot());
+    queryClient.setQueryData(
+      serverQueryKeys.providerUsage("claudeAgent", null),
+      fallbackSnapshot(),
+    );
 
     const summary = readProviderUsageSummary({ queryClient });
 
     expect(summary.rateLimits).toHaveLength(1);
-    expect(summary.rateLimits[0]?.limits[0]?.window).toBe("Weekly");
+    expect(summary.rateLimits[0]?.limits?.[0]?.window).toBe("Weekly");
     expect(summary.usageLines).toEqual([
       { label: "24h", value: "123M tokens", subtitle: "12 recent sessions" },
     ]);
@@ -138,7 +146,10 @@ describe("useProviderUsageSummary", () => {
   it("does not show fallback rows when an explicit provider card snapshot is non-ok", () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
-    queryClient.setQueryData(serverQueryKeys.providerUsage("claudeAgent", null), fallbackSnapshot());
+    queryClient.setQueryData(
+      serverQueryKeys.providerUsage("claudeAgent", null),
+      fallbackSnapshot(),
+    );
 
     const summary = readProviderUsageSummary({
       queryClient,

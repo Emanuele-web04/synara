@@ -19,8 +19,6 @@ import { TbExchange } from "react-icons/tb";
 import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
 import { ArrowRightIcon, HandoffIcon, PanelRightCloseIcon, TerminalIcon, XIcon } from "~/lib/icons";
-import { useAppSettings } from "~/appSettings";
-import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
 import {
   CHAT_HEADER_TOGGLE_CLASS_NAME,
   ChatHeaderButton,
@@ -41,14 +39,8 @@ import { cn } from "~/lib/utils";
 import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
 import { useOpenFavoriteEditorShortcut } from "~/hooks/useOpenFavoriteEditorShortcut";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
-import {
-  deriveProviderUsageDisplayRows,
-  selectPrimaryProviderUsageDisplayRow,
-} from "~/lib/providerUsageDisplay";
-import { useStore } from "~/store";
-import { createAllThreadsSelector } from "~/storeSelectors";
 import { ProviderIcon } from "../ProviderIcon";
-import { ProviderUsagePanelContent } from "../ProviderUsagePanelContent";
+import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
 
 /**
@@ -57,65 +49,6 @@ import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/En
  * for any layout that narrows the chat column (split chat, right dock, small window).
  */
 const HEADER_COMPACT_BREAKPOINT = 700;
-
-function ModelUsageHeaderChip({ provider }: { provider: ProviderKind }) {
-  const { settings } = useAppSettings();
-  const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
-  const threads = useStore(selectAllThreads);
-  const usageSummary = useProviderUsageSummary({
-    provider,
-    threads,
-    codexHomePath: settings.codexHomePath || null,
-  });
-  const usageRows = useMemo(
-    () => deriveProviderUsageDisplayRows(usageSummary.rateLimits),
-    [usageSummary.rateLimits],
-  );
-  const primaryRow = useMemo(() => selectPrimaryProviderUsageDisplayRow(usageRows), [usageRows]);
-
-  if (!primaryRow) {
-    return null;
-  }
-
-  const menuTitle = `${PROVIDER_DISPLAY_NAMES[provider]} usage`;
-
-  return (
-    <Menu modal={false}>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <MenuTrigger
-              render={
-                <ChatHeaderButton
-                  type="button"
-                  tone="plain"
-                  className="gap-1.5 px-2"
-                  aria-label={menuTitle}
-                />
-              }
-            >
-              <ProviderIcon provider={provider} tone="header" className="size-3.5 shrink-0" />
-              <span className="truncate font-normal">{primaryRow.remainingLabel}</span>
-            </MenuTrigger>
-          }
-        />
-        <TooltipPopup side="bottom">{menuTitle}</TooltipPopup>
-      </Tooltip>
-      <ComposerPickerMenuPopup align="end" side="bottom" className="w-64 min-w-64">
-        <ProviderUsagePanelContent
-          provider={provider}
-          rateLimits={usageSummary.rateLimits}
-          usageLines={usageSummary.usageLines}
-          isLoading={usageSummary.isLoading}
-          learnMoreHref={usageSummary.learnMoreHref}
-          showUsageLines={false}
-          showTitle={false}
-          className="px-2 pb-1 pt-1"
-        />
-      </ComposerPickerMenuPopup>
-    </Menu>
-  );
-}
 
 interface ChatHeaderProps {
   activeThreadId: ThreadId;
@@ -425,8 +358,8 @@ export const ChatHeader = memo(function ChatHeader({
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
-        {!isDisposableThread && !hideHandoffControls ? (
-          <ModelUsageHeaderChip provider={activeProvider} />
+        {!isDisposableThread && !hideHandoffControls && !environment ? (
+          <ProviderUsageMenuControl provider={activeProvider} />
         ) : null}
         {!isDisposableThread && !hideHandoffControls ? (
           <Menu modal={false}>

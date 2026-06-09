@@ -145,9 +145,9 @@ function missingSnapshot(provider: ProviderKind): ServerProviderUsageSnapshot {
 }
 
 function mergeProviderUsageRefresh(
-  previous: ServerProviderUsageSnapshot[] | undefined,
-  next: ServerProviderUsageSnapshot[],
-): ServerProviderUsageSnapshot[] {
+  previous: readonly ServerProviderUsageSnapshot[] | undefined,
+  next: readonly ServerProviderUsageSnapshot[],
+): readonly ServerProviderUsageSnapshot[] {
   if (!previous) {
     return next;
   }
@@ -169,7 +169,7 @@ export function ProviderUsageSettingsPanel() {
   const refreshMutation = useMutation({
     mutationFn: () => fetchAllProviderUsage({ forceRefresh: true }),
     onSuccess: (data) => {
-      queryClient.setQueryData<ServerProviderUsageSnapshot[]>(
+      queryClient.setQueryData<readonly ServerProviderUsageSnapshot[]>(
         serverQueryKeys.allProviderUsage(),
         (previous) => mergeProviderUsageRefresh(previous, data),
       );

@@ -210,6 +210,59 @@ const GROK_BUILD_CAPABILITIES: ModelCapabilities = {
   contextWindowOptions: [],
 };
 
+// Shared Claude building blocks. Capability shapes repeat across Claude
+// generations, so declare them once and let each model entry override only the
+// fields that genuinely differ (mirrors the CODEX_GPT_5_* pattern above).
+const CLAUDE_DUAL_CONTEXT_WINDOW: readonly ContextWindowOption[] = [
+  { value: "200k", label: "200k", isDefault: true },
+  { value: "1m", label: "1M" },
+];
+
+// Fable 5: full effort ladder + ultracode, but no ultrathink or fast mode.
+const CLAUDE_FABLE_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium" },
+    { value: "high", label: "High", isDefault: true },
+    { value: "xhigh", label: "Extra High" },
+    { value: "max", label: "Max" },
+    { value: "ultracode", label: "Ultracode", description: "xhigh + workflows" },
+  ],
+  supportsFastMode: false,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+  contextWindowOptions: CLAUDE_DUAL_CONTEXT_WINDOW,
+};
+
+// Full reasoning ladder: xhigh + ultracode + ultrathink (Opus 4.7/4.8).
+const CLAUDE_FLAGSHIP_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium" },
+    { value: "high", label: "High", isDefault: true },
+    { value: "xhigh", label: "Extra High" },
+    { value: "max", label: "Max" },
+    { value: "ultrathink", label: "Ultrathink" },
+    { value: "ultracode", label: "Ultracode" },
+  ],
+  supportsFastMode: true,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: ["ultrathink"],
+  contextWindowOptions: CLAUDE_DUAL_CONTEXT_WINDOW,
+};
+
+// Reasoning ladder before xhigh/ultracode landed (Opus 4.6, Sonnet 4.6).
+const CLAUDE_EXTENDED_THINKING_CAPABILITIES: ModelCapabilities = {
+  ...CLAUDE_FLAGSHIP_CAPABILITIES,
+  reasoningEffortLevels: [
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium" },
+    { value: "high", label: "High", isDefault: true },
+    { value: "max", label: "Max" },
+    { value: "ultrathink", label: "Ultrathink" },
+  ],
+};
+
 type ModelDefinition = {
   readonly slug: string;
   readonly name: string;
@@ -260,68 +313,24 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   ],
   claudeAgent: [
     {
+      slug: "claude-fable-5",
+      name: "Claude Fable 5",
+      capabilities: CLAUDE_FABLE_CAPABILITIES,
+    },
+    {
       slug: "claude-opus-4-8",
       name: "Claude Opus 4.8",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "xhigh", label: "Extra High" },
-          { value: "max", label: "Max" },
-          { value: "ultrathink", label: "Ultrathink" },
-          { value: "ultracode", label: "Ultracode" },
-        ],
-        supportsFastMode: true,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: ["ultrathink"],
-        contextWindowOptions: [
-          { value: "200k", label: "200k", isDefault: true },
-          { value: "1m", label: "1M" },
-        ],
-      },
+      capabilities: CLAUDE_FLAGSHIP_CAPABILITIES,
     },
     {
       slug: "claude-opus-4-7",
       name: "Claude Opus 4.7",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "xhigh", label: "Extra High" },
-          { value: "max", label: "Max" },
-          { value: "ultrathink", label: "Ultrathink" },
-          { value: "ultracode", label: "Ultracode" },
-        ],
-        supportsFastMode: true,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: ["ultrathink"],
-        contextWindowOptions: [
-          { value: "200k", label: "200k", isDefault: true },
-          { value: "1m", label: "1M" },
-        ],
-      },
+      capabilities: CLAUDE_FLAGSHIP_CAPABILITIES,
     },
     {
       slug: "claude-opus-4-6",
       name: "Claude Opus 4.6",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "max", label: "Max" },
-          { value: "ultrathink", label: "Ultrathink" },
-        ],
-        supportsFastMode: true,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: ["ultrathink"],
-        contextWindowOptions: [
-          { value: "200k", label: "200k", isDefault: true },
-          { value: "1m", label: "1M" },
-        ],
-      },
+      capabilities: CLAUDE_EXTENDED_THINKING_CAPABILITIES,
     },
     {
       slug: "claude-opus-4-5",
@@ -335,31 +344,13 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: false,
         supportsThinkingToggle: false,
         promptInjectedEffortLevels: [],
-        contextWindowOptions: [
-          { value: "200k", label: "200k", isDefault: true },
-          { value: "1m", label: "1M" },
-        ],
+        contextWindowOptions: CLAUDE_DUAL_CONTEXT_WINDOW,
       },
     },
     {
       slug: "claude-sonnet-4-6",
       name: "Claude Sonnet 4.6",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "max", label: "Max" },
-          { value: "ultrathink", label: "Ultrathink" },
-        ],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: ["ultrathink"],
-        contextWindowOptions: [
-          { value: "200k", label: "200k", isDefault: true },
-          { value: "1m", label: "1M" },
-        ],
-      },
+      capabilities: { ...CLAUDE_EXTENDED_THINKING_CAPABILITIES, supportsFastMode: false },
     },
     {
       slug: "claude-haiku-4-5",
@@ -579,6 +570,8 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "gpt-5.3-spark": "gpt-5.3-codex-spark",
   },
   claudeAgent: {
+    fable: "claude-fable-5",
+    "fable-5": "claude-fable-5",
     opus: "claude-opus-4-8",
     "opus-4.8": "claude-opus-4-8",
     "claude-opus-4.8": "claude-opus-4-8",

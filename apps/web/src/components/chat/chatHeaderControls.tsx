@@ -99,7 +99,7 @@ export const CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME =
 
 /**
  * Shared flat "chip" skin for the header diff toggle and the right-dock tabs so
- * the two read as the exact same control: 28px tall, lg radius, no border, ui-sm
+ * the two read as the exact same control: 28px tall, lg radius, ui-sm
  * muted text that brightens + fills on hover, with a smooth color transition.
  * The active (pressed/selected) background is layered on per call site because
  * the mechanism differs (Toggle `data-pressed` vs the dock tab's `active` flag),
@@ -107,7 +107,7 @@ export const CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME =
  */
 export const CHAT_SURFACE_CHIP_CLASS_NAME = cn(
   CHAT_HEADER_CONTROL_CLASS_NAME,
-  "gap-1.5 border-0 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors",
+  "gap-1.5 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors",
   CHAT_SURFACE_CONTROL_IDLE_TEXT_CLASS_NAME,
   CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
 );
@@ -131,16 +131,16 @@ export function SurfaceChipIcon({
   return <Icon aria-hidden className={cn(CHAT_SURFACE_CHIP_ICON_CLASS_NAME, className)} />;
 }
 
-/** Header diff toggle — shared chip skin + Toggle's pressed text treatment. */
+/** Header diff / environment toggles — chip layout; border lives on Toggle default variant. */
 export const CHAT_HEADER_TOGGLE_CLASS_NAME = cn(
   CHAT_SURFACE_CHIP_CLASS_NAME,
   "data-pressed:text-[var(--color-text-foreground)]",
 );
 
-/** Flat dock tab chip — identical chrome to the header diff toggle. */
+/** Flat dock tab chip — identical chrome to the header diff toggle, without a border. */
 export const DOCK_TAB_CHIP_CLASS_NAME = cn(
   CHAT_SURFACE_CHIP_CLASS_NAME,
-  "inline-flex min-w-0 items-center",
+  "inline-flex min-w-0 items-center border-0",
 );
 
 /** Icon slot for dock tabs — bare larger icon at rest; on hover a circular disc + X appears.
