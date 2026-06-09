@@ -22,6 +22,52 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.1.6",
+    date: "Jun 9",
+    features: [
+      {
+        id: "thread-markers",
+        title: "Transcript markers make long chats easier to navigate",
+        description:
+          "You can now mark important transcript moments, jump back to them, and manage them from the Environment panel without losing your place in busy threads.",
+        details:
+          "Markers now round-trip through orchestration events, projection storage, migrations, shared validation helpers, transcript selection actions, highlighted markdown spans, marker-aware scrolling, and focused browser/unit coverage.",
+      },
+      {
+        id: "link-favicons",
+        title: "Links show real site identity",
+        description:
+          "AI response links, source lists, composer chips, and sent user bubbles now share the same link parsing path with website favicons instead of generic globe icons.",
+        details:
+          "Synara now caches site favicons server-side, serves authenticated favicon image URLs, recognizes bare domains in composer text, and keeps markdown link text aligned with the same medium-weight chip styling used while composing.",
+      },
+      {
+        id: "local-server-environment",
+        title: "Local dev servers are easier to spot",
+        description:
+          "The Environment panel can now show local servers tied to the current project, with clearer browser/terminal identity and controls for tracked project runs.",
+        details:
+          "The server now monitors listening processes with address-family metadata, tracks project-run ownership, syncs local server state over WebSocket/RPC contracts, and adds sidebar/project-run affordances for starting, viewing, and stopping dev servers.",
+      },
+      {
+        id: "transcript-scroll-reliability",
+        title: "Transcript scrolling is calmer",
+        description:
+          "Collapsed work sections no longer drag the transcript tail, marker navigation is more predictable, and thread rendering does less surprising work while sessions update.",
+        details:
+          "The timeline path now separates marker scroll behavior from live-output sticking, avoids retriggering tail scrolls for collapsed work disclosure changes, and has extra coverage around marker selection, rendering, and scrolling.",
+      },
+      {
+        id: "orchestration-and-keybindings",
+        title: "Small orchestration and shortcut fixes landed too",
+        description:
+          "Thread orchestration, terminal identity, recent view switching, retired-model shortcuts, and local-server cleanup picked up focused reliability fixes.",
+        details:
+          "This release tightens provider/runtime event projection, terminal visual identity, local-server process cleanup, recent-view key handling, and retired model picker shortcuts, with new tests for the affected contracts and stores.",
+      },
+    ],
+  },
+  {
     version: "0.1.5",
     date: "Jun 8",
     features: [

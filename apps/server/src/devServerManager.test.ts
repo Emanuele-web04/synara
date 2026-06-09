@@ -34,7 +34,7 @@ function makeLocalServer(
     displayName: "Vite",
     args: "node ./node_modules/.bin/vite",
     ports: [5173],
-    addresses: [{ host: "127.0.0.1", port: 5173, url: "http://127.0.0.1:5173" }],
+    addresses: [{ host: "127.0.0.1", port: 5173, url: "http://127.0.0.1:5173", family: "tcp4" }],
     isStoppable: true,
     ...overrides,
   };

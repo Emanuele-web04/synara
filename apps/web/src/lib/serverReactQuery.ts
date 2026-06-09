@@ -98,8 +98,9 @@ export function serverLocalServersQueryOptions(
     },
     enabled,
     staleTime: options.staleTime ?? LOCAL_SERVERS_DEFAULT_STALE_TIME_MS,
-    refetchInterval:
-      enabled ? (options.refetchInterval ?? LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS) : false,
+    refetchInterval: enabled
+      ? (options.refetchInterval ?? LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS)
+      : false,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });

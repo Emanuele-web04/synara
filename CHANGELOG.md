@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.1.6 - 2026-06-09
+
+### Added
+
+- Added transcript text markers with orchestration events, projection persistence, migration `042_ProjectionThreadsMarkers`, shared marker validation, transcript selection actions, marker-aware scrolling, and an Environment panel marker section.
+- Added website favicon support for markdown links, composer/user-bubble link chips, and bare-domain link parsing, backed by a server-side favicon cache and authenticated favicon image route.
+- Added local server monitoring, project-run tracking, local-server Environment panel rows, sidebar/project-run controls, and WebSocket/RPC contracts for listing and stopping tracked dev servers.
+- Added terminal/project visual identity helpers and project-run target/running helpers so local server and terminal surfaces can share clearer labels and icons.
+- Added focused tests for marker round-trips, marker scrolling, local server monitoring, project run targets, terminal visual identity, favicon parsing/cache behavior, and link chip parsing.
+
+### Changed
+
+- Refined transcript rendering and timeline behavior so marker navigation, markdown highlights, collapsed work disclosures, and auto-scroll follow logic are less likely to fight each other.
+- Unified link rendering across AI responses, composer chips, and sent user bubbles so site identity, favicon fallback, alignment, and medium-weight text stay consistent.
+- Reworked local-server discovery around listener address-family metadata, project ownership matching, and tracked PTY/dev-server state.
+- Refined recent view switching, browser panel identity, terminal chrome sizing, and local server display state around project-aware surfaces.
+- Tightened orchestration projection and provider/runtime handling around markers, thread updates, local server state, and terminal/runtime cleanup.
+
+### Fixed
+
+- Fixed retired model picker keybindings so shortcuts keep working when hidden/retired model entries are present.
+- Fixed collapsed work disclosures retriggering tail-scroll behavior after output had already settled.
+- Fixed formatter drift in `apps/server/src/wsRpc.ts` and `apps/web/src/lib/serverReactQuery.ts`.
+- Fixed the local-server test fixture to include the required listener address `family` field.
+- Fixed bare domains such as `linear.app/...` being ignored by composer/user-bubble link chip parsing while full `https://...` links worked.
+
+### Verification
+
+- `bun run fmt:check` initially failed on `apps/server/src/wsRpc.ts` and `apps/web/src/lib/serverReactQuery.ts`; both files were formatted and the rerun passed.
+- `bun run lint` passed with 145 warnings, 0 errors.
+- `bun run typecheck` initially failed in `apps/server/src/devServerManager.test.ts` because a `ServerLocalServerProcess` fixture lacked `family`; after the fixture fix, `bun run typecheck` passed.
+- `bun run release:smoke` passed.
+- `bun run build` passed.
+- `bun run test` failed in `packages/effect-acp/src/client.test.ts` on `replays buffered notifications to handlers registered after they arrive` with a 5000ms timeout; Turbo canceled the server test package afterward with code 130.
+- `bun run test src/client.test.ts -t "replays buffered notifications to handlers registered after they arrive"` from `packages/effect-acp` passed (1 test passed, 4 skipped).
+- `bun run --cwd apps/server test -- --reporter verbose --maxWorkers=1` passed (112 files passed, 1 skipped; 1108 tests passed, 6 skipped).
+- `bun run test` from `apps/web` passed (140 files passed; 1657 tests passed).
+- `bun run test` from `packages/contracts` passed (9 files passed; 90 tests passed).
+- `bun run test` from `packages/shared` passed (21 files passed; 183 tests passed).
+- `bun run test` from `apps/desktop` passed (18 files passed; 141 tests passed).
+- `bun run test` from `scripts` passed (5 files passed; 36 tests passed).
+- `apps/marketing` has no `test` script.
+- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.1.6`.
+
 ## 0.1.5 - 2026-06-08
 
 ### Added

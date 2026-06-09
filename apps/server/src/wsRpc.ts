@@ -836,10 +836,7 @@ export const makeWsRpcLayer = () =>
             "Failed to list local servers",
           ),
         [WS_METHODS.serverStopLocalServer]: (input) =>
-          rpcEffect(
-            stopLocalServerAndTrackedProjectRun(input),
-            "Failed to stop local server",
-          ),
+          rpcEffect(stopLocalServerAndTrackedProjectRun(input), "Failed to stop local server"),
         [WS_METHODS.serverGetProviderUsageSnapshot]: (input) =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
         [WS_METHODS.serverGetDiagnostics]: () =>
