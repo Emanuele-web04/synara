@@ -10,11 +10,13 @@ import { normalizeProviderKind } from "./modelSelection";
 import type {
   ComposerImageAttachment,
   ComposerThreadDraftState,
+  QueuedComposerTurn,
+} from "../composerDraftStore";
+import type {
   PersistedComposerImageAttachment,
   PersistedComposerThreadDraftState,
   PersistedQueuedComposerTurn,
-  QueuedComposerTurn,
-} from "../composerDraftStore";
+} from "./persistedSchema";
 
 export function hydratePersistedComposerImageAttachment(
   attachment: PersistedComposerImageAttachment,
