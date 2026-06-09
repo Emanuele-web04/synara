@@ -88,7 +88,6 @@ import {
 import { getLocalFolderBrowseRootPath, isLocalFolderMentionQuery } from "~/lib/localFolderMentions";
 import {
   isProviderUsable,
-  normalizeCustomBinaryPath,
   normalizeProviderStatusForLocalConfig,
   providerUnavailableReason,
 } from "~/lib/providerAvailability";
@@ -107,9 +106,18 @@ import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   buildThreadBreadcrumbs,
+  canHandleComposerPickerShortcut,
   enrichSubagentWorkEntries,
+  eventTargetsComposer,
+  getConfirmedCustomBinarySessionKey,
+  getProviderHealthBannerDismissalKey,
+  getProviderStartOptionsCustomBinaryPath,
+  getRateLimitBannerDismissalKey,
+  getThreadProviderCustomBinaryPathKey,
   resolveActiveThreadTitle,
+  resolveCodexSessionPrewarmKey,
   resolveCommittedProviderModel,
+  revokeBlobPreviewUrlsAfterPaint,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
 } from "./ChatView.logic";
@@ -209,12 +217,14 @@ import {
   ChevronRightIcon,
   ComposerSendArrowIcon,
   QueueArrow,
-  RefreshCwIcon,
   XIcon,
 } from "~/lib/icons";
 import { QueuedComposerActions } from "./chat/QueuedComposerActions";
+import {
+  ComposerControlSkeleton,
+  ComposerModelLoadingControl,
+} from "./chat/ComposerLoadingControls";
 import { Button } from "./ui/button";
-import { Skeleton } from "./ui/skeleton";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { disposeAndCloseTerminalSession, randomTerminalId } from "./terminal/terminalSession";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
@@ -349,11 +359,7 @@ import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { ProjectPicker } from "./chat/ProjectPicker";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
-import {
-  RateLimitBanner,
-  deriveLatestRateLimitStatus,
-  type RateLimitStatus,
-} from "./chat/RateLimitBanner";
+import { RateLimitBanner, deriveLatestRateLimitStatus } from "./chat/RateLimitBanner";
 import {
   ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS,
   appendVoiceTranscriptToPrompt,
@@ -420,116 +426,10 @@ const EMPTY_SUGGESTION_SOURCE_THREADS: Thread[] = [];
 const selectEmptyComposerSuggestionThreads: ReturnType<typeof createAllThreadsSelector> = () =>
   EMPTY_SUGGESTION_SOURCE_THREADS;
 
-function revokeBlobPreviewUrlsAfterPaint(previewUrls: readonly string[]): void {
-  if (previewUrls.length === 0 || typeof window === "undefined") {
-    return;
-  }
-  window.requestAnimationFrame(() => {
-    window.setTimeout(() => {
-      for (const previewUrl of previewUrls) {
-        revokeBlobPreviewUrl(previewUrl);
-      }
-    }, 0);
-  });
-}
-
-function eventTargetsComposer(
-  event: globalThis.KeyboardEvent,
-  composerForm: HTMLFormElement | null,
-): boolean {
-  if (!composerForm) return false;
-  const target = event.target;
-  return target instanceof Node ? composerForm.contains(target) : false;
-}
-
-function canHandleComposerPickerShortcut(
-  event: globalThis.KeyboardEvent,
-  composerForm: HTMLFormElement | null,
-): boolean {
-  if (!composerForm) return false;
-  if (eventTargetsComposer(event, composerForm)) return true;
-  const target = event.target;
-  return (
-    target === document.body ||
-    target === document.documentElement ||
-    document.activeElement === document.body ||
-    document.activeElement === document.documentElement
-  );
-}
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 const MAX_DISMISSED_PROVIDER_HEALTH_BANNERS = 50;
-
-function getThreadProviderCustomBinaryPathKey(threadId: Thread["id"], provider: ProviderKind) {
-  return `${threadId}:${provider}`;
-}
-
-function getConfirmedCustomBinarySessionKey(
-  thread: Thread | null | undefined,
-  provider: ProviderKind,
-): string | null {
-  const session = thread?.session;
-  if (!thread || session?.provider !== provider) {
-    return null;
-  }
-  if (session.status !== "ready" && session.status !== "running") {
-    return null;
-  }
-  return getThreadProviderCustomBinaryPathKey(thread.id, provider);
-}
-
-function getProviderStartOptionsCustomBinaryPath(
-  providerOptions: ProviderStartOptions | undefined,
-  provider: ProviderKind,
-): string | null {
-  switch (provider) {
-    case "codex":
-      return normalizeCustomBinaryPath(providerOptions?.codex?.binaryPath);
-    case "claudeAgent":
-      return normalizeCustomBinaryPath(providerOptions?.claudeAgent?.binaryPath);
-    case "gemini":
-      return normalizeCustomBinaryPath(providerOptions?.gemini?.binaryPath);
-    case "grok":
-      return normalizeCustomBinaryPath(providerOptions?.grok?.binaryPath);
-    case "kilo":
-      return normalizeCustomBinaryPath(providerOptions?.kilo?.binaryPath);
-    case "opencode":
-      return normalizeCustomBinaryPath(providerOptions?.opencode?.binaryPath);
-    case "cursor":
-      return normalizeCustomBinaryPath(providerOptions?.cursor?.binaryPath);
-    case "pi":
-      return normalizeCustomBinaryPath(providerOptions?.pi?.binaryPath);
-  }
-}
-
-function getProviderHealthBannerDismissalKey(status: ServerProviderStatus | null): string | null {
-  if (!status || status.status === "ready") {
-    return null;
-  }
-  return [
-    status.provider,
-    status.status,
-    status.available ? "available" : "unavailable",
-    status.authStatus,
-    status.message?.trim() ?? "",
-  ].join("\u001f");
-}
-
-function getRateLimitBannerDismissalKey(
-  status: RateLimitStatus | null,
-  threadId: Thread["id"] | null,
-): string | null {
-  if (!status || !threadId) {
-    return null;
-  }
-  return [
-    threadId,
-    status.status,
-    status.resetsAt ?? "",
-    typeof status.utilization === "number" ? String(Math.round(status.utilization * 100)) : "",
-  ].join("\u001f");
-}
 
 type ComposerPluginSuggestion = {
   plugin: ProviderPluginDescriptor;
@@ -805,35 +705,6 @@ const terminalContextIdListsEqual = (
 ): boolean =>
   contexts.length === ids.length && contexts.every((context, index) => context.id === ids[index]);
 
-function ComposerControlSkeleton(props: { widthClassName: string }) {
-  return (
-    <div
-      aria-hidden="true"
-      className={cn(
-        "flex h-8 shrink-0 items-center rounded-md border border-border/50 px-2",
-        props.widthClassName,
-      )}
-    >
-      <Skeleton className="h-3.5 w-full rounded-full" />
-    </div>
-  );
-}
-
-function ComposerModelLoadingControl(props: { widthClassName: string }) {
-  return (
-    <div
-      aria-label="Loading models"
-      className={cn(
-        "flex h-8 shrink-0 items-center gap-2 rounded-md border border-border/50 px-2 text-muted-foreground",
-        props.widthClassName,
-      )}
-    >
-      <RefreshCwIcon aria-hidden="true" className="size-3.5 animate-spin" />
-      <span className="truncate text-[length:var(--app-font-size-ui-xs,11px)]">Loading models</span>
-    </div>
-  );
-}
-
 interface ChatViewProps {
   threadId: ThreadId;
   paneScopeId?: string;
@@ -843,6 +714,8 @@ interface ChatViewProps {
   onToggleDiffPanel?: () => void;
   onToggleBrowserPanel?: () => void;
   onOpenTurnDiffPanel?: (turnId: TurnId, filePath?: string) => void;
+  reviewPanelOpen?: boolean;
+  onToggleReviewPanel?: () => void;
   onSplitSurface?: () => void;
   onMaximizeSurface?: () => void;
   onChangeThreadInSplitPane?: () => void;
@@ -858,6 +731,8 @@ export default function ChatView({
   onToggleDiffPanel,
   onToggleBrowserPanel,
   onOpenTurnDiffPanel,
+  reviewPanelOpen = false,
+  onToggleReviewPanel,
   onSplitSurface,
   onMaximizeSurface,
   onChangeThreadInSplitPane,
@@ -1437,6 +1312,7 @@ export default function ChatView({
   const voiceTranscriptionRequestIdRef = useRef(0);
   const voiceThreadIdRef = useRef(threadId);
   const voiceProviderRef = useRef<ProviderKind>(selectedProvider);
+  const codexSessionPrewarmKeyRef = useRef<string | null>(null);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
   voiceThreadIdRef.current = threadId;
   voiceProviderRef.current = selectedProvider;
@@ -1729,6 +1605,41 @@ export default function ChatView({
     selectedProvider,
   ]);
   const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
+  useEffect(() => {
+    const prewarmKey = resolveCodexSessionPrewarmKey({
+      isServerThread,
+      thread: activeThread,
+      modelSelection: selectedModelSelection,
+      providerOptions: providerOptionsForDispatch,
+      runtimeMode,
+    });
+    const threadIdForPrewarm = activeThread?.id;
+    if (!prewarmKey || !threadIdForPrewarm || codexSessionPrewarmKeyRef.current === prewarmKey) {
+      return;
+    }
+    codexSessionPrewarmKeyRef.current = prewarmKey;
+    const api = readNativeApi();
+    if (!api) {
+      return;
+    }
+    void api.orchestration
+      .dispatchCommand({
+        type: "thread.session.ensure",
+        commandId: newCommandId(),
+        threadId: threadIdForPrewarm,
+        modelSelection: selectedModelSelection,
+        ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
+        runtimeMode,
+        createdAt: new Date().toISOString(),
+      })
+      .catch(() => undefined);
+  }, [
+    activeThread,
+    isServerThread,
+    providerOptionsForDispatch,
+    runtimeMode,
+    selectedModelSelection,
+  ]);
   const selectedModelForPicker =
     selectedModelSelection.provider === selectedProvider
       ? selectedModelSelection.model
@@ -7438,7 +7349,7 @@ export default function ChatView({
             )}
           >
             <SidebarHeaderNavigationControls />
-            <span className="text-xs text-muted-foreground/50">No active thread</span>
+            <span className="text-xs text-muted-foreground/70">No active thread</span>
           </div>
         )}
         <div className="flex flex-1 items-center justify-center">
@@ -7720,6 +7631,7 @@ export default function ChatView({
                   onChange={onPromptChange}
                   onCommandKeyDown={onComposerCommandKey}
                   onPaste={onComposerPaste}
+                  ariaLabel="Message composer"
                   placeholder={
                     isComposerApprovalState
                       ? "Resolve this approval request to continue"
@@ -7982,6 +7894,7 @@ export default function ChatView({
                               isSendBusy ||
                               isConnecting ||
                               isVoiceTranscribing ||
+                              !activeProject ||
                               !composerSendState.hasSendableContent
                             }
                             aria-label={
@@ -7989,11 +7902,13 @@ export default function ChatView({
                                 ? "Connecting"
                                 : isVoiceTranscribing
                                   ? "Transcribing voice note"
-                                  : isPreparingWorktree
-                                    ? "Preparing worktree"
-                                    : isSendBusy
-                                      ? "Sending"
-                                      : "Send message"
+                                  : !activeProject
+                                    ? "Select a project before sending"
+                                    : isPreparingWorktree
+                                      ? "Preparing worktree"
+                                      : isSendBusy
+                                        ? "Sending"
+                                        : "Send message"
                             }
                           >
                             {isConnecting || isSendBusy ? (
@@ -8138,6 +8053,8 @@ export default function ChatView({
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
           onToggleDiff={onToggleDiff}
+          reviewOpen={reviewPanelOpen}
+          {...(onToggleReviewPanel ? { onToggleReview: onToggleReviewPanel } : {})}
           onCreateHandoff={onCreateHandoffThread}
           onNavigateToThread={onNavigateToThread}
           onRenameThread={() => setRenameDialogOpen(true)}

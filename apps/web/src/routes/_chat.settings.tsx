@@ -31,39 +31,34 @@ import {
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  MAX_CHAT_FONT_SIZE_PX,
   getCustomModelsForProvider,
   getGitTextGenerationModelOptions,
   MAX_CUSTOM_MODEL_LENGTH,
-  MIN_CHAT_FONT_SIZE_PX,
   MODEL_PROVIDER_SETTINGS,
-  normalizeChatFontSizePx,
   patchCustomModels,
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
-import { ProviderOptionLabel } from "../components/ProviderIcon";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
-import {
-  CODE_FONT_PRESETS,
-  SettingResetButton,
-  SettingsFontControl,
-  SettingsSelectControl,
-  UI_FONT_PRESETS,
-} from "../components/settings/SettingControls";
+import { SettingResetButton, SettingsSelectControl } from "../components/settings/SettingControls";
 import { Select, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
 import { toastManager } from "../components/ui/toast";
-import { ThemePackEditor } from "../components/ThemePackEditor";
 import {
-  SettingsCard,
   SettingsRow,
   SettingsSection,
   SettingsSelectPopup,
 } from "../components/settings/SettingsPanelPrimitives";
+import { NotificationsSettings } from "../components/settings/NotificationsSettings";
+import { BehaviorSettings } from "../components/settings/BehaviorSettings";
+import { AppearanceSettings } from "../components/settings/AppearanceSettings";
+import { GeneralSettings } from "../components/settings/GeneralSettings";
+import { SandboxesSettings } from "../components/settings/SandboxesSettings";
+import { WorktreesSettings } from "../components/settings/WorktreesSettings";
+import { AdvancedSettings } from "../components/settings/AdvancedSettings";
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
   CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
@@ -110,7 +105,6 @@ import {
   SETTINGS_EMPTY_STATE_CLASS_NAME,
   SETTINGS_INSET_LIST_CLASS_NAME,
   SETTINGS_PAGE_BACKGROUND_CLASS_NAME,
-  SETTINGS_SECTION_LABEL_CLASS_NAME,
 } from "../settingsPanelStyles";
 import { useStore } from "../store";
 import ReleaseHistoryDialog from "../components/ReleaseHistoryDialog";
@@ -120,24 +114,6 @@ import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 import { sameProviderOrder } from "../providerOrdering";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
-
-const THEME_OPTIONS = [
-  {
-    value: "system",
-    label: "System",
-    description: "Match your OS appearance setting.",
-  },
-  {
-    value: "light",
-    label: "Light",
-    description: "Always use the light theme.",
-  },
-  {
-    value: "dark",
-    label: "Dark",
-    description: "Always use the dark theme.",
-  },
-] as const;
 
 const PROVIDER_SELECT_OPTIONS = [
   "codex",
@@ -149,28 +125,6 @@ const PROVIDER_SELECT_OPTIONS = [
   "kilo",
   "pi",
 ] as const satisfies readonly ProviderKind[];
-
-const TIMESTAMP_FORMAT_LABELS = {
-  locale: "System default",
-  "12-hour": "12-hour",
-  "24-hour": "24-hour",
-} as const;
-
-const SIDEBAR_SIDE_LABELS = {
-  left: "Left",
-  right: "Right",
-} as const;
-
-const SIDEBAR_PROJECT_SORT_ORDER_LABELS = {
-  updated_at: "Recently active",
-  created_at: "Recently added",
-  manual: "Manual order",
-} as const;
-
-const SIDEBAR_THREAD_SORT_ORDER_LABELS = {
-  updated_at: "Recently active",
-  created_at: "Newest first",
-} as const;
 
 type InstallBinarySettingsKey =
   | "claudeBinaryPath"
@@ -460,11 +414,6 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
   },
 ];
 
-// ── Settings UI primitives ────────────────────────────────────────────────
-
-// SettingResetButton / SettingsSelectControl / SettingsFontControl and the font
-// preset lists live in ~/components/settings/SettingControls (imported above).
-
 function isProviderSelectOption(value: string): value is ProviderKind {
   return PROVIDER_SELECT_OPTIONS.includes(value as ProviderKind);
 }
@@ -570,7 +519,6 @@ function SettingsRouteView() {
 
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [isRepairingLocalState, setIsRepairingLocalState] = useState(false);
-  const [showRecoveryTools, setShowRecoveryTools] = useState(false);
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
   const providerUpdatesRef = useRef<HTMLDivElement | null>(null);
@@ -1039,7 +987,6 @@ function SettingsRouteView() {
     });
     setCustomModelErrorByProvider({});
     setShowAllCustomModels(false);
-    setShowRecoveryTools(false);
     setOpenKeybindingsError(null);
   }
 
@@ -1315,768 +1262,45 @@ function SettingsRouteView() {
   );
 
   const renderGeneralPanel = () => (
-    <div className="space-y-6">
-      <SettingsSection title="Core defaults">
-        <SettingsRow
-          title="Default provider"
-          description="Choose the provider used for new chats."
-          resetAction={
-            settings.defaultProvider !== defaults.defaultProvider ? (
-              <SettingResetButton
-                label="default provider"
-                onClick={() => updateSettings({ defaultProvider: defaults.defaultProvider })}
-              />
-            ) : null
-          }
-          control={
-            <SettingsSelectControl
-              value={settings.defaultProvider}
-              onValueChange={(value) => {
-                if (!isProviderSelectOption(value)) return;
-                updateSettings({ defaultProvider: value });
-              }}
-              ariaLabel="Default provider"
-              valueContent={
-                <ProviderOptionLabel
-                  provider={settings.defaultProvider}
-                  label={PROVIDER_DISPLAY_NAMES[settings.defaultProvider]}
-                />
-              }
-            >
-              {PROVIDER_SELECT_OPTIONS.map((provider) => (
-                <SelectItem hideIndicator key={provider} value={provider}>
-                  <ProviderOptionLabel
-                    provider={provider}
-                    label={PROVIDER_DISPLAY_NAMES[provider]}
-                  />
-                </SelectItem>
-              ))}
-            </SettingsSelectControl>
-          }
-        />
-
-        <SettingsRow
-          title="New threads"
-          description="Pick the default workspace mode for newly created draft threads."
-          resetAction={
-            settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? (
-              <SettingResetButton
-                label="new threads"
-                onClick={() =>
-                  updateSettings({
-                    defaultThreadEnvMode: defaults.defaultThreadEnvMode,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <SettingsSelectControl
-              value={settings.defaultThreadEnvMode}
-              onValueChange={(value) => {
-                if (value !== "local" && value !== "worktree") return;
-                updateSettings({
-                  defaultThreadEnvMode: value,
-                });
-              }}
-              ariaLabel="Default thread mode"
-              valueContent={settings.defaultThreadEnvMode === "worktree" ? "New worktree" : "Local"}
-            >
-              <SelectItem hideIndicator value="local">
-                Local
-              </SelectItem>
-              <SelectItem hideIndicator value="worktree">
-                New worktree
-              </SelectItem>
-            </SettingsSelectControl>
-          }
-        />
-      </SettingsSection>
-
-      <SettingsSection title="Sidebar organization">
-        <SettingsRow
-          title="Position"
-          description="Choose which side of the screen the sidebar appears on."
-          resetAction={
-            settings.sidebarSide !== defaults.sidebarSide ? (
-              <SettingResetButton
-                label="sidebar position"
-                onClick={() =>
-                  updateSettings({
-                    sidebarSide: defaults.sidebarSide,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <SettingsSelectControl
-              value={settings.sidebarSide}
-              onValueChange={(value) => {
-                if (value !== "left" && value !== "right") {
-                  return;
-                }
-                updateSettings({ sidebarSide: value });
-              }}
-              ariaLabel="Sidebar position"
-              valueContent={SIDEBAR_SIDE_LABELS[settings.sidebarSide]}
-            >
-              <SelectItem hideIndicator value="left">
-                {SIDEBAR_SIDE_LABELS.left}
-              </SelectItem>
-              <SelectItem hideIndicator value="right">
-                {SIDEBAR_SIDE_LABELS.right}
-              </SelectItem>
-            </SettingsSelectControl>
-          }
-        />
-
-        <SettingsRow
-          title="Project order"
-          description="Controls how projects are arranged in the main sidebar."
-          resetAction={
-            settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder ? (
-              <SettingResetButton
-                label="project order"
-                onClick={() =>
-                  updateSettings({
-                    sidebarProjectSortOrder: defaults.sidebarProjectSortOrder,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <SettingsSelectControl
-              value={settings.sidebarProjectSortOrder}
-              onValueChange={(value) => {
-                if (value !== "updated_at" && value !== "created_at" && value !== "manual") {
-                  return;
-                }
-                updateSettings({ sidebarProjectSortOrder: value });
-              }}
-              ariaLabel="Project sort order"
-              valueContent={SIDEBAR_PROJECT_SORT_ORDER_LABELS[settings.sidebarProjectSortOrder]}
-            >
-              <SelectItem hideIndicator value="updated_at">
-                {SIDEBAR_PROJECT_SORT_ORDER_LABELS.updated_at}
-              </SelectItem>
-              <SelectItem hideIndicator value="created_at">
-                {SIDEBAR_PROJECT_SORT_ORDER_LABELS.created_at}
-              </SelectItem>
-              <SelectItem hideIndicator value="manual">
-                {SIDEBAR_PROJECT_SORT_ORDER_LABELS.manual}
-              </SelectItem>
-            </SettingsSelectControl>
-          }
-        />
-
-        <SettingsRow
-          title="Thread order"
-          description="Controls how threads are arranged inside each project in the main sidebar."
-          resetAction={
-            settings.sidebarThreadSortOrder !== defaults.sidebarThreadSortOrder ? (
-              <SettingResetButton
-                label="thread order"
-                onClick={() =>
-                  updateSettings({
-                    sidebarThreadSortOrder: defaults.sidebarThreadSortOrder,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <SettingsSelectControl
-              value={settings.sidebarThreadSortOrder}
-              onValueChange={(value) => {
-                if (value !== "updated_at" && value !== "created_at") {
-                  return;
-                }
-                updateSettings({ sidebarThreadSortOrder: value });
-              }}
-              ariaLabel="Thread sort order"
-              valueContent={SIDEBAR_THREAD_SORT_ORDER_LABELS[settings.sidebarThreadSortOrder]}
-            >
-              <SelectItem hideIndicator value="updated_at">
-                {SIDEBAR_THREAD_SORT_ORDER_LABELS.updated_at}
-              </SelectItem>
-              <SelectItem hideIndicator value="created_at">
-                {SIDEBAR_THREAD_SORT_ORDER_LABELS.created_at}
-              </SelectItem>
-            </SettingsSelectControl>
-          }
-        />
-      </SettingsSection>
-    </div>
+    <GeneralSettings settings={settings} defaults={defaults} updateSettings={updateSettings} />
   );
 
   const renderAppearancePanel = () => (
-    <div className="space-y-6">
-      <section className="space-y-2">
-        <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>Theme and typography</h2>
-        <SettingsCard>
-          <SettingsRow
-            title="Theme"
-            description="Choose how Synara looks across the app."
-            resetAction={
-              theme !== "system" ? (
-                <SettingResetButton label="theme" onClick={() => setTheme("system")} />
-              ) : null
-            }
-            control={
-              <SettingsSelectControl
-                value={theme}
-                onValueChange={(value) => {
-                  if (value !== "system" && value !== "light" && value !== "dark") return;
-                  setTheme(value);
-                }}
-                ariaLabel="Theme preference"
-                triggerClassName="w-full sm:w-40"
-                valueContent={
-                  THEME_OPTIONS.find((option) => option.value === theme)?.label ?? "System"
-                }
-              >
-                {THEME_OPTIONS.map((option) => (
-                  <SelectItem hideIndicator key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SettingsSelectControl>
-            }
-          />
-        </SettingsCard>
-
-        <div className="space-y-3">
-          {(resolvedTheme === "dark"
-            ? (["dark", "light"] as const)
-            : (["light", "dark"] as const)
-          ).map((variant) => (
-            <ThemePackEditor
-              key={variant}
-              variant={variant}
-              isActive={resolvedTheme === variant}
-              mode={theme}
-            />
-          ))}
-        </div>
-
-        <SettingsCard>
-          <SettingsRow
-            title="UI font"
-            description="Set a custom font for the interface. Leave empty to use the active theme's UI font."
-            resetAction={
-              settings.uiFontFamily !== defaults.uiFontFamily ? (
-                <SettingResetButton
-                  label="UI font"
-                  onClick={() => updateSettings({ uiFontFamily: defaults.uiFontFamily })}
-                />
-              ) : null
-            }
-            control={
-              <SettingsFontControl
-                value={settings.uiFontFamily}
-                onValueChange={(value) => updateSettings({ uiFontFamily: value })}
-                presets={UI_FONT_PRESETS}
-                placeholder="System default"
-                ariaLabel="Custom UI font family"
-              />
-            }
-          />
-
-          <SettingsRow
-            title="Code font"
-            description="Set a custom font for code blocks and inline code in chat. Leave empty to use the active theme's code font."
-            resetAction={
-              settings.chatCodeFontFamily !== defaults.chatCodeFontFamily ? (
-                <SettingResetButton
-                  label="code font"
-                  onClick={() =>
-                    updateSettings({
-                      chatCodeFontFamily: defaults.chatCodeFontFamily,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <SettingsFontControl
-                value={settings.chatCodeFontFamily}
-                onValueChange={(value) => updateSettings({ chatCodeFontFamily: value })}
-                presets={CODE_FONT_PRESETS}
-                placeholder="System default"
-                ariaLabel="Custom chat code font family"
-              />
-            }
-          />
-
-          <SettingsRow
-            title="Base font size"
-            description="Adjust the app text base in pixels. Chat and UI typography scale proportionally from this value."
-            resetAction={
-              settings.chatFontSizePx !== defaults.chatFontSizePx ? (
-                <SettingResetButton
-                  label="base font size"
-                  onClick={() =>
-                    updateSettings({
-                      chatFontSizePx: defaults.chatFontSizePx,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
-                <Input
-                  type="number"
-                  min={MIN_CHAT_FONT_SIZE_PX}
-                  max={MAX_CHAT_FONT_SIZE_PX}
-                  step={1}
-                  inputMode="numeric"
-                  className="w-full text-right sm:w-20"
-                  value={String(settings.chatFontSizePx)}
-                  onChange={(event) => {
-                    const nextValue = event.target.value.trim();
-                    if (nextValue.length === 0) return;
-                    updateSettings({
-                      chatFontSizePx: normalizeChatFontSizePx(Number(nextValue)),
-                    });
-                  }}
-                  aria-label="Base font size in pixels"
-                />
-                <span className="text-xs text-muted-foreground">px</span>
-              </div>
-            }
-          />
-
-          {shouldShowFontSmoothing ? (
-            <SettingsRow
-              title="Font smoothing"
-              description="Use macOS-style antialiasing for lighter, crisper text rendering."
-              resetAction={
-                settings.enableNativeFontSmoothing !== defaults.enableNativeFontSmoothing ? (
-                  <SettingResetButton
-                    label="font smoothing"
-                    onClick={() =>
-                      updateSettings({
-                        enableNativeFontSmoothing: defaults.enableNativeFontSmoothing,
-                      })
-                    }
-                  />
-                ) : null
-              }
-              control={
-                <Switch
-                  checked={settings.enableNativeFontSmoothing}
-                  onCheckedChange={(checked) =>
-                    updateSettings({ enableNativeFontSmoothing: checked })
-                  }
-                  aria-label="Enable font smoothing"
-                />
-              }
-            />
-          ) : null}
-        </SettingsCard>
-      </section>
-
-      <SettingsSection title="Time and reading">
-        <SettingsRow
-          title="Time format"
-          description="System default follows your browser or OS clock preference."
-          resetAction={
-            settings.timestampFormat !== defaults.timestampFormat ? (
-              <SettingResetButton
-                label="time format"
-                onClick={() =>
-                  updateSettings({
-                    timestampFormat: defaults.timestampFormat,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <SettingsSelectControl
-              value={settings.timestampFormat}
-              onValueChange={(value) => {
-                if (value !== "locale" && value !== "12-hour" && value !== "24-hour") {
-                  return;
-                }
-                updateSettings({
-                  timestampFormat: value,
-                });
-              }}
-              ariaLabel="Timestamp format"
-              triggerClassName="w-full sm:w-40"
-              valueContent={TIMESTAMP_FORMAT_LABELS[settings.timestampFormat]}
-            >
-              <SelectItem hideIndicator value="locale">
-                {TIMESTAMP_FORMAT_LABELS.locale}
-              </SelectItem>
-              <SelectItem hideIndicator value="12-hour">
-                {TIMESTAMP_FORMAT_LABELS["12-hour"]}
-              </SelectItem>
-              <SelectItem hideIndicator value="24-hour">
-                {TIMESTAMP_FORMAT_LABELS["24-hour"]}
-              </SelectItem>
-            </SettingsSelectControl>
-          }
-        />
-      </SettingsSection>
-    </div>
+    <AppearanceSettings
+      theme={theme}
+      resolvedTheme={resolvedTheme}
+      setTheme={setTheme}
+      settings={settings}
+      defaults={defaults}
+      updateSettings={updateSettings}
+      shouldShowFontSmoothing={shouldShowFontSmoothing}
+    />
   );
 
   const renderNotificationsPanel = () => (
-    <div className="space-y-6">
-      <SettingsSection title="Activity alerts">
-        <SettingsRow
-          title="Activity toasts"
-          description="Show an in-app toast when a chat or managed terminal agent finishes or needs input."
-          resetAction={
-            settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts ? (
-              <SettingResetButton
-                label="activity toasts"
-                onClick={() =>
-                  updateSettings({
-                    enableTaskCompletionToasts: defaults.enableTaskCompletionToasts,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.enableTaskCompletionToasts}
-              onCheckedChange={(checked) =>
-                updateSettings({ enableTaskCompletionToasts: Boolean(checked) })
-              }
-              aria-label="Activity toast notifications"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Desktop notifications"
-          description="Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background."
-          status={buildNotificationSettingsSupportText(browserNotificationPermission)}
-          resetAction={
-            settings.enableSystemTaskCompletionNotifications !==
-            defaults.enableSystemTaskCompletionNotifications ? (
-              <SettingResetButton
-                label="desktop notifications"
-                onClick={() =>
-                  updateSettings({
-                    enableSystemTaskCompletionNotifications:
-                      defaults.enableSystemTaskCompletionNotifications,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
-              <Button size="xs" variant="outline" onClick={() => void sendTestNotification()}>
-                Test
-              </Button>
-              <Switch
-                checked={settings.enableSystemTaskCompletionNotifications}
-                onCheckedChange={(checked) => {
-                  void setSystemNotificationsEnabled(Boolean(checked));
-                }}
-                aria-label="Desktop activity notifications"
-              />
-            </div>
-          }
-        />
-      </SettingsSection>
-    </div>
+    <NotificationsSettings
+      settings={settings}
+      defaults={defaults}
+      updateSettings={updateSettings}
+      browserNotificationPermission={browserNotificationPermission}
+      onSetSystemNotifications={(nextEnabled) => void setSystemNotificationsEnabled(nextEnabled)}
+      onSendTestNotification={() => void sendTestNotification()}
+    />
   );
 
   const renderBehaviorPanel = () => (
-    <div className="space-y-6">
-      <SettingsSection title="Runtime behavior">
-        <SettingsRow
-          title="Assistant output"
-          description="Show token-by-token output while a response is in progress."
-          resetAction={
-            settings.enableAssistantStreaming !== defaults.enableAssistantStreaming ? (
-              <SettingResetButton
-                label="assistant output"
-                onClick={() =>
-                  updateSettings({
-                    enableAssistantStreaming: defaults.enableAssistantStreaming,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.enableAssistantStreaming}
-              onCheckedChange={(checked) =>
-                updateSettings({
-                  enableAssistantStreaming: Boolean(checked),
-                })
-              }
-              aria-label="Stream assistant messages"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Diff line wrapping"
-          description="Set the default wrap state when the diff panel opens. The in-panel wrap toggle only affects the current diff session."
-          resetAction={
-            settings.diffWordWrap !== defaults.diffWordWrap ? (
-              <SettingResetButton
-                label="diff line wrapping"
-                onClick={() =>
-                  updateSettings({
-                    diffWordWrap: defaults.diffWordWrap,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.diffWordWrap}
-              onCheckedChange={(checked) =>
-                updateSettings({
-                  diffWordWrap: Boolean(checked),
-                })
-              }
-              aria-label="Wrap diff lines by default"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Prompt suggestions"
-          description="Show suggested prompts under the composer when starting a new thread."
-          resetAction={
-            settings.enableComposerSuggestions !== defaults.enableComposerSuggestions ? (
-              <SettingResetButton
-                label="prompt suggestions"
-                onClick={() =>
-                  updateSettings({
-                    enableComposerSuggestions: defaults.enableComposerSuggestions,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.enableComposerSuggestions}
-              onCheckedChange={(checked) =>
-                updateSettings({
-                  enableComposerSuggestions: Boolean(checked),
-                })
-              }
-              aria-label="Show composer prompt suggestions"
-            />
-          }
-        />
-      </SettingsSection>
-
-      <SettingsSection title="Safety confirmations">
-        <SettingsRow
-          title="Delete confirmation"
-          description="Ask before deleting a thread and its chat history."
-          resetAction={
-            settings.confirmThreadDelete !== defaults.confirmThreadDelete ? (
-              <SettingResetButton
-                label="delete confirmation"
-                onClick={() =>
-                  updateSettings({
-                    confirmThreadDelete: defaults.confirmThreadDelete,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.confirmThreadDelete}
-              onCheckedChange={(checked) =>
-                updateSettings({
-                  confirmThreadDelete: Boolean(checked),
-                })
-              }
-              aria-label="Confirm thread deletion"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Archive confirmation"
-          description="Ask before archiving a thread."
-          resetAction={
-            settings.confirmThreadArchive !== defaults.confirmThreadArchive ? (
-              <SettingResetButton
-                label="archive confirmation"
-                onClick={() =>
-                  updateSettings({
-                    confirmThreadArchive: defaults.confirmThreadArchive,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.confirmThreadArchive}
-              onCheckedChange={(checked) =>
-                updateSettings({
-                  confirmThreadArchive: Boolean(checked),
-                })
-              }
-              aria-label="Confirm thread archive"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Terminal close confirmation"
-          description="Ask before closing a terminal tab and clearing its history."
-          resetAction={
-            settings.confirmTerminalTabClose !== defaults.confirmTerminalTabClose ? (
-              <SettingResetButton
-                label="terminal close confirmation"
-                onClick={() =>
-                  updateSettings({
-                    confirmTerminalTabClose: defaults.confirmTerminalTabClose,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.confirmTerminalTabClose}
-              onCheckedChange={(checked) =>
-                updateSettings({
-                  confirmTerminalTabClose: Boolean(checked),
-                })
-              }
-              aria-label="Confirm terminal tab close"
-            />
-          }
-        />
-      </SettingsSection>
-    </div>
+    <BehaviorSettings settings={settings} defaults={defaults} updateSettings={updateSettings} />
   );
 
   const renderWorktreesPanel = () => (
-    <div className="space-y-6">
-      <SettingsSection title="Managed worktrees">
-        <div className="space-y-4">
-          {serverWorktreesQuery.isLoading ? (
-            <div
-              className={cn(
-                SETTINGS_EMPTY_STATE_CLASS_NAME,
-                "px-4 py-6 text-sm text-muted-foreground",
-              )}
-            >
-              Loading managed worktrees...
-            </div>
-          ) : serverWorktreesQuery.isError ? (
-            <div
-              className={cn(
-                SETTINGS_EMPTY_STATE_CLASS_NAME,
-                "border-destructive/30 bg-destructive/5 px-4 py-6 text-sm text-destructive",
-              )}
-            >
-              {serverWorktreesQuery.error instanceof Error
-                ? serverWorktreesQuery.error.message
-                : "Unable to load worktrees."}
-            </div>
-          ) : worktreesByWorkspaceRoot.length === 0 ? (
-            <div
-              className={cn(
-                SETTINGS_EMPTY_STATE_CLASS_NAME,
-                "px-4 py-6 text-sm text-muted-foreground",
-              )}
-            >
-              No app-managed worktrees found yet.
-            </div>
-          ) : (
-            worktreesByWorkspaceRoot.map((group) => (
-              <section key={group.workspaceRoot} className="space-y-2">
-                <h3 className="px-1 font-mono text-[11px] text-muted-foreground">
-                  {group.workspaceRoot}
-                </h3>
-
-                <div className={SETTINGS_INSET_LIST_CLASS_NAME}>
-                  {group.worktrees.map((worktree, index) => {
-                    const deleteDisabled = removeWorktreeMutation.isPending;
-                    return (
-                      <div
-                        key={worktree.path}
-                        className={cn(
-                          "flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-start sm:justify-between",
-                          index > 0 && "border-t border-[color:var(--color-border)]",
-                        )}
-                      >
-                        <div className="min-w-0 flex-1 space-y-2">
-                          <div className="space-y-0.5">
-                            <div className="text-sm font-medium text-foreground">Worktree</div>
-                            <div className="font-mono text-[11px] text-muted-foreground">
-                              {worktree.path}
-                            </div>
-                          </div>
-
-                          <div className="space-y-1">
-                            <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                              Conversations
-                            </div>
-                            {worktree.linkedThreads.length > 0 ? (
-                              <div className="space-y-1">
-                                {worktree.linkedThreads.map((thread) => (
-                                  <div key={thread.id} className="text-sm text-foreground">
-                                    {thread.title}
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="text-sm text-muted-foreground">
-                                No conversations linked to this worktree.
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="flex shrink-0 flex-col items-end gap-2">
-                          <Button
-                            size="xs"
-                            variant="destructive"
-                            disabled={deleteDisabled}
-                            onClick={() =>
-                              void deleteManagedWorktree({
-                                workspaceRoot: group.workspaceRoot,
-                                worktreePath: worktree.path,
-                              })
-                            }
-                          >
-                            Delete
-                          </Button>
-                          {worktree.linkedThreads.length > 0 ? (
-                            <p className="max-w-40 text-right text-[11px] text-muted-foreground">
-                              Linked conversations exist. Deleting will ask for confirmation.
-                            </p>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            ))
-          )}
-        </div>
-      </SettingsSection>
-    </div>
+    <WorktreesSettings
+      worktreesByWorkspaceRoot={worktreesByWorkspaceRoot}
+      isLoading={serverWorktreesQuery.isLoading}
+      isError={serverWorktreesQuery.isError}
+      error={serverWorktreesQuery.error}
+      isDeleting={removeWorktreeMutation.isPending}
+      onDeleteWorktree={(input) => void deleteManagedWorktree(input)}
+    />
   );
 
   const renderArchivedPanel = () => {
@@ -2941,365 +2165,22 @@ function SettingsRouteView() {
     </div>
   );
 
-  const sandboxRuntimeTextFields: ReadonlyArray<{
-    appKey:
-      | "sandboxRuntimeCpu"
-      | "sandboxRuntimeMemoryMb"
-      | "sandboxRuntimeTimeoutSeconds"
-      | "sandboxRuntimePorts";
-    title: string;
-    resetLabel: string;
-    description: string;
-    placeholder: string;
-  }> = [
-    {
-      appKey: "sandboxRuntimeCpu",
-      title: "CPU",
-      resetLabel: "CPU default",
-      description: "vCPUs requested for the sandbox. Blank uses the provider default.",
-      placeholder: "provider default",
-    },
-    {
-      appKey: "sandboxRuntimeMemoryMb",
-      title: "Memory (MB)",
-      resetLabel: "memory default",
-      description: "Memory requested for the sandbox, in MB. Blank uses the provider default.",
-      placeholder: "provider default",
-    },
-    {
-      appKey: "sandboxRuntimeTimeoutSeconds",
-      title: "Timeout (s)",
-      resetLabel: "timeout default",
-      description: "Max sandbox lifetime in seconds before the provider reclaims it.",
-      placeholder: "provider default",
-    },
-    {
-      appKey: "sandboxRuntimePorts",
-      title: "Exposed ports",
-      resetLabel: "ports default",
-      description: "Comma-separated ports to expose from the sandbox.",
-      placeholder: "3000, 8080",
-    },
-  ];
-
   const renderSandboxesPanel = () => (
-    <div className="space-y-6">
-      <SettingsSection title="Defaults">
-        <SettingsRow
-          title="Default remote provider"
-          description="Provider used when a new remote-runtime thread does not pick one."
-          resetAction={
-            settings.sandboxDefaultRemoteProvider !== defaults.sandboxDefaultRemoteProvider ? (
-              <SettingResetButton
-                label="default remote provider"
-                onClick={() =>
-                  updateSettings({
-                    sandboxDefaultRemoteProvider: defaults.sandboxDefaultRemoteProvider,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <SettingsSelectControl
-              value={settings.sandboxDefaultRemoteProvider}
-              onValueChange={(value) => updateSettings({ sandboxDefaultRemoteProvider: value })}
-              ariaLabel="Default remote provider"
-              valueContent={
-                SANDBOX_DEFAULT_PROVIDER_OPTIONS.find(
-                  (option) => option.value === settings.sandboxDefaultRemoteProvider,
-                )?.label ?? "No preference"
-              }
-            >
-              {SANDBOX_DEFAULT_PROVIDER_OPTIONS.map((option) => (
-                <SelectItem hideIndicator key={option.value || "none"} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SettingsSelectControl>
-          }
-        />
-        <SettingsRow
-          title="Post-clone command"
-          description="Optional command run in the sandbox after the repo is cloned (e.g. `pnpm install --frozen-lockfile`), so a remote agent can run tests/lint/typecheck. Use `auto` to detect a package manager from the lockfile. Empty (default) skips it. Best-effort: a failure does not block the session."
-          resetAction={
-            settings.sandboxPostCloneCommand !== defaults.sandboxPostCloneCommand ? (
-              <SettingResetButton
-                label="post-clone command"
-                onClick={() =>
-                  updateSettings({
-                    sandboxPostCloneCommand: defaults.sandboxPostCloneCommand,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Input
-              className="w-full"
-              type="text"
-              value={settings.sandboxPostCloneCommand}
-              onChange={(event) => updateSettings({ sandboxPostCloneCommand: event.target.value })}
-              placeholder="pnpm install --frozen-lockfile"
-              spellCheck={false}
-              aria-label="Post-clone command"
-            />
-          }
-        />
-      </SettingsSection>
-
-      <SettingsSection title="Remote runtime defaults">
-        {sandboxRuntimeTextFields.map((field) => (
-          <SettingsRow
-            key={field.appKey}
-            title={field.title}
-            description={field.description}
-            resetAction={
-              settings[field.appKey] !== defaults[field.appKey] ? (
-                <SettingResetButton
-                  label={field.resetLabel}
-                  onClick={() => updateSettings({ [field.appKey]: defaults[field.appKey] })}
-                />
-              ) : null
-            }
-            control={
-              <Input
-                className="w-full"
-                type="text"
-                value={settings[field.appKey]}
-                onChange={(event) => updateSettings({ [field.appKey]: event.target.value })}
-                placeholder={field.placeholder}
-                spellCheck={false}
-                aria-label={field.title}
-              />
-            }
-          />
-        ))}
-        <SettingsRow
-          title="Persistent runtime"
-          description="Keep the sandbox alive between turns instead of tearing it down after each one. The provider must support a persistent filesystem."
-          resetAction={
-            settings.sandboxRuntimePersistent !== defaults.sandboxRuntimePersistent ? (
-              <SettingResetButton
-                label="persistent runtime"
-                onClick={() =>
-                  updateSettings({
-                    sandboxRuntimePersistent: defaults.sandboxRuntimePersistent,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.sandboxRuntimePersistent === "true"}
-              onCheckedChange={(checked) =>
-                updateSettings({ sandboxRuntimePersistent: checked ? "true" : "false" })
-              }
-              aria-label="Persistent runtime"
-            />
-          }
-        />
-        <SettingsRow
-          title="Sync Codex MCP plugins"
-          description="Inject your local Codex HTTP MCP servers (and their resolved auth) into a remote sandbox, so a remote agent has the same tools a local one does. Off by default — enabling sends those credentials to the cloud VM. stdio servers are never synced."
-          resetAction={
-            settings.sandboxRuntimeSyncMcpPlugins !== defaults.sandboxRuntimeSyncMcpPlugins ? (
-              <SettingResetButton
-                label="MCP plugin sync"
-                onClick={() =>
-                  updateSettings({
-                    sandboxRuntimeSyncMcpPlugins: defaults.sandboxRuntimeSyncMcpPlugins,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.sandboxRuntimeSyncMcpPlugins === "true"}
-              onCheckedChange={(checked) =>
-                updateSettings({ sandboxRuntimeSyncMcpPlugins: checked ? "true" : "false" })
-              }
-              aria-label="Sync Codex MCP plugins"
-            />
-          }
-        />
-        {settings.sandboxRuntimeSyncMcpPlugins === "true" ? (
-          <SettingsRow
-            title="MCP plugin allowlist"
-            description="Optional comma-separated MCP server names to sync. Blank syncs every runnable HTTP server."
-            resetAction={
-              settings.sandboxRuntimeMcpAllowlist !== defaults.sandboxRuntimeMcpAllowlist ? (
-                <SettingResetButton
-                  label="MCP allowlist"
-                  onClick={() =>
-                    updateSettings({
-                      sandboxRuntimeMcpAllowlist: defaults.sandboxRuntimeMcpAllowlist,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <Input
-                className="w-full"
-                type="text"
-                value={settings.sandboxRuntimeMcpAllowlist}
-                onChange={(event) =>
-                  updateSettings({ sandboxRuntimeMcpAllowlist: event.target.value })
-                }
-                placeholder="exa, novu"
-                spellCheck={false}
-                aria-label="MCP plugin allowlist"
-              />
-            }
-          />
-        ) : null}
-      </SettingsSection>
-
-      {SANDBOX_PROVIDER_DESCRIPTORS.map((provider) => (
-        <SettingsSection key={provider.id} title={provider.title}>
-          <SettingsRow
-            title={`${provider.title} credentials`}
-            description="Secrets are stored on the server and never sent back to the browser."
-          >
-            <div className="mt-3 space-y-4">
-              {provider.fields.map((field) => {
-                const value = settings[field.appKey];
-                const inputId = `sandbox-${provider.id}-${field.serverField}`;
-                return (
-                  <label key={field.appKey} htmlFor={inputId} className="block">
-                    <span className="flex items-center gap-2">
-                      <span className="block text-xs font-medium text-foreground">
-                        {field.label}
-                      </span>
-                      {field.secret && value ? (
-                        <span className="inline-flex items-center rounded-full border border-[color:var(--color-border)] px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                          Configured
-                        </span>
-                      ) : null}
-                    </span>
-                    <Input
-                      id={inputId}
-                      className="mt-1"
-                      type={field.secret ? "password" : "text"}
-                      autoComplete={field.secret ? "off" : undefined}
-                      value={value}
-                      onChange={(event) => updateSettings({ [field.appKey]: event.target.value })}
-                      placeholder={field.placeholder}
-                      spellCheck={false}
-                    />
-                    <span className="mt-1 block text-xs text-muted-foreground">
-                      {field.description}
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-          </SettingsRow>
-        </SettingsSection>
-      ))}
-    </div>
+    <SandboxesSettings settings={settings} defaults={defaults} updateSettings={updateSettings} />
   );
 
   const renderAdvancedPanel = () => (
-    <div className="space-y-6">
-      <SettingsSection title="Developer tools">
-        <SettingsRow
-          title="Keybindings"
-          description="Open the persisted `keybindings.json` file to edit advanced bindings directly."
-          status={
-            <>
-              <span className="block break-all font-mono text-[11px] text-foreground">
-                {keybindingsConfigPath ?? "Resolving keybindings path..."}
-              </span>
-              {openKeybindingsError ? (
-                <span className="mt-1 block text-destructive">{openKeybindingsError}</span>
-              ) : (
-                <span className="mt-1 block">Opens in your preferred editor.</span>
-              )}
-            </>
-          }
-          control={
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={!keybindingsConfigPath || isOpeningKeybindings}
-              onClick={openKeybindingsFile}
-            >
-              {isOpeningKeybindings ? "Opening..." : "Open file"}
-            </Button>
-          }
-        />
-
-        <SettingsRow
-          title="Recovery tools"
-          description="Rebuild local project indexes without clearing existing chats when the local state gets out of sync."
-          status={
-            shouldOfferRecoveryTools
-              ? "Visible because projects exist but no chat history is currently available."
-              : "Shown automatically only when recovery actions are relevant."
-          }
-          control={
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={!shouldOfferRecoveryTools || isRepairingLocalState}
-              onClick={() => void repairLocalState()}
-            >
-              {isRepairingLocalState ? "Repairing..." : "Repair state"}
-            </Button>
-          }
-        >
-          {shouldOfferRecoveryTools ? (
-            <div className="mt-3 border-t border-border/70 pt-3">
-              <button
-                type="button"
-                className="flex w-full items-center justify-between text-left"
-                onClick={() => setShowRecoveryTools((current) => !current)}
-              >
-                <span className="text-xs font-medium text-muted-foreground">What this does</span>
-                <ChevronDownIcon
-                  className={cn(
-                    "size-4 shrink-0 text-muted-foreground transition-transform",
-                    showRecoveryTools && "rotate-180",
-                  )}
-                />
-              </button>
-              {showRecoveryTools ? (
-                <div
-                  className={cn(
-                    "mt-3 px-3 py-3 text-xs text-muted-foreground",
-                    SETTINGS_INSET_LIST_CLASS_NAME,
-                  )}
-                >
-                  Rebuilds local project indexes and refreshes project snapshots. Existing chats
-                  stay in place.
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </SettingsRow>
-      </SettingsSection>
-
-      <SettingsSection title="About">
-        <SettingsRow
-          title="Version"
-          description="Current application version."
-          control={<code className="text-xs font-medium text-muted-foreground">{APP_VERSION}</code>}
-        />
-        <SettingsRow
-          title="Release history"
-          description="A running log of every update, newest first. Same notes the post-update dialog shows, kept here so you can revisit them any time."
-          control={
-            <Button size="sm" variant="outline" onClick={() => setReleaseHistoryOpen(true)}>
-              View release history
-            </Button>
-          }
-        />
-      </SettingsSection>
-    </div>
+    <AdvancedSettings
+      keybindingsConfigPath={keybindingsConfigPath}
+      keybindingsError={openKeybindingsError}
+      isOpeningKeybindings={isOpeningKeybindings}
+      onOpenKeybindings={openKeybindingsFile}
+      shouldOfferRecoveryTools={shouldOfferRecoveryTools}
+      isRepairingLocalState={isRepairingLocalState}
+      onRepairLocalState={() => void repairLocalState()}
+      appVersion={APP_VERSION}
+      onReleaseHistoryOpen={() => setReleaseHistoryOpen(true)}
+    />
   );
 
   const renderActivePanel = () => {

@@ -67,7 +67,9 @@ beforeAll(() => {
   });
 });
 
-describe("MessagesTimeline", () => {
+// Each test dynamically imports the module; the first to run under a cold parallel
+// transform can exceed the default 5s budget, so widen the timeout for the block.
+describe("MessagesTimeline", { timeout: 30_000 }, () => {
   it("keeps small transcripts on the simple non-virtualized path", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(

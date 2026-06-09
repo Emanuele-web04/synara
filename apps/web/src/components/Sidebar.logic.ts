@@ -2,10 +2,19 @@
 // Purpose: Shared sidebar sorting and status helpers used by the thread list UI.
 // Exports: Sidebar row state derivation, add-project error helpers, sort utilities, and visibility helpers.
 
-import type { KeybindingCommand, ProjectId, ThreadId } from "@t3tools/contracts";
+import type {
+  GitStatusResult,
+  KeybindingCommand,
+  ProjectId,
+  ResolvedKeybindingsConfig,
+  ThreadId,
+} from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
+import { GitMergedSimpleIcon, GitPullRequestIcon, type LucideIcon } from "~/lib/icons";
+import { shortcutLabelForCommand, threadJumpCommandForIndex } from "../keybindings";
+import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
   SIDEBAR_ROW_HOVER_CLASS_NAME,
@@ -889,7 +898,10 @@ export function sortThreadsForSidebar<T extends { id: Thread["id"] } & SidebarTh
 }
 
 export function getFallbackThreadIdAfterDelete<
-  T extends { id: Thread["id"]; projectId: Thread["projectId"] } & SidebarThreadSortInput,
+  T extends {
+    id: Thread["id"];
+    projectId: Thread["projectId"];
+  } & SidebarThreadSortInput,
 >(input: {
   threads: readonly T[];
   deletedThreadId: T["id"];
@@ -1098,4 +1110,214 @@ export function deriveSidebarProjectData(input: {
   }
 
   return byProjectId;
+}
+
+export const EMPTY_THREAD_JUMP_LABELS = new Map<ThreadId, string>();
+
+export interface TerminalStatusIndicator {
+  label: "Terminal input needed" | "Terminal task completed" | "Terminal process running";
+  colorClass: string;
+  pulse: boolean;
+}
+
+export interface PrStatusIndicator {
+  label: "PR open" | "PR closed" | "PR merged";
+  colorClass: string;
+  icon: LucideIcon;
+  tooltip: string;
+  url: string;
+}
+
+export type ThreadPr = GitStatusResult["pr"];
+
+export function readDebugFeatureFlagsMenuVisibility(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    return shouldShowDebugFeatureFlagsMenu({
+      isDev: import.meta.env.DEV,
+      hostname: window.location.hostname,
+      storageValue: window.localStorage.getItem(DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY),
+    });
+  } catch {
+    return false;
+  }
+}
+
+export function threadJumpLabelMapsEqual(
+  left: ReadonlyMap<ThreadId, string>,
+  right: ReadonlyMap<ThreadId, string>,
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (left.size !== right.size) {
+    return false;
+  }
+  for (const [threadId, label] of left) {
+    if (right.get(threadId) !== label) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Resolve the visible numbered-thread hints from the active keybinding config.
+export function buildThreadJumpLabelMap(input: {
+  keybindings: ResolvedKeybindingsConfig;
+  platform: string;
+  terminalOpen: boolean;
+  threadJumpCommandByThreadId: ReadonlyMap<
+    ThreadId,
+    NonNullable<ReturnType<typeof threadJumpCommandForIndex>>
+  >;
+}): ReadonlyMap<ThreadId, string> {
+  if (input.threadJumpCommandByThreadId.size === 0) {
+    return EMPTY_THREAD_JUMP_LABELS;
+  }
+
+  const shortcutLabelOptions = {
+    platform: input.platform,
+    context: {
+      terminalFocus: false,
+      terminalOpen: input.terminalOpen,
+    },
+  } as const;
+  const mapping = new Map<ThreadId, string>();
+  for (const [threadId, command] of input.threadJumpCommandByThreadId) {
+    const label = shortcutLabelForCommand(input.keybindings, command, shortcutLabelOptions);
+    if (label) {
+      mapping.set(threadId, label);
+    }
+  }
+  return mapping.size > 0 ? mapping : EMPTY_THREAD_JUMP_LABELS;
+}
+
+// Right-aligned slot wrapper that matches the timestamp width and fades out on
+// row hover/focus so the trailing hover actions can take over.
+export function threadStatusSlotClassName(isSubagentThread: boolean): string {
+  return cn(
+    "mr-1 flex shrink-0 items-center justify-end transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+    isSubagentThread ? "w-[1.2rem]" : "w-[1.625rem]",
+  );
+}
+
+export function resolveWorktreeBadgeLabel(
+  thread: Pick<Thread, "envMode" | "worktreePath">,
+): string | null {
+  return resolveThreadEnvironmentPresentation({
+    envMode: thread.envMode,
+    worktreePath: thread.worktreePath,
+  }).worktreeBadgeLabel;
+}
+
+export function resolveSplitPreviewTitle(input: {
+  thread: Pick<SidebarThreadSummary, "title"> | null;
+  draftPrompt: string | null;
+}): string {
+  if (input.thread?.title) {
+    return input.thread.title;
+  }
+  const draftPrompt = input.draftPrompt?.trim() ?? "";
+  if (draftPrompt.length > 0) {
+    return draftPrompt;
+  }
+  return "New chat";
+}
+
+export function formatRelativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+export function toThreadPr(
+  pr:
+    | NonNullable<ThreadPr>
+    | {
+        number: number;
+        title: string;
+        url: string;
+        baseBranch: string;
+        headBranch: string;
+        state: "open" | "closed" | "merged";
+      },
+): ThreadPr {
+  return {
+    number: pr.number,
+    title: pr.title,
+    url: pr.url,
+    baseBranch: pr.baseBranch,
+    headBranch: pr.headBranch,
+    state: pr.state,
+  };
+}
+
+export function terminalStatusFromThreadState(input: {
+  runningTerminalIds: string[];
+  terminalAttentionStatesById: Record<string, "attention" | "review">;
+}): TerminalStatusIndicator | null {
+  const terminalAttentionStates = Object.values(input.terminalAttentionStatesById ?? {});
+  if (terminalAttentionStates.includes("attention")) {
+    return {
+      label: "Terminal input needed",
+      colorClass: "text-amber-600 dark:text-amber-300/90",
+      pulse: false,
+    };
+  }
+  if ((input.runningTerminalIds?.length ?? 0) > 0) {
+    return {
+      label: "Terminal process running",
+      colorClass: "text-teal-600 dark:text-teal-300/90",
+      pulse: true,
+    };
+  }
+  if (terminalAttentionStates.includes("review")) {
+    return {
+      label: "Terminal task completed",
+      colorClass: "text-emerald-600 dark:text-emerald-300/90",
+      pulse: false,
+    };
+  }
+  return null;
+}
+
+export function prStatusIndicator(pr: ThreadPr): PrStatusIndicator | null {
+  if (!pr) return null;
+
+  if (pr.state === "open") {
+    return {
+      label: "PR open",
+      // Match the diff "+" green so an opened PR reads as the same positive signal.
+      colorClass: "text-[var(--color-decoration-added)]",
+      icon: GitPullRequestIcon,
+      tooltip: `#${pr.number} PR open: ${pr.title}`,
+      url: pr.url,
+    };
+  }
+  if (pr.state === "closed") {
+    return {
+      label: "PR closed",
+      colorClass: "text-zinc-500 dark:text-zinc-400/80",
+      icon: GitPullRequestIcon,
+      tooltip: `#${pr.number} PR closed: ${pr.title}`,
+      url: pr.url,
+    };
+  }
+  if (pr.state === "merged") {
+    return {
+      label: "PR merged",
+      colorClass: "text-violet-500 dark:text-violet-400",
+      icon: GitMergedSimpleIcon,
+      tooltip: `#${pr.number} PR merged: ${pr.title}`,
+      url: pr.url,
+    };
+  }
+  return null;
 }
