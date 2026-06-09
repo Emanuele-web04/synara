@@ -60,6 +60,8 @@ describe("normalizeModelSlug", () => {
   });
 
   it("uses provider-specific aliases", () => {
+    expect(normalizeModelSlug("fable", "claudeAgent")).toBe("claude-fable-5");
+    expect(normalizeModelSlug("fable-5", "claudeAgent")).toBe("claude-fable-5");
     expect(normalizeModelSlug("sonnet", "claudeAgent")).toBe("claude-sonnet-4-6");
     expect(normalizeModelSlug("opus-4.6", "claudeAgent")).toBe("claude-opus-4-6");
     expect(normalizeModelSlug("claude-haiku-4-5-20251001", "claudeAgent")).toBe("claude-haiku-4-5");
@@ -91,6 +93,7 @@ describe("resolveModelSlug", () => {
     expect(resolveModelSlugForProvider("claudeAgent", undefined)).toBe(
       DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
     );
+    expect(resolveModelSlugForProvider("claudeAgent", "fable")).toBe("claude-fable-5");
     expect(resolveModelSlugForProvider("claudeAgent", "sonnet")).toBe("claude-sonnet-4-6");
     expect(resolveModelSlugForProvider("claudeAgent", "gpt-5.3-codex")).toBe(
       DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
@@ -126,10 +129,17 @@ describe("resolveSelectableModel", () => {
   it("resolves provider-specific aliases after normalization", () => {
     expect(
       resolveSelectableModel("claudeAgent", "sonnet", [
+        { slug: "claude-fable-5", name: "Claude Fable 5" },
         { slug: "claude-opus-4-6", name: "Claude Opus 4.6" },
         { slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
       ]),
     ).toBe("claude-sonnet-4-6");
+    expect(
+      resolveSelectableModel("claudeAgent", "fable", [
+        { slug: "claude-fable-5", name: "Claude Fable 5" },
+        { slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+      ]),
+    ).toBe("claude-fable-5");
   });
 
   it("returns null for empty input", () => {
@@ -184,6 +194,18 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
       "high",
       "max",
       "ultrathink",
+    ]);
+  });
+
+  it("returns claude effort options for Fable 5", () => {
+    expect(values("claudeAgent", "claude-fable-5")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultrathink",
+      "ultracode",
     ]);
   });
 
@@ -463,6 +485,19 @@ describe("normalizeClaudeModelOptions", () => {
         contextWindow: "1m",
       }),
     ).toEqual({
+      contextWindow: "1m",
+    });
+  });
+
+  it("preserves Fable 5 extra-high effort and 1M context", () => {
+    expect(
+      normalizeClaudeModelOptions("claude-fable-5", {
+        effort: "xhigh",
+        fastMode: true,
+        contextWindow: "1m",
+      }),
+    ).toEqual({
+      effort: "xhigh",
       contextWindow: "1m",
     });
   });

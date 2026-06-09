@@ -260,6 +260,28 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   ],
   claudeAgent: [
     {
+      slug: "claude-fable-5",
+      name: "Claude Fable 5",
+      capabilities: {
+        reasoningEffortLevels: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High", isDefault: true },
+          { value: "xhigh", label: "Extra High" },
+          { value: "max", label: "Max" },
+          { value: "ultrathink", label: "Ultrathink" },
+          { value: "ultracode", label: "Ultracode" },
+        ],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: ["ultrathink"],
+        contextWindowOptions: [
+          { value: "200k", label: "200k", isDefault: true },
+          { value: "1m", label: "1M" },
+        ],
+      },
+    },
+    {
       slug: "claude-opus-4-8",
       name: "Claude Opus 4.8",
       capabilities: {
@@ -579,6 +601,9 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "gpt-5.3-spark": "gpt-5.3-codex-spark",
   },
   claudeAgent: {
+    fable: "claude-fable-5",
+    "fable-5": "claude-fable-5",
+    "claude-fable-5": "claude-fable-5",
     opus: "claude-opus-4-8",
     "opus-4.8": "claude-opus-4-8",
     "claude-opus-4.8": "claude-opus-4-8",
