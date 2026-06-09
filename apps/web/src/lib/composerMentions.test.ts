@@ -8,6 +8,7 @@ import {
   filterPromptProviderMentionReferences,
   filterPromptSkillReferences,
   formatComposerMentionToken,
+  resolveMentionChipKind,
 } from "./composerMentions";
 
 describe("composer mention reference filtering", () => {
@@ -44,6 +45,14 @@ describe("composer mention reference filtering", () => {
     const plugin = { name: "Linear Plugin", path: "plugin://linear@openai-curated" };
 
     expect(filterPromptProviderMentionReferences("Use @linear please", [plugin])).toEqual([plugin]);
+  });
+
+  it("resolves plugin chip kind from stored mention references", () => {
+    const plugin = { name: "linear", path: "plugin://linear@openai-curated" };
+
+    expect(resolveMentionChipKind("linear")).toBe("path");
+    expect(resolveMentionChipKind("linear", { kind: "plugin" })).toBe("plugin");
+    expect(resolveMentionChipKind("linear", { mentionReferences: [plugin] })).toBe("plugin");
   });
 
   it("keeps selected slash and dollar skills only when their prompt token remains", () => {

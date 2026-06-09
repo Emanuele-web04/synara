@@ -6,35 +6,31 @@
 // Exports: MentionChipIcon, createMentionChipIconElement
 
 import { memo } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { getFileIconName, inferEntryKindFromPath } from "~/file-icons";
+import {
+  resolveMentionChipKind,
+  type MentionChipKind,
+} from "~/lib/composerMentions";
 import { createCentralIconElement } from "~/lib/central-icons";
-import { FileIcon, PluginIcon } from "~/lib/icons";
+import { PluginIcon } from "~/lib/icons";
 import { COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME } from "../composerInlineChip";
 import { FolderClosed } from "../FolderClosed";
 import { FileEntryIcon } from "./FileEntryIcon";
+import type { ProviderMentionReference } from "@t3tools/contracts";
 
-const FOLDER_CLOSED_ICON_SVG = renderToStaticMarkup(
-  <FolderClosed aria-hidden="true" className={COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME} />,
-);
-const FILE_ICON_SVG = renderToStaticMarkup(
-  <FileIcon aria-hidden="true" className={COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME} />,
-);
-const PLUGIN_ICON_SVG = renderToStaticMarkup(
-  <PluginIcon aria-hidden="true" className={COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME} />,
-);
+export type { MentionChipKind };
 
-export type MentionChipKind = "path" | "plugin";
-
-function createStaticIconSpan(
-  svg: string,
-  className: string = COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME,
-): HTMLSpanElement {
-  const span = document.createElement("span");
-  span.ariaHidden = "true";
-  span.className = className;
-  span.innerHTML = svg;
-  return span;
+function composerMentionChipCentralIconName(
+  path: string,
+  kind: MentionChipKind = "path",
+): string {
+  if (kind === "plugin" || path.startsWith("plugin://")) {
+    return "puzzle";
+  }
+  if (inferEntryKindFromPath(path) === "directory") {
+    return "folder-2";
+  }
+  return getFileIconName(path);
 }
 
 // `theme` is retained for call-site compatibility but no longer affects icon
@@ -45,10 +41,15 @@ export const MentionChipIcon = memo(function MentionChipIcon(props: {
   path: string;
   theme: "light" | "dark";
   kind?: MentionChipKind;
+  mentionReferences?: ReadonlyArray<ProviderMentionReference>;
   className?: string;
 }) {
   const className = props.className ?? COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME;
-  if (props.kind === "plugin" || props.path.startsWith("plugin://")) {
+  const resolvedKind = resolveMentionChipKind(props.path, {
+    ...(props.kind ? { kind: props.kind } : {}),
+    ...(props.mentionReferences ? { mentionReferences: props.mentionReferences } : {}),
+  });
+  if (resolvedKind === "plugin") {
     return <PluginIcon className={className} />;
   }
   const kind = inferEntryKindFromPath(props.path);
@@ -62,17 +63,17 @@ export const MentionChipIcon = memo(function MentionChipIcon(props: {
   );
 });
 
+// Lexical composer only — use a single masked Central icon (same as skill chips)
+// so @ tokens align with / and $ tokens. User-message bubbles keep MentionChipIcon.
 export function createMentionChipIconElement(
   path: string,
   kind: MentionChipKind = "path",
   className: string = COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME,
 ): HTMLElement {
-  if (kind === "plugin" || path.startsWith("plugin://")) {
-    return createStaticIconSpan(PLUGIN_ICON_SVG, className);
-  }
-  if (inferEntryKindFromPath(path) === "directory") {
-    return createStaticIconSpan(FOLDER_CLOSED_ICON_SVG, className);
-  }
-  const iconElement = createCentralIconElement(getFileIconName(path), className);
-  return iconElement ?? createStaticIconSpan(FILE_ICON_SVG, className);
+  const iconName = composerMentionChipCentralIconName(path, kind);
+  return (
+    createCentralIconElement(iconName, className) ??
+    createCentralIconElement("code-brackets", className) ??
+    document.createElement("span")
+  );
 }

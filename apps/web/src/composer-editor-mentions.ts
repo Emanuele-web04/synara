@@ -6,6 +6,7 @@ import {
 import {
   createComposerMentionTokenRegex,
   extractComposerMentionPath,
+  isPluginProviderMentionReference,
   providerMentionMatchesToken,
 } from "./lib/composerMentions";
 import {
@@ -269,8 +270,10 @@ function splitTextIntoPromptSegments(
       });
     } else if (match.kind === "mention") {
       const isPluginMention =
-        options.mentionReferences?.some((mention) =>
-          providerMentionMatchesToken(mention, match.value),
+        options.mentionReferences?.some(
+          (mention) =>
+            isPluginProviderMentionReference(mention) &&
+            providerMentionMatchesToken(mention, match.value),
         ) ?? false;
       segments.push(
         isPluginMention

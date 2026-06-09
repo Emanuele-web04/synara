@@ -90,6 +90,34 @@ export function providerMentionMatchesToken(
   );
 }
 
+export type MentionChipKind = "path" | "plugin";
+
+export function isPluginProviderMentionReference(mention: ProviderMentionReference): boolean {
+  return mention.path.startsWith("plugin://");
+}
+
+export function resolveMentionChipKind(
+  path: string,
+  options?: {
+    kind?: MentionChipKind;
+    mentionReferences?: ReadonlyArray<ProviderMentionReference>;
+  },
+): MentionChipKind {
+  if (options?.kind === "plugin" || path.startsWith("plugin://")) {
+    return "plugin";
+  }
+  if (
+    options?.mentionReferences?.some(
+      (mention) =>
+        isPluginProviderMentionReference(mention) &&
+        providerMentionMatchesToken(mention, path),
+    )
+  ) {
+    return "plugin";
+  }
+  return "path";
+}
+
 const PROMPT_MENTION_NAME_REGEX = createComposerMentionTokenRegex({
   includeTrailingTokenAtEnd: true,
 });

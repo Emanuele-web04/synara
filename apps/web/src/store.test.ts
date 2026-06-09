@@ -306,6 +306,29 @@ describe("store pure functions", () => {
     ]);
   });
 
+  it("preserves plugin mention references from live thread.message-sent events", () => {
+    const messageId = MessageId.makeUnsafe("message-with-plugin-mention");
+    const next = applyOrchestrationEvents(makeState(makeThread()), [
+      makeDomainEvent("thread.message-sent", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId,
+        role: "user",
+        text: "Use @linear",
+        attachments: [],
+        mentions: [{ name: "linear", path: "plugin://linear@openai-curated" }],
+        turnId: null,
+        streaming: false,
+        source: "native",
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:00.000Z",
+      }),
+    ]);
+
+    expect(next.threads[0]?.messages[0]?.mentions).toEqual([
+      { name: "linear", path: "plugin://linear@openai-curated" },
+    ]);
+  });
+
   it("does not regress a semantic branch when local workspace patches only report a temp branch", () => {
     const state = makeState(
       makeThread({
