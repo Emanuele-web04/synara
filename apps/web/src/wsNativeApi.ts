@@ -16,6 +16,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
+  type ReviewUpdatedPayload,
   type ServerProviderStatusesUpdatedPayload,
   type ServerLifecycleStreamEvent,
   type ServerSettingsUpdatedPayload,
@@ -43,6 +44,8 @@ const serverProviderStatusesUpdatedListeners = new Set<
 const serverMaintenanceUpdatedListeners = new Set<(payload: ServerLifecycleStreamEvent) => void>();
 const serverSettingsUpdatedListeners = new Set<(payload: ServerSettingsUpdatedPayload) => void>();
 const gitActionProgressListeners = new Set<(payload: GitActionProgressEvent) => void>();
+const reviewUpdatedListeners = new Set<(payload: ReviewUpdatedPayload) => void>();
+let reviewUpdatedTransportUnsubscribe: (() => void) | null = null;
 
 function omitNullUserInputAnswers(
   command: Parameters<NativeApi["orchestration"]["dispatchCommand"]>[0],
@@ -60,6 +63,34 @@ function omitNullUserInputAnswers(
     ),
   };
 }
+
+function dispatchReviewUpdated(payload: ReviewUpdatedPayload): void {
+  for (const listener of reviewUpdatedListeners) {
+    try {
+      listener(payload);
+    } catch {
+      // Swallow listener errors
+    }
+  }
+}
+
+function ensureReviewUpdatedSubscription(transport: WsTransport): void {
+  if (reviewUpdatedTransportUnsubscribe !== null) {
+    return;
+  }
+  reviewUpdatedTransportUnsubscribe = transport.subscribe(WS_CHANNELS.reviewUpdated, (message) =>
+    dispatchReviewUpdated(message.data),
+  );
+}
+
+function stopReviewUpdatedSubscription(): void {
+  if (reviewUpdatedTransportUnsubscribe === null) {
+    return;
+  }
+  reviewUpdatedTransportUnsubscribe();
+  reviewUpdatedTransportUnsubscribe = null;
+}
+
 const terminalEventListeners = new Set<(payload: TerminalEvent) => void>();
 const orchestrationDomainEventListeners = new Set<(payload: OrchestrationEvent) => void>();
 const orchestrationShellEventListeners = new Set<(payload: OrchestrationShellStreamItem) => void>();
@@ -522,6 +553,42 @@ export function createWsNativeApi(): NativeApi {
         };
       },
     },
+    review: {
+      listPullRequests: (input) => transport.request(WS_METHODS.reviewListPullRequests, input),
+      getViewer: (input) => transport.request(WS_METHODS.reviewGetViewer, input),
+      loadChangeset: (input) => transport.request(WS_METHODS.reviewLoadChangeset, input),
+      loadPullRequest: (input) => transport.request(WS_METHODS.reviewLoadPullRequest, input),
+      loadConversation: (input) => transport.request(WS_METHODS.reviewLoadConversation, input),
+      listComments: (input) => transport.request(WS_METHODS.reviewListComments, input),
+      addComment: (input) => transport.request(WS_METHODS.reviewAddComment, input),
+      updateComment: (input) => transport.request(WS_METHODS.reviewUpdateComment, input),
+      removeComment: (input) => transport.request(WS_METHODS.reviewRemoveComment, input),
+      submit: (input) => transport.request(WS_METHODS.reviewSubmit, input),
+      loadRemoteThreads: (input) => transport.request(WS_METHODS.reviewLoadRemoteThreads, input),
+      runAgent: (input) => transport.request(WS_METHODS.reviewRunAgent, input),
+      checkProjectAccess: (input) => transport.request(WS_METHODS.reviewCheckProjectAccess, input),
+      listProjects: (input) => transport.request(WS_METHODS.reviewListProjects, input),
+      getProjectBoard: (input) => transport.request(WS_METHODS.reviewGetProjectBoard, input),
+      moveProjectCard: (input) => transport.request(WS_METHODS.reviewMoveProjectCard, input),
+      onUpdated: (callback) => {
+        reviewUpdatedListeners.add(callback);
+        ensureReviewUpdatedSubscription(transport);
+        const latest = transport.getLatestPush(WS_CHANNELS.reviewUpdated)?.data;
+        if (latest) {
+          queueMicrotask(() => {
+            if (reviewUpdatedListeners.has(callback)) {
+              callback(latest);
+            }
+          });
+        }
+        return () => {
+          reviewUpdatedListeners.delete(callback);
+          if (reviewUpdatedListeners.size === 0) {
+            stopReviewUpdatedSubscription();
+          }
+        };
+      },
+    },
     contextMenu: {
       show: async <T extends string>(
         items: readonly ContextMenuItem<T>[],
@@ -811,6 +878,8 @@ if (import.meta.hot) {
     serverProviderStatusesUpdatedListeners.clear();
     serverSettingsUpdatedListeners.clear();
     gitActionProgressListeners.clear();
+    reviewUpdatedListeners.clear();
+    stopReviewUpdatedSubscription();
     terminalEventListeners.clear();
     orchestrationDomainEventListeners.clear();
     orchestrationShellEventListeners.clear();

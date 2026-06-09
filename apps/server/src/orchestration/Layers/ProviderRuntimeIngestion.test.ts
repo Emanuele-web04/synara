@@ -948,7 +948,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
-  it("does not project reasoning content deltas into transcript work rows", async () => {
+  it("projects reasoning content deltas into visible thinking work rows without assistant messages", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
@@ -980,15 +980,65 @@ describe("ProviderRuntimeIngestion", () => {
 
     const thread = await waitForThread(harness.engine, (entry) =>
       entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-turn-completed",
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-delta",
       ),
     );
 
-    expect(
-      thread.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-delta",
+    const reasoningActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-delta",
+    );
+    expect(reasoningActivity).toMatchObject({
+      kind: "reasoning.delta",
+      summary: "Thinking",
+      tone: "info",
+      payload: {
+        streamKind: "reasoning_text",
+        detail: "checking files",
+      },
+      turnId: asTurnId("turn-reasoning"),
+    });
+    expect(thread.messages).toHaveLength(0);
+  });
+
+  it("projects reasoning summary deltas with summary index metadata", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-summary-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("thought-1"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        delta: "reviewing patch shape",
+        summaryIndex: 1,
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-summary-delta",
       ),
-    ).toBe(false);
+    );
+
+    const reasoningActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-summary-delta",
+    );
+    expect(reasoningActivity).toMatchObject({
+      kind: "reasoning.delta",
+      summary: "Thinking summary",
+      tone: "info",
+      payload: {
+        streamKind: "reasoning_summary_text",
+        detail: "reviewing patch shape",
+        summaryIndex: 1,
+      },
+      turnId: asTurnId("turn-reasoning"),
+    });
     expect(thread.messages).toHaveLength(0);
   });
 
@@ -2789,6 +2839,44 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.status).toBe("running");
     expect(thread.session?.activeTurnId).toBe("turn-warning");
     expect(thread.session?.lastError).toBeNull();
+  });
+
+  it("labels Codex MCP auth warnings with actionable copy", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "runtime.warning",
+      eventId: asEventId("evt-mcp-auth-warning"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        message:
+          '2026-06-08T22:53:48.409310Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer..." })',
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === "evt-mcp-auth-warning" &&
+          activity.summary === "MCP authentication required",
+      ),
+    );
+    const warning = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-mcp-auth-warning",
+    );
+    const warningPayload =
+      warning?.payload && typeof warning.payload === "object"
+        ? (warning.payload as Record<string, unknown>)
+        : undefined;
+
+    expect(warning?.summary).toBe("MCP authentication required");
+    expect(warningPayload?.message).toBe(
+      "A configured MCP server rejected Codex because it requires Bearer authentication.",
+    );
+    expect(String(warningPayload?.detail)).toContain("rmcp::transport::worker");
   });
 
   it("maps session/thread lifecycle and item.started into session/activity projections", async () => {

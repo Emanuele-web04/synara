@@ -43,7 +43,7 @@ export function ContextWindowMeter(props: {
                   fill="none"
                   stroke="currentColor"
                   strokeWidth="2"
-                  className="text-muted-foreground/25 dark:text-muted-foreground/40"
+                  className="text-muted-foreground/75 dark:text-muted-foreground/70"
                 />
                 <circle
                   cx="8"

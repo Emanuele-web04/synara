@@ -20,7 +20,18 @@ import {
   type RuntimeMode,
   TurnId,
 } from "@t3tools/contracts";
-import { Cache, Cause, Duration, Effect, Equal, Layer, Option, Schema, Stream } from "effect";
+import {
+  Cache,
+  Cause,
+  Duration,
+  Effect,
+  Equal,
+  Fiber,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import {
   buildPromptThreadTitleFallback,
@@ -79,6 +90,7 @@ type ProviderIntentEvent = Extract<
       | "thread.conversation-rollback-requested"
       | "thread.message-edit-resend-requested"
       | "thread.session-stop-requested"
+      | "thread.session-ensure-requested"
       | "thread.runtime-action-requested";
   }
 >;
@@ -154,8 +166,25 @@ const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
 const serverCommandId = (tag: string): CommandId =>
   CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
 
+const resolveSubagentProviderThreadId = (
+  threadId: ThreadId,
+  parentThreadId: ThreadId | null | undefined,
+): string | undefined => {
+  if (!parentThreadId) {
+    return undefined;
+  }
+
+  const prefix = `subagent:${parentThreadId}:`;
+  const rawThreadId = threadId as string;
+  return rawThreadId.startsWith(prefix) ? rawThreadId.slice(prefix.length) : undefined;
+};
+
+const editResendTurnStartKey = (threadId: ThreadId, messageId: string) =>
+  `${threadId}:${messageId}`;
+
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
+const RECENT_SESSION_ENSURE_REUSE_WINDOW_MS = 30_000;
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const HANDOFF_CONTEXT_WRAPPER_OVERHEAD =
   "<handoff_context>\n\n</handoff_context>\n\n<latest_user_message>\n\n</latest_user_message>"
@@ -272,6 +301,14 @@ const make = Effect.gen(function* () {
 
   const threadProviderOptions = new Map<string, ProviderStartOptions>();
   const threadModelSelections = new Map<string, ModelSelection>();
+  const recentlyEnsuredSessionThreads = new Map<
+    string,
+    {
+      readonly ensuredAt: number;
+      readonly modelSelection?: ModelSelection;
+      readonly runtimeMode?: RuntimeMode;
+    }
+  >();
 
   const resolveThreadWorkspaceProject = Effect.fnUntraced(function* (
     thread: Pick<OrchestrationThread, "projectId">,
@@ -429,6 +466,17 @@ const make = Effect.gen(function* () {
     return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
   });
 
+  const joinPendingSessionEnsure = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const recentEnsure = recentlyEnsuredSessionThreads.get(threadId);
+    if (recentEnsure === undefined) {
+      return null;
+    }
+    recentlyEnsuredSessionThreads.delete(threadId);
+    return Date.now() - recentEnsure.ensuredAt <= RECENT_SESSION_ENSURE_REUSE_WINDOW_MS
+      ? recentEnsure
+      : null;
+  });
+
   // Recovers the parent thread when older/local-only subagent rows are missing parentThreadId metadata.
   const inferParentThreadFromSyntheticSubagentId = Effect.fnUntraced(function* (
     threadId: ThreadId,
@@ -454,19 +502,6 @@ const make = Effect.gen(function* () {
     const parentThread = yield* resolveThread(thread.parentThreadId);
     return parentThread ?? thread;
   });
-
-  const resolveSubagentProviderThreadId = (
-    threadId: ThreadId,
-    parentThreadId: ThreadId | null | undefined,
-  ): string | undefined => {
-    if (!parentThreadId) {
-      return undefined;
-    }
-
-    const prefix = `subagent:${parentThreadId}:`;
-    const rawThreadId = threadId as string;
-    return rawThreadId.startsWith(prefix) ? rawThreadId.slice(prefix.length) : undefined;
-  };
 
   const enqueueQueuedTurnStart = (
     payload: Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>["payload"],
@@ -521,9 +556,6 @@ const make = Effect.gen(function* () {
           .get(threadId)
           ?.some((payload) => payload.messageId === messageId) ?? false,
     );
-
-  const editResendTurnStartKey = (threadId: ThreadId, messageId: string) =>
-    `${threadId}:${messageId}`;
 
   const clearEditResendTurnStartKeysForThread = (threadId: ThreadId) =>
     Effect.sync(() => {
@@ -790,6 +822,30 @@ const make = Effect.gen(function* () {
         },
         sessionServerOptions,
       );
+    const startProviderSessionWithStaleResumeRetry = (input?: {
+      readonly resumeCursor?: unknown;
+      readonly provider?: ProviderKind;
+    }) =>
+      startProviderSession(input).pipe(
+        Effect.catch((error) => {
+          if (!isStaleCodexResumeError(error)) {
+            return Effect.fail(error);
+          }
+          return Effect.gen(function* () {
+            yield* clearStaleProviderResumeState({ threadId, cause: error });
+            yield* Effect.logWarning(
+              "provider command reactor retrying provider session after stale resume cursor",
+              {
+                threadId,
+                provider: preferredProvider,
+                runtimeMode: desiredRuntimeMode,
+                cause: error.message,
+              },
+            );
+            return yield* startProviderSession(undefined);
+          });
+        }),
+      );
 
     const bindSessionToThread = (session: ProviderSession) =>
       setThreadSession({
@@ -809,6 +865,21 @@ const make = Effect.gen(function* () {
 
     // Only reuse projected session state when the runtime still has a live session to attach to.
     const activeSession = yield* resolveActiveSession(threadId);
+    const activeSessionMatchesDesired =
+      activeSession !== undefined &&
+      activeSession.status !== "closed" &&
+      activeSession.provider === preferredProvider &&
+      activeSession.runtimeMode === desiredRuntimeMode &&
+      (requestedModelSelection === undefined ||
+        activeSession.model === undefined ||
+        activeSession.model === requestedModelSelection.model);
+    if (
+      activeSessionMatchesDesired &&
+      (thread.session === null || thread.session.status === "stopped")
+    ) {
+      yield* bindSessionToThread(activeSession);
+      return threadId;
+    }
     const existingSessionThreadId =
       thread.session && thread.session.status !== "stopped" && activeSession ? thread.id : null;
     if (existingSessionThreadId) {
@@ -857,7 +928,7 @@ const make = Effect.gen(function* () {
         shouldRestartForModelSelectionChange,
         hasResumeCursor: resumeCursor !== undefined,
       });
-      const restartedSession = yield* startProviderSession(
+      const restartedSession = yield* startProviderSessionWithStaleResumeRetry(
         resumeCursor !== undefined ? { resumeCursor } : undefined,
       );
       yield* Effect.logInfo("provider command reactor restarted provider session", {
@@ -916,7 +987,7 @@ const make = Effect.gen(function* () {
       sidechatContextBootstrapThreadIds.add(threadId);
     }
 
-    const startedSession = yield* startProviderSession(undefined);
+    const startedSession = yield* startProviderSessionWithStaleResumeRetry(undefined);
     yield* bindSessionToThread(startedSession);
     return startedSession.threadId;
   });
@@ -940,16 +1011,76 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+
+    const captureMessageStartCheckpoint = Effect.gen(function* () {
+      if ((input.dispatchMode ?? "queue") === "steer") {
+        return;
+      }
+
+      const currentThread = yield* resolveThread(input.threadId);
+      if (!currentThread) {
+        return;
+      }
+      if (currentThread.reviewChatTarget !== null) {
+        return;
+      }
+
+      const cwd = yield* resolveProjectedThreadWorkspaceCwd(currentThread);
+      if (!cwd || !(yield* checkpointStore.isGitRepository(cwd))) {
+        return;
+      }
+
+      const checkpointRef = checkpointRefForThreadMessageStart(
+        input.threadId,
+        MessageId.makeUnsafe(input.messageId),
+      );
+      const checkpointExists = yield* checkpointStore.hasCheckpointRef({
+        cwd,
+        checkpointRef,
+      });
+      if (!checkpointExists) {
+        // Capture before provider dispatch so the later turn diff is bounded by
+        // the user's submit moment, not an async runtime event.
+        yield* checkpointStore.captureCheckpoint({
+          cwd,
+          checkpointRef,
+        });
+      }
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("failed to capture provider turn start checkpoint", {
+          threadId: input.threadId,
+          messageId: input.messageId,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+    const messageStartCheckpointFiber =
+      input.reviewTarget === undefined && input.dispatchMode !== "steer"
+        ? yield* captureMessageStartCheckpoint.pipe(Effect.forkChild)
+        : null;
+
+    const joinedPendingSessionEnsure = yield* joinPendingSessionEnsure(input.threadId);
     const activeSessionBeforeEnsure = yield* providerService
       .listSessions()
       .pipe(
         Effect.map((sessions) => sessions.find((session) => session.threadId === input.threadId)),
       );
-    yield* ensureSessionForThread(input.threadId, input.createdAt, {
-      ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
-      ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
-      ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
-    });
+    const hasJoinedReusableSession =
+      joinedPendingSessionEnsure !== null &&
+      (input.runtimeMode === undefined ||
+        joinedPendingSessionEnsure.runtimeMode === input.runtimeMode) &&
+      (input.modelSelection === undefined ||
+        joinedPendingSessionEnsure.modelSelection === undefined ||
+        (joinedPendingSessionEnsure.modelSelection.provider === input.modelSelection.provider &&
+          joinedPendingSessionEnsure.modelSelection.model === input.modelSelection.model));
+    if (!hasJoinedReusableSession) {
+      yield* ensureSessionForThread(input.threadId, input.createdAt, {
+        ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+        ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+        ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
+      });
+    }
     if (input.providerOptions !== undefined) {
       threadProviderOptions.set(input.threadId, input.providerOptions);
     }
@@ -985,6 +1116,7 @@ const make = Effect.gen(function* () {
     const shouldBootstrapPriorTranscriptContext =
       (selectedProvider === "kilo" || selectedProvider === "opencode") &&
       activeSessionBeforeEnsure === undefined &&
+      !hasJoinedReusableSession &&
       !handoffBootstrapText &&
       !sidechatBootstrapText;
     const priorTranscriptBootstrapText =
@@ -1029,40 +1161,10 @@ const make = Effect.gen(function* () {
             }
           : requestedModelSelection
         : input.modelSelection;
-
-    const captureMessageStartCheckpoint = Effect.gen(function* () {
-      if ((input.dispatchMode ?? "queue") === "steer") {
-        return;
-      }
-
-      const currentThread = yield* resolveThread(input.threadId);
-      if (!currentThread) {
-        return;
-      }
-
-      const cwd = yield* resolveProjectedThreadWorkspaceCwd(currentThread);
-      if (!cwd || !(yield* checkpointStore.isGitRepository(cwd))) {
-        return;
-      }
-
-      // Capture before provider dispatch so the later turn diff is bounded by
-      // the user's submit moment, not an async runtime event.
-      yield* checkpointStore.captureCheckpoint({
-        cwd,
-        checkpointRef: checkpointRefForThreadMessageStart(
-          input.threadId,
-          MessageId.makeUnsafe(input.messageId),
-        ),
-      });
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("failed to capture provider turn start checkpoint", {
-          threadId: input.threadId,
-          messageId: input.messageId,
-          cause: Cause.pretty(cause),
-        }),
-      ),
-    );
+    const providerInteractionMode =
+      thread.reviewChatTarget !== null && input.interactionMode === "default"
+        ? undefined
+        : input.interactionMode;
 
     if (input.reviewTarget !== undefined) {
       yield* providerService.startReview({
@@ -1077,10 +1179,14 @@ const make = Effect.gen(function* () {
         ...(input.skills !== undefined ? { skills: input.skills } : {}),
         ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
         ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
-        ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+        ...(providerInteractionMode !== undefined
+          ? { interactionMode: providerInteractionMode }
+          : {}),
       });
     } else {
-      yield* captureMessageStartCheckpoint;
+      if (messageStartCheckpointFiber) {
+        yield* Fiber.join(messageStartCheckpointFiber);
+      }
       yield* providerService.sendTurn({
         threadId: input.threadId,
         ...(normalizedInput ? { input: normalizedInput } : {}),
@@ -1088,7 +1194,9 @@ const make = Effect.gen(function* () {
         ...(input.skills !== undefined ? { skills: input.skills } : {}),
         ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
         ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
-        ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+        ...(providerInteractionMode !== undefined
+          ? { interactionMode: providerInteractionMode }
+          : {}),
       });
     }
     if (handoffBootstrapText && thread.handoff !== null) {
@@ -1410,7 +1518,6 @@ const make = Effect.gen(function* () {
         ? "queue"
         : event.payload.dispatchMode;
     const editResendKey = editResendTurnStartKey(event.payload.threadId, event.payload.messageId);
-    const isEditResendTurn = editResendTurnStartKeys.has(editResendKey);
 
     yield* dispatchTurnForThread({
       threadId: event.payload.threadId,
@@ -1463,6 +1570,60 @@ const make = Effect.gen(function* () {
     event: Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>,
   ) {
     yield* enqueueQueuedTurnStart(event.payload);
+  });
+
+  const processSessionEnsureRequested = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.session-ensure-requested" }>,
+  ) {
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread) {
+      return;
+    }
+    if (thread.session?.status === "running" && thread.session.activeTurnId !== null) {
+      return;
+    }
+
+    const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
+    const ensureSession = ensureSessionForThread(event.payload.threadId, event.payload.createdAt, {
+      ...(event.payload.modelSelection !== undefined
+        ? { modelSelection: event.payload.modelSelection }
+        : {}),
+      ...(event.payload.providerOptions !== undefined
+        ? { providerOptions: event.payload.providerOptions }
+        : cachedProviderOptions !== undefined
+          ? { providerOptions: cachedProviderOptions }
+          : {}),
+      runtimeMode: event.payload.runtimeMode,
+    }).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          recentlyEnsuredSessionThreads.set(event.payload.threadId, {
+            ensuredAt: Date.now(),
+            ...(event.payload.modelSelection !== undefined
+              ? { modelSelection: event.payload.modelSelection }
+              : {}),
+            ...(event.payload.runtimeMode !== undefined
+              ? { runtimeMode: event.payload.runtimeMode }
+              : {}),
+          });
+        }),
+      ),
+      Effect.catchCause((cause) =>
+        setThreadSessionError({
+          threadId: event.payload.threadId,
+          runtimeMode: event.payload.runtimeMode,
+          detail: Cause.pretty(cause),
+          createdAt: event.payload.createdAt,
+        }),
+      ),
+    );
+    yield* ensureSession;
+    if (event.payload.modelSelection !== undefined) {
+      threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+    }
+    if (event.payload.providerOptions !== undefined) {
+      threadProviderOptions.set(event.payload.threadId, event.payload.providerOptions);
+    }
   });
 
   // Promote the next queued message only after the active provider turn settles.
@@ -2051,6 +2212,9 @@ const make = Effect.gen(function* () {
         case "thread.session-stop-requested":
           yield* processSessionStopRequested(event);
           return;
+        case "thread.session-ensure-requested":
+          yield* processSessionEnsureRequested(event);
+          return;
         case "thread.runtime-action-requested":
           yield* processRuntimeActionRequested(event);
           return;
@@ -2100,6 +2264,7 @@ const make = Effect.gen(function* () {
         event.type !== "thread.conversation-rollback-requested" &&
         event.type !== "thread.message-edit-resend-requested" &&
         event.type !== "thread.session-stop-requested" &&
+        event.type !== "thread.session-ensure-requested" &&
         event.type !== "thread.runtime-action-requested"
       ) {
         return Effect.void;

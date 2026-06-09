@@ -779,7 +779,7 @@ export function BranchToolbarBranchSelector({
             <div className="flex items-center justify-between gap-2">
               <span className="truncate">{itemValue}</span>
               {badge && (
-                <span className="shrink-0 text-[10px] text-muted-foreground/45">{badge}</span>
+                <span className="shrink-0 text-[10px] text-muted-foreground/70">{badge}</span>
               )}
             </div>
             {currentBranchChangeSummary ? (

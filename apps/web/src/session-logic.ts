@@ -156,6 +156,28 @@ export type TimelineEntry =
       entry: WorkLogEntry;
     };
 
+export type CompactChatTimelineEntry =
+  | {
+      id: string;
+      kind: "message";
+      createdAt: string;
+      message: ChatMessage;
+    }
+  | {
+      id: string;
+      kind: "work";
+      createdAt: string;
+      entry: WorkLogEntry;
+    };
+
+export function formatWorkLogEntryLabel(entry: WorkLogEntry): string {
+  return entry.toolTitle ?? entry.preview ?? entry.label;
+}
+
+export function formatWorkLogEntryDetail(entry: WorkLogEntry): string | null {
+  return entry.detail ?? entry.command ?? null;
+}
+
 function formatDuration(durationMs: number): string {
   if (!Number.isFinite(durationMs) || durationMs < 0) return "0ms";
   if (durationMs < 1_000) return `${Math.max(1, Math.round(durationMs))}ms`;
@@ -336,13 +358,16 @@ function parseUserInputQuestions(
       if (options.length === 0) {
         return null;
       }
-      return {
+      const parsedQuestion: UserInputQuestion = {
         id: question.id,
         header: question.header,
         question: question.question,
         options,
-        ...(question.multiSelect === true ? { multiSelect: true } : {}),
       };
+      if (question.multiSelect === true) {
+        parsedQuestion.multiSelect = true;
+      }
+      return parsedQuestion;
     })
     .filter((question): question is UserInputQuestion => question !== null);
   return parsed.length > 0 ? parsed : null;
@@ -651,6 +676,7 @@ export function deriveWorkLogEntries(
     .filter((activity) =>
       latestTurnId
         ? activity.turnId === latestTurnId ||
+          (activity.kind === "reasoning.delta" && activity.turnId === null) ||
           (activity.kind === "context-compaction" && activity.turnId === null)
         : true,
     )
@@ -728,7 +754,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     id: activity.id,
     createdAt: activity.createdAt,
     label: activity.summary,
-    tone: activity.tone === "approval" ? "info" : activity.tone,
+    tone:
+      activity.kind === "reasoning.delta"
+        ? "thinking"
+        : activity.tone === "approval"
+          ? "info"
+          : activity.tone,
     activityKind: activity.kind,
     ...(toolName ? { toolName } : {}),
     ...(toolCallId ? { toolCallId } : {}),
@@ -1085,15 +1116,18 @@ function extractCollabSubagents(
   }
 
   const receiverThreadIds = decodeSubagentReceiverThreadIds(item);
-  const receiverAgents = decodeSubagentReceiverAgents(item, receiverThreadIds).map((agent) => ({
-    threadId: agent.providerThreadId,
-    providerThreadId: agent.providerThreadId,
-    ...(agent.agentId ? { agentId: agent.agentId } : {}),
-    ...(agent.nickname ? { nickname: agent.nickname } : {}),
-    ...(agent.role ? { role: agent.role } : {}),
-    ...(agent.model ? { model: agent.model } : {}),
-    ...(agent.prompt ? { prompt: agent.prompt } : {}),
-  }));
+  const receiverAgents = decodeSubagentReceiverAgents(item, receiverThreadIds).map((agent) => {
+    const receiver: WorkLogSubagent = {
+      threadId: agent.providerThreadId,
+      providerThreadId: agent.providerThreadId,
+    };
+    if (agent.agentId) receiver.agentId = agent.agentId;
+    if (agent.nickname) receiver.nickname = agent.nickname;
+    if (agent.role) receiver.role = agent.role;
+    if (agent.model) receiver.model = agent.model;
+    if (agent.prompt) receiver.prompt = agent.prompt;
+    return receiver;
+  });
 
   const agentStates = decodeSubagentAgentStates(item);
   if (receiverAgents.length > 0 || Object.keys(agentStates).length > 0) {
@@ -1664,7 +1698,10 @@ export function deriveTimelineEntries(
   const proposedPlanTurnIds = new Set(
     proposedPlans.flatMap((proposedPlan) => (proposedPlan.turnId ? [proposedPlan.turnId] : [])),
   );
-  const messageRows: TimelineEntry[] = messages.flatMap((message) => {
+  const messageRows: TimelineEntry[] = [];
+  let messageRowsSorted = true;
+  let previousMessageCreatedAt: string | null = null;
+  for (const message of messages) {
     const displayMessage =
       message.role === "assistant" && message.turnId && proposedPlanTurnIds.has(message.turnId)
         ? { ...message, text: stripProposedPlanBlocksFromText(message.text) }
@@ -1675,32 +1712,176 @@ export function deriveTimelineEntries(
       displayMessage.turnId &&
       proposedPlanTurnIds.has(displayMessage.turnId)
     ) {
-      return [];
+      continue;
     }
-    return [
-      {
-        id: displayMessage.id,
-        kind: "message",
-        createdAt: displayMessage.createdAt,
-        message: displayMessage,
-      },
-    ];
-  });
-  const proposedPlanRows: TimelineEntry[] = proposedPlans.map((proposedPlan) => ({
-    id: proposedPlan.id,
-    kind: "proposed-plan",
-    createdAt: proposedPlan.createdAt,
-    proposedPlan,
-  }));
-  const workRows: TimelineEntry[] = workEntries.map((entry) => ({
-    id: entry.id,
-    kind: "work",
-    createdAt: entry.createdAt,
-    entry,
-  }));
-  return [...messageRows, ...proposedPlanRows, ...workRows].toSorted((a, b) =>
-    a.createdAt.localeCompare(b.createdAt),
-  );
+    if (previousMessageCreatedAt !== null && previousMessageCreatedAt > displayMessage.createdAt) {
+      messageRowsSorted = false;
+    }
+    previousMessageCreatedAt = displayMessage.createdAt;
+    messageRows.push({
+      id: displayMessage.id,
+      kind: "message",
+      createdAt: displayMessage.createdAt,
+      message: displayMessage,
+    });
+  }
+
+  const proposedPlanRows: TimelineEntry[] = [];
+  let proposedPlanRowsSorted = true;
+  let previousProposedPlanCreatedAt: string | null = null;
+  for (const proposedPlan of proposedPlans) {
+    if (
+      previousProposedPlanCreatedAt !== null &&
+      previousProposedPlanCreatedAt > proposedPlan.createdAt
+    ) {
+      proposedPlanRowsSorted = false;
+    }
+    previousProposedPlanCreatedAt = proposedPlan.createdAt;
+    proposedPlanRows.push({
+      id: proposedPlan.id,
+      kind: "proposed-plan",
+      createdAt: proposedPlan.createdAt,
+      proposedPlan,
+    });
+  }
+
+  const workRows: TimelineEntry[] = [];
+  let workRowsSorted = true;
+  let previousWorkCreatedAt: string | null = null;
+  for (const entry of workEntries) {
+    if (previousWorkCreatedAt !== null && previousWorkCreatedAt > entry.createdAt) {
+      workRowsSorted = false;
+    }
+    previousWorkCreatedAt = entry.createdAt;
+    workRows.push({
+      id: entry.id,
+      kind: "work",
+      createdAt: entry.createdAt,
+      entry,
+    });
+  }
+
+  if (!messageRowsSorted || !proposedPlanRowsSorted || !workRowsSorted) {
+    return [...messageRows, ...proposedPlanRows, ...workRows].toSorted((a, b) =>
+      a.createdAt.localeCompare(b.createdAt),
+    );
+  }
+
+  return mergeTimelineRows(messageRows, proposedPlanRows, workRows);
+}
+
+export function deriveCompactChatTimelineEntries(
+  messages: ReadonlyArray<ChatMessage>,
+  workEntries: ReadonlyArray<WorkLogEntry>,
+): CompactChatTimelineEntry[] {
+  const messageRows: CompactChatTimelineEntry[] = [];
+  let messageRowsSorted = true;
+  let previousMessageCreatedAt: string | null = null;
+  for (const message of messages) {
+    if (previousMessageCreatedAt !== null && previousMessageCreatedAt > message.createdAt) {
+      messageRowsSorted = false;
+    }
+    previousMessageCreatedAt = message.createdAt;
+    messageRows.push({
+      id: message.id,
+      kind: "message",
+      createdAt: message.createdAt,
+      message,
+    });
+  }
+
+  const workRows: CompactChatTimelineEntry[] = [];
+  let workRowsSorted = true;
+  let previousWorkCreatedAt: string | null = null;
+  for (const entry of workEntries) {
+    if (previousWorkCreatedAt !== null && previousWorkCreatedAt > entry.createdAt) {
+      workRowsSorted = false;
+    }
+    previousWorkCreatedAt = entry.createdAt;
+    workRows.push({
+      id: entry.id,
+      kind: "work",
+      createdAt: entry.createdAt,
+      entry,
+    });
+  }
+
+  if (!messageRowsSorted || !workRowsSorted) {
+    return [...messageRows, ...workRows].toSorted((left, right) =>
+      left.createdAt.localeCompare(right.createdAt),
+    );
+  }
+
+  return mergeCompactTimelineRows(messageRows, workRows);
+}
+
+function mergeCompactTimelineRows(
+  messageRows: CompactChatTimelineEntry[],
+  workRows: CompactChatTimelineEntry[],
+): CompactChatTimelineEntry[] {
+  const result: CompactChatTimelineEntry[] = [];
+  let messageIndex = 0;
+  let workIndex = 0;
+
+  while (messageIndex < messageRows.length || workIndex < workRows.length) {
+    const messageRow = messageRows[messageIndex];
+    const workRow = workRows[workIndex];
+    if (!messageRow || (workRow && workRow.createdAt < messageRow.createdAt)) {
+      result.push(workRow);
+      workIndex += 1;
+    } else {
+      result.push(messageRow);
+      messageIndex += 1;
+    }
+  }
+
+  return result;
+}
+
+function mergeTimelineRows(
+  messageRows: TimelineEntry[],
+  proposedPlanRows: TimelineEntry[],
+  workRows: TimelineEntry[],
+): TimelineEntry[] {
+  const result: TimelineEntry[] = [];
+  let messageIndex = 0;
+  let proposedPlanIndex = 0;
+  let workIndex = 0;
+
+  while (
+    messageIndex < messageRows.length ||
+    proposedPlanIndex < proposedPlanRows.length ||
+    workIndex < workRows.length
+  ) {
+    const messageRow = messageRows[messageIndex];
+    const proposedPlanRow = proposedPlanRows[proposedPlanIndex];
+    const workRow = workRows[workIndex];
+    let nextRow = messageRow;
+    let source: "message" | "proposed-plan" | "work" = "message";
+
+    if (!nextRow || (proposedPlanRow && proposedPlanRow.createdAt < nextRow.createdAt)) {
+      nextRow = proposedPlanRow;
+      source = "proposed-plan";
+    }
+    if (!nextRow || (workRow && workRow.createdAt < nextRow.createdAt)) {
+      nextRow = workRow;
+      source = "work";
+    }
+    if (!nextRow) {
+      break;
+    }
+
+    result.push(nextRow);
+    if (source === "message") {
+      messageIndex += 1;
+    } else if (source === "proposed-plan") {
+      proposedPlanIndex += 1;
+    } else {
+      workIndex += 1;
+    }
+  }
+
+  return result;
 }
 
 export function inferCheckpointTurnCountByTurnId(

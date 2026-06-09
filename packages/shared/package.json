@@ -91,6 +91,10 @@
     "./localImage": {
       "types": "./src/localImage.ts",
       "import": "./src/localImage.ts"
+    },
+    "./reviewTargetKey": {
+      "types": "./src/reviewTargetKey.ts",
+      "import": "./src/reviewTargetKey.ts"
     }
   },
   "scripts": {

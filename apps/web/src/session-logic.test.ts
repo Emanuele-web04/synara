@@ -11,6 +11,7 @@ import {
   deriveActiveBackgroundTasksState,
   deriveActiveWorkStartedAt,
   deriveActiveTaskListState,
+  deriveCompactChatTimelineEntries,
   hasLiveLatestTurn,
   hasLiveTurnTailWork,
   PROVIDER_OPTIONS,
@@ -20,6 +21,8 @@ import {
   deriveWorkLogEntries,
   findLatestProposedPlan,
   findSidebarProposedPlan,
+  formatWorkLogEntryDetail,
+  formatWorkLogEntryLabel,
   hasActionableProposedPlan,
   isLatestTurnSettled,
 } from "./session-logic";
@@ -705,6 +708,89 @@ describe("findSidebarProposedPlan", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("renders reasoning deltas as thinking work entries", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "other-turn-reasoning-delta",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "reasoning.delta",
+        summary: "Thinking",
+        tone: "info",
+        payload: {
+          streamKind: "reasoning_text",
+          detail: "stale turn",
+        },
+        turnId: "turn-stale",
+      }),
+      makeActivity({
+        id: "turnless-reasoning-delta",
+        createdAt: "2026-02-23T00:00:01.500Z",
+        kind: "reasoning.delta",
+        summary: "Thinking",
+        tone: "info",
+        payload: {
+          streamKind: "reasoning_text",
+          detail: "turnless live reasoning",
+        },
+      }),
+      makeActivity({
+        id: "reasoning-delta",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "reasoning.delta",
+        summary: "Thinking",
+        tone: "info",
+        payload: {
+          streamKind: "reasoning_text",
+          detail: "checking files",
+        },
+        turnId: "turn-reasoning",
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-reasoning"));
+
+    expect(entries).toMatchObject([
+      {
+        id: EventId.makeUnsafe("turnless-reasoning-delta"),
+        label: "Thinking",
+        tone: "thinking",
+        detail: "turnless live reasoning",
+      },
+      {
+        id: EventId.makeUnsafe("reasoning-delta"),
+        label: "Thinking",
+        tone: "thinking",
+        detail: "checking files",
+      },
+    ]);
+    expect(entries.map((entry) => entry.id)).toEqual([
+      EventId.makeUnsafe("turnless-reasoning-delta"),
+      EventId.makeUnsafe("reasoning-delta"),
+    ]);
+  });
+
+  it("formats compact work entry labels and details", () => {
+    expect(
+      formatWorkLogEntryLabel({
+        id: "work-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        label: "Tool call",
+        toolTitle: "Read file",
+        preview: "Fallback preview",
+        tone: "tool",
+      }),
+    ).toBe("Read file");
+    expect(
+      formatWorkLogEntryDetail({
+        id: "work-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        label: "Command",
+        command: "bun run build",
+        tone: "tool",
+      }),
+    ).toBe("bun run build");
+  });
+
   it("keeps started tool entries so pending Cursor calls appear immediately", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -1990,6 +2076,79 @@ describe("deriveWorkLogEntries", () => {
   });
 });
 
+describe("deriveCompactChatTimelineEntries", () => {
+  it("orders messages and reasoning work entries chronologically", () => {
+    const entries = deriveCompactChatTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("user-message"),
+          role: "user",
+          text: "summarize this",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("assistant-message"),
+          role: "assistant",
+          text: "summary",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          streaming: true,
+        },
+      ],
+      [
+        {
+          id: "reasoning-work",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          label: "Thinking",
+          detail: "checking files",
+          tone: "thinking",
+        },
+      ],
+    );
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      MessageId.makeUnsafe("user-message"),
+      "reasoning-work",
+      MessageId.makeUnsafe("assistant-message"),
+    ]);
+  });
+
+  it("falls back to chronological output when compact streams arrive out of order", () => {
+    const entries = deriveCompactChatTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("assistant-message"),
+          role: "assistant",
+          text: "done",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("user-message"),
+          role: "user",
+          text: "question",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          streaming: false,
+        },
+      ],
+      [
+        {
+          id: "reasoning-work",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          label: "Thinking",
+          tone: "thinking",
+        },
+      ],
+    );
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      MessageId.makeUnsafe("user-message"),
+      "reasoning-work",
+      MessageId.makeUnsafe("assistant-message"),
+    ]);
+  });
+});
+
 describe("deriveTimelineEntries", () => {
   it("includes proposed plans alongside messages and work entries in chronological order", () => {
     const entries = deriveTimelineEntries(
@@ -2032,6 +2191,96 @@ describe("deriveTimelineEntries", () => {
         implementationThreadId: null,
       },
     });
+  });
+
+  it("merges already-chronological message, plan, and work streams without requiring global input order", () => {
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("message-1"),
+          role: "user",
+          text: "first",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("message-2"),
+          role: "assistant",
+          text: "last",
+          createdAt: "2026-02-23T00:00:05.000Z",
+          streaming: false,
+        },
+      ],
+      [
+        {
+          id: "plan:thread-1:turn:turn-1",
+          turnId: TurnId.makeUnsafe("turn-1"),
+          planMarkdown: "# Ship it",
+          implementedAt: null,
+          implementationThreadId: null,
+          createdAt: "2026-02-23T00:00:03.000Z",
+          updatedAt: "2026-02-23T00:00:03.000Z",
+        },
+      ],
+      [
+        {
+          id: "work-1",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          label: "Read files",
+          tone: "tool",
+        },
+        {
+          id: "work-2",
+          createdAt: "2026-02-23T00:00:04.000Z",
+          label: "Ran tests",
+          tone: "tool",
+        },
+      ],
+    );
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      MessageId.makeUnsafe("message-1"),
+      "work-1",
+      "plan:thread-1:turn:turn-1",
+      "work-2",
+      MessageId.makeUnsafe("message-2"),
+    ]);
+  });
+
+  it("falls back to chronological output when one source stream arrives out of order", () => {
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("message-late"),
+          role: "assistant",
+          text: "late",
+          createdAt: "2026-02-23T00:00:05.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("message-early"),
+          role: "user",
+          text: "early",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          streaming: false,
+        },
+      ],
+      [],
+      [
+        {
+          id: "work-middle",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          label: "Ran tests",
+          tone: "tool",
+        },
+      ],
+    );
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      MessageId.makeUnsafe("message-early"),
+      "work-middle",
+      MessageId.makeUnsafe("message-late"),
+    ]);
   });
 
   it("hides tagged plan markdown from the assistant row when a proposed plan exists", () => {

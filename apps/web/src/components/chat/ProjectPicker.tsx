@@ -192,7 +192,7 @@ export const ProjectPicker = memo(function ProjectPicker({
     <span className="flex min-w-0 items-baseline gap-1.5">
       <span className="min-w-0 truncate">{selectedFolderOption.primaryLabel}</span>
       {selectedFolderOption.secondaryLabel ? (
-        <span className="min-w-0 truncate text-muted-foreground/60 text-xs">
+        <span className="min-w-0 truncate text-muted-foreground/75 text-xs">
           {selectedFolderOption.secondaryLabel}
         </span>
       ) : null}
@@ -353,7 +353,7 @@ export const ProjectPicker = memo(function ProjectPicker({
                         <div className="flex min-w-0 items-baseline gap-1.5">
                           <span className="min-w-0 truncate">{folder.primaryLabel}</span>
                           {folder.secondaryLabel ? (
-                            <span className="min-w-0 truncate text-muted-foreground/60 text-xs">
+                            <span className="min-w-0 truncate text-muted-foreground/75 text-xs">
                               {folder.secondaryLabel}
                             </span>
                           ) : null}

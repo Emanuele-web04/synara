@@ -31,16 +31,15 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   if (cached) {
     return cached;
   }
-  const titleColor = theme === "dark" ? "#6073CC" : "#526FFF";
   const css = `
 :host {
   /* Route the entire diff viewer through the chat code font so custom code fonts reach line numbers too. */
   --diffs-font-family: var(--font-chat-code-family);
   --diffs-header-font-family: var(--font-chat-code-family);
   /* Honor the user-chosen chat code font size from settings instead of the library default (13px). */
-  --diffs-font-size: var(--app-font-size-chat-code, 11px);
+  --diffs-font-size: var(--review-diff-font-size, var(--app-font-size-chat-code, 11px));
   font-family: var(--font-chat-code-family) !important;
-  font-size: var(--app-font-size-chat-code, 11px) !important;
+  font-size: var(--review-diff-font-size, var(--app-font-size-chat-code, 11px)) !important;
 }
 
 [data-diffs-header],
@@ -51,31 +50,31 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   /* Re-assert the code font inside the library chrome because these nodes live in shadow-rooted markup. */
   --diffs-font-family: var(--font-chat-code-family) !important;
   --diffs-header-font-family: var(--font-chat-code-family) !important;
-  --diffs-font-size: var(--app-font-size-chat-code, 11px) !important;
+  --diffs-font-size: var(--review-diff-font-size, var(--app-font-size-chat-code, 11px)) !important;
   font-family: var(--font-chat-code-family) !important;
-  font-size: var(--app-font-size-chat-code, 11px) !important;
+  font-size: var(--review-diff-font-size, var(--app-font-size-chat-code, 11px)) !important;
   --diffs-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
   --diffs-light-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
   --diffs-dark-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
   --diffs-token-light-bg: transparent;
   --diffs-token-dark-bg: transparent;
 
-  --diffs-bg-context-override: color-mix(in srgb, var(--background) 97%, var(--foreground));
-  --diffs-bg-hover-override: color-mix(in srgb, var(--background) 94%, var(--foreground));
-  --diffs-bg-separator-override: color-mix(in srgb, var(--background) 95%, var(--foreground));
-  --diffs-bg-buffer-override: color-mix(in srgb, var(--background) 90%, var(--foreground));
+  --diffs-bg-context-override: color-mix(in srgb, var(--background) 98%, var(--foreground));
+  --diffs-bg-hover-override: color-mix(in srgb, var(--background) 96%, var(--foreground));
+  --diffs-bg-separator-override: color-mix(in srgb, var(--background) 97%, var(--foreground));
+  --diffs-bg-buffer-override: color-mix(in srgb, var(--background) 94%, var(--foreground));
 
-  --diffs-bg-addition-override: color-mix(in srgb, var(--background) 92%, var(--success));
-  --diffs-bg-addition-number-override: color-mix(in srgb, var(--background) 88%, var(--success));
-  --diffs-bg-addition-hover-override: color-mix(in srgb, var(--background) 85%, var(--success));
-  --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--background) 80%, var(--success));
+  --diffs-bg-addition-override: color-mix(in srgb, var(--background) 94%, var(--success));
+  --diffs-bg-addition-number-override: color-mix(in srgb, var(--background) 91%, var(--success));
+  --diffs-bg-addition-hover-override: color-mix(in srgb, var(--background) 89%, var(--success));
+  --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--background) 84%, var(--success));
 
-  --diffs-bg-deletion-override: color-mix(in srgb, var(--background) 92%, var(--destructive));
-  --diffs-bg-deletion-number-override: color-mix(in srgb, var(--background) 88%, var(--destructive));
-  --diffs-bg-deletion-hover-override: color-mix(in srgb, var(--background) 85%, var(--destructive));
+  --diffs-bg-deletion-override: color-mix(in srgb, var(--background) 94%, var(--destructive));
+  --diffs-bg-deletion-number-override: color-mix(in srgb, var(--background) 91%, var(--destructive));
+  --diffs-bg-deletion-hover-override: color-mix(in srgb, var(--background) 89%, var(--destructive));
   --diffs-bg-deletion-emphasis-override: color-mix(
     in srgb,
-    var(--background) 80%,
+    var(--background) 84%,
     var(--destructive)
   );
 
@@ -84,7 +83,7 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 
 [data-file-info] {
   font-family: var(--font-chat-code-family) !important;
-  font-size: var(--app-font-size-chat-code, 11px) !important;
+  font-size: var(--review-diff-font-size, var(--app-font-size-chat-code, 11px)) !important;
   background-color: color-mix(in srgb, var(--card) 94%, var(--foreground)) !important;
   border-block-color: var(--border) !important;
   color: var(--foreground) !important;
@@ -106,9 +105,9 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 
 [data-title] {
   font-family: var(--font-chat-code-family) !important;
-  font-size: var(--app-font-size-chat-code, 11px) !important;
+  font-size: var(--review-diff-font-size, var(--app-font-size-chat-code, 11px)) !important;
   cursor: pointer;
-  color: ${titleColor} !important;
+  color: color-mix(in srgb, var(--foreground) 78%, var(--muted-foreground)) !important;
 }
 `;
   diffPanelUnsafeCssCache.set(theme, css);

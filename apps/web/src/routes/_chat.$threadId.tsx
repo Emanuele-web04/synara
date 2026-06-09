@@ -121,6 +121,11 @@ import { cn } from "~/lib/utils";
 import { SidebarInset } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
+const ReviewDockPane = lazy(() =>
+  import("../components/review/ReviewDockPane").then((module) => ({
+    default: module.ReviewDockPane,
+  })),
+);
 // Open the dock as a true 50/50 split of the chat area: `50vw - 8rem` is half the
 // viewport minus half the fixed 16rem left sidebar, so the chat and dock match.
 // `max()` keeps a sane minimum on narrow screens but never caps the half-width.
@@ -175,6 +180,14 @@ const LazyDiffPanel = (props: {
         />
       </Suspense>
     </DiffWorkerPoolProvider>
+  );
+};
+
+const LazyReviewDockPane = (props: { threadId: ThreadIdType }) => {
+  return (
+    <Suspense fallback={<PanelStateMessage density="compact">Loading review…</PanelStateMessage>}>
+      <ReviewDockPane threadId={props.threadId} />
+    </Suspense>
   );
 };
 
@@ -617,6 +630,8 @@ function DeferredChatView(props: {
   onToggleDiff: () => void;
   onToggleBrowser: () => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  reviewOpen?: boolean;
+  onToggleReview?: () => void;
   onSplitSurface?: () => void;
   onMaximize?: () => void;
   onChangeThread?: () => void;
@@ -667,6 +682,8 @@ function DeferredChatView(props: {
       onToggleDiffPanel={props.onToggleDiff}
       onToggleBrowserPanel={props.onToggleBrowser}
       onOpenTurnDiffPanel={props.onOpenTurnDiff}
+      {...(props.reviewOpen !== undefined ? { reviewPanelOpen: props.reviewOpen } : {})}
+      {...(props.onToggleReview ? { onToggleReviewPanel: props.onToggleReview } : {})}
       {...(props.onSplitSurface ? { onSplitSurface: props.onSplitSurface } : {})}
       {...(props.onMaximize ? { onMaximizeSurface: props.onMaximize } : {})}
       {...(props.onChangeThread ? { onChangeThreadInSplitPane: props.onChangeThread } : {})}
@@ -1365,6 +1382,8 @@ function SingleChatSurface(props: {
     [activePane, dockState.panes.length],
   );
 
+  const reviewOpen = activePane?.kind === "review";
+
   const handleToggleDiff = useCallback(() => {
     requestImmediateDockHydration("diff");
     toggleSingletonPane(props.threadId, { kind: "diff" });
@@ -1372,6 +1391,10 @@ function SingleChatSurface(props: {
   const handleToggleBrowser = useCallback(() => {
     requestImmediateDockHydration("browser");
     toggleSingletonPane(props.threadId, { kind: "browser" });
+  }, [props.threadId, requestImmediateDockHydration, toggleSingletonPane]);
+  const handleToggleReview = useCallback(() => {
+    requestImmediateDockHydration("review");
+    toggleSingletonPane(props.threadId, { kind: "review" });
   }, [props.threadId, requestImmediateDockHydration, toggleSingletonPane]);
   const handleOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string) => {
@@ -1633,6 +1656,8 @@ function SingleChatSurface(props: {
               onClose={() => closePane(props.threadId, pane.id)}
             />
           );
+        case "review":
+          return <LazyReviewDockPane threadId={props.threadId} />;
         case "sidechat":
           if (!pane.threadId) {
             return <RightDockPanePlaceholder kind="sidechat" />;
@@ -1698,6 +1723,8 @@ function SingleChatSurface(props: {
             onToggleDiff={handleToggleDiff}
             onToggleBrowser={handleToggleBrowser}
             onOpenTurnDiff={handleOpenTurnDiff}
+            reviewOpen={reviewOpen}
+            onToggleReview={handleToggleReview}
             onSplitSurface={handleSplitSurface}
           />
         </SidebarInset>

@@ -2,6 +2,7 @@ import { Effect, Layer, Option, Ref, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import type { CursorModelSelection, ProviderStartOptions } from "@t3tools/contracts";
+import { ReviewFinding } from "@t3tools/contracts";
 import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 
@@ -21,6 +22,7 @@ import {
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
+  buildReviewFindingsPrompt,
   buildThreadTitlePrompt,
   decodeStructuredTextGenerationOutput,
   type RawTextFallback,
@@ -33,10 +35,16 @@ const CURSOR_TEXT_GENERATION_LABEL = "Cursor Agent";
 
 const CURSOR_TIMEOUT_MS = 180_000;
 
+const ReviewFindingsOutputSchema = Schema.Struct({
+  summary: Schema.String,
+  findings: Schema.Array(ReviewFinding),
+});
+
 type CursorTextGenerationOperation =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateDiffSummary"
+  | "generateReviewFindings"
   | "generateBranchName"
   | "generateThreadTitle";
 
@@ -293,6 +301,37 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     };
   });
 
+  const generateReviewFindings: TextGenerationShape["generateReviewFindings"] = Effect.fn(
+    "CursorTextGeneration.generateReviewFindings",
+  )(function* (input) {
+    const modelSelection = resolveCursorModelSelection(input);
+    if (!modelSelection) {
+      return yield* new TextGenerationError({
+        operation: "generateReviewFindings",
+        detail: "Invalid Cursor model selection.",
+      });
+    }
+
+    const { prompt } = buildReviewFindingsPrompt({
+      patch: input.patch,
+      ...(input.prTitle ? { prTitle: input.prTitle } : {}),
+      ...(input.prBody ? { prBody: input.prBody } : {}),
+    });
+    const generated = yield* runCursorJson({
+      operation: "generateReviewFindings",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson: ReviewFindingsOutputSchema,
+      modelSelection,
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
+
+    return {
+      summary: generated.summary,
+      findings: generated.findings,
+    };
+  });
+
   const generateBranchName: TextGenerationShape["generateBranchName"] = Effect.fn(
     "CursorTextGeneration.generateBranchName",
   )(function* (input) {
@@ -357,6 +396,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     generateCommitMessage,
     generatePrContent,
     generateDiffSummary,
+    generateReviewFindings,
     generateBranchName,
     generateThreadTitle,
   } satisfies TextGenerationShape;

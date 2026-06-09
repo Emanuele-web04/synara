@@ -9,7 +9,14 @@ import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 // Single source of truth for the dock pane kinds. The union type, the runtime
 // validator, the per-kind metadata map, and the add-menu order are all derived
 // from this list so they can never drift apart.
-export const RIGHT_DOCK_PANE_KINDS = ["browser", "diff", "terminal", "sidechat", "git"] as const;
+export const RIGHT_DOCK_PANE_KINDS = [
+  "browser",
+  "diff",
+  "terminal",
+  "sidechat",
+  "git",
+  "review",
+] as const;
 
 export type RightDockPaneKind = (typeof RIGHT_DOCK_PANE_KINDS)[number];
 

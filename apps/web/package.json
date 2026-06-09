@@ -22,6 +22,8 @@
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@formkit/auto-animate": "^0.9.0",
+    "@headless-tree/core": "^1.7.0",
+    "@headless-tree/react": "^1.7.0",
     "@legendapp/list": "3.0.0-beta.44",
     "@lexical/react": "^0.41.0",
     "@pierre/diffs": "^1.1.0-beta.16",

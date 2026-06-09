@@ -12,7 +12,12 @@ import {
   ProjectionThreadRepository,
   type ProjectionThreadRepositoryShape,
 } from "../Services/ProjectionThreads.ts";
-import { ModelSelection, OrchestrationThreadPullRequest, ThreadHandoff } from "@t3tools/contracts";
+import {
+  ModelSelection,
+  OrchestrationReviewChatTarget,
+  OrchestrationThreadPullRequest,
+  ThreadHandoff,
+} from "@t3tools/contracts";
 
 const SqliteBoolean = Schema.Number.pipe(
   Schema.decodeTo(Schema.Boolean, {
@@ -27,6 +32,7 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
     isPinned: SqliteBoolean,
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
+    reviewChatTarget: Schema.NullOr(Schema.fromJsonString(OrchestrationReviewChatTarget)),
     modelSelection: Schema.fromJsonString(ModelSelection),
   }),
 );
@@ -61,6 +67,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           fork_source_thread_id,
           sidechat_source_thread_id,
           last_known_pr_json,
+          review_chat_target_json,
           latest_turn_id,
           handoff_json,
           latest_user_message_at,
@@ -94,6 +101,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.forkSourceThreadId ?? null},
           ${row.sidechatSourceThreadId ?? null},
           ${row.lastKnownPr === null ? null : JSON.stringify(row.lastKnownPr)},
+          ${row.reviewChatTarget == null ? null : JSON.stringify(row.reviewChatTarget)},
           ${row.latestTurnId},
           ${row.handoff === null ? null : JSON.stringify(row.handoff)},
           ${row.latestUserMessageAt},
@@ -127,6 +135,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           fork_source_thread_id = excluded.fork_source_thread_id,
           sidechat_source_thread_id = excluded.sidechat_source_thread_id,
           last_known_pr_json = excluded.last_known_pr_json,
+          review_chat_target_json = excluded.review_chat_target_json,
           latest_turn_id = excluded.latest_turn_id,
           handoff_json = excluded.handoff_json,
           latest_user_message_at = excluded.latest_user_message_at,
@@ -167,6 +176,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           fork_source_thread_id AS "forkSourceThreadId",
           sidechat_source_thread_id AS "sidechatSourceThreadId",
           last_known_pr_json AS "lastKnownPr",
+          review_chat_target_json AS "reviewChatTarget",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
           latest_user_message_at AS "latestUserMessageAt",
@@ -209,6 +219,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           fork_source_thread_id AS "forkSourceThreadId",
           sidechat_source_thread_id AS "sidechatSourceThreadId",
           last_known_pr_json AS "lastKnownPr",
+          review_chat_target_json AS "reviewChatTarget",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
           latest_user_message_at AS "latestUserMessageAt",

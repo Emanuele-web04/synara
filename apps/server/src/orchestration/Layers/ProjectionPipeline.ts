@@ -642,6 +642,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             forkSourceThreadId: event.payload.forkSourceThreadId,
             sidechatSourceThreadId: event.payload.sidechatSourceThreadId,
             lastKnownPr: event.payload.lastKnownPr ?? null,
+            reviewChatTarget: event.payload.reviewChatTarget ?? null,
             latestTurnId: null,
             handoff: event.payload.handoff,
             latestUserMessageAt: null,
@@ -707,6 +708,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               : {}),
             ...(event.payload.lastKnownPr !== undefined
               ? { lastKnownPr: event.payload.lastKnownPr }
+              : {}),
+            ...(event.payload.reviewChatTarget !== undefined
+              ? { reviewChatTarget: event.payload.reviewChatTarget }
               : {}),
             ...(event.payload.handoff !== undefined ? { handoff: event.payload.handoff } : {}),
             updatedAt: event.payload.updatedAt,

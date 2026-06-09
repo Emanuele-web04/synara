@@ -611,7 +611,7 @@ export default function DiffPanel({
             "absolute left-0 top-1/2 z-20 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-md border bg-[var(--color-background-surface)] text-muted-foreground transition-colors",
             canScrollTurnStripLeft
               ? "border-border/70 hover:border-border hover:text-foreground"
-              : "cursor-not-allowed border-border/40 text-muted-foreground/40",
+              : "cursor-not-allowed border-border/40 text-muted-foreground/70",
           )}
           onClick={() => scrollTurnStripBy(-180)}
           disabled={!canScrollTurnStripLeft}
@@ -625,7 +625,7 @@ export default function DiffPanel({
             "absolute right-0 top-1/2 z-20 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-md border bg-[var(--color-background-surface)] text-muted-foreground transition-colors",
             canScrollTurnStripRight
               ? "border-border/70 hover:border-border hover:text-foreground"
-              : "cursor-not-allowed border-border/40 text-muted-foreground/40",
+              : "cursor-not-allowed border-border/40 text-muted-foreground/70",
           )}
           onClick={() => scrollTurnStripBy(180)}
           disabled={!canScrollTurnStripRight}

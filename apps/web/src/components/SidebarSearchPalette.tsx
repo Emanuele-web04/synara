@@ -7,6 +7,7 @@
 import {
   CheckIcon,
   DeviceLaptopIcon,
+  GitPullRequestIcon,
   MoonIcon,
   NewThreadIcon,
   SearchIcon,
@@ -25,6 +26,7 @@ import { ProviderIcon as SharedProviderIcon } from "./ProviderIcon";
 import { formatRelativeTime } from "./Sidebar";
 import { readNativeApi } from "~/nativeApi";
 import { isMacPlatform } from "~/lib/utils";
+import { parsePullRequestReference } from "~/pullRequestReference";
 import { Kbd, KbdGroup } from "./ui/kbd";
 import {
   appendBrowsePathSegment,
@@ -87,6 +89,7 @@ interface SidebarSearchPaletteProps {
   initialBrowseQuery?: string | null;
   onOpenSettings: () => void;
   onOpenProject: (projectId: string) => void;
+  onOpenPullRequestReference: (reference: string) => void;
   onOpenThread: (threadId: string) => void;
   importProviders: readonly ImportProviderKind[];
   onImportThread: (provider: ImportProviderKind, externalId: string) => Promise<void>;
@@ -410,6 +413,10 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     () => (isBrowsing ? [] : matchSidebarSearchActions(props.actions, query)),
     [isBrowsing, props.actions, query],
   );
+  const parsedPullRequestReference = useMemo(
+    () => (isBrowsing ? null : parsePullRequestReference(trimmedQuery)),
+    [isBrowsing, trimmedQuery],
+  );
   const themeCommandItem = useMemo(
     () =>
       buildThemeCommandItem({
@@ -456,6 +463,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     matchedActions.length > 0 ||
     themeCommandItem !== null ||
     matchedCurrentThemes.length > 0 ||
+    parsedPullRequestReference !== null ||
     matchedProjects.length > 0 ||
     matchedThreads.length > 0;
   const importFieldLabel = importProvider === "codex" ? "Thread ID" : "Session ID";
@@ -778,7 +786,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                                   if (browseParentPath) setQuery(browseParentPath);
                                 }}
                               >
-                                <LuCornerLeftUp className="size-3.5 text-muted-foreground/60" />
+                                <LuCornerLeftUp className="size-3.5 text-muted-foreground/75" />
                                 <span className="min-w-0 flex-1 truncate text-sm text-foreground">
                                   ..
                                 </span>
@@ -794,7 +802,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                                 }}
                                 onClick={() => setQuery(appendBrowsePathSegment(query, entry.name))}
                               >
-                                <FolderClosed className="size-3.5 text-muted-foreground/60" />
+                                <FolderClosed className="size-3.5 text-muted-foreground/75" />
                                 <span className="min-w-0 flex-1 truncate text-sm text-foreground">
                                   {entry.name}
                                 </span>
@@ -871,6 +879,43 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
 
                   {!isBrowsing &&
                   matchedActions.length > 0 &&
+                  (parsedPullRequestReference !== null ||
+                    matchedThreads.length > 0 ||
+                    matchedProjects.length > 0 ||
+                    showThemeSection) ? (
+                    <CommandSeparator />
+                  ) : null}
+
+                  {!isBrowsing && parsedPullRequestReference !== null ? (
+                    <CommandGroup>
+                      <CommandGroupLabel className="py-1.5 pl-3">Review</CommandGroupLabel>
+                      <CommandItem
+                        key="review-pr-reference"
+                        value={`review-pr:${parsedPullRequestReference}`}
+                        className="cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5"
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                        }}
+                        onClick={() => {
+                          props.onOpenChange(false);
+                          props.onOpenPullRequestReference(parsedPullRequestReference);
+                        }}
+                      >
+                        <PaletteIcon icon={GitPullRequestIcon} />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[length:var(--app-font-size-ui,12px)] text-foreground">
+                            Open pull request
+                          </div>
+                          <div className="truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/79">
+                            {parsedPullRequestReference}
+                          </div>
+                        </div>
+                      </CommandItem>
+                    </CommandGroup>
+                  ) : null}
+
+                  {!isBrowsing &&
+                  parsedPullRequestReference !== null &&
                   (matchedThreads.length > 0 || matchedProjects.length > 0 || showThemeSection) ? (
                     <CommandSeparator />
                   ) : null}
@@ -923,14 +968,14 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                                   </div>
                                   <div className="flex w-[8.5rem] shrink-0 justify-end">
                                     {threadMatchLabel({ matchKind, messageMatchCount }) ? (
-                                      <span className="truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/58">
+                                      <span className="truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/70">
                                         {threadMatchLabel({ matchKind, messageMatchCount })}
                                       </span>
                                     ) : null}
                                   </div>
                                 </div>
                               ) : threadMatchLabel({ matchKind, messageMatchCount }) ? (
-                                <div className="mt-0.5 text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/58">
+                                <div className="mt-0.5 text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/70">
                                   {threadMatchLabel({ matchKind, messageMatchCount })}
                                 </div>
                               ) : null}
@@ -1068,7 +1113,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     <CommandEmpty className="py-10">
                       <div className="flex flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground/79">
                         <SearchIcon className="size-4 opacity-70" />
-                        <div>No matches.</div>
+                        <div>No matches. Paste a pull request number or GitHub PR link.</div>
                       </div>
                     </CommandEmpty>
                   ) : null}
@@ -1093,7 +1138,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                   </>
                 ) : (
                   <>
-                    <span>Jump to threads, projects, actions, or appearance.</span>
+                    <span>Jump to threads, projects, PRs, actions, or appearance.</span>
                     <span>Enter to open</span>
                   </>
                 )}

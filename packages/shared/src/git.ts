@@ -121,6 +121,29 @@ export function resolveThreadBranchRegressionGuard(input: {
   return input.nextBranch;
 }
 
+export interface ParsedPullRequestUrl {
+  owner: string;
+  repo: string;
+  number: number;
+}
+
+const PULL_REQUEST_URL_PATTERN = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/.*)?$/i;
+
+export function parsePullRequestUrl(url: string): ParsedPullRequestUrl | null {
+  const match = PULL_REQUEST_URL_PATTERN.exec(url.trim());
+  const owner = match?.[1]?.trim() ?? "";
+  const repo = match?.[2]?.trim() ?? "";
+  const number = Number.parseInt(match?.[3] ?? "", 10);
+  if (owner.length === 0 || repo.length === 0 || !Number.isInteger(number) || number <= 0) {
+    return null;
+  }
+  return { owner, repo, number };
+}
+
+export function parseRepositoryNameFromPullRequestUrl(url: string): string | null {
+  return parsePullRequestUrl(url)?.repo ?? null;
+}
+
 export function mergeGitStatusParts<Local extends object, Remote extends object>(
   local: Local,
   remote: Remote | null,

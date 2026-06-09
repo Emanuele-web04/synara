@@ -9,6 +9,7 @@ import {
   GitCommitIcon,
   GlobeIcon,
   InfoIcon,
+  ListChecksIcon,
   MessageCircleIcon,
   TerminalIcon,
 } from "~/lib/icons";
@@ -29,6 +30,7 @@ export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> 
   terminal: { label: "Terminal", Icon: TerminalIcon },
   sidechat: { label: "Side chat", Icon: MessageCircleIcon },
   git: { label: "Git", Icon: GitCommitIcon },
+  review: { label: "Review", Icon: ListChecksIcon },
 };
 
 // Neutral fallback for any pane kind we no longer recognize (e.g. stale

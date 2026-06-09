@@ -54,6 +54,30 @@ const makeCheckpointStore = Effect.gen(function* () {
       })
       .pipe(Effect.map((result) => result.code === 0));
 
+  const captureCleanHeadCheckpoint = (
+    cwd: string,
+    checkpointRef: CheckpointRef,
+  ): Effect.Effect<boolean, GitCommandError> =>
+    Effect.gen(function* () {
+      const statusResult = yield* git.execute({
+        operation: "CheckpointStore.captureCleanHeadCheckpoint",
+        cwd,
+        args: ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."],
+        allowNonZeroExit: true,
+      });
+      if (statusResult.code !== 0 || statusResult.stdout.length > 0) {
+        return false;
+      }
+
+      const updateResult = yield* git.execute({
+        operation: "CheckpointStore.captureCleanHeadCheckpoint",
+        cwd,
+        args: ["update-ref", checkpointRef, "HEAD"],
+        allowNonZeroExit: true,
+      });
+      return updateResult.code === 0;
+    });
+
   const resolveCheckpointCommit = (
     cwd: string,
     checkpointRef: CheckpointRef,
@@ -91,6 +115,10 @@ const makeCheckpointStore = Effect.gen(function* () {
   const captureCheckpoint: CheckpointStoreShape["captureCheckpoint"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.captureCheckpoint";
+      const capturedCleanHead = yield* captureCleanHeadCheckpoint(input.cwd, input.checkpointRef);
+      if (capturedCleanHead) {
+        return;
+      }
 
       yield* Effect.acquireUseRelease(
         fs.makeTempDirectory({ prefix: "t3-fs-checkpoint-" }),

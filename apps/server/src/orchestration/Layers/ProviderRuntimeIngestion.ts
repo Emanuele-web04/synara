@@ -134,6 +134,36 @@ function truncateDetail(value: string, limit = 180): string {
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
 }
 
+function runtimeWarningActivityCopy(message: string): {
+  readonly summary: string;
+  readonly message: string;
+  readonly detail?: string;
+} {
+  if (
+    message.includes("rmcp::transport::worker") &&
+    message.includes("AuthRequired") &&
+    message.includes("www_authenticate_header")
+  ) {
+    return {
+      summary: "MCP authentication required",
+      message: "A configured MCP server rejected Codex because it requires Bearer authentication.",
+      detail: truncateDetail(message, 500),
+    };
+  }
+  if (message.includes("thread/resume failed: no rollout found for thread id")) {
+    return {
+      summary: "Codex thread resume unavailable",
+      message:
+        "Codex could not resume the stored thread, so this chat needs a fresh provider session.",
+      detail: truncateDetail(message, 500),
+    };
+  }
+  return {
+    summary: "Runtime warning",
+    message: truncateDetail(message),
+  };
+}
+
 function stringifyJsonLike(value: unknown): string {
   const seen = new WeakSet<object>();
   return (
@@ -583,6 +613,41 @@ function runtimeEventToActivities(
       : {};
   })();
   switch (event.type) {
+    case "content.delta": {
+      if (
+        event.payload.streamKind !== "reasoning_text" &&
+        event.payload.streamKind !== "reasoning_summary_text"
+      ) {
+        return [];
+      }
+      const delta = event.payload.delta.trim();
+      if (delta.length === 0) {
+        return [];
+      }
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "reasoning.delta",
+          summary:
+            event.payload.streamKind === "reasoning_summary_text" ? "Thinking summary" : "Thinking",
+          payload: toActivityPayload({
+            streamKind: event.payload.streamKind,
+            detail: truncateDetail(delta),
+            ...(event.payload.contentIndex !== undefined
+              ? { contentIndex: event.payload.contentIndex }
+              : {}),
+            ...(event.payload.summaryIndex !== undefined
+              ? { summaryIndex: event.payload.summaryIndex }
+              : {}),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "session.configured": {
       const payload = buildConfiguredContextWindowPayload(event);
       if (!payload) {
@@ -682,16 +747,18 @@ function runtimeEventToActivities(
     }
 
     case "runtime.warning": {
+      const copy = runtimeWarningActivityCopy(event.payload.message);
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "info",
           kind: "runtime.warning",
-          summary: "Runtime warning",
+          summary: copy.summary,
           payload: toActivityPayload({
-            message: truncateDetail(event.payload.message),
-            ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
+            message: copy.message,
+            ...(copy.detail !== undefined ? { detail: copy.detail } : {}),
+            ...(event.payload.detail !== undefined ? { rawDetail: event.payload.detail } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

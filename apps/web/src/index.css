@@ -201,6 +201,19 @@
       0;
   }
 
+  .review-shell-card {
+    --app-content-card-radius: 1.15rem;
+    background: var(--background);
+  }
+
+  .dark .review-shell-card {
+    --seam-shadow-color: rgba(0, 0, 0, 0.58);
+  }
+
+  .review-shell-card .review-route-strip {
+    background: var(--background);
+  }
+
   .chat-content-card::before {
     content: "";
     position: absolute;
@@ -1143,9 +1156,63 @@ diffs-container {
 
 .diff-render-file {
   border: 1px solid var(--border);
-  border-radius: 0.5rem;
+  border-radius: 0.75rem;
   overflow: clip;
-  background: color-mix(in srgb, var(--card) 92%, var(--background));
+  background: color-mix(in srgb, var(--background) 88%, var(--card));
+}
+
+.review-files-workbench {
+  --review-workbench-bg: color-mix(in srgb, var(--background) 96%, var(--card));
+  --review-pane-bg: color-mix(in srgb, var(--background) 92%, var(--card));
+  --review-diff-file-bg: color-mix(in srgb, var(--background) 88%, var(--card));
+  --review-diff-header-bg: color-mix(in srgb, var(--card) 58%, var(--background));
+  --review-pane-border: color-mix(in srgb, var(--border) 72%, transparent);
+  background: var(--review-workbench-bg);
+  color: var(--foreground);
+}
+
+.review-diff-viewport {
+  --review-diff-font-size: 13px;
+  background: color-mix(in srgb, var(--background) 94%, var(--card));
+}
+
+.review-files-workbench .review-diff-viewport {
+  background: var(--review-pane-bg);
+}
+
+.review-diff-viewport .diff-render-file {
+  border-color: color-mix(in srgb, var(--border) 34%, transparent);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--background) 90%, var(--card));
+  box-shadow: none;
+}
+
+.review-files-workbench .review-diff-viewport .diff-render-file {
+  border-color: var(--review-pane-border);
+  background: var(--review-diff-file-bg);
+}
+
+.review-files-workbench .review-diff-viewport .diff-render-file {
+  border-right: 0;
+  border-left: 0;
+  border-radius: 0;
+  background: var(--review-diff-file-bg);
+  border-color: var(--review-pane-border);
+  border-bottom: 0;
+}
+
+.review-diff-viewport .diff-render-file:first-child {
+  margin-top: 0;
+}
+
+.review-diff-viewport .diff-render-file [data-diffs-header],
+.review-diff-viewport .diff-render-file [data-file-info] {
+  background: color-mix(in srgb, var(--card) 36%, var(--background));
+}
+
+.review-files-workbench .review-diff-viewport .diff-render-file [data-diffs-header],
+.review-files-workbench .review-diff-viewport .diff-render-file [data-file-info] {
+  background: var(--review-diff-header-bg);
 }
 
 /* Composer surface follows Codex's renderer token path: light uses

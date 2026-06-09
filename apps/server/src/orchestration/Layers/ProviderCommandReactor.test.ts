@@ -186,11 +186,15 @@ describe("ProviderCommandReactor", () => {
     const isGitRepository = vi.fn<CheckpointStoreShape["isGitRepository"]>(() =>
       Effect.succeed(false),
     );
+    const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(() => Effect.void);
+    const hasCheckpointRef = vi.fn<CheckpointStoreShape["hasCheckpointRef"]>(() =>
+      Effect.succeed(false),
+    );
     const checkpointStore: CheckpointStoreShape = {
       isGitRepository,
-      captureCheckpoint: () => Effect.void,
+      captureCheckpoint,
       copyCheckpointRef: () => Effect.succeed(true),
-      hasCheckpointRef: () => Effect.succeed(false),
+      hasCheckpointRef,
       restoreCheckpoint,
       diffCheckpoints: () => Effect.succeed(""),
       deleteCheckpointRefs: () => Effect.void,
@@ -386,6 +390,8 @@ describe("ProviderCommandReactor", () => {
       respondToUserInput,
       rollbackConversation,
       isGitRepository,
+      captureCheckpoint,
+      hasCheckpointRef,
       restoreCheckpoint,
       stopSession,
       stopRuntimeSession,
@@ -1141,6 +1147,402 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("retries normal turn startup after clearing a stale Codex resume cursor", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.startSession.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "codex",
+          method: "thread/start",
+          detail: "thread/resume failed: no rollout found for thread id 019db5ad",
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-stale-resume-retry"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-stale-resume-retry"),
+          role: "user",
+          text: "hello after stale resume",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.clearSessionResumeCursor).toHaveBeenCalledWith({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+  });
+
+  it("skips pre-send checkpoint capture for review chat turns", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.isGitRepository.mockImplementationOnce(() => Effect.succeed(true));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-review-chat-thread-create"),
+        threadId: ThreadId.makeUnsafe("thread-review-chat"),
+        projectId: asProjectId("project-1"),
+        title: "Review #42",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: "main",
+        worktreePath: null,
+        reviewChatTarget: {
+          projectId: asProjectId("project-1"),
+          cwd: "/tmp/provider-project",
+          repositoryId: "owner/repo",
+          reference: "owner/repo#42",
+          number: 42,
+          url: "https://github.com/owner/repo/pull/42",
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-review-chat-turn-start"),
+        threadId: ThreadId.makeUnsafe("thread-review-chat"),
+        message: {
+          messageId: asMessageId("review-chat-user-message"),
+          role: "user",
+          text: "What should I review first?",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-review-chat"),
+      input: "What should I review first?",
+    });
+    expect(harness.sendTurn.mock.calls[0]?.[0]).not.toHaveProperty("interactionMode");
+    expect(harness.captureCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("reuses a background message-start checkpoint before sending a normal turn", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.isGitRepository.mockImplementationOnce(() => Effect.succeed(true));
+    harness.hasCheckpointRef.mockImplementationOnce(() => Effect.succeed(true));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-existing-message-checkpoint"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-existing-checkpoint"),
+          role: "user",
+          text: "hello reactor",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.hasCheckpointRef).toHaveBeenCalledWith({
+      cwd: "/tmp/provider-project",
+      checkpointRef: expect.stringContaining("message-start"),
+    });
+    expect(harness.captureCheckpoint).not.toHaveBeenCalled();
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "hello reactor",
+    });
+  });
+
+  it("prewarms a review chat provider session without sending a turn", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-review-chat-prewarm-thread-create"),
+        threadId: ThreadId.makeUnsafe("thread-review-chat-prewarm"),
+        projectId: asProjectId("project-1"),
+        title: "Review #42",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: "main",
+        worktreePath: null,
+        reviewChatTarget: {
+          projectId: asProjectId("project-1"),
+          cwd: "/tmp/provider-project",
+          repositoryId: "owner/repo",
+          reference: "owner/repo#42",
+          number: 42,
+          url: "https://github.com/owner/repo/pull/42",
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.ensure",
+        commandId: CommandId.makeUnsafe("cmd-review-chat-session-ensure"),
+        threadId: ThreadId.makeUnsafe("thread-review-chat-prewarm"),
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[0]).toEqual(
+      ThreadId.makeUnsafe("thread-review-chat-prewarm"),
+    );
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      cwd: "/tmp/provider-project",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      runtimeMode: "approval-required",
+    });
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it("marks review chat sessions errored when session ensure fails", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.startSession.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "codex",
+          method: "thread.turn.start",
+          detail: "session ensure failed",
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-review-chat-failed-ensure-create"),
+        threadId: ThreadId.makeUnsafe("thread-review-chat-failed-ensure"),
+        projectId: asProjectId("project-1"),
+        title: "Review #42",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: "main",
+        worktreePath: null,
+        reviewChatTarget: {
+          projectId: asProjectId("project-1"),
+          cwd: "/tmp/provider-project",
+          repositoryId: "owner/repo",
+          reference: "owner/repo#42",
+          number: 42,
+          url: "https://github.com/owner/repo/pull/42",
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.ensure",
+        commandId: CommandId.makeUnsafe("cmd-review-chat-failed-ensure"),
+        threadId: ThreadId.makeUnsafe("thread-review-chat-failed-ensure"),
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find(
+        (entry) => entry.id === ThreadId.makeUnsafe("thread-review-chat-failed-ensure"),
+      );
+      return thread?.session?.status === "error";
+    });
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find(
+      (entry) => entry.id === ThreadId.makeUnsafe("thread-review-chat-failed-ensure"),
+    );
+    expect(thread?.session?.status).toBe("error");
+    expect(thread?.session?.activeTurnId).toBeNull();
+    expect(thread?.session?.lastError).toContain("session ensure failed");
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it("removes provider startup from a warmed review chat visible send", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    let phase: "cold" | "warmup" | "visible" = "cold";
+    let coldVisibleCost = 0;
+    let warmupCost = 0;
+    let warmVisibleCost = 0;
+    const charge = (cost: number) => {
+      switch (phase) {
+        case "cold":
+          coldVisibleCost += cost;
+          return;
+        case "warmup":
+          warmupCost += cost;
+          return;
+        case "visible":
+          warmVisibleCost += cost;
+          return;
+      }
+    };
+    harness.startSession.mockImplementation((_: unknown, input: unknown) => {
+      charge(200);
+      const threadId =
+        typeof input === "object" &&
+        input !== null &&
+        "threadId" in input &&
+        typeof input.threadId === "string"
+          ? ThreadId.makeUnsafe(input.threadId)
+          : ThreadId.makeUnsafe("thread-cost");
+      return Effect.succeed({
+        provider: "codex",
+        status: "ready",
+        runtimeMode: "approval-required",
+        model: "gpt-5-codex",
+        threadId,
+        resumeCursor: { opaque: "resume-cost" },
+        createdAt: now,
+        updatedAt: now,
+      } satisfies ProviderSession);
+    });
+    harness.sendTurn.mockImplementation((_: unknown) => {
+      charge(1);
+      return Effect.succeed({
+        threadId: ThreadId.makeUnsafe("thread-cost"),
+        turnId: asTurnId("turn-cost"),
+      });
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-cold-visible-turn-start"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-cold-visible"),
+          role: "user",
+          text: "cold visible send",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-review-chat-warm-visible-thread-create"),
+        threadId: ThreadId.makeUnsafe("thread-review-chat-warm-visible"),
+        projectId: asProjectId("project-1"),
+        title: "Review #42",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: "main",
+        worktreePath: null,
+        reviewChatTarget: {
+          projectId: asProjectId("project-1"),
+          cwd: "/tmp/provider-project",
+          repositoryId: "owner/repo",
+          reference: "owner/repo#42",
+          number: 42,
+          url: "https://github.com/owner/repo/pull/42",
+        },
+        createdAt: now,
+      }),
+    );
+
+    phase = "warmup";
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.ensure",
+        commandId: CommandId.makeUnsafe("cmd-review-chat-warm-visible-session-ensure"),
+        threadId: ThreadId.makeUnsafe("thread-review-chat-warm-visible"),
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+
+    phase = "visible";
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-review-chat-warm-visible-turn-start"),
+        threadId: ThreadId.makeUnsafe("thread-review-chat-warm-visible"),
+        message: {
+          messageId: asMessageId("user-message-review-chat-warm-visible"),
+          role: "user",
+          text: "warm visible send",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+
+    expect(coldVisibleCost).toBe(201);
+    expect(warmupCost).toBe(200);
+    expect(warmVisibleCost).toBe(1);
+    expect(coldVisibleCost / warmVisibleCost).toBeGreaterThanOrEqual(10);
+    expect(harness.startSession.mock.calls.length).toBe(2);
   });
 
   it("marks the thread session errored when normal turn start fails", async () => {

@@ -18,6 +18,8 @@ type VisibleToastLayoutItem<TToast extends object> = {
   offsetY: number;
 };
 
+const DEFAULT_FRONTMOST_TOAST_HEIGHT = 168;
+
 export function buildVisibleToastLayout<TToast extends object>(
   visibleToasts: readonly (TToast & ToastWithHeight)[],
 ): {
@@ -27,7 +29,10 @@ export function buildVisibleToastLayout<TToast extends object>(
   let offsetY = 0;
 
   return {
-    frontmostHeight: normalizeToastHeight(visibleToasts[0]?.height),
+    frontmostHeight:
+      visibleToasts.length > 0
+        ? Math.max(normalizeToastHeight(visibleToasts[0]?.height), DEFAULT_FRONTMOST_TOAST_HEIGHT)
+        : 0,
     items: visibleToasts.map((toast, visibleIndex) => {
       const item = {
         toast,

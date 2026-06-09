@@ -45,6 +45,24 @@ import {
   GitUnstageFilesInput,
 } from "./git";
 import {
+  ReviewAddCommentInput,
+  ReviewCheckProjectAccessInput,
+  ReviewGetProjectBoardInput,
+  ReviewGetViewerInput,
+  ReviewListCommentsInput,
+  ReviewListProjectsInput,
+  ReviewListPullRequestsInput,
+  ReviewLoadChangesetInput,
+  ReviewLoadRemoteThreadsInput,
+  ReviewUpdatedPayload,
+  ReviewPullRequestQueryInput,
+  ReviewMoveProjectCardInput,
+  ReviewRemoveCommentInput,
+  ReviewRunAgentInput,
+  ReviewSubmitInput,
+  ReviewUpdateCommentInput,
+} from "./review";
+import {
   TerminalClearInput,
   TerminalCloseInput,
   TerminalEvent,
@@ -124,6 +142,25 @@ export const WS_METHODS = {
   gitResolvePullRequest: "git.resolvePullRequest",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
 
+  // Review methods
+  reviewListPullRequests: "review.listPullRequests",
+  reviewGetViewer: "review.getViewer",
+  reviewLoadChangeset: "review.loadChangeset",
+  reviewLoadPullRequest: "review.loadPullRequest",
+  reviewLoadConversation: "review.loadConversation",
+  reviewListComments: "review.listComments",
+  reviewAddComment: "review.addComment",
+  reviewUpdateComment: "review.updateComment",
+  reviewRemoveComment: "review.removeComment",
+  reviewSubmit: "review.submit",
+  reviewLoadRemoteThreads: "review.loadRemoteThreads",
+  reviewRunAgent: "review.runAgent",
+  reviewCheckProjectAccess: "review.checkProjectAccess",
+  reviewListProjects: "review.listProjects",
+  reviewGetProjectBoard: "review.getProjectBoard",
+  reviewMoveProjectCard: "review.moveProjectCard",
+  subscribeReviewUpdates: "review.subscribeUpdates",
+
   // Terminal methods
   terminalOpen: "terminal.open",
   terminalWrite: "terminal.write",
@@ -175,6 +212,7 @@ export const WS_CHANNELS = {
   serverConfigUpdated: "server.configUpdated",
   serverProviderStatusesUpdated: "server.providerStatusesUpdated",
   serverSettingsUpdated: "server.settingsUpdated",
+  reviewUpdated: "review.updated",
 } as const;
 
 // -- Tagged Union of all request body schemas ─────────────────────────
@@ -241,6 +279,25 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.gitHandoffThread, GitHandoffThreadInput),
   tagRequestBody(WS_METHODS.gitResolvePullRequest, GitPullRequestRefInput),
   tagRequestBody(WS_METHODS.gitPreparePullRequestThread, GitPreparePullRequestThreadInput),
+
+  // Review methods
+  tagRequestBody(WS_METHODS.reviewListPullRequests, ReviewListPullRequestsInput),
+  tagRequestBody(WS_METHODS.reviewGetViewer, ReviewGetViewerInput),
+  tagRequestBody(WS_METHODS.reviewLoadChangeset, ReviewLoadChangesetInput),
+  tagRequestBody(WS_METHODS.reviewLoadPullRequest, ReviewPullRequestQueryInput),
+  tagRequestBody(WS_METHODS.reviewLoadConversation, ReviewPullRequestQueryInput),
+  tagRequestBody(WS_METHODS.reviewListComments, ReviewListCommentsInput),
+  tagRequestBody(WS_METHODS.reviewAddComment, ReviewAddCommentInput),
+  tagRequestBody(WS_METHODS.reviewUpdateComment, ReviewUpdateCommentInput),
+  tagRequestBody(WS_METHODS.reviewRemoveComment, ReviewRemoveCommentInput),
+  tagRequestBody(WS_METHODS.reviewSubmit, ReviewSubmitInput),
+  tagRequestBody(WS_METHODS.reviewLoadRemoteThreads, ReviewLoadRemoteThreadsInput),
+  tagRequestBody(WS_METHODS.reviewRunAgent, ReviewRunAgentInput),
+  tagRequestBody(WS_METHODS.reviewCheckProjectAccess, ReviewCheckProjectAccessInput),
+  tagRequestBody(WS_METHODS.reviewListProjects, ReviewListProjectsInput),
+  tagRequestBody(WS_METHODS.reviewGetProjectBoard, ReviewGetProjectBoardInput),
+  tagRequestBody(WS_METHODS.reviewMoveProjectCard, ReviewMoveProjectCardInput),
+  tagRequestBody(WS_METHODS.subscribeReviewUpdates, Schema.Struct({})),
 
   // Terminal methods
   tagRequestBody(WS_METHODS.terminalOpen, TerminalOpenInput),
@@ -309,6 +366,7 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.serverConfigUpdated]: typeof ServerConfigUpdatedPayload.Type;
   readonly [WS_CHANNELS.serverProviderStatusesUpdated]: typeof ServerProviderStatusesUpdatedPayload.Type;
   readonly [WS_CHANNELS.serverSettingsUpdated]: typeof ServerSettingsUpdatedPayload.Type;
+  readonly [WS_CHANNELS.reviewUpdated]: typeof ReviewUpdatedPayload.Type;
   readonly [WS_CHANNELS.gitActionProgress]: typeof GitActionProgressEvent.Type;
   readonly [WS_CHANNELS.terminalEvent]: typeof TerminalEvent.Type;
   readonly [ORCHESTRATION_WS_CHANNELS.domainEvent]: OrchestrationEvent;
@@ -347,6 +405,10 @@ export const WsPushServerSettingsUpdated = makeWsPushSchema(
   WS_CHANNELS.serverSettingsUpdated,
   ServerSettingsUpdatedPayload,
 );
+export const WsPushReviewUpdated = makeWsPushSchema(
+  WS_CHANNELS.reviewUpdated,
+  ReviewUpdatedPayload,
+);
 export const WsPushGitActionProgress = makeWsPushSchema(
   WS_CHANNELS.gitActionProgress,
   GitActionProgressEvent,
@@ -372,6 +434,7 @@ export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.serverConfigUpdated,
   WS_CHANNELS.serverProviderStatusesUpdated,
   WS_CHANNELS.serverSettingsUpdated,
+  WS_CHANNELS.reviewUpdated,
   WS_CHANNELS.terminalEvent,
   ORCHESTRATION_WS_CHANNELS.domainEvent,
   ORCHESTRATION_WS_CHANNELS.shellEvent,
@@ -385,6 +448,7 @@ export const WsPush = Schema.Union([
   WsPushServerConfigUpdated,
   WsPushServerProviderStatusesUpdated,
   WsPushServerSettingsUpdated,
+  WsPushReviewUpdated,
   WsPushGitActionProgress,
   WsPushTerminalEvent,
   WsPushOrchestrationDomainEvent,

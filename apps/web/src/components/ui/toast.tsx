@@ -361,7 +361,7 @@ function Toasts({ position = "top-center" }: { position: ToastPosition }) {
     <Toast.Portal data-slot="toast-portal">
       <Toast.Viewport
         className={cn(
-          "fixed z-[200] mx-auto flex w-[calc(100%-var(--toast-inset)*2)] max-w-sm [--toast-inset:--spacing(4)] sm:[--toast-inset:--spacing(8)]",
+          "fixed z-[200] mx-auto flex h-(--toast-frontmost-height) w-[calc(100%-var(--toast-inset)*2)] max-w-sm [--toast-inset:--spacing(4)] sm:[--toast-inset:--spacing(8)]",
           // Vertical positioning
           "data-[position=top-center]:top-4",
           "data-[position=top-left]:top-[calc(var(--toast-inset)+46px)]",

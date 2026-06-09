@@ -182,6 +182,11 @@ interface CodexVoiceTranscriptionAuthContext {
   readonly token: string;
 }
 
+interface CodexStartupDiscovery {
+  readonly advertisedModelSlugs: ReadonlyArray<string>;
+  readonly account: CodexAccountSnapshot;
+}
+
 export interface CodexAppServerSendTurnInput {
   readonly threadId: ThreadId;
   readonly input?: string;
@@ -714,6 +719,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly pluginsCache = new Map<string, ProviderListPluginsResult>();
   private readonly pluginDetailCache = new Map<string, ProviderReadPluginResult>();
   private readonly modelCache = new Map<string, ProviderListModelsResult>();
+  private readonly localStartupDiscoveryCache = new Map<string, CodexStartupDiscovery>();
+  private readonly localStartupDiscoveryInFlight = new Map<
+    string,
+    Promise<CodexStartupDiscovery>
+  >();
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
   private readonly services: ServiceMap.ServiceMap<never> | undefined;
@@ -754,6 +764,70 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         shell: process.platform === "win32",
       }),
     );
+  }
+
+  private async resolveStartupDiscovery(
+    context: CodexSessionContext,
+    cacheKey: string | undefined,
+  ): Promise<CodexStartupDiscovery> {
+    const cached = cacheKey ? this.localStartupDiscoveryCache.get(cacheKey) : undefined;
+    if (cached) {
+      return cached;
+    }
+
+    const inFlight = cacheKey ? this.localStartupDiscoveryInFlight.get(cacheKey) : undefined;
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const promise = (async (): Promise<CodexStartupDiscovery> => {
+      let advertisedModelSlugs: ReadonlyArray<string> = [];
+      let account: CodexAccountSnapshot = {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      };
+
+      try {
+        const modelListResponse = await this.sendRequest(context, "model/list", {});
+        console.log("codex model/list response", modelListResponse);
+        advertisedModelSlugs = this.parseModelListResponse(modelListResponse).map(
+          (model) => model.slug,
+        );
+      } catch (error) {
+        console.log("codex model/list failed", error);
+      }
+
+      try {
+        const accountReadResponse = await this.sendRequest(context, "account/read", {});
+        console.log("codex account/read response", accountReadResponse);
+        account = readCodexAccountSnapshot(accountReadResponse);
+        console.log("codex subscription status", {
+          type: account.type,
+          planType: account.planType,
+          sparkEnabled: account.sparkEnabled,
+        });
+      } catch (error) {
+        console.log("codex account/read failed", error);
+      }
+
+      return { advertisedModelSlugs, account };
+    })();
+
+    if (!cacheKey) {
+      return promise;
+    }
+
+    this.localStartupDiscoveryInFlight.set(cacheKey, promise);
+    try {
+      const discovery = await promise;
+      if (discovery.account.type !== "unknown") {
+        this.localStartupDiscoveryCache.set(cacheKey, discovery);
+      }
+      return discovery;
+    } finally {
+      this.localStartupDiscoveryInFlight.delete(cacheKey);
+    }
   }
 
   private async isContextAlive(context: CodexSessionContext): Promise<boolean> {
@@ -833,31 +907,22 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       this.emitLifecycleEvent(context, "session/connecting", "Starting codex app-server");
 
+      const startupStartedAt = Date.now();
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
+      const initializeResolvedAt = Date.now();
 
       this.writeMessage(context, { method: "initialized" });
-      let advertisedModelSlugs: ReadonlyArray<string> = [];
-      try {
-        const modelListResponse = await this.sendRequest(context, "model/list", {});
-        console.log("codex model/list response", modelListResponse);
-        advertisedModelSlugs = this.parseModelListResponse(modelListResponse).map(
-          (model) => model.slug,
-        );
-      } catch (error) {
-        console.log("codex model/list failed", error);
-      }
-      try {
-        const accountReadResponse = await this.sendRequest(context, "account/read", {});
-        console.log("codex account/read response", accountReadResponse);
-        context.account = readCodexAccountSnapshot(accountReadResponse);
-        console.log("codex subscription status", {
-          type: context.account.type,
-          planType: context.account.planType,
-          sparkEnabled: context.account.sparkEnabled,
-        });
-      } catch (error) {
-        console.log("codex account/read failed", error);
-      }
+      const discoveryCacheKey =
+        input.createTransport === undefined
+          ? `${codexBinaryPath}\u001f${codexHomePath ?? ""}`
+          : undefined;
+      const usedDiscoveryCache =
+        discoveryCacheKey !== undefined && this.localStartupDiscoveryCache.has(discoveryCacheKey);
+      const discoveryStartedAt = Date.now();
+      const discovery = await this.resolveStartupDiscovery(context, discoveryCacheKey);
+      const discoveryResolvedAt = Date.now();
+      const advertisedModelSlugs = discovery.advertisedModelSlugs;
+      context.account = discovery.account;
 
       const normalizedModel = resolveCodexModelForAccount(
         normalizeCodexModelSlug(input.model),
@@ -973,6 +1038,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         requestedRuntimeMode: input.runtimeMode,
       }).pipe(this.runPromise);
       this.emitLifecycleEvent(context, "session/ready", `Connected to thread ${providerThreadId}`);
+      await Effect.logInfo("codex app-server startup timings", {
+        threadId,
+        initializeMs: initializeResolvedAt - startupStartedAt,
+        discoveryMs: discoveryResolvedAt - discoveryStartedAt,
+        threadOpenMs: Date.now() - discoveryResolvedAt,
+        totalMs: Date.now() - startupStartedAt,
+        usedDiscoveryCache,
+      }).pipe(this.runPromise);
       return { ...context.session };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to start Codex session.";
@@ -2255,10 +2328,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     ) {
       return;
     }
-    const textDelta =
-      notification.method === "item/agentMessage/delta"
-        ? this.readString(notification.params, "delta")
-        : undefined;
+    const textDelta = this.readNotificationTextDelta(notification);
 
     this.emitEvent({
       id: EventId.makeUnsafe(randomUUID()),
@@ -2431,6 +2501,20 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         status: "error",
         lastError: message ?? context.session.lastError,
       });
+    }
+  }
+
+  private readNotificationTextDelta(notification: JsonRpcNotification): string | undefined {
+    switch (notification.method) {
+      case "item/agentMessage/delta":
+      case "item/reasoning/textDelta":
+      case "item/reasoning/summaryTextDelta":
+      case "item/plan/delta":
+      case "item/commandExecution/outputDelta":
+      case "item/fileChange/outputDelta":
+        return this.readString(notification.params, "delta");
+      default:
+        return undefined;
     }
   }
 

@@ -7,6 +7,7 @@ import type {
   OrchestrationMessageSource,
   TurnDispatchMode,
   OrchestrationLatestTurn,
+  OrchestrationReviewChatTarget,
   OrchestrationThreadPullRequest,
   OrchestrationThreadRuntime,
   OrchestrationProposedPlanId,
@@ -185,6 +186,7 @@ export interface Thread extends ThreadWorkspaceState {
   sidechatSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
+  reviewChatTarget?: OrchestrationReviewChatTarget | null;
   runtime?: OrchestrationThreadRuntime | null;
   latestUserMessageAt?: string | null;
   hasPendingApprovals?: boolean;
@@ -215,6 +217,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
   sidechatSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
+  reviewChatTarget?: OrchestrationReviewChatTarget | null;
   runtime?: OrchestrationThreadRuntime | null;
   latestUserMessageAt?: string | null;
   hasPendingApprovals?: boolean;
@@ -257,6 +260,7 @@ export interface SidebarThreadSummary {
   sidechatSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
+  reviewChatTarget?: OrchestrationReviewChatTarget | null;
 }
 
 export interface ThreadSession {

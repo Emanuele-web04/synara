@@ -408,4 +408,26 @@ describe("buildThemeCssVariables", () => {
       cssVariables.variables["--app-user-message-background"],
     );
   });
+
+  it("keeps status foreground tokens readable instead of mapping them to the surface", () => {
+    const pack = {
+      codeThemeId: "custom-light",
+      theme: {
+        ...DEFAULT_THEME_STATE.chromeThemes.light,
+        semanticColors: {
+          ...DEFAULT_THEME_STATE.chromeThemes.light.semanticColors,
+          diffAdded: "#167f3a",
+        },
+        surface: "#ffffff",
+      },
+    };
+    const cssVariables = buildThemeCssVariables(pack, "light");
+
+    expect(cssVariables.variables["--success"]).toBe("#167f3a");
+    expect(cssVariables.variables["--success-foreground"]).toBe("#167f3a");
+    expect(cssVariables.variables["--warning-foreground"]).not.toBe(
+      cssVariables.variables["--background"],
+    );
+    expect(cssVariables.variables["--success-foreground"]).not.toBe(pack.theme.surface);
+  });
 });

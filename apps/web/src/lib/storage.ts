@@ -23,6 +23,22 @@ export function createMemoryStorage(): StateStorage {
   };
 }
 
+function isStateStorage(value: unknown): value is StateStorage {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Partial<StateStorage>;
+  return (
+    typeof candidate.getItem === "function" &&
+    typeof candidate.setItem === "function" &&
+    typeof candidate.removeItem === "function"
+  );
+}
+
+export function createBrowserStateStorage(): StateStorage {
+  return isStateStorage(globalThis.localStorage) ? globalThis.localStorage : createMemoryStorage();
+}
+
 export function createDebouncedStorage(
   baseStorage: StateStorage,
   debounceMs: number = 300,

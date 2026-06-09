@@ -51,6 +51,10 @@ import Migration0035 from "./Migrations/035_NormalizeLegacyModelSelectionOptions
 import Migration0036 from "./Migrations/036_ProjectionThreadsPinned.ts";
 import Migration0037 from "./Migrations/037_ProjectionSnapshotCapIndexes.ts";
 import Migration0038 from "./Migrations/038_ExecutionRuntimeTables.ts";
+import Migration0039 from "./Migrations/039_ReviewCache.ts";
+import Migration0040 from "./Migrations/040_ProjectionThreadsReviewChatTarget.ts";
+import Migration0041 from "./Migrations/041_BackfillReviewChangesetPatchSignature.ts";
+import Migration0042 from "./Migrations/042_BackfillRuntimeWarningSummaries.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -101,6 +105,10 @@ export const migrationEntries = [
   [36, "ProjectionThreadsPinned", Migration0036],
   [37, "ProjectionSnapshotCapIndexes", Migration0037],
   [38, "ExecutionRuntimeTables", Migration0038],
+  [39, "ReviewCache", Migration0039],
+  [40, "ProjectionThreadsReviewChatTarget", Migration0040],
+  [41, "BackfillReviewChangesetPatchSignature", Migration0041],
+  [42, "BackfillRuntimeWarningSummaries", Migration0042],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

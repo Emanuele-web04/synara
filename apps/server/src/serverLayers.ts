@@ -37,6 +37,7 @@ import { OrchestrationLayerLive } from "./orchestration/runtimeLayer";
 import { KeybindingsLive } from "./keybindings";
 import { GitCoreLive } from "./git/Layers/GitCore";
 import { GitLayerLive, TextGenerationLayerLive } from "./git/runtimeLayer";
+import { ReviewLayerLive } from "./review/runtimeLayer";
 import { TerminalLayerLive } from "./terminal/runtimeLayer";
 import { AuthControlPlaneLive } from "./auth/Layers/AuthControlPlane";
 import { BootstrapCredentialServiceLive } from "./auth/Layers/BootstrapCredentialService";
@@ -246,6 +247,7 @@ export function makeServerRuntimeServicesLayer() {
     executionRuntimeReconcilerLayer,
     runtimeRemoteConcernsLayer,
     GitLayerLive,
+    ReviewLayerLive,
     TerminalLayerLive,
     KeybindingsLive,
     ServerSettingsLive,

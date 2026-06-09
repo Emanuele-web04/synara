@@ -187,6 +187,7 @@ function ProviderUpdateNotifications() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const { activeThread } = useFocusedChatContext();
   const [isUpdatingAll, setIsUpdatingAll] = useState(false);
   const activeToastRef = useRef<ActiveProviderUpdateToast | null>(null);
   const isUpdatingAllRef = useRef(false);
@@ -351,6 +352,7 @@ function ProviderUpdateNotifications() {
       outdatedProviders.length === 0 ||
       oneClickProviders.length === 0 ||
       !notificationKey ||
+      !activeThread ||
       isUpdatingAll ||
       activeToastRef.current ||
       seenProviderUpdateNotificationKeys.has(notificationKey)
@@ -410,7 +412,15 @@ function ProviderUpdateNotifications() {
       },
     });
     activeToastRef.current = { kind: "prompt", key: notificationKey, toastId };
-  }, [isUpdatingAll, navigate, notificationKey, oneClickProviders, outdatedProviders, updateAll]);
+  }, [
+    activeThread,
+    isUpdatingAll,
+    navigate,
+    notificationKey,
+    oneClickProviders,
+    outdatedProviders,
+    updateAll,
+  ]);
 
   return null;
 }

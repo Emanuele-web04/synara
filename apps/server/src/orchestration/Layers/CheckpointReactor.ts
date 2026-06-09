@@ -110,6 +110,7 @@ const make = Effect.gen(function* () {
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const receiptBus = yield* RuntimeReceiptBus;
   const pendingMessageStartByThread = new Map<ThreadId, MessageId>();
+  const reviewChatThreadIds = new Set<ThreadId>();
 
   // Wait a short time for ProviderRuntimeIngestion to persist the final
   // assistant message id when turn completion wins the subscriber race.
@@ -600,6 +601,9 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    if (thread.reviewChatTarget !== null || reviewChatThreadIds.has(thread.id)) {
+      return;
+    }
     const project = yield* getProjectShell(thread.projectId);
     if (!project) {
       return;
@@ -741,7 +745,7 @@ const make = Effect.gen(function* () {
       hasTurnStartBaseline = copied;
       pendingMessageStartByThread.delete(thread.id);
       if (!copied) {
-        yield* Effect.logWarning("checkpoint turn start baseline alias missing message baseline", {
+        yield* Effect.logDebug("checkpoint turn start baseline alias missing message baseline", {
           threadId: thread.id,
           turnId,
           messageId,
@@ -792,6 +796,10 @@ const make = Effect.gen(function* () {
     const threadId = event.payload.threadId;
     const thread = yield* getThreadDetail(threadId);
     if (!thread) {
+      return;
+    }
+    if (thread.reviewChatTarget !== null || reviewChatThreadIds.has(thread.id)) {
+      reviewChatThreadIds.add(thread.id);
       return;
     }
     const project = yield* getProjectShell(thread.projectId);
@@ -969,6 +977,20 @@ const make = Effect.gen(function* () {
   });
 
   const processDomainEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
+    if (event.type === "thread.created") {
+      if (event.payload.reviewChatTarget !== null) {
+        reviewChatThreadIds.add(event.payload.threadId);
+      }
+      return;
+    }
+
+    if (event.type === "thread.meta-updated") {
+      if (event.payload.reviewChatTarget !== undefined && event.payload.reviewChatTarget !== null) {
+        reviewChatThreadIds.add(event.payload.threadId);
+      }
+      return;
+    }
+
     if (event.type === "thread.turn-start-requested" || event.type === "thread.message-sent") {
       yield* ensurePreTurnBaselineFromDomainTurnStart(event);
       return;
@@ -1045,6 +1067,8 @@ const make = Effect.gen(function* () {
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
         if (
+          event.type !== "thread.created" &&
+          event.type !== "thread.meta-updated" &&
           event.type !== "thread.turn-start-requested" &&
           event.type !== "thread.message-sent" &&
           event.type !== "thread.checkpoint-revert-requested" &&

@@ -400,6 +400,10 @@ function protectLiteralDollarsInMarkdownLinks(value: string): string {
 
 // Tighten single-dollar math so currency and escaped dollars stay literal without touching code spans.
 function protectLiteralMarkdownDollars(value: string): string {
+  if (!value.includes("$")) {
+    return value;
+  }
+
   let result = "";
   let cursor = 0;
 

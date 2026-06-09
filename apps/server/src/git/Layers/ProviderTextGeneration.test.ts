@@ -29,6 +29,12 @@ function createTextGenerationDouble(label: string) {
       summary: `${label} summary`,
     }),
   );
+  const generateReviewFindings = vi.fn<TextGenerationShape["generateReviewFindings"]>(() =>
+    Effect.succeed({
+      summary: `${label} review`,
+      findings: [],
+    }),
+  );
   const generateBranchName = vi.fn<TextGenerationShape["generateBranchName"]>(() =>
     Effect.succeed({
       branch: `${label}-branch`,
@@ -45,12 +51,14 @@ function createTextGenerationDouble(label: string) {
       generateCommitMessage,
       generatePrContent,
       generateDiffSummary,
+      generateReviewFindings,
       generateBranchName,
       generateThreadTitle,
     } satisfies TextGenerationShape,
     generateCommitMessage,
     generatePrContent,
     generateDiffSummary,
+    generateReviewFindings,
     generateBranchName,
     generateThreadTitle,
   };

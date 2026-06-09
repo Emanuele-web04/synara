@@ -20,6 +20,7 @@ import {
   type ThreadTerminalWorkspaceLayout,
   type ThreadTerminalWorkspaceTab,
 } from "./types";
+import { createBrowserStateStorage } from "./lib/storage";
 import {
   addTerminalTabToGroupLayout,
   collectTerminalIdsFromLayout,
@@ -1392,7 +1393,7 @@ export const useTerminalStateStore = create<TerminalStateStoreState>()(
     {
       name: TERMINAL_STATE_STORAGE_KEY,
       version: 1,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(createBrowserStateStorage),
       partialize: (state) => ({
         terminalStateByThreadId: sanitizePersistedTerminalStateByThreadId(
           state.terminalStateByThreadId,

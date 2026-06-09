@@ -9,6 +9,7 @@ import type {
   ProviderStartOptions,
 } from "@t3tools/contracts";
 import {
+  parseRepositoryNameFromPullRequestUrl,
   resolveAutoFeatureBranchName,
   sanitizeBranchFragment,
   sanitizeFeatureBranchName,
@@ -94,13 +95,6 @@ interface FailedWorktreeHandoffRecovery {
 
 interface FailedWorktreeTransferRecovery extends FailedWorktreeHandoffRecovery {
   worktreeRemoved: boolean;
-}
-
-function parseRepositoryNameFromPullRequestUrl(url: string): string | null {
-  const trimmed = url.trim();
-  const match = /^https:\/\/github\.com\/[^/]+\/([^/]+)\/pull\/\d+(?:\/.*)?$/i.exec(trimmed);
-  const repositoryName = match?.[1]?.trim() ?? "";
-  return repositoryName.length > 0 ? repositoryName : null;
 }
 
 function resolveHeadRepositoryNameWithOwner(

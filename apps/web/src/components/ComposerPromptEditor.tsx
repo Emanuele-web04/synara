@@ -51,10 +51,7 @@ import {
   isCollapsedCursorAdjacentToInlineToken,
 } from "~/composer-logic";
 import { splitPromptIntoComposerSegments } from "~/composer-editor-mentions";
-import {
-  INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
-  type TerminalContextDraft,
-} from "~/lib/terminalContext";
+import { type TerminalContextDraft } from "~/lib/terminalContext";
 import type { ProviderMentionReference } from "@t3tools/contracts";
 import { cn } from "~/lib/utils";
 import {
@@ -73,7 +70,6 @@ import {
   $createComposerAgentMentionNode,
   $createComposerTerminalContextNode,
   isComposerInlineTokenNode,
-  COMPOSER_NODE_CLASSES,
   type ComposerInlineTokenNode,
 } from "./composer-nodes";
 
@@ -489,6 +485,7 @@ interface ComposerPromptEditorProps {
   mentionReferences?: ReadonlyArray<ProviderMentionReference>;
   disabled: boolean;
   placeholder: string;
+  ariaLabel?: string;
   className?: string;
   onRemoveTerminalContext: (contextId: string) => void;
   onChange: (
@@ -740,6 +737,7 @@ function ComposerPromptEditorInner({
   mentionReferences = [],
   disabled,
   placeholder,
+  ariaLabel,
   className,
   onRemoveTerminalContext,
   onChange,
@@ -971,6 +969,7 @@ function ComposerPromptEditorInner({
                 className,
               )}
               data-testid="composer-editor"
+              aria-label={ariaLabel}
               aria-placeholder={placeholder}
               placeholder={<span />}
               onPaste={onPaste}
@@ -980,7 +979,7 @@ function ComposerPromptEditorInner({
             terminalContexts.length > 0 ? null : (
               <div
                 className={cn(
-                  "font-system-ui pointer-events-none absolute inset-0 text-muted-foreground/40",
+                  "font-system-ui pointer-events-none absolute inset-0 text-muted-foreground/70",
                   COMPOSER_EDITOR_TEXT_CLASS_NAME,
                   COMPOSER_EDITOR_LINE_HEIGHT_CLASS_NAME,
                 )}
@@ -1013,6 +1012,7 @@ export const ComposerPromptEditor = forwardRef<
     mentionReferences,
     disabled,
     placeholder,
+    ariaLabel,
     className,
     onRemoveTerminalContext,
     onChange,
@@ -1059,6 +1059,7 @@ export const ComposerPromptEditor = forwardRef<
         mentionReferences={normalizedMentionReferences}
         disabled={disabled}
         placeholder={placeholder}
+        {...(ariaLabel ? { ariaLabel } : {})}
         onRemoveTerminalContext={onRemoveTerminalContext}
         onChange={onChange}
         onPaste={onPaste}

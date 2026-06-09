@@ -238,6 +238,7 @@ export const OrchestrationMessageSource = Schema.Literals([
   "native",
   "handoff-import",
   "fork-import",
+  "review-context-bootstrap",
 ]);
 export type OrchestrationMessageSource = typeof OrchestrationMessageSource.Type;
 
@@ -484,6 +485,18 @@ export const OrchestrationThreadPullRequest = Schema.Struct({
 });
 export type OrchestrationThreadPullRequest = typeof OrchestrationThreadPullRequest.Type;
 
+export const OrchestrationReviewChatTarget = Schema.Struct({
+  projectId: ProjectId,
+  cwd: TrimmedNonEmptyString,
+  repositoryId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  reference: TrimmedNonEmptyString,
+  number: PositiveInt,
+  url: Schema.optional(Schema.NullOr(Schema.String)).pipe(Schema.withDecodingDefault(() => null)),
+});
+export type OrchestrationReviewChatTarget = typeof OrchestrationReviewChatTarget.Type;
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -526,6 +539,9 @@ export const OrchestrationThread = Schema.Struct({
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  reviewChatTarget: Schema.optional(Schema.NullOr(OrchestrationReviewChatTarget)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
   runtime: Schema.optional(Schema.NullOr(OrchestrationThreadRuntime)).pipe(
@@ -593,6 +609,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  reviewChatTarget: Schema.optional(Schema.NullOr(OrchestrationReviewChatTarget)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
   runtime: Schema.optional(Schema.NullOr(OrchestrationThreadRuntime)).pipe(
@@ -729,6 +748,9 @@ const ThreadCreateCommand = Schema.Struct({
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  reviewChatTarget: Schema.optional(Schema.NullOr(OrchestrationReviewChatTarget)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   runtimePlan: Schema.optional(Schema.NullOr(RuntimePlan)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -840,6 +862,7 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   subagentRole: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   handoff: Schema.optional(Schema.NullOr(ThreadHandoff)),
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)),
+  reviewChatTarget: Schema.optional(Schema.NullOr(OrchestrationReviewChatTarget)),
 });
 
 const ThreadRuntimeModeSetCommand = Schema.Struct({
@@ -869,6 +892,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
     attachments: Schema.Array(ChatAttachment),
     skills: Schema.optional(Schema.Array(ProviderSkillReference)),
     mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
+    source: Schema.optional(OrchestrationMessageSource),
   }),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
@@ -896,6 +920,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     attachments: Schema.Array(UploadChatAttachment),
     skills: Schema.optional(Schema.Array(ProviderSkillReference)),
     mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
+    source: Schema.optional(OrchestrationMessageSource),
   }),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
@@ -994,6 +1019,16 @@ const ThreadSessionStopCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadSessionEnsureCommand = Schema.Struct({
+  type: Schema.Literal("thread.session.ensure"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  modelSelection: Schema.optional(ModelSelection),
+  providerOptions: Schema.optional(ProviderStartOptions),
+  runtimeMode: RuntimeMode,
+  createdAt: IsoDateTime,
+});
+
 const ThreadRuntimeActionRequestCommand = Schema.Struct({
   type: Schema.Literal("thread.runtime.action"),
   commandId: CommandId,
@@ -1032,6 +1067,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMessageEditAndResendCommand,
   ThreadActivityAppendCommand,
   ThreadSessionStopCommand,
+  ThreadSessionEnsureCommand,
   ThreadRuntimeActionRequestCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
@@ -1058,6 +1094,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMessageEditAndResendCommand,
   ThreadActivityAppendCommand,
   ThreadSessionStopCommand,
+  ThreadSessionEnsureCommand,
   ThreadRuntimeActionRequestCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
@@ -1342,6 +1379,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.conversation-rolled-back",
   "thread.message-edit-resend-requested",
   "thread.session-stop-requested",
+  "thread.session-ensure-requested",
   "thread.runtime-action-requested",
   "thread.session-set",
   "thread.proposed-plan-upserted",
@@ -1435,6 +1473,9 @@ export const ThreadCreatedPayload = Schema.Struct({
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  reviewChatTarget: Schema.optional(Schema.NullOr(OrchestrationReviewChatTarget)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   // The requested execution target carried from create/handoff/fork. It is plan
   // *input*, not thread state: the reactor validates and provisions from it; the
   // resolved runtime read-model lives on `OrchestrationThread.runtime` instead.
@@ -1484,6 +1525,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   subagentRole: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   handoff: Schema.optional(Schema.NullOr(ThreadHandoff)),
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)),
+  reviewChatTarget: Schema.optional(Schema.NullOr(OrchestrationReviewChatTarget)),
   updatedAt: IsoDateTime,
 });
 
@@ -1597,6 +1639,14 @@ export const ThreadMessageEditResendRequestedPayload = Schema.Struct({
 
 export const ThreadSessionStopRequestedPayload = Schema.Struct({
   threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
+export const ThreadSessionEnsureRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  modelSelection: Schema.optional(ModelSelection),
+  providerOptions: Schema.optional(ProviderStartOptions),
+  runtimeMode: RuntimeMode,
   createdAt: IsoDateTime,
 });
 
@@ -1881,6 +1931,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.session-stop-requested"),
     payload: ThreadSessionStopRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.session-ensure-requested"),
+    payload: ThreadSessionEnsureRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

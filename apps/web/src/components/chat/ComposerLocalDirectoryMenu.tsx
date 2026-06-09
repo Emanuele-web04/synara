@@ -487,7 +487,7 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
                   <CommandSeparator className="my-0.5" />
                 ) : null}
                 <CommandGroup>
-                  <CommandGroupLabel className="px-2 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/55">
+                  <CommandGroupLabel className="px-2 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">
                     Matches deeper
                   </CommandGroupLabel>
                   {searchRows.map((entry, searchIndex) => {
@@ -510,23 +510,23 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
           </CommandList>
         </div>
         {isAwaitingHomeDir ? (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
+          <p className="px-2 py-1.5 text-muted-foreground/70 text-[11px]">
             Waiting for home directory from server…
           </p>
         ) : isLoading && visibleCount === 0 ? (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">Loading local files…</p>
+          <p className="px-2 py-1.5 text-muted-foreground/70 text-[11px]">Loading local files…</p>
         ) : errorMessage ? (
           <p className="px-2 py-1.5 text-destructive/80 text-[11px]">{errorMessage}</p>
         ) : isSearchPending ? (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
+          <p className="px-2 py-1.5 text-muted-foreground/70 text-[11px]">
             Searching nested files…
           </p>
         ) : visibleCount === 0 ? (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
+          <p className="px-2 py-1.5 text-muted-foreground/70 text-[11px]">
             {filter.trim().length > 0 ? "No matches." : "No files or folders here."}
           </p>
         ) : searchQuery.data?.truncated ? (
-          <p className="px-2 py-1 text-muted-foreground/40 text-[10.5px]">
+          <p className="px-2 py-1 text-muted-foreground/70 text-[10.5px]">
             Showing top matches. Keep typing to narrow.
           </p>
         ) : null}
@@ -560,12 +560,12 @@ const UseCurrentFolderRow = memo(function UseCurrentFolderRow(props: {
       }}
       onClick={onActivate}
     >
-      <FolderClosed className="size-3.5 text-muted-foreground/60" />
+      <FolderClosed className="size-3.5 text-muted-foreground/75" />
       <div className="min-w-0 flex flex-1 items-center gap-1.5 overflow-hidden">
         <span className="shrink-0 text-[11.5px] font-medium text-foreground/80">
           Use this folder
         </span>
-        <span className="truncate text-[11px] text-muted-foreground/55">{directoryLabel}</span>
+        <span className="truncate text-[11px] text-muted-foreground/70">{directoryLabel}</span>
       </div>
     </CommandItem>
   );
@@ -615,16 +615,16 @@ const LocalSearchRow = memo(function LocalSearchRow(props: {
       onClick={() => onActivate(entry)}
     >
       {isDirectory ? (
-        <FolderClosed className="size-3.5 text-muted-foreground/60" />
+        <FolderClosed className="size-3.5 text-muted-foreground/75" />
       ) : (
-        <FileIcon className="size-3.5 text-muted-foreground/60" />
+        <FileIcon className="size-3.5 text-muted-foreground/75" />
       )}
       <div className="min-w-0 flex flex-1 items-center gap-3">
         <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-foreground/80">
           {entry.name}
         </span>
         {subtitle ? (
-          <span className="shrink-0 max-w-[60%] truncate pl-2 text-right text-[10.5px] text-muted-foreground/42">
+          <span className="shrink-0 max-w-[60%] truncate pl-2 text-right text-[10.5px] text-muted-foreground/70">
             {subtitle}
           </span>
         ) : null}
@@ -661,9 +661,9 @@ const LocalEntryRow = memo(function LocalEntryRow(props: {
       onClick={() => onActivate(entry)}
     >
       {isDirectory ? (
-        <FolderClosed className="size-3.5 text-muted-foreground/60" />
+        <FolderClosed className="size-3.5 text-muted-foreground/75" />
       ) : (
-        <FileIcon className="size-3.5 text-muted-foreground/60" />
+        <FileIcon className="size-3.5 text-muted-foreground/75" />
       )}
       <div className="min-w-0 flex flex-1 items-center gap-1.5 overflow-hidden">
         <span className="truncate text-[11.5px] font-medium text-foreground/80">{entry.name}</span>

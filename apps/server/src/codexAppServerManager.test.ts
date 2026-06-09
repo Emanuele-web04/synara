@@ -1190,6 +1190,45 @@ describe("steerTurn", () => {
 });
 
 describe("CodexAppServerManager discovery", () => {
+  it("reuses local startup discovery by cache key", async () => {
+    const manager = new CodexAppServerManager();
+    const context = {} as never;
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockImplementation(async (_context, method) => {
+        if (method === "model/list") {
+          return { items: [{ id: "gpt-5.3-codex-spark", name: "Spark" }] };
+        }
+        if (method === "account/read") {
+          return { account: { type: "apiKey" } };
+        }
+        return {};
+      });
+    const resolveStartupDiscovery = (
+      manager as unknown as {
+        resolveStartupDiscovery: (
+          context: unknown,
+          cacheKey: string | undefined,
+        ) => Promise<{
+          readonly advertisedModelSlugs: ReadonlyArray<string>;
+          readonly account: { readonly type: string };
+        }>;
+      }
+    ).resolveStartupDiscovery.bind(manager);
+
+    const first = await resolveStartupDiscovery(context, "codex\u001f");
+    const second = await resolveStartupDiscovery(context, "codex\u001f");
+
+    expect(first.advertisedModelSlugs).toEqual(["gpt-5.3-codex-spark"]);
+    expect(second.account.type).toBe("apiKey");
+    expect(sendRequest.mock.calls.map((call) => call[1])).toEqual(["model/list", "account/read"]);
+  });
+
   it("normalizes model/list fast mode metadata from runtime discovery", async () => {
     const manager = new CodexAppServerManager();
     const context = {
@@ -2334,6 +2373,38 @@ describe("collab child conversation routing", () => {
     );
   });
 
+  it("extracts reasoning notification deltas for the provider adapter stream", () => {
+    const { manager, context, emitEvent } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "item/reasoning/summaryTextDelta",
+      params: {
+        threadId: "provider_parent",
+        turnId: "turn_parent",
+        itemId: "reasoning_1",
+        delta: "checking review context",
+        summaryIndex: 0,
+      },
+    });
+
+    expect(emitEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        method: "item/reasoning/summaryTextDelta",
+        turnId: "turn_parent",
+        itemId: "reasoning_1",
+        textDelta: "checking review context",
+        payload: expect.objectContaining({
+          delta: "checking review context",
+          summaryIndex: 0,
+        }),
+      }),
+    );
+  });
+
   it("suppresses child lifecycle notifications without mutating the parent session state", () => {
     const { manager, context, emitEvent, updateSession } = createCollabNotificationHarness();
 
@@ -2703,7 +2774,7 @@ interface OutboundFrame {
  * harnesses for end-to-end coverage.
  */
 function createInMemoryCodexHarness(options?: {
-  readonly responders?: Record<string, (frame: OutboundFrame) => unknown>;
+  readonly responders?: Record<string, (frame: OutboundFrame) => unknown | Promise<unknown>>;
 }) {
   const built = Effect.runSync(makeInMemoryJsonRpcTransport());
   const controller: InMemoryTransportController = built.controller;
@@ -2719,7 +2790,7 @@ function createInMemoryCodexHarness(options?: {
     events.push(event);
   });
 
-  const defaultResponders: Record<string, (frame: OutboundFrame) => unknown> = {
+  const defaultResponders: Record<string, (frame: OutboundFrame) => unknown | Promise<unknown>> = {
     initialize: () => ({ userAgent: "codex-test" }),
     "model/list": () => ({ items: [] }),
     "account/read": () => ({ account: { type: "apiKey" } }),
@@ -2743,7 +2814,7 @@ function createInMemoryCodexHarness(options?: {
         continue;
       }
       const responder = responders[frame.method as string];
-      const result = responder ? responder(frame) : {};
+      const result = responder ? await responder(frame) : {};
       await Effect.runPromise(controller.pushInboundMessage({ id: frame.id, result }));
     }
   })();
@@ -2866,6 +2937,71 @@ describe("Codex protocol over an in-memory transport", () => {
         "turn/completed projection",
       );
       expect(harness.manager.listSessions()[0]?.status).toBe("ready");
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("keeps warmed visible sends off the startup path", async () => {
+    let coldPathCost = 0;
+    let warmPathCost = 0;
+    let phase: "cold" | "warm" = "cold";
+    const charge = (cost: number) => {
+      if (phase === "cold") {
+        coldPathCost += cost;
+      } else {
+        warmPathCost += cost;
+      }
+    };
+    const harness = createInMemoryCodexHarness({
+      responders: {
+        initialize: () => {
+          charge(50);
+          return { userAgent: "codex-test" };
+        },
+        "model/list": () => {
+          charge(50);
+          return { items: [] };
+        },
+        "account/read": () => {
+          charge(50);
+          return { account: { type: "apiKey" } };
+        },
+        "thread/start": () => {
+          charge(50);
+          return { thread: { id: "provider_thread_1" } };
+        },
+        "turn/start": () => {
+          charge(1);
+          return { turn: { id: "turn_mem_1" } };
+        },
+      },
+    });
+    try {
+      await harness.manager.startSession({
+        threadId: asThreadId("thread_mem_warm"),
+        provider: "codex",
+        cwd: "/tmp/mem-workspace",
+        runtimeMode: "full-access",
+      });
+
+      phase = "warm";
+      await harness.manager.sendTurn({
+        threadId: asThreadId("thread_mem_warm"),
+        input: "Summarize the repo",
+      });
+
+      expect(coldPathCost).toBe(200);
+      expect(warmPathCost).toBe(1);
+      expect(coldPathCost / warmPathCost).toBeGreaterThanOrEqual(10);
+      expect(harness.outboundFrames.map((frame) => frame.method)).toEqual([
+        "initialize",
+        "initialized",
+        "model/list",
+        "account/read",
+        "thread/start",
+        "turn/start",
+      ]);
     } finally {
       await harness.stop();
     }

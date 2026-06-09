@@ -325,6 +325,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           subagentRole: command.subagentRole,
           forkSourceThreadId: null,
           lastKnownPr: command.lastKnownPr,
+          reviewChatTarget: command.reviewChatTarget,
           runtimePlan: command.runtimePlan,
           handoff: null,
           createdAt: command.createdAt,
@@ -666,6 +667,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.subagentRole !== undefined ? { subagentRole: command.subagentRole } : {}),
           ...(command.handoff !== undefined ? { handoff: command.handoff } : {}),
           ...(command.lastKnownPr !== undefined ? { lastKnownPr: command.lastKnownPr } : {}),
+          ...(command.reviewChatTarget !== undefined
+            ? { reviewChatTarget: command.reviewChatTarget }
+            : {}),
           updatedAt: occurredAt,
         },
       };
@@ -767,7 +771,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           dispatchMode,
           turnId: null,
           streaming: false,
-          source: "native",
+          source: command.message.source ?? "native",
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -1061,6 +1065,34 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.session-stop-requested",
         payload: {
           threadId: command.threadId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.session.ensure": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.session-ensure-requested",
+        payload: {
+          threadId: command.threadId,
+          ...(command.modelSelection !== undefined
+            ? { modelSelection: command.modelSelection }
+            : {}),
+          ...(command.providerOptions !== undefined
+            ? { providerOptions: command.providerOptions }
+            : {}),
+          runtimeMode: command.runtimeMode,
           createdAt: command.createdAt,
         },
       };

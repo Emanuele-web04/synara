@@ -147,6 +147,14 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
         ? `Thinking ${thinkingEnabled ? "On" : "Off"}`
         : null;
   const showsFastBadge = supportsFastModeControl && fastModeEnabled;
+  const triggerAccessibleLabel = [
+    "Change model and reasoning",
+    modelLabel,
+    triggerStatusLabel,
+    showsFastBadge ? "Fast" : null,
+  ]
+    .filter((part): part is string => typeof part === "string" && part.length > 0)
+    .join(", ");
 
   const handleFastModeChange = useCallback(
     (value: string) => {
@@ -189,7 +197,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
         "min-w-0 shrink-0 justify-start gap-1.5 whitespace-nowrap px-2 sm:px-2.5 [&_svg]:mx-0",
         COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
       )}
-      aria-label="Change model and reasoning"
+      aria-label={triggerAccessibleLabel}
     />
   );
 

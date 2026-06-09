@@ -36,7 +36,7 @@ export const DirectoryTreePicker = memo(function DirectoryTreePicker({
       <PopoverPopup align="start" className="w-[min(32rem,calc(100vw-2rem))] p-0">
         <div className="border-b border-border/60 px-4 py-3">
           <p className="text-sm font-medium text-foreground">Start a chat from a folder</p>
-          <p className="mt-1 truncate text-xs text-muted-foreground/60">
+          <p className="mt-1 truncate text-xs text-muted-foreground/75">
             {rootPath ?? "No home directory found"}
           </p>
         </div>

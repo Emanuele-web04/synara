@@ -10,6 +10,7 @@ import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 
 type ThreadCreateCommand = Extract<ClientOrchestrationCommand, { type: "thread.create" }>;
+type ThreadCreatePromotionApi = Pick<NativeApi, "orchestration">;
 
 type PromoteThreadCreateResult = "created" | "exists" | "unavailable";
 
@@ -31,7 +32,7 @@ export function isDuplicateThreadCreateError(error: unknown, threadId: ThreadId)
 }
 
 async function recoverPromotedThreadFromShellSnapshot(
-  api: NativeApi,
+  api: ThreadCreatePromotionApi,
   threadId: ThreadId,
 ): Promise<boolean> {
   const snapshot = await api.orchestration.getShellSnapshot();
@@ -41,7 +42,7 @@ async function recoverPromotedThreadFromShellSnapshot(
 }
 
 async function dispatchPromoteThreadCreate(
-  api: NativeApi,
+  api: ThreadCreatePromotionApi,
   command: ThreadCreateCommand,
 ): Promise<PromoteThreadCreateResult> {
   if (getThreadFromState(useStore.getState(), command.threadId)) {
@@ -70,7 +71,7 @@ async function dispatchPromoteThreadCreate(
 
 export async function promoteThreadCreate(
   command: ThreadCreateCommand,
-  api: NativeApi | undefined = readNativeApi(),
+  api: ThreadCreatePromotionApi | undefined = readNativeApi(),
 ): Promise<PromoteThreadCreateResult> {
   if (!api) {
     return "unavailable";

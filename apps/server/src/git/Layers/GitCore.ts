@@ -1865,6 +1865,14 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
+    const readRangeDiff: GitCoreShape["readRangeDiff"] = (input) =>
+      execute({
+        operation: "GitCore.readRangeDiff",
+        cwd: input.cwd,
+        args: ["diff", "--patch", "--no-color", "--no-ext-diff", `${input.base}...${input.head}`],
+        maxOutputBytes: 10_000_000,
+      }).pipe(Effect.map((result) => ({ patch: result.stdout })));
+
     const readConfigValue: GitCoreShape["readConfigValue"] = (cwd, key) =>
       runGitStdout("GitCore.readConfigValue", cwd, ["config", "--get", key], true).pipe(
         Effect.map((stdout) => stdout.trim()),
@@ -2593,6 +2601,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       pushCurrentBranch,
       pullCurrentBranch,
       readRangeContext,
+      readRangeDiff,
       readConfigValue,
       listBranches,
       createWorktree,

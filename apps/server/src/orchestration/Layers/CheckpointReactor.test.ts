@@ -486,6 +486,62 @@ describe("CheckpointReactor", () => {
     ).toBe("v2\n");
   });
 
+  it("skips backup message-start checkpoint capture for review chat turns", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const threadId = ThreadId.makeUnsafe("thread-review-chat");
+    const messageId = MessageId.makeUnsafe("review-chat-message");
+    const createdAt = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-review-chat-thread-create"),
+        threadId,
+        projectId: asProjectId("project-1"),
+        title: "Review #42",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: "main",
+        worktreePath: harness.cwd,
+        reviewChatTarget: {
+          projectId: asProjectId("project-1"),
+          cwd: harness.cwd,
+          repositoryId: "owner/repo",
+          reference: "owner/repo#42",
+          number: 42,
+          url: "https://github.com/owner/repo/pull/42",
+        },
+        createdAt,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-review-chat-turn-start"),
+        threadId,
+        message: {
+          messageId,
+          role: "user",
+          text: "What should I review first?",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      }),
+    );
+
+    await harness.drain();
+    expect(gitRefExists(harness.cwd, checkpointRefForThreadMessageStart(threadId, messageId))).toBe(
+      false,
+    );
+  });
+
   it("summarizes only files changed after each turn's start checkpoint", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const threadId = ThreadId.makeUnsafe("thread-1");
@@ -846,12 +902,12 @@ describe("CheckpointReactor", () => {
           checkpoint.status === "ready" &&
           checkpoint.files
             ?.map((file) => file.path)
-            .sort()
+            .toSorted()
             .join(",") === "early.txt,late.txt",
       ),
     );
 
-    expect(thread.checkpoints[0]?.files?.map((file) => file.path).sort()).toEqual([
+    expect(thread.checkpoints[0]?.files?.map((file) => file.path).toSorted()).toEqual([
       "early.txt",
       "late.txt",
     ]);

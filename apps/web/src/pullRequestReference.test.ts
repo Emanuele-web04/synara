@@ -9,6 +9,15 @@ describe("parsePullRequestReference", () => {
     );
   });
 
+  it("accepts GitHub pull request URLs with browser suffixes", () => {
+    expect(
+      parsePullRequestReference("https://github.com/enzo-health/bonaparte/pull/7870?tab=files"),
+    ).toBe("https://github.com/enzo-health/bonaparte/pull/7870?tab=files");
+    expect(
+      parsePullRequestReference("https://github.com/enzo-health/bonaparte/pull/7870#discussion_r1"),
+    ).toBe("https://github.com/enzo-health/bonaparte/pull/7870#discussion_r1");
+  });
+
   it("accepts raw numbers", () => {
     expect(parsePullRequestReference("42")).toBe("42");
   });

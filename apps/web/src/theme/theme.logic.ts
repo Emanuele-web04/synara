@@ -758,11 +758,11 @@ export function buildThemeCssVariables(
     "--sidebar-border": readCodexVariable("--color-border"),
     "--sidebar-foreground": readCodexVariable("--color-text-foreground"),
     "--success": pack.theme.semanticColors.diffAdded,
-    "--success-foreground": pack.theme.surface,
+    "--success-foreground": pack.theme.semanticColors.diffAdded,
     "--theme-font-code-family": normalizeFontFamilyCssValue(pack.theme.fonts.code) ?? "",
     "--theme-font-ui-family": normalizeFontFamilyCssValue(pack.theme.fonts.ui) ?? "",
     "--warning": warningColor,
-    "--warning-foreground": pack.theme.surface,
+    "--warning-foreground": warningColor,
   };
 
   return {

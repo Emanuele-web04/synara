@@ -78,7 +78,7 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
         type="button"
         className={cn(
           COMPOSER_INLINE_CHIP_DISMISS_BUTTON_CLASS_NAME,
-          "size-5 rounded-full text-muted-foreground/62 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
+          "size-5 rounded-full text-muted-foreground/75 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
         )}
         onClick={() => onRemoveImage(image.id)}
         aria-label={`Remove ${image.name}`}

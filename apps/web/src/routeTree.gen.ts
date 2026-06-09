@@ -12,10 +12,13 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
+import { Route as ChatReviewRouteImport } from './routes/_chat.review'
 import { Route as ChatPluginsRouteImport } from './routes/_chat.plugins'
 import { Route as ChatThreadIdRouteImport } from './routes/_chat.$threadId'
 import { Route as ChatWorkspaceIndexRouteImport } from './routes/_chat.workspace.index'
+import { Route as ChatReviewIndexRouteImport } from './routes/_chat.review.index'
 import { Route as ChatWorkspaceWorkspaceIdRouteImport } from './routes/_chat.workspace.$workspaceId'
+import { Route as ChatReviewReferenceRouteImport } from './routes/_chat.review.$reference'
 
 const ChatRoute = ChatRouteImport.update({
   id: '/_chat',
@@ -29,6 +32,11 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
 const ChatSettingsRoute = ChatSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => ChatRoute,
+} as any)
+const ChatReviewRoute = ChatReviewRouteImport.update({
+  id: '/review',
+  path: '/review',
   getParentRoute: () => ChatRoute,
 } as any)
 const ChatPluginsRoute = ChatPluginsRouteImport.update({
@@ -46,19 +54,32 @@ const ChatWorkspaceIndexRoute = ChatWorkspaceIndexRouteImport.update({
   path: '/workspace/',
   getParentRoute: () => ChatRoute,
 } as any)
+const ChatReviewIndexRoute = ChatReviewIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ChatReviewRoute,
+} as any)
 const ChatWorkspaceWorkspaceIdRoute =
   ChatWorkspaceWorkspaceIdRouteImport.update({
     id: '/workspace/$workspaceId',
     path: '/workspace/$workspaceId',
     getParentRoute: () => ChatRoute,
   } as any)
+const ChatReviewReferenceRoute = ChatReviewReferenceRouteImport.update({
+  id: '/$reference',
+  path: '/$reference',
+  getParentRoute: () => ChatReviewRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
   '/$threadId': typeof ChatThreadIdRoute
   '/plugins': typeof ChatPluginsRoute
+  '/review': typeof ChatReviewRouteWithChildren
   '/settings': typeof ChatSettingsRoute
+  '/review/$reference': typeof ChatReviewReferenceRoute
   '/workspace/$workspaceId': typeof ChatWorkspaceWorkspaceIdRoute
+  '/review/': typeof ChatReviewIndexRoute
   '/workspace/': typeof ChatWorkspaceIndexRoute
 }
 export interface FileRoutesByTo {
@@ -66,7 +87,9 @@ export interface FileRoutesByTo {
   '/plugins': typeof ChatPluginsRoute
   '/settings': typeof ChatSettingsRoute
   '/': typeof ChatIndexRoute
+  '/review/$reference': typeof ChatReviewReferenceRoute
   '/workspace/$workspaceId': typeof ChatWorkspaceWorkspaceIdRoute
+  '/review': typeof ChatReviewIndexRoute
   '/workspace': typeof ChatWorkspaceIndexRoute
 }
 export interface FileRoutesById {
@@ -74,9 +97,12 @@ export interface FileRoutesById {
   '/_chat': typeof ChatRouteWithChildren
   '/_chat/$threadId': typeof ChatThreadIdRoute
   '/_chat/plugins': typeof ChatPluginsRoute
+  '/_chat/review': typeof ChatReviewRouteWithChildren
   '/_chat/settings': typeof ChatSettingsRoute
   '/_chat/': typeof ChatIndexRoute
+  '/_chat/review/$reference': typeof ChatReviewReferenceRoute
   '/_chat/workspace/$workspaceId': typeof ChatWorkspaceWorkspaceIdRoute
+  '/_chat/review/': typeof ChatReviewIndexRoute
   '/_chat/workspace/': typeof ChatWorkspaceIndexRoute
 }
 export interface FileRouteTypes {
@@ -85,8 +111,11 @@ export interface FileRouteTypes {
     | '/'
     | '/$threadId'
     | '/plugins'
+    | '/review'
     | '/settings'
+    | '/review/$reference'
     | '/workspace/$workspaceId'
+    | '/review/'
     | '/workspace/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -94,16 +123,21 @@ export interface FileRouteTypes {
     | '/plugins'
     | '/settings'
     | '/'
+    | '/review/$reference'
     | '/workspace/$workspaceId'
+    | '/review'
     | '/workspace'
   id:
     | '__root__'
     | '/_chat'
     | '/_chat/$threadId'
     | '/_chat/plugins'
+    | '/_chat/review'
     | '/_chat/settings'
     | '/_chat/'
+    | '/_chat/review/$reference'
     | '/_chat/workspace/$workspaceId'
+    | '/_chat/review/'
     | '/_chat/workspace/'
   fileRoutesById: FileRoutesById
 }
@@ -134,6 +168,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatSettingsRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/review': {
+      id: '/_chat/review'
+      path: '/review'
+      fullPath: '/review'
+      preLoaderRoute: typeof ChatReviewRouteImport
+      parentRoute: typeof ChatRoute
+    }
     '/_chat/plugins': {
       id: '/_chat/plugins'
       path: '/plugins'
@@ -155,6 +196,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatWorkspaceIndexRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/review/': {
+      id: '/_chat/review/'
+      path: '/'
+      fullPath: '/review/'
+      preLoaderRoute: typeof ChatReviewIndexRouteImport
+      parentRoute: typeof ChatReviewRoute
+    }
     '/_chat/workspace/$workspaceId': {
       id: '/_chat/workspace/$workspaceId'
       path: '/workspace/$workspaceId'
@@ -162,12 +210,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatWorkspaceWorkspaceIdRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/review/$reference': {
+      id: '/_chat/review/$reference'
+      path: '/$reference'
+      fullPath: '/review/$reference'
+      preLoaderRoute: typeof ChatReviewReferenceRouteImport
+      parentRoute: typeof ChatReviewRoute
+    }
   }
 }
+
+interface ChatReviewRouteChildren {
+  ChatReviewReferenceRoute: typeof ChatReviewReferenceRoute
+  ChatReviewIndexRoute: typeof ChatReviewIndexRoute
+}
+
+const ChatReviewRouteChildren: ChatReviewRouteChildren = {
+  ChatReviewReferenceRoute: ChatReviewReferenceRoute,
+  ChatReviewIndexRoute: ChatReviewIndexRoute,
+}
+
+const ChatReviewRouteWithChildren = ChatReviewRoute._addFileChildren(
+  ChatReviewRouteChildren,
+)
 
 interface ChatRouteChildren {
   ChatThreadIdRoute: typeof ChatThreadIdRoute
   ChatPluginsRoute: typeof ChatPluginsRoute
+  ChatReviewRoute: typeof ChatReviewRouteWithChildren
   ChatSettingsRoute: typeof ChatSettingsRoute
   ChatIndexRoute: typeof ChatIndexRoute
   ChatWorkspaceWorkspaceIdRoute: typeof ChatWorkspaceWorkspaceIdRoute
@@ -177,6 +247,7 @@ interface ChatRouteChildren {
 const ChatRouteChildren: ChatRouteChildren = {
   ChatThreadIdRoute: ChatThreadIdRoute,
   ChatPluginsRoute: ChatPluginsRoute,
+  ChatReviewRoute: ChatReviewRouteWithChildren,
   ChatSettingsRoute: ChatSettingsRoute,
   ChatIndexRoute: ChatIndexRoute,
   ChatWorkspaceWorkspaceIdRoute: ChatWorkspaceWorkspaceIdRoute,
