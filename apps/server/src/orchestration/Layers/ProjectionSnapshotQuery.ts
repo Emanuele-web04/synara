@@ -1,39 +1,18 @@
-import {
-  ChatAttachment,
-  CheckpointRef,
-  IsoDateTime,
-  MessageId,
-  NonNegativeInt,
-  OrchestrationCheckpointFile,
-  OrchestrationProjectShell,
-  OrchestrationProposedPlanId,
-  OrchestrationReadModel,
-  OrchestrationReviewChatTarget,
-  OrchestrationShellSnapshot,
-  OrchestrationThreadDetailSnapshot,
-  OrchestrationThreadPullRequest,
-  ProjectScript,
-  ProjectId,
-  ProviderMentionReference,
-  ProviderSkillReference,
-  ThreadId,
-  ThreadEnvironmentMode,
-  TurnDispatchMode,
-  TurnId,
-  type OrchestrationCheckpointSummary,
-  type OrchestrationLatestTurn,
-  type OrchestrationMessage,
-  type OrchestrationProposedPlan,
-  type OrchestrationProject,
-  type OrchestrationSession,
+import type {
+  OrchestrationCheckpointSummary,
+  OrchestrationLatestTurn,
+  OrchestrationMessage,
+  OrchestrationProject,
+  OrchestrationProposedPlan,
+  OrchestrationSession,
   OrchestrationThread,
-  type OrchestrationThreadShell,
-  type OrchestrationThreadActivity,
-  type OrchestrationThreadRuntime,
-  ThreadHandoff,
-  ModelSelection,
+  OrchestrationThreadActivity,
+  OrchestrationThreadDetailSnapshot,
+  OrchestrationThreadRuntime,
+  OrchestrationThreadShell,
+  ThreadId,
 } from "@t3tools/contracts";
-import { Effect, Layer, Option, Schema, Struct } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
@@ -41,24 +20,9 @@ import {
   isPersistenceError,
   toPersistenceDecodeError,
   toPersistenceSqlError,
-  type ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
-import { normalizePersistedModelSelection } from "../../persistence/modelSelectionCompatibility.ts";
-import { deriveThreadSummaryMetadata } from "@t3tools/shared/threadSummary";
-import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheckpoints.ts";
-import { ProjectionProject } from "../../persistence/Services/ProjectionProjects.ts";
-import { ProjectionState } from "../../persistence/Services/ProjectionState.ts";
-import { ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
-import { ProjectionThreadMessage } from "../../persistence/Services/ProjectionThreadMessages.ts";
-import { ProjectionThreadProposedPlan } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
-import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
-import {
-  type ProjectionThreadRuntime,
-  ProjectionThreadRuntimeRepository,
-} from "../../persistence/Services/ProjectionThreadRuntime.ts";
+import { ProjectionThreadRuntimeRepository } from "../../persistence/Services/ProjectionThreadRuntime.ts";
 import { ProjectionThreadRuntimeRepositoryLive } from "../../persistence/Layers/ProjectionThreadRuntime.ts";
-import { ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
-import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import {
   ProjectionSnapshotQuery,
   type ProjectionFullThreadDiffContext,
@@ -67,508 +31,54 @@ import {
   type ProjectionThreadCheckpointContext,
   type ProjectionSnapshotQueryShape,
 } from "../Services/ProjectionSnapshotQuery.ts";
-
-const decodeReadModel = Schema.decodeUnknownEffect(OrchestrationReadModel);
-const decodeShellSnapshot = Schema.decodeUnknownEffect(OrchestrationShellSnapshot);
-const decodeThreadDetail = Schema.decodeUnknownEffect(OrchestrationThread);
-const decodeThreadDetailSnapshot = Schema.decodeUnknownEffect(OrchestrationThreadDetailSnapshot);
-const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
-const ModelSelectionJsonUnknown = Schema.fromJsonString(Schema.Unknown);
-const MAX_THREAD_MESSAGES = 2_000;
-const MAX_THREAD_ACTIVITIES = 500;
-const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
-  Struct.assign({
-    defaultModelSelection: Schema.NullOr(ModelSelectionJsonUnknown),
-    scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
-  }),
-);
-const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
-  Struct.assign({
-    isStreaming: Schema.Number,
-    attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
-    skills: Schema.NullOr(Schema.fromJsonString(Schema.Array(ProviderSkillReference))),
-    mentions: Schema.NullOr(Schema.fromJsonString(Schema.Array(ProviderMentionReference))),
-    dispatchMode: Schema.NullOr(TurnDispatchMode),
-  }),
-);
-const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
-const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
-  Struct.assign({
-    createBranchFlowCompleted: Schema.Number,
-    isPinned: Schema.Number,
-    handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
-    lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
-    reviewChatTarget: Schema.NullOr(Schema.fromJsonString(OrchestrationReviewChatTarget)),
-    modelSelection: ModelSelectionJsonUnknown,
-  }),
-);
-const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
-  Struct.assign({
-    payload: Schema.fromJsonString(Schema.Unknown),
-    sequence: Schema.NullOr(NonNegativeInt),
-  }),
-);
-const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
-const ProjectionCheckpointDbRowSchema = ProjectionCheckpoint.mapFields(
-  Struct.assign({
-    files: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
-  }),
-);
-const ProjectionLatestTurnDbRowSchema = Schema.Struct({
-  threadId: ProjectionThread.fields.threadId,
-  turnId: TurnId,
-  state: Schema.String,
-  requestedAt: IsoDateTime,
-  startedAt: Schema.NullOr(IsoDateTime),
-  completedAt: Schema.NullOr(IsoDateTime),
-  assistantMessageId: Schema.NullOr(MessageId),
-  sourceProposedPlanThreadId: Schema.NullOr(ThreadId),
-  sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
-});
-const ProjectionStateDbRowSchema = ProjectionState;
-const ProjectionCountsRowSchema = Schema.Struct({
-  projectCount: Schema.Number,
-  threadCount: Schema.Number,
-});
-const WorkspaceRootLookupInput = Schema.Struct({
-  workspaceRoot: Schema.String,
-});
-const ProjectIdLookupInput = Schema.Struct({
-  projectId: ProjectId,
-});
-const ThreadIdLookupInput = Schema.Struct({
-  threadId: ThreadId,
-});
-const SyntheticSubagentParentLookupInput = Schema.Struct({
-  threadId: ThreadId,
-});
-const FullThreadDiffContextLookupInput = Schema.Struct({
-  threadId: ThreadId,
-  checkpointTurnCount: NonNegativeInt,
-});
-const ProjectionProjectLookupRowSchema = ProjectionProjectDbRowSchema;
-const ProjectionThreadIdLookupRowSchema = Schema.Struct({
-  threadId: ThreadId,
-});
-const ProjectionThreadCheckpointContextThreadRowSchema = Schema.Struct({
-  threadId: ThreadId,
-  projectId: ProjectId,
-  workspaceRoot: Schema.String,
-  envMode: ThreadEnvironmentMode,
-  worktreePath: Schema.NullOr(Schema.String),
-});
-const ProjectionFullThreadDiffContextRowSchema = Schema.Struct({
-  threadId: ThreadId,
-  projectId: ProjectId,
-  workspaceRoot: Schema.String,
-  envMode: ThreadEnvironmentMode,
-  worktreePath: Schema.NullOr(Schema.String),
-  latestCheckpointTurnCount: Schema.NullOr(NonNegativeInt),
-  toCheckpointRef: Schema.NullOr(CheckpointRef),
-});
-
-type ProjectionThreadDbRowRaw = Schema.Schema.Type<typeof ProjectionThreadDbRowSchema>;
-type ProjectionProjectDbRowRaw = Schema.Schema.Type<typeof ProjectionProjectDbRowSchema>;
-type ProjectionThreadDbRow = Omit<ProjectionThreadDbRowRaw, "modelSelection"> & {
-  readonly modelSelection: typeof ModelSelection.Type;
-};
-type ProjectionProjectDbRow = Omit<ProjectionProjectDbRowRaw, "defaultModelSelection"> & {
-  readonly defaultModelSelection: typeof ModelSelection.Type | null;
-};
-type ProjectionThreadMessageDbRow = Schema.Schema.Type<typeof ProjectionThreadMessageDbRowSchema>;
-type ProjectionThreadProposedPlanDbRow = Schema.Schema.Type<
-  typeof ProjectionThreadProposedPlanDbRowSchema
->;
-type ProjectionThreadActivityDbRow = Schema.Schema.Type<typeof ProjectionThreadActivityDbRowSchema>;
-type ProjectionCheckpointDbRow = Schema.Schema.Type<typeof ProjectionCheckpointDbRowSchema>;
-type ProjectionLatestTurnDbRow = Schema.Schema.Type<typeof ProjectionLatestTurnDbRowSchema>;
-type ProjectionThreadSessionDbRow = Schema.Schema.Type<typeof ProjectionThreadSessionDbRowSchema>;
-
-function decodeProjectionProjectRow(
-  row: ProjectionProjectDbRowRaw,
-): Effect.Effect<ProjectionProjectDbRow, Schema.SchemaError> {
-  if (row.defaultModelSelection === null) {
-    return Effect.succeed({ ...row, defaultModelSelection: null });
-  }
-  return decodeModelSelection(normalizePersistedModelSelection(row.defaultModelSelection)).pipe(
-    Effect.map((defaultModelSelection) => ({ ...row, defaultModelSelection })),
-  );
-}
-
-function decodeProjectionThreadRow(
-  row: ProjectionThreadDbRowRaw,
-): Effect.Effect<ProjectionThreadDbRow, Schema.SchemaError> {
-  return decodeModelSelection(normalizePersistedModelSelection(row.modelSelection)).pipe(
-    Effect.map((modelSelection) => ({ ...row, modelSelection })),
-  );
-}
-
-function decodeProjectionProjectRows(
-  rows: ReadonlyArray<ProjectionProjectDbRowRaw>,
-  operation: string,
-): Effect.Effect<ReadonlyArray<ProjectionProjectDbRow>, ProjectionRepositoryError> {
-  return Effect.forEach(rows, decodeProjectionProjectRow).pipe(
-    Effect.mapError(toPersistenceDecodeError(operation)),
-  );
-}
-
-function decodeProjectionThreadRows(
-  rows: ReadonlyArray<ProjectionThreadDbRowRaw>,
-  operation: string,
-): Effect.Effect<ReadonlyArray<ProjectionThreadDbRow>, ProjectionRepositoryError> {
-  return Effect.forEach(rows, decodeProjectionThreadRow).pipe(
-    Effect.mapError(toPersistenceDecodeError(operation)),
-  );
-}
-
-function decodeProjectionProjectOption(
-  option: Option.Option<ProjectionProjectDbRowRaw>,
-  operation: string,
-): Effect.Effect<Option.Option<ProjectionProjectDbRow>, ProjectionRepositoryError> {
-  if (Option.isNone(option)) {
-    return Effect.succeed(Option.none());
-  }
-  return decodeProjectionProjectRow(option.value).pipe(
-    Effect.map(Option.some),
-    Effect.mapError(toPersistenceDecodeError(operation)),
-  );
-}
-
-function decodeProjectionThreadOption(
-  option: Option.Option<ProjectionThreadDbRowRaw>,
-  operation: string,
-): Effect.Effect<Option.Option<ProjectionThreadDbRow>, ProjectionRepositoryError> {
-  if (Option.isNone(option)) {
-    return Effect.succeed(Option.none());
-  }
-  return decodeProjectionThreadRow(option.value).pipe(
-    Effect.map(Option.some),
-    Effect.mapError(toPersistenceDecodeError(operation)),
-  );
-}
-
-const REQUIRED_SNAPSHOT_PROJECTORS = [
-  ORCHESTRATION_PROJECTOR_NAMES.projects,
-  ORCHESTRATION_PROJECTOR_NAMES.threads,
-  ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries,
-  ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
-  ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
-  ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
-  ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
-  ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
-] as const;
-
-function maxIso(left: string | null, right: string): string {
-  if (left === null) {
-    return right;
-  }
-  return left > right ? left : right;
-}
-
-function toProjectedMessage(row: ProjectionThreadMessageDbRow): OrchestrationMessage {
-  return {
-    id: row.messageId,
-    role: row.role,
-    text: row.text,
-    ...(row.attachments !== null ? { attachments: row.attachments } : {}),
-    ...(row.skills !== null ? { skills: row.skills } : {}),
-    ...(row.mentions !== null ? { mentions: row.mentions } : {}),
-    ...(row.dispatchMode ? { dispatchMode: row.dispatchMode } : {}),
-    turnId: row.turnId,
-    streaming: row.isStreaming === 1,
-    source: row.source,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
-function toProjectedProposedPlan(
-  row: ProjectionThreadProposedPlanDbRow,
-): OrchestrationProposedPlan {
-  return {
-    id: row.planId,
-    turnId: row.turnId,
-    planMarkdown: row.planMarkdown,
-    implementedAt: row.implementedAt,
-    implementationThreadId: row.implementationThreadId,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
-function toProjectedActivity(row: ProjectionThreadActivityDbRow): OrchestrationThreadActivity {
-  return {
-    id: row.activityId,
-    tone: row.tone,
-    kind: row.kind,
-    summary: row.summary,
-    payload: row.payload as OrchestrationThreadActivity["payload"],
-    turnId: row.turnId,
-    ...(row.sequence !== null ? { sequence: row.sequence } : {}),
-    createdAt: row.createdAt,
-  };
-}
-
-function toProjectedCheckpoint(row: ProjectionCheckpointDbRow): OrchestrationCheckpointSummary {
-  return {
-    turnId: row.turnId,
-    checkpointTurnCount: row.checkpointTurnCount,
-    checkpointRef: row.checkpointRef,
-    status: row.status,
-    files: row.files,
-    assistantMessageId: row.assistantMessageId,
-    completedAt: row.completedAt,
-  };
-}
-
-function toProjectedLatestTurn(row: ProjectionLatestTurnDbRow): OrchestrationLatestTurn {
-  return {
-    turnId: row.turnId,
-    state:
-      row.state === "error"
-        ? "error"
-        : row.state === "interrupted"
-          ? "interrupted"
-          : row.state === "completed"
-            ? "completed"
-            : "running",
-    requestedAt: row.requestedAt,
-    startedAt: row.startedAt,
-    completedAt: row.completedAt,
-    assistantMessageId: row.assistantMessageId,
-    ...(row.sourceProposedPlanThreadId !== null && row.sourceProposedPlanId !== null
-      ? {
-          sourceProposedPlan: {
-            threadId: row.sourceProposedPlanThreadId,
-            planId: row.sourceProposedPlanId,
-          },
-        }
-      : {}),
-  };
-}
-
-function toProjectedSession(row: ProjectionThreadSessionDbRow): OrchestrationSession {
-  return {
-    threadId: row.threadId,
-    status: row.status,
-    providerName: row.providerName,
-    runtimeMode: row.runtimeMode,
-    activeTurnId: row.activeTurnId,
-    lastError: row.lastError,
-    updatedAt: row.updatedAt,
-  };
-}
-
-function toThreadRuntime(row: ProjectionThreadRuntime): OrchestrationThreadRuntime {
-  return {
-    threadId: row.threadId,
-    targetKind: row.targetKind,
-    provider: row.provider,
-    role: row.role,
-    status: row.status,
-    instance: row.instance,
-    processes: row.processes,
-    routes: row.routes,
-    snapshots: row.snapshots,
-    leases: row.leases,
-    lastActivityAt: row.lastActivityAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
-function toProjectedProjectShell(row: ProjectionProjectDbRow): OrchestrationProjectShell {
-  return {
-    id: row.projectId,
-    kind: row.kind,
-    title: row.title,
-    workspaceRoot: row.workspaceRoot,
-    defaultModelSelection: row.defaultModelSelection,
-    scripts: row.scripts,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
-function toProjectedThreadShell(input: {
-  readonly threadRow: ProjectionThreadDbRow;
-  readonly latestTurn: OrchestrationLatestTurn | null;
-  readonly messages: ReadonlyArray<Pick<OrchestrationMessage, "role" | "createdAt">>;
-  readonly proposedPlans: ReadonlyArray<
-    Pick<OrchestrationProposedPlan, "id" | "turnId" | "updatedAt" | "implementedAt">
-  >;
-  readonly activities: ReadonlyArray<
-    Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
-  >;
-  readonly session: OrchestrationSession | null;
-  readonly runtime: OrchestrationThreadRuntime | null;
-}): OrchestrationThreadShell {
-  const { threadRow } = input;
-  const summary = deriveThreadSummaryMetadata(input);
-  return {
-    id: threadRow.threadId,
-    projectId: threadRow.projectId,
-    title: threadRow.title,
-    modelSelection: threadRow.modelSelection,
-    runtimeMode: threadRow.runtimeMode,
-    interactionMode: threadRow.interactionMode,
-    envMode: threadRow.envMode,
-    branch: threadRow.branch,
-    worktreePath: threadRow.worktreePath,
-    associatedWorktreePath: threadRow.associatedWorktreePath,
-    associatedWorktreeBranch: threadRow.associatedWorktreeBranch,
-    associatedWorktreeRef: threadRow.associatedWorktreeRef,
-    createBranchFlowCompleted: threadRow.createBranchFlowCompleted > 0,
-    isPinned: threadRow.isPinned > 0,
-    parentThreadId: threadRow.parentThreadId ?? null,
-    subagentAgentId: threadRow.subagentAgentId ?? null,
-    subagentNickname: threadRow.subagentNickname ?? null,
-    subagentRole: threadRow.subagentRole ?? null,
-    forkSourceThreadId: threadRow.forkSourceThreadId ?? null,
-    sidechatSourceThreadId: threadRow.sidechatSourceThreadId ?? null,
-    lastKnownPr: threadRow.lastKnownPr,
-    reviewChatTarget: threadRow.reviewChatTarget,
-    runtime: input.runtime,
-    latestTurn: input.latestTurn,
-    latestUserMessageAt: summary.latestUserMessageAt,
-    hasPendingApprovals: summary.hasPendingApprovals,
-    hasPendingUserInput: summary.hasPendingUserInput,
-    hasActionableProposedPlan: summary.hasActionableProposedPlan,
-    createdAt: threadRow.createdAt,
-    updatedAt: threadRow.updatedAt,
-    archivedAt: threadRow.archivedAt ?? null,
-    handoff: threadRow.handoff,
-    session: input.session,
-  };
-}
-
-function toProjectedThreadShellFromStoredSummary(input: {
-  readonly threadRow: ProjectionThreadDbRow;
-  readonly latestTurn: OrchestrationLatestTurn | null;
-  readonly session: OrchestrationSession | null;
-  readonly runtime: OrchestrationThreadRuntime | null;
-}): OrchestrationThreadShell {
-  const { threadRow } = input;
-  return {
-    id: threadRow.threadId,
-    projectId: threadRow.projectId,
-    title: threadRow.title,
-    modelSelection: threadRow.modelSelection,
-    runtimeMode: threadRow.runtimeMode,
-    interactionMode: threadRow.interactionMode,
-    envMode: threadRow.envMode,
-    branch: threadRow.branch,
-    worktreePath: threadRow.worktreePath,
-    associatedWorktreePath: threadRow.associatedWorktreePath,
-    associatedWorktreeBranch: threadRow.associatedWorktreeBranch,
-    associatedWorktreeRef: threadRow.associatedWorktreeRef,
-    createBranchFlowCompleted: threadRow.createBranchFlowCompleted > 0,
-    isPinned: threadRow.isPinned > 0,
-    parentThreadId: threadRow.parentThreadId ?? null,
-    subagentAgentId: threadRow.subagentAgentId ?? null,
-    subagentNickname: threadRow.subagentNickname ?? null,
-    subagentRole: threadRow.subagentRole ?? null,
-    forkSourceThreadId: threadRow.forkSourceThreadId ?? null,
-    sidechatSourceThreadId: threadRow.sidechatSourceThreadId ?? null,
-    lastKnownPr: threadRow.lastKnownPr,
-    reviewChatTarget: threadRow.reviewChatTarget,
-    runtime: input.runtime,
-    latestTurn: input.latestTurn,
-    latestUserMessageAt: threadRow.latestUserMessageAt,
-    hasPendingApprovals: threadRow.pendingApprovalCount > 0,
-    hasPendingUserInput: threadRow.pendingUserInputCount > 0,
-    hasActionableProposedPlan: threadRow.hasActionableProposedPlan > 0,
-    createdAt: threadRow.createdAt,
-    updatedAt: threadRow.updatedAt,
-    archivedAt: threadRow.archivedAt ?? null,
-    handoff: threadRow.handoff,
-    session: input.session,
-  };
-}
-
-function toProjectedThread(input: {
-  readonly threadRow: ProjectionThreadDbRow;
-  readonly latestTurn: OrchestrationLatestTurn | null;
-  readonly messages: ReadonlyArray<OrchestrationMessage>;
-  readonly proposedPlans: ReadonlyArray<OrchestrationProposedPlan>;
-  readonly activities: ReadonlyArray<OrchestrationThreadActivity>;
-  readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
-  readonly session: OrchestrationSession | null;
-  readonly runtime: OrchestrationThreadRuntime | null;
-}): OrchestrationThread {
-  const { threadRow } = input;
-  const summary = deriveThreadSummaryMetadata(input);
-  return {
-    id: threadRow.threadId,
-    projectId: threadRow.projectId,
-    title: threadRow.title,
-    modelSelection: threadRow.modelSelection,
-    runtimeMode: threadRow.runtimeMode,
-    interactionMode: threadRow.interactionMode,
-    envMode: threadRow.envMode,
-    branch: threadRow.branch,
-    worktreePath: threadRow.worktreePath,
-    associatedWorktreePath: threadRow.associatedWorktreePath,
-    associatedWorktreeBranch: threadRow.associatedWorktreeBranch,
-    associatedWorktreeRef: threadRow.associatedWorktreeRef,
-    createBranchFlowCompleted: threadRow.createBranchFlowCompleted > 0,
-    isPinned: threadRow.isPinned > 0,
-    parentThreadId: threadRow.parentThreadId ?? null,
-    subagentAgentId: threadRow.subagentAgentId ?? null,
-    subagentNickname: threadRow.subagentNickname ?? null,
-    subagentRole: threadRow.subagentRole ?? null,
-    forkSourceThreadId: threadRow.forkSourceThreadId,
-    sidechatSourceThreadId: threadRow.sidechatSourceThreadId ?? null,
-    lastKnownPr: threadRow.lastKnownPr,
-    reviewChatTarget: threadRow.reviewChatTarget,
-    runtime: input.runtime,
-    latestTurn: input.latestTurn,
-    createdAt: threadRow.createdAt,
-    updatedAt: threadRow.updatedAt,
-    archivedAt: threadRow.archivedAt ?? null,
-    deletedAt: threadRow.deletedAt,
-    handoff: threadRow.handoff,
-    latestUserMessageAt: summary.latestUserMessageAt,
-    hasPendingApprovals: summary.hasPendingApprovals,
-    hasPendingUserInput: summary.hasPendingUserInput,
-    hasActionableProposedPlan: summary.hasActionableProposedPlan,
-    messages: input.messages,
-    proposedPlans: input.proposedPlans,
-    activities: input.activities,
-    checkpoints: input.checkpoints,
-    session: input.session,
-  };
-}
-
-function computeSnapshotSequence(
-  stateRows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionStateDbRowSchema>>,
-): number {
-  if (stateRows.length === 0) {
-    return 0;
-  }
-  const sequenceByProjector = new Map(
-    stateRows.map((row) => [row.projector, row.lastAppliedSequence] as const),
-  );
-
-  let minSequence = Number.POSITIVE_INFINITY;
-  for (const projector of REQUIRED_SNAPSHOT_PROJECTORS) {
-    const sequence = sequenceByProjector.get(projector);
-    if (sequence === undefined) {
-      return 0;
-    }
-    if (sequence < minSequence) {
-      minSequence = sequence;
-    }
-  }
-
-  return Number.isFinite(minSequence) ? minSequence : 0;
-}
-
-function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
-  return (cause: unknown): ProjectionRepositoryError =>
-    Schema.isSchemaError(cause)
-      ? toPersistenceDecodeError(decodeOperation)(cause)
-      : toPersistenceSqlError(sqlOperation)(cause);
-}
+import {
+  decodeReadModel,
+  decodeShellSnapshot,
+  decodeThreadDetail,
+  decodeThreadDetailSnapshot,
+  FullThreadDiffContextLookupInput,
+  MAX_THREAD_ACTIVITIES,
+  MAX_THREAD_MESSAGES,
+  ProjectIdLookupInput,
+  ProjectionCheckpointDbRowSchema,
+  ProjectionCountsRowSchema,
+  ProjectionFullThreadDiffContextRowSchema,
+  ProjectionLatestTurnDbRowSchema,
+  ProjectionProjectDbRowSchema,
+  ProjectionProjectLookupRowSchema,
+  ProjectionStateDbRowSchema,
+  ProjectionThreadActivityDbRowSchema,
+  ProjectionThreadCheckpointContextThreadRowSchema,
+  ProjectionThreadDbRowSchema,
+  ProjectionThreadIdLookupRowSchema,
+  ProjectionThreadMessageDbRowSchema,
+  ProjectionThreadProposedPlanDbRowSchema,
+  ProjectionThreadSessionDbRowSchema,
+  SyntheticSubagentParentLookupInput,
+  ThreadIdLookupInput,
+  WorkspaceRootLookupInput,
+} from "./ProjectionSnapshotQuery.schemas.ts";
+import {
+  decodeProjectionProjectOption,
+  decodeProjectionProjectRows,
+  decodeProjectionThreadOption,
+  decodeProjectionThreadRows,
+  toPersistenceSqlOrDecodeError,
+} from "./ProjectionSnapshotQuery.decode.ts";
+import {
+  computeSnapshotSequence,
+  maxIso,
+  toProjectedActivity,
+  toProjectedCheckpoint,
+  toProjectedLatestTurn,
+  toProjectedMessage,
+  toProjectedProjectShell,
+  toProjectedProposedPlan,
+  toProjectedSession,
+  toProjectedThread,
+  toProjectedThreadShellFromStoredSummary,
+  toThreadRuntime,
+} from "./ProjectionSnapshotQuery.mappers.ts";
 
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
