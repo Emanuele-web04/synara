@@ -77,6 +77,7 @@ import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { useProviderAuthRefreshOnFocus } from "../hooks/useProviderAuthRefreshOnFocus";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
+import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
 import {
   getGitInvalidationThreadIdForEvent,
@@ -816,6 +817,7 @@ function EventRouter() {
     let pendingGitInvalidationThreadIds = new Set<ThreadId>();
     let pendingDomainEvents: OrchestrationEvent[] = [];
     const immediatelyFlushedAssistantMessageIds = new Set<string>();
+    let providerDiscoveryInvalidationFingerprint: string | null = null;
     let shellSnapshotSequence = -1;
     let pendingShellEvents: OrchestrationShellStreamEvent[] = [];
     const subscribedThreadIds = new Set<ThreadId>();
@@ -1272,7 +1274,19 @@ function EventRouter() {
       });
     });
     const unsubProviderStatusesUpdated = onServerProviderStatusesUpdated((payload) => {
+      const nextProviderDiscoveryFingerprint =
+        providerModelDiscoveryInvalidationFingerprint(payload.providers);
       const currentConfig = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
+      const previousProviderDiscoveryFingerprint =
+        providerDiscoveryInvalidationFingerprint ??
+        (currentConfig
+          ? providerModelDiscoveryInvalidationFingerprint(currentConfig.providers)
+          : null);
+      const shouldInvalidateProviderDiscovery =
+        previousProviderDiscoveryFingerprint !== null &&
+        previousProviderDiscoveryFingerprint !== nextProviderDiscoveryFingerprint;
+      providerDiscoveryInvalidationFingerprint = nextProviderDiscoveryFingerprint;
+
       if (!currentConfig) {
         void queryClient.fetchQuery(serverConfigQueryOptions()).catch(() => undefined);
         return;
@@ -1281,22 +1295,25 @@ function EventRouter() {
         ...currentConfig,
         providers: payload.providers,
       });
-      // OpenCode-compatible model availability depends on which underlying providers are connected.
-      void queryClient.invalidateQueries({
-        queryKey: ["provider-discovery", "models", "kilo"],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ["provider-discovery", "models", "opencode"],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ["provider-discovery", "models", "cursor"],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: providerDiscoveryQueryKeys.agents("kilo"),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: providerDiscoveryQueryKeys.agents("opencode"),
-      });
+      if (shouldInvalidateProviderDiscovery) {
+        // Model and agent discovery can depend on auth, availability, and installed versions,
+        // but not on every provider-status timestamp replay.
+        void queryClient.invalidateQueries({
+          queryKey: ["provider-discovery", "models", "kilo"],
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ["provider-discovery", "models", "opencode"],
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ["provider-discovery", "models", "cursor"],
+        });
+        void queryClient.invalidateQueries({
+          queryKey: providerDiscoveryQueryKeys.agents("kilo"),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: providerDiscoveryQueryKeys.agents("opencode"),
+        });
+      }
     });
     const unsubServerSettingsUpdated = onServerSettingsUpdated((payload) => {
       queryClient.setQueryData(serverQueryKeys.settings(), payload.settings);

@@ -75,6 +75,7 @@ import {
 import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
 import {
   applyCursorAcpModelSelection,
+  fetchCursorAcpModelDescriptors,
   makeCursorAcpRuntime,
   parseCursorCliModelList,
   resolveCursorAcpBaseModelId,
@@ -113,6 +114,23 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
     () => "",
     (acc, chunk) => acc + new TextDecoder().decode(chunk),
   );
+
+function mergeCursorModelDescriptors(
+  preferredModels: ReadonlyArray<ProviderListModelsResult["models"][number]>,
+  additionalModels: ReadonlyArray<ProviderListModelsResult["models"][number]>,
+): ProviderListModelsResult["models"] {
+  const seen = new Set<string>();
+  const merged: ProviderListModelsResult["models"] = [];
+  for (const model of [...preferredModels, ...additionalModels]) {
+    const key = model.slug.trim().toLowerCase();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(model);
+  }
+  return merged;
+}
 
 export interface CursorAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
@@ -1421,14 +1439,77 @@ export function makeCursorAdapter(
           }),
         ),
       );
-      const discovery = Effect.gen(function* () {
-        const cliModels = yield* runCursorModelListCommand;
-        return {
-          models: cliModels,
-          source: "cursor.cli",
+      // Preferred path: the ACP `cursor/list_available_models` extension exposes
+      // each model's full parameter matrix (context window, effort, thinking,
+      // fast) — data the flat `cursor-agent models` CLI list cannot provide.
+      const effectiveAcpSettings: CursorAcpRuntimeCursorSettings = {
+        binaryPath: effectiveBinaryPath,
+        ...(effectiveApiEndpoint ? { apiEndpoint: effectiveApiEndpoint } : {}),
+      };
+      const runCursorAcpModelDiscovery = Effect.gen(function* () {
+        const runtime = yield* makeCursorAcpRuntime({
+          cursorSettings: effectiveAcpSettings,
+          childProcessSpawner,
+          cwd: process.cwd(),
+          clientInfo: { name: "Synara", version: "0.0.0" },
+        });
+        const started = yield* runtime.start();
+        const models = yield* fetchCursorAcpModelDescriptors(runtime, started.sessionId);
+        if (models.length === 0) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "model/list",
+            detail: "Cursor ACP model discovery returned no models.",
+          });
+        }
+        return models;
+      }).pipe(
+        Effect.scoped,
+        Effect.timeoutOption(CURSOR_MODEL_DISCOVERY_TIMEOUT_MS),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "model/list",
+                  detail: "Timed out while discovering Cursor models via ACP.",
+                }),
+              ),
+            onSome: (models) => Effect.succeed(models),
+          }),
+        ),
+      );
+
+      const discovery = runCursorAcpModelDiscovery.pipe(
+        Effect.flatMap((acpModels) =>
+          runCursorModelListCommand.pipe(
+            Effect.map((cliModels) => mergeCursorModelDescriptors(acpModels, cliModels)),
+            // ACP is the authoritative source for editable model parameters; keep
+            // it even if the raw CLI variant list is temporarily unavailable.
+            Effect.catch(() => Effect.succeed(acpModels)),
+          ),
+        ),
+        Effect.map((models) => ({
+          models,
+          source: "cursor.acp",
           cached: false,
-        } satisfies ProviderListModelsResult;
-      });
+        })),
+        // The CLI list still works without an authenticated ACP session and keeps
+        // discovery resilient if the extension method is unavailable.
+        Effect.catch(() =>
+          runCursorModelListCommand.pipe(
+            Effect.map(
+              (cliModels) =>
+                ({
+                  models: cliModels,
+                  source: "cursor.cli",
+                  cached: false,
+                }) satisfies ProviderListModelsResult,
+            ),
+          ),
+        ),
+      );
 
       return discovery.pipe(
         Effect.mapError((cause) =>
@@ -1437,7 +1518,7 @@ export function makeCursorAdapter(
             : new ProviderAdapterRequestError({
                 provider: PROVIDER,
                 method: "model/list",
-                detail: "Failed to discover Cursor models via CLI.",
+                detail: "Failed to discover Cursor models.",
                 cause,
               }),
         ),

@@ -423,7 +423,7 @@ import {
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
 import { useFeatureFlags } from "../featureFlags";
-import { collapseCursorModelVariants } from "../cursorModelVariants";
+import { mergeCursorModelVariantsWithBaseControls } from "../cursorModelVariants";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
   canCreateThreadHandoff,
@@ -1524,13 +1524,14 @@ export default function ChatView({
     () =>
       showExpandedCursorModelVariants
         ? (cursorDynamicModelsQuery.data?.models ?? [])
-        : collapseCursorModelVariants(cursorDynamicModelsQuery.data?.models ?? []),
+        : mergeCursorModelVariantsWithBaseControls(cursorDynamicModelsQuery.data?.models ?? []),
     [cursorDynamicModelsQuery.data?.models, showExpandedCursorModelVariants],
   );
   const cursorModelDiscoveryEnabled =
     selectedProvider === "cursor" || lockedProvider === "cursor" || isModelPickerOpen;
   const hasResolvedCursorModelDiscovery =
-    cursorDynamicModelsQuery.data?.source === "cursor.cli" &&
+    (cursorDynamicModelsQuery.data?.source === "cursor.cli" ||
+      cursorDynamicModelsQuery.data?.source === "cursor.acp") &&
     (cursorDynamicModelsQuery.data.models.length ?? 0) > 0;
   const cursorModelDiscoveryPending =
     cursorModelDiscoveryEnabled &&

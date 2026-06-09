@@ -122,6 +122,38 @@ function isCursorOneMillionVariant(model: ProviderModelDescriptor): boolean {
   return /\b1M\b/u.test(model.name ?? "");
 }
 
+function fallbackContextWindowOptionsForCursorBase(
+  baseSlug: string,
+  variants: ReadonlyArray<ProviderModelDescriptor>,
+): NonNullable<ProviderModelDescriptor["contextWindowOptions"]> {
+  if (!variants.some(isCursorOneMillionVariant)) {
+    return [];
+  }
+  if (baseSlug === "gpt-5.5" || baseSlug === "gpt-5.4") {
+    return [
+      { value: "272k", label: "272K", isDefault: true },
+      { value: "1m", label: "1M" },
+    ];
+  }
+  if (
+    baseSlug === "claude-fable-5" ||
+    baseSlug === "claude-opus-4-8" ||
+    baseSlug === "claude-opus-4-7"
+  ) {
+    return [
+      { value: "300k", label: "300K", isDefault: true },
+      { value: "1m", label: "1M" },
+    ];
+  }
+  if (baseSlug === "claude-opus-4-6" || baseSlug === "claude-sonnet-4-6") {
+    return [
+      { value: "200k", label: "200K", isDefault: true },
+      { value: "1m", label: "1M" },
+    ];
+  }
+  return [];
+}
+
 export function collapseCursorModelVariants(
   models: ReadonlyArray<ProviderModelDescriptor>,
 ): ProviderModelDescriptor[] {
@@ -162,10 +194,15 @@ export function collapseCursorModelVariants(
         baseSlug,
         efforts.map((effort) => effort.value),
       );
-    const hasOneMillionContext = variants.some(isCursorOneMillionVariant);
+    // The flat `cursor-agent models` fallback names only 1M variants for some
+    // families; synthesize the missing default context when ACP metadata is absent.
+    const fallbackContextWindowOptions = fallbackContextWindowOptionsForCursorBase(
+      baseSlug,
+      variants,
+    );
     const contextWindowOptions = uniqueByValue([
+      ...fallbackContextWindowOptions,
       ...variants.flatMap((variant) => variant.contextWindowOptions ?? []),
-      ...(hasOneMillionContext ? [{ value: "1m", label: "1M", isDefault: true as const }] : []),
     ]);
 
     return {
@@ -203,4 +240,22 @@ export function collapseCursorModelVariants(
         : {}),
     };
   });
+}
+
+export function mergeCursorModelVariantsWithBaseControls(
+  models: ReadonlyArray<ProviderModelDescriptor>,
+): ProviderModelDescriptor[] {
+  const seen = new Set<string>();
+  const merged: ProviderModelDescriptor[] = [];
+
+  for (const model of [...collapseCursorModelVariants(models), ...models]) {
+    const key = model.slug.trim().toLowerCase();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(model);
+  }
+
+  return merged;
 }

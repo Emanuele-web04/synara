@@ -187,8 +187,10 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   const defaultAgent = defaultAgentForProvider(provider);
   const selectedAgent = getSelectedAgentValue(provider, modelOptions);
   const hasAgentControls = agentOptions.length > 0 && defaultAgent !== null;
+  const hasPriorContextWindowSection = thinkingEnabled !== null;
+  const hasPriorEffortSection = thinkingEnabled !== null || contextWindowOptions.length > 1;
   const hasPriorFastModeSection =
-    effortLevels.length > 0 || thinkingEnabled !== null || contextWindowOptions.length > 1;
+    thinkingEnabled !== null || effortLevels.length > 0 || contextWindowOptions.length > 1;
 
   // Single home for committing a trait change: merge the patch into the provider
   // options, persist it as sticky, and close the menu. Every section funnels here.
@@ -252,28 +254,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
 
   return (
     <>
-      {effortLevels.length > 0 ? (
-        <TraitRadioSection
-          label={provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
-          note={
-            ultrathinkPromptControlled ? (
-              <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
-                Remove Ultrathink from the prompt to change effort.
-              </div>
-            ) : undefined
-          }
-          value={effort ?? ""}
-          disabled={ultrathinkPromptControlled}
-          options={effortLevels.map((option) => ({
-            value: option.value,
-            label: option.label,
-            isDefault: option.value === defaultEffort,
-            description: option.description ?? null,
-          }))}
-          onValueChange={handleEffortChange}
-          onSelectionComplete={onSelectionComplete}
-        />
-      ) : thinkingEnabled !== null ? (
+      {thinkingEnabled !== null ? (
         <TraitRadioSection
           label="Thinking"
           value={thinkingEnabled ? "on" : "off"}
@@ -284,6 +265,47 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           onValueChange={(value) => commitTrait({ thinking: value === "on" })}
           onSelectionComplete={onSelectionComplete}
         />
+      ) : null}
+      {contextWindowOptions.length > 1 ? (
+        <>
+          {hasPriorContextWindowSection ? <MenuDivider /> : null}
+          <TraitRadioSection
+            label="Context"
+            value={contextWindow ?? defaultContextWindow ?? ""}
+            options={contextWindowOptions.map((option) => ({
+              value: option.value,
+              label: option.label,
+              isDefault: option.value === defaultContextWindow,
+            }))}
+            onValueChange={(value) => commitTrait({ contextWindow: value })}
+            onSelectionComplete={onSelectionComplete}
+          />
+        </>
+      ) : null}
+      {effortLevels.length > 0 ? (
+        <>
+          {hasPriorEffortSection ? <MenuDivider /> : null}
+          <TraitRadioSection
+            label={provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
+            note={
+              ultrathinkPromptControlled ? (
+                <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
+                  Remove Ultrathink from the prompt to change effort.
+                </div>
+              ) : undefined
+            }
+            value={effort ?? ""}
+            disabled={ultrathinkPromptControlled}
+            options={effortLevels.map((option) => ({
+              value: option.value,
+              label: option.label,
+              isDefault: option.value === defaultEffort,
+              description: option.description ?? null,
+            }))}
+            onValueChange={handleEffortChange}
+            onSelectionComplete={onSelectionComplete}
+          />
+        </>
       ) : null}
       {includeFastMode && supportsFastModeControl ? (
         <>
@@ -296,22 +318,6 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
               { value: "on", label: "Fast" },
             ]}
             onValueChange={(value) => commitTrait({ fastMode: value === "on" })}
-            onSelectionComplete={onSelectionComplete}
-          />
-        </>
-      ) : null}
-      {contextWindowOptions.length > 1 ? (
-        <>
-          <MenuDivider />
-          <TraitRadioSection
-            label="Context"
-            value={contextWindow ?? defaultContextWindow ?? ""}
-            options={contextWindowOptions.map((option) => ({
-              value: option.value,
-              label: option.label,
-              isDefault: option.value === defaultContextWindow,
-            }))}
-            onValueChange={(value) => commitTrait({ contextWindow: value })}
             onSelectionComplete={onSelectionComplete}
           />
         </>

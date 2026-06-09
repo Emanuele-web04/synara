@@ -109,8 +109,7 @@ export function resolveMentionChipKind(
   if (
     options?.mentionReferences?.some(
       (mention) =>
-        isPluginProviderMentionReference(mention) &&
-        providerMentionMatchesToken(mention, path),
+        isPluginProviderMentionReference(mention) && providerMentionMatchesToken(mention, path),
     )
   ) {
     return "plugin";

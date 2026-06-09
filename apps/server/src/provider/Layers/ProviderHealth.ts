@@ -1620,7 +1620,20 @@ export const checkCursorProviderStatus = makeCheckCursorProviderStatus();
 
 // ── Snapshot helpers ────────────────────────────────────────────────
 
-function providerStatusesEqual(left: ProviderStatuses, right: ProviderStatuses): boolean {
+function comparableProviderVersionAdvisory(
+  advisory: ServerProviderStatus["versionAdvisory"] | undefined,
+): Omit<NonNullable<ServerProviderStatus["versionAdvisory"]>, "checkedAt"> | null {
+  if (!advisory) {
+    return null;
+  }
+  const { checkedAt: _checkedAt, ...comparableAdvisory } = advisory;
+  return comparableAdvisory;
+}
+
+export function providerStatusesEqual(
+  left: ReadonlyArray<ServerProviderStatus>,
+  right: ReadonlyArray<ServerProviderStatus>,
+): boolean {
   if (left.length !== right.length) {
     return false;
   }
@@ -1637,8 +1650,8 @@ function providerStatusesEqual(left: ProviderStatuses, right: ProviderStatuses):
       status.voiceTranscriptionAvailable === next.voiceTranscriptionAvailable &&
       (status.version ?? null) === (next.version ?? null) &&
       (status.message ?? null) === (next.message ?? null) &&
-      JSON.stringify(status.versionAdvisory ?? null) ===
-        JSON.stringify(next.versionAdvisory ?? null) &&
+      JSON.stringify(comparableProviderVersionAdvisory(status.versionAdvisory)) ===
+        JSON.stringify(comparableProviderVersionAdvisory(next.versionAdvisory)) &&
       JSON.stringify(status.updateState ?? null) === JSON.stringify(next.updateState ?? null)
     );
   });

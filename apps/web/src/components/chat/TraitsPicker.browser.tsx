@@ -4,6 +4,7 @@ import {
   type ModelSelection,
   ClaudeModelOptions,
   CodexModelOptions,
+  type CursorModelOptions,
   DEFAULT_MODEL_BY_PROVIDER,
   type OpenCodeModelOptions,
   type ProviderModelDescriptor,
@@ -460,7 +461,7 @@ describe("TraitsPicker (Codex)", () => {
 
 async function mountCursorPicker(props: {
   runtimeModel: ProviderModelDescriptor;
-  options?: { fastMode?: boolean };
+  options?: CursorModelOptions;
 }) {
   const threadId = ThreadId.makeUnsafe("thread-cursor-traits");
   const host = document.createElement("div");
@@ -526,6 +527,43 @@ describe("TraitsPicker (Cursor)", () => {
       expect(text).toContain("Fast");
       expect(text).not.toMatch(/\bThinking\b/u);
       expect(text).not.toContain("Effort");
+    });
+  });
+
+  it("shows thinking, context, and effort controls together for Fable-style models", async () => {
+    await using _ = await mountCursorPicker({
+      runtimeModel: {
+        slug: "claude-fable-5",
+        name: "Fable 5",
+        supportsThinkingToggle: true,
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High", isDefault: true },
+          { value: "xhigh", label: "Extra High" },
+          { value: "max", label: "Max" },
+        ],
+        defaultReasoningEffort: "high",
+        contextWindowOptions: [
+          { value: "300k", label: "300K", isDefault: true },
+          { value: "1m", label: "1M" },
+        ],
+        defaultContextWindow: "300k",
+      },
+      options: { thinking: true, reasoningEffort: "high", contextWindow: "300k" },
+    });
+
+    await page.getByRole("button").click();
+
+    await vi.waitFor(() => {
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Thinking");
+      expect(text).toContain("Context");
+      expect(text).toContain("Effort");
+      expect(text).toContain("300K");
+      expect(text).toContain("1M");
+      expect(text).toContain("Extra High");
+      expect(text).toContain("Max");
     });
   });
 });

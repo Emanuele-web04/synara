@@ -65,9 +65,7 @@ export interface BufferLiveUiStreamOptions<E2 = never, R2 = never> {
   /** Identifies the stream in dropped-event warnings. */
   readonly label?: string;
   /** Optional recovery hook. Snapshot-backed streams use this to restart/resubscribe. */
-  readonly onDroppedEvents?: (
-    report: LiveUiStreamDropReport,
-  ) => Effect.Effect<void, E2, R2>;
+  readonly onDroppedEvents?: (report: LiveUiStreamDropReport) => Effect.Effect<void, E2, R2>;
 }
 
 export function bufferLiveUiStream<A, E, R, E2 = never, R2 = never>(

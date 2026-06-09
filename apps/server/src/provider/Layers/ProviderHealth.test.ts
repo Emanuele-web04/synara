@@ -21,6 +21,7 @@ import {
   makeCheckOpenCodeProviderStatus,
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
+  providerStatusesEqual,
   readCodexConfigModelProvider,
   stabilizeProviderStatusesAgainstTransientTimeouts,
 } from "./ProviderHealth";
@@ -256,6 +257,66 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           [authTimeoutWarning],
         ),
         [authTimeoutWarning],
+      );
+    });
+  });
+
+  describe("providerStatusesEqual", () => {
+    const readyCursor = {
+      provider: "cursor",
+      status: "ready",
+      available: true,
+      authStatus: "unknown",
+      version: "2026.06.04-8f81907",
+      checkedAt: "2026-06-04T17:00:00.000Z",
+      message:
+        "Cursor Agent CLI is installed. Sign in with Cursor if a session prompts for authentication.",
+      versionAdvisory: {
+        status: "current",
+        currentVersion: "2026.06.04-8f81907",
+        latestVersion: "2026.06.04-8f81907",
+        updateCommand: null,
+        canUpdate: true,
+        checkedAt: "2026-06-04T17:00:00.000Z",
+        message: null,
+      },
+    } satisfies ServerProviderStatus;
+
+    it("ignores top-level and version-advisory checkedAt churn", () => {
+      assert.strictEqual(
+        providerStatusesEqual(
+          [readyCursor],
+          [
+            {
+              ...readyCursor,
+              checkedAt: "2026-06-04T17:01:00.000Z",
+              versionAdvisory: {
+                ...readyCursor.versionAdvisory,
+                checkedAt: "2026-06-04T17:01:00.000Z",
+              },
+            },
+          ],
+        ),
+        true,
+      );
+    });
+
+    it("detects meaningful version-advisory changes", () => {
+      assert.strictEqual(
+        providerStatusesEqual(
+          [readyCursor],
+          [
+            {
+              ...readyCursor,
+              versionAdvisory: {
+                ...readyCursor.versionAdvisory,
+                status: "behind_latest",
+                latestVersion: "2026.06.05-a1b2c3d",
+              },
+            },
+          ],
+        ),
+        false,
       );
     });
   });

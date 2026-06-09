@@ -7,10 +7,7 @@
 
 import { memo } from "react";
 import { getFileIconName, inferEntryKindFromPath } from "~/file-icons";
-import {
-  resolveMentionChipKind,
-  type MentionChipKind,
-} from "~/lib/composerMentions";
+import { resolveMentionChipKind, type MentionChipKind } from "~/lib/composerMentions";
 import { createCentralIconElement } from "~/lib/central-icons";
 import { PluginIcon } from "~/lib/icons";
 import { COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME } from "../composerInlineChip";
@@ -20,10 +17,7 @@ import type { ProviderMentionReference } from "@t3tools/contracts";
 
 export type { MentionChipKind };
 
-function composerMentionChipCentralIconName(
-  path: string,
-  kind: MentionChipKind = "path",
-): string {
+function composerMentionChipCentralIconName(path: string, kind: MentionChipKind = "path"): string {
   if (kind === "plugin" || path.startsWith("plugin://")) {
     return "puzzle";
   }
