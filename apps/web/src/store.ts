@@ -17,10 +17,8 @@ import {
 } from "@t3tools/contracts";
 import { resolveThreadBranchRegressionGuard } from "@t3tools/shared/git";
 import { normalizeModelSlug } from "@t3tools/shared/model";
-import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
 import { create } from "zustand";
 import {
-  type ChatAttachment,
   type ChatMessage,
   type Project,
   type SidebarThreadSummary,
@@ -30,12 +28,66 @@ import {
   type ThreadTurnState,
   type ThreadWorkspacePatch,
 } from "./types";
-import { Debouncer } from "@tanstack/react-pacer";
-import { hasLiveTurnTailWork } from "./session-logic";
-import { deriveThreadSummaryMetadata } from "@t3tools/shared/threadSummary";
 import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
-import { toAttachmentPreviewUrl } from "./lib/wsHttpUrl";
-import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
+import {
+  debouncedPersistState,
+  persistState,
+  persistedProjectOrderCwds,
+  projectCwdKey,
+  readPersistedState,
+  rememberProjectLocalNames,
+  rememberProjectUiState,
+} from "./storePersistence/hydration";
+import {
+  normalizeProjectFromReadModel,
+  normalizeProjectFromShell,
+  upsertProjectFromReadModel,
+  upsertProjectFromShell,
+} from "./storeSlices/projects";
+import {
+  buildProposedPlanSlice,
+  normalizeProposedPlans,
+  sourceProposedPlansEqual,
+} from "./storeSlices/threadProposedPlans";
+import {
+  buildSidebarThreadSummary,
+  resolveThreadSummaryAfterApprovalResponseRequested,
+  resolveThreadSummaryAfterUserInputResponseRequested,
+  withDerivedThreadStateSignals,
+} from "./storeSlices/sidebarSummaries";
+import {
+  buildActivitySlice,
+  normalizeActivities,
+  THREAD_SUMMARY_ACTIVITY_KINDS,
+} from "./storeSlices/threadActivities";
+import {
+  MAX_THREAD_MESSAGES,
+  buildMessageSlice,
+  mergeReadModelMessagesWithLiveHotPath,
+  mergeStreamingMessage,
+  normalizeChatMessage,
+  normalizeChatMessages,
+  shouldPreserveRunningTurn,
+} from "./storeSlices/threadMessages";
+import {
+  threadSessionsEqual,
+  threadShellsEqual,
+  toThreadShell,
+  toThreadTurnState,
+} from "./storeSlices/threadShell";
+
+export { readPersistedState, persistState } from "./storePersistence/hydration";
+export {
+  normalizeProjectFromReadModel,
+  normalizeProjectFromShell,
+  upsertProjectFromReadModel,
+  upsertProjectFromShell,
+} from "./storeSlices/projects";
+export {
+  buildProposedPlanSlice,
+  normalizeProposedPlans,
+  sourceProposedPlansEqual,
+} from "./storeSlices/threadProposedPlans";
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -58,41 +110,13 @@ export interface AppState {
   turnDiffSummaryByThreadId?: Record<ThreadId, Record<TurnId, Thread["turnDiffSummaries"][number]>>;
 }
 
-type ReadModelProject = OrchestrationReadModel["projects"][number];
 type ReadModelThread = OrchestrationReadModel["threads"][number];
-type ReadModelMessage = OrchestrationReadModel["threads"][number]["messages"][number];
-type ShellSnapshotProject = OrchestrationShellSnapshot["projects"][number];
 type ShellSnapshotThread = OrchestrationShellSnapshot["threads"][number];
 type ThreadMessageSentEvent = Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
 type ThreadActivityAppendedEvent = Extract<
   OrchestrationEvent,
   { type: "thread.activity-appended" }
 >;
-type ThreadApprovalResponseRequestedEvent = Extract<
-  OrchestrationEvent,
-  { type: "thread.approval-response-requested" }
->;
-type ThreadUserInputResponseRequestedEvent = Extract<
-  OrchestrationEvent,
-  { type: "thread.user-input-response-requested" }
->;
-
-const PERSISTED_STATE_KEY = "synara:renderer-state:v8";
-const LEGACY_PERSISTED_STATE_KEYS = [
-  "dpcode:renderer-state:v8",
-  "t3code:renderer-state:v8",
-  "t3code:renderer-state:v7",
-  "t3code:renderer-state:v6",
-  "t3code:renderer-state:v5",
-  "t3code:renderer-state:v4",
-  "t3code:renderer-state:v3",
-  "codething:renderer-state:v4",
-  "codething:renderer-state:v3",
-  "codething:renderer-state:v2",
-  "codething:renderer-state:v1",
-] as const;
-const MAX_THREAD_MESSAGES = 2_000;
-const MAX_THREAD_ACTIVITIES = 500;
 // Stable empty reference for `threadIds` fallbacks. Consumers must read through
 // this (never an inline `?? []`) so `useSyncExternalStore` selectors keep a
 // stable snapshot and cannot trigger an infinite re-render (React error #185).
@@ -116,143 +140,6 @@ const EMPTY_TURN_DIFF_BY_THREAD: Record<
   ThreadId,
   Record<TurnId, Thread["turnDiffSummaries"][number]>
 > = {};
-const THREAD_SUMMARY_ACTIVITY_KINDS = new Set([
-  "approval.requested",
-  "approval.resolved",
-  "provider.approval.respond.failed",
-  "user-input.requested",
-  "user-input.resolved",
-  "provider.user-input.respond.failed",
-]);
-const PENDING_INTERACTION_REQUEST_KINDS = new Set(["approval.requested", "user-input.requested"]);
-
-const initialState: AppState = {
-  projects: [],
-  threads: [],
-  sidebarThreadSummaryById: {},
-  threadsHydrated: false,
-  threadIds: [],
-  threadShellById: {},
-  threadSessionById: {},
-  threadTurnStateById: {},
-  messageIdsByThreadId: {},
-  messageByThreadId: {},
-  activityIdsByThreadId: {},
-  activityByThreadId: {},
-  proposedPlanIdsByThreadId: {},
-  proposedPlanByThreadId: {},
-  turnDiffIdsByThreadId: {},
-  turnDiffSummaryByThreadId: {},
-};
-const persistedExpandedProjectCwds = new Set<string>();
-const persistedProjectOrderCwds: string[] = [];
-const persistedProjectNamesByCwd = new Map<string, string>();
-
-function projectCwdKey(cwd: string): string {
-  return normalizeWorkspaceRootForComparison(cwd);
-}
-
-function basenameOfPath(value: string): string | null {
-  const segments = value.split(/[/\\]/).filter((segment) => segment.length > 0);
-  return segments.at(-1) ?? null;
-}
-
-function rememberProjectUiState(projects: ReadonlyArray<Pick<Project, "cwd" | "expanded">>): void {
-  for (const project of projects) {
-    const cwdKey = projectCwdKey(project.cwd);
-    if (project.expanded) {
-      persistedExpandedProjectCwds.add(cwdKey);
-    } else {
-      persistedExpandedProjectCwds.delete(cwdKey);
-    }
-    if (!persistedProjectOrderCwds.includes(cwdKey)) {
-      persistedProjectOrderCwds.push(cwdKey);
-    }
-  }
-}
-
-function rememberProjectLocalNames(
-  projects: ReadonlyArray<Pick<Project, "cwd" | "localName">>,
-): void {
-  for (const project of projects) {
-    const cwdKey = projectCwdKey(project.cwd);
-    const localName = project.localName?.trim() ?? "";
-    if (localName.length > 0) {
-      persistedProjectNamesByCwd.set(cwdKey, localName);
-    } else {
-      persistedProjectNamesByCwd.delete(cwdKey);
-    }
-  }
-}
-
-// ── Persist helpers ──────────────────────────────────────────────────
-
-function readPersistedState(): AppState {
-  if (typeof window === "undefined") return initialState;
-  try {
-    const raw = window.localStorage.getItem(PERSISTED_STATE_KEY);
-    if (!raw) return initialState;
-    const parsed = JSON.parse(raw) as {
-      expandedProjectCwds?: string[];
-      projectOrderCwds?: string[];
-      projectNamesByCwd?: Record<string, string>;
-    };
-    persistedExpandedProjectCwds.clear();
-    persistedProjectOrderCwds.length = 0;
-    persistedProjectNamesByCwd.clear();
-    for (const cwd of parsed.expandedProjectCwds ?? []) {
-      if (typeof cwd === "string" && cwd.length > 0) {
-        persistedExpandedProjectCwds.add(projectCwdKey(cwd));
-      }
-    }
-    for (const cwd of parsed.projectOrderCwds ?? []) {
-      const cwdKey = typeof cwd === "string" ? projectCwdKey(cwd) : "";
-      if (cwdKey.length > 0 && !persistedProjectOrderCwds.includes(cwdKey)) {
-        persistedProjectOrderCwds.push(cwdKey);
-      }
-    }
-    for (const [cwd, name] of Object.entries(parsed.projectNamesByCwd ?? {})) {
-      if (typeof cwd !== "string" || cwd.length === 0) continue;
-      if (typeof name !== "string") continue;
-      const trimmedName = name.trim();
-      if (trimmedName.length === 0) continue;
-      persistedProjectNamesByCwd.set(projectCwdKey(cwd), trimmedName);
-    }
-    return { ...initialState };
-  } catch {
-    return initialState;
-  }
-}
-
-let legacyKeysCleanedUp = false;
-
-function persistState(state: AppState): void {
-  if (typeof window === "undefined") return;
-  try {
-    rememberProjectUiState(state.projects);
-    rememberProjectLocalNames(state.projects);
-    window.localStorage.setItem(
-      PERSISTED_STATE_KEY,
-      JSON.stringify({
-        expandedProjectCwds: state.projects
-          .filter((project) => project.expanded)
-          .map((project) => project.cwd),
-        projectOrderCwds: state.projects.map((project) => project.cwd),
-        projectNamesByCwd: Object.fromEntries(persistedProjectNamesByCwd),
-      }),
-    );
-    if (!legacyKeysCleanedUp) {
-      legacyKeysCleanedUp = true;
-      for (const legacyKey of LEGACY_PERSISTED_STATE_KEYS) {
-        window.localStorage.removeItem(legacyKey);
-      }
-    }
-  } catch {
-    // Ignore quota/storage errors to avoid breaking chat UX.
-  }
-}
-const debouncedPersistState = new Debouncer(persistState, { wait: 500 });
-
 export function persistAppStateNow(state: AppState = useStore.getState()): void {
   persistState(state);
 }
@@ -274,15 +161,6 @@ function updateThread(
   return changed ? next : threads;
 }
 
-function sourceProposedPlansEqual(
-  left: Thread["pendingSourceProposedPlan"],
-  right: Thread["pendingSourceProposedPlan"],
-): boolean {
-  if (left === right) return true;
-  if (left === undefined || right === undefined) return false;
-  return left.threadId === right.threadId && left.planId === right.planId;
-}
-
 function latestTurnsEqual(left: Thread["latestTurn"], right: Thread["latestTurn"]): boolean {
   if (left === right) return true;
   if (left == null || right == null) return false;
@@ -294,23 +172,6 @@ function latestTurnsEqual(left: Thread["latestTurn"], right: Thread["latestTurn"
     left.completedAt === right.completedAt &&
     left.assistantMessageId === right.assistantMessageId &&
     sourceProposedPlansEqual(left.sourceProposedPlan, right.sourceProposedPlan)
-  );
-}
-
-function threadSessionsEqual(
-  left: ThreadSession | null | undefined,
-  right: ThreadSession | null | undefined,
-): boolean {
-  if (left === right) return true;
-  if (left == null || right == null) return false;
-  return (
-    left.provider === right.provider &&
-    left.status === right.status &&
-    left.orchestrationStatus === right.orchestrationStatus &&
-    left.activeTurnId === right.activeTurnId &&
-    left.createdAt === right.createdAt &&
-    left.updatedAt === right.updatedAt &&
-    left.lastError === right.lastError
   );
 }
 
@@ -353,143 +214,12 @@ function resolveCreateBranchFlowCompletedMerge(input: {
   return input.nextCreateBranchFlowCompleted;
 }
 
-function threadShellsEqual(left: ThreadShell | undefined, right: ThreadShell): boolean {
-  return (
-    left !== undefined &&
-    left.id === right.id &&
-    left.codexThreadId === right.codexThreadId &&
-    left.projectId === right.projectId &&
-    left.title === right.title &&
-    left.modelSelection === right.modelSelection &&
-    left.runtimeMode === right.runtimeMode &&
-    left.interactionMode === right.interactionMode &&
-    left.error === right.error &&
-    left.createdAt === right.createdAt &&
-    (left.archivedAt ?? null) === (right.archivedAt ?? null) &&
-    left.updatedAt === right.updatedAt &&
-    (left.isPinned ?? false) === (right.isPinned ?? false) &&
-    left.envMode === right.envMode &&
-    left.branch === right.branch &&
-    left.worktreePath === right.worktreePath &&
-    (left.associatedWorktreePath ?? null) === (right.associatedWorktreePath ?? null) &&
-    (left.associatedWorktreeBranch ?? null) === (right.associatedWorktreeBranch ?? null) &&
-    (left.associatedWorktreeRef ?? null) === (right.associatedWorktreeRef ?? null) &&
-    (left.createBranchFlowCompleted ?? false) === (right.createBranchFlowCompleted ?? false) &&
-    (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
-    (left.subagentAgentId ?? null) === (right.subagentAgentId ?? null) &&
-    (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
-    (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
-    (left.forkSourceThreadId ?? null) === (right.forkSourceThreadId ?? null) &&
-    (left.sidechatSourceThreadId ?? null) === (right.sidechatSourceThreadId ?? null) &&
-    deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
-    deepEqualJson(left.runtime ?? null, right.runtime ?? null) &&
-    (left.handoff ?? null) === (right.handoff ?? null) &&
-    left.latestUserMessageAt === right.latestUserMessageAt &&
-    left.hasPendingApprovals === right.hasPendingApprovals &&
-    left.hasPendingUserInput === right.hasPendingUserInput &&
-    left.hasActionableProposedPlan === right.hasActionableProposedPlan &&
-    left.lastVisitedAt === right.lastVisitedAt
-  );
-}
-
 function threadTurnStatesEqual(left: ThreadTurnState | undefined, right: ThreadTurnState): boolean {
   return (
     left !== undefined &&
     latestTurnsEqual(left.latestTurn, right.latestTurn) &&
     sourceProposedPlansEqual(left.pendingSourceProposedPlan, right.pendingSourceProposedPlan)
   );
-}
-
-function toThreadShell(thread: Thread): ThreadShell {
-  return {
-    id: thread.id,
-    codexThreadId: thread.codexThreadId,
-    projectId: thread.projectId,
-    title: thread.title,
-    modelSelection: thread.modelSelection,
-    runtimeMode: thread.runtimeMode,
-    interactionMode: thread.interactionMode,
-    error: thread.error,
-    createdAt: thread.createdAt,
-    archivedAt: thread.archivedAt ?? null,
-    updatedAt: thread.updatedAt,
-    isPinned: thread.isPinned ?? false,
-    envMode: thread.envMode,
-    branch: thread.branch,
-    worktreePath: thread.worktreePath,
-    associatedWorktreePath: thread.associatedWorktreePath ?? null,
-    associatedWorktreeBranch: thread.associatedWorktreeBranch ?? null,
-    associatedWorktreeRef: thread.associatedWorktreeRef ?? null,
-    createBranchFlowCompleted: thread.createBranchFlowCompleted ?? false,
-    parentThreadId: thread.parentThreadId ?? null,
-    subagentAgentId: thread.subagentAgentId ?? null,
-    subagentNickname: thread.subagentNickname ?? null,
-    subagentRole: thread.subagentRole ?? null,
-    forkSourceThreadId: thread.forkSourceThreadId ?? null,
-    sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
-    lastKnownPr: thread.lastKnownPr ?? null,
-    runtime: thread.runtime ?? null,
-    handoff: thread.handoff ?? null,
-    ...(thread.latestUserMessageAt !== undefined
-      ? { latestUserMessageAt: thread.latestUserMessageAt }
-      : {}),
-    ...(thread.hasPendingApprovals !== undefined
-      ? { hasPendingApprovals: thread.hasPendingApprovals }
-      : {}),
-    ...(thread.hasPendingUserInput !== undefined
-      ? { hasPendingUserInput: thread.hasPendingUserInput }
-      : {}),
-    ...(thread.hasActionableProposedPlan !== undefined
-      ? { hasActionableProposedPlan: thread.hasActionableProposedPlan }
-      : {}),
-    ...(thread.lastVisitedAt !== undefined ? { lastVisitedAt: thread.lastVisitedAt } : {}),
-  };
-}
-
-function toThreadTurnState(thread: Thread): ThreadTurnState {
-  return {
-    latestTurn: thread.latestTurn,
-    ...(thread.pendingSourceProposedPlan
-      ? { pendingSourceProposedPlan: thread.pendingSourceProposedPlan }
-      : {}),
-  };
-}
-
-function buildMessageSlice(thread: Thread): {
-  ids: MessageId[];
-  byId: Record<MessageId, ChatMessage>;
-} {
-  return {
-    ids: thread.messages.map((message) => message.id),
-    byId: Object.fromEntries(
-      thread.messages.map((message) => [message.id, message] as const),
-    ) as Record<MessageId, ChatMessage>,
-  };
-}
-
-function buildActivitySlice(thread: Thread): {
-  ids: string[];
-  byId: Record<string, Thread["activities"][number]>;
-} {
-  const activities = capThreadActivities(dedupeActivitiesById(thread.activities));
-  return {
-    ids: activities.map((activity) => activity.id),
-    byId: Object.fromEntries(
-      activities.map((activity) => [activity.id, activity] as const),
-    ) as Record<string, Thread["activities"][number]>,
-  };
-}
-
-function buildProposedPlanSlice(thread: Thread): {
-  ids: string[];
-  byId: Record<string, Thread["proposedPlans"][number]>;
-} {
-  return {
-    ids: thread.proposedPlans.map((plan) => plan.id),
-    byId: Object.fromEntries(
-      thread.proposedPlans.map((plan) => [plan.id, plan] as const),
-    ) as Record<string, Thread["proposedPlans"][number]>,
-  };
 }
 
 function buildTurnDiffSlice(thread: Thread): {
@@ -505,7 +235,7 @@ function buildTurnDiffSlice(thread: Thread): {
 }
 
 // Reuse unchanged branches from the read model so per-thread selectors stay stable during streaming.
-function arraysShallowEqual<T>(
+export function arraysShallowEqual<T>(
   left: ReadonlyArray<T> | undefined,
   right: ReadonlyArray<T>,
 ): left is ReadonlyArray<T> {
@@ -534,7 +264,7 @@ function recordsShallowEqual<T>(left: Record<string, T>, right: Record<string, T
   return true;
 }
 
-function deepEqualJson(left: unknown, right: unknown): boolean {
+export function deepEqualJson(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) {
     return true;
   }
@@ -571,441 +301,13 @@ function deepEqualJson(left: unknown, right: unknown): boolean {
   return true;
 }
 
-function normalizeModelSelection<T extends { provider: ProviderKind; model: string }>(
+export function normalizeModelSelection<T extends { provider: ProviderKind; model: string }>(
   value: T,
   previous: T | null | undefined,
 ): T {
   const normalizedModel = normalizeModelSlug(value.model, value.provider) ?? value.model;
   const next = normalizedModel === value.model ? value : { ...value, model: normalizedModel };
   return previous && deepEqualJson(previous, next) ? previous : next;
-}
-
-function normalizeProjectScripts(
-  incoming: ReadModelProject["scripts"],
-  previous: Project["scripts"] | undefined,
-): Project["scripts"] {
-  const nextScripts = incoming.map((script, index) => {
-    const existing = previous?.[index];
-    return existing && deepEqualJson(existing, script) ? existing : script;
-  });
-  return arraysShallowEqual(previous, nextScripts) ? previous : nextScripts;
-}
-
-function normalizeProjectFromReadModel(
-  incoming: ReadModelProject,
-  previous: Project | undefined,
-): Project {
-  const workspaceRootKey = projectCwdKey(incoming.workspaceRoot);
-  const folderName = basenameOfPath(incoming.workspaceRoot) ?? incoming.title;
-  const localName = previous?.localName ?? persistedProjectNamesByCwd.get(workspaceRootKey) ?? null;
-  const defaultModelSelection =
-    incoming.defaultModelSelection === null
-      ? null
-      : normalizeModelSelection(incoming.defaultModelSelection, previous?.defaultModelSelection);
-  const scripts = normalizeProjectScripts(incoming.scripts, previous?.scripts);
-  const expanded =
-    previous?.expanded ??
-    (persistedExpandedProjectCwds.size > 0
-      ? persistedExpandedProjectCwds.has(workspaceRootKey)
-      : true);
-
-  if (
-    previous &&
-    previous.id === incoming.id &&
-    previous.kind === incoming.kind &&
-    previous.name === (localName ?? incoming.title) &&
-    previous.remoteName === incoming.title &&
-    previous.folderName === folderName &&
-    previous.localName === localName &&
-    previous.cwd === incoming.workspaceRoot &&
-    previous.defaultModelSelection === defaultModelSelection &&
-    previous.expanded === expanded &&
-    previous.createdAt === incoming.createdAt &&
-    previous.updatedAt === incoming.updatedAt &&
-    previous.scripts === scripts
-  ) {
-    return previous;
-  }
-
-  return {
-    id: incoming.id,
-    kind: incoming.kind ?? "project",
-    name: localName ?? incoming.title,
-    remoteName: incoming.title,
-    folderName,
-    localName,
-    cwd: incoming.workspaceRoot,
-    defaultModelSelection,
-    expanded,
-    createdAt: incoming.createdAt,
-    updatedAt: incoming.updatedAt,
-    scripts,
-  } satisfies Project;
-}
-
-function normalizeProjectFromShell(
-  incoming: ShellSnapshotProject,
-  previous: Project | undefined,
-): Project {
-  const workspaceRootKey = projectCwdKey(incoming.workspaceRoot);
-  const folderName = basenameOfPath(incoming.workspaceRoot) ?? incoming.title;
-  const localName = previous?.localName ?? persistedProjectNamesByCwd.get(workspaceRootKey) ?? null;
-  const defaultModelSelection =
-    incoming.defaultModelSelection === null
-      ? null
-      : normalizeModelSelection(incoming.defaultModelSelection, previous?.defaultModelSelection);
-  const scripts = normalizeProjectScripts(incoming.scripts, previous?.scripts);
-  const expanded =
-    previous?.expanded ??
-    (persistedExpandedProjectCwds.size > 0
-      ? persistedExpandedProjectCwds.has(workspaceRootKey)
-      : true);
-
-  if (
-    previous &&
-    previous.id === incoming.id &&
-    previous.kind === incoming.kind &&
-    previous.name === (localName ?? incoming.title) &&
-    previous.remoteName === incoming.title &&
-    previous.folderName === folderName &&
-    previous.localName === localName &&
-    previous.cwd === incoming.workspaceRoot &&
-    previous.defaultModelSelection === defaultModelSelection &&
-    previous.expanded === expanded &&
-    previous.createdAt === incoming.createdAt &&
-    previous.updatedAt === incoming.updatedAt &&
-    previous.scripts === scripts
-  ) {
-    return previous;
-  }
-
-  return {
-    id: incoming.id,
-    kind: incoming.kind ?? "project",
-    name: localName ?? incoming.title,
-    remoteName: incoming.title,
-    folderName,
-    localName,
-    cwd: incoming.workspaceRoot,
-    defaultModelSelection,
-    expanded,
-    createdAt: incoming.createdAt,
-    updatedAt: incoming.updatedAt,
-    scripts,
-  } satisfies Project;
-}
-
-function upsertProjectFromReadModel(state: AppState, incoming: ReadModelProject): AppState {
-  const existingProject = state.projects.find((project) => project.id === incoming.id);
-  const nextProject = normalizeProjectFromReadModel(incoming, existingProject);
-
-  if (existingProject) {
-    if (existingProject === nextProject) {
-      return state;
-    }
-    return {
-      ...state,
-      projects: state.projects.map((project) =>
-        project.id === incoming.id ? nextProject : project,
-      ),
-    };
-  }
-
-  return {
-    ...state,
-    projects: [...state.projects, nextProject],
-  };
-}
-
-function upsertProjectFromShell(state: AppState, incoming: ShellSnapshotProject): AppState {
-  const existingProject =
-    state.projects.find((project) => project.id === incoming.id) ??
-    state.projects.find(
-      (project) => projectCwdKey(project.cwd) === projectCwdKey(incoming.workspaceRoot),
-    );
-  const nextProject = normalizeProjectFromShell(incoming, existingProject);
-
-  if (existingProject) {
-    if (existingProject === nextProject) {
-      return state;
-    }
-    return {
-      ...state,
-      projects: state.projects.map((project) =>
-        project.id === existingProject.id ? nextProject : project,
-      ),
-    };
-  }
-
-  return {
-    ...state,
-    projects: [...state.projects, nextProject],
-  };
-}
-
-function normalizeChatAttachments(
-  incoming: ReadModelMessage["attachments"],
-  previous: ChatAttachment[] | undefined,
-): ChatAttachment[] | undefined {
-  if (!incoming || incoming.length === 0) {
-    return undefined;
-  }
-
-  const previousById = new Map(previous?.map((attachment) => [attachment.id, attachment] as const));
-  const nextAttachments = incoming.map((attachment) => {
-    const nextAttachment: ChatAttachment =
-      attachment.type === "assistant-selection"
-        ? {
-            type: "assistant-selection",
-            id: attachment.id,
-            assistantMessageId: attachment.assistantMessageId,
-            text: attachment.text,
-          }
-        : {
-            type: "image",
-            id: attachment.id,
-            name: attachment.name,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-            previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
-          };
-    const existing = previousById.get(attachment.id);
-    if (
-      existing &&
-      ((existing.type === "assistant-selection" &&
-        nextAttachment.type === "assistant-selection" &&
-        existing.assistantMessageId === nextAttachment.assistantMessageId &&
-        existing.text === nextAttachment.text) ||
-        (existing.type === "image" &&
-          nextAttachment.type === "image" &&
-          existing.name === nextAttachment.name &&
-          existing.mimeType === nextAttachment.mimeType &&
-          existing.sizeBytes === nextAttachment.sizeBytes &&
-          existing.previewUrl === nextAttachment.previewUrl))
-    ) {
-      return existing;
-    }
-    return nextAttachment;
-  });
-
-  return arraysShallowEqual(previous, nextAttachments) ? previous : nextAttachments;
-}
-
-function normalizeChatMessage(
-  incoming: ReadModelMessage,
-  previous: ChatMessage | undefined,
-): ChatMessage {
-  const attachments = normalizeChatAttachments(incoming.attachments, previous?.attachments);
-  const completedAt = incoming.streaming ? undefined : incoming.updatedAt;
-  if (
-    previous &&
-    previous.role === incoming.role &&
-    previous.text === incoming.text &&
-    previous.dispatchMode === incoming.dispatchMode &&
-    previous.turnId === incoming.turnId &&
-    previous.createdAt === incoming.createdAt &&
-    previous.streaming === incoming.streaming &&
-    previous.source === incoming.source &&
-    previous.completedAt === completedAt &&
-    previous.attachments === attachments
-  ) {
-    return previous;
-  }
-
-  return {
-    id: incoming.id,
-    role: incoming.role,
-    text: incoming.text,
-    ...(incoming.dispatchMode ? { dispatchMode: incoming.dispatchMode } : {}),
-    turnId: incoming.turnId,
-    createdAt: incoming.createdAt,
-    streaming: incoming.streaming,
-    source: incoming.source,
-    ...(completedAt ? { completedAt } : {}),
-    ...(attachments ? { attachments } : {}),
-  };
-}
-
-function normalizeChatMessages(
-  incoming: ReadModelThread["messages"],
-  previous: ChatMessage[] | undefined,
-): ChatMessage[] {
-  const previousById = new Map(previous?.map((message) => [message.id, message] as const));
-  const nextMessages = incoming
-    .slice(-MAX_THREAD_MESSAGES)
-    .map((message) => normalizeChatMessage(message, previousById.get(message.id)));
-  return arraysShallowEqual(previous, nextMessages) ? previous : nextMessages;
-}
-
-function readModelAttachmentsFromChatMessage(
-  attachments: ChatMessage["attachments"],
-): ReadModelThread["messages"][number]["attachments"] {
-  return (
-    attachments?.map((attachment) =>
-      attachment.type === "assistant-selection"
-        ? {
-            id: attachment.id,
-            type: "assistant-selection" as const,
-            assistantMessageId: MessageId.makeUnsafe(attachment.assistantMessageId),
-            text: attachment.text,
-          }
-        : {
-            id: attachment.id,
-            name: attachment.name,
-            type: "image" as const,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-          },
-    ) ?? []
-  );
-}
-
-function readModelMessageFromChatMessage(
-  message: ChatMessage,
-): ReadModelThread["messages"][number] {
-  return {
-    id: message.id,
-    role: message.role,
-    text: message.text,
-    ...(message.dispatchMode ? { dispatchMode: message.dispatchMode } : {}),
-    turnId: message.turnId ?? null,
-    streaming: message.streaming,
-    source: message.source ?? "native",
-    createdAt: message.createdAt,
-    updatedAt: message.completedAt ?? message.createdAt,
-    attachments: readModelAttachmentsFromChatMessage(message.attachments),
-  };
-}
-
-function shouldRetainLiveAssistantMessageForHotPath(
-  previousThread: Thread,
-  message: ChatMessage,
-): boolean {
-  if (message.role !== "assistant") {
-    return false;
-  }
-  if (message.streaming) {
-    return true;
-  }
-  const latestTurn = previousThread.latestTurn;
-  if (!latestTurn) {
-    return false;
-  }
-  if (latestTurn.assistantMessageId === message.id) {
-    return true;
-  }
-  return (
-    previousThread.session?.orchestrationStatus === "running" &&
-    message.turnId !== undefined &&
-    latestTurn.turnId === message.turnId
-  );
-}
-
-function mergeReadModelMessagesWithLiveHotPath(
-  incomingMessages: ReadModelThread["messages"],
-  previousThread: Thread | undefined,
-): ReadModelThread["messages"] {
-  if (!previousThread || previousThread.messages.length === 0) {
-    return incomingMessages;
-  }
-
-  const previousMessageById = new Map(
-    previousThread.messages.map((message) => [message.id, message] as const),
-  );
-  const mergedById = new Map<MessageId, ReadModelThread["messages"][number]>();
-  let changed = false;
-
-  for (const incomingMessage of incomingMessages) {
-    const previousMessage = previousMessageById.get(incomingMessage.id);
-    if (!previousMessage || previousMessage.role !== incomingMessage.role) {
-      mergedById.set(incomingMessage.id, incomingMessage);
-      continue;
-    }
-
-    const incomingCompletedAt = incomingMessage.streaming ? undefined : incomingMessage.updatedAt;
-    const shouldPreferLiveMessage =
-      previousMessage.text.length > incomingMessage.text.length ||
-      (!previousMessage.streaming && incomingMessage.streaming) ||
-      (previousMessage.completedAt !== undefined &&
-        (incomingCompletedAt === undefined || previousMessage.completedAt > incomingCompletedAt));
-
-    if (!shouldPreferLiveMessage) {
-      mergedById.set(incomingMessage.id, incomingMessage);
-      continue;
-    }
-
-    changed = true;
-    mergedById.set(incomingMessage.id, {
-      ...incomingMessage,
-      text: previousMessage.text,
-      dispatchMode: previousMessage.dispatchMode ?? incomingMessage.dispatchMode,
-      turnId: previousMessage.turnId ?? incomingMessage.turnId ?? null,
-      source: previousMessage.source ?? incomingMessage.source ?? "native",
-      streaming: previousMessage.streaming,
-      updatedAt: previousMessage.completedAt ?? incomingMessage.updatedAt,
-      attachments: readModelAttachmentsFromChatMessage(previousMessage.attachments),
-    });
-  }
-
-  for (const previousMessage of previousThread.messages) {
-    if (mergedById.has(previousMessage.id)) {
-      continue;
-    }
-    if (!shouldRetainLiveAssistantMessageForHotPath(previousThread, previousMessage)) {
-      continue;
-    }
-    changed = true;
-    mergedById.set(previousMessage.id, readModelMessageFromChatMessage(previousMessage));
-  }
-
-  if (!changed) {
-    return incomingMessages;
-  }
-
-  return [...mergedById.values()].toSorted((left, right) =>
-    left.createdAt === right.createdAt
-      ? String(left.id).localeCompare(String(right.id))
-      : left.createdAt.localeCompare(right.createdAt),
-  );
-}
-
-function hasLiveAssistantIntro(previousThread: Thread | undefined): boolean {
-  if (!previousThread) {
-    return false;
-  }
-  const latestTurn = previousThread.latestTurn;
-  if (!latestTurn || latestTurn.state !== "running") {
-    return false;
-  }
-  if (previousThread.session?.orchestrationStatus !== "running") {
-    return false;
-  }
-  return previousThread.messages.some(
-    (message) =>
-      message.role === "assistant" &&
-      message.turnId === latestTurn.turnId &&
-      (message.streaming || message.id === latestTurn.assistantMessageId),
-  );
-}
-
-function shouldPreserveRunningTurn(
-  previousThread: Thread | undefined,
-  incoming: ReadModelThread,
-): boolean {
-  if (!hasLiveAssistantIntro(previousThread)) {
-    return false;
-  }
-  const previousTurnId = previousThread?.latestTurn?.turnId;
-  if (!previousTurnId) {
-    return false;
-  }
-  if (incoming.latestTurn?.turnId !== previousTurnId) {
-    return true;
-  }
-  if (incoming.latestTurn.completedAt) {
-    return false;
-  }
-  return true;
 }
 
 function readModelSessionFromThreadSession(
@@ -1152,37 +454,6 @@ function mergeReadModelThreadDetailWithLiveHotPath(
   };
 }
 
-function normalizeProposedPlans(
-  incoming: ReadModelThread["proposedPlans"],
-  previous: Thread["proposedPlans"] | undefined,
-): Thread["proposedPlans"] {
-  const previousById = new Map(previous?.map((plan) => [plan.id, plan] as const));
-  const nextPlans = incoming.map((plan) => {
-    const existing = previousById.get(plan.id);
-    if (
-      existing &&
-      existing.turnId === plan.turnId &&
-      existing.planMarkdown === plan.planMarkdown &&
-      existing.implementedAt === plan.implementedAt &&
-      existing.implementationThreadId === plan.implementationThreadId &&
-      existing.createdAt === plan.createdAt &&
-      existing.updatedAt === plan.updatedAt
-    ) {
-      return existing;
-    }
-    return {
-      id: plan.id,
-      turnId: plan.turnId,
-      planMarkdown: plan.planMarkdown,
-      implementedAt: plan.implementedAt,
-      implementationThreadId: plan.implementationThreadId,
-      createdAt: plan.createdAt,
-      updatedAt: plan.updatedAt,
-    };
-  });
-  return arraysShallowEqual(previous, nextPlans) ? previous : nextPlans;
-}
-
 function normalizeTurnDiffFiles(
   incoming: ReadonlyArray<Thread["turnDiffSummaries"][number]["files"][number]>,
   previous: Thread["turnDiffSummaries"][number]["files"] | undefined,
@@ -1254,168 +525,6 @@ function normalizeTurnDiffSummaries(
     };
   });
   return arraysShallowEqual(previous, nextSummaries) ? previous : nextSummaries;
-}
-
-function normalizeActivities(
-  incoming: ReadModelThread["activities"],
-  previous: Thread["activities"] | undefined,
-): Thread["activities"] {
-  const previousActivities = previous ? dedupeActivitiesById(previous) : undefined;
-  const incomingActivities = dedupeActivitiesById(incoming);
-  const previousById = new Map(
-    previousActivities?.map((activity) => [activity.id, activity] as const),
-  );
-  const nextActivities = incomingActivities.map((activity) => {
-    const existing = previousById.get(activity.id);
-    if (existing) {
-      const preferred = preferRicherActivity(existing, activity);
-      if (preferred === existing || activitiesEqual(existing, preferred)) {
-        return existing;
-      }
-      return preferred;
-    }
-    return activity;
-  });
-  const cappedActivities = capThreadActivities(nextActivities);
-  return arraysShallowEqual(previous, cappedActivities) ? previous : cappedActivities;
-}
-
-function capThreadActivities<TActivity extends Thread["activities"][number]>(
-  activities: readonly TActivity[],
-): TActivity[] {
-  if (activities.length <= MAX_THREAD_ACTIVITIES) {
-    return activities as TActivity[];
-  }
-  const retainedIds = new Set(
-    activities.slice(-MAX_THREAD_ACTIVITIES).map((activity) => activity.id),
-  );
-  const pendingRequestIds = pendingInteractionRequestIds(activities);
-  for (const activity of activities) {
-    const requestId = activityRequestId(activity);
-    if (
-      requestId !== null &&
-      pendingRequestIds.has(requestId) &&
-      PENDING_INTERACTION_REQUEST_KINDS.has(activity.kind)
-    ) {
-      retainedIds.add(activity.id);
-    }
-  }
-  return activities.filter((activity) => retainedIds.has(activity.id));
-}
-
-function activityRequestId(activity: Thread["activities"][number]): string | null {
-  const payload = asActivityRecord(activity.payload);
-  const requestId = payload?.requestId;
-  return typeof requestId === "string" && requestId.trim().length > 0 ? requestId : null;
-}
-
-// Keep old actionable prompts even when their timeline rows fall outside the cap.
-function pendingInteractionRequestIds(
-  activities: readonly Thread["activities"][number][],
-): Set<string> {
-  const pendingRequestIds = new Set<string>();
-  for (const activity of activities) {
-    const requestId = activityRequestId(activity);
-    if (requestId === null) {
-      continue;
-    }
-    if (activity.kind === "approval.requested" || activity.kind === "user-input.requested") {
-      pendingRequestIds.add(requestId);
-      continue;
-    }
-    if (activity.kind === "approval.resolved" || activity.kind === "user-input.resolved") {
-      pendingRequestIds.delete(requestId);
-      continue;
-    }
-    if (
-      (activity.kind === "provider.approval.respond.failed" ||
-        activity.kind === "provider.user-input.respond.failed") &&
-      isStalePendingRequestFailureDetail(asActivityRecord(activity.payload)?.detail)
-    ) {
-      pendingRequestIds.delete(requestId);
-    }
-  }
-  return pendingRequestIds;
-}
-
-function dedupeActivitiesById<TActivity extends Thread["activities"][number]>(
-  activities: ReadonlyArray<TActivity>,
-): TActivity[] {
-  const indexById = new Map<string, number>();
-  const result: TActivity[] = [];
-  for (const activity of activities) {
-    const existingIndex = indexById.get(activity.id);
-    if (existingIndex === undefined) {
-      indexById.set(activity.id, result.length);
-      result.push(activity);
-      continue;
-    }
-    result[existingIndex] = preferRicherActivity(result[existingIndex]!, activity);
-  }
-  return arraysShallowEqual(activities, result) ? (activities as TActivity[]) : result;
-}
-
-// Duplicate activity ids can arrive from snapshot + live event races. Keep the
-// payload with the most tool detail so normalized state cannot regress to a generic row.
-function preferRicherActivity<TActivity extends Thread["activities"][number]>(
-  previous: TActivity,
-  incoming: TActivity,
-): TActivity {
-  if (activitiesEqual(previous, incoming)) {
-    return previous;
-  }
-  const previousScore = activityPayloadDetailScore(previous);
-  const incomingScore = activityPayloadDetailScore(incoming);
-  return incomingScore < previousScore ? previous : incoming;
-}
-
-function activitiesEqual(
-  left: Thread["activities"][number],
-  right: Thread["activities"][number],
-): boolean {
-  return (
-    left.kind === right.kind &&
-    left.tone === right.tone &&
-    left.summary === right.summary &&
-    deepEqualJson(left.payload, right.payload) &&
-    left.turnId === right.turnId &&
-    left.sequence === right.sequence &&
-    left.createdAt === right.createdAt
-  );
-}
-
-function activityPayloadDetailScore(activity: Thread["activities"][number]): number {
-  const payload = asActivityRecord(activity.payload);
-  const data = asActivityRecord(payload?.data);
-  const item = asActivityRecord(data?.item);
-  const commandActions = item?.commandActions ?? data?.commandActions ?? payload?.commandActions;
-  let score = 0;
-  if (payload?.itemType) score += 4;
-  if (payload?.title) score += 1;
-  if (payload?.detail) score += 2;
-  if (data) score += 2;
-  if (item) score += 4;
-  if (normalizeActivityCommandValue(item?.command ?? data?.command ?? payload?.command)) score += 8;
-  if (Array.isArray(commandActions) && commandActions.length > 0) score += 8;
-  return score;
-}
-
-function asActivityRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
-function normalizeActivityCommandValue(value: unknown): string | null {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  }
-  if (!Array.isArray(value)) {
-    return null;
-  }
-  const parts = value
-    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-    .filter((entry) => entry.length > 0);
-  return parts.length > 0 ? parts.join(" ") : null;
 }
 
 function isNonFatalThreadErrorMessage(message: string | null | undefined): boolean {
@@ -1523,6 +632,12 @@ function normalizeThreadFromReadModel(
     deepEqualJson(previous.lastKnownPr, incoming.lastKnownPr)
       ? previous.lastKnownPr
       : (incoming.lastKnownPr ?? null);
+  const reviewChatTarget =
+    previous?.reviewChatTarget &&
+    incoming.reviewChatTarget &&
+    deepEqualJson(previous.reviewChatTarget, incoming.reviewChatTarget)
+      ? previous.reviewChatTarget
+      : (incoming.reviewChatTarget ?? null);
   const runtime =
     previous?.runtime && incoming.runtime && deepEqualJson(previous.runtime, incoming.runtime)
       ? previous.runtime
@@ -1608,6 +723,7 @@ function normalizeThreadFromReadModel(
     (previous.forkSourceThreadId ?? null) === (incoming.forkSourceThreadId ?? null) &&
     (previous.sidechatSourceThreadId ?? null) === (incoming.sidechatSourceThreadId ?? null) &&
     deepEqualJson(previous.lastKnownPr ?? null, lastKnownPr) &&
+    deepEqualJson(previous.reviewChatTarget ?? null, reviewChatTarget) &&
     deepEqualJson(previous.runtime ?? null, runtime) &&
     (previous.handoff ?? null) === handoff &&
     previous.turnDiffSummaries === turnDiffSummaries &&
@@ -1649,6 +765,7 @@ function normalizeThreadFromReadModel(
     forkSourceThreadId: incoming.forkSourceThreadId ?? null,
     sidechatSourceThreadId: incoming.sidechatSourceThreadId ?? null,
     lastKnownPr,
+    reviewChatTarget,
     runtime,
     handoff,
     ...(resolvedLatestUserMessageAt !== undefined
@@ -1689,6 +806,12 @@ function normalizeThreadShellSnapshot(
     deepEqualJson(previous.lastKnownPr, incoming.lastKnownPr)
       ? previous.lastKnownPr
       : (incoming.lastKnownPr ?? null);
+  const reviewChatTarget =
+    previous?.reviewChatTarget &&
+    incoming.reviewChatTarget &&
+    deepEqualJson(previous.reviewChatTarget, incoming.reviewChatTarget)
+      ? previous.reviewChatTarget
+      : (incoming.reviewChatTarget ?? null);
   const runtime =
     previous?.runtime && incoming.runtime && deepEqualJson(previous.runtime, incoming.runtime)
       ? previous.runtime
@@ -1744,6 +867,7 @@ function normalizeThreadShellSnapshot(
     forkSourceThreadId: incoming.forkSourceThreadId ?? null,
     sidechatSourceThreadId: incoming.sidechatSourceThreadId ?? null,
     lastKnownPr,
+    reviewChatTarget,
     runtime,
     handoff,
     ...(incoming.latestUserMessageAt !== undefined
@@ -1897,53 +1021,6 @@ function toLegacyProvider(providerName: string | null): ProviderKind {
   return "codex";
 }
 
-function attachmentPreviewRoutePath(attachmentId: string): string {
-  return `/attachments/${encodeURIComponent(attachmentId)}`;
-}
-
-function resolveThreadSidebarMetadata(
-  thread: Thread,
-): Pick<
-  SidebarThreadSummary,
-  | "latestUserMessageAt"
-  | "hasPendingApprovals"
-  | "hasPendingUserInput"
-  | "hasActionableProposedPlan"
-  | "hasLiveTailWork"
-> {
-  const needsDerivedMetadata =
-    thread.latestUserMessageAt === undefined ||
-    thread.hasPendingApprovals === undefined ||
-    thread.hasPendingUserInput === undefined ||
-    thread.hasActionableProposedPlan === undefined;
-  const derivedMetadata = needsDerivedMetadata
-    ? deriveThreadSummaryMetadata({
-        messages: thread.messages,
-        activities: thread.activities,
-        proposedPlans: thread.proposedPlans,
-        latestTurn: thread.latestTurn,
-      })
-    : null;
-
-  return {
-    latestUserMessageAt: thread.latestUserMessageAt ?? derivedMetadata?.latestUserMessageAt ?? null,
-    hasPendingApprovals:
-      thread.hasPendingApprovals ?? derivedMetadata?.hasPendingApprovals ?? false,
-    hasPendingUserInput:
-      thread.hasPendingUserInput ?? derivedMetadata?.hasPendingUserInput ?? false,
-    hasActionableProposedPlan:
-      thread.hasActionableProposedPlan ?? derivedMetadata?.hasActionableProposedPlan ?? false,
-    hasLiveTailWork: Boolean(
-      hasLiveTurnTailWork({
-        latestTurn: thread.latestTurn,
-        messages: thread.messages,
-        activities: thread.activities,
-        session: thread.session,
-      }),
-    ),
-  };
-}
-
 function threadMessageUpdatesSummary(event: ThreadMessageSentEvent): boolean {
   return event.payload.role === "user";
 }
@@ -1955,136 +1032,6 @@ function threadActivityUpdatesSummary(event: ThreadActivityAppendedEvent): boole
 // Sidebar summaries can follow turn boundaries, but not every streaming assistant delta.
 function threadMessageUpdatesSidebarSummary(event: ThreadMessageSentEvent): boolean {
   return event.payload.role === "user" || !event.payload.streaming;
-}
-
-function resolveThreadSummaryAfterUserInputResponseRequested(
-  thread: Thread,
-  event: ThreadUserInputResponseRequestedEvent,
-) {
-  return deriveThreadSummaryMetadata({
-    messages: thread.messages,
-    activities: [
-      ...thread.activities,
-      {
-        id: EventId.makeUnsafe(
-          `synthetic-user-input-resolved:${event.payload.requestId}:${event.sequence}`,
-        ),
-        kind: "user-input.resolved",
-        payload: {
-          requestId: event.payload.requestId,
-        },
-        createdAt: event.payload.createdAt,
-      },
-    ],
-    proposedPlans: thread.proposedPlans,
-    latestTurn: thread.latestTurn,
-  });
-}
-
-function resolveThreadSummaryAfterApprovalResponseRequested(
-  thread: Thread,
-  event: ThreadApprovalResponseRequestedEvent,
-) {
-  return deriveThreadSummaryMetadata({
-    messages: thread.messages,
-    activities: [
-      ...thread.activities,
-      {
-        id: EventId.makeUnsafe(
-          `synthetic-approval-resolved:${event.payload.requestId}:${event.sequence}`,
-        ),
-        kind: "approval.resolved",
-        payload: {
-          requestId: event.payload.requestId,
-          decision: event.payload.decision,
-        },
-        createdAt: event.payload.createdAt,
-        sequence: event.sequence,
-      },
-    ],
-    proposedPlans: thread.proposedPlans,
-    latestTurn: thread.latestTurn,
-  });
-}
-
-function sidebarThreadSummariesEqual(
-  left: SidebarThreadSummary | undefined,
-  right: SidebarThreadSummary,
-): boolean {
-  return (
-    left !== undefined &&
-    left.id === right.id &&
-    left.projectId === right.projectId &&
-    left.title === right.title &&
-    left.modelSelection === right.modelSelection &&
-    left.interactionMode === right.interactionMode &&
-    left.envMode === right.envMode &&
-    left.branch === right.branch &&
-    left.worktreePath === right.worktreePath &&
-    left.session === right.session &&
-    left.createdAt === right.createdAt &&
-    (left.archivedAt ?? null) === (right.archivedAt ?? null) &&
-    left.updatedAt === right.updatedAt &&
-    (left.isPinned ?? false) === (right.isPinned ?? false) &&
-    left.latestTurn === right.latestTurn &&
-    left.lastVisitedAt === right.lastVisitedAt &&
-    (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
-    (left.subagentAgentId ?? null) === (right.subagentAgentId ?? null) &&
-    (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
-    (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
-    left.latestUserMessageAt === right.latestUserMessageAt &&
-    left.hasPendingApprovals === right.hasPendingApprovals &&
-    left.hasPendingUserInput === right.hasPendingUserInput &&
-    left.hasActionableProposedPlan === right.hasActionableProposedPlan &&
-    left.hasLiveTailWork === right.hasLiveTailWork &&
-    (left.forkSourceThreadId ?? null) === (right.forkSourceThreadId ?? null) &&
-    (left.sidechatSourceThreadId ?? null) === (right.sidechatSourceThreadId ?? null) &&
-    deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
-    (left.handoff ?? null) === (right.handoff ?? null)
-  );
-}
-
-// Keep sidebar row state lightweight so live thread updates do not force row code
-// to rescan every thread message/activity collection on each render.
-function buildSidebarThreadSummary(
-  thread: Thread,
-  previous?: SidebarThreadSummary,
-): SidebarThreadSummary {
-  const metadata = resolveThreadSidebarMetadata(thread);
-  const nextSummary: SidebarThreadSummary = {
-    id: thread.id,
-    projectId: thread.projectId,
-    title: thread.title,
-    modelSelection: thread.modelSelection,
-    interactionMode: thread.interactionMode,
-    envMode: thread.envMode,
-    branch: thread.branch,
-    worktreePath: thread.worktreePath,
-    session: thread.session,
-    createdAt: thread.createdAt,
-    archivedAt: thread.archivedAt ?? null,
-    updatedAt: thread.updatedAt,
-    isPinned: thread.isPinned ?? false,
-    latestTurn: thread.latestTurn,
-    lastVisitedAt: thread.lastVisitedAt,
-    parentThreadId: thread.parentThreadId ?? null,
-    subagentAgentId: thread.subagentAgentId ?? null,
-    subagentNickname: thread.subagentNickname ?? null,
-    subagentRole: thread.subagentRole ?? null,
-    latestUserMessageAt: metadata.latestUserMessageAt,
-    hasPendingApprovals: metadata.hasPendingApprovals,
-    hasPendingUserInput: metadata.hasPendingUserInput,
-    hasActionableProposedPlan: metadata.hasActionableProposedPlan,
-    hasLiveTailWork: metadata.hasLiveTailWork,
-    forkSourceThreadId: thread.forkSourceThreadId ?? null,
-    sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
-    lastKnownPr: thread.lastKnownPr ?? null,
-    handoff: thread.handoff ?? null,
-  };
-  if (previous && sidebarThreadSummariesEqual(previous, nextSummary)) {
-    return previous;
-  }
-  return nextSummary;
 }
 
 function ensureThreadRegistered(state: AppState, threadId: ThreadId): AppState {
@@ -2733,45 +1680,6 @@ function applyTurnDiffSummaryToThread(
   };
 }
 
-function deriveThreadStateSignals(
-  thread: Thread,
-): Pick<
-  Thread,
-  | "latestUserMessageAt"
-  | "hasPendingApprovals"
-  | "hasPendingUserInput"
-  | "hasActionableProposedPlan"
-> {
-  const metadata = deriveThreadSummaryMetadata({
-    messages: thread.messages,
-    activities: thread.activities,
-    proposedPlans: thread.proposedPlans,
-    latestTurn: thread.latestTurn,
-  });
-  return {
-    latestUserMessageAt: metadata.latestUserMessageAt,
-    hasPendingApprovals: metadata.hasPendingApprovals,
-    hasPendingUserInput: metadata.hasPendingUserInput,
-    hasActionableProposedPlan: metadata.hasActionableProposedPlan,
-  };
-}
-
-function withDerivedThreadStateSignals(thread: Thread): Thread {
-  const nextSignals = deriveThreadStateSignals(thread);
-  if (
-    thread.latestUserMessageAt === nextSignals.latestUserMessageAt &&
-    thread.hasPendingApprovals === nextSignals.hasPendingApprovals &&
-    thread.hasPendingUserInput === nextSignals.hasPendingUserInput &&
-    thread.hasActionableProposedPlan === nextSignals.hasActionableProposedPlan
-  ) {
-    return thread;
-  }
-  return {
-    ...thread,
-    ...nextSignals,
-  };
-}
-
 function applyThreadUpdate(
   state: AppState,
   threadId: ThreadId,
@@ -2798,62 +1706,6 @@ function applyThreadUpdate(
     updateThreadArray: options?.updateThreadArray ?? true,
     updateSidebarSummary: options?.updateSidebarSummary ?? true,
   });
-}
-
-function mergeStreamingMessage(
-  existingMessage: ChatMessage,
-  incomingMessage: ChatMessage,
-): ChatMessage | null {
-  let nextText: string;
-  if (
-    existingMessage.role === "user" &&
-    incomingMessage.role === "user" &&
-    !incomingMessage.streaming
-  ) {
-    nextText = incomingMessage.text;
-  } else if (incomingMessage.streaming || incomingMessage.text.length === 0) {
-    nextText = `${existingMessage.text}${incomingMessage.text}`;
-  } else if (incomingMessage.text.startsWith(existingMessage.text)) {
-    nextText = incomingMessage.text;
-  } else if (existingMessage.text.startsWith(incomingMessage.text)) {
-    nextText = existingMessage.text;
-  } else {
-    nextText = `${existingMessage.text}${incomingMessage.text}`;
-  }
-  const nextAttachments = incomingMessage.attachments ?? existingMessage.attachments;
-  const nextCompletedAt = incomingMessage.streaming
-    ? existingMessage.completedAt
-    : (incomingMessage.completedAt ?? existingMessage.completedAt);
-  const nextTurnId =
-    incomingMessage.turnId !== undefined ? incomingMessage.turnId : existingMessage.turnId;
-  const nextDispatchMode =
-    incomingMessage.dispatchMode !== undefined
-      ? incomingMessage.dispatchMode
-      : existingMessage.dispatchMode;
-  const nextSource = incomingMessage.source ?? existingMessage.source;
-
-  if (
-    existingMessage.text === nextText &&
-    existingMessage.streaming === incomingMessage.streaming &&
-    existingMessage.attachments === nextAttachments &&
-    existingMessage.completedAt === nextCompletedAt &&
-    existingMessage.turnId === nextTurnId &&
-    existingMessage.dispatchMode === nextDispatchMode &&
-    existingMessage.source === nextSource
-  ) {
-    return null;
-  }
-
-  return {
-    ...existingMessage,
-    text: nextText,
-    streaming: incomingMessage.streaming,
-    ...(nextAttachments ? { attachments: nextAttachments } : {}),
-    ...(nextTurnId !== undefined ? { turnId: nextTurnId } : {}),
-    ...(nextDispatchMode !== undefined ? { dispatchMode: nextDispatchMode } : {}),
-    ...(nextSource !== undefined ? { source: nextSource } : {}),
-    ...(nextCompletedAt !== undefined ? { completedAt: nextCompletedAt } : {}),
-  };
 }
 
 function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEvent): Thread {
@@ -3077,6 +1929,11 @@ function applyOrchestrationEvent(
               (event.payload.subagentRole ?? null) === (thread.subagentRole ?? null)) &&
             (event.payload.lastKnownPr === undefined ||
               deepEqualJson(event.payload.lastKnownPr ?? null, thread.lastKnownPr ?? null)) &&
+            (event.payload.reviewChatTarget === undefined ||
+              deepEqualJson(
+                event.payload.reviewChatTarget ?? null,
+                thread.reviewChatTarget ?? null,
+              )) &&
             (event.payload.handoff === undefined ||
               (event.payload.handoff ?? null) === (thread.handoff ?? null)) &&
             nextUpdatedAt === thread.updatedAt
@@ -3110,6 +1967,9 @@ function applyOrchestrationEvent(
               : {}),
             ...(event.payload.lastKnownPr !== undefined
               ? { lastKnownPr: event.payload.lastKnownPr }
+              : {}),
+            ...(event.payload.reviewChatTarget !== undefined
+              ? { reviewChatTarget: event.payload.reviewChatTarget }
               : {}),
             ...(event.payload.handoff !== undefined ? { handoff: event.payload.handoff } : {}),
             updatedAt: nextUpdatedAt,
