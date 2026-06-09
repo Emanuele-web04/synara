@@ -58,7 +58,10 @@ import { cn } from "~/lib/utils";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "./ui/input-group";
 import { SidebarInset } from "./ui/sidebar";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
-import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
+import {
+  useDesktopTopBarTrafficLightGutterClassName,
+  useDesktopTopBarWindowControlsGutterClassName,
+} from "~/hooks/useDesktopTopBarGutter";
 import { Skeleton } from "./ui/skeleton";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -370,6 +373,8 @@ function SectionHeader({ title }: { title: string }) {
 
 export function PluginLibrary() {
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
+  const desktopTopBarWindowControlsGutterClassName =
+    useDesktopTopBarWindowControlsGutterClassName();
   const firstProject = useStore(useMemo(() => createFirstProjectSelector(), []));
   const { activeProject: focusedProject, activeThread, focusedThreadId } = useFocusedChatContext();
   const activeProject = focusedProject ?? firstProject ?? null;
@@ -557,8 +562,9 @@ export function PluginLibrary() {
         {/* ── Top nav ───────────────────────────────────────────────────── */}
         <div
           className={cn(
-            "flex shrink-0 items-center gap-3 border-b border-border px-4 sm:px-6",
+            "drag-region flex shrink-0 items-center gap-3 border-b border-border px-4 sm:px-6",
             desktopTopBarTrafficLightGutterClassName,
+            desktopTopBarWindowControlsGutterClassName,
           )}
         >
           <SidebarHeaderNavigationControls />

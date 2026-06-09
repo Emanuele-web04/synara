@@ -324,7 +324,10 @@ import {
 } from "./chat/chatHeaderControls";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SidebarHeaderTrigger } from "./ui/sidebar";
-import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
+import {
+  useDesktopTopBarTrafficLightGutterClassName,
+  useDesktopTopBarWindowControlsGutterClassName,
+} from "~/hooks/useDesktopTopBarGutter";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { useIsMobile } from "~/hooks/useMediaQuery";
@@ -807,6 +810,8 @@ export default function ChatView({
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
   const { settings } = useAppSettings();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
+  const desktopTopBarWindowControlsGutterClassName =
+    useDesktopTopBarWindowControlsGutterClassName();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
@@ -7824,6 +7829,7 @@ export default function ChatView({
               CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
               "drag-region px-5",
               desktopTopBarTrafficLightGutterClassName,
+              desktopTopBarWindowControlsGutterClassName,
             )}
           >
             <SidebarHeaderNavigationControls />
@@ -8499,6 +8505,7 @@ export default function ChatView({
           CHAT_SURFACE_HEADER_HEIGHT_CLASS,
           isElectron && "drag-region",
           desktopTopBarTrafficLightGutterClassName,
+          desktopTopBarWindowControlsGutterClassName,
         )}
       >
         <ChatHeader

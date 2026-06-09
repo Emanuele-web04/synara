@@ -9,7 +9,10 @@ import { useQuery } from "@tanstack/react-query";
 import { Button } from "~/components/ui/button";
 import { SidebarInset } from "~/components/ui/sidebar";
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
-import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
+import {
+  useDesktopTopBarTrafficLightGutterClassName,
+  useDesktopTopBarWindowControlsGutterClassName,
+} from "~/hooks/useDesktopTopBarGutter";
 import { useTerminalSurfaceController } from "~/hooks/useTerminalSurfaceController";
 import { cn } from "~/lib/utils";
 import { resolveTerminalNewAction } from "~/lib/terminalNewAction";
@@ -37,6 +40,8 @@ import { randomTerminalId } from "./terminal/terminalSession";
 
 export default function WorkspaceView({ workspaceId }: { workspaceId: string }) {
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
+  const desktopTopBarWindowControlsGutterClassName =
+    useDesktopTopBarWindowControlsGutterClassName();
   const workspace = useWorkspaceStore((state) =>
     state.workspacePages.find((entry) => entry.id === workspaceId),
   );
@@ -307,7 +312,9 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
           className={cn(
             CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
             CHAT_SURFACE_HEADER_PADDING_X_CLASS,
+            "drag-region",
             desktopTopBarTrafficLightGutterClassName,
+            desktopTopBarWindowControlsGutterClassName,
           )}
         >
           <div className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}>

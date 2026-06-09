@@ -3124,11 +3124,13 @@ function SettingsRouteView() {
           chat/workspace headers — so the collapsed-state toggle sits by the traffic
           lights instead of floating in the centered settings body. It renders nothing
           while the sidebar is open (SidebarHeaderNavigationControls returns null), so it
-          adds no chrome in the common (open) state and never shifts the centered content
-          (hence absolute, not a layout-occupying header row). */}
+          adds no navigation chrome in the common (open) state and never shifts the centered
+          content (hence absolute, not a layout-occupying header row). The strip stays a
+          drag-region so the Windows frameless window can be moved by its top edge; the
+          caption buttons themselves are a separate fixed cluster (see root route). */}
         <div
           className={cn(
-            "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center",
+            "drag-region absolute inset-x-0 top-0 z-10 flex items-center",
             CHAT_SURFACE_HEADER_PADDING_X_CLASS,
             CHAT_SURFACE_HEADER_HEIGHT_CLASS,
             desktopTopBarTrafficLightGutterClassName,

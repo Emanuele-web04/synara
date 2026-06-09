@@ -22,6 +22,7 @@ import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME } from "../branding";
+import { DesktopWindowControls } from "../components/DesktopWindowControls";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import WhatsNewDialog from "../components/WhatsNewDialog";
@@ -149,31 +150,54 @@ function RootRouteView() {
   useSyncDesktopTopBarTrafficLightGutterZoom();
   useTheme();
 
+  // Single mount point for the Windows caption buttons. The cluster is pinned to the
+  // window's top-right corner (frameless Windows shell) and renders nothing on macOS,
+  // Linux, or the web build, so it is safe to mount unconditionally here — including on
+  // the pre-backend "connecting" screen, so the window stays closable before the
+  // renderer connects. Top bars reserve space for it via
+  // useDesktopTopBarWindowControlsGutterClassName().
+  //
+  // MUST render LAST: Electron builds the OS drag region by walking elements with
+  // `-webkit-app-region` in DOM order, unioning `drag` rects and subtracting `no-drag`
+  // rects in sequence. The route headers are full-width `drag-region`s that extend under
+  // this cluster, so the cluster's `no-drag` rect has to be subtracted AFTER those drag
+  // rects are added — otherwise the OS reclaims the corner as title-bar caption and
+  // swallows the click as a window drag (the buttons render but do nothing). Rendering
+  // it last in document order guarantees that subtraction wins. (z above dialogs/toasts
+  // so it also stays clickable while a modal is open.)
+  const desktopWindowControls = <DesktopWindowControls className="fixed top-0 right-0 z-[250]" />;
+
   if (!readNativeApi()) {
     return (
-      <div className="flex h-screen flex-col bg-background text-foreground">
-        <div className="flex flex-1 items-center justify-center">
-          <p className="text-sm text-muted-foreground">
-            Connecting to {APP_DISPLAY_NAME} server...
-          </p>
+      <>
+        <div className="flex h-screen flex-col bg-background text-foreground">
+          <div className="flex flex-1 items-center justify-center">
+            <p className="text-sm text-muted-foreground">
+              Connecting to {APP_DISPLAY_NAME} server...
+            </p>
+          </div>
         </div>
-      </div>
+        {desktopWindowControls}
+      </>
     );
   }
 
   return (
-    <ToastProvider position="top-center">
-      <AnchoredToastProvider>
-        <GitProgressToastPreviewDev />
-        <EventRouter />
-        <GlobalShortcutsDialog />
-        <GlobalWhatsNewSurface />
-        <TaskCompletionNotifications />
-        <ProviderUpdateNotifications />
-        <DesktopProjectBootstrap />
-        <Outlet />
-      </AnchoredToastProvider>
-    </ToastProvider>
+    <>
+      <ToastProvider position="top-center">
+        <AnchoredToastProvider>
+          <GitProgressToastPreviewDev />
+          <EventRouter />
+          <GlobalShortcutsDialog />
+          <GlobalWhatsNewSurface />
+          <TaskCompletionNotifications />
+          <ProviderUpdateNotifications />
+          <DesktopProjectBootstrap />
+          <Outlet />
+        </AnchoredToastProvider>
+      </ToastProvider>
+      {desktopWindowControls}
+    </>
   );
 }
 
