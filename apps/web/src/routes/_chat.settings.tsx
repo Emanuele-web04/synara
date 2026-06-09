@@ -41,6 +41,8 @@ import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
   type AppSettings,
+  DEFAULT_UI_DENSITY,
+  type UiDensity,
   MAX_CHAT_FONT_SIZE_PX,
   MAX_TERMINAL_FONT_SIZE_PX,
   getCustomModelsForProvider,
@@ -153,6 +155,28 @@ import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 import { sameProviderOrder } from "../providerOrdering";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
+
+const UI_DENSITY_OPTIONS = [
+  {
+    value: "compact",
+    label: "Compact",
+    description: "Tighter spacing in the sidebar, composer, and settings rows.",
+  },
+  {
+    value: "comfortable",
+    label: "Comfortable",
+    description: "Balanced spacing for everyday use.",
+  },
+  {
+    value: "spacious",
+    label: "Spacious",
+    description: "More breathing room across the main workspace surfaces.",
+  },
+] as const satisfies ReadonlyArray<{
+  value: UiDensity;
+  label: string;
+  description: string;
+}>;
 
 const THEME_OPTIONS = [
   {
@@ -851,6 +875,7 @@ function SettingsRouteView() {
     ...(settings.showWorkspaceSection !== defaults.showWorkspaceSection
       ? ["Workspace section"]
       : []),
+    ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
     ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx ? ["Terminal font size"] : []),
     ...(settings.terminalFontFamily !== defaults.terminalFontFamily ? ["Terminal font"] : []),
@@ -1683,6 +1708,36 @@ function SettingsRouteView() {
         </div>
 
         <SettingsCard>
+          <SettingsRow
+            title="UI density"
+            description="Control spacing in the sidebar, composer, chat gutters, and settings rows without changing font size."
+            resetAction={
+              settings.uiDensity !== defaults.uiDensity ? (
+                <SettingResetButton
+                  label="UI density"
+                  onClick={() =>
+                    updateSettings({
+                      uiDensity: DEFAULT_UI_DENSITY,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <SettingsSegmentedControl
+                value={settings.uiDensity}
+                onValueChange={(value) => {
+                  if (value !== "compact" && value !== "comfortable" && value !== "spacious") {
+                    return;
+                  }
+                  updateSettings({ uiDensity: value });
+                }}
+                ariaLabel="UI density"
+                options={UI_DENSITY_OPTIONS}
+              />
+            }
+          />
+
           <SettingsRow
             title="Base font size"
             description="Adjust the app text base in pixels. Chat and UI typography scale proportionally from this value."
