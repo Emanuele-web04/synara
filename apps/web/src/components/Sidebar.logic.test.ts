@@ -7,6 +7,7 @@ import {
   deriveSidebarProjectData,
   describeAddProjectError,
   extractDuplicateProjectCreateProjectId,
+  findDeepestWorkspaceRootMatch,
   findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
   getVisibleSidebarEntriesForPreview,
@@ -251,6 +252,36 @@ describe("add-project error helpers", () => {
         (project) => project.cwd,
       )?.id,
     ).toBe("project-2");
+  });
+
+  it("attributes a nested server cwd to the deepest matching project", () => {
+    const projects = [
+      { id: "repo", cwd: "/Users/tester/Code/repo" },
+      { id: "web", cwd: "/Users/tester/Code/repo/apps/web" },
+      { id: "other", cwd: "/Users/tester/Code/other" },
+    ];
+
+    expect(
+      findDeepestWorkspaceRootMatch(
+        projects,
+        "/Users/tester/Code/repo/apps/web/src",
+        (project) => project.cwd,
+      )?.id,
+    ).toBe("web");
+    expect(
+      findDeepestWorkspaceRootMatch(
+        projects,
+        "/Users/tester/Code/repo/apps/server",
+        (project) => project.cwd,
+      )?.id,
+    ).toBe("repo");
+    expect(
+      findDeepestWorkspaceRootMatch(
+        projects,
+        "/Users/tester/Code/unrelated",
+        (project) => project.cwd,
+      ),
+    ).toBeUndefined();
   });
 
   it("falls through to project.create when a local project shell is stale on the server", async () => {

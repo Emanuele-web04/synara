@@ -52,12 +52,20 @@ import type {
   GitUnstageFilesResult,
 } from "./git";
 import type {
+  ProjectDevServerEvent,
+  ProjectDiscoverScriptsInput,
+  ProjectDiscoverScriptsResult,
+  ProjectListDevServersResult,
   ProjectListDirectoriesInput,
   ProjectListDirectoriesResult,
+  ProjectRunDevServerInput,
+  ProjectRunDevServerResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesInput,
   ProjectSearchLocalEntriesResult,
+  ProjectStopDevServerInput,
+  ProjectStopDevServerResult,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project";
@@ -350,12 +358,17 @@ export interface NativeApi {
     onEvent: (callback: (event: TerminalEvent) => void) => () => void;
   };
   projects: {
+    discoverScripts: (input: ProjectDiscoverScriptsInput) => Promise<ProjectDiscoverScriptsResult>;
     listDirectories: (input: ProjectListDirectoriesInput) => Promise<ProjectListDirectoriesResult>;
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
     searchLocalEntries: (
       input: ProjectSearchLocalEntriesInput,
     ) => Promise<ProjectSearchLocalEntriesResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
+    runDevServer: (input: ProjectRunDevServerInput) => Promise<ProjectRunDevServerResult>;
+    stopDevServer: (input: ProjectStopDevServerInput) => Promise<ProjectStopDevServerResult>;
+    listDevServers: () => Promise<ProjectListDevServersResult>;
+    onDevServerEvent: (callback: (event: ProjectDevServerEvent) => void) => () => void;
   };
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;

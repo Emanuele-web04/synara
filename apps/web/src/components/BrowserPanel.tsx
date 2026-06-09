@@ -30,7 +30,7 @@ import {
   XIcon,
 } from "~/lib/icons";
 
-import { localServerAddressLabel } from "@t3tools/shared/localServers";
+import { localServerPrimaryLabel } from "@t3tools/shared/localServers";
 
 import { readNativeApi } from "~/nativeApi";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
@@ -58,6 +58,7 @@ import {
   type BrowserAddressSuggestion,
 } from "./BrowserPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
+import { LocalServerIdentity } from "./LocalServerIdentity";
 import { Button } from "./ui/button";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { Input } from "./ui/input";
@@ -373,7 +374,7 @@ function browserLocalServerUrl(server: ServerLocalServerProcess): string | null 
 // Paints a tiny browser-preview tile without fetching screenshots or adding network work.
 // The page name and address are rendered into the tile so it reads as a real preview.
 function BrowserLocalServerThumbnail({ server }: { server: ServerLocalServerProcess }) {
-  const label = server.pageTitle ?? server.displayName;
+  const label = localServerPrimaryLabel(server);
   const port = server.ports[0];
 
   return (
@@ -453,8 +454,6 @@ function BrowserLocalServersHome({
           <div className="mt-4 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-6">
             {servers.map((server) => {
               const url = browserLocalServerUrl(server);
-              const title = server.pageTitle ?? server.displayName;
-              const address = localServerAddressLabel(server);
 
               return (
                 <button
@@ -469,14 +468,7 @@ function BrowserLocalServersHome({
                   className="group grid w-full shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3.5 rounded-xl border border-white/[0.07] px-3 py-2.5 text-left transition-colors hover:border-white/[0.14] hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   <BrowserLocalServerThumbnail server={server} />
-                  <span className="min-w-0">
-                    <span className="block truncate text-[14px] font-semibold leading-tight text-white">
-                      {title}
-                    </span>
-                    <span className="mt-0.5 block truncate text-[12px] leading-tight text-white/35">
-                      {address}
-                    </span>
-                  </span>
+                  <LocalServerIdentity server={server} tone="browser" />
                   <span
                     className="mr-1 size-2 rounded-full bg-[#36d07b] shadow-[0_0_0_2.5px_rgba(54,208,123,0.16)]"
                     aria-hidden

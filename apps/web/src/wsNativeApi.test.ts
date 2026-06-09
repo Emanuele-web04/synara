@@ -475,6 +475,22 @@ describe("wsNativeApi", () => {
     });
   });
 
+  it("forwards project script discovery to the websocket project method", async () => {
+    requestMock.mockResolvedValue({ targets: [] });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.projects.discoverScripts({
+      cwd: "/tmp/project",
+      depth: 2,
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsDiscoverScripts, {
+      cwd: "/tmp/project",
+      depth: 2,
+    });
+  });
+
   it("forwards server environment requests to the websocket server method", async () => {
     requestMock.mockResolvedValue({
       environmentId: "environment-1",

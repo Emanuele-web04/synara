@@ -3,6 +3,7 @@ import { realpathSync } from "node:fs";
 
 import {
   CommandId,
+  DEFAULT_TERMINAL_ID,
   ORCHESTRATION_WS_METHODS,
   ThreadId,
   WS_METHODS,
@@ -10,6 +11,7 @@ import {
   WsRpcGroup,
   type GitActionProgressEvent,
   type OrchestrationEvent,
+  type ProjectDevServerEvent,
   type OrchestrationShellStreamEvent,
   type OrchestrationThreadStreamItem,
   type ServerConfigStreamEvent,
@@ -26,6 +28,7 @@ import { ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { ServerConfig } from "./config";
+import { DevServerManager, findProjectDevServerForLocalServer } from "./devServerManager";
 import { GitCore, type GitCoreShape } from "./git/Services/GitCore";
 import { GitManager } from "./git/Services/GitManager";
 import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
@@ -47,6 +50,7 @@ import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
 import { TerminalManager } from "./terminal/Services/Manager";
+import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
 
@@ -296,6 +300,7 @@ export const makeWsRpcLayer = () =>
     Effect.gen(function* () {
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
       const config = yield* ServerConfig;
+      const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
       const git = yield* GitCore;
       const gitManager = yield* GitManager;
@@ -384,6 +389,65 @@ export const makeWsRpcLayer = () =>
         projectionSnapshotQuery: projectionReadModelQuery,
         providerAdapterRegistry,
         providerService,
+      });
+
+      // Terminal-first threads are created with the generic "New terminal" placeholder.
+      // The tracker buffers per-terminal input and, once a meaningful command is submitted,
+      // surfaces a safe title used to auto-rename the thread on its first command.
+      const terminalTitleTracker = new TerminalThreadTitleTracker();
+      const resetTerminalTitleBuffer = (threadId: string, terminalId: string | null) =>
+        Effect.sync(() => terminalTitleTracker.reset(threadId, terminalId));
+      // Terminal auto-titles are best-effort metadata and must never block or fail terminal writes.
+      const maybeAutoRenameTerminalThread = Effect.fnUntraced(function* (input: {
+        threadId: string;
+        terminalId: string;
+        data: string;
+      }) {
+        const readModel = yield* orchestrationEngine.getReadModel();
+        const thread = readModel.threads.find((entry) => entry.id === input.threadId);
+        if (!thread) {
+          return;
+        }
+        const nextTitle = terminalTitleTracker.consumeWrite({
+          currentTitle: thread.title,
+          data: input.data,
+          terminalId: input.terminalId,
+          threadId: input.threadId,
+        });
+        if (!nextTitle) {
+          return;
+        }
+        yield* orchestrationEngine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe(`server:terminal-title-rename:${crypto.randomUUID()}`),
+          threadId: ThreadId.makeUnsafe(input.threadId),
+          title: nextTitle,
+        });
+      });
+
+      const stopLocalServerAndTrackedProjectRun = Effect.fnUntraced(function* (input: {
+        pid: number;
+        port: number;
+      }) {
+        const localServerSnapshot = yield* Effect.promise(() => listLocalServers());
+        const localServer =
+          localServerSnapshot.servers.find(
+            (server) => server.pid === input.pid && server.ports.includes(input.port),
+          ) ?? null;
+        const result = yield* Effect.promise(() => stopLocalServer(input, localServer));
+        if (localServer?.isStoppable) {
+          const devServers = yield* devServerManager.list;
+          const trackedServer = findProjectDevServerForLocalServer({
+            localServer,
+            devServers: devServers.servers,
+          });
+          if (trackedServer) {
+            yield* devServerManager
+              .stop({ projectId: trackedServer.projectId })
+              .pipe(Effect.catch(() => Effect.void));
+          }
+        }
+        return result;
       });
 
       const loadServerConfig = Effect.gen(function* () {
@@ -559,10 +623,32 @@ export const makeWsRpcLayer = () =>
           ),
         [WS_METHODS.projectsSearchEntries]: (input) =>
           rpcEffect(workspaceEntries.search(input), "Failed to search workspace entries"),
+        [WS_METHODS.projectsDiscoverScripts]: (input) =>
+          rpcEffect(workspaceEntries.discoverScripts(input), "Failed to discover project scripts"),
         [WS_METHODS.projectsSearchLocalEntries]: (input) =>
           rpcEffect(workspaceEntries.searchLocal(input), "Failed to search local entries"),
         [WS_METHODS.projectsWriteFile]: (input) =>
           rpcEffect(workspaceFileSystem.writeFile(input), "Failed to write workspace file"),
+        [WS_METHODS.projectsRunDevServer]: (input) =>
+          rpcEffect(devServerManager.run(input), "Failed to start dev server"),
+        [WS_METHODS.projectsStopDevServer]: (input) =>
+          rpcEffect(devServerManager.stop(input), "Failed to stop dev server"),
+        [WS_METHODS.projectsListDevServers]: () =>
+          rpcEffect(devServerManager.list, "Failed to list dev servers"),
+        [WS_METHODS.subscribeProjectDevServerEvents]: () =>
+          Stream.concat(
+            Stream.fromEffect(
+              devServerManager.list.pipe(
+                Effect.map(
+                  (result): ProjectDevServerEvent => ({
+                    type: "snapshot",
+                    servers: result.servers,
+                  }),
+                ),
+              ),
+            ),
+            devServerManager.stream,
+          ),
         [WS_METHODS.filesystemBrowse]: (input) =>
           rpcEffect(workspaceEntries.browse(input), "Failed to browse filesystem"),
         [WS_METHODS.shellOpenInEditor]: (input) =>
@@ -680,9 +766,25 @@ export const makeWsRpcLayer = () =>
           ),
 
         [WS_METHODS.terminalOpen]: (input) =>
-          rpcEffect(terminalManager.open(input), "Failed to open terminal"),
+          rpcEffect(
+            resetTerminalTitleBuffer(input.threadId, input.terminalId ?? DEFAULT_TERMINAL_ID).pipe(
+              Effect.andThen(terminalManager.open(input)),
+            ),
+            "Failed to open terminal",
+          ),
         [WS_METHODS.terminalWrite]: (input) =>
-          rpcEffect(terminalManager.write(input), "Failed to write terminal"),
+          rpcEffect(
+            terminalManager.write(input).pipe(
+              Effect.tap(() =>
+                maybeAutoRenameTerminalThread({
+                  threadId: input.threadId,
+                  terminalId: input.terminalId ?? DEFAULT_TERMINAL_ID,
+                  data: input.data,
+                }).pipe(Effect.catch(() => Effect.void)),
+              ),
+            ),
+            "Failed to write terminal",
+          ),
         [WS_METHODS.terminalAckOutput]: (input) =>
           rpcEffect(terminalManager.ackOutput(input), "Failed to acknowledge terminal output"),
         [WS_METHODS.terminalResize]: (input) =>
@@ -690,9 +792,19 @@ export const makeWsRpcLayer = () =>
         [WS_METHODS.terminalClear]: (input) =>
           rpcEffect(terminalManager.clear(input), "Failed to clear terminal"),
         [WS_METHODS.terminalRestart]: (input) =>
-          rpcEffect(terminalManager.restart(input), "Failed to restart terminal"),
+          rpcEffect(
+            resetTerminalTitleBuffer(input.threadId, input.terminalId ?? DEFAULT_TERMINAL_ID).pipe(
+              Effect.andThen(terminalManager.restart(input)),
+            ),
+            "Failed to restart terminal",
+          ),
         [WS_METHODS.terminalClose]: (input) =>
-          rpcEffect(terminalManager.close(input), "Failed to close terminal"),
+          rpcEffect(
+            resetTerminalTitleBuffer(input.threadId, input.terminalId ?? null).pipe(
+              Effect.andThen(terminalManager.close(input)),
+            ),
+            "Failed to close terminal",
+          ),
         [WS_METHODS.subscribeTerminalEvents]: () =>
           Stream.callback((queue) =>
             Effect.gen(function* () {
@@ -725,7 +837,7 @@ export const makeWsRpcLayer = () =>
           ),
         [WS_METHODS.serverStopLocalServer]: (input) =>
           rpcEffect(
-            Effect.promise(() => stopLocalServer(input)),
+            stopLocalServerAndTrackedProjectRun(input),
             "Failed to stop local server",
           ),
         [WS_METHODS.serverGetProviderUsageSnapshot]: (input) =>

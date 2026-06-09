@@ -420,6 +420,36 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
+  it("drains output into history without emitting output events when streamOutput is false", async () => {
+    const { manager, ptyAdapter, logsDir } = makeManager();
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+    await manager.open(openInput({ streamOutput: false }));
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    process.emitData("dev server listening\n");
+    // History is still drained and persisted even though nothing is broadcast.
+    await waitFor(() => fs.existsSync(historyLogPath(logsDir)));
+    await waitFor(() =>
+      fs.readFileSync(historyLogPath(logsDir), "utf8").includes("dev server listening"),
+    );
+
+    // No live output event ever reaches the WebSocket fanout for a headless session.
+    expect(events.some((event) => event.type === "output")).toBe(false);
+
+    // Re-opening with streamOutput:true flips the session back to live mode (e.g. a
+    // log viewer attaching later); omitting the flag would preserve headless mode.
+    await manager.open(openInput({ streamOutput: true }));
+    process.emitData("after attach\n");
+    await waitFor(() => events.some((event) => event.type === "output"));
+
+    manager.dispose();
+  });
+
   it("resumes ack-paused reads when a renderer reattaches", async () => {
     const { manager, ptyAdapter } = makeManager();
     await manager.open(openInput());

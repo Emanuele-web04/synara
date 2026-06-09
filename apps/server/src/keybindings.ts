@@ -531,9 +531,11 @@ function normalizeLegacyKeybindingEntry(entry: unknown): {
     return { entry, migrated: false };
   }
 
+  // `readKeybindingEntryCommand` only yields a string command for non-null object
+  // entries, so the spread target is guaranteed to be an object here.
   return {
     entry: {
-      ...entry,
+      ...(entry as Record<string, unknown>),
       command:
         LEGACY_KEYBINDING_COMMAND_ALIASES[
           command as keyof typeof LEGACY_KEYBINDING_COMMAND_ALIASES

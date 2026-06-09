@@ -281,7 +281,7 @@ function SplitPaneEmbeddedPanel(props: {
     <div
       ref={wrapperRef}
       data-native-browser-surface={props.panel === "browser" ? "true" : undefined}
-      className="relative flex h-full min-h-0 min-w-0 flex-none border-l border-sidebar-border bg-card text-foreground"
+      className="relative flex h-full min-h-0 min-w-0 flex-none border-l border-[var(--app-surface-divider)] bg-card text-foreground"
       style={
         {
           width: `${panelWidth}px`,
@@ -291,7 +291,7 @@ function SplitPaneEmbeddedPanel(props: {
       }
     >
       <div
-        className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-transparent before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-sidebar-border"
+        className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-transparent before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-[var(--app-surface-divider)]"
         onPointerDown={startResize}
       />
       {props.panel === "browser" ? (

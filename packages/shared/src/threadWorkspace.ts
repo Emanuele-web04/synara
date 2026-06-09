@@ -75,6 +75,27 @@ export function workspaceRootsEqual(
   );
 }
 
+// True when `candidate` is `ancestorRoot` itself or a path nested beneath it.
+// Comparison happens on normalized roots so trailing slashes, separator style,
+// and macOS `/private` aliasing never cause false negatives. The nesting check
+// is segment-aware, so `/a/app` is not treated as inside `/a/ap`.
+export function isWorkspaceRootWithin(
+  candidate: string,
+  ancestorRoot: string,
+  options?: NormalizeWorkspaceRootForComparisonOptions,
+): boolean {
+  const normalizedCandidate = normalizeWorkspaceRootForComparison(candidate, options);
+  const normalizedAncestor = normalizeWorkspaceRootForComparison(ancestorRoot, options);
+  if (normalizedCandidate.length === 0 || normalizedAncestor.length === 0) {
+    return false;
+  }
+  if (normalizedCandidate === normalizedAncestor) {
+    return true;
+  }
+  const prefix = normalizedAncestor.endsWith("/") ? normalizedAncestor : `${normalizedAncestor}/`;
+  return normalizedCandidate.startsWith(prefix);
+}
+
 export function deriveAssociatedWorktreeMetadata(input: {
   branch?: string | null;
   worktreePath?: string | null;

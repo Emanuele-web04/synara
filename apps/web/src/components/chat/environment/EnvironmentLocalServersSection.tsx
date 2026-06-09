@@ -7,8 +7,9 @@ import type { ReactNode } from "react";
 
 import type { ServerLocalServerProcess } from "@t3tools/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { localServerAddressLabel } from "@t3tools/shared/localServers";
+import { localServerPrimaryLabel } from "@t3tools/shared/localServers";
 
+import { LocalServerIdentity } from "../../LocalServerIdentity";
 import { ComposerPickerMenuPopup } from "../ComposerPickerMenuPopup";
 import { Menu, MenuItem, MenuTrigger } from "../../ui/menu";
 import { GlobeIcon, RefreshCwIcon, StopFilledIcon } from "~/lib/icons";
@@ -67,8 +68,7 @@ function LocalServerRow({
   onStop: (server: ServerLocalServerProcess) => void;
 }) {
   const stoppable = server.isStoppable && !stopping;
-  const primaryLabel = server.pageTitle ?? server.displayName;
-  const addressLabel = localServerAddressLabel(server);
+  const primaryLabel = localServerPrimaryLabel(server);
   const stopHint = server.isStoppable
     ? `Stop ${primaryLabel}`
     : (server.stopDisabledReason ?? server.args ?? server.displayName);
@@ -81,17 +81,7 @@ function LocalServerRow({
         <span className="relative size-1 rounded-full bg-success" />
       </span>
 
-      <span className="min-w-0">
-        <span
-          className="block truncate text-[length:var(--app-font-size-ui,12px)] font-medium leading-tight text-[var(--color-text-foreground)]"
-          title={primaryLabel}
-        >
-          {primaryLabel}
-        </span>
-        <span className="mt-0.5 block truncate text-[length:var(--app-font-size-ui-xs,10px)] leading-tight tabular-nums text-muted-foreground/65">
-          {addressLabel}
-        </span>
-      </span>
+      <LocalServerIdentity server={server} tone="menu" />
 
       <MenuItem
         closeOnClick={false}

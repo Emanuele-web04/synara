@@ -65,6 +65,13 @@ export interface TerminalSessionState {
   pendingOutputLength: number;
   /** Timer handle for the next scheduled output flush. */
   outputFlushTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * When false, output is still drained and parsed into history but no live
+   * `output` events are emitted. Set for headless sessions (e.g. dev servers)
+   * whose output no renderer consumes, so their PTY traffic never reaches the
+   * WebSocket fanout. Defaults to true for interactive terminals.
+   */
+  streamOutput: boolean;
   /** Whether PTY reading has been paused due to backpressure. */
   outputPaused: boolean;
   /** Local batching requested a PTY pause until the server flushes output. */

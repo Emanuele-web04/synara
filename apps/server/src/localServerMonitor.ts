@@ -18,6 +18,7 @@ import type {
 const PROCESS_OUTPUT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
 const STOP_SIGNAL_SETTLE_MS = 450;
 const MAX_PROCESS_ARGS_CHARS = 1_000;
+const PROCESS_LINEAGE_MAX_DEPTH = 4;
 const PAGE_TITLE_MAX_CHARS = 200;
 const PAGE_TITLE_FETCH_TIMEOUT_MS = 650;
 const PAGE_TITLE_MAX_BYTES = 128 * 1024;
@@ -229,6 +230,34 @@ export function parseLsofTcpListenOutput(output: string): ParsedLsofListener[] {
   return listeners;
 }
 
+// Parses `lsof -d cwd -Fn` records into a pid -> working-directory map. Each
+// process appears as a `p<pid>` line followed by an `n<path>` line for its cwd.
+export function parseLsofCwdOutput(output: string): Map<number, string> {
+  const cwdByPid = new Map<number, string>();
+  let currentPid: number | null = null;
+  for (const rawLine of output.split(/\r?\n/g)) {
+    const line = rawLine.trim();
+    if (line.length < 2) {
+      continue;
+    }
+    const field = line[0];
+    const value = line.slice(1);
+    if (field === "p") {
+      const pid = Number(value);
+      currentPid = Number.isInteger(pid) && pid > 0 ? pid : null;
+      continue;
+    }
+    if (field !== "n" || currentPid === null) {
+      continue;
+    }
+    const cwd = value.trim();
+    if (cwd.length > 0 && !cwdByPid.has(currentPid)) {
+      cwdByPid.set(currentPid, cwd);
+    }
+  }
+  return cwdByPid;
+}
+
 function parseProcessInfo(output: string): Map<number, LocalServerProcessInfo> {
   const rows = new Map<number, LocalServerProcessInfo>();
   for (const line of output.split(/\r?\n/g)) {
@@ -256,6 +285,37 @@ function normalizeCommandName(command: string, args: string): string {
     .basename(firstToken || command)
     .replace(/\.[cm]?js$/i, "")
     .toLowerCase();
+}
+
+// Some dev tools let a generic child own the port while the parent has the useful command.
+function processLineageCommandLines(
+  pid: number,
+  processInfoByPid: ReadonlyMap<number, LocalServerProcessInfo>,
+): string | null {
+  const commandLines: string[] = [];
+  const seen = new Set<number>();
+  let currentPid = pid;
+
+  for (let depth = 0; depth < PROCESS_LINEAGE_MAX_DEPTH; depth++) {
+    if (seen.has(currentPid)) {
+      break;
+    }
+    seen.add(currentPid);
+
+    const processInfo = processInfoByPid.get(currentPid);
+    if (!processInfo) {
+      break;
+    }
+    if (processInfo.commandLine) {
+      commandLines.push(processInfo.commandLine);
+    }
+    if (processInfo.ppid <= 1) {
+      break;
+    }
+    currentPid = processInfo.ppid;
+  }
+
+  return commandLines.length > 0 ? commandLines.join(" ") : null;
 }
 
 function normalizeProcessText(command: string, args: string): string {
@@ -300,11 +360,6 @@ function detectDevServerKindFromText(input: DevServerCandidateInput): string | n
     return directToolLabel;
   }
 
-  const scriptName = devScriptNameFromArgs(input.args);
-  if (scriptName && isDevScriptName(scriptName)) {
-    return "Dev Server";
-  }
-
   const text = normalizeProcessText(input.command, input.args);
   if (/(^|[\s/\\])vite(?:\.js|\.mjs|\.cjs)?(?:\s|$)/i.test(text)) return "Vite";
   if (/\bnext\s+dev\b/i.test(text)) return "Next.js";
@@ -325,6 +380,12 @@ function detectDevServerKindFromText(input: DevServerCandidateInput): string | n
   if (/\bpython3?\s+-m\s+http\.server\b/i.test(text)) return "Python";
   if (/\bphp\s+-S\s+/i.test(text)) return "PHP";
   if (/\breact-scripts\s+start\b/i.test(text)) return "React";
+
+  const scriptName = devScriptNameFromArgs(input.args);
+  if (scriptName && isDevScriptName(scriptName)) {
+    return "Dev Server";
+  }
+
   if (DEV_ARGS_PATTERN.test(text)) return "Dev Server";
   return null;
 }
@@ -465,9 +526,12 @@ function parseIpv4Host(host: string): readonly [number, number, number, number] 
   if (parts.length !== 4) {
     return null;
   }
-  const bytes = parts.map((part) =>
-    /^\d{1,3}$/.test(part) ? Number(part) : Number.NaN,
-  ) as [number, number, number, number];
+  const bytes = parts.map((part) => (/^\d{1,3}$/.test(part) ? Number(part) : Number.NaN)) as [
+    number,
+    number,
+    number,
+    number,
+  ];
   return bytes.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255) ? bytes : null;
 }
 
@@ -711,6 +775,7 @@ function toServerProcess(
   pid: number,
   listeners: readonly ParsedLsofListener[],
   processInfoByPid: ReadonlyMap<number, LocalServerProcessInfo>,
+  cwdByPid: ReadonlyMap<number, string>,
 ): ServerLocalServerProcess | null {
   if (pid === process.pid) {
     return null;
@@ -723,22 +788,56 @@ function toServerProcess(
   const command = listeners[0]?.command ?? "unknown";
   const processInfo = processInfoByPid.get(pid);
   const args = processInfo?.commandLine ?? command;
-  if (!isLikelyDevServerProcess({ command, args, ports })) {
+  const detectionArgs = processLineageCommandLines(pid, processInfoByPid) ?? args;
+  if (!isLikelyDevServerProcess({ command, args: detectionArgs, ports })) {
     return null;
   }
 
   const isStoppable = isProcessSignalable(pid);
+  const cwd = resolveProcessCwd(pid, processInfoByPid, cwdByPid);
   return {
     id: `${pid}:${ports.join(",")}`,
     pid,
+    ...(typeof processInfo?.ppid === "number" && processInfo.ppid > 0
+      ? { ppid: processInfo.ppid }
+      : {}),
     command,
-    displayName: formatDisplayName(command, args),
+    displayName: formatDisplayName(command, detectionArgs),
+    ...(cwd ? { cwd } : {}),
     args,
     ports,
     addresses,
     isStoppable,
     ...(isStoppable ? {} : { stopDisabledReason: "Synara cannot signal this process." }),
   };
+}
+
+// Resolves the working directory for a listener, walking up the process lineage
+// when the listening pid itself has no resolvable cwd (e.g. a generic child that
+// inherited the dev tool's directory). Mirrors how command lines are resolved.
+function resolveProcessCwd(
+  pid: number,
+  processInfoByPid: ReadonlyMap<number, LocalServerProcessInfo>,
+  cwdByPid: ReadonlyMap<number, string>,
+): string | null {
+  const seen = new Set<number>();
+  let currentPid = pid;
+  for (let depth = 0; depth < PROCESS_LINEAGE_MAX_DEPTH; depth++) {
+    if (seen.has(currentPid)) {
+      break;
+    }
+    seen.add(currentPid);
+    const cwd = cwdByPid.get(currentPid);
+    if (cwd) {
+      return cwd;
+    }
+    const ppid = processInfoByPid.get(currentPid)?.ppid;
+    if (typeof ppid !== "number" || ppid <= 1) {
+      break;
+    }
+    currentPid = ppid;
+  }
+  return null;
 }
 
 function groupListenersByPid(
@@ -763,7 +862,7 @@ async function readLsofListeners(): Promise<ParsedLsofListener[]> {
   return parseLsofTcpListenOutput(output);
 }
 
-async function readProcessInfo(
+async function readProcessInfoBatch(
   pids: readonly number[],
 ): Promise<Map<number, LocalServerProcessInfo>> {
   if (pids.length === 0 || process.platform === "win32") {
@@ -783,15 +882,49 @@ async function readProcessInfo(
   return parseProcessInfo(output);
 }
 
+// Resolves each pid's working directory via `lsof -d cwd`. Only user-owned
+// processes are reported (which dev servers are); others are silently absent.
+async function readProcessCwdBatch(pids: readonly number[]): Promise<Map<number, string>> {
+  if (pids.length === 0 || process.platform === "win32") {
+    return new Map();
+  }
+  const output = await execFileText("lsof", ["-a", "-d", "cwd", "-Fn", "-p", pids.join(",")]).catch(
+    () => "",
+  );
+  return parseLsofCwdOutput(output);
+}
+
+async function readProcessInfoWithAncestors(
+  pids: readonly number[],
+): Promise<Map<number, LocalServerProcessInfo>> {
+  const allProcessInfo = new Map<number, LocalServerProcessInfo>();
+  let pendingPids = [...new Set(pids)].filter((pid) => pid > 1);
+
+  for (let depth = 0; depth < PROCESS_LINEAGE_MAX_DEPTH && pendingPids.length > 0; depth++) {
+    const batch = await readProcessInfoBatch(pendingPids);
+    const nextPids: number[] = [];
+    for (const [pid, processInfo] of batch) {
+      allProcessInfo.set(pid, processInfo);
+      if (processInfo.ppid > 1 && !allProcessInfo.has(processInfo.ppid)) {
+        nextPids.push(processInfo.ppid);
+      }
+    }
+    pendingPids = [...new Set(nextPids)];
+  }
+
+  return allProcessInfo;
+}
+
 // Builds UI-ready process rows from raw listener rows; exported for focused parser tests.
 export function buildLocalServerProcesses(
   listeners: readonly ParsedLsofListener[],
   processInfoByPid: ReadonlyMap<number, LocalServerProcessInfo> = new Map(),
+  cwdByPid: ReadonlyMap<number, string> = new Map(),
 ): ServerLocalServerProcess[] {
   const grouped = groupListenersByPid(listeners);
   const processes: ServerLocalServerProcess[] = [];
   for (const [pid, group] of grouped) {
-    const processRow = toServerProcess(pid, group, processInfoByPid);
+    const processRow = toServerProcess(pid, group, processInfoByPid, cwdByPid);
     if (processRow) {
       processes.push(processRow);
     }
@@ -804,8 +937,11 @@ export function buildLocalServerProcesses(
 export async function listLocalServers(): Promise<ServerListLocalServersResult> {
   const listeners = await readLsofListeners();
   const pids = [...new Set(listeners.map((listener) => listener.pid))];
-  const processInfoByPid = await readProcessInfo(pids);
-  const servers = buildLocalServerProcesses(listeners, processInfoByPid);
+  const processInfoByPid = await readProcessInfoWithAncestors(pids);
+  // Resolve cwd across the full lineage so a generic port-holding child can fall
+  // back to its dev-tool parent's directory (cwd is inherited across fork/exec).
+  const cwdByPid = await readProcessCwdBatch([...new Set([...pids, ...processInfoByPid.keys()])]);
+  const servers = buildLocalServerProcesses(listeners, processInfoByPid, cwdByPid);
   return {
     generatedAt: new Date().toISOString(),
     servers: await enrichLocalServerProcessesWithPageTitles(servers),
@@ -828,11 +964,14 @@ function delay(ms: number): Promise<void> {
 // Revalidates the pid/port before signaling so stale UI rows cannot kill arbitrary processes.
 export async function stopLocalServer(
   input: ServerStopLocalServerInput,
+  prevalidatedTarget?: ServerLocalServerProcess | null,
 ): Promise<ServerStopLocalServerResult> {
-  const snapshot = await listLocalServers();
-  const target = snapshot.servers.find(
-    (server) => server.pid === input.pid && server.ports.includes(input.port),
-  );
+  const target =
+    prevalidatedTarget !== undefined
+      ? prevalidatedTarget
+      : (await listLocalServers()).servers.find(
+          (server) => server.pid === input.pid && server.ports.includes(input.port),
+        );
 
   if (!target) {
     return {

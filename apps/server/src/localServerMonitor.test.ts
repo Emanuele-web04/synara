@@ -11,6 +11,7 @@ import {
   extractLocalServerPageTitle,
   isIgnoredLocalServerProcess,
   isLikelyDevServerProcess,
+  parseLsofCwdOutput,
   parseLsofTcpListenOutput,
   type LocalServerProcessInfo,
 } from "./localServerMonitor";
@@ -209,6 +210,47 @@ describe("localServerMonitor", () => {
     });
   });
 
+  it("uses parent command lines when a dev-tool child owns the listening port", () => {
+    const processInfo = new Map<number, LocalServerProcessInfo>([
+      [
+        12095,
+        {
+          ppid: 12094,
+          commandLine: "next-server (v16.2.3)",
+        },
+      ],
+      [
+        12094,
+        {
+          ppid: 12064,
+          commandLine:
+            "node /Users/emanueledipietro/Developer/dpcode-website/node_modules/.bin/next dev",
+        },
+      ],
+      [
+        12064,
+        {
+          ppid: 10212,
+          commandLine: "npm run dev",
+        },
+      ],
+    ]);
+
+    const servers = buildLocalServerProcesses(
+      parseLsofTcpListenOutput(["p12095", "cnode", "PTCP", "n*:3000"].join("\n")),
+      processInfo,
+    );
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0]).toMatchObject({
+      pid: 12095,
+      ppid: 12094,
+      displayName: "Next.js",
+      args: "next-server (v16.2.3)",
+      ports: [3000],
+    });
+  });
+
   it("groups one process with multiple listener addresses into one row", () => {
     const processInfo = new Map<number, LocalServerProcessInfo>([
       [123, { ppid: 1, commandLine: "node ./node_modules/.bin/vite" }],
@@ -315,5 +357,68 @@ describe("localServerMonitor", () => {
 
     expect(fetchedUrls).toEqual([startUrl]);
     expect(enriched[0]?.pageTitle).toBeUndefined();
+  });
+
+  it("parses lsof cwd records into a pid -> directory map", () => {
+    const cwdByPid = parseLsofCwdOutput(
+      ["p123", "fcwd", "n/Users/dev/app", "p456", "fcwd", "n/Users/dev/api"].join("\n"),
+    );
+
+    expect(cwdByPid.get(123)).toBe("/Users/dev/app");
+    expect(cwdByPid.get(456)).toBe("/Users/dev/api");
+    expect(cwdByPid.size).toBe(2);
+  });
+
+  it("keeps the first cwd line and ignores malformed records", () => {
+    const cwdByPid = parseLsofCwdOutput(
+      ["px", "n/ignored", "p789", "n/Users/dev/web", "n/Users/dev/other"].join("\n"),
+    );
+
+    expect(cwdByPid.get(789)).toBe("/Users/dev/web");
+    expect(cwdByPid.size).toBe(1);
+  });
+
+  it("attaches a resolved cwd to the built server row", () => {
+    const processInfo = new Map<number, LocalServerProcessInfo>([
+      [123, { ppid: 1, commandLine: "vite" }],
+    ]);
+    const cwdByPid = new Map<number, string>([[123, "/Users/dev/app"]]);
+    const servers = buildLocalServerProcesses(
+      parseLsofTcpListenOutput(["p123", "cnode", "PTCP", "n127.0.0.1:5173"].join("\n")),
+      processInfo,
+      cwdByPid,
+    );
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0]?.cwd).toBe("/Users/dev/app");
+  });
+
+  it("falls back to an ancestor cwd when the listening child has none", () => {
+    const processInfo = new Map<number, LocalServerProcessInfo>([
+      [456, { ppid: 123, commandLine: "node child" }],
+      [123, { ppid: 1, commandLine: "bun run dev" }],
+    ]);
+    const cwdByPid = new Map<number, string>([[123, "/Users/dev/monorepo"]]);
+    const servers = buildLocalServerProcesses(
+      parseLsofTcpListenOutput(["p456", "cnode", "PTCP", "n127.0.0.1:5173"].join("\n")),
+      processInfo,
+      cwdByPid,
+    );
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0]?.cwd).toBe("/Users/dev/monorepo");
+  });
+
+  it("omits cwd when it cannot be resolved", () => {
+    const processInfo = new Map<number, LocalServerProcessInfo>([
+      [123, { ppid: 1, commandLine: "vite" }],
+    ]);
+    const servers = buildLocalServerProcesses(
+      parseLsofTcpListenOutput(["p123", "cnode", "PTCP", "n127.0.0.1:5173"].join("\n")),
+      processInfo,
+    );
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0]?.cwd).toBeUndefined();
   });
 });

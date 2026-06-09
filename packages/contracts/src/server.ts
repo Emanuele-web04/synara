@@ -152,9 +152,13 @@ export type ServerLocalServerAddress = typeof ServerLocalServerAddress.Type;
 export const ServerLocalServerProcess = Schema.Struct({
   id: TrimmedNonEmptyString,
   pid: PositiveInt,
+  ppid: Schema.optional(PositiveInt),
   command: TrimmedNonEmptyString,
   displayName: TrimmedNonEmptyString,
   pageTitle: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
+  // Working directory of the listening process, when resolvable. Surfaced in the
+  // UI and used to attribute manually-started dev servers to a project by folder.
+  cwd: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
   args: Schema.String.check(Schema.isMaxLength(1_000)),
   ports: Schema.Array(PositiveInt),
   addresses: Schema.Array(ServerLocalServerAddress),

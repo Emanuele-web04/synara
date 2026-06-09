@@ -11,6 +11,7 @@ import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus"
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer";
 
+import { DevServerManagerLive } from "./devServerManager";
 import { KeybindingsLive } from "./keybindings";
 import { GitCoreLive } from "./git/Layers/GitCore";
 import { GitLayerLive, TextGenerationLayerLive } from "./git/runtimeLayer";
@@ -65,6 +66,8 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(OrchestrationLayerLive),
     Layer.provideMerge(TerminalLayerLive),
   );
+  // Shares the single memoized TerminalManager with the top-level TerminalLayerLive.
+  const devServerManagerLayer = DevServerManagerLive.pipe(Layer.provide(TerminalLayerLive));
   const sessionCredentialLayer = SessionCredentialServiceLive.pipe(
     Layer.provide(ServerSecretStoreLive),
   );
@@ -90,6 +93,7 @@ export function makeServerRuntimeServicesLayer() {
   return Layer.mergeAll(
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
+    devServerManagerLayer,
     GitLayerLive,
     TextGenerationLayerLive,
     TerminalLayerLive,

@@ -9,6 +9,7 @@ import {
   ChevronRightIcon,
   CopyIcon,
   DisposableThreadIcon,
+  ExternalLinkIcon,
   FolderIcon,
   FolderOpenIcon,
   GitMergedSimpleIcon,
@@ -17,8 +18,10 @@ import {
   NewThreadIcon,
   PencilIcon,
   PinIcon,
+  PlayIcon,
   SearchIcon,
   SettingsIcon,
+  StopFilledIcon,
   TerminalIcon,
   Trash2,
   TriangleAlertIcon,
@@ -68,11 +71,14 @@ import {
   type ProviderKind,
   ThreadId,
   type GitStatusResult,
+  type ProjectDiscoveredScriptTarget,
   type ResolvedKeybindingsConfig,
+  type ServerLocalServerProcess,
 } from "@t3tools/contracts";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { getDefaultModel } from "@t3tools/shared/model";
 import { pluralize } from "@t3tools/shared/text";
+import { localServerAddressLabel, localServerMatchesRun } from "@t3tools/shared/localServers";
 import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
@@ -111,7 +117,14 @@ import {
   supportsThreadImport,
 } from "../lib/providerDiscoveryReactQuery";
 import { resolveCurrentProjectTargetId } from "../lib/projectShortcutTargets";
-import { serverConfigQueryOptions } from "../lib/serverReactQuery";
+import { projectDiscoverScriptsQueryOptions } from "../lib/projectReactQuery";
+import {
+  LOCAL_SERVERS_BACKGROUND_REFETCH_INTERVAL_MS,
+  LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS,
+  serverConfigQueryOptions,
+  serverLocalServersQueryOptions,
+  serverQueryKeys,
+} from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { isHomeChatContainerProject, prewarmHomeChatProject } from "../lib/chatProjects";
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -143,6 +156,9 @@ import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
+import { useProjectRunStore, type ProjectRunState } from "../projectRunStore";
+import { selectPrimaryProjectRunCommand } from "../projectRunTargets";
+import { projectScriptRuntimeEnv } from "../projectScripts";
 import { toastManager } from "./ui/toast";
 import {
   normalizeSidebarProjectThreadListCwd,
@@ -165,6 +181,16 @@ import {
 } from "./desktopUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "./ui/dialog";
 import { Kbd, KbdGroup } from "./ui/kbd";
 import {
   Menu,
@@ -200,6 +226,7 @@ import {
   deriveSidebarProjectData,
   derivePinnedThreadIdsForSidebar,
   extractDuplicateProjectCreateProjectId,
+  findDeepestWorkspaceRootMatch,
   findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
   getPinnedThreadsForSidebar,
@@ -318,6 +345,8 @@ const DebugFeatureFlagsMenu = import.meta.env.DEV
 type ProjectContextMenuId =
   | "open-in-finder"
   | "copy-path"
+  | "start-dev"
+  | "stop-dev"
   | "rename"
   | "toggle-pin"
   | "archive-threads"
@@ -357,6 +386,20 @@ function ProjectContextMenuIcon({ icon: Icon }: { icon: LucideIcon }) {
       <Icon aria-hidden="true" />
     </span>
   );
+}
+
+function firstLocalServerUrl(server: ServerLocalServerProcess): string | null {
+  return server.addresses.find((address) => address.url)?.url ?? null;
+}
+
+function findTrackedProjectRunServer(
+  run: ProjectRunState | null | undefined,
+  servers: readonly ServerLocalServerProcess[],
+): ServerLocalServerProcess | null {
+  if (!run) {
+    return null;
+  }
+  return servers.find((server) => localServerMatchesRun(server, run)) ?? null;
 }
 
 type DebugFeatureFlagsWindow = Window & {
@@ -455,6 +498,20 @@ function ThreadStatusTrailingGlyph({ threadStatus }: { threadStatus: ThreadStatu
     <span
       aria-hidden="true"
       className={cn("size-1.5 shrink-0 rounded-full", threadStatus.dotClass)}
+    />
+  );
+}
+
+/** Pulsing green dot shown before a thread or project name while a dev run is live. */
+function ProjectRunIndicatorDot({ className }: { className?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      title="Dev server running"
+      className={cn(
+        "size-1.5 shrink-0 rounded-full bg-emerald-400 motion-safe:animate-pulse",
+        className,
+      )}
     />
   );
 }
@@ -1173,6 +1230,9 @@ export default function Sidebar() {
   const renameProjectLocally = useStore((store) => store.renameProjectLocally);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const terminalStateByThreadId = useTerminalStateStore((state) => state.terminalStateByThreadId);
+  const projectRunsByProjectId = useProjectRunStore((state) => state.runsByProjectId);
+  const storeUpsertProjectRun = useProjectRunStore((state) => state.upsertRun);
+  const storeRemoveProjectRun = useProjectRunStore((state) => state.removeRun);
   const clearTerminalState = useTerminalStateStore((state) => state.clearTerminalState);
   const openChatThreadPage = useTerminalStateStore((state) => state.openChatThreadPage);
   const openTerminalThreadPage = useTerminalStateStore((state) => state.openTerminalThreadPage);
@@ -1315,6 +1375,10 @@ export default function Sidebar() {
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
   const [searchPaletteMode, setSearchPaletteMode] = useState<SidebarSearchPaletteMode>("search");
   const [searchPaletteInitialQuery, setSearchPaletteInitialQuery] = useState<string | null>(null);
+  const [projectRunDialogProjectId, setProjectRunDialogProjectId] = useState<ProjectId | null>(
+    null,
+  );
+  const [projectRunDialogCommandDraft, setProjectRunDialogCommandDraft] = useState("");
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [showManualPathInput, setShowManualPathInput] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
@@ -1654,6 +1718,12 @@ export default function Sidebar() {
     [projects],
   );
   const projectByIdRef = useRef(projectById);
+  const projectRunCommandByProjectIdRef = useRef<
+    Map<ProjectId, ReturnType<typeof selectPrimaryProjectRunCommand>>
+  >(new Map());
+  const projectRunServerByProjectIdRef = useRef<Map<ProjectId, ServerLocalServerProcess>>(
+    new Map(),
+  );
   useEffect(() => {
     projectByIdRef.current = projectById;
   }, [projectById]);
@@ -3469,6 +3539,115 @@ export default function Sidebar() {
     terminalStateByThreadId,
   });
 
+  const handleStartProjectRun = useCallback(
+    async (projectId: ProjectId, commandOverride?: string) => {
+      const api = readNativeApi();
+      const project = projectById.get(projectId);
+      const runCommand = projectRunCommandByProjectIdRef.current.get(projectId);
+      if (!api || !project || !runCommand) {
+        return;
+      }
+      if (projectRunsByProjectId[projectId]) {
+        return;
+      }
+      // The dialog lets the user edit the default command before launching, so an
+      // explicit override wins over the resolved default while reusing its cwd.
+      const command = commandOverride?.trim() || runCommand.command;
+      // Dev servers run from the project root; mirror the env the terminal runner
+      // would otherwise inject so scripts resolve project paths identically.
+      const env = projectScriptRuntimeEnv({
+        project: { cwd: project.cwd },
+        worktreePath: null,
+      });
+
+      // Optimistically reflect the pending launch so the sidebar dot lights up
+      // immediately; the server's authoritative snapshot replaces this on success.
+      storeUpsertProjectRun({
+        projectId,
+        command,
+        cwd: runCommand.cwd,
+        pid: null,
+        startedAt: new Date().toISOString(),
+        status: "starting",
+      });
+      try {
+        const { server } = await api.projects.runDevServer({
+          projectId,
+          command,
+          cwd: runCommand.cwd,
+          env,
+        });
+        storeUpsertProjectRun(server);
+        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
+      } catch (error) {
+        storeRemoveProjectRun(projectId);
+        toastManager.add({
+          type: "error",
+          title: `Failed to run "${project.name}"`,
+          description: error instanceof Error ? error.message : "Unable to start the run command.",
+        });
+      }
+    },
+    [
+      projectById,
+      projectRunsByProjectId,
+      queryClient,
+      storeRemoveProjectRun,
+      storeUpsertProjectRun,
+    ],
+  );
+
+  const handleStopProjectRun = useCallback(
+    async (projectId: ProjectId) => {
+      const api = readNativeApi();
+      if (!api) {
+        storeRemoveProjectRun(projectId);
+        return;
+      }
+      // Optimistically clear the indicator; the server owns the process lifecycle
+      // and will broadcast a `removed` event that keeps every client consistent.
+      storeRemoveProjectRun(projectId);
+      try {
+        await api.projects.stopDevServer({ projectId });
+      } catch (error) {
+        // The optimistic removal may have been wrong (e.g. the stop failed), so
+        // resync from the authoritative server registry before surfacing the error.
+        try {
+          const { servers } = await api.projects.listDevServers();
+          useProjectRunStore.getState().replaceAll(servers);
+        } catch {
+          // Ignore resync failures; the dev-server event stream will reconcile.
+        }
+        toastManager.add({
+          type: "error",
+          title: "Failed to stop run",
+          description: error instanceof Error ? error.message : "Unable to stop the dev server.",
+        });
+      } finally {
+        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
+      }
+    },
+    [queryClient, storeRemoveProjectRun],
+  );
+
+  const handleOpenProjectRunServer = useCallback(async (projectId: ProjectId) => {
+    const api = readNativeApi();
+    const server = projectRunServerByProjectIdRef.current.get(projectId);
+    const url = server ? firstLocalServerUrl(server) : null;
+    if (!api || !server || !url) {
+      return;
+    }
+    try {
+      await api.shell.openExternal(url);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: `Unable to open ${localServerAddressLabel(server)}`,
+        description: error instanceof Error ? error.message : "Unable to open the local server.",
+      });
+    }
+  }, []);
+
   const handleProjectContextMenuAction = useCallback(
     async (projectId: ProjectId, clicked: ProjectContextMenuId) => {
       setProjectContextMenuState(null);
@@ -3494,6 +3673,14 @@ export default function Sidebar() {
       }
       if (clicked === "copy-path") {
         copyPathToClipboard(project.cwd, { path: project.cwd });
+        return;
+      }
+      if (clicked === "start-dev") {
+        setProjectRunDialogProjectId(projectId);
+        return;
+      }
+      if (clicked === "stop-dev") {
+        await handleStopProjectRun(projectId);
         return;
       }
       if (clicked === "rename") {
@@ -3577,6 +3764,7 @@ export default function Sidebar() {
       copyPathToClipboard,
       deleteProjectThreads,
       deleteAllThreadsInProject,
+      handleStopProjectRun,
       projectById,
       sidebarThreads,
       toggleProjectPinned,
@@ -3778,6 +3966,118 @@ export default function Sidebar() {
     () => orderPinnedProjectsForSidebar(standardProjectsBase, pinnedProjectIds),
     [pinnedProjectIds, standardProjectsBase],
   );
+  const projectScriptDiscoveryQueries = useQueries({
+    queries: standardProjects.map((project) =>
+      projectDiscoverScriptsQueryOptions({
+        cwd: project.cwd,
+        enabled:
+          project.kind === "project" &&
+          !project.scripts.some((script) => !script.runOnWorktreeCreate),
+      }),
+    ),
+  });
+  const discoveredScriptTargetsByProjectId = useMemo(() => {
+    const targetsByProjectId = new Map<ProjectId, readonly ProjectDiscoveredScriptTarget[]>();
+    for (let index = 0; index < standardProjects.length; index += 1) {
+      const project = standardProjects[index];
+      if (!project) continue;
+      targetsByProjectId.set(project.id, projectScriptDiscoveryQueries[index]?.data?.targets ?? []);
+    }
+    return targetsByProjectId;
+  }, [projectScriptDiscoveryQueries, standardProjects]);
+  const projectRunCommandByProjectId = useMemo(() => {
+    const commandByProjectId = new Map<
+      ProjectId,
+      ReturnType<typeof selectPrimaryProjectRunCommand>
+    >();
+    for (const project of standardProjects) {
+      commandByProjectId.set(
+        project.id,
+        selectPrimaryProjectRunCommand({
+          project,
+          discoveredTargets: discoveredScriptTargetsByProjectId.get(project.id) ?? [],
+        }),
+      );
+    }
+    return commandByProjectId;
+  }, [discoveredScriptTargetsByProjectId, standardProjects]);
+  projectRunCommandByProjectIdRef.current = projectRunCommandByProjectId;
+  // Keep manual server attribution alive, but slow the always-on folder scan
+  // when no Synara-owned run needs near-real-time reconciliation.
+  const hasActiveProjectRun = useMemo(
+    () => Object.keys(projectRunsByProjectId).length > 0,
+    [projectRunsByProjectId],
+  );
+  const shouldTrackLocalServers = standardProjects.length > 0 || hasActiveProjectRun;
+  const localServersRefetchInterval = hasActiveProjectRun
+    ? LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS
+    : LOCAL_SERVERS_BACKGROUND_REFETCH_INTERVAL_MS;
+  const projectRunLocalServersQuery = useQuery(
+    serverLocalServersQueryOptions({
+      enabled: shouldTrackLocalServers,
+      refetchInterval: localServersRefetchInterval,
+    }),
+  );
+  const projectRunServerByProjectId = useMemo(() => {
+    const servers = projectRunLocalServersQuery.data?.servers ?? [];
+    const serverByProjectId = new Map<ProjectId, ServerLocalServerProcess>();
+    // 1. Authoritative: Synara-tracked runs matched by pid/ppid.
+    for (const run of Object.values(projectRunsByProjectId)) {
+      const server = findTrackedProjectRunServer(run, servers);
+      if (server) {
+        serverByProjectId.set(run.projectId, server);
+      }
+    }
+    // 2. Fallback: attribute remaining servers to a project by cwd, so dev
+    //    servers started outside Synara still light up the running indicator.
+    for (const server of servers) {
+      if (!server.cwd) {
+        continue;
+      }
+      const project = findDeepestWorkspaceRootMatch(
+        standardProjects,
+        server.cwd,
+        (candidate) => candidate.cwd,
+      );
+      if (project && !serverByProjectId.has(project.id)) {
+        serverByProjectId.set(project.id, server);
+      }
+    }
+    return serverByProjectId;
+  }, [projectRunLocalServersQuery.data?.servers, projectRunsByProjectId, standardProjects]);
+  projectRunServerByProjectIdRef.current = projectRunServerByProjectId;
+  const projectRunDialogProject = projectRunDialogProjectId
+    ? (projectById.get(projectRunDialogProjectId) ?? null)
+    : null;
+  const projectRunDialogExistingRun = projectRunDialogProjectId
+    ? (projectRunsByProjectId[projectRunDialogProjectId] ?? null)
+    : null;
+  const closeProjectRunDialog = useCallback(() => {
+    setProjectRunDialogProjectId(null);
+  }, []);
+  // Seed the editable command field with the resolved default each time the dialog
+  // opens for a project, without clobbering edits while it stays open.
+  useEffect(() => {
+    if (projectRunDialogProjectId === null) {
+      return;
+    }
+    const defaultCommand =
+      projectRunCommandByProjectIdRef.current.get(projectRunDialogProjectId)?.command ?? "";
+    setProjectRunDialogCommandDraft(defaultCommand);
+  }, [projectRunDialogProjectId]);
+  const projectRunDialogCommandIsValid = projectRunDialogCommandDraft.trim().length > 0;
+  const handleConfirmProjectRun = useCallback(() => {
+    const projectId = projectRunDialogProjectId;
+    if (!projectId) {
+      return;
+    }
+    const command = projectRunDialogCommandDraft.trim();
+    if (!command) {
+      return;
+    }
+    setProjectRunDialogProjectId(null);
+    void handleStartProjectRun(projectId, command);
+  }, [handleStartProjectRun, projectRunDialogCommandDraft, projectRunDialogProjectId]);
   const projectEmptyState = resolveProjectEmptyState({
     projectCount: standardProjects.length,
     shouldShowProjectPathEntry,
@@ -4890,6 +5190,16 @@ export default function Sidebar() {
     const projectFolderIconClassName = isProjectPinned
       ? "opacity-0"
       : "transition-opacity md:group-hover/project-header:opacity-0 md:group-has-[:focus-visible]/project-header:opacity-0";
+    const projectRun = projectRunsByProjectId[project.id] ?? null;
+    const projectRunServer = projectRunServerByProjectId.get(project.id) ?? null;
+    const projectRunServerUrl = projectRunServer ? firstLocalServerUrl(projectRunServer) : null;
+    // A project reads as "running" when Synara tracks a run for it or when a
+    // local server (possibly started outside Synara) is attributed by cwd.
+    const isProjectRunning = projectRun !== null || projectRunServer !== null;
+    const hasOpenServerButton = projectRunServer !== null && projectRunServerUrl !== null;
+    const projectToolbarReserveClassName = hasOpenServerButton
+      ? "group-hover/project-header:pr-[6.25rem] focus-visible:pr-[6.25rem]"
+      : "group-hover/project-header:pr-[4.75rem] focus-visible:pr-[4.75rem]";
 
     return (
       <div className="group/collapsible">
@@ -4899,7 +5209,8 @@ export default function Sidebar() {
             size="sm"
             className={cn(
               SIDEBAR_HEADER_ROW_CLASS_NAME,
-              "transition-[padding] duration-150 ease-out hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:pr-[4.75rem] group-hover/project-header:text-[var(--sidebar-accent-foreground)] focus-visible:pr-[4.75rem]",
+              "transition-[padding] duration-150 ease-out hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:text-[var(--sidebar-accent-foreground)]",
+              projectToolbarReserveClassName,
               isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
             )}
             {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
@@ -4967,6 +5278,7 @@ export default function Sidebar() {
                 />
               ) : (
                 <>
+                  {isProjectRunning ? <ProjectRunIndicatorDot className="self-center" /> : null}
                   <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79">
                     {project.name}
                   </span>
@@ -5003,6 +5315,19 @@ export default function Sidebar() {
             <PinIcon className="size-3.5" />
           </button>
           <SidebarSectionToolbar placement="overlay" revealOnHover>
+            {hasOpenServerButton ? (
+              <SidebarIconButton
+                icon={ExternalLinkIcon}
+                label={`Open ${localServerAddressLabel(projectRunServer)}`}
+                tooltip={`Open ${localServerAddressLabel(projectRunServer)}`}
+                tooltipSide="top"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void handleOpenProjectRunServer(project.id);
+                }}
+              />
+            ) : null}
             <SidebarIconButton
               icon={TerminalIcon}
               label={`Create new terminal thread in ${project.name}`}
@@ -5780,6 +6105,9 @@ export default function Sidebar() {
   const projectContextMenuIsPinned = projectContextMenuProject
     ? pinnedProjectIdSet.has(projectContextMenuProject.id)
     : false;
+  const projectContextMenuIsRunning = projectContextMenuProject
+    ? Boolean(projectRunsByProjectId[projectContextMenuProject.id])
+    : false;
 
   return (
     <>
@@ -6390,6 +6718,33 @@ export default function Sidebar() {
                 <ProjectContextMenuIcon icon={CopyIcon} />
                 <span>Copy Path</span>
               </MenuItem>
+              {projectContextMenuIsRunning ? (
+                <MenuItem
+                  className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                  onClick={() =>
+                    void handleProjectContextMenuAction(
+                      projectContextMenuState.projectId,
+                      "stop-dev",
+                    )
+                  }
+                >
+                  <ProjectContextMenuIcon icon={StopFilledIcon} />
+                  <span>Stop dev</span>
+                </MenuItem>
+              ) : (
+                <MenuItem
+                  className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                  onClick={() =>
+                    void handleProjectContextMenuAction(
+                      projectContextMenuState.projectId,
+                      "start-dev",
+                    )
+                  }
+                >
+                  <ProjectContextMenuIcon icon={PlayIcon} />
+                  <span>Start dev</span>
+                </MenuItem>
+              )}
               <MenuItem
                 className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
                 onClick={() =>
@@ -6456,6 +6811,71 @@ export default function Sidebar() {
           </ComposerPickerMenuPopup>
         </Menu>
       ) : null}
+
+      <Dialog
+        open={projectRunDialogProjectId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeProjectRunDialog();
+          }
+        }}
+      >
+        <DialogPopup className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <PlayIcon className="size-4 text-emerald-500" />
+              Start dev
+            </DialogTitle>
+            <DialogDescription>
+              {projectRunDialogProject ? projectRunDialogProject.name : "Project"}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel className="space-y-2">
+            <label
+              htmlFor="project-run-command-input"
+              className="block text-[length:var(--app-font-size-ui-xs,10px)] font-medium uppercase tracking-[0.08em] text-[var(--color-text-foreground-secondary)]"
+            >
+              Command
+            </label>
+            <Input
+              id="project-run-command-input"
+              autoFocus
+              spellCheck={false}
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              placeholder="e.g. npm run dev"
+              className="font-mono"
+              value={projectRunDialogCommandDraft}
+              aria-invalid={projectRunDialogCommandIsValid ? undefined : true}
+              onChange={(event) => setProjectRunDialogCommandDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  handleConfirmProjectRun();
+                }
+              }}
+            />
+            {projectRunDialogCommandIsValid ? null : (
+              <p className="text-[length:var(--app-font-size-ui-sm,11px)] text-destructive">
+                Enter a command to run.
+              </p>
+            )}
+          </DialogPanel>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeProjectRunDialog}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleConfirmProjectRun}
+              disabled={!projectRunDialogCommandIsValid || Boolean(projectRunDialogExistingRun)}
+            >
+              <PlayIcon className="size-4" />
+              Run
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
 
       <RenameThreadDialog
         open={renameDialogThreadId !== null}

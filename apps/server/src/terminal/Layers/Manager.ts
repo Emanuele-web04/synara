@@ -1020,6 +1020,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           pendingOutputChunks: [],
           pendingOutputLength: 0,
           outputFlushTimer: null,
+          streamOutput: input.streamOutput ?? true,
           outputPaused: false,
           outputBufferPauseRequested: false,
           outputAckPauseRequested: false,
@@ -1036,6 +1037,11 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         return this.snapshot(session);
       }
 
+      // A re-open may flip headless mode (e.g. a viewer attaching later); honor it
+      // when explicitly provided, otherwise keep the session's current mode.
+      if (input.streamOutput !== undefined) {
+        existing.streamOutput = input.streamOutput;
+      }
       const nextRuntimeEnv = normalizedRuntimeEnv(input.env);
       const currentRuntimeEnv = existing.runtimeEnv;
       const targetCols = input.cols ?? existing.cols;
@@ -1223,6 +1229,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           pendingOutputChunks: [],
           pendingOutputLength: 0,
           outputFlushTimer: null,
+          // Restart has no headless mode of its own; fresh sessions stream normally
+          // and existing sessions (below) keep whatever mode they were opened with.
+          streamOutput: true,
           outputPaused: false,
           outputBufferPauseRequested: false,
           outputAckPauseRequested: false,
@@ -1546,14 +1555,19 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     // taken right after a flush reflects this output.
     this.processOutputBatch(session, data);
 
-    this.emitEvent({
-      type: "output",
-      threadId: session.threadId,
-      terminalId: session.terminalId,
-      createdAt: new Date().toISOString(),
-      data,
-      byteLength,
-    });
+    // Headless sessions (e.g. dev servers) still drain the PTY and maintain
+    // history above, but skip the live broadcast so unviewed background output
+    // never reaches the WebSocket fanout.
+    if (session.streamOutput) {
+      this.emitEvent({
+        type: "output",
+        threadId: session.threadId,
+        terminalId: session.terminalId,
+        createdAt: new Date().toISOString(),
+        data,
+        byteLength,
+      });
+    }
     if (session.outputAckObserved) {
       session.outputUnackedBytes += byteLength;
       if (session.outputUnackedBytes >= OUTPUT_ACK_HIGH_WATERMARK) {

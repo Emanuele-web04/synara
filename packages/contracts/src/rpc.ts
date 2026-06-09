@@ -72,12 +72,20 @@ import {
   ProviderReadPluginResult,
 } from "./providerDiscovery";
 import {
+  ProjectDevServerEvent,
+  ProjectDiscoverScriptsInput,
+  ProjectDiscoverScriptsResult,
+  ProjectListDevServersResult,
   ProjectListDirectoriesInput,
   ProjectListDirectoriesResult,
+  ProjectRunDevServerInput,
+  ProjectRunDevServerResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesInput,
   ProjectSearchLocalEntriesResult,
+  ProjectStopDevServerInput,
+  ProjectStopDevServerResult,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project";
@@ -232,6 +240,12 @@ export const WsProjectsListDirectoriesRpc = Rpc.make(WS_METHODS.projectsListDire
   error: WsRpcError,
 });
 
+export const WsProjectsDiscoverScriptsRpc = Rpc.make(WS_METHODS.projectsDiscoverScripts, {
+  payload: ProjectDiscoverScriptsInput,
+  success: ProjectDiscoverScriptsResult,
+  error: WsRpcError,
+});
+
 export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntries, {
   payload: ProjectSearchEntriesInput,
   success: ProjectSearchEntriesResult,
@@ -249,6 +263,34 @@ export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   success: ProjectWriteFileResult,
   error: WsRpcError,
 });
+
+export const WsProjectsRunDevServerRpc = Rpc.make(WS_METHODS.projectsRunDevServer, {
+  payload: ProjectRunDevServerInput,
+  success: ProjectRunDevServerResult,
+  error: WsRpcError,
+});
+
+export const WsProjectsStopDevServerRpc = Rpc.make(WS_METHODS.projectsStopDevServer, {
+  payload: ProjectStopDevServerInput,
+  success: ProjectStopDevServerResult,
+  error: WsRpcError,
+});
+
+export const WsProjectsListDevServersRpc = Rpc.make(WS_METHODS.projectsListDevServers, {
+  payload: Schema.Struct({}),
+  success: ProjectListDevServersResult,
+  error: WsRpcError,
+});
+
+export const WsSubscribeProjectDevServerEventsRpc = Rpc.make(
+  WS_METHODS.subscribeProjectDevServerEvents,
+  {
+    payload: Schema.Struct({}),
+    success: ProjectDevServerEvent,
+    error: WsRpcError,
+    stream: true,
+  },
+);
 
 export const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   payload: FilesystemBrowseInput,
@@ -627,10 +669,15 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationSubscribeThreadRpc,
   WsOrchestrationUnsubscribeThreadRpc,
   WsOrchestrationSubscribeDomainEventsRpc,
+  WsProjectsDiscoverScriptsRpc,
   WsProjectsListDirectoriesRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsSearchLocalEntriesRpc,
   WsProjectsWriteFileRpc,
+  WsProjectsRunDevServerRpc,
+  WsProjectsStopDevServerRpc,
+  WsProjectsListDevServersRpc,
+  WsSubscribeProjectDevServerEventsRpc,
   WsFilesystemBrowseRpc,
   WsShellOpenInEditorRpc,
   WsGitGithubRepositoryRpc,

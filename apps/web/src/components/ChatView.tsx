@@ -50,7 +50,6 @@ import {
   resolveThreadBranchSourceCwd,
   resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd,
 } from "@t3tools/shared/threadEnvironment";
-import { deriveTerminalCommandIdentity } from "@t3tools/shared/terminalThreads";
 import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
 import {
   useCallback,
@@ -242,6 +241,7 @@ import {
   projectScriptIdFromCommand,
   setupProjectScript,
 } from "~/projectScripts";
+import { runProjectCommandInTerminal } from "~/projectTerminalRunner";
 import { newCommandId, newMessageId, newProjectId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import {
@@ -609,8 +609,6 @@ function buildQueuedComposerPreviewText(input: {
 }
 
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
-const SCRIPT_TERMINAL_COLS = 120;
-const SCRIPT_TERMINAL_ROWS = 30;
 const VOICE_RECORDER_ACTION_ARM_DELAY_MS = 250;
 
 function warnVoiceGuard(event: string, details?: Record<string, unknown>) {
@@ -3745,36 +3743,25 @@ export default function ChatView({
       }
       setTerminalFocusRequestId((value) => value + 1);
 
-      const runtimeEnv = projectScriptRuntimeEnv({
-        project: {
-          cwd: activeProject.cwd,
-        },
-        worktreePath: options?.worktreePath ?? activeThread.worktreePath ?? null,
-        ...(options?.env ? { extraEnv: options.env } : {}),
-      });
-      const openTerminalInput: Parameters<typeof api.terminal.open>[0] = {
-        threadId: activeThreadId,
-        terminalId: targetTerminalId,
-        cwd: targetCwd,
-        env: runtimeEnv,
-        cols: SCRIPT_TERMINAL_COLS,
-        rows: SCRIPT_TERMINAL_ROWS,
-      };
-
       try {
-        const terminalCommandIdentity = deriveTerminalCommandIdentity(script.command);
-        await api.terminal.open(openTerminalInput);
-        if (terminalCommandIdentity) {
-          storeSetTerminalMetadata(activeThreadId, targetTerminalId, {
-            cliKind: terminalCommandIdentity.cliKind,
-            label: terminalCommandIdentity.title,
-          });
-        }
-        await api.terminal.write({
+        const { metadata } = await runProjectCommandInTerminal({
+          api,
           threadId: activeThreadId,
           terminalId: targetTerminalId,
-          data: `${script.command}\r`,
+          project: {
+            cwd: activeProject.cwd,
+          },
+          cwd: targetCwd,
+          command: script.command,
+          worktreePath: options?.worktreePath ?? activeThread.worktreePath ?? null,
+          ...(options?.env ? { env: options.env } : {}),
         });
+        if (metadata) {
+          storeSetTerminalMetadata(activeThreadId, targetTerminalId, {
+            cliKind: metadata.cliKind,
+            label: metadata.label,
+          });
+        }
       } catch (error) {
         setThreadError(
           activeThreadId,

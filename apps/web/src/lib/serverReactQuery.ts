@@ -2,6 +2,10 @@ import type { ProviderKind, ServerStopLocalServerInput } from "@t3tools/contract
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
 
+export const LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS = 10_000;
+export const LOCAL_SERVERS_BACKGROUND_REFETCH_INTERVAL_MS = 30_000;
+const LOCAL_SERVERS_DEFAULT_STALE_TIME_MS = 3_000;
+
 export const serverQueryKeys = {
   all: ["server"] as const,
   config: () => ["server", "config"] as const,
@@ -75,7 +79,17 @@ export function serverWorktreesQueryOptions() {
   });
 }
 
-export function serverLocalServersQueryOptions(enabled = true) {
+export function serverLocalServersQueryOptions(
+  input:
+    | boolean
+    | {
+        enabled?: boolean;
+        refetchInterval?: number | false;
+        staleTime?: number;
+      } = true,
+) {
+  const options = typeof input === "boolean" ? { enabled: input } : input;
+  const enabled = options.enabled ?? true;
   return queryOptions({
     queryKey: serverQueryKeys.localServers(),
     queryFn: async () => {
@@ -83,8 +97,9 @@ export function serverLocalServersQueryOptions(enabled = true) {
       return api.server.listLocalServers();
     },
     enabled,
-    staleTime: 3_000,
-    refetchInterval: enabled ? 10_000 : false,
+    staleTime: options.staleTime ?? LOCAL_SERVERS_DEFAULT_STALE_TIME_MS,
+    refetchInterval:
+      enabled ? (options.refetchInterval ?? LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS) : false,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });

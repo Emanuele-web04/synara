@@ -25,7 +25,7 @@ import {
   SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
-import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+import { isWorkspaceRootWithin, workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 import {
   hasLiveLatestTurn,
   findLatestProposedPlan,
@@ -442,6 +442,30 @@ export function findWorkspaceRootMatch<T>(
   getWorkspaceRoot: (item: T) => string,
 ): T | undefined {
   return items.find((item) => workspaceRootsEqual(getWorkspaceRoot(item), targetWorkspaceRoot));
+}
+
+// Finds the item whose workspace root most specifically contains `targetPath`
+// (equal to it, or its closest ancestor). Used to attribute a dev server's cwd
+// to a project even when it runs from a monorepo subdirectory; the deepest root
+// wins so a nested project beats its parent.
+export function findDeepestWorkspaceRootMatch<T>(
+  items: readonly T[],
+  targetPath: string,
+  getWorkspaceRoot: (item: T) => string,
+): T | undefined {
+  let best: T | undefined;
+  let bestRootLength = -1;
+  for (const item of items) {
+    const root = getWorkspaceRoot(item);
+    if (!isWorkspaceRootWithin(targetPath, root)) {
+      continue;
+    }
+    if (root.length > bestRootLength) {
+      best = item;
+      bestRootLength = root.length;
+    }
+  }
+  return best;
 }
 
 // Rechecks an existing local project against the server before the add flow decides to reuse it.

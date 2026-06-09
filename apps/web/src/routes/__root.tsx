@@ -58,6 +58,7 @@ import {
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import { useProjectRunStore } from "../projectRunStore";
 import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
@@ -1119,6 +1120,35 @@ function EventRouter() {
         agentState: activity.agentState,
       });
     });
+    // Dev servers are first-class server processes; mirror their lifecycle into the
+    // client store so the sidebar indicator survives reconnects and stays consistent
+    // across tabs without owning any thread/terminal state.
+    const invalidateLocalServers = () => {
+      void queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
+    };
+    const unsubDevServerEvent = api.projects.onDevServerEvent((event) => {
+      const store = useProjectRunStore.getState();
+      if (event.type === "snapshot") {
+        store.replaceAll(event.servers);
+      } else if (event.type === "upserted") {
+        store.upsertRun(event.server);
+      } else {
+        store.removeRun(event.projectId);
+      }
+      invalidateLocalServers();
+    });
+    // The channel's initial snapshot may have arrived before this listener was
+    // registered, so seed from the authoritative registry on mount.
+    void api.projects
+      .listDevServers()
+      .then(({ servers }) => {
+        if (disposed) {
+          return;
+        }
+        useProjectRunStore.getState().replaceAll(servers);
+        invalidateLocalServers();
+      })
+      .catch(() => undefined);
     const unsubWelcome = onServerWelcome((payload) => {
       void (async () => {
         setWorkspaceHomeDir(payload.homeDir);
@@ -1259,6 +1289,7 @@ function EventRouter() {
       unsubShellEvent();
       unsubThreadEvent();
       unsubTerminalEvent();
+      unsubDevServerEvent();
       unsubWelcome();
       unsubServerConfigUpdated();
       unsubProviderStatusesUpdated();

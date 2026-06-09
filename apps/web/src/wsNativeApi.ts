@@ -21,6 +21,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
+  type ProjectDevServerEvent,
   type ServerProviderStatusesUpdatedPayload,
   type ServerLifecycleStreamEvent,
   type ServerSettingsUpdatedPayload,
@@ -67,6 +68,7 @@ function omitNullUserInputAnswers(
   };
 }
 const terminalEventListeners = new Set<(payload: TerminalEvent) => void>();
+const projectDevServerEventListeners = new Set<(payload: ProjectDevServerEvent) => void>();
 const orchestrationDomainEventListeners = new Set<(payload: OrchestrationEvent) => void>();
 const orchestrationShellEventListeners = new Set<(payload: OrchestrationShellStreamItem) => void>();
 const orchestrationThreadEventListeners = new Set<
@@ -389,6 +391,16 @@ export function createWsNativeApi(): NativeApi {
       }
     }
   });
+  transport.subscribe(WS_CHANNELS.projectDevServerEvent, (message) => {
+    const payload = message.data;
+    for (const listener of projectDevServerEventListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) => {
     const payload = message.data;
     for (const listener of orchestrationDomainEventListeners) {
@@ -461,11 +473,21 @@ export function createWsNativeApi(): NativeApi {
       },
     },
     projects: {
+      discoverScripts: (input) => transport.request(WS_METHODS.projectsDiscoverScripts, input),
       listDirectories: (input) => transport.request(WS_METHODS.projectsListDirectories, input),
       searchEntries: (input) => transport.request(WS_METHODS.projectsSearchEntries, input),
       searchLocalEntries: (input) =>
         transport.request(WS_METHODS.projectsSearchLocalEntries, input),
       writeFile: (input) => transport.request(WS_METHODS.projectsWriteFile, input),
+      runDevServer: (input) => transport.request(WS_METHODS.projectsRunDevServer, input),
+      stopDevServer: (input) => transport.request(WS_METHODS.projectsStopDevServer, input),
+      listDevServers: () => transport.request(WS_METHODS.projectsListDevServers),
+      onDevServerEvent: (callback) => {
+        projectDevServerEventListeners.add(callback);
+        return () => {
+          projectDevServerEventListeners.delete(callback);
+        };
+      },
     },
     filesystem: {
       browse: (input) => transport.request(WS_METHODS.filesystemBrowse, input),
@@ -829,6 +851,7 @@ export function resetWsNativeApiForTest(): void {
   serverSettingsUpdatedListeners.clear();
   gitActionProgressListeners.clear();
   terminalEventListeners.clear();
+  projectDevServerEventListeners.clear();
   orchestrationDomainEventListeners.clear();
   orchestrationShellEventListeners.clear();
   orchestrationThreadEventListeners.clear();
@@ -846,6 +869,7 @@ if (import.meta.hot) {
     serverSettingsUpdatedListeners.clear();
     gitActionProgressListeners.clear();
     terminalEventListeners.clear();
+    projectDevServerEventListeners.clear();
     orchestrationDomainEventListeners.clear();
     orchestrationShellEventListeners.clear();
     orchestrationThreadEventListeners.clear();

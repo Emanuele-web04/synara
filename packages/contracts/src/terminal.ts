@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { TrimmedNonEmptyString } from "./baseSchemas";
+import { ProcessEnvRecord, TrimmedNonEmptyString } from "./baseSchemas";
 
 export const DEFAULT_TERMINAL_ID = "default";
 
@@ -21,13 +21,7 @@ const TerminalRowsSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(TERMIN
   Schema.isLessThanOrEqualTo(TERMINAL_MAX_ROWS),
 );
 const TerminalIdSchema = TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(128));
-const TerminalEnvKeySchema = Schema.String.check(
-  Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/),
-).check(Schema.isMaxLength(128));
-const TerminalEnvValueSchema = Schema.String.check(Schema.isMaxLength(8_192));
-const TerminalEnvSchema = Schema.Record(TerminalEnvKeySchema, TerminalEnvValueSchema).check(
-  Schema.isMaxProperties(128),
-);
+const TerminalEnvSchema = ProcessEnvRecord;
 
 const TerminalIdWithDefaultSchema = TerminalIdSchema.pipe(
   Schema.withDecodingDefault(() => DEFAULT_TERMINAL_ID),
@@ -50,6 +44,11 @@ export const TerminalOpenInput = Schema.Struct({
   cols: Schema.optional(TerminalColsSchema),
   rows: Schema.optional(TerminalRowsSchema),
   env: Schema.optional(TerminalEnvSchema),
+  // When false, the PTY is still drained and history is still maintained, but
+  // live `output` events are not broadcast. Used for headless background
+  // sessions (e.g. dev servers) whose output no renderer consumes. Defaults to
+  // true so interactive terminals stream as usual.
+  streamOutput: Schema.optional(Schema.Boolean),
 });
 export type TerminalOpenInput = Schema.Codec.Encoded<typeof TerminalOpenInput>;
 
