@@ -22,63 +22,58 @@ import {
   type ServerVoiceTranscriptionInput,
   type ServerVoiceTranscriptionResult,
 } from "@t3tools/contracts";
-import { getModelSelectionBooleanOptionValue } from "@t3tools/shared/model";
 import { Deferred, Effect, ServiceMap, Stream } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 
-import { CODEX_DEFAULT_MODEL, CODEX_DISCOVERY_SESSION_IDLE_MS } from "./codexAppServer.config.ts";
+import { CODEX_DEFAULT_MODEL } from "./codexAppServer.config.ts";
+import {
+  type CodexDiscoveryQueryDeps,
+  listModels as listModelsQuery,
+  listPlugins as listPluginsQuery,
+  listSkills as listSkillsQuery,
+  readPlugin as readPluginQuery,
+} from "./codexAppServer.discovery.ts";
+import {
+  type CodexDiscoverySessionDeps,
+  getOrCreateDiscoverySession as getOrCreateDiscoverySessionFn,
+  resolveContextForDiscovery as resolveContextForDiscoveryFn,
+  resolveVoiceTranscriptionAuth as resolveVoiceTranscriptionAuthFn,
+  scheduleDiscoverySessionIdleStop as scheduleDiscoverySessionIdleStopFn,
+  stopDiscoverySession as stopDiscoverySessionFn,
+} from "./codexAppServer.discoverySession.ts";
+import {
+  type CodexSessionOpenDeps,
+  forkThread as forkThreadFn,
+  startSession as startSessionFn,
+} from "./codexAppServer.sessionOpen.ts";
+import {
+  type CodexHandlerDeps,
+  handleResponse,
+  handleServerNotification,
+  handleServerRequest,
+  handleStdoutLine,
+  resolveApprovalRequest,
+  settleTrackedReview,
+} from "./codexAppServer.handlers.ts";
 import {
   classifyCodexStderrLine,
   isIgnorableCodexProcessLine,
-  isJsonObjectLine,
-  isRecoverableThreadResumeError,
-  normalizeCodexProcessLine,
-  normalizeCodexUserVisibleErrorMessage,
-  normalizeProviderThreadId,
   readCodexAccountSnapshot,
-  readResumeCursorThreadId,
-  shouldRetrySkillsListWithCwdFallback,
-  toTurnId,
 } from "./codexAppServer.protocol.ts";
 import {
   findLatestReviewTurnId,
-  isExitedReviewModeNotification,
   isExitedReviewTurn,
-  isResponse,
-  isServerNotification,
-  isServerRequest,
   isTurnInterruptTimeout,
   parseModelListResponse,
-  parsePluginListResponse,
-  parsePluginReadResponse,
-  parseSkillsListResponse,
   parseThreadSnapshot,
-  readArray,
-  readBoolean,
-  readObject,
-  readProviderConversationId,
-  readRouteFields,
-  readString,
-  readThreadIdFromResponse,
-  requestKindForMethod,
-  toCodexReviewTarget,
 } from "./codexAppServer.parsers.ts";
 import {
-  buildCodexCollaborationMode,
-  buildCodexInitializeParams,
   CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES,
-  ensureIsolatedScratchWorkspace,
-  mapCodexRuntimeMode,
-  normalizeCodexModelSlug,
-  readCodexProviderOptions,
   readResumeThreadId,
-  resolveCodexModelForAccount,
-  resolveCodexTurnOverrides,
   toCodexUserInputAnswers,
 } from "./codexAppServer.session.ts";
 import type {
   CodexAccountSnapshot,
-  CodexApprovalPolicy,
   CodexAppServerSendTurnInput,
   CodexAppServerStartSessionInput,
   CodexPluginListInput,
@@ -90,16 +85,19 @@ import type {
   CodexThreadTurnSnapshot,
   CodexTransportFactory,
   CodexTransportFactoryInput,
-  CodexTurnSandboxPolicy,
   CodexVoiceTranscriptionAuthContext,
   CodexAppServerManagerEvents,
   CodexAppServerManagerOptions,
   JsonRpcNotification,
   JsonRpcRequest,
   JsonRpcResponse,
-  PendingApprovalRequest,
 } from "./codexAppServer.types.ts";
-import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
+import {
+  type CodexTurnDeps,
+  sendTurn as sendTurnFn,
+  startReview as startReviewFn,
+  steerTurn as steerTurnFn,
+} from "./codexAppServer.turns.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
 import { selectAvailableCodexModel } from "./provider/codexModelSelection.ts";
 import { assertSupportedCodexCliVersion } from "./provider/process/codexCliVersionGate.ts";
@@ -154,11 +152,70 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
   private readonly services: ServiceMap.ServiceMap<never> | undefined;
   private readonly transportFactory: CodexTransportFactory | undefined;
+  private readonly handlerDeps: CodexHandlerDeps;
+  private readonly discoveryQueryDeps: CodexDiscoveryQueryDeps;
+  private readonly discoverySessionDeps: CodexDiscoverySessionDeps;
+  private readonly turnDeps: CodexTurnDeps;
+  private readonly sessionOpenDeps: CodexSessionOpenDeps;
   constructor(services?: ServiceMap.ServiceMap<never>, options?: CodexAppServerManagerOptions) {
     super();
     this.services = services;
     this.transportFactory = options?.createTransport;
     this.runPromise = services ? Effect.runPromiseWith(services) : Effect.runPromise;
+    this.handlerDeps = {
+      emitEvent: (event) => this.emitEvent(event),
+      emitErrorEvent: (context, method, message) => this.emitErrorEvent(context, method, message),
+      writeMessage: (context, message) => this.writeMessage(context, message),
+      updateSession: (context, updates) => this.updateSession(context, updates),
+    };
+    this.discoverySessionDeps = {
+      sessions: this.sessions,
+      discoverySessions: this.discoverySessions,
+      discoverySessionIdleTimers: this.discoverySessionIdleTimers,
+      requireSession: (...args) => this.requireSession(...args),
+      isContextAlive: (...args) => this.isContextAlive(...args),
+      assertSupportedCodexCliVersion: (...args) => this.assertSupportedCodexCliVersion(...args),
+      createTransport: (...args) => this.createTransport(...args),
+      attachProcessListeners: (...args) => this.attachProcessListeners(...args),
+      sendRequest: (...args) => this.sendRequest(...args),
+      writeMessage: (...args) => this.writeMessage(...args),
+      updateSession: (...args) => this.updateSession(...args),
+      closeTransport: (...args) => this.closeTransport(...args),
+      getOrCreateDiscoverySession: (...args) => this.getOrCreateDiscoverySession(...args),
+      scheduleDiscoverySessionIdleStop: (...args) => this.scheduleDiscoverySessionIdleStop(...args),
+      stopDiscoverySession: (...args) => this.stopDiscoverySession(...args),
+    };
+    this.sessionOpenDeps = {
+      sessions: this.sessions,
+      localStartupDiscoveryCache: this.localStartupDiscoveryCache,
+      runPromise: (effect) => this.runPromise(effect),
+      stopSession: (...args) => this.stopSession(...args),
+      assertSupportedCodexCliVersion: (...args) => this.assertSupportedCodexCliVersion(...args),
+      createTransport: (...args) => this.createTransport(...args),
+      attachProcessListeners: (...args) => this.attachProcessListeners(...args),
+      emitLifecycleEvent: (...args) => this.emitLifecycleEvent(...args),
+      emitErrorEvent: (...args) => this.emitErrorEvent(...args),
+      emitEvent: (...args) => this.emitEvent(...args),
+      sendRequest: (...args) => this.sendRequest(...args),
+      writeMessage: (...args) => this.writeMessage(...args),
+      updateSession: (...args) => this.updateSession(...args),
+      resolveStartupDiscovery: (...args) => this.resolveStartupDiscovery(...args),
+      selectSandboxCodexModel: (...args) => this.selectSandboxCodexModel(...args),
+    };
+    this.turnDeps = {
+      requireSession: (...args) => this.requireSession(...args),
+      sendRequest: (...args) => this.sendRequest(...args),
+      updateSession: (...args) => this.updateSession(...args),
+      sendTurn: (...args) => this.sendTurn(...args),
+    };
+    this.discoveryQueryDeps = {
+      skillsCache: this.skillsCache,
+      pluginsCache: this.pluginsCache,
+      pluginDetailCache: this.pluginDetailCache,
+      modelCache: this.modelCache,
+      resolveContextForDiscovery: (...args) => this.resolveContextForDiscovery(...args),
+      sendRequest: (...args) => this.sendRequest(...args),
+    };
   }
 
   // The production services map carries `ChildProcessSpawner`; its type is erased
@@ -267,494 +324,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   async startSession(input: CodexAppServerStartSessionInput): Promise<ProviderSession> {
-    const threadId = input.threadId;
-    const now = new Date().toISOString();
-    let context: CodexSessionContext | undefined;
-
-    try {
-      const existing = this.sessions.get(threadId);
-      if (existing) {
-        this.stopSession(threadId);
-      }
-
-      const resolvedCwd = input.cwd ?? ensureIsolatedScratchWorkspace(threadId);
-
-      const session: ProviderSession = {
-        provider: "codex",
-        status: "connecting",
-        runtimeMode: input.runtimeMode,
-        model: normalizeCodexModelSlug(input.model),
-        cwd: resolvedCwd,
-        threadId,
-        createdAt: now,
-        updatedAt: now,
-      };
-
-      const codexOptions = readCodexProviderOptions(input);
-      const codexBinaryPath = codexOptions.binaryPath ?? "codex";
-      const codexHomePath = codexOptions.homePath;
-      this.assertSupportedCodexCliVersion({
-        binaryPath: codexBinaryPath,
-        cwd: resolvedCwd,
-        ...(codexHomePath ? { homePath: codexHomePath } : {}),
-        hasSuppliedTransport: input.createTransport !== undefined,
-      });
-      const transport = await this.createTransport(
-        {
-          binaryPath: codexBinaryPath,
-          cwd: resolvedCwd,
-          ...(codexHomePath ? { homePath: codexHomePath } : {}),
-        },
-        input.createTransport,
-      );
-
-      context = {
-        session,
-        account: {
-          type: "unknown",
-          planType: null,
-          sparkEnabled: true,
-        },
-        transport,
-        pending: new Map(),
-        pendingApprovals: new Map(),
-        pendingUserInputs: new Map(),
-        collabReceiverTurns: new Map(),
-        collabReceiverParents: new Map(),
-        reviewTurnIds: new Set(),
-        nextRequestId: 1,
-        stopping: false,
-      };
-
-      this.sessions.set(threadId, context);
-      this.attachProcessListeners(context);
-
-      this.emitLifecycleEvent(context, "session/connecting", "Starting codex app-server");
-
-      const startupStartedAt = Date.now();
-      await this.sendRequest(context, "initialize", buildCodexInitializeParams());
-      const initializeResolvedAt = Date.now();
-
-      this.writeMessage(context, { method: "initialized" });
-      const discoveryCacheKey =
-        input.createTransport === undefined
-          ? `${codexBinaryPath}\u001f${codexHomePath ?? ""}`
-          : undefined;
-      const usedDiscoveryCache =
-        discoveryCacheKey !== undefined && this.localStartupDiscoveryCache.has(discoveryCacheKey);
-      const discoveryStartedAt = Date.now();
-      const discovery = await this.resolveStartupDiscovery(context, discoveryCacheKey);
-      const discoveryResolvedAt = Date.now();
-      const advertisedModelSlugs = discovery.advertisedModelSlugs;
-      context.account = discovery.account;
-
-      const normalizedModel = resolveCodexModelForAccount(
-        normalizeCodexModelSlug(input.model),
-        context.account,
-      );
-      // Remote-only: a sandbox codex may advertise a different model catalog than
-      // the host, so a request it does not recognize would wedge the turn. Resolve
-      // against what the sandbox actually advertised, falling back to the product
-      // default. The local path is untouched (the gate skips it), so it stays
-      // byte-for-byte unchanged.
-      const effectiveModel =
-        input.createTransport !== undefined
-          ? this.selectSandboxCodexModel(normalizedModel, advertisedModelSlugs, {
-              threadId,
-            })
-          : (normalizedModel ?? null);
-      const sessionOverrides = {
-        model: effectiveModel,
-        ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
-        cwd: resolvedCwd,
-        ...mapCodexRuntimeMode(input.runtimeMode ?? "full-access"),
-      };
-
-      const threadStartParams = {
-        ...sessionOverrides,
-        experimentalRawEvents: false,
-      };
-      const resumeThreadId = readResumeThreadId(input);
-      this.emitLifecycleEvent(
-        context,
-        "session/threadOpenRequested",
-        resumeThreadId
-          ? `Attempting to resume thread ${resumeThreadId}.`
-          : "Starting a new Codex thread.",
-      );
-      await Effect.logInfo("codex app-server opening thread", {
-        threadId,
-        requestedRuntimeMode: input.runtimeMode,
-        requestedModel: normalizedModel ?? null,
-        requestedCwd: resolvedCwd,
-        resumeThreadId: resumeThreadId ?? null,
-      }).pipe(this.runPromise);
-
-      let threadOpenMethod: "thread/start" | "thread/resume" = "thread/start";
-      let threadOpenResponse: unknown;
-      if (resumeThreadId) {
-        try {
-          threadOpenMethod = "thread/resume";
-          threadOpenResponse = await this.sendRequest(context, "thread/resume", {
-            ...sessionOverrides,
-            threadId: resumeThreadId,
-          });
-        } catch (error) {
-          if (!isRecoverableThreadResumeError(error)) {
-            this.emitErrorEvent(
-              context,
-              "session/threadResumeFailed",
-              error instanceof Error ? error.message : "Codex thread resume failed.",
-            );
-            await Effect.logWarning("codex app-server thread resume failed", {
-              threadId,
-              requestedRuntimeMode: input.runtimeMode,
-              resumeThreadId,
-              recoverable: false,
-              cause: error instanceof Error ? error.message : String(error),
-            }).pipe(this.runPromise);
-            throw error;
-          }
-
-          threadOpenMethod = "thread/start";
-          this.emitLifecycleEvent(
-            context,
-            "session/threadResumeFallback",
-            `Could not resume thread ${resumeThreadId}; started a new thread instead.`,
-          );
-          await Effect.logWarning("codex app-server thread resume fell back to fresh start", {
-            threadId,
-            requestedRuntimeMode: input.runtimeMode,
-            resumeThreadId,
-            recoverable: true,
-            cause: error instanceof Error ? error.message : String(error),
-          }).pipe(this.runPromise);
-          threadOpenResponse = await this.sendRequest(context, "thread/start", threadStartParams);
-        }
-      } else {
-        threadOpenMethod = "thread/start";
-        threadOpenResponse = await this.sendRequest(context, "thread/start", threadStartParams);
-      }
-
-      const threadOpenRecord = readObject(threadOpenResponse);
-      const threadIdRaw =
-        readString(readObject(threadOpenRecord, "thread"), "id") ??
-        readString(threadOpenRecord, "threadId");
-      if (!threadIdRaw) {
-        throw new Error(`${threadOpenMethod} response did not include a thread id.`);
-      }
-      const providerThreadId = threadIdRaw;
-
-      this.updateSession(context, {
-        status: "ready",
-        resumeCursor: { threadId: providerThreadId },
-      });
-      this.emitLifecycleEvent(
-        context,
-        "session/threadOpenResolved",
-        `Codex ${threadOpenMethod} resolved.`,
-      );
-      await Effect.logInfo("codex app-server thread open resolved", {
-        threadId,
-        threadOpenMethod,
-        requestedResumeThreadId: resumeThreadId ?? null,
-        resolvedThreadId: providerThreadId,
-        requestedRuntimeMode: input.runtimeMode,
-      }).pipe(this.runPromise);
-      this.emitLifecycleEvent(context, "session/ready", `Connected to thread ${providerThreadId}`);
-      await Effect.logInfo("codex app-server startup timings", {
-        threadId,
-        initializeMs: initializeResolvedAt - startupStartedAt,
-        discoveryMs: discoveryResolvedAt - discoveryStartedAt,
-        threadOpenMs: Date.now() - discoveryResolvedAt,
-        totalMs: Date.now() - startupStartedAt,
-        usedDiscoveryCache,
-      }).pipe(this.runPromise);
-      return { ...context.session };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to start Codex session.";
-      if (context) {
-        this.updateSession(context, {
-          status: "error",
-          lastError: message,
-        });
-        this.emitErrorEvent(context, "session/startFailed", message);
-        this.stopSession(threadId);
-      } else {
-        this.emitEvent({
-          id: EventId.makeUnsafe(randomUUID()),
-          kind: "error",
-          provider: "codex",
-          threadId,
-          createdAt: new Date().toISOString(),
-          method: "session/startFailed",
-          message,
-        });
-      }
-      throw new Error(message, { cause: error });
-    }
+    return startSessionFn(this.sessionOpenDeps, input);
   }
 
   async sendTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
-    const context = this.requireSession(input.threadId);
-    context.collabReceiverTurns.clear();
-
-    // Normal sends never interrupt active work. The orchestration layer decides
-    // when a queued follow-up is ready to become a provider turn.
-    const turnInput: Array<
-      | { type: "text"; text: string; text_elements: [] }
-      | { type: "image"; url: string }
-      | { type: "skill"; name: string; path: string }
-      | { type: "mention"; name: string; path: string }
-    > = [];
-    if (input.input) {
-      turnInput.push({
-        type: "text",
-        text: input.input,
-        text_elements: [],
-      });
-    }
-    for (const attachment of input.attachments ?? []) {
-      if (attachment.type === "image") {
-        turnInput.push({
-          type: "image",
-          url: attachment.url,
-        });
-      }
-    }
-    for (const skill of input.skills ?? []) {
-      turnInput.push({
-        type: "skill",
-        name: skill.name,
-        path: skill.path,
-      });
-    }
-    for (const mention of input.mentions ?? []) {
-      turnInput.push({
-        type: "mention",
-        name: mention.name,
-        path: mention.path,
-      });
-    }
-    if (turnInput.length === 0) {
-      throw new Error("Turn input must include text or attachments.");
-    }
-
-    const providerThreadId = readResumeThreadId({
-      threadId: context.session.threadId,
-      runtimeMode: context.session.runtimeMode,
-      resumeCursor: context.session.resumeCursor,
-    });
-    if (!providerThreadId) {
-      throw new Error("Session is missing provider resume thread id.");
-    }
-    const turnStartParams: {
-      threadId: string;
-      input: Array<
-        | { type: "text"; text: string; text_elements: [] }
-        | { type: "image"; url: string }
-        | { type: "skill"; name: string; path: string }
-        | { type: "mention"; name: string; path: string }
-      >;
-      model?: string;
-      serviceTier?: string | null;
-      effort?: string;
-      approvalPolicy?: CodexApprovalPolicy;
-      sandboxPolicy?: CodexTurnSandboxPolicy;
-      collaborationMode?: {
-        mode: "default" | "plan";
-        settings: {
-          model: string;
-          reasoning_effort: string;
-          developer_instructions: string;
-        };
-      };
-    } = {
-      threadId: providerThreadId,
-      input: turnInput,
-      ...resolveCodexTurnOverrides(context),
-    };
-    const normalizedModel = resolveCodexModelForAccount(
-      normalizeCodexModelSlug(input.model ?? context.session.model),
-      context.account,
-    );
-    if (normalizedModel) {
-      turnStartParams.model = normalizedModel;
-    }
-    if (input.serviceTier !== undefined) {
-      turnStartParams.serviceTier = input.serviceTier;
-    }
-    if (input.effort) {
-      turnStartParams.effort = input.effort;
-    }
-    const collaborationMode = buildCodexCollaborationMode({
-      ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
-      ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
-      ...(input.effort !== undefined ? { effort: input.effort } : {}),
-    });
-    if (collaborationMode) {
-      if (!turnStartParams.model) {
-        turnStartParams.model = collaborationMode.settings.model;
-      }
-      turnStartParams.collaborationMode = collaborationMode;
-    }
-
-    const response = await this.sendRequest(context, "turn/start", turnStartParams);
-    const turnIdRaw = readString(readObject(readObject(response), "turn"), "id");
-    if (!turnIdRaw) {
-      throw new Error("turn/start response did not include a turn id.");
-    }
-    const turnId = TurnId.makeUnsafe(turnIdRaw);
-
-    this.updateSession(context, {
-      status: "running",
-      activeTurnId: turnId,
-      ...(context.session.resumeCursor !== undefined
-        ? { resumeCursor: context.session.resumeCursor }
-        : {}),
-    });
-
-    return {
-      threadId: context.session.threadId,
-      turnId,
-      ...(context.session.resumeCursor !== undefined
-        ? { resumeCursor: context.session.resumeCursor }
-        : {}),
-    };
+    return sendTurnFn(this.turnDeps, input);
   }
 
   async steerTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
-    const context = this.requireSession(input.threadId);
-    context.collabReceiverTurns.clear();
-
-    const activeTurnId = context.session.activeTurnId;
-    if (context.session.status !== "running" || activeTurnId === undefined) {
-      return this.sendTurn(input);
-    }
-
-    const turnInput: Array<
-      | { type: "text"; text: string; text_elements: [] }
-      | { type: "image"; url: string }
-      | { type: "skill"; name: string; path: string }
-      | { type: "mention"; name: string; path: string }
-    > = [];
-    if (input.input) {
-      turnInput.push({
-        type: "text",
-        text: input.input,
-        text_elements: [],
-      });
-    }
-    for (const attachment of input.attachments ?? []) {
-      if (attachment.type === "image") {
-        turnInput.push({
-          type: "image",
-          url: attachment.url,
-        });
-      }
-    }
-    for (const skill of input.skills ?? []) {
-      turnInput.push({
-        type: "skill",
-        name: skill.name,
-        path: skill.path,
-      });
-    }
-    for (const mention of input.mentions ?? []) {
-      turnInput.push({
-        type: "mention",
-        name: mention.name,
-        path: mention.path,
-      });
-    }
-    if (turnInput.length === 0) {
-      throw new Error("Turn input must include text or attachments.");
-    }
-
-    const providerThreadId = readResumeThreadId({
-      threadId: context.session.threadId,
-      runtimeMode: context.session.runtimeMode,
-      resumeCursor: context.session.resumeCursor,
-    });
-    if (!providerThreadId) {
-      throw new Error("Session is missing provider resume thread id.");
-    }
-
-    const response = await this.sendRequest(context, "turn/steer", {
-      threadId: providerThreadId,
-      input: turnInput,
-      expectedTurnId: activeTurnId,
-    });
-
-    const turnIdRaw = readString(readObject(response), "turnId");
-    if (!turnIdRaw) {
-      throw new Error("turn/steer response did not include a turn id.");
-    }
-    const turnId = TurnId.makeUnsafe(turnIdRaw);
-
-    this.updateSession(context, {
-      status: "running",
-      activeTurnId: turnId,
-      ...(context.session.resumeCursor !== undefined
-        ? { resumeCursor: context.session.resumeCursor }
-        : {}),
-    });
-
-    return {
-      threadId: context.session.threadId,
-      turnId,
-      ...(context.session.resumeCursor !== undefined
-        ? { resumeCursor: context.session.resumeCursor }
-        : {}),
-    };
+    return steerTurnFn(this.turnDeps, input);
   }
 
   async startReview(input: ProviderStartReviewInput): Promise<ProviderTurnStartResult> {
-    const context = this.requireSession(input.threadId);
-    const providerThreadId = readResumeThreadId({
-      threadId: context.session.threadId,
-      runtimeMode: context.session.runtimeMode,
-      resumeCursor: context.session.resumeCursor,
-    });
-    if (!providerThreadId) {
-      throw new Error("Session is missing a provider resume thread id.");
-    }
-
-    const response = await this.sendRequest(context, "review/start", {
-      threadId: providerThreadId,
-      delivery: "inline",
-      target: toCodexReviewTarget(input.target),
-    });
-
-    const turn = readObject(readObject(response), "turn");
-    const turnIdRaw = readString(turn, "id");
-    if (!turnIdRaw) {
-      throw new Error("review/start response did not include a turn id.");
-    }
-    const turnId = TurnId.makeUnsafe(turnIdRaw);
-    context.reviewTurnIds.add(turnId);
-    console.log("[codex-review] review/start acknowledged", {
-      threadId: context.session.threadId,
-      providerThreadId,
-      turnId,
-      target: input.target.type,
-    });
-
-    this.updateSession(context, {
-      status: "running",
-      activeTurnId: turnId,
-      ...(context.session.resumeCursor !== undefined
-        ? { resumeCursor: context.session.resumeCursor }
-        : {}),
-    });
-
-    return {
-      threadId: context.session.threadId,
-      turnId,
-      ...(context.session.resumeCursor !== undefined
-        ? { resumeCursor: context.session.resumeCursor }
-        : {}),
-    };
+    return startReviewFn(this.turnDeps, input);
   }
 
   async interruptTurn(
@@ -827,7 +409,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           threadId,
           turnId: latestReviewTurnId,
         });
-        this.settleTrackedReview(context, {
+        settleTrackedReview(this.handlerDeps, context, {
           completedTurnId: latestReviewTurnId,
           reason: "review exited via thread/read",
         });
@@ -886,141 +468,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   async forkThread(input: ProviderForkThreadInput): Promise<ProviderForkThreadResult> {
-    const threadId = input.threadId;
-    const now = new Date().toISOString();
-    let context: CodexSessionContext | undefined;
-
-    try {
-      const existing = this.sessions.get(threadId);
-      if (existing) {
-        this.stopSession(threadId);
-      }
-
-      const sourceProviderThreadId = readResumeCursorThreadId(input.sourceResumeCursor);
-      if (!sourceProviderThreadId) {
-        throw new Error("Provider fork is missing the source thread resume id.");
-      }
-
-      const resolvedCwd = input.cwd ?? ensureIsolatedScratchWorkspace(threadId);
-      const session: ProviderSession = {
-        provider: "codex",
-        status: "connecting",
-        runtimeMode: input.runtimeMode,
-        model:
-          input.modelSelection?.provider === "codex"
-            ? normalizeCodexModelSlug(input.modelSelection.model)
-            : undefined,
-        cwd: resolvedCwd,
-        threadId,
-        createdAt: now,
-        updatedAt: now,
-      };
-
-      const codexOptions = readCodexProviderOptions({
-        threadId,
-        ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
-        runtimeMode: input.runtimeMode,
-        ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-      });
-      const codexBinaryPath = codexOptions.binaryPath ?? "codex";
-      const codexHomePath = codexOptions.homePath;
-      this.assertSupportedCodexCliVersion({
-        binaryPath: codexBinaryPath,
-        cwd: resolvedCwd,
-        ...(codexHomePath ? { homePath: codexHomePath } : {}),
-      });
-      const transport = await this.createTransport({
-        binaryPath: codexBinaryPath,
-        cwd: resolvedCwd,
-        ...(codexHomePath ? { homePath: codexHomePath } : {}),
-      });
-
-      context = {
-        session,
-        account: {
-          type: "unknown",
-          planType: null,
-          sparkEnabled: true,
-        },
-        transport,
-        pending: new Map(),
-        pendingApprovals: new Map(),
-        pendingUserInputs: new Map(),
-        collabReceiverTurns: new Map(),
-        collabReceiverParents: new Map(),
-        reviewTurnIds: new Set(),
-        nextRequestId: 1,
-        stopping: false,
-      };
-
-      this.sessions.set(threadId, context);
-      this.attachProcessListeners(context);
-      this.emitLifecycleEvent(context, "session/connecting", "Starting codex app-server");
-
-      await this.sendRequest(context, "initialize", buildCodexInitializeParams());
-      this.writeMessage(context, { method: "initialized" });
-      try {
-        const accountReadResponse = await this.sendRequest(context, "account/read", {});
-        context.account = readCodexAccountSnapshot(accountReadResponse);
-      } catch {
-        // Fork can proceed without account metadata; model fallback will stay best-effort.
-      }
-
-      const normalizedModel =
-        input.modelSelection?.provider === "codex"
-          ? resolveCodexModelForAccount(
-              normalizeCodexModelSlug(input.modelSelection.model),
-              context.account,
-            )
-          : undefined;
-      const useFastServiceTier =
-        input.modelSelection?.provider === "codex" &&
-        getModelSelectionBooleanOptionValue(input.modelSelection, "fastMode") === true;
-      const forkParams = {
-        threadId: sourceProviderThreadId,
-        ...(normalizedModel ? { model: normalizedModel } : {}),
-        ...(useFastServiceTier ? { serviceTier: "fast" as const } : {}),
-        cwd: resolvedCwd,
-        ...mapCodexRuntimeMode(input.runtimeMode),
-      };
-
-      this.emitLifecycleEvent(
-        context,
-        "session/threadOpenRequested",
-        `Forking Codex thread ${sourceProviderThreadId}.`,
-      );
-      const response = await this.sendRequest(context, "thread/fork", forkParams);
-      const forkedProviderThreadId = readThreadIdFromResponse("thread/fork", response);
-
-      this.updateSession(context, {
-        status: "ready",
-        resumeCursor: { threadId: forkedProviderThreadId },
-      });
-      this.emitLifecycleEvent(context, "session/threadOpenResolved", "Codex thread/fork resolved.");
-      this.emitLifecycleEvent(
-        context,
-        "session/ready",
-        `Connected to thread ${forkedProviderThreadId}`,
-      );
-
-      return {
-        threadId,
-        resumeCursor: {
-          threadId: forkedProviderThreadId,
-        },
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to fork Codex thread.";
-      if (context) {
-        this.updateSession(context, {
-          status: "error",
-          lastError: message,
-        });
-        this.emitErrorEvent(context, "session/threadForkFailed", message);
-        this.stopSession(threadId);
-      }
-      throw new Error(message, { cause: error });
-    }
+    return forkThreadFn(this.sessionOpenDeps, input);
   }
 
   async rollbackThread(threadId: ThreadId, numTurns: number): Promise<CodexThreadSnapshot> {
@@ -1105,42 +553,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
-  private resolveApprovalRequest(
-    context: CodexSessionContext,
-    pendingRequest: PendingApprovalRequest,
-    decision: ProviderApprovalDecision,
-  ): void {
-    this.writeMessage(context, {
-      id: pendingRequest.jsonRpcId,
-      result: {
-        decision,
-      },
-    });
-
-    this.emitEvent({
-      id: EventId.makeUnsafe(randomUUID()),
-      kind: "notification",
-      provider: "codex",
-      threadId: context.session.threadId,
-      createdAt: new Date().toISOString(),
-      method: "item/requestApproval/decision",
-      turnId: pendingRequest.turnId,
-      itemId: pendingRequest.itemId,
-      requestId: pendingRequest.requestId,
-      requestKind: pendingRequest.requestKind,
-      payload: {
-        requestId: pendingRequest.requestId,
-        requestKind: pendingRequest.requestKind,
-        decision,
-      },
-    });
-  }
-
   private resolveRemainingSessionApprovalRequests(context: CodexSessionContext): void {
     const remainingRequests = Array.from(context.pendingApprovals.values());
     context.pendingApprovals.clear();
     for (const pendingRequest of remainingRequests) {
-      this.resolveApprovalRequest(context, pendingRequest, "acceptForSession");
+      resolveApprovalRequest(this.handlerDeps, context, pendingRequest, "acceptForSession");
     }
   }
 
@@ -1159,7 +576,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (decision === "acceptForSession") {
       context.sessionApprovalOverride = CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES;
     }
-    this.resolveApprovalRequest(context, pendingRequest, decision);
+    resolveApprovalRequest(this.handlerDeps, context, pendingRequest, decision);
     if (decision === "acceptForSession") {
       this.resolveRemainingSessionApprovalRequests(context);
     }
@@ -1248,131 +665,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   async listSkills(input: CodexSkillListInput): Promise<ProviderListSkillsResult> {
-    const cwd = input.cwd.trim();
-    const cacheKey = JSON.stringify({
-      cwd,
-      threadId: input.threadId?.trim() || null,
-    });
-    if (!input.forceReload) {
-      const cached = this.skillsCache.get(cacheKey);
-      if (cached) {
-        return {
-          ...cached,
-          cached: true,
-        };
-      }
-    }
-
-    const context = await this.resolveContextForDiscovery(input.threadId, cwd);
-    let response: Record<string, unknown>;
-    try {
-      response = await this.sendRequest<Record<string, unknown>>(context, "skills/list", {
-        cwds: [cwd],
-        ...(input.forceReload ? { forceReload: true } : {}),
-      });
-    } catch (error) {
-      if (!shouldRetrySkillsListWithCwdFallback(error)) {
-        throw error;
-      }
-      response = await this.sendRequest<Record<string, unknown>>(context, "skills/list", {
-        cwd,
-        ...(input.forceReload ? { forceReload: true } : {}),
-      });
-    }
-    const skills = parseSkillsListResponse(response, cwd);
-    const result: ProviderListSkillsResult = {
-      skills,
-      source: "codex-app-server",
-      cached: false,
-    };
-    this.skillsCache.set(cacheKey, result);
-    return result;
+    return listSkillsQuery(this.discoveryQueryDeps, input);
   }
 
   async listPlugins(input: CodexPluginListInput): Promise<ProviderListPluginsResult> {
-    const cwd = input.cwd?.trim() || null;
-    const cacheKey = JSON.stringify({
-      cwd,
-      threadId: input.threadId?.trim() || null,
-      forceRemoteSync: input.forceRemoteSync === true,
-    });
-    if (!input.forceReload) {
-      const cached = this.pluginsCache.get(cacheKey);
-      if (cached) {
-        return {
-          ...cached,
-          cached: true,
-        };
-      }
-    }
-
-    const context = await this.resolveContextForDiscovery(input.threadId, cwd ?? undefined);
-    const response = await this.sendRequest<Record<string, unknown>>(context, "plugin/list", {
-      ...(cwd ? { cwds: [cwd] } : {}),
-      ...(input.forceRemoteSync ? { forceRemoteSync: true } : {}),
-    });
-    const result: ProviderListPluginsResult = {
-      ...parsePluginListResponse(response),
-      source: "codex-app-server",
-      cached: false,
-    };
-    this.pluginsCache.set(cacheKey, result);
-    return result;
+    return listPluginsQuery(this.discoveryQueryDeps, input);
   }
 
   async readPlugin(input: CodexPluginReadInput): Promise<ProviderReadPluginResult> {
-    const marketplacePath = input.marketplacePath.trim();
-    const pluginName = input.pluginName.trim();
-    const cacheKey = JSON.stringify({
-      marketplacePath,
-      pluginName,
-    });
-    const cached = this.pluginDetailCache.get(cacheKey);
-    if (cached) {
-      return {
-        ...cached,
-        cached: true,
-      };
-    }
-
-    const context = await this.resolveContextForDiscovery(undefined);
-    const response = await this.sendRequest<Record<string, unknown>>(context, "plugin/read", {
-      marketplacePath,
-      pluginName,
-    });
-    const result: ProviderReadPluginResult = {
-      plugin: parsePluginReadResponse(response),
-      source: "codex-app-server",
-      cached: false,
-    };
-    this.pluginDetailCache.set(cacheKey, result);
-    return result;
+    return readPluginQuery(this.discoveryQueryDeps, input);
   }
 
   async listModels(threadId?: string): Promise<ProviderListModelsResult> {
-    const cacheKey = threadId?.trim() || "__default__";
-    const cached = this.modelCache.get(cacheKey);
-    if (cached) {
-      return {
-        ...cached,
-        cached: true,
-      };
-    }
-
-    const context = await this.resolveContextForDiscovery(threadId);
-    const response = await this.sendRequest<Record<string, unknown>>(context, "model/list", {
-      cursor: null,
-      limit: 50,
-      includeHidden: false,
-    });
-    const models = parseModelListResponse(response);
-    const result: ProviderListModelsResult = {
-      models,
-      source: "codex-app-server",
-      cached: false,
-    };
-    this.modelCache.set(cacheKey, result);
-    return result;
+    return listModelsQuery(this.discoveryQueryDeps, threadId);
   }
 
   async transcribeVoice(
@@ -1416,194 +721,31 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return context;
   }
 
-  private async resolveContextForDiscovery(
+  private resolveContextForDiscovery(
     threadId?: string,
     cwd?: string,
   ): Promise<CodexSessionContext> {
-    const normalizedThreadId = threadId?.trim();
-    const normalizedCwd = cwd?.trim() || undefined;
-    if (normalizedThreadId) {
-      try {
-        const session = this.requireSession(ThreadId.makeUnsafe(normalizedThreadId));
-        if (!normalizedCwd || session.session.cwd === normalizedCwd) {
-          return session;
-        }
-      } catch {
-        // Discovery is read-only metadata, so if the current draft thread does not
-        // have a live Codex session yet we can still service repo-scoped
-        // discovery through a dedicated discovery session for that cwd.
-      }
-    }
-    if (normalizedCwd) {
-      for (const activeSession of this.sessions.values()) {
-        if (
-          !activeSession.stopping &&
-          activeSession.session.cwd === normalizedCwd &&
-          (await this.isContextAlive(activeSession))
-        ) {
-          return activeSession;
-        }
-      }
-      return this.getOrCreateDiscoverySession(normalizedCwd);
-    }
-    const firstActive = this.sessions.values().next().value;
-    if (firstActive) {
-      return firstActive;
-    }
-    return this.getOrCreateDiscoverySession(process.cwd());
+    return resolveContextForDiscoveryFn(this.discoverySessionDeps, threadId, cwd);
   }
 
-  private async resolveVoiceTranscriptionAuth(input: {
+  private resolveVoiceTranscriptionAuth(input: {
     readonly cwd?: string;
     readonly threadId?: string;
     readonly refreshToken: boolean;
   }): Promise<CodexVoiceTranscriptionAuthContext> {
-    // Voice transcription should always resolve auth from a fresh discovery context
-    // instead of reusing a possibly stale thread-bound session token.
-    const context = await this.getOrCreateDiscoverySession(input.cwd?.trim() || process.cwd());
-    const readAuthStatus = async (refreshToken: boolean) => {
-      const response = await this.sendRequest<Record<string, unknown>>(context, "getAuthStatus", {
-        includeToken: true,
-        refreshToken,
-      });
-      const authMethod = readString(response, "authMethod");
-      return {
-        authMethod,
-        token: readString(response, "authToken"),
-      };
-    };
-
-    let { authMethod, token } = await readAuthStatus(input.refreshToken);
-    if (!token && !input.refreshToken) {
-      ({ authMethod, token } = await readAuthStatus(true));
-    }
-
-    if (!token) {
-      throw new Error("No ChatGPT session token is available. Sign in to ChatGPT in Codex.");
-    }
-    if (authMethod !== "chatgpt" && authMethod !== "chatgptAuthTokens") {
-      throw new Error("Voice transcription requires a ChatGPT-authenticated Codex session.");
-    }
-
-    return {
-      authMethod,
-      token,
-    };
+    return resolveVoiceTranscriptionAuthFn(this.discoverySessionDeps, input);
   }
 
-  private async getOrCreateDiscoverySession(cwd: string): Promise<CodexSessionContext> {
-    const normalizedCwd = cwd.trim() || process.cwd();
-    const existing = this.discoverySessions.get(normalizedCwd);
-    if (existing && !existing.stopping && (await this.isContextAlive(existing))) {
-      this.scheduleDiscoverySessionIdleStop(normalizedCwd);
-      return existing;
-    }
-
-    const now = new Date().toISOString();
-    this.assertSupportedCodexCliVersion({
-      binaryPath: "codex",
-      cwd: normalizedCwd,
-    });
-    const transport = await this.createTransport({
-      binaryPath: "codex",
-      cwd: normalizedCwd,
-    });
-    const context: CodexSessionContext = {
-      session: {
-        provider: "codex",
-        status: "connecting",
-        runtimeMode: "full-access",
-        model: CODEX_DEFAULT_MODEL,
-        cwd: normalizedCwd,
-        threadId: ThreadId.makeUnsafe(`__codex_discovery__:${normalizedCwd}`),
-        createdAt: now,
-        updatedAt: now,
-      },
-      account: {
-        type: "unknown",
-        planType: null,
-        sparkEnabled: true,
-      },
-      transport,
-      pending: new Map(),
-      pendingApprovals: new Map(),
-      pendingUserInputs: new Map(),
-      collabReceiverTurns: new Map(),
-      collabReceiverParents: new Map(),
-      reviewTurnIds: new Set(),
-      nextRequestId: 1,
-      stopping: false,
-      discovery: true,
-    };
-
-    this.discoverySessions.set(normalizedCwd, context);
-    this.attachProcessListeners(context);
-    try {
-      await this.sendRequest(context, "initialize", buildCodexInitializeParams());
-      this.writeMessage(context, { method: "initialized" });
-      try {
-        const accountReadResponse = await this.sendRequest(context, "account/read", {});
-        context.account = readCodexAccountSnapshot(accountReadResponse);
-      } catch {
-        // Discovery can still function without account metadata.
-      }
-      this.updateSession(context, { status: "ready" });
-      this.scheduleDiscoverySessionIdleStop(normalizedCwd);
-      return context;
-    } catch (error) {
-      this.stopDiscoverySession(normalizedCwd);
-      throw error;
-    }
+  private getOrCreateDiscoverySession(cwd: string): Promise<CodexSessionContext> {
+    return getOrCreateDiscoverySessionFn(this.discoverySessionDeps, cwd);
   }
 
   private scheduleDiscoverySessionIdleStop(discoveryKey: string): void {
-    const existingTimer = this.discoverySessionIdleTimers.get(discoveryKey);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
-    }
-
-    const timer = setTimeout(() => {
-      const context = this.discoverySessions.get(discoveryKey);
-      if (!context || context.stopping) {
-        this.discoverySessionIdleTimers.delete(discoveryKey);
-        return;
-      }
-      if (
-        context.pending.size > 0 ||
-        context.pendingApprovals.size > 0 ||
-        context.pendingUserInputs.size > 0
-      ) {
-        this.scheduleDiscoverySessionIdleStop(discoveryKey);
-        return;
-      }
-
-      this.stopDiscoverySession(discoveryKey);
-    }, CODEX_DISCOVERY_SESSION_IDLE_MS);
-    timer.unref();
-    this.discoverySessionIdleTimers.set(discoveryKey, timer);
+    scheduleDiscoverySessionIdleStopFn(this.discoverySessionDeps, discoveryKey);
   }
 
   private stopDiscoverySession(discoveryKey: string): void {
-    const idleTimer = this.discoverySessionIdleTimers.get(discoveryKey);
-    if (idleTimer) {
-      clearTimeout(idleTimer);
-      this.discoverySessionIdleTimers.delete(discoveryKey);
-    }
-
-    const context = this.discoverySessions.get(discoveryKey);
-    if (!context) {
-      return;
-    }
-
-    context.stopping = true;
-    for (const pending of context.pending.values()) {
-      clearTimeout(pending.timeout);
-      pending.reject(new Error("Discovery session stopped before request completed."));
-    }
-    context.pending.clear();
-    this.closeTransport(context);
-
-    this.discoverySessions.delete(discoveryKey);
+    stopDiscoverySessionFn(this.discoverySessionDeps, discoveryKey);
   }
 
   private attachProcessListeners(context: CodexSessionContext): void {
@@ -1662,377 +804,25 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     );
   }
 
+  // Thin seams over the extracted inbound-dispatch handlers. Kept as instance
+  // methods because the protocol tests drive them directly on a manager instance.
   private handleStdoutLine(context: CodexSessionContext, line: string): void {
-    if (isIgnorableCodexProcessLine(line)) {
-      return;
-    }
-
-    // A line whose first non-whitespace char is not `{` is not a JSON-RPC frame:
-    // it is codex process/log output. On a remote PTY transport stdout and stderr
-    // are merged, so codex's own log lines are interleaved into this inbound
-    // stream rather than arriving on the (empty) stderr side channel. Route them
-    // through the stderr classifier — emitting `process/stderr` only for
-    // ERROR-level codex logs — to restore the local-transport split where such
-    // lines were warnings, never a user-visible `protocol/parseError` flood.
-    if (!isJsonObjectLine(line)) {
-      const classified = classifyCodexStderrLine(line);
-      if (classified) {
-        this.emitErrorEvent(context, "process/stderr", classified.message);
-      }
-      return;
-    }
-
-    // Parse the ANSI-stripped line, not the raw one: on the merged PTY stream a
-    // real frame can carry non-SGR ANSI (bracketed-paste, OSC) that `JSON.parse`
-    // rejects. `isJsonObjectLine` gated on the stripped form, so parsing must use
-    // the same normalization or a stripped-but-real frame is silently dropped.
-    const normalizedLine = normalizeCodexProcessLine(line);
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(normalizedLine);
-    } catch {
-      // The frame gate already filtered non-JSON log noise; a line that looks
-      // like a JSON object yet fails to parse is a rare malformed frame. Keep it
-      // out of the user-visible error channel — log at debug and drop it.
-      if (process.env.SYNARA_DEBUG_CODEX_TRANSPORT === "1") {
-        console.debug("[codex] dropped unparseable inbound frame", line);
-      }
-      return;
-    }
-
-    if (!parsed || typeof parsed !== "object") {
-      this.emitErrorEvent(
-        context,
-        "protocol/invalidMessage",
-        "Received non-object protocol message.",
-      );
-      return;
-    }
-
-    if (isServerRequest(parsed)) {
-      this.handleServerRequest(context, parsed);
-      return;
-    }
-
-    if (isServerNotification(parsed)) {
-      this.handleServerNotification(context, parsed);
-      return;
-    }
-
-    if (isResponse(parsed)) {
-      this.handleResponse(context, parsed);
-      return;
-    }
-
-    this.emitErrorEvent(
-      context,
-      "protocol/unrecognizedMessage",
-      "Received protocol message in an unknown shape.",
-    );
+    handleStdoutLine(this.handlerDeps, context, line);
   }
 
   private handleServerNotification(
     context: CodexSessionContext,
     notification: JsonRpcNotification,
   ): void {
-    const rawRoute = readRouteFields(notification.params);
-    this.rememberCollabReceiverTurns(context, notification.params, rawRoute.turnId);
-    const childParentTurnId = this.readChildParentTurnId(context, notification.params);
-    const providerThreadId = normalizeProviderThreadId(
-      readProviderConversationId(notification.params),
-    );
-    const providerParentThreadId = this.readChildParentProviderThreadId(
-      context,
-      notification.params,
-    );
-    const isChildConversation = childParentTurnId !== undefined;
-    if (
-      isChildConversation &&
-      this.shouldSuppressChildConversationNotification(notification.method)
-    ) {
-      return;
-    }
-    const textDelta = this.readNotificationTextDelta(notification);
-
-    this.emitEvent({
-      id: EventId.makeUnsafe(randomUUID()),
-      kind: "notification",
-      provider: "codex",
-      threadId: context.session.threadId,
-      createdAt: new Date().toISOString(),
-      method: notification.method,
-      ...(rawRoute.turnId ? { turnId: rawRoute.turnId } : {}),
-      ...(childParentTurnId ? { parentTurnId: childParentTurnId } : {}),
-      ...(rawRoute.itemId ? { itemId: rawRoute.itemId } : {}),
-      ...(providerThreadId ? { providerThreadId } : {}),
-      ...(providerParentThreadId ? { providerParentThreadId } : {}),
-      textDelta,
-      payload: notification.params,
-    });
-
-    if (notification.method === "thread/started") {
-      const startedThreadId = normalizeProviderThreadId(
-        readString(readObject(notification.params)?.thread, "id"),
-      );
-      if (startedThreadId && !isChildConversation) {
-        this.updateSession(context, {
-          resumeCursor: { threadId: startedThreadId },
-        });
-      }
-      return;
-    }
-
-    if (notification.method === "turn/started") {
-      if (isChildConversation) {
-        return;
-      }
-      const turnId = toTurnId(readString(readObject(notification.params)?.turn, "id"));
-      if (
-        turnId !== undefined &&
-        context.session.activeTurnId !== undefined &&
-        context.reviewTurnIds.has(context.session.activeTurnId)
-      ) {
-        context.reviewTurnIds.add(turnId);
-        console.log("[codex-review] extending tracked review turn set on turn/started", {
-          threadId: context.session.threadId,
-          previousTurnId: context.session.activeTurnId,
-          nextTurnId: turnId,
-        });
-      }
-      this.updateSession(context, {
-        status: "running",
-        activeTurnId: turnId,
-      });
-      return;
-    }
-
-    if (notification.method === "turn/completed") {
-      if (isChildConversation) {
-        return;
-      }
-      context.collabReceiverTurns.clear();
-      if (rawRoute.turnId) {
-        context.reviewTurnIds.delete(rawRoute.turnId);
-      }
-      const turn = readObject(notification.params, "turn");
-      const status = readString(turn, "status");
-      const errorMessageRaw = readString(readObject(turn, "error"), "message");
-      const errorMessage =
-        errorMessageRaw !== undefined
-          ? normalizeCodexUserVisibleErrorMessage(errorMessageRaw)
-          : undefined;
-      this.updateSession(context, {
-        status: status === "failed" ? "error" : "ready",
-        activeTurnId: undefined,
-        lastError: errorMessage ?? context.session.lastError,
-      });
-      return;
-    }
-
-    if (notification.method === "turn/aborted") {
-      if (isChildConversation) {
-        return;
-      }
-      context.collabReceiverTurns.clear();
-      if (rawRoute.turnId) {
-        context.reviewTurnIds.delete(rawRoute.turnId);
-      }
-      this.updateSession(context, {
-        status: "ready",
-        activeTurnId: undefined,
-        lastError: undefined,
-      });
-      return;
-    }
-
-    if (isExitedReviewModeNotification(notification)) {
-      if (isChildConversation) {
-        return;
-      }
-      const item = readObject(notification.params, "item");
-      const reviewTurnId = toTurnId(readString(item, "id")) ?? rawRoute.turnId;
-      const reviewTurnTracked =
-        reviewTurnId !== undefined ? context.reviewTurnIds.has(reviewTurnId) : false;
-      const activeTurnTracked =
-        context.session.activeTurnId !== undefined &&
-        context.reviewTurnIds.has(context.session.activeTurnId);
-      console.log("[codex-review] exitedReviewMode notification", {
-        threadId: context.session.threadId,
-        reviewTurnId: reviewTurnId ?? null,
-        activeTurnId: context.session.activeTurnId ?? null,
-        reviewTurnTracked,
-        activeTurnTracked,
-      });
-      if (
-        reviewTurnId !== undefined &&
-        context.session.activeTurnId !== undefined &&
-        reviewTurnId !== context.session.activeTurnId &&
-        !reviewTurnTracked &&
-        !activeTurnTracked
-      ) {
-        console.log("[codex-review] exitedReviewMode ignored due to turn mismatch", {
-          threadId: context.session.threadId,
-          reviewTurnId,
-          activeTurnId: context.session.activeTurnId,
-        });
-        return;
-      }
-      // `review/start` can emit the final review result via `exitedReviewMode`
-      // before the terminal `turn/completed` notification arrives. If that
-      // completion never shows up, settle the session here instead of leaving
-      // native review stuck in "running" forever.
-      console.log("[codex-review] settling review from exitedReviewMode notification", {
-        threadId: context.session.threadId,
-        reviewTurnId: reviewTurnId ?? null,
-      });
-      this.settleTrackedReview(
-        context,
-        reviewTurnId !== undefined
-          ? {
-              completedTurnId: reviewTurnId,
-              reason: "review exited via exitedReviewMode",
-            }
-          : {
-              reason: "review exited via exitedReviewMode",
-            },
-      );
-      return;
-    }
-
-    if (notification.method === "error") {
-      if (isChildConversation) {
-        return;
-      }
-      const rawMessage = readString(readObject(notification.params)?.error, "message");
-      const message =
-        rawMessage !== undefined ? normalizeCodexUserVisibleErrorMessage(rawMessage) : undefined;
-      const willRetry = readBoolean(notification.params, "willRetry");
-      const isNonFatalWarning =
-        message !== undefined && !willRetry && isNonFatalCodexErrorMessage(message);
-
-      if (willRetry) {
-        this.updateSession(context, {
-          status: "running",
-        });
-        return;
-      }
-
-      if (isNonFatalWarning) {
-        return;
-      }
-
-      this.updateSession(context, {
-        status: "error",
-        lastError: message ?? context.session.lastError,
-      });
-    }
-  }
-
-  private readNotificationTextDelta(notification: JsonRpcNotification): string | undefined {
-    switch (notification.method) {
-      case "item/agentMessage/delta":
-      case "item/reasoning/textDelta":
-      case "item/reasoning/summaryTextDelta":
-      case "item/plan/delta":
-      case "item/commandExecution/outputDelta":
-      case "item/fileChange/outputDelta":
-        return readString(notification.params, "delta");
-      default:
-        return undefined;
-    }
+    handleServerNotification(this.handlerDeps, context, notification);
   }
 
   private handleServerRequest(context: CodexSessionContext, request: JsonRpcRequest): void {
-    const rawRoute = readRouteFields(request.params);
-    const childParentTurnId = this.readChildParentTurnId(context, request.params);
-    const providerThreadId = normalizeProviderThreadId(readProviderConversationId(request.params));
-    const providerParentThreadId = this.readChildParentProviderThreadId(context, request.params);
-    const requestKind = requestKindForMethod(request.method);
-    let requestId: ApprovalRequestId | undefined;
-    if (requestKind) {
-      requestId = ApprovalRequestId.makeUnsafe(randomUUID());
-      const pendingRequest: PendingApprovalRequest = {
-        requestId,
-        jsonRpcId: request.id,
-        method:
-          requestKind === "command"
-            ? "item/commandExecution/requestApproval"
-            : requestKind === "file-read"
-              ? "item/fileRead/requestApproval"
-              : "item/fileChange/requestApproval",
-        requestKind,
-        threadId: context.session.threadId,
-        ...(rawRoute.turnId ? { turnId: rawRoute.turnId } : {}),
-        ...(rawRoute.itemId ? { itemId: rawRoute.itemId } : {}),
-      };
-      if (context.sessionApprovalOverride) {
-        this.resolveApprovalRequest(context, pendingRequest, "acceptForSession");
-        return;
-      }
-      context.pendingApprovals.set(requestId, pendingRequest);
-    }
-
-    if (request.method === "item/tool/requestUserInput") {
-      requestId = ApprovalRequestId.makeUnsafe(randomUUID());
-      context.pendingUserInputs.set(requestId, {
-        requestId,
-        jsonRpcId: request.id,
-        threadId: context.session.threadId,
-        ...(rawRoute.turnId ? { turnId: rawRoute.turnId } : {}),
-        ...(rawRoute.itemId ? { itemId: rawRoute.itemId } : {}),
-      });
-    }
-
-    this.emitEvent({
-      id: EventId.makeUnsafe(randomUUID()),
-      kind: "request",
-      provider: "codex",
-      threadId: context.session.threadId,
-      createdAt: new Date().toISOString(),
-      method: request.method,
-      ...(rawRoute.turnId ? { turnId: rawRoute.turnId } : {}),
-      ...(childParentTurnId ? { parentTurnId: childParentTurnId } : {}),
-      ...(rawRoute.itemId ? { itemId: rawRoute.itemId } : {}),
-      ...(providerThreadId ? { providerThreadId } : {}),
-      ...(providerParentThreadId ? { providerParentThreadId } : {}),
-      requestId,
-      requestKind,
-      payload: request.params,
-    });
-
-    if (requestKind) {
-      return;
-    }
-
-    if (request.method === "item/tool/requestUserInput") {
-      return;
-    }
-
-    this.writeMessage(context, {
-      id: request.id,
-      error: {
-        code: -32601,
-        message: `Unsupported server request: ${request.method}`,
-      },
-    });
+    handleServerRequest(this.handlerDeps, context, request);
   }
 
   private handleResponse(context: CodexSessionContext, response: JsonRpcResponse): void {
-    const key = String(response.id);
-    const pending = context.pending.get(key);
-    if (!pending) {
-      return;
-    }
-
-    clearTimeout(pending.timeout);
-    context.pending.delete(key);
-
-    if (response.error?.message) {
-      pending.reject(new Error(`${pending.method} failed: ${String(response.error.message)}`));
-      return;
-    }
-
-    pending.resolve(response.result);
+    handleResponse(context, response);
   }
 
   private async sendRequest<TResponse>(
@@ -2114,51 +904,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.emit("event", event);
   }
 
-  private settleTrackedReview(
-    context: CodexSessionContext,
-    input: {
-      readonly completedTurnId?: TurnId;
-      readonly reason: string;
-    },
-  ): void {
-    const terminalTurnId =
-      context.session.activeTurnId !== undefined &&
-      context.reviewTurnIds.has(context.session.activeTurnId)
-        ? context.session.activeTurnId
-        : input.completedTurnId !== undefined && context.reviewTurnIds.has(input.completedTurnId)
-          ? input.completedTurnId
-          : context.reviewTurnIds.values().next().value;
-
-    this.updateSession(context, {
-      status: "ready",
-      activeTurnId: undefined,
-      lastError: undefined,
-    });
-
-    context.reviewTurnIds.clear();
-
-    if (!terminalTurnId) {
-      return;
-    }
-
-    this.emitEvent({
-      id: EventId.makeUnsafe(randomUUID()),
-      kind: "notification",
-      provider: "codex",
-      threadId: context.session.threadId,
-      createdAt: new Date().toISOString(),
-      method: "turn/completed",
-      turnId: terminalTurnId,
-      message: input.reason,
-      payload: {
-        turn: {
-          id: terminalTurnId,
-          status: "completed",
-        },
-      },
-    });
-  }
-
   private assertSupportedCodexCliVersion(input: {
     readonly binaryPath: string;
     readonly cwd: string;
@@ -2206,72 +951,5 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...updates,
       updatedAt: new Date().toISOString(),
     };
-  }
-
-  private readChildParentTurnId(context: CodexSessionContext, params: unknown): TurnId | undefined {
-    const providerConversationId = readProviderConversationId(params);
-    if (!providerConversationId) {
-      return undefined;
-    }
-    return context.collabReceiverTurns.get(providerConversationId);
-  }
-
-  private readChildParentProviderThreadId(
-    context: CodexSessionContext,
-    params: unknown,
-  ): string | undefined {
-    const providerConversationId = readProviderConversationId(params);
-    if (!providerConversationId) {
-      return undefined;
-    }
-    return context.collabReceiverParents.get(providerConversationId);
-  }
-
-  private rememberCollabReceiverTurns(
-    context: CodexSessionContext,
-    params: unknown,
-    parentTurnId: TurnId | undefined,
-  ): void {
-    if (!parentTurnId) {
-      return;
-    }
-    const payload = readObject(params);
-    const item = readObject(payload, "item") ?? payload;
-    const itemType = readString(item, "type") ?? readString(item, "kind");
-    if (itemType !== "collabAgentToolCall") {
-      return;
-    }
-    const parentProviderThreadId = normalizeProviderThreadId(readProviderConversationId(params));
-
-    const receiverThreadIds =
-      readArray(item, "receiverThreadIds")
-        ?.map((value) => (typeof value === "string" ? value : null))
-        .filter((value): value is string => value !== null) ?? [];
-    for (const receiverThreadId of receiverThreadIds) {
-      context.collabReceiverTurns.set(receiverThreadId, parentTurnId);
-      if (parentProviderThreadId) {
-        context.collabReceiverParents.set(receiverThreadId, parentProviderThreadId);
-      }
-    }
-  }
-
-  private shouldSuppressChildConversationNotification(method: string): boolean {
-    // Intentionally do NOT suppress `turn/plan/updated` or `item/plan/delta` here,
-    // even for child conversations. These are the events that let the active plan
-    // card advance ("1 out of 5" → "2 out of 5" ...) and render streaming plan text;
-    // suppressing them freezes the plan UI at its initial all-pending snapshot.
-    return (
-      method === "thread/started" ||
-      method === "thread/status/changed" ||
-      method === "thread/archived" ||
-      method === "thread/unarchived" ||
-      method === "thread/closed" ||
-      method === "thread/compacted" ||
-      method === "thread/name/updated" ||
-      method === "thread/tokenUsage/updated" ||
-      method === "turn/started" ||
-      method === "turn/completed" ||
-      method === "turn/aborted"
-    );
   }
 }
