@@ -11,9 +11,9 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
-import { memo, useCallback, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { IoFlash } from "react-icons/io5";
-import { ChevronDownIcon } from "~/lib/icons";
+import { ChevronDownIcon, SettingsIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -289,7 +289,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           {hasPriorFastModeSection ? <MenuDivider /> : null}
           <TraitRadioSection
-            label="Fast Mode"
+            label="Speed"
             value={fastModeEnabled ? "on" : "off"}
             options={[
               { value: "off", label: "Default" },
@@ -304,7 +304,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           <MenuDivider />
           <TraitRadioSection
-            label="Context Window"
+            label="Context"
             value={contextWindow ?? defaultContextWindow ?? ""}
             options={contextWindowOptions.map((option) => ({
               value: option.value,
@@ -352,13 +352,16 @@ export const TraitsPicker = memo(function TraitsPicker({
   modelOptions,
   open,
   onOpenChange,
+  onSelectionCommitted,
   shortcutLabel,
 }: TraitsMenuContentProps & {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  onSelectionCommitted?: () => void;
   shortcutLabel?: string | null;
 }) {
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
+  const selectionCommitTimerRef = useRef<number | null>(null);
   const isMenuOpen = open ?? uncontrolledMenuOpen;
   const setMenuOpen = useCallback(
     (nextOpen: boolean) => {
@@ -369,6 +372,27 @@ export const TraitsPicker = memo(function TraitsPicker({
     },
     [onOpenChange, open],
   );
+  const scheduleSelectionCommitted = useCallback(() => {
+    if (selectionCommitTimerRef.current !== null) {
+      window.clearTimeout(selectionCommitTimerRef.current);
+    }
+    selectionCommitTimerRef.current = window.setTimeout(() => {
+      selectionCommitTimerRef.current = null;
+      onSelectionCommitted?.();
+    }, 0);
+  }, [onSelectionCommitted]);
+  useEffect(
+    () => () => {
+      if (selectionCommitTimerRef.current !== null) {
+        window.clearTimeout(selectionCommitTimerRef.current);
+      }
+    },
+    [],
+  );
+  const handleSelectionComplete = useCallback(() => {
+    setMenuOpen(false);
+    scheduleSelectionCommitted();
+  }, [scheduleSelectionCommitted, setMenuOpen]);
   const {
     caps,
     effort,
@@ -428,25 +452,23 @@ export const TraitsPicker = memo(function TraitsPicker({
     <Button
       size="sm"
       variant="chrome"
-      className={
-        isCodexStyle
-          ? `min-w-0 max-w-40 shrink justify-start overflow-hidden whitespace-nowrap px-2 sm:max-w-48 sm:px-3 [&_svg]:mx-0 ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`
-          : `shrink-0 whitespace-nowrap px-2 sm:px-3 ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`
-      }
+      className={`min-w-0 shrink-0 justify-start overflow-hidden whitespace-nowrap px-2 sm:px-2.5 [&_svg]:mx-0 ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`}
+      aria-label="Change effort, context, and speed"
     />
   );
 
   const triggerContent = isCodexStyle ? (
     <span className="flex min-w-0 w-full items-center gap-2 overflow-hidden">
+      <SettingsIcon aria-hidden="true" className="size-3.5 shrink-0 opacity-75" />
       <span className="min-w-0 flex flex-1 items-center gap-1.5 truncate">
         {visiblePrimaryTriggerLabel ? (
           <span className="truncate">{visiblePrimaryTriggerLabel}</span>
-        ) : null}
+        ) : (
+          <span className="truncate">Options</span>
+        )}
         {showsFastBadge ? (
           <>
-            {visiblePrimaryTriggerLabel ? (
-              <span className="shrink-0 text-muted-foreground/45">·</span>
-            ) : null}
+            <span className="shrink-0 text-muted-foreground/45">·</span>
             <span className="inline-flex shrink-0 items-center gap-1">
               <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
               <span>Fast</span>
@@ -466,13 +488,12 @@ export const TraitsPicker = memo(function TraitsPicker({
     </span>
   ) : (
     <>
+      <SettingsIcon aria-hidden="true" className="size-3.5 opacity-75" />
       <span className="inline-flex items-center gap-1.5">
-        {visiblePrimaryTriggerLabel ? <span>{visiblePrimaryTriggerLabel}</span> : null}
+        <span>{visiblePrimaryTriggerLabel ?? "Options"}</span>
         {showsFastBadge ? (
           <>
-            {visiblePrimaryTriggerLabel ? (
-              <span className="text-muted-foreground/45">·</span>
-            ) : null}
+            <span className="text-muted-foreground/45">·</span>
             <span className="inline-flex items-center gap-1">
               <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
               <span>Fast</span>
@@ -507,7 +528,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           {!isMenuOpen ? (
             <ComposerPickerTooltipPopup side="top" sideOffset={6}>
               <span className="inline-flex items-center gap-2 px-1 py-0.5">
-                <span>Change reasoning</span>
+                <span>Change effort, context, and speed</span>
                 <ShortcutKbd
                   shortcutLabel={shortcutLabel}
                   className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
@@ -530,7 +551,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           onPromptChange={onPromptChange}
           includeFastMode={includeFastMode}
           modelOptions={modelOptions}
-          onSelectionComplete={() => setMenuOpen(false)}
+          onSelectionComplete={handleSelectionComplete}
         />
       </ComposerPickerMenuPopup>
     </Menu>
