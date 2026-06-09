@@ -18,6 +18,8 @@ import {
   createDesktopPlatformBuildConfig,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
+import { parseBooleanEnvValue } from "./lib/env-bool.ts";
+import { finalizeMacUpdateZip } from "./lib/mac-update-zip-finalize.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -227,11 +229,11 @@ const BuildEnvConfig = Config.all({
   arch: Config.schema(BuildArch, "T3CODE_DESKTOP_ARCH").pipe(Config.option),
   version: Config.string("T3CODE_DESKTOP_VERSION").pipe(Config.option),
   outputDir: Config.string("T3CODE_DESKTOP_OUTPUT_DIR").pipe(Config.option),
-  skipBuild: Config.boolean("T3CODE_DESKTOP_SKIP_BUILD").pipe(Config.withDefault(false)),
-  keepStage: Config.boolean("T3CODE_DESKTOP_KEEP_STAGE").pipe(Config.withDefault(false)),
-  signed: Config.boolean("T3CODE_DESKTOP_SIGNED").pipe(Config.withDefault(false)),
-  verbose: Config.boolean("T3CODE_DESKTOP_VERBOSE").pipe(Config.withDefault(false)),
-  mockUpdates: Config.boolean("T3CODE_DESKTOP_MOCK_UPDATES").pipe(Config.withDefault(false)),
+  skipBuild: Config.string("T3CODE_DESKTOP_SKIP_BUILD").pipe(Config.option),
+  keepStage: Config.string("T3CODE_DESKTOP_KEEP_STAGE").pipe(Config.option),
+  signed: Config.string("T3CODE_DESKTOP_SIGNED").pipe(Config.option),
+  verbose: Config.string("T3CODE_DESKTOP_VERBOSE").pipe(Config.option),
+  mockUpdates: Config.string("T3CODE_DESKTOP_MOCK_UPDATES").pipe(Config.option),
   mockUpdateServerPort: Config.string("T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT").pipe(Config.option),
 });
 
@@ -239,6 +241,19 @@ const resolveBooleanFlag = (flag: Option.Option<boolean>, envValue: boolean) =>
   Option.getOrElse(flag, () => envValue);
 const mergeOptions = <A>(a: Option.Option<A>, b: Option.Option<A>, defaultValue: A) =>
   Option.getOrElse(a, () => Option.getOrElse(b, () => defaultValue));
+const resolveBooleanEnv = (name: string, value: Option.Option<string>) =>
+  Effect.try({
+    try: () =>
+      Option.match(value, {
+        onNone: () => false,
+        onSome: (rawValue) => parseBooleanEnvValue(name, rawValue),
+      }),
+    catch: (cause) =>
+      new BuildScriptError({
+        message: cause instanceof Error ? cause.message : `Could not parse ${name}.`,
+        cause,
+      }),
+  });
 
 export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   input: BuildCliInput,
@@ -262,7 +277,12 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   const target = mergeOptions(input.target, env.target, PLATFORM_CONFIG[platform].defaultTarget);
   const arch = mergeOptions(input.arch, env.arch, getDefaultArch(platform));
   const version = mergeOptions(input.buildVersion, env.version, undefined);
-  const releaseDir = resolveBooleanFlag(input.mockUpdates, env.mockUpdates)
+  const envSkipBuild = yield* resolveBooleanEnv("T3CODE_DESKTOP_SKIP_BUILD", env.skipBuild);
+  const envKeepStage = yield* resolveBooleanEnv("T3CODE_DESKTOP_KEEP_STAGE", env.keepStage);
+  const envSigned = yield* resolveBooleanEnv("T3CODE_DESKTOP_SIGNED", env.signed);
+  const envVerbose = yield* resolveBooleanEnv("T3CODE_DESKTOP_VERBOSE", env.verbose);
+  const envMockUpdates = yield* resolveBooleanEnv("T3CODE_DESKTOP_MOCK_UPDATES", env.mockUpdates);
+  const releaseDir = resolveBooleanFlag(input.mockUpdates, envMockUpdates)
     ? "release-mock"
     : "release";
   const outputDir = path.resolve(
@@ -270,11 +290,11 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     mergeOptions(input.outputDir, env.outputDir, releaseDir),
   );
 
-  const skipBuild = resolveBooleanFlag(input.skipBuild, env.skipBuild);
-  const keepStage = resolveBooleanFlag(input.keepStage, env.keepStage);
-  const signed = resolveBooleanFlag(input.signed, env.signed);
-  const verbose = resolveBooleanFlag(input.verbose, env.verbose);
-  const mockUpdates = resolveBooleanFlag(input.mockUpdates, env.mockUpdates);
+  const skipBuild = resolveBooleanFlag(input.skipBuild, envSkipBuild);
+  const keepStage = resolveBooleanFlag(input.keepStage, envKeepStage);
+  const signed = resolveBooleanFlag(input.signed, envSigned);
+  const verbose = resolveBooleanFlag(input.verbose, envVerbose);
+  const mockUpdates = resolveBooleanFlag(input.mockUpdates, envMockUpdates);
   const mockUpdateServerPort = mergeOptions(
     input.mockUpdateServerPort,
     env.mockUpdateServerPort,
@@ -832,6 +852,28 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     return yield* new BuildScriptError({
       message: `Build completed but dist directory was not found at ${stageDistDir}`,
     });
+  }
+
+  if (options.platform === "mac") {
+    yield* Effect.log("[desktop-artifact] Repacking and validating macOS update zip...");
+    const finalizedZip = yield* Effect.tryPromise({
+      try: () =>
+        finalizeMacUpdateZip({
+          stageDistDir,
+          signed: options.signed,
+          verbose: options.verbose,
+        }),
+      catch: (cause) =>
+        new BuildScriptError({
+          message: "macOS update zip finalization failed.",
+          cause,
+        }),
+    });
+    if (finalizedZip.removedZipBlockmapPath) {
+      yield* Effect.log(
+        `[desktop-artifact] Removed stale macOS zip blockmap (${path.basename(finalizedZip.removedZipBlockmapPath)}).`,
+      );
+    }
   }
 
   const stageEntries = yield* fs.readDirectory(stageDistDir);

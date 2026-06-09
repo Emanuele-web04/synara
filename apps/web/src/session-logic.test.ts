@@ -21,7 +21,9 @@ import {
   findLatestProposedPlan,
   findSidebarProposedPlan,
   hasActionableProposedPlan,
+  isFileChangeWorkLogEntry,
   isLatestTurnSettled,
+  isProviderFileEditWorkLogEntry,
 } from "./session-logic";
 
 function makeActivity(overrides: {
@@ -1544,6 +1546,28 @@ describe("deriveWorkLogEntries", () => {
       "apps/web/src/components/ChatView.tsx",
       "apps/web/src/session-logic.ts",
     ]);
+  });
+
+  it("identifies file-change work by lifecycle metadata, not any changedFiles array", () => {
+    const readEntryWithFileMetadata = {
+      itemType: "dynamic_tool_call" as const,
+      changedFiles: ["apps/web/src/session-logic.ts"],
+    };
+
+    expect(isFileChangeWorkLogEntry({ itemType: "file_change" })).toBe(true);
+    expect(isFileChangeWorkLogEntry({ requestKind: "file-change" })).toBe(true);
+    expect(isFileChangeWorkLogEntry(readEntryWithFileMetadata)).toBe(false);
+  });
+
+  it("identifies provider file edits without counting bare file-change approvals", () => {
+    expect(isProviderFileEditWorkLogEntry({ itemType: "file_change" })).toBe(true);
+    expect(
+      isProviderFileEditWorkLogEntry({
+        requestKind: "file-change",
+        changedFiles: ["apps/web/src/session-logic.ts"],
+      }),
+    ).toBe(true);
+    expect(isProviderFileEditWorkLogEntry({ requestKind: "file-change" })).toBe(false);
   });
 
   it("extracts Cursor read targets from rawInput and ACP locations", () => {

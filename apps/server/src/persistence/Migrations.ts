@@ -52,6 +52,9 @@ import Migration0036 from "./Migrations/036_ProjectionThreadsPinned.ts";
 import Migration0037 from "./Migrations/037_ProjectionSnapshotCapIndexes.ts";
 import Migration0038 from "./Migrations/038_ReconcileLegacySidechatSource.ts";
 import Migration0039 from "./Migrations/039_ReconcileLegacyPinnedThreads.ts";
+import Migration0040 from "./Migrations/040_ProjectionThreadsPinnedMessagesNotes.ts";
+import Migration0041 from "./Migrations/041_ProjectionProjectsPinned.ts";
+import Migration0042 from "./Migrations/042_ProjectionThreadsMarkers.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -103,6 +106,9 @@ export const migrationEntries = [
   [37, "ProjectionSnapshotCapIndexes", Migration0037],
   [38, "ReconcileLegacySidechatSource", Migration0038],
   [39, "ReconcileLegacyPinnedThreads", Migration0039],
+  [40, "ProjectionThreadsPinnedMessagesNotes", Migration0040],
+  [41, "ProjectionProjectsPinned", Migration0041],
+  [42, "ProjectionThreadsMarkers", Migration0042],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

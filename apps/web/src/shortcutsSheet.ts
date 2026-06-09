@@ -106,6 +106,26 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Open the current conversation in a second pane.",
   },
   {
+    command: "view.recent.previous",
+    label: "Previous recent view",
+    description: "Cycle backward through recently opened primary views.",
+  },
+  {
+    command: "view.recent.next",
+    label: "Next recent view",
+    description: "Cycle forward through recently opened primary views.",
+  },
+  {
+    command: "modelPicker.toggle",
+    label: "Model picker",
+    description: "Open the composer provider and model picker.",
+  },
+  {
+    command: "traitsPicker.toggle",
+    label: "Reasoning picker",
+    description: "Open the composer reasoning and trait controls.",
+  },
+  {
     command: "terminal.toggle",
     label: "Toggle terminal",
     description: "Show or hide the terminal surface for the active thread.",

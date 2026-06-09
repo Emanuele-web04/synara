@@ -620,3 +620,18 @@ export const getProviderUsageSnapshot = Effect.fn(function* (
     catch: () => null,
   });
 });
+
+// Reused by the live-usage batch (providerUsage/index.ts) to enrich live snapshots with the
+// locally-derived 24h/7d/30d token-total lines for providers that keep on-disk archives.
+export async function loadLocalProviderUsageLines(input: {
+  provider: ProviderKind;
+  homeDir: string;
+  homePath?: string;
+}): Promise<ReadonlyArray<ServerProviderUsageLine>> {
+  try {
+    const snapshot = await getCachedProviderUsageSnapshot(input);
+    return snapshot?.usageLines ?? [];
+  } catch {
+    return [];
+  }
+}

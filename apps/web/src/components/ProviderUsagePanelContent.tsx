@@ -3,6 +3,7 @@
 // rate-limit rows and archive-derived local usage lines in the same popover.
 
 import type { ProviderKind } from "@t3tools/contracts";
+import { providerUsageLabel } from "@t3tools/shared/providerUsage";
 import { memo, useMemo } from "react";
 
 import { ExternalLinkIcon } from "~/lib/icons";
@@ -10,19 +11,15 @@ import type { OpenUsageUsageLine } from "~/lib/openUsageRateLimits";
 import {
   deriveProviderUsageLearnMoreHref,
   deriveRateLimitLearnMoreHref,
-  deriveVisibleRateLimitRows,
   type ProviderRateLimit,
 } from "~/lib/rateLimits";
+import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
 import { cn } from "~/lib/utils";
 
-import { RateLimitSummaryList } from "./RateLimitSummaryList";
+import { ProviderUsageLimitRows } from "./ProviderUsageLimitRows";
+import { ProviderUsageLineList } from "./ProviderUsageLineList";
 
-export function providerUsageLabel(provider: ProviderKind | null | undefined): string {
-  if (provider === "codex") return "Codex usage";
-  if (provider === "claudeAgent") return "Claude usage";
-  if (provider === "gemini") return "Gemini usage";
-  return "Usage";
-}
+export { providerUsageLabel };
 
 export const ProviderUsagePanelContent = memo(function ProviderUsagePanelContent(props: {
   provider: ProviderKind | null | undefined;
@@ -30,11 +27,12 @@ export const ProviderUsagePanelContent = memo(function ProviderUsagePanelContent
   usageLines?: ReadonlyArray<OpenUsageUsageLine> | undefined;
   isLoading?: boolean | undefined;
   learnMoreHref?: string | null | undefined;
+  showUsageLines?: boolean | undefined;
   showTitle?: boolean | undefined;
   className?: string | undefined;
 }) {
   const visibleRows = useMemo(
-    () => deriveVisibleRateLimitRows(props.rateLimits),
+    () => deriveProviderUsageDisplayRows(props.rateLimits),
     [props.rateLimits],
   );
   const learnMoreHref = useMemo(
@@ -52,28 +50,13 @@ export const ProviderUsagePanelContent = memo(function ProviderUsagePanelContent
           {providerUsageLabel(props.provider)}
         </div>
       ) : null}
-      {visibleRows.length > 0 ? <RateLimitSummaryList rateLimits={props.rateLimits} /> : null}
-      {props.usageLines && props.usageLines.length > 0 ? (
-        <div className="space-y-1.5">
-          {props.usageLines.map((line) => (
-            <div
-              key={`${line.label}:${line.value}`}
-              className="space-y-0.5 text-[length:var(--app-font-size-chat,12px)]"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-medium text-foreground">{line.label}</span>
-                <span className="text-right text-[length:var(--app-font-size-chat-meta,10px)] text-muted-foreground">
-                  {line.value}
-                </span>
-              </div>
-              {line.subtitle ? (
-                <div className="text-[length:var(--app-font-size-chat-meta,10px)] text-muted-foreground/80">
-                  {line.subtitle}
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </div>
+      <ProviderUsageLimitRows rows={visibleRows} surface="popover" />
+      {props.showUsageLines !== false && props.usageLines && props.usageLines.length > 0 ? (
+        <ProviderUsageLineList
+          className={cn(visibleRows.length > 0 && "pt-0.5")}
+          lines={props.usageLines}
+          surface="popover"
+        />
       ) : visibleRows.length === 0 && props.isLoading ? (
         <p className="text-[length:var(--app-font-size-chat-meta,10px)] leading-relaxed text-muted-foreground">
           Scanning local usage data for the selected provider.

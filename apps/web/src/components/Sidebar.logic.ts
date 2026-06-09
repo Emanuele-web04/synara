@@ -2,11 +2,22 @@
 // Purpose: Shared sidebar sorting and status helpers used by the thread list UI.
 // Exports: Sidebar row state derivation, add-project error helpers, sort utilities, and visibility helpers.
 
-import type { KeybindingCommand, ProjectId, ThreadId } from "@t3tools/contracts";
+import {
+  MAX_PINNED_PROJECTS,
+  type KeybindingCommand,
+  type ProjectId,
+  type ThreadId,
+} from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
 import { resolveRestorableThreadRoute, type LastThreadRoute } from "../chatRouteRestore";
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
+import {
+  derivePinnedIds,
+  getPinnedItems,
+  isLatestPinMutation,
+  orderPinnedItemsFirst,
+} from "../pinning.logic";
 import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
   SIDEBAR_ROW_HOVER_CLASS_NAME,
@@ -14,7 +25,7 @@ import {
   SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
-import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+import { isWorkspaceRootWithin, workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 import {
   hasLiveLatestTurn,
   findLatestProposedPlan,
@@ -433,6 +444,30 @@ export function findWorkspaceRootMatch<T>(
   return items.find((item) => workspaceRootsEqual(getWorkspaceRoot(item), targetWorkspaceRoot));
 }
 
+// Finds the item whose workspace root most specifically contains `targetPath`
+// (equal to it, or its closest ancestor). Used to attribute a dev server's cwd
+// to a project even when it runs from a monorepo subdirectory; the deepest root
+// wins so a nested project beats its parent.
+export function findDeepestWorkspaceRootMatch<T>(
+  items: readonly T[],
+  targetPath: string,
+  getWorkspaceRoot: (item: T) => string,
+): T | undefined {
+  let best: T | undefined;
+  let bestRootLength = -1;
+  for (const item of items) {
+    const root = getWorkspaceRoot(item);
+    if (!isWorkspaceRootWithin(targetPath, root)) {
+      continue;
+    }
+    if (root.length > bestRootLength) {
+      best = item;
+      bestRootLength = root.length;
+    }
+  }
+  return best;
+}
+
 // Rechecks an existing local project against the server before the add flow decides to reuse it.
 export async function recoverExistingAddProjectTarget(input: {
   readonly existingProjectId: ProjectId | null | undefined;
@@ -664,25 +699,11 @@ export function getVisibleSidebarEntriesForPreview<
   };
 }
 
-// Preserve the persisted pin order while discarding ids that no longer exist locally.
 export function getPinnedThreadsForSidebar<T extends Pick<Thread, "id">>(
   threads: readonly T[],
   pinnedThreadIds: readonly T["id"][],
 ): T[] {
-  const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
-  const seen = new Set<T["id"]>();
-  const pinnedThreads: T[] = [];
-
-  for (const threadId of pinnedThreadIds) {
-    if (seen.has(threadId)) continue;
-    seen.add(threadId);
-    const thread = threadById.get(threadId);
-    if (thread) {
-      pinnedThreads.push(thread);
-    }
-  }
-
-  return pinnedThreads;
+  return getPinnedItems(threads, pinnedThreadIds);
 }
 
 // Resolve the visible pinned ids from server state, local legacy pins, and pending user clicks.
@@ -691,23 +712,11 @@ export function derivePinnedThreadIdsForSidebar<T extends Pick<Thread, "id" | "i
   readonly persistedPinnedThreadIds: readonly T["id"][];
   readonly optimisticPinnedStateByThreadId: ReadonlyMap<T["id"], boolean>;
 }): T["id"][] {
-  const next = new Set<T["id"]>();
-
-  for (const thread of input.threads) {
-    const optimisticPinned = input.optimisticPinnedStateByThreadId.get(thread.id);
-    if (optimisticPinned ?? thread.isPinned === true) {
-      next.add(thread.id);
-    }
-  }
-
-  for (const threadId of input.persistedPinnedThreadIds) {
-    if (input.optimisticPinnedStateByThreadId.get(threadId) === false) {
-      continue;
-    }
-    next.add(threadId);
-  }
-
-  return [...next];
+  return derivePinnedIds({
+    items: input.threads,
+    persistedPinnedIds: input.persistedPinnedThreadIds,
+    optimisticPinnedStateById: input.optimisticPinnedStateByThreadId,
+  });
 }
 
 // Only the newest pin mutation may roll back optimistic state after rapid clicks.
@@ -716,7 +725,45 @@ export function isLatestPinnedThreadMutation<T>(input: {
   readonly requestVersion: number;
   readonly latestMutationVersionByThreadId: ReadonlyMap<T, number>;
 }): boolean {
-  return input.latestMutationVersionByThreadId.get(input.threadId) === input.requestVersion;
+  return isLatestPinMutation({
+    id: input.threadId,
+    requestVersion: input.requestVersion,
+    latestMutationVersionById: input.latestMutationVersionByThreadId,
+  });
+}
+
+export function isLatestPinnedProjectMutation<T>(input: {
+  readonly projectId: T;
+  readonly requestVersion: number;
+  readonly latestMutationVersionByProjectId: ReadonlyMap<T, number>;
+}): boolean {
+  return isLatestPinMutation({
+    id: input.projectId,
+    requestVersion: input.requestVersion,
+    latestMutationVersionById: input.latestMutationVersionByProjectId,
+  });
+}
+
+export function derivePinnedProjectIdsForSidebar<
+  T extends Pick<Project, "id" | "isPinned">,
+>(input: {
+  readonly projects: readonly T[];
+  readonly persistedPinnedProjectIds: readonly T["id"][];
+  readonly optimisticPinnedStateByProjectId: ReadonlyMap<T["id"], boolean>;
+}): T["id"][] {
+  return derivePinnedIds({
+    items: input.projects,
+    persistedPinnedIds: input.persistedPinnedProjectIds,
+    optimisticPinnedStateById: input.optimisticPinnedStateByProjectId,
+    maxCount: MAX_PINNED_PROJECTS,
+  });
+}
+
+export function orderPinnedProjectsForSidebar<T extends Pick<Project, "id">>(
+  projects: readonly T[],
+  pinnedProjectIds: readonly T["id"][],
+): T[] {
+  return orderPinnedItemsFirst(projects, pinnedProjectIds);
 }
 
 // Hide globally pinned rows from the per-project lists so the sidebar doesn't duplicate chats.

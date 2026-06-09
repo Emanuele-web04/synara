@@ -31,12 +31,11 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   if (cached) {
     return cached;
   }
-  const titleColor = theme === "dark" ? "#6073CC" : "#526FFF";
   const css = `
 :host {
-  /* Route the entire diff viewer through the chat code font so custom code fonts reach line numbers too. */
+  /* Route diff hunks through the chat code font; keep file headers on the UI stack. */
   --diffs-font-family: var(--font-chat-code-family);
-  --diffs-header-font-family: var(--font-chat-code-family);
+  --diffs-header-font-family: var(--font-ui-family);
   /* Honor the user-chosen chat code font size from settings instead of the library default (13px). */
   --diffs-font-size: var(--app-font-size-chat-code, 11px);
   font-family: var(--font-chat-code-family) !important;
@@ -48,12 +47,7 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 [data-file],
 [data-error-wrapper],
 [data-virtualizer-buffer] {
-  /* Re-assert the code font inside the library chrome because these nodes live in shadow-rooted markup. */
-  --diffs-font-family: var(--font-chat-code-family) !important;
-  --diffs-header-font-family: var(--font-chat-code-family) !important;
   --diffs-font-size: var(--app-font-size-chat-code, 11px) !important;
-  font-family: var(--font-chat-code-family) !important;
-  font-size: var(--app-font-size-chat-code, 11px) !important;
   --diffs-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
   --diffs-light-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
   --diffs-dark-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
@@ -82,15 +76,28 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   background-color: var(--diffs-bg) !important;
 }
 
-[data-file-info] {
+[data-diff],
+[data-file],
+[data-error-wrapper],
+[data-virtualizer-buffer] {
+  /* Re-assert the code font inside diff hunks because these nodes live in shadow-rooted markup. */
+  --diffs-font-family: var(--font-chat-code-family) !important;
   font-family: var(--font-chat-code-family) !important;
   font-size: var(--app-font-size-chat-code, 11px) !important;
+}
+
+[data-file-info] {
+  font-family: var(--font-ui-family) !important;
+  font-size: var(--app-font-size-ui, 12px) !important;
   background-color: color-mix(in srgb, var(--card) 94%, var(--foreground)) !important;
   border-block-color: var(--border) !important;
   color: var(--foreground) !important;
 }
 
 [data-diffs-header] {
+  --diffs-header-font-family: var(--font-ui-family) !important;
+  font-family: var(--font-ui-family) !important;
+  font-size: var(--app-font-size-ui, 12px) !important;
   position: sticky !important;
   top: 0;
   z-index: 4;
@@ -99,16 +106,30 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   cursor: pointer;
 }
 
+[data-header-content] {
+  align-items: center !important;
+}
+
+::slotted([slot="header-prefix"]) {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0 !important;
+  line-height: 0 !important;
+}
+
 /* Hide the default change-type icon (blue circle) — replaced by chevron + file-type icon. */
 [data-change-icon] {
   display: none;
 }
 
-[data-title] {
-  font-family: var(--font-chat-code-family) !important;
-  font-size: var(--app-font-size-chat-code, 11px) !important;
+[data-title],
+[data-prev-name] {
+  font-family: var(--font-ui-family) !important;
+  font-size: var(--app-font-size-ui, 12px) !important;
+  font-weight: 400 !important;
   cursor: pointer;
-  color: ${titleColor} !important;
+  color: var(--foreground) !important;
 }
 `;
   diffPanelUnsafeCssCache.set(theme, css);
@@ -252,10 +273,18 @@ export function summarizeFileDiffStats(files: ReadonlyArray<FileDiffMetadata>): 
   );
 }
 
-export function summarizePatchStats(
+export function summarizeRenderablePatchStats(
+  renderable: RenderablePatch | null | undefined,
+): { additions: number; deletions: number; fileCount: number } | null {
+  if (!renderable || renderable.kind !== "files" || renderable.files.length === 0) {
+    return null;
+  }
+  return { ...summarizeFileDiffStats(renderable.files), fileCount: renderable.files.length };
+}
+
+export function summarizePatchTotals(
   patch: string | undefined,
-): { additions: number; deletions: number } | null {
+): { additions: number; deletions: number; fileCount: number } | null {
   const renderable = getRenderablePatch(patch, "diff-panel:stats");
-  if (renderable?.kind !== "files") return null;
-  return summarizeFileDiffStats(renderable.files);
+  return summarizeRenderablePatchStats(renderable);
 }

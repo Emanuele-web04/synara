@@ -2489,6 +2489,7 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
             runOnWorktreeCreate: false,
           },
         ],
+        isPinned: true,
         defaultModelSelection: {
           provider: "codex",
           model: "gpt-5",
@@ -2498,10 +2499,12 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
       const projectRows = yield* sql<{
         readonly scriptsJson: string;
         readonly defaultModelSelection: string;
+        readonly isPinned: number;
       }>`
         SELECT
           scripts_json AS "scriptsJson",
-          default_model_selection_json AS "defaultModelSelection"
+          default_model_selection_json AS "defaultModelSelection",
+          is_pinned AS "isPinned"
         FROM projection_projects
         WHERE project_id = 'project-scripts'
       `;
@@ -2510,6 +2513,7 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
           scriptsJson:
             '[{"id":"script-1","name":"Build","command":"bun run build","icon":"build","runOnWorktreeCreate":false}]',
           defaultModelSelection: '{"provider":"codex","model":"gpt-5"}',
+          isPinned: 1,
         },
       ]);
     }),

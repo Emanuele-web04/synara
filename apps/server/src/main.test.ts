@@ -1,4 +1,7 @@
 import * as Http from "node:http";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import type { OrchestrationReadModel } from "@t3tools/contracts";
@@ -7,7 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Command from "effect/unstable/cli/Command";
 import { FetchHttpClient } from "effect/unstable/http";
-import { beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import { NetService } from "@t3tools/shared/Net";
 
 import { ServerConfig, type ServerConfigShape } from "./config";
@@ -37,6 +40,14 @@ const serverStart = Effect.acquireRelease(
   () => Effect.sync(() => stop()),
 );
 const findAvailablePort = vi.fn((preferred: number) => Effect.succeed(preferred));
+let defaultSynaraHome = "";
+const tempHomes = new Set<string>();
+
+function makeTempHome(prefix = "synara-main-test-"): string {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempHomes.add(directory);
+  return directory;
+}
 
 // Shared service layer used by this CLI test suite.
 const testLayer = Layer.mergeAll(
@@ -64,19 +75,13 @@ const testLayer = Layer.mergeAll(
   NodeServices.layer,
 );
 
-const runCli = (
-  args: ReadonlyArray<string>,
-  env: Record<string, string> = {
-    SYNARA_HOME: "/tmp/synara-test-home",
-    T3CODE_NO_BROWSER: "true",
-  },
-) => {
+const runCli = (args: ReadonlyArray<string>, env: Record<string, string> = {}) => {
   const program = Command.runWith(t3Cli, { version: "0.0.0-test" })(args).pipe(
     Effect.provide(
       ConfigProvider.layer(
         ConfigProvider.fromEnv({
           env: {
-            SYNARA_HOME: "/tmp/synara-test-home",
+            SYNARA_HOME: defaultSynaraHome,
             T3CODE_NO_BROWSER: "true",
             ...env,
           },
@@ -89,15 +94,25 @@ const runCli = (
 
 beforeEach(() => {
   vi.clearAllMocks();
+  defaultSynaraHome = makeTempHome();
   resolvedConfig = null;
   start.mockImplementation(() => undefined);
   stop.mockImplementation(() => undefined);
   findAvailablePort.mockImplementation((preferred: number) => Effect.succeed(preferred));
 });
 
+afterEach(() => {
+  for (const directory of tempHomes) {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+  tempHomes.clear();
+});
+
 it.layer(testLayer)("server CLI command", (it) => {
   it.effect("parses all CLI flags and wires scoped start/stop", () =>
     Effect.gen(function* () {
+      const flagHome = makeTempHome("synara-main-flag-");
+
       yield* runCli([
         "--mode",
         "desktop",
@@ -106,7 +121,7 @@ it.layer(testLayer)("server CLI command", (it) => {
         "--host",
         "0.0.0.0",
         "--home-dir",
-        "/tmp/t3-cli-home",
+        flagHome,
         "--dev-url",
         "http://127.0.0.1:5173",
         "--no-browser",
@@ -118,8 +133,8 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.mode, "desktop");
       assert.equal(resolvedConfig?.port, 4010);
       assert.equal(resolvedConfig?.host, "0.0.0.0");
-      assert.equal(resolvedConfig?.baseDir, "/tmp/t3-cli-home");
-      assert.equal(resolvedConfig?.stateDir, "/tmp/t3-cli-home/dev");
+      assert.equal(resolvedConfig?.baseDir, flagHome);
+      assert.equal(resolvedConfig?.stateDir, path.join(flagHome, "dev"));
       assert.equal(resolvedConfig?.devUrl?.toString(), "http://127.0.0.1:5173/");
       assert.equal(resolvedConfig?.noBrowser, true);
       assert.equal(resolvedConfig?.authToken, "auth-secret");
@@ -141,11 +156,13 @@ it.layer(testLayer)("server CLI command", (it) => {
 
   it.effect("uses env fallbacks when flags are not provided", () =>
     Effect.gen(function* () {
+      const envHome = makeTempHome("synara-main-env-");
+
       yield* runCli([], {
         T3CODE_MODE: "desktop",
         T3CODE_PORT: "4999",
         T3CODE_HOST: "100.88.10.4",
-        SYNARA_HOME: "/tmp/synara-env-home",
+        SYNARA_HOME: envHome,
         VITE_DEV_SERVER_URL: "http://localhost:5173",
         T3CODE_NO_BROWSER: "true",
         T3CODE_AUTH_TOKEN: "env-token",
@@ -155,8 +172,8 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.mode, "desktop");
       assert.equal(resolvedConfig?.port, 4999);
       assert.equal(resolvedConfig?.host, "100.88.10.4");
-      assert.equal(resolvedConfig?.baseDir, "/tmp/synara-env-home");
-      assert.equal(resolvedConfig?.stateDir, "/tmp/synara-env-home/dev");
+      assert.equal(resolvedConfig?.baseDir, envHome);
+      assert.equal(resolvedConfig?.stateDir, path.join(envHome, "dev"));
       assert.equal(resolvedConfig?.devUrl?.toString(), "http://localhost:5173/");
       assert.equal(resolvedConfig?.noBrowser, true);
       assert.equal(resolvedConfig?.authToken, "env-token");

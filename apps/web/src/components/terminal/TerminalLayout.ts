@@ -4,12 +4,11 @@
 // Depends on: shared terminal identity logic plus terminal pane-tree helpers.
 
 import {
-  type TerminalVisualState,
-  resolveTerminalVisualIdentity,
   type ResolvedTerminalVisualIdentity,
   type TerminalCliKind,
 } from "@t3tools/shared/terminalThreads";
 
+import { resolveTerminalVisualIdentityMap } from "../../terminalVisualIdentity";
 import {
   collectTerminalIdsFromLayout,
   findFirstTerminalIdInLayout,
@@ -154,47 +153,6 @@ function resolveActiveGroup(input: {
   );
 }
 
-function resolveTerminalVisualIdentityMap(input: {
-  normalizedTerminalIds: string[];
-  runningTerminalIds: string[];
-  terminalAttentionStatesById: Record<string, "attention" | "review">;
-  terminalCliKindsById: Record<string, TerminalCliKind>;
-  terminalLabelsById: Record<string, string>;
-  terminalTitleOverridesById: Record<string, string>;
-}): ReadonlyMap<string, ResolvedTerminalVisualIdentity> {
-  const terminalLabelsById = input.terminalLabelsById ?? {};
-  const terminalTitleOverridesById = input.terminalTitleOverridesById ?? {};
-  const runningTerminalIdSet = new Set(
-    input.runningTerminalIds.map((id) => id.trim()).filter((id) => id.length > 0),
-  );
-
-  const resolveStateForTerminal = (terminalId: string): TerminalVisualState => {
-    const attentionState = input.terminalAttentionStatesById[terminalId] ?? null;
-    if (attentionState === "attention") {
-      return "attention";
-    }
-    if (runningTerminalIdSet.has(terminalId)) {
-      return "running";
-    }
-    if (attentionState === "review") {
-      return "review";
-    }
-    return "idle";
-  };
-
-  return new Map(
-    input.normalizedTerminalIds.map((terminalId, index) => [
-      terminalId,
-      resolveTerminalVisualIdentity({
-        cliKind: input.terminalCliKindsById[terminalId] ?? null,
-        fallbackTitle: `Terminal ${index + 1}`,
-        state: resolveStateForTerminal(terminalId),
-        title: terminalTitleOverridesById[terminalId] ?? terminalLabelsById[terminalId],
-      }),
-    ]),
-  );
-}
-
 export function resolveThreadTerminalLayout(input: {
   activeTerminalGroupId: string;
   activeTerminalId: string;
@@ -229,7 +187,7 @@ export function resolveThreadTerminalLayout(input: {
     resolvedTerminalGroups.some((terminalGroup) => terminalGroup.terminalIds.length > 1);
   const hasReachedSplitLimit = visibleTerminalIds.length >= MAX_TERMINALS_PER_GROUP;
   const terminalVisualIdentityById = resolveTerminalVisualIdentityMap({
-    normalizedTerminalIds,
+    terminalIds: normalizedTerminalIds,
     runningTerminalIds: input.runningTerminalIds,
     terminalAttentionStatesById: input.terminalAttentionStatesById,
     terminalCliKindsById: input.terminalCliKindsById,

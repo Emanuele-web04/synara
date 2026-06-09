@@ -30,14 +30,16 @@ import { formatComposerMentionToken } from "~/lib/composerMentions";
 import { basenameOfPath } from "~/file-icons";
 import { createCentralIconElement } from "~/lib/central-icons";
 import {
+  COMPOSER_INLINE_DECORATOR_HOST_CLASS_NAME,
   COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
   COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
-  COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+  COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
   formatComposerSkillChipLabel,
 } from "../composerInlineChip";
+import { InlineLinkChip } from "../InlineLinkChip";
 import { ComposerPendingTerminalContextChip } from "../chat/ComposerPendingTerminalContexts";
 import { createMentionChipIconElement, type MentionChipKind } from "../chat/MentionChipIcon";
 
@@ -72,6 +74,15 @@ export type SerializedComposerAgentMentionNode = Spread<
   SerializedTextNode
 >;
 
+export type SerializedComposerLinkNode = Spread<
+  {
+    url: string;
+    type: "composer-link";
+    version: 1;
+  },
+  SerializedLexicalNode
+>;
+
 export type SerializedComposerTerminalContextNode = Spread<
   {
     context: TerminalContextDraft;
@@ -95,7 +106,7 @@ function renderMentionChipDom(
   const icon = createMentionChipIconElement(
     pathValue,
     kind,
-    COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+    COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   );
 
   const label = document.createElement("span");
@@ -112,7 +123,7 @@ function renderSkillChipDom(container: HTMLElement, name: string): void {
 
   const icon = createCentralIconElement(
     COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
-    COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+    COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   );
 
   const label = document.createElement("span");
@@ -161,6 +172,10 @@ function renderAgentMentionChipDom(container: HTMLElement, alias: string, color:
   label.textContent = `@${alias}`;
 
   container.append(icon, label);
+}
+
+function ComposerLinkDecorator(props: { url: string }) {
+  return <InlineLinkChip url={props.url} />;
 }
 
 // ── ComposerMentionNode ───────────────────────────────────────────────
@@ -404,6 +419,63 @@ export function $createComposerAgentMentionNode(
   return $applyNodeReplacement(new ComposerAgentMentionNode(alias, color));
 }
 
+// ── ComposerLinkNode ──────────────────────────────────────────────────
+
+export class ComposerLinkNode extends DecoratorNode<ReactElement> {
+  __url: string;
+
+  static override getType(): string {
+    return "composer-link";
+  }
+
+  static override clone(node: ComposerLinkNode): ComposerLinkNode {
+    return new ComposerLinkNode(node.__url, node.__key);
+  }
+
+  static override importJSON(serializedNode: SerializedComposerLinkNode): ComposerLinkNode {
+    return $createComposerLinkNode(serializedNode.url);
+  }
+
+  constructor(url: string, key?: NodeKey) {
+    super(key);
+    this.__url = url;
+  }
+
+  override exportJSON(): SerializedComposerLinkNode {
+    return {
+      url: this.__url,
+      type: "composer-link",
+      version: 1,
+    };
+  }
+
+  override createDOM(): HTMLElement {
+    const dom = document.createElement("span");
+    dom.className = COMPOSER_INLINE_DECORATOR_HOST_CLASS_NAME;
+    return dom;
+  }
+
+  override updateDOM(): false {
+    return false;
+  }
+
+  override decorate(): ReactElement {
+    return <ComposerLinkDecorator url={this.__url} />;
+  }
+
+  override getTextContent(): string {
+    return this.__url;
+  }
+
+  override isInline(): true {
+    return true;
+  }
+}
+
+export function $createComposerLinkNode(url: string): ComposerLinkNode {
+  return $applyNodeReplacement(new ComposerLinkNode(url));
+}
+
 // ── ComposerTerminalContextNode ───────────────────────────────────────
 
 function ComposerTerminalContextDecorator(props: { context: TerminalContextDraft }) {
@@ -443,7 +515,7 @@ export class ComposerTerminalContextNode extends DecoratorNode<ReactElement> {
 
   override createDOM(): HTMLElement {
     const dom = document.createElement("span");
-    dom.className = "inline-flex align-middle leading-none";
+    dom.className = COMPOSER_INLINE_DECORATOR_HOST_CLASS_NAME;
     return dom;
   }
 
@@ -476,7 +548,8 @@ export type ComposerInlineTokenNode =
   | ComposerMentionNode
   | ComposerSkillNode
   | ComposerTerminalContextNode
-  | ComposerAgentMentionNode;
+  | ComposerAgentMentionNode
+  | ComposerLinkNode;
 
 export function isComposerInlineTokenNode(
   candidate: unknown,
@@ -485,7 +558,8 @@ export function isComposerInlineTokenNode(
     candidate instanceof ComposerMentionNode ||
     candidate instanceof ComposerSkillNode ||
     candidate instanceof ComposerTerminalContextNode ||
-    candidate instanceof ComposerAgentMentionNode
+    candidate instanceof ComposerAgentMentionNode ||
+    candidate instanceof ComposerLinkNode
   );
 }
 
@@ -495,4 +569,5 @@ export const COMPOSER_NODE_CLASSES = [
   ComposerSkillNode,
   ComposerTerminalContextNode,
   ComposerAgentMentionNode,
+  ComposerLinkNode,
 ] as const;

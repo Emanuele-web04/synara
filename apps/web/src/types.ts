@@ -9,6 +9,8 @@ import type {
   OrchestrationLatestTurn,
   OrchestrationThreadPullRequest,
   OrchestrationProposedPlanId,
+  PinnedMessage,
+  ThreadMarker,
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
   ThreadHandoff,
@@ -17,6 +19,8 @@ import type {
   ProjectId,
   TurnId,
   MessageId,
+  ProviderMentionReference,
+  ProviderSkillReference,
   ProviderKind,
   CheckpointRef,
   ProviderInteractionMode,
@@ -87,6 +91,8 @@ export interface ChatMessage {
   role: "user" | "assistant" | "system";
   text: string;
   attachments?: ChatAttachment[];
+  skills?: ProviderSkillReference[];
+  mentions?: ProviderMentionReference[];
   dispatchMode?: TurnDispatchMode;
   turnId?: TurnId | null;
   createdAt: string;
@@ -132,6 +138,7 @@ export interface Project {
   cwd: string;
   defaultModelSelection: ModelSelection | null;
   expanded: boolean;
+  isPinned?: boolean;
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
   scripts: ProjectScript[];
@@ -173,6 +180,9 @@ export interface Thread extends ThreadWorkspaceState {
   archivedAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
+  pinnedMessages?: PinnedMessage[];
+  threadMarkers?: ThreadMarker[];
+  notes?: string;
   latestTurn: OrchestrationLatestTurn | null;
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
   lastVisitedAt?: string | undefined;
@@ -205,6 +215,13 @@ export interface ThreadShell extends ThreadWorkspaceState {
   archivedAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
+  // Per-thread workspace annotations carried through the normalized projection so
+  // `getThreadFromState` reconstructs them (the shell is the source of truth for a Thread).
+  // These do not arrive on the sidebar shell snapshot, so the snapshot path preserves them
+  // from the previous shell rather than clobbering with `undefined`.
+  pinnedMessages?: PinnedMessage[];
+  threadMarkers?: ThreadMarker[];
+  notes?: string;
   parentThreadId?: ThreadId | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;

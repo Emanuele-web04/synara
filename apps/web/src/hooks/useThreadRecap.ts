@@ -55,9 +55,8 @@ function hydrateThreadRecapCache(): Partial<Record<ThreadId, ThreadRecapCacheEnt
 
 // Debounces recap generation until a thread is quiet and the latest assistant output settled.
 export function useThreadRecap(input: UseThreadRecapInput): UseThreadRecapResult {
-  const [cacheByThreadId, setCacheByThreadId] = useState<
-    Partial<Record<ThreadId, ThreadRecapCacheEntry>>
-  >(hydrateThreadRecapCache);
+  const [cacheByThreadId, setCacheByThreadId] =
+    useState<Partial<Record<ThreadId, ThreadRecapCacheEntry>>>(hydrateThreadRecapCache);
   const inFlightSignatureByThreadIdRef = useRef<Partial<Record<ThreadId, string>>>({});
   const failedSignatureByThreadIdRef = useRef<Partial<Record<ThreadId, string>>>({});
   const latestSourceSignatureByThreadIdRef = useRef<Partial<Record<ThreadId, string>>>({});

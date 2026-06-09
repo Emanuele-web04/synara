@@ -6,6 +6,18 @@ export const TrimmedNonEmptyString = TrimmedString.check(Schema.isNonEmpty());
 export const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 export const PositiveInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
 
+// Shared schema for child-process environment overrides (terminals, dev servers).
+// Keys follow POSIX env-name rules; values and total size are capped to keep
+// requests bounded. Extracted here so terminal and project contracts stay in sync.
+const ProcessEnvKey = Schema.String.check(Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/)).check(
+  Schema.isMaxLength(128),
+);
+const ProcessEnvValue = Schema.String.check(Schema.isMaxLength(8_192));
+export const ProcessEnvRecord = Schema.Record(ProcessEnvKey, ProcessEnvValue).check(
+  Schema.isMaxProperties(128),
+);
+export type ProcessEnvRecord = typeof ProcessEnvRecord.Type;
+
 export const IsoDateTime = Schema.String;
 export type IsoDateTime = typeof IsoDateTime.Type;
 
@@ -29,6 +41,8 @@ export const EventId = makeEntityId("EventId");
 export type EventId = typeof EventId.Type;
 export const MessageId = makeEntityId("MessageId");
 export type MessageId = typeof MessageId.Type;
+export const ThreadMarkerId = makeEntityId("ThreadMarkerId");
+export type ThreadMarkerId = typeof ThreadMarkerId.Type;
 export const TurnId = makeEntityId("TurnId");
 export type TurnId = typeof TurnId.Type;
 

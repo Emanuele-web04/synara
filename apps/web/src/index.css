@@ -68,11 +68,18 @@
     background: var(--app-shell-background, transparent);
   }
   :root {
-    /* One token for every app-surface divider line: the vertical sidebar↔chat seam
-       AND the horizontal chrome-bar dividers (chat/workspace/dock/diff headers). Both
-       resolve through here so the two divider directions always read as the same line.
-       (Chat headers previously used the lighter --color-border-light and looked off.) */
-    --app-surface-divider: var(--color-border);
+    /* One token for the INTERNAL chat-surface dividers: the horizontal chrome-bar
+       hairlines (chat/workspace/dock/diff headers) AND the right-side pane splits
+       (diff/browser/dock). All resolve through here so those divider directions read
+       as the same line. The rounded sidebar↔chat seam is intentionally NOT one of
+       these — it stays at full --color-border (see --seam-line) so the card's outer
+       edge reads as before.
+       (Chat headers previously used the lighter --color-border-light and looked off.)
+       Held at a fraction of --color-border so these internal dividers sit slightly MORE
+       transparent than card/input borders — color-mix toward transparent scales the
+       border's alpha (same proven form as the seam-hover tint below) and stays
+       theme-aware because --color-border already differs per theme. */
+    --app-surface-divider: color-mix(in srgb, var(--color-border) 60%, transparent);
     /* Rounded-corner radius of the chat card's seam side. Defined once here so the card
        radius, the seam ring clip-path, the right-side border-radius, and the backing
        strip width stay in lockstep. (All call sites still carry a 0.75rem fallback.) */
@@ -196,7 +203,10 @@
      sidebar; when the sidebar is collapsed the seam sits at the window edge and the shadow
      simply falls off-screen. */
   .chat-content-card {
-    --seam-line: var(--app-surface-divider);
+    /* The rounded outer seam stays at FULL --color-border (NOT the more-transparent
+       --app-surface-divider used by the internal hairlines/splits): the card's outer
+       edge against the sidebar should read as solid as before. Do not re-unify these. */
+    --seam-line: var(--color-border);
     --seam-shadow-color: rgba(0, 0, 0, 0.068);
     --seam-shadow-x: 0px;
     /* Tight, low-spread depth: small blur + heavy negative spread so the shadow hugs the
@@ -738,6 +748,74 @@ label:has(> select#reasoning-effort) select {
   text-decoration: underline;
   text-decoration-thickness: from-font;
   text-underline-offset: 0.18em;
+}
+
+.chat-markdown .thread-marker {
+  border-radius: 0.22em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  transition:
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    text-decoration-color 160ms ease;
+}
+
+.chat-markdown .thread-marker-highlight {
+  padding: 0.02em 0.12em;
+}
+
+/* Markdown can split one marker across inline nodes; only outer edges keep padding/radius. */
+.chat-markdown .thread-marker-highlight.thread-marker-continues-before {
+  padding-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.chat-markdown .thread-marker-highlight.thread-marker-continues-after {
+  padding-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.chat-markdown .thread-marker-underline {
+  text-decoration-line: underline;
+  text-decoration-thickness: 0.14em;
+  text-underline-offset: 0.18em;
+}
+
+.chat-markdown .thread-marker-yellow {
+  background-color: color-mix(in srgb, var(--color-text-accent) 12%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--color-text-foreground) 22%, transparent);
+}
+
+.chat-markdown .thread-marker-blue {
+  background-color: transparent;
+  text-decoration-color: color-mix(in srgb, var(--color-text-foreground) 22%, transparent);
+}
+
+.chat-markdown .thread-marker-green {
+  background-color: color-mix(in srgb, #34d399 24%, transparent);
+  text-decoration-color: color-mix(in srgb, #10b981 82%, transparent);
+}
+
+.chat-markdown .thread-marker-pink {
+  background-color: color-mix(in srgb, #f472b6 24%, transparent);
+  text-decoration-color: color-mix(in srgb, #ec4899 82%, transparent);
+}
+
+.chat-markdown .thread-marker-done {
+  opacity: 0.58;
+}
+
+.chat-markdown .thread-marker-active {
+  box-shadow:
+    0 0 0 2px var(--color-background-surface),
+    0 0 0 4px color-mix(in srgb, var(--color-text-foreground) 34%, transparent);
+}
+
+.chat-markdown .thread-marker-active.thread-marker-continues-before,
+.chat-markdown .thread-marker-active.thread-marker-continues-after {
+  box-shadow: none;
 }
 
 .chat-markdown blockquote {

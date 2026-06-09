@@ -1,6 +1,14 @@
-import type { ProviderKind } from "@t3tools/contracts";
-import { queryOptions } from "@tanstack/react-query";
+import type {
+  ProviderKind,
+  ServerListProviderUsageInput,
+  ServerStopLocalServerInput,
+} from "@t3tools/contracts";
+import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
+
+export const LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS = 10_000;
+export const LOCAL_SERVERS_BACKGROUND_REFETCH_INTERVAL_MS = 30_000;
+const LOCAL_SERVERS_DEFAULT_STALE_TIME_MS = 3_000;
 
 export const serverQueryKeys = {
   all: ["server"] as const,
@@ -9,8 +17,14 @@ export const serverQueryKeys = {
   environment: () => ["server", "environment"] as const,
   settings: () => ["server", "settings"] as const,
   worktrees: () => ["server", "worktrees"] as const,
+  localServers: () => ["server", "localServers"] as const,
   providerUsage: (provider: ProviderKind | null | undefined, homePath?: string | null) =>
     ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
+  allProviderUsage: () => ["server", "allProviderUsage"] as const,
+};
+
+export const serverMutationKeys = {
+  stopLocalServer: () => ["server", "mutation", "stopLocalServer"] as const,
 };
 
 export function serverConfigQueryOptions() {
@@ -70,6 +84,46 @@ export function serverWorktreesQueryOptions() {
   });
 }
 
+export function serverLocalServersQueryOptions(
+  input:
+    | boolean
+    | {
+        enabled?: boolean;
+        refetchInterval?: number | false;
+        staleTime?: number;
+      } = true,
+) {
+  const options = typeof input === "boolean" ? { enabled: input } : input;
+  const enabled = options.enabled ?? true;
+  return queryOptions({
+    queryKey: serverQueryKeys.localServers(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      return api.server.listLocalServers();
+    },
+    enabled,
+    staleTime: options.staleTime ?? LOCAL_SERVERS_DEFAULT_STALE_TIME_MS,
+    refetchInterval: enabled
+      ? (options.refetchInterval ?? LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS)
+      : false,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+  });
+}
+
+export function serverStopLocalServerMutationOptions(input: { queryClient: QueryClient }) {
+  return mutationOptions({
+    mutationKey: serverMutationKeys.stopLocalServer(),
+    mutationFn: async (server: ServerStopLocalServerInput) => {
+      const api = ensureNativeApi();
+      return api.server.stopLocalServer(server);
+    },
+    onSettled: () => {
+      void input.queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
+    },
+  });
+}
+
 export function serverProviderUsageSnapshotQueryOptions(input: {
   provider: ProviderKind | null | undefined;
   homePath?: string | null;
@@ -89,5 +143,30 @@ export function serverProviderUsageSnapshotQueryOptions(input: {
         ...(input.homePath ? { homePath: input.homePath } : {}),
       });
     },
+  });
+}
+
+export async function fetchAllProviderUsage(input: ServerListProviderUsageInput = {}) {
+  const api = ensureNativeApi();
+  return api.server.listProviderUsage(input);
+}
+
+// Live remaining-usage for every supported provider at once, powering Settings and active usage UI.
+export function serverAllProviderUsageQueryOptions(
+  input:
+    | boolean
+    | {
+        enabled?: boolean;
+      } = true,
+) {
+  const enabled = typeof input === "boolean" ? input : (input.enabled ?? true);
+  return queryOptions({
+    queryKey: serverQueryKeys.allProviderUsage(),
+    enabled,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+    queryFn: async () => fetchAllProviderUsage(),
   });
 }

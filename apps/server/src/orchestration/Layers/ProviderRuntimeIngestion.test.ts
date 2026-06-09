@@ -2332,15 +2332,13 @@ describe("ProviderRuntimeIngestion", () => {
     });
     await harness.drain();
 
-    const thread = await waitForThread(
-      harness.engine,
-      (entry) =>
-        entry.messages.some(
-          (message: ProviderRuntimeTestMessage) =>
-            message.id === "assistant:item-late-completion" &&
-            message.turnId === "turn-late-completion" &&
-            !message.streaming,
-        ),
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:item-late-completion" &&
+          message.turnId === "turn-late-completion" &&
+          !message.streaming,
+      ),
     );
     const message = thread.messages.find(
       (entry: ProviderRuntimeTestMessage) => entry.id === "assistant:item-late-completion",

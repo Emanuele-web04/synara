@@ -2,19 +2,23 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildProjectThreadTree,
+  derivePinnedProjectIdsForSidebar,
   derivePinnedThreadIdsForSidebar,
   deriveSidebarProjectData,
   describeAddProjectError,
   extractDuplicateProjectCreateProjectId,
+  findDeepestWorkspaceRootMatch,
   findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
   getVisibleSidebarEntriesForPreview,
+  orderPinnedProjectsForSidebar,
   getPinnedThreadsForSidebar,
   getNextVisibleSidebarThreadId,
   getSidebarThreadIdForJumpCommand,
   getSidebarThreadIdsToPrewarm,
   getRenderedThreadsForSidebarProject,
   groupSidebarThreadsByProjectId,
+  isLatestPinnedProjectMutation,
   getUnpinnedThreadsForSidebar,
   getVisibleSidebarThreadIds,
   getVisibleThreadsForProject,
@@ -250,6 +254,36 @@ describe("add-project error helpers", () => {
     ).toBe("project-2");
   });
 
+  it("attributes a nested server cwd to the deepest matching project", () => {
+    const projects = [
+      { id: "repo", cwd: "/Users/tester/Code/repo" },
+      { id: "web", cwd: "/Users/tester/Code/repo/apps/web" },
+      { id: "other", cwd: "/Users/tester/Code/other" },
+    ];
+
+    expect(
+      findDeepestWorkspaceRootMatch(
+        projects,
+        "/Users/tester/Code/repo/apps/web/src",
+        (project) => project.cwd,
+      )?.id,
+    ).toBe("web");
+    expect(
+      findDeepestWorkspaceRootMatch(
+        projects,
+        "/Users/tester/Code/repo/apps/server",
+        (project) => project.cwd,
+      )?.id,
+    ).toBe("repo");
+    expect(
+      findDeepestWorkspaceRootMatch(
+        projects,
+        "/Users/tester/Code/unrelated",
+        (project) => project.cwd,
+      ),
+    ).toBeUndefined();
+  });
+
   it("falls through to project.create when a local project shell is stale on the server", async () => {
     const recoverByProjectIdCalls: ProjectId[] = [];
     const recoverByWorkspaceRootCalls: string[] = [];
@@ -335,6 +369,22 @@ describe("add-project error helpers", () => {
 });
 
 describe("pin helpers", () => {
+  const makeProject = (id: string): Project =>
+    ({
+      id: id as ProjectId,
+      kind: "project",
+      name: id,
+      remoteName: id,
+      folderName: id,
+      localName: null,
+      cwd: `/tmp/${id}`,
+      defaultModelSelection: null,
+      expanded: true,
+      createdAt: "2026-03-09T10:00:00.000Z",
+      updatedAt: "2026-03-09T10:00:00.000Z",
+      scripts: [],
+    }) satisfies Project;
+
   const makeThread = (id: string): Thread =>
     ({
       id: id as ThreadId,
@@ -404,9 +454,36 @@ describe("pin helpers", () => {
     ).toEqual(["thread-1"]);
   });
 
+  it("derives at most three pinned projects and keeps persisted order first", () => {
+    const projects = [
+      { ...makeProject("project-1"), isPinned: true },
+      { ...makeProject("project-2"), isPinned: true },
+      { ...makeProject("project-3"), isPinned: true },
+      { ...makeProject("project-4"), isPinned: true },
+    ];
+
+    expect(
+      derivePinnedProjectIdsForSidebar({
+        projects,
+        persistedPinnedProjectIds: ["project-3" as ProjectId, "project-1" as ProjectId],
+        optimisticPinnedStateByProjectId: new Map([["project-1" as ProjectId, false]]),
+      }),
+    ).toEqual(["project-3", "project-2", "project-4"]);
+  });
+
+  it("moves pinned projects to the top while preserving unpinned order", () => {
+    const projects = [makeProject("project-1"), makeProject("project-2"), makeProject("project-3")];
+
+    expect(
+      orderPinnedProjectsForSidebar(projects, ["project-3" as ProjectId, "project-1" as ProjectId]),
+    ).toEqual([projects[2], projects[0], projects[1]]);
+  });
+
   it("rejects stale pin mutation versions so old failures cannot roll back newer clicks", () => {
     const threadId = "thread-1" as ThreadId;
     const latestMutationVersionByThreadId = new Map<ThreadId, number>([[threadId, 2]]);
+    const projectId = "project-1" as ProjectId;
+    const latestMutationVersionByProjectId = new Map<ProjectId, number>([[projectId, 2]]);
 
     expect(
       isLatestPinnedThreadMutation({
@@ -420,6 +497,20 @@ describe("pin helpers", () => {
         threadId,
         requestVersion: 2,
         latestMutationVersionByThreadId,
+      }),
+    ).toBe(true);
+    expect(
+      isLatestPinnedProjectMutation({
+        projectId,
+        requestVersion: 1,
+        latestMutationVersionByProjectId,
+      }),
+    ).toBe(false);
+    expect(
+      isLatestPinnedProjectMutation({
+        projectId,
+        requestVersion: 2,
+        latestMutationVersionByProjectId,
       }),
     ).toBe(true);
   });

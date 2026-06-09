@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import {
   IsoDateTime,
   NonNegativeInt,
+  PositiveInt,
   ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -122,12 +123,24 @@ export const ServerProviderUsageLine = Schema.Struct({
 });
 export type ServerProviderUsageLine = typeof ServerProviderUsageLine.Type;
 
+// Lifecycle of a live provider usage fetch. Absent status is treated as "ok" so
+// existing local-archive snapshots stay valid without setting it.
+//   ok          – fetched fresh usage from the provider backend
+//   needs-auth  – no/expired credential, or the backend rejected the token (read-only mode never refreshes)
+//   unsupported – the provider has no fetchable usage source for the current auth (e.g. API-key-only)
+//   error       – the fetch failed unexpectedly (network/parse); detail carries the reason
+export const ProviderUsageStatus = Schema.Literals(["ok", "needs-auth", "unsupported", "error"]);
+export type ProviderUsageStatus = typeof ProviderUsageStatus.Type;
+
 export const ServerProviderUsageSnapshot = Schema.Struct({
   provider: ProviderKind,
   updatedAt: IsoDateTime,
   limits: Schema.Array(ServerProviderUsageLimit),
   usageLines: Schema.Array(ServerProviderUsageLine),
   source: TrimmedNonEmptyString,
+  status: Schema.optional(ProviderUsageStatus),
+  planName: Schema.optional(TrimmedNonEmptyString),
+  detail: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderUsageSnapshot = typeof ServerProviderUsageSnapshot.Type;
 
@@ -139,6 +152,61 @@ export type ServerGetProviderUsageSnapshotInput = typeof ServerGetProviderUsageS
 
 export const ServerGetProviderUsageSnapshotResult = Schema.NullOr(ServerProviderUsageSnapshot);
 export type ServerGetProviderUsageSnapshotResult = typeof ServerGetProviderUsageSnapshotResult.Type;
+
+// Batch live-usage fetch for every supported provider, powering the Settings → Usage section.
+// Returns one entry per supported provider (including needs-auth/error) so the UI can render a row each.
+export const ServerListProviderUsageInput = Schema.Struct({
+  forceRefresh: Schema.optional(Schema.Boolean),
+});
+export type ServerListProviderUsageInput = typeof ServerListProviderUsageInput.Type;
+
+export const ServerListProviderUsageResult = Schema.Array(ServerProviderUsageSnapshot);
+export type ServerListProviderUsageResult = typeof ServerListProviderUsageResult.Type;
+
+export const ServerLocalServerAddress = Schema.Struct({
+  host: TrimmedNonEmptyString,
+  port: PositiveInt,
+  family: Schema.Literals(["tcp4", "tcp6", "tcp"]),
+  url: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ServerLocalServerAddress = typeof ServerLocalServerAddress.Type;
+
+export const ServerLocalServerProcess = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  pid: PositiveInt,
+  ppid: Schema.optional(PositiveInt),
+  command: TrimmedNonEmptyString,
+  displayName: TrimmedNonEmptyString,
+  pageTitle: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
+  // Working directory of the listening process, when resolvable. Surfaced in the
+  // UI and used to attribute manually-started dev servers to a project by folder.
+  cwd: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+  args: Schema.String.check(Schema.isMaxLength(1_000)),
+  ports: Schema.Array(PositiveInt),
+  addresses: Schema.Array(ServerLocalServerAddress),
+  isStoppable: Schema.Boolean,
+  stopDisabledReason: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
+});
+export type ServerLocalServerProcess = typeof ServerLocalServerProcess.Type;
+
+export const ServerListLocalServersResult = Schema.Struct({
+  generatedAt: IsoDateTime,
+  servers: Schema.Array(ServerLocalServerProcess),
+});
+export type ServerListLocalServersResult = typeof ServerListLocalServersResult.Type;
+
+export const ServerStopLocalServerInput = Schema.Struct({
+  pid: PositiveInt,
+  port: PositiveInt,
+});
+export type ServerStopLocalServerInput = typeof ServerStopLocalServerInput.Type;
+
+export const ServerStopLocalServerResult = Schema.Struct({
+  pid: PositiveInt,
+  stopped: Schema.Boolean,
+  message: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
+});
+export type ServerStopLocalServerResult = typeof ServerStopLocalServerResult.Type;
 
 export const ServerDiagnosticsMemory = Schema.Struct({
   rssBytes: NonNegativeInt,

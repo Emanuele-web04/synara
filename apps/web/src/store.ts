@@ -16,6 +16,18 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { resolveThreadBranchRegressionGuard } from "@t3tools/shared/git";
+import {
+  addPinnedMessage,
+  removePinnedMessage,
+  setPinnedMessageDone,
+  setPinnedMessageLabel,
+} from "@t3tools/shared/pinnedMessages";
+import {
+  addThreadMarker,
+  removeThreadMarker,
+  setThreadMarkerDone,
+  setThreadMarkerLabel,
+} from "@t3tools/shared/threadMarkers";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
 import { create } from "zustand";
@@ -274,6 +286,11 @@ function updateThread(
   return changed ? next : threads;
 }
 
+function resolveEventUpdatedAt(thread: Thread, updatedAt: string): string {
+  const currentUpdatedAt = thread.updatedAt ?? thread.createdAt;
+  return currentUpdatedAt > updatedAt ? currentUpdatedAt : updatedAt;
+}
+
 function sourceProposedPlansEqual(
   left: Thread["pendingSourceProposedPlan"],
   right: Thread["pendingSourceProposedPlan"],
@@ -383,6 +400,9 @@ function threadShellsEqual(left: ThreadShell | undefined, right: ThreadShell): b
     (left.sidechatSourceThreadId ?? null) === (right.sidechatSourceThreadId ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     (left.handoff ?? null) === (right.handoff ?? null) &&
+    deepEqualJson(left.pinnedMessages ?? null, right.pinnedMessages ?? null) &&
+    deepEqualJson(left.threadMarkers ?? null, right.threadMarkers ?? null) &&
+    (left.notes ?? "") === (right.notes ?? "") &&
     left.latestUserMessageAt === right.latestUserMessageAt &&
     left.hasPendingApprovals === right.hasPendingApprovals &&
     left.hasPendingUserInput === right.hasPendingUserInput &&
@@ -428,6 +448,9 @@ function toThreadShell(thread: Thread): ThreadShell {
     sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
     handoff: thread.handoff ?? null,
+    ...(thread.pinnedMessages !== undefined ? { pinnedMessages: thread.pinnedMessages } : {}),
+    ...(thread.threadMarkers !== undefined ? { threadMarkers: thread.threadMarkers } : {}),
+    ...(thread.notes !== undefined ? { notes: thread.notes } : {}),
     ...(thread.latestUserMessageAt !== undefined
       ? { latestUserMessageAt: thread.latestUserMessageAt }
       : {}),
@@ -512,6 +535,28 @@ function arraysShallowEqual<T>(
   }
   for (let index = 0; index < left.length; index += 1) {
     if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function providerReferenceArraysEqual(
+  left:
+    | ReadonlyArray<Pick<NonNullable<ChatMessage["mentions"]>[number], "name" | "path">>
+    | undefined,
+  right: ReadonlyArray<Pick<NonNullable<ChatMessage["mentions"]>[number], "name" | "path">>,
+): boolean {
+  if (!left || left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    const leftReference = left[index];
+    const rightReference = right[index];
+    if (
+      leftReference?.name !== rightReference?.name ||
+      leftReference?.path !== rightReference?.path
+    ) {
       return false;
     }
   }
@@ -618,6 +663,7 @@ function normalizeProjectFromReadModel(
     previous.cwd === incoming.workspaceRoot &&
     previous.defaultModelSelection === defaultModelSelection &&
     previous.expanded === expanded &&
+    (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
     previous.createdAt === incoming.createdAt &&
     previous.updatedAt === incoming.updatedAt &&
     previous.scripts === scripts
@@ -635,6 +681,7 @@ function normalizeProjectFromReadModel(
     cwd: incoming.workspaceRoot,
     defaultModelSelection,
     expanded,
+    isPinned: incoming.isPinned ?? false,
     createdAt: incoming.createdAt,
     updatedAt: incoming.updatedAt,
     scripts,
@@ -670,6 +717,7 @@ function normalizeProjectFromShell(
     previous.cwd === incoming.workspaceRoot &&
     previous.defaultModelSelection === defaultModelSelection &&
     previous.expanded === expanded &&
+    (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
     previous.createdAt === incoming.createdAt &&
     previous.updatedAt === incoming.updatedAt &&
     previous.scripts === scripts
@@ -687,6 +735,7 @@ function normalizeProjectFromShell(
     cwd: incoming.workspaceRoot,
     defaultModelSelection,
     expanded,
+    isPinned: incoming.isPinned ?? false,
     createdAt: incoming.createdAt,
     updatedAt: incoming.updatedAt,
     scripts,
@@ -794,6 +843,10 @@ function normalizeChatMessage(
   previous: ChatMessage | undefined,
 ): ChatMessage {
   const attachments = normalizeChatAttachments(incoming.attachments, previous?.attachments);
+  const skills = incoming.skills ?? [];
+  const mentions = incoming.mentions ?? [];
+  const previousSkills = previous?.skills ?? [];
+  const previousMentions = previous?.mentions ?? [];
   const completedAt = incoming.streaming ? undefined : incoming.updatedAt;
   if (
     previous &&
@@ -805,7 +858,9 @@ function normalizeChatMessage(
     previous.streaming === incoming.streaming &&
     previous.source === incoming.source &&
     previous.completedAt === completedAt &&
-    previous.attachments === attachments
+    previous.attachments === attachments &&
+    providerReferenceArraysEqual(previousSkills, skills) &&
+    providerReferenceArraysEqual(previousMentions, mentions)
   ) {
     return previous;
   }
@@ -821,6 +876,8 @@ function normalizeChatMessage(
     source: incoming.source,
     ...(completedAt ? { completedAt } : {}),
     ...(attachments ? { attachments } : {}),
+    ...(skills.length > 0 ? { skills: [...skills] } : {}),
+    ...(mentions.length > 0 ? { mentions: [...mentions] } : {}),
   };
 }
 
@@ -872,6 +929,8 @@ function readModelMessageFromChatMessage(
     createdAt: message.createdAt,
     updatedAt: message.completedAt ?? message.createdAt,
     attachments: readModelAttachmentsFromChatMessage(message.attachments),
+    ...(message.skills && message.skills.length > 0 ? { skills: message.skills } : {}),
+    ...(message.mentions && message.mentions.length > 0 ? { mentions: message.mentions } : {}),
   };
 }
 
@@ -942,6 +1001,12 @@ function mergeReadModelMessagesWithLiveHotPath(
       streaming: previousMessage.streaming,
       updatedAt: previousMessage.completedAt ?? incomingMessage.updatedAt,
       attachments: readModelAttachmentsFromChatMessage(previousMessage.attachments),
+      ...(previousMessage.skills && previousMessage.skills.length > 0
+        ? { skills: previousMessage.skills }
+        : {}),
+      ...(previousMessage.mentions && previousMessage.mentions.length > 0
+        ? { mentions: previousMessage.mentions }
+        : {}),
     });
   }
 
@@ -1521,6 +1586,16 @@ function normalizeThreadFromReadModel(
     deepEqualJson(previous.lastKnownPr, incoming.lastKnownPr)
       ? previous.lastKnownPr
       : (incoming.lastKnownPr ?? null);
+  const pinnedMessages =
+    previous?.pinnedMessages &&
+    deepEqualJson(previous.pinnedMessages, incoming.pinnedMessages ?? null)
+      ? previous.pinnedMessages
+      : (incoming.pinnedMessages as Thread["pinnedMessages"]);
+  const threadMarkers =
+    previous?.threadMarkers && deepEqualJson(previous.threadMarkers, incoming.threadMarkers ?? null)
+      ? previous.threadMarkers
+      : (incoming.threadMarkers as Thread["threadMarkers"]);
+  const notes = incoming.notes;
   const turnDiffSummaries = normalizeTurnDiffSummaries(
     incoming.checkpoints,
     previous?.turnDiffSummaries,
@@ -1603,6 +1678,9 @@ function normalizeThreadFromReadModel(
     (previous.sidechatSourceThreadId ?? null) === (incoming.sidechatSourceThreadId ?? null) &&
     deepEqualJson(previous.lastKnownPr ?? null, lastKnownPr) &&
     (previous.handoff ?? null) === handoff &&
+    previous.pinnedMessages === pinnedMessages &&
+    previous.threadMarkers === threadMarkers &&
+    previous.notes === notes &&
     previous.turnDiffSummaries === turnDiffSummaries &&
     previous.activities === activities
   ) {
@@ -1643,6 +1721,9 @@ function normalizeThreadFromReadModel(
     sidechatSourceThreadId: incoming.sidechatSourceThreadId ?? null,
     lastKnownPr,
     handoff,
+    ...(pinnedMessages !== undefined ? { pinnedMessages } : {}),
+    ...(threadMarkers !== undefined ? { threadMarkers } : {}),
+    ...(notes !== undefined ? { notes } : {}),
     ...(resolvedLatestUserMessageAt !== undefined
       ? { latestUserMessageAt: resolvedLatestUserMessageAt }
       : {}),
@@ -1733,6 +1814,11 @@ function normalizeThreadShellSnapshot(
     sidechatSourceThreadId: incoming.sidechatSourceThreadId ?? null,
     lastKnownPr,
     handoff,
+    // The sidebar shell snapshot/event does not carry thread annotations, so keep the values
+    // resolved from the thread-detail path instead of clobbering them with `undefined`.
+    ...(previous?.pinnedMessages !== undefined ? { pinnedMessages: previous.pinnedMessages } : {}),
+    ...(previous?.threadMarkers !== undefined ? { threadMarkers: previous.threadMarkers } : {}),
+    ...(previous?.notes !== undefined ? { notes: previous.notes } : {}),
     ...(incoming.latestUserMessageAt !== undefined
       ? { latestUserMessageAt: incoming.latestUserMessageAt ?? null }
       : {}),
@@ -2314,6 +2400,11 @@ function removeThreadState(state: AppState, threadId: ThreadId): AppState {
     sidebarThreadSummaryById,
     threads: nextThreads,
   };
+}
+
+// Removes a successfully deleted thread from every client-side projection immediately.
+export function removeDeletedThreadFromClientState(state: AppState, threadId: ThreadId): AppState {
+  return removeThreadState(state, threadId);
 }
 
 // Drop a project and any thread-scoped state that still points at it.
@@ -2949,6 +3040,7 @@ function applyOrchestrationEvent(
         workspaceRoot: event.payload.workspaceRoot,
         defaultModelSelection: event.payload.defaultModelSelection,
         scripts: event.payload.scripts,
+        isPinned: event.payload.isPinned ?? false,
         createdAt: event.payload.createdAt,
         updatedAt: event.payload.updatedAt,
         deletedAt: null,
@@ -2971,6 +3063,7 @@ function applyOrchestrationEvent(
             ? event.payload.defaultModelSelection
             : existingProject.defaultModelSelection,
         scripts: event.payload.scripts ?? existingProject.scripts,
+        isPinned: event.payload.isPinned ?? existingProject.isPinned ?? false,
         createdAt: existingProject.createdAt ?? event.payload.updatedAt,
         updatedAt: event.payload.updatedAt,
         deletedAt: null,
@@ -2989,6 +3082,10 @@ function applyOrchestrationEvent(
         projects: state.projects.filter((project) => project.id !== event.payload.projectId),
       };
     }
+
+    case "thread.deleted":
+      // Deletion is terminal for both active sidebar rows and archived settings rows.
+      return removeThreadState(state, event.payload.threadId);
 
     case "thread.meta-updated":
       return applyThreadUpdate(
@@ -3066,6 +3163,11 @@ function applyOrchestrationEvent(
               deepEqualJson(event.payload.lastKnownPr ?? null, thread.lastKnownPr ?? null)) &&
             (event.payload.handoff === undefined ||
               (event.payload.handoff ?? null) === (thread.handoff ?? null)) &&
+            (event.payload.pinnedMessages === undefined ||
+              deepEqualJson(event.payload.pinnedMessages, thread.pinnedMessages ?? null)) &&
+            (event.payload.threadMarkers === undefined ||
+              deepEqualJson(event.payload.threadMarkers, thread.threadMarkers ?? null)) &&
+            (event.payload.notes === undefined || event.payload.notes === (thread.notes ?? "")) &&
             nextUpdatedAt === thread.updatedAt
           ) {
             return thread;
@@ -3099,6 +3201,21 @@ function applyOrchestrationEvent(
               ? { lastKnownPr: event.payload.lastKnownPr }
               : {}),
             ...(event.payload.handoff !== undefined ? { handoff: event.payload.handoff } : {}),
+            ...(event.payload.pinnedMessages !== undefined
+              ? {
+                  pinnedMessages: event.payload.pinnedMessages as NonNullable<
+                    Thread["pinnedMessages"]
+                  >,
+                }
+              : {}),
+            ...(event.payload.threadMarkers !== undefined
+              ? {
+                  threadMarkers: event.payload.threadMarkers as NonNullable<
+                    Thread["threadMarkers"]
+                  >,
+                }
+              : {}),
+            ...(event.payload.notes !== undefined ? { notes: event.payload.notes } : {}),
             updatedAt: nextUpdatedAt,
             ...(cwdChanged ? { session: null } : {}),
           };
@@ -3109,6 +3226,179 @@ function applyOrchestrationEvent(
             options?.updateThreadArray !== false || event.payload.title !== undefined,
           updateSidebarSummary: true,
         },
+      );
+
+    case "thread.pinned-message-added":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const pinnedMessages = addPinnedMessage(thread.pinnedMessages, event.payload.pin);
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
+          if (thread.pinnedMessages === pinnedMessages && thread.updatedAt === updatedAt) {
+            return thread;
+          }
+          return {
+            ...thread,
+            pinnedMessages,
+            updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: false },
+      );
+
+    case "thread.pinned-message-removed":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const pinnedMessages = removePinnedMessage(
+            thread.pinnedMessages,
+            event.payload.messageId,
+          );
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
+          if (thread.pinnedMessages === pinnedMessages && thread.updatedAt === updatedAt) {
+            return thread;
+          }
+          return {
+            ...thread,
+            pinnedMessages,
+            updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: false },
+      );
+
+    case "thread.pinned-message-done-set":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const pinnedMessages = setPinnedMessageDone(
+            thread.pinnedMessages,
+            event.payload.messageId,
+            event.payload.done,
+          );
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
+          if (thread.pinnedMessages === pinnedMessages && thread.updatedAt === updatedAt) {
+            return thread;
+          }
+          return {
+            ...thread,
+            pinnedMessages,
+            updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: false },
+      );
+
+    case "thread.pinned-message-label-set":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const pinnedMessages = setPinnedMessageLabel(
+            thread.pinnedMessages,
+            event.payload.messageId,
+            event.payload.label,
+          );
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
+          if (thread.pinnedMessages === pinnedMessages && thread.updatedAt === updatedAt) {
+            return thread;
+          }
+          return {
+            ...thread,
+            pinnedMessages,
+            updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: false },
+      );
+
+    case "thread.marker-added":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const threadMarkers = addThreadMarker(thread.threadMarkers, event.payload.marker);
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
+          if (thread.threadMarkers === threadMarkers && thread.updatedAt === updatedAt) {
+            return thread;
+          }
+          return {
+            ...thread,
+            threadMarkers,
+            updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: false },
+      );
+
+    case "thread.marker-removed":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const threadMarkers = removeThreadMarker(thread.threadMarkers, event.payload.markerId);
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
+          if (thread.threadMarkers === threadMarkers && thread.updatedAt === updatedAt) {
+            return thread;
+          }
+          return {
+            ...thread,
+            threadMarkers,
+            updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: false },
+      );
+
+    case "thread.marker-done-set":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const threadMarkers = setThreadMarkerDone(
+            thread.threadMarkers,
+            event.payload.markerId,
+            event.payload.done,
+            event.payload.updatedAt,
+          );
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
+          if (thread.threadMarkers === threadMarkers && thread.updatedAt === updatedAt) {
+            return thread;
+          }
+          return {
+            ...thread,
+            threadMarkers,
+            updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: false },
+      );
+
+    case "thread.marker-label-set":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const threadMarkers = setThreadMarkerLabel(
+            thread.threadMarkers,
+            event.payload.markerId,
+            event.payload.label,
+            event.payload.updatedAt,
+          );
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
+          if (thread.threadMarkers === threadMarkers && thread.updatedAt === updatedAt) {
+            return thread;
+          }
+          return {
+            ...thread,
+            threadMarkers,
+            updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: false },
       );
 
     case "thread.message-sent":
@@ -3994,6 +4284,7 @@ interface AppStore extends AppState {
   applyShellEvent: (event: OrchestrationShellStreamEvent) => void;
   applyOrchestrationEvents: (events: ReadonlyArray<OrchestrationEvent>) => void;
   applyOrchestrationEventsHotPath: (events: ReadonlyArray<OrchestrationEvent>) => void;
+  removeDeletedThreadFromClientState: (threadId: ThreadId) => void;
   markThreadVisited: (threadId: ThreadId, visitedAt?: string) => void;
   markThreadUnread: (threadId: ThreadId) => void;
   toggleProject: (projectId: Project["id"]) => void;
@@ -4022,6 +4313,8 @@ export const useStore = create<AppStore>((set) => ({
         updateSidebarSummary: false,
       }),
     ),
+  removeDeletedThreadFromClientState: (threadId) =>
+    set((state) => removeDeletedThreadFromClientState(state, threadId)),
   markThreadVisited: (threadId, visitedAt) =>
     set((state) => markThreadVisited(state, threadId, visitedAt)),
   markThreadUnread: (threadId) => set((state) => markThreadUnread(state, threadId)),

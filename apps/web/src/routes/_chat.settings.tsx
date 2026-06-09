@@ -13,7 +13,16 @@ import {
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { pluralize } from "@t3tools/shared/text";
+import {
+  type ReactNode,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   closestCenter,
   DndContext,
@@ -76,6 +85,7 @@ import {
   SettingsSection,
   SettingsSelectPopup,
 } from "../components/settings/SettingsPanelPrimitives";
+import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
@@ -92,6 +102,10 @@ import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
 import { CentralIcon } from "../lib/central-icons";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
+import {
+  deleteArchivedThreadFromClient,
+  deleteArchivedThreadsFromClient,
+} from "../lib/archivedThreadDelete";
 import {
   ArchiveIcon,
   ChevronDownIcon,
@@ -118,7 +132,11 @@ import {
   readBrowserNotificationPermissionState,
   requestBrowserNotificationPermission,
 } from "../notifications/taskCompletion";
-import { normalizeSettingsSection, SETTINGS_NAV_ITEMS } from "../settingsNavigation";
+import {
+  normalizeSettingsSection,
+  SETTINGS_NAV_ITEMS,
+  SETTINGS_TARGETS,
+} from "../settingsNavigation";
 import {
   SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME,
   SETTINGS_EMPTY_STATE_CLASS_NAME,
@@ -549,6 +567,24 @@ type BooleanSettingKey = {
 
 // ── Route screen ───────────────────────────────────────────────────────────
 
+// Scroll a deep-linked settings section into view when it becomes the active `?target=…`.
+// `retriggerKey` lets a panel re-attempt after late-loading data mounts the target element.
+function useSettingsTargetScroll(
+  active: boolean,
+  ref: RefObject<HTMLElement | null>,
+  retriggerKey?: unknown,
+): void {
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      ref.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [active, ref, retriggerKey]);
+}
+
 function SettingsRouteView() {
   const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSection = normalizeSettingsSection(routeSearch.section);
@@ -562,6 +598,10 @@ function SettingsRouteView() {
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const serverWorktreesQuery = useQuery(serverWorktreesQueryOptions());
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
+  const removeDeletedThreadFromClientState = useStore(
+    (store) => store.removeDeletedThreadFromClientState,
+  );
+  const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const threads = useStore(useMemo(() => createAllThreadsSelector(), []));
   const projects = useStore((store) => store.projects);
@@ -581,6 +621,7 @@ function SettingsRouteView() {
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
   const providerUpdatesRef = useRef<HTMLDivElement | null>(null);
   const providerInstallsRef = useRef<HTMLDivElement | null>(null);
+  const environmentPanelRef = useRef<HTMLDivElement | null>(null);
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>({
     codex: Boolean(settings.codexBinaryPath || settings.codexHomePath),
     claudeAgent: Boolean(settings.claudeBinaryPath),
@@ -693,19 +734,17 @@ function SettingsRouteView() {
       ),
     [serverConfigQuery.data?.providers],
   );
-  const shouldFocusProviderUpdates =
-    activeSection === "providers" && settingsTarget === "provider-updates";
+  useSettingsTargetScroll(
+    activeSection === "providers" && settingsTarget === SETTINGS_TARGETS.providerUpdates,
+    providerUpdatesRef,
+    serverConfigQuery.data?.providers,
+  );
 
-  useEffect(() => {
-    if (!shouldFocusProviderUpdates) {
-      return;
-    }
-
-    const frame = window.requestAnimationFrame(() => {
-      providerUpdatesRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [serverConfigQuery.data?.providers, shouldFocusProviderUpdates]);
+  // Deep-link target for the chat Environment panel's gear button (see EnvironmentPanel).
+  useSettingsTargetScroll(
+    activeSection === "general" && settingsTarget === SETTINGS_TARGETS.environmentPanel,
+    environmentPanelRef,
+  );
   const managedWorktrees = serverWorktreesQuery.data?.worktrees ?? [];
   const worktreesByWorkspaceRoot = managedWorktrees.reduce<
     Array<{
@@ -1193,7 +1232,7 @@ function SettingsRouteView() {
           ? [
               `Delete worktree "${displayName}"?`,
               "",
-              `${linkedActiveThreadCount} active and ${linkedArchivedThreadIds.length} archived conversation${linkedConversationCount === 1 ? " is" : "s are"} linked to this worktree.`,
+              `${linkedActiveThreadCount} active and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedConversationCount, "conversation is", "conversations are")} linked to this worktree.`,
               linkedArchivedThreadIds.length > 0
                 ? "Archived conversations will be deleted first."
                 : "Deleting it can break reopening those chats in the same workspace.",
@@ -1209,13 +1248,12 @@ function SettingsRouteView() {
       }
 
       try {
-        for (const archivedThreadId of linkedArchivedThreadIds) {
-          await api.orchestration.dispatchCommand({
-            type: "thread.delete",
-            commandId: newCommandId(),
-            threadId: archivedThreadId,
-          });
-        }
+        await deleteArchivedThreadsFromClient({
+          api: api.orchestration,
+          threadIds: linkedArchivedThreadIds,
+          removeDeletedThreadFromClientState,
+          syncServerShellSnapshot,
+        });
 
         await removeWorktreeMutation.mutateAsync({
           cwd: input.workspaceRoot,
@@ -1230,7 +1268,7 @@ function SettingsRouteView() {
           title: "Worktree deleted",
           description:
             linkedArchivedThreadIds.length > 0
-              ? `${displayName} was removed and ${linkedArchivedThreadIds.length} archived conversation${linkedArchivedThreadIds.length === 1 ? "" : "s"} were deleted.`
+              ? `${displayName} was removed and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedArchivedThreadIds.length, "conversation")} were deleted.`
               : `${displayName} was removed.`,
         });
       } catch (error) {
@@ -1241,7 +1279,12 @@ function SettingsRouteView() {
         });
       }
     },
-    [queryClient, removeWorktreeMutation],
+    [
+      queryClient,
+      removeDeletedThreadFromClientState,
+      removeWorktreeMutation,
+      syncServerShellSnapshot,
+    ],
   );
 
   const unarchiveThread = useCallback(async (threadId: ThreadId) => {
@@ -1267,34 +1310,38 @@ function SettingsRouteView() {
     }
   }, []);
 
-  const deleteArchivedThread = useCallback(async (threadId: ThreadId, threadTitle: string) => {
-    const api = readNativeApi();
-    if (!api) return;
+  const deleteArchivedThread = useCallback(
+    async (threadId: ThreadId, threadTitle: string) => {
+      const api = readNativeApi();
+      if (!api) return;
 
-    const confirmed = await api.dialogs.confirm(
-      `Permanently delete "${threadTitle}"?\n\nThis will remove the thread and its conversation history forever.`,
-    );
-    if (!confirmed) return;
+      const confirmed = await api.dialogs.confirm(
+        `Permanently delete "${threadTitle}"?\n\nThis will remove the thread and its conversation history forever.`,
+      );
+      if (!confirmed) return;
 
-    try {
-      await api.orchestration.dispatchCommand({
-        type: "thread.delete",
-        commandId: newCommandId(),
-        threadId,
-      });
-      toastManager.add({
-        type: "success",
-        title: "Thread deleted",
-        description: "The archived thread has been permanently removed.",
-      });
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Could not delete thread",
-        description: error instanceof Error ? error.message : "Unable to delete the thread.",
-      });
-    }
-  }, []);
+      try {
+        await deleteArchivedThreadFromClient({
+          api: api.orchestration,
+          threadId,
+          removeDeletedThreadFromClientState,
+          syncServerShellSnapshot,
+        });
+        toastManager.add({
+          type: "success",
+          title: "Thread deleted",
+          description: "The archived thread has been permanently removed.",
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not delete thread",
+          description: error instanceof Error ? error.message : "Unable to delete the thread.",
+        });
+      }
+    },
+    [removeDeletedThreadFromClientState, syncServerShellSnapshot],
+  );
 
   const handleArchivedThreadContextMenu = useCallback(
     async (threadId: ThreadId, threadTitle: string, position: { x: number; y: number }) => {
@@ -1538,6 +1585,60 @@ function SettingsRouteView() {
           ariaLabel: "Show the Workspace section in the sidebar",
         })}
       </SettingsSection>
+
+      <div ref={environmentPanelRef} id={SETTINGS_TARGETS.environmentPanel}>
+        <SettingsSection title="Environment panel">
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentRepository",
+            title: "Repository",
+            description:
+              "Show the GitHub repository link in the chat Environment panel. The git block (Changes, Worktree, branch, Commit and Push) always stays visible.",
+            resetLabel: "repository section",
+            ariaLabel: "Show the Repository section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentEditor",
+            title: "Editor",
+            description: "Show the Open in editor picker in the chat Environment panel.",
+            resetLabel: "editor section",
+            ariaLabel: "Show the Editor section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentRecap",
+            title: "Recap",
+            description: "Show the auto-generated chat recap in the Environment panel.",
+            resetLabel: "recap section",
+            ariaLabel: "Show the Recap section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentPinned",
+            title: "Pinned messages",
+            description: "Show the pinned-messages checklist in the Environment panel.",
+            resetLabel: "pinned messages section",
+            ariaLabel: "Show the Pinned messages section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentMarkers",
+            title: "Text markers",
+            description:
+              "Show highlighted and underlined transcript text in the Environment panel.",
+            resetLabel: "text markers section",
+            ariaLabel: "Show the Text markers section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentNotepad",
+            title: "Notepad",
+            description: "Show the per-thread notepad in the Environment panel.",
+            resetLabel: "notepad section",
+            ariaLabel: "Show the Notepad section in the Environment panel",
+          })}
+        </SettingsSection>
+      </div>
     </div>
   );
 
@@ -2305,7 +2406,7 @@ function SettingsRouteView() {
           description="Drag providers into your preferred picker order and hide the ones you don't use. The provider you're currently using on a thread always stays visible."
           status={
             hiddenProviderCount > 0
-              ? `${hiddenProviderCount} provider${hiddenProviderCount === 1 ? "" : "s"} hidden`
+              ? `${hiddenProviderCount} ${pluralize(hiddenProviderCount, "provider")} hidden`
               : isProviderOrderDirty
                 ? "Custom order"
                 : "All providers visible"
@@ -2361,14 +2462,14 @@ function SettingsRouteView() {
   );
 
   const renderProviderUpdatesSection = () => (
-    <div ref={providerUpdatesRef} id="provider-updates">
+    <div ref={providerUpdatesRef} id={SETTINGS_TARGETS.providerUpdates}>
       <SettingsSection title="Updates">
         <SettingsRow
           title="Provider updates"
           description="Update installed provider tools that Synara can safely update."
           status={
             outdatedProviderCount > 0
-              ? `${outdatedProviderCount} update${outdatedProviderCount === 1 ? "" : "s"} available`
+              ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
               : "No provider updates detected"
           }
         >
@@ -2436,14 +2537,14 @@ function SettingsRouteView() {
   );
 
   const renderProviderInstallsSection = () => (
-    <div ref={providerInstallsRef} id="provider-installs">
+    <div ref={providerInstallsRef} id={SETTINGS_TARGETS.providerInstalls}>
       <SettingsSection title="Provider tools">
         <SettingsRow
           title="Installed CLIs"
           description="Review provider versions and update tools. Open a row only when you need binary overrides."
           status={
             outdatedProviderCount > 0
-              ? `${outdatedProviderCount} update${outdatedProviderCount === 1 ? "" : "s"} available`
+              ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
               : "No provider updates detected"
           }
           resetAction={
@@ -2988,6 +3089,8 @@ function SettingsRouteView() {
         return renderModelsPanel();
       case "providers":
         return renderProvidersPanel();
+      case "usage":
+        return <ProviderUsageSettingsPanel />;
       case "advanced":
         return renderAdvancedPanel();
       default:

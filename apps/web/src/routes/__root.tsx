@@ -23,6 +23,7 @@ import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME } from "../branding";
 import { DesktopWindowControls } from "../components/DesktopWindowControls";
+import { SETTINGS_TARGETS } from "../settingsNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import WhatsNewDialog from "../components/WhatsNewDialog";
 import { useWhatsNew } from "../whatsNew/useWhatsNew";
@@ -58,6 +59,7 @@ import {
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import { useProjectRunStore } from "../projectRunStore";
 import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
@@ -436,7 +438,7 @@ function ProviderUpdateNotifications() {
           }
           void navigate({
             to: "/settings",
-            search: { section: "providers", target: "provider-updates" },
+            search: { section: "providers", target: SETTINGS_TARGETS.providerUpdates },
           });
         },
       },
@@ -692,6 +694,14 @@ function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: Threa
     event.type === "thread.conversation-rolled-back" ||
     event.type === "thread.session-set" ||
     event.type === "thread.meta-updated" ||
+    event.type === "thread.pinned-message-added" ||
+    event.type === "thread.pinned-message-removed" ||
+    event.type === "thread.pinned-message-done-set" ||
+    event.type === "thread.pinned-message-label-set" ||
+    event.type === "thread.marker-added" ||
+    event.type === "thread.marker-removed" ||
+    event.type === "thread.marker-done-set" ||
+    event.type === "thread.marker-label-set" ||
     event.type === "thread.archived" ||
     event.type === "thread.unarchived"
   );
@@ -1114,10 +1124,14 @@ function EventRouter() {
     const unsubTerminalEvent = api.terminal.onEvent((event) => {
       const terminalThreadId = ThreadId.makeUnsafe(event.threadId);
       if (event.type === "activity") {
-        if (event.cliKind) {
-          useTerminalStateStore.getState().setTerminalMetadata(terminalThreadId, event.terminalId, {
+        const terminalStore = useTerminalStateStore.getState();
+        const currentCliKind =
+          selectThreadTerminalState(terminalStore.terminalStateByThreadId, terminalThreadId)
+            .terminalCliKindsById[event.terminalId] ?? null;
+        if (event.cliKind || currentCliKind !== null) {
+          terminalStore.setTerminalMetadata(terminalThreadId, event.terminalId, {
             cliKind: event.cliKind,
-            label: defaultTerminalTitleForCliKind(event.cliKind),
+            label: event.cliKind ? defaultTerminalTitleForCliKind(event.cliKind) : "Terminal",
           });
         }
       }
@@ -1130,6 +1144,35 @@ function EventRouter() {
         agentState: activity.agentState,
       });
     });
+    // Dev servers are first-class server processes; mirror their lifecycle into the
+    // client store so the sidebar indicator survives reconnects and stays consistent
+    // across tabs without owning any thread/terminal state.
+    const invalidateLocalServers = () => {
+      void queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
+    };
+    const unsubDevServerEvent = api.projects.onDevServerEvent((event) => {
+      const store = useProjectRunStore.getState();
+      if (event.type === "snapshot") {
+        store.replaceAll(event.servers);
+      } else if (event.type === "upserted") {
+        store.upsertRun(event.server);
+      } else {
+        store.removeRun(event.projectId);
+      }
+      invalidateLocalServers();
+    });
+    // The channel's initial snapshot may have arrived before this listener was
+    // registered, so seed from the authoritative registry on mount.
+    void api.projects
+      .listDevServers()
+      .then(({ servers }) => {
+        if (disposed) {
+          return;
+        }
+        useProjectRunStore.getState().replaceAll(servers);
+        invalidateLocalServers();
+      })
+      .catch(() => undefined);
     const unsubWelcome = onServerWelcome((payload) => {
       void (async () => {
         setWorkspaceHomeDir(payload.homeDir);
@@ -1270,6 +1313,7 @@ function EventRouter() {
       unsubShellEvent();
       unsubThreadEvent();
       unsubTerminalEvent();
+      unsubDevServerEvent();
       unsubWelcome();
       unsubServerConfigUpdated();
       unsubProviderStatusesUpdated();

@@ -36,6 +36,7 @@ import {
   resolveDefaultBranchActionDialogCopy,
   resolveCreatePrActionAvailability,
   resolveQuickAction,
+  resolvePullActionAvailability,
   shouldOfferCreateBranchPrompt,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
@@ -1098,6 +1099,10 @@ export default function GitActionsControl({
     const pushMenuItem = gitActionMenuItems.find((item) => item.id === "push");
     const prMenuItem = gitActionMenuItems.find((item) => item.id === "pr");
     const createBranchDisabled = isGitActionRunning || !gitStatusForActions;
+    const pullAvailability = resolvePullActionAvailability({
+      gitStatus: gitStatusForActions,
+      isBusy: isGitActionRunning,
+    });
 
     if (commitMenuItem) {
       items.push({
@@ -1130,6 +1135,15 @@ export default function GitActionsControl({
         onSelect: () => openDialogForMenuItem(commitPushMenuItem),
       });
     }
+
+    items.push({
+      id: "sync",
+      label: "Pull",
+      disabled: !pullAvailability.canRun,
+      disabledReason: pullAvailability.hint,
+      icon: "sync",
+      onSelect: runSyncWithRemote,
+    });
 
     if (pushMenuItem) {
       items.push({
@@ -1184,6 +1198,7 @@ export default function GitActionsControl({
     isGitActionRunning,
     openCreateBranchDialog,
     openDialogForMenuItem,
+    runSyncWithRemote,
   ]);
 
   const runDialogAction = useCallback(() => {
@@ -1232,6 +1247,11 @@ export default function GitActionsControl({
   );
 
   if (!gitCwd) return null;
+
+  const hasRunnableCommitPushAction = gitActionMenuItems.some(
+    (item) => (item.id === "commit_push" || item.id === "push") && !item.disabled,
+  );
+  const shouldDimPanelCommitPushRow = isGitActionRunning || !hasRunnableCommitPushAction;
 
   // Shared dropdown body — the picker rows plus the contextual git-status warnings.
   // Rendered identically by the header split button and the panel "Commit and Push" row.
@@ -1583,8 +1603,25 @@ export default function GitActionsControl({
             }}
           >
             <MenuTrigger
-              disabled={isGitActionRunning}
-              render={<button type="button" className={ENVIRONMENT_ROW_CLASS_NAME} />}
+              render={
+                <button
+                  type="button"
+                  className={cn(
+                    ENVIRONMENT_ROW_CLASS_NAME,
+                    shouldDimPanelCommitPushRow && "opacity-55",
+                  )}
+                  aria-label={
+                    shouldDimPanelCommitPushRow
+                      ? "Commit and Push unavailable; open Git actions menu"
+                      : "Commit and Push"
+                  }
+                  title={
+                    shouldDimPanelCommitPushRow
+                      ? "Commit and Push unavailable. Open for more Git actions."
+                      : "Commit and Push"
+                  }
+                />
+              }
             >
               <EnvironmentRowBody
                 icon={<GitActionGlyph name="push" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}

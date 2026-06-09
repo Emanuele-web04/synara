@@ -25,7 +25,7 @@ export function SidebarSectionToolbar({
         "flex items-center gap-1.5",
         placement === "inline" ? "-mr-1" : "absolute top-1 right-1.5",
         revealOnHover &&
-          "pointer-events-none opacity-100 transition-opacity md:opacity-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-focus-within/project-header:pointer-events-auto md:group-focus-within/project-header:opacity-100 md:has-[[data-state=open]]:pointer-events-auto md:has-[[data-state=open]]:opacity-100",
+          "pointer-events-none opacity-100 transition-opacity md:opacity-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-has-[:focus-visible]/project-header:pointer-events-auto md:group-has-[:focus-visible]/project-header:opacity-100 md:has-[[data-state=open]]:pointer-events-auto md:has-[[data-state=open]]:opacity-100",
         className,
       )}
     >

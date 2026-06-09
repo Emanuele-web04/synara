@@ -15,6 +15,7 @@ import {
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
   EnvironmentRowBody,
   EnvironmentRowChevron,
+  EnvironmentSectionDivider,
   EnvironmentSectionLabel,
 } from "./EnvironmentRow";
 
@@ -42,37 +43,40 @@ export function EnvironmentEditorSection({
   const ActiveIcon = activeOption?.Icon;
 
   return (
-    <div className="flex flex-col gap-0.5">
-      <EnvironmentSectionLabel>Editor</EnvironmentSectionLabel>
-      <Menu>
-        <MenuTrigger
-          disabled={!openInCwd}
-          render={<button type="button" className={ENVIRONMENT_ROW_CLASS_NAME} />}
-        >
-          <EnvironmentRowBody
-            icon={
-              ActiveIcon ? (
-                <ActiveIcon aria-hidden className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />
-              ) : null
-            }
-            label={activeOption ? `Open in ${activeOption.label}` : "Open in editor"}
-            trailing={<EnvironmentRowChevron />}
-          />
-        </MenuTrigger>
-        <ComposerPickerMenuPopup align="start" side="bottom" className="w-44 min-w-44">
-          {options.map(({ label, Icon, value }) => (
-            <MenuItem key={value} onClick={() => openInEditor(value)}>
-              <span className="shrink-0">
-                <Icon aria-hidden className="size-3.5 text-muted-foreground" />
-              </span>
-              {label}
-              {value === preferredEditor && openFavoriteShortcutLabel ? (
-                <MenuShortcut>{openFavoriteShortcutLabel}</MenuShortcut>
-              ) : null}
-            </MenuItem>
-          ))}
-        </ComposerPickerMenuPopup>
-      </Menu>
-    </div>
+    <>
+      <EnvironmentSectionDivider />
+      <div className="flex flex-col gap-0.5">
+        <EnvironmentSectionLabel>Editor</EnvironmentSectionLabel>
+        <Menu>
+          <MenuTrigger
+            disabled={!openInCwd}
+            render={<button type="button" className={ENVIRONMENT_ROW_CLASS_NAME} />}
+          >
+            <EnvironmentRowBody
+              icon={
+                ActiveIcon ? (
+                  <ActiveIcon aria-hidden className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />
+                ) : null
+              }
+              label={activeOption ? `Open in ${activeOption.label}` : "Open in editor"}
+              trailing={<EnvironmentRowChevron />}
+            />
+          </MenuTrigger>
+          <ComposerPickerMenuPopup align="start" side="bottom" className="w-44 min-w-44">
+            {options.map(({ label, Icon, value }) => (
+              <MenuItem key={value} onClick={() => openInEditor(value)}>
+                <span className="shrink-0">
+                  <Icon aria-hidden className="size-3.5 text-muted-foreground" />
+                </span>
+                {label}
+                {value === preferredEditor && openFavoriteShortcutLabel ? (
+                  <MenuShortcut>{openFavoriteShortcutLabel}</MenuShortcut>
+                ) : null}
+              </MenuItem>
+            ))}
+          </ComposerPickerMenuPopup>
+        </Menu>
+      </div>
+    </>
   );
 }

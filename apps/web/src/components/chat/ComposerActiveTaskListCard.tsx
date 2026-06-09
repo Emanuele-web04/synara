@@ -8,9 +8,8 @@
 import { memo, type RefObject } from "react";
 
 import type { ActiveTaskListState } from "../../session-logic";
-import { cn } from "~/lib/utils";
 import { ActiveTaskListCard } from "./ActiveTaskListCard";
-import { COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME } from "./composerPickerStyles";
+import { ComposerStackedPanel } from "./ComposerStackedPanel";
 
 interface ComposerActiveTaskListCardProps {
   activeTaskList: ActiveTaskListState;
@@ -20,6 +19,7 @@ interface ComposerActiveTaskListCardProps {
   compact: boolean;
   onCompactChange: (compact: boolean) => void;
   onOpenSidebar: () => void;
+  attachedToPrevious?: boolean;
 }
 
 export const ComposerActiveTaskListCard = memo(function ComposerActiveTaskListCard({
@@ -29,21 +29,22 @@ export const ComposerActiveTaskListCard = memo(function ComposerActiveTaskListCa
   compact,
   onCompactChange,
   onOpenSidebar,
+  attachedToPrevious = false,
 }: ComposerActiveTaskListCardProps) {
   return (
-    <div className="pointer-events-none w-full">
-      <div
-        ref={cardRef}
-        className={cn("pointer-events-auto", COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME)}
-      >
-        <ActiveTaskListCard
-          activeTaskList={activeTaskList}
-          backgroundTaskCount={backgroundTaskCount}
-          compact={compact}
-          onCompactChange={onCompactChange}
-          onOpenSidebar={onOpenSidebar}
-        />
-      </div>
-    </div>
+    <ComposerStackedPanel
+      ref={cardRef}
+      passthroughSideMargins
+      attachedToPrevious={attachedToPrevious}
+      data-testid="active-task-list-card"
+    >
+      <ActiveTaskListCard
+        activeTaskList={activeTaskList}
+        backgroundTaskCount={backgroundTaskCount}
+        compact={compact}
+        onCompactChange={onCompactChange}
+        onOpenSidebar={onOpenSidebar}
+      />
+    </ComposerStackedPanel>
   );
 });

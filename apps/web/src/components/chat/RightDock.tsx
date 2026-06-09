@@ -155,7 +155,10 @@ export function RightDock(props: RightDockProps) {
       <Sidebar
         side="right"
         collapsible="offcanvas"
-        className={cn("border-l border-sidebar-border text-foreground", chromeMotionClass)}
+        className={cn(
+          "border-l border-[var(--app-surface-divider)] text-foreground",
+          chromeMotionClass,
+        )}
         innerClassName={CHAT_BACKGROUND_CLASS_NAME}
         gapClassName={chromeMotionClass}
         transparentSurface

@@ -230,6 +230,8 @@ const PersistedComposerThreadDraftState = Schema.Struct({
     ),
   ),
   terminalContexts: Schema.optionalKey(Schema.Array(PersistedTerminalContextDraft)),
+  skills: Schema.optionalKey(Schema.Array(ProviderSkillReference)),
+  mentions: Schema.optionalKey(Schema.Array(ProviderMentionReference)),
   queuedTurns: Schema.optionalKey(Schema.Array(PersistedQueuedComposerTurn)),
   modelSelectionByProvider: Schema.optionalKey(
     Schema.Record(ProviderKind, Schema.optionalKey(ModelSelection)),
@@ -318,6 +320,8 @@ export interface ComposerThreadDraftState {
   persistedAttachments: PersistedComposerImageAttachment[];
   assistantSelections: ComposerAssistantSelectionAttachment[];
   terminalContexts: TerminalContextDraft[];
+  skills: ProviderSkillReference[];
+  mentions: ProviderMentionReference[];
   queuedTurns: QueuedComposerTurn[];
   modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
   activeProvider: ProviderKind | null;
@@ -393,6 +397,8 @@ export interface ComposerDraftStoreState {
   setStickyModelSelection: (modelSelection: ModelSelection | null | undefined) => void;
   setPrompt: (threadId: ThreadId, prompt: string) => void;
   setTerminalContexts: (threadId: ThreadId, contexts: TerminalContextDraft[]) => void;
+  setSkills: (threadId: ThreadId, skills: ProviderSkillReference[]) => void;
+  setMentions: (threadId: ThreadId, mentions: ProviderMentionReference[]) => void;
   setModelSelection: (
     threadId: ThreadId,
     modelSelection: ModelSelection | null | undefined,
@@ -533,10 +539,14 @@ const EMPTY_IMAGES: ComposerImageAttachment[] = [];
 const EMPTY_IDS: string[] = [];
 const EMPTY_PERSISTED_ATTACHMENTS: PersistedComposerImageAttachment[] = [];
 const EMPTY_TERMINAL_CONTEXTS: TerminalContextDraft[] = [];
+const EMPTY_SKILLS: ProviderSkillReference[] = [];
+const EMPTY_MENTIONS: ProviderMentionReference[] = [];
 const EMPTY_QUEUED_TURNS: QueuedComposerTurn[] = [];
 Object.freeze(EMPTY_IMAGES);
 Object.freeze(EMPTY_IDS);
 Object.freeze(EMPTY_PERSISTED_ATTACHMENTS);
+Object.freeze(EMPTY_SKILLS);
+Object.freeze(EMPTY_MENTIONS);
 Object.freeze(EMPTY_QUEUED_TURNS);
 const EMPTY_MODEL_SELECTION_BY_PROVIDER: Partial<Record<ProviderKind, ModelSelection>> =
   Object.freeze({});
@@ -548,6 +558,8 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   persistedAttachments: EMPTY_PERSISTED_ATTACHMENTS,
   assistantSelections: [],
   terminalContexts: EMPTY_TERMINAL_CONTEXTS,
+  skills: EMPTY_SKILLS,
+  mentions: EMPTY_MENTIONS,
   queuedTurns: EMPTY_QUEUED_TURNS,
   modelSelectionByProvider: EMPTY_MODEL_SELECTION_BY_PROVIDER,
   activeProvider: null,
@@ -563,6 +575,8 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     persistedAttachments: [],
     assistantSelections: [],
     terminalContexts: [],
+    skills: [],
+    mentions: [],
     queuedTurns: [],
     modelSelectionByProvider: {},
     activeProvider: null,
@@ -690,6 +704,8 @@ function buildTransferredComposerDraft(input: {
       targetThreadId,
       sourceDraft.terminalContexts,
     ),
+    skills: [...sourceDraft.skills],
+    mentions: [...sourceDraft.mentions],
   };
 }
 
@@ -700,6 +716,8 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.persistedAttachments.length === 0 &&
     draft.assistantSelections.length === 0 &&
     draft.terminalContexts.length === 0 &&
+    draft.skills.length === 0 &&
+    draft.mentions.length === 0 &&
     draft.queuedTurns.length === 0 &&
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
@@ -1704,6 +1722,12 @@ function normalizePersistedDraftsByThreadId(
           return normalized ? [normalized] : [];
         })
       : [];
+    const skills = Array.isArray(draftCandidate.skills)
+      ? draftCandidate.skills.filter(Schema.is(ProviderSkillReference))
+      : [];
+    const mentions = Array.isArray(draftCandidate.mentions)
+      ? draftCandidate.mentions.filter(Schema.is(ProviderMentionReference))
+      : [];
     const queuedTurns = normalizePersistedQueuedTurns(draftCandidate.queuedTurns);
     const runtimeMode =
       draftCandidate.runtimeMode === "approval-required" ||
@@ -1768,10 +1792,12 @@ function normalizePersistedDraftsByThreadId(
     const hasModelData =
       Object.keys(modelSelectionByProvider).length > 0 || activeProvider !== null;
     const hasQueuedTurns = normalizedQueuedTurns.length > 0;
+    const hasReferenceData = skills.length > 0 || mentions.length > 0;
     if (
       promptCandidate.length === 0 &&
       attachments.length === 0 &&
       terminalContexts.length === 0 &&
+      !hasReferenceData &&
       !hasQueuedTurns &&
       !hasModelData &&
       !runtimeMode &&
@@ -1783,6 +1809,8 @@ function normalizePersistedDraftsByThreadId(
       prompt,
       attachments,
       ...(terminalContexts.length > 0 ? { terminalContexts } : {}),
+      ...(skills.length > 0 ? { skills } : {}),
+      ...(mentions.length > 0 ? { mentions } : {}),
       ...(hasQueuedTurns ? { queuedTurns: normalizedQueuedTurns } : {}),
       ...(hasModelData ? { modelSelectionByProvider, activeProvider } : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
@@ -1913,11 +1941,13 @@ function partializeComposerDraftStoreState(
     const hasModelData =
       Object.keys(draft.modelSelectionByProvider).length > 0 || draft.activeProvider !== null;
     const hasQueuedTurns = persistedQueuedTurns.length > 0;
+    const hasReferenceData = draft.skills.length > 0 || draft.mentions.length > 0;
     if (
       draft.prompt.length === 0 &&
       draft.persistedAttachments.length === 0 &&
       draft.assistantSelections.length === 0 &&
       draft.terminalContexts.length === 0 &&
+      !hasReferenceData &&
       !hasQueuedTurns &&
       !hasModelData &&
       draft.runtimeMode === null &&
@@ -1950,6 +1980,8 @@ function partializeComposerDraftStoreState(
             })),
           }
         : {}),
+      ...(draft.skills.length > 0 ? { skills: [...draft.skills] } : {}),
+      ...(draft.mentions.length > 0 ? { mentions: [...draft.mentions] } : {}),
       ...(hasQueuedTurns ? { queuedTurns: persistedQueuedTurns } : {}),
       ...(hasModelData
         ? {
@@ -2194,6 +2226,8 @@ function toHydratedThreadDraft(
         ...context,
         text: "",
       })) ?? [],
+    skills: [...(persistedDraft.skills ?? [])],
+    mentions: [...(persistedDraft.mentions ?? [])],
     queuedTurns: hydrateQueuedTurnsFromPersisted(threadId, persistedDraft.queuedTurns),
     modelSelectionByProvider,
     activeProvider,
@@ -2685,6 +2719,52 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
               normalizedContexts.length,
             ),
             terminalContexts: normalizedContexts,
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
+      setSkills: (threadId, skills) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        const nextSkills = [...skills];
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+          if (Equal.equals(existing.skills, nextSkills)) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...existing,
+            skills: nextSkills,
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
+      setMentions: (threadId, mentions) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        const nextMentions = [...mentions];
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+          if (Equal.equals(existing.mentions, nextMentions)) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...existing,
+            mentions: nextMentions,
           };
           const nextDraftsByThreadId = { ...state.draftsByThreadId };
           if (shouldRemoveDraft(nextDraft)) {
@@ -3381,6 +3461,8 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             persistedAttachments: [],
             assistantSelections: [],
             terminalContexts: [],
+            skills: [],
+            mentions: [],
           };
           const nextDraftsByThreadId = { ...state.draftsByThreadId };
           if (shouldRemoveDraft(nextDraft)) {

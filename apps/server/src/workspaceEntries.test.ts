@@ -7,7 +7,11 @@ import { spawnSync } from "node:child_process";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
 import * as ProcessRunner from "./processRunner";
-import { listWorkspaceDirectories, searchWorkspaceEntries } from "./workspaceEntries";
+import {
+  discoverProjectScripts,
+  listWorkspaceDirectories,
+  searchWorkspaceEntries,
+} from "./workspaceEntries";
 
 const tempDirs: string[] = [];
 
@@ -260,5 +264,98 @@ describe("listWorkspaceDirectories", () => {
       { path: "docs", name: "docs", kind: "directory", hasChildren: true },
       { path: "README.md", name: "README.md", kind: "file" },
     ]);
+  });
+});
+
+describe("discoverProjectScripts", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const dir of tempDirs.splice(0, tempDirs.length)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("discovers root package scripts with lockfile-selected commands", async () => {
+    const cwd = makeTempDir("t3code-script-discovery-root-");
+    writeFile(
+      cwd,
+      "package.json",
+      JSON.stringify({ name: "root-app", scripts: { dev: "vite", start: "vite --host" } }),
+    );
+    writeFile(cwd, "bun.lock", "");
+
+    const result = await discoverProjectScripts({ cwd });
+
+    expect(result.targets).toEqual([
+      {
+        cwd,
+        relativePath: "",
+        packageJsonPath: path.join(cwd, "package.json"),
+        packageName: "root-app",
+        scripts: [
+          { name: "dev", command: "bun run dev" },
+          { name: "start", command: "bun run start" },
+        ],
+      },
+    ]);
+  });
+
+  it("discovers shallow nested package scripts", async () => {
+    const cwd = makeTempDir("t3code-script-discovery-nested-");
+    writeFile(cwd, "apps/web/package.json", JSON.stringify({ scripts: { dev: "vite" } }));
+    writeFile(cwd, "apps/web/pnpm-lock.yaml", "");
+
+    const result = await discoverProjectScripts({ cwd, depth: 2 });
+
+    expect(result.targets).toEqual([
+      {
+        cwd: path.join(cwd, "apps/web"),
+        relativePath: "apps/web",
+        packageJsonPath: path.join(cwd, "apps/web/package.json"),
+        scripts: [{ name: "dev", command: "pnpm run dev" }],
+      },
+    ]);
+  });
+
+  it("ignores invalid package json files", async () => {
+    const cwd = makeTempDir("t3code-script-discovery-invalid-");
+    writeFile(cwd, "package.json", "{ nope");
+    writeFile(cwd, "apps/ok/package.json", JSON.stringify({ scripts: { start: "vite" } }));
+
+    const result = await discoverProjectScripts({ cwd, depth: 2 });
+
+    expect(result.targets.map((target) => target.relativePath)).toEqual(["apps/ok"]);
+  });
+
+  it("skips ignored package directories", async () => {
+    const cwd = makeTempDir("t3code-script-discovery-ignored-");
+    writeFile(cwd, "node_modules/pkg/package.json", JSON.stringify({ scripts: { dev: "vite" } }));
+    writeFile(cwd, "dist/package.json", JSON.stringify({ scripts: { dev: "vite" } }));
+    writeFile(cwd, "packages/app/package.json", JSON.stringify({ scripts: { dev: "vite" } }));
+
+    const result = await discoverProjectScripts({ cwd, depth: 2 });
+
+    expect(result.targets.map((target) => target.relativePath)).toEqual(["packages/app"]);
+  });
+
+  it("prefers package manager lockfiles in discovery order", async () => {
+    const cwd = makeTempDir("t3code-script-discovery-package-manager-");
+    writeFile(cwd, "apps/bun/package.json", JSON.stringify({ scripts: { dev: "vite" } }));
+    writeFile(cwd, "apps/bun/bun.lockb", "");
+    writeFile(cwd, "apps/pnpm/package.json", JSON.stringify({ scripts: { dev: "vite" } }));
+    writeFile(cwd, "apps/pnpm/pnpm-lock.yaml", "");
+    writeFile(cwd, "apps/yarn/package.json", JSON.stringify({ scripts: { dev: "vite" } }));
+    writeFile(cwd, "apps/yarn/yarn.lock", "");
+    writeFile(cwd, "apps/npm/package.json", JSON.stringify({ scripts: { dev: "vite" } }));
+
+    const result = await discoverProjectScripts({ cwd, depth: 2 });
+    const commandsByPath = new Map(
+      result.targets.map((target) => [target.relativePath, target.scripts[0]?.command]),
+    );
+
+    expect(commandsByPath.get("apps/bun")).toBe("bun run dev");
+    expect(commandsByPath.get("apps/pnpm")).toBe("pnpm run dev");
+    expect(commandsByPath.get("apps/yarn")).toBe("yarn dev");
+    expect(commandsByPath.get("apps/npm")).toBe("npm run dev");
   });
 });

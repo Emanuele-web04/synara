@@ -12,7 +12,7 @@ import { cn } from "~/lib/utils";
 
 /** Panel title ("Environment") and section labels ("Editor", "Recap"). */
 export const ENVIRONMENT_PANEL_LABEL_CLASS_NAME = cn(
-  "font-medium",
+  "font-normal",
   COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
 );
 
@@ -22,10 +22,23 @@ export const ENVIRONMENT_PANEL_TITLE_CLASS_NAME = cn(
   "text-[length:var(--app-font-size-ui,12px)]",
 );
 
-/** Section headings inside the card. */
-export const ENVIRONMENT_PANEL_SECTION_LABEL_CLASS_NAME = cn(
+/**
+ * Section-heading typography without row padding — used inline inside the collapsible
+ * section header (which owns the padding alongside its chevron).
+ */
+export const ENVIRONMENT_PANEL_SECTION_LABEL_INLINE_CLASS_NAME = cn(
   ENVIRONMENT_PANEL_LABEL_CLASS_NAME,
-  "px-2 pb-0.5 pt-0.5 text-[length:var(--app-font-size-ui-sm,11px)]",
+  "text-[length:var(--app-font-size-ui-sm,11px)]",
+);
+
+/**
+ * Section headings inside the card (standalone label row). Shares the collapsible-section
+ * header's `px-2 py-1` box so static labels (e.g. "Repository", "Editor") line up on the same
+ * vertical rhythm as the expand/collapse section headers.
+ */
+export const ENVIRONMENT_PANEL_SECTION_LABEL_CLASS_NAME = cn(
+  ENVIRONMENT_PANEL_SECTION_LABEL_INLINE_CLASS_NAME,
+  "px-2 py-1",
 );
 
 /** Muted secondary copy such as the recap body. */

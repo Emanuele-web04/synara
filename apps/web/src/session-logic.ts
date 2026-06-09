@@ -17,6 +17,7 @@ import {
   decodeSubagentReceiverThreadIds,
 } from "@t3tools/shared/subagents";
 import { summarizeToolRawOutput } from "@t3tools/shared/toolOutputSummary";
+import { pluralize } from "@t3tools/shared/text";
 import {
   deriveReadableToolTitle,
   isGenericToolTitle,
@@ -108,6 +109,23 @@ export interface PendingApproval {
   requestKind: "command" | "file-read" | "file-change";
   createdAt: string;
   detail?: string;
+}
+
+// Shared "edited files" predicate so transcript cards and composer chrome do not drift.
+export function isFileChangeWorkLogEntry(
+  workEntry: Pick<WorkLogEntry, "itemType" | "requestKind">,
+): boolean {
+  return workEntry.requestKind === "file-change" || workEntry.itemType === "file_change";
+}
+
+// Composer live chrome should count actual edit work, not bare file-change approvals.
+export function isProviderFileEditWorkLogEntry(
+  workEntry: Pick<WorkLogEntry, "changedFiles" | "itemType" | "requestKind">,
+): boolean {
+  if (workEntry.itemType === "file_change") {
+    return true;
+  }
+  return workEntry.requestKind === "file-change" && (workEntry.changedFiles?.length ?? 0) > 0;
 }
 
 export interface PendingUserInput {
@@ -1144,7 +1162,7 @@ function inferSubagentActionTool(item: Record<string, unknown> | null): string |
 function summarizeSubagentAction(tool: string, count: number): string {
   const normalizedTool = normalizeCollabIdentifier(tool) ?? "";
   const effectiveCount = Math.max(1, count);
-  const noun = effectiveCount === 1 ? "agent" : "agents";
+  const noun = pluralize(effectiveCount, "agent");
   switch (normalizedTool) {
     case "spawnagent":
       return `Spawning ${effectiveCount} ${noun}`;
@@ -1156,7 +1174,7 @@ function summarizeSubagentAction(tool: string, count: number): string {
     case "resumeagent":
       return `Resuming ${effectiveCount} ${noun}`;
     case "sendinput":
-      return effectiveCount === 1 ? "Updating agent" : "Updating agents";
+      return `Updating ${pluralize(effectiveCount, "agent")}`;
     default:
       return effectiveCount === 1 ? "Agent activity" : `Agent activity (${effectiveCount})`;
   }

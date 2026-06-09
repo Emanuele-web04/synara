@@ -3,12 +3,10 @@
 // Layer: Shared runtime utility
 // Exports: summarizeToolRawOutput, countTextLines
 
+import { pluralize } from "./text";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function pluralize(count: number, singular: string, plural = `${singular}s`): string {
-  return count === 1 ? singular : plural;
 }
 
 export function countTextLines(content: string): number {

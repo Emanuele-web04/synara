@@ -46,6 +46,10 @@ import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { shouldAllowMediaPermissionRequest } from "./mediaPermissions";
+import {
+  installResumableUpdateDownloader,
+  type ResumableDownloaderTarget,
+} from "./resumableUpdateDownload";
 import { ServerListeningDetector } from "./serverListeningDetector";
 import { syncShellEnvironment } from "./syncShellEnvironment";
 import {
@@ -81,14 +85,7 @@ import {
   resolveElectronUpdaterCacheDirName,
   resolveElectronUpdaterPendingCacheDir,
 } from "./updatePendingCache";
-import {
-  buildGitHubReleaseDownloadBaseUrl,
-  buildGitHubReleasesPageUrl,
-  type LatestGitHubRelease,
-  resolveGitHubUpdateSource,
-  resolveLatestStableGitHubRelease,
-} from "./githubUpdateFeed";
-import { CachedGitHubUpdateFeedRefresher } from "./updateFeedCache";
+import { buildGitHubReleasesPageUrl, resolveGitHubUpdateSource } from "./githubUpdateFeed";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { DesktopBrowserManager } from "./browserManager";
 import { BROWSER_IPC_CHANNELS, registerBrowserIpcHandlers, sendBrowserState } from "./browserIpc";
@@ -158,13 +155,11 @@ const AUTO_UPDATE_POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
 const AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const AUTO_UPDATE_FOREGROUND_RECHECK_MIN_BACKGROUND_MS = 30 * 1000;
 const AUTO_UPDATE_CHECK_TIMEOUT_MS = 45 * 1000;
-const AUTO_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS = 90 * 1000;
+const AUTO_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS = 60 * 1000;
 // Upper bound on how long we wait for electron-updater to release a cancelled
 // download before allowing a retry, so a wedged updater promise can't block updates.
-const AUTO_UPDATE_DOWNLOAD_SETTLE_TIMEOUT_MS = 30 * 1000;
+const AUTO_UPDATE_DOWNLOAD_SETTLE_TIMEOUT_MS = 20 * 1000;
 const AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS = 2 * 60 * 1000;
-const AUTO_UPDATE_FEED_CACHE_TTL_MS = 30 * 60 * 1000;
-const AUTO_UPDATE_FEED_REFRESH_TIMEOUT_MS = 10 * 1000;
 // How long we give quitAndInstall() to actually quit/relaunch the app before we
 // conclude the OS installer never started (unsigned/quarantined build, read-only
 // install dir, blocked NSIS run) and surface the manual-download fallback.
@@ -212,8 +207,6 @@ let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const browserManager = new DesktopBrowserManager();
 let browserUsePipeServer: BrowserUsePipeServer | null = null;
 let configuredGitHubUpdateSource: ReturnType<typeof resolveGitHubUpdateSource> = null;
-let configuredGitHubUpdateToken = "";
-let configuredGitHubUpdateFeedRefresher: CachedGitHubUpdateFeedRefresher | null = null;
 let configuredUpdaterCacheDirName: string | null = null;
 
 browserManager.subscribe((state) => {
@@ -1333,68 +1326,6 @@ function shouldEnableAutoUpdates(): boolean {
   return resolveAutoUpdateDisabledReason() === null;
 }
 
-function applyConfiguredGitHubUpdateFeed(latestRelease: LatestGitHubRelease): void {
-  if (configuredGitHubUpdateSource === null) {
-    return;
-  }
-  // Keep the manual-download fallback pinned to the exact release we are about
-  // to offer, so a user whose in-app update fails lands on the matching assets.
-  setUpdateState({
-    releaseUrl: buildGitHubReleasesPageUrl(configuredGitHubUpdateSource, latestRelease.tag),
-  });
-  autoUpdater.setFeedURL({
-    provider: "generic",
-    url: buildGitHubReleaseDownloadBaseUrl(configuredGitHubUpdateSource, latestRelease.tag),
-    ...(configuredGitHubUpdateToken
-      ? {
-          requestHeaders: {
-            authorization: `token ${configuredGitHubUpdateToken}`,
-          },
-        }
-      : {}),
-  });
-}
-
-async function resolveLatestConfiguredGitHubRelease(): Promise<LatestGitHubRelease | null> {
-  if (configuredGitHubUpdateSource === null) {
-    return null;
-  }
-
-  const controller = new AbortController();
-  let timedOut = false;
-  const timeoutTimer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, AUTO_UPDATE_FEED_REFRESH_TIMEOUT_MS);
-  timeoutTimer.unref();
-
-  try {
-    return await resolveLatestStableGitHubRelease(
-      configuredGitHubUpdateSource,
-      configuredGitHubUpdateToken,
-      { signal: controller.signal },
-    );
-  } catch (error) {
-    if (timedOut) {
-      throw new Error("Timed out while refreshing the desktop update feed.");
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeoutTimer);
-  }
-}
-
-function shouldForceUpdateFeedRefresh(reason: string): boolean {
-  return reason === "menu" || reason === "renderer";
-}
-
-// Explicit user checks bypass the feed TTL; automatic checks keep startup/foreground latency low.
-async function refreshConfiguredUpdateFeed(
-  options: { readonly force?: boolean } = {},
-): Promise<void> {
-  await configuredGitHubUpdateFeedRefresher?.refresh(options);
-}
-
 function isKnownUpdateVersionNewer(version: string | null | undefined): boolean {
   return typeof version === "string" && isUpdateVersionNewer(app.getVersion(), version);
 }
@@ -1594,7 +1525,6 @@ async function checkForUpdates(reason: string): Promise<void> {
   console.info(`[desktop-updater] Checking for updates (${reason})...`);
 
   try {
-    await refreshConfiguredUpdateFeed({ force: shouldForceUpdateFeedRefresh(reason) });
     await autoUpdater.checkForUpdates();
   } catch (error: unknown) {
     clearUpdateCheckTimeoutTimer();
@@ -1753,35 +1683,15 @@ function configureAutoUpdater(): void {
   });
   if (!enabled) {
     configuredGitHubUpdateSource = null;
-    configuredGitHubUpdateToken = "";
-    configuredGitHubUpdateFeedRefresher = null;
     configuredUpdaterCacheDirName = null;
     return;
   }
   updaterConfigured = true;
   configuredGitHubUpdateSource = resolveGitHubUpdateSource(appUpdateYml);
   if (configuredGitHubUpdateSource !== null) {
-    // Seed the manual-download fallback with the "latest" releases page until a
-    // specific release tag is resolved by the feed refresher.
+    // The updater itself uses app-update.yml; this URL is only the human fallback.
     setUpdateState({ releaseUrl: buildGitHubReleasesPageUrl(configuredGitHubUpdateSource) });
   }
-
-  const githubToken =
-    process.env.T3CODE_DESKTOP_UPDATE_GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || "";
-  configuredGitHubUpdateToken = githubToken;
-  configuredGitHubUpdateFeedRefresher =
-    configuredGitHubUpdateSource === null
-      ? null
-      : new CachedGitHubUpdateFeedRefresher({
-          cacheTtlMs: AUTO_UPDATE_FEED_CACHE_TTL_MS,
-          resolveLatestRelease: resolveLatestConfiguredGitHubRelease,
-          applyRelease: applyConfiguredGitHubUpdateFeed,
-          onStaleRefreshFailure: (error, release) => {
-            console.warn(
-              `[desktop-updater] Failed to refresh update feed; using cached ${release.tag}: ${formatErrorMessage(error)}`,
-            );
-          },
-        });
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
@@ -1789,9 +1699,24 @@ function configureAutoUpdater(): void {
   autoUpdater.channel = DESKTOP_UPDATE_CHANNEL;
   autoUpdater.allowPrerelease = DESKTOP_UPDATE_ALLOW_PRERELEASE;
   autoUpdater.allowDowngrade = false;
-  // The feed is pinned to an exact release tag before each check, so blockmap
-  // differential downloads can be used without racing a moving "latest" target.
-  autoUpdater.disableDifferentialDownload = false;
+  // Match electron-updater's native GitHub provider path; the packaged
+  // app-update.yml owns the production feed, and generic feeds stay mock-only.
+  // macOS release builds repack and validate the Squirrel update zip, then omit
+  // the stale zip blockmap so ShipIt always installs the exact signed payload.
+  autoUpdater.disableDifferentialDownload =
+    process.platform === "darwin" || isArm64HostRunningIntelBuild(desktopRuntimeInfo);
+  // electron-updater has no working idle timeout on macOS (its socket timeout is
+  // wired to a `socket` event Electron's net.request never emits) and never
+  // resumes from a byte offset, so a stalled CDN transfer hangs for minutes
+  // until TCP recovers on its own. installResumableUpdateDownloader replaces the
+  // download transfer with a stall-aware, resumable one and installs a real idle
+  // timeout, so an intermittent stall becomes a brief reconnect-and-resume
+  // instead of a multi-minute freeze. Independent of the zip-validation fix.
+  if (!installResumableUpdateDownloader(autoUpdater as unknown as ResumableDownloaderTarget)) {
+    console.warn(
+      "[desktop-updater] Could not install resumable update downloader; falling back to default transfer.",
+    );
+  }
   let lastLoggedDownloadMilestone = -1;
 
   if (isArm64HostRunningIntelBuild(desktopRuntimeInfo)) {

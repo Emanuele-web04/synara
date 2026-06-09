@@ -51,6 +51,8 @@ function makeComposerDraftState(
     persistedAttachments: [],
     assistantSelections: [],
     terminalContexts: [],
+    skills: [],
+    mentions: [],
     queuedTurns: [],
     modelSelectionByProvider: {
       claudeAgent: modelSelection("claudeAgent", "claude-opus-4-6", { effort: "max" }),

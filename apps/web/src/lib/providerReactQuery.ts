@@ -35,8 +35,20 @@ export const providerQueryKeys = {
     ] as const,
 };
 
+/** Keep polling while placeholder checkpoints are still being written. */
+export const CHECKPOINT_DIFF_PENDING_REFETCH_INTERVAL_MS = 2_000;
+export const CHECKPOINT_DIFF_PENDING_REFETCH_MAX_ATTEMPTS = 12;
+
+function shouldUseFullThreadDiffApi(input: CheckpointDiffQueryInput): boolean {
+  return (
+    input.fromTurnCount === 0 &&
+    typeof input.cacheScope === "string" &&
+    input.cacheScope.startsWith("conversation:")
+  );
+}
+
 function decodeCheckpointDiffRequest(input: CheckpointDiffQueryInput) {
-  if (input.fromTurnCount === 0) {
+  if (shouldUseFullThreadDiffApi(input)) {
     return Schema.decodeUnknownOption(OrchestrationGetFullThreadDiffInput)({
       threadId: input.threadId,
       toTurnCount: input.toTurnCount,
@@ -89,13 +101,27 @@ function normalizeCheckpointErrorMessage(error: unknown): string {
   return message;
 }
 
-function isCheckpointTemporarilyUnavailable(error: unknown): boolean {
+export function isCheckpointTemporarilyUnavailable(error: unknown): boolean {
   const message = asCheckpointErrorMessage(error).toLowerCase();
   return (
     message.includes("exceeds current turn count") ||
     // Placeholder checkpoint rows can arrive before the checkpoint writer finishes.
     message.includes("checkpoint diff is not available yet")
   );
+}
+
+export function resolveCheckpointDiffQueryDisplayState(input: {
+  isLoading: boolean;
+  isFetching: boolean;
+  data: unknown;
+  error: unknown;
+}): { isLoading: boolean; error: string | null } {
+  const hasData = input.data != null;
+  return {
+    isLoading: input.isLoading || (input.isFetching && !hasData),
+    error:
+      input.isFetching || input.error == null ? null : normalizeCheckpointErrorMessage(input.error),
+  };
 }
 
 export function checkpointDiffQueryOptions(input: CheckpointDiffQueryInput) {
@@ -129,5 +155,15 @@ export function checkpointDiffQueryOptions(input: CheckpointDiffQueryInput) {
       isCheckpointTemporarilyUnavailable(error)
         ? Math.min(5_000, 250 * 2 ** (attempt - 1))
         : Math.min(1_000, 100 * 2 ** (attempt - 1)),
+    refetchInterval: (query) => {
+      const temporaryError = query.state.error;
+      if (!temporaryError || !isCheckpointTemporarilyUnavailable(temporaryError)) {
+        return false;
+      }
+      const temporaryErrorCount = query.state.errorUpdateCount ?? 0;
+      return temporaryErrorCount < CHECKPOINT_DIFF_PENDING_REFETCH_MAX_ATTEMPTS
+        ? CHECKPOINT_DIFF_PENDING_REFETCH_INTERVAL_MS
+        : false;
+    },
   });
 }

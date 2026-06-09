@@ -29,10 +29,11 @@ import {
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "./ProviderIcon";
 import { useStore } from "~/store";
 import {
-  buildPluginSearchBlob,
-  buildSkillSearchBlob,
+  buildPluginSearchFields,
+  buildSkillSearchFields,
   isInstalledProviderPlugin,
   normalizeProviderDiscoveryText,
+  rankProviderDiscoveryItems,
   resolveProviderDiscoveryCwd,
 } from "~/lib/providerDiscovery";
 import { createFirstProjectSelector } from "~/storeSelectors";
@@ -50,7 +51,7 @@ import {
   CircleAlertIcon,
   HammerIcon,
   ListChecksIcon,
-  PlugIcon,
+  PluginIcon,
   SearchIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -213,7 +214,7 @@ function PluginGlyph({ plugin }: { plugin: ProviderPluginDescriptor }) {
       className="inline-flex size-11 shrink-0 items-center justify-center rounded-[14px]"
       style={style}
     >
-      <PlugIcon className="size-5 text-white/80" />
+      <PluginIcon className="size-5 text-white/80" />
     </span>
   );
 }
@@ -522,7 +523,9 @@ export function PluginLibrary() {
   const filteredPluginEntries = useMemo(() => {
     const q = normalizeProviderDiscoveryText(deferredPluginSearch);
     if (!q) return installedPluginEntries;
-    return installedPluginEntries.filter((e) => buildPluginSearchBlob(e.plugin).includes(q));
+    return rankProviderDiscoveryItems(installedPluginEntries, q, (entry) =>
+      buildPluginSearchFields(entry.plugin),
+    );
   }, [deferredPluginSearch, installedPluginEntries]);
 
   const marketplaceSections = useMemo(() => {
@@ -548,7 +551,7 @@ export function PluginLibrary() {
   const filteredSkills = useMemo(() => {
     const q = normalizeProviderDiscoveryText(deferredSkillSearch);
     if (!q) return discoveredSkills;
-    return discoveredSkills.filter((s) => buildSkillSearchBlob(s).includes(q));
+    return rankProviderDiscoveryItems(discoveredSkills, q, buildSkillSearchFields);
   }, [deferredSkillSearch, discoveredSkills]);
 
   // ── Render ───────────────────────────────────────────────────────────────

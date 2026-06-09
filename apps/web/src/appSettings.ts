@@ -162,6 +162,15 @@ export const AppSettingsSchema = Schema.Struct({
   // is hidden (see the sidebar segmented picker).
   showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
   showWorkspaceSection: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Local-only UI preferences: which optional sections of the chat Environment panel are
+  // shown. The git block (Changes/Worktree/branch/Commit and Push) is always visible; these
+  // toggle the sections beneath it via the panel header's gear menu.
+  showEnvironmentRepository: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentEditor: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentRecap: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentPinned: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentMarkers: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => true)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => false)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),

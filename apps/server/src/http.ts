@@ -27,8 +27,11 @@ import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalImageFile } from "./localIma
 import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
 import type { ServerReadiness } from "./server/readiness";
+import { resolveFavicon, tryParseHost } from "./siteFaviconCache";
 
 const PROJECT_FAVICON_CACHE_CONTROL = "public, max-age=3600";
+const SITE_FAVICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
+const SITE_FAVICON_CACHE_CONTROL_FALLBACK = "public, max-age=3600"; // 1 h (negative result)
 const decodeBootstrapInput = Schema.decodeUnknownEffect(AuthBootstrapInput);
 const decodeCreatePairingCredentialInput = Schema.decodeUnknownEffect(
   AuthCreatePairingCredentialInput,
@@ -59,6 +62,7 @@ export function makeEffectHttpRouteLayer(readiness: ServerReadiness) {
     ),
     authEffectRouteLayer,
     projectFaviconEffectRouteLayer,
+    siteFaviconEffectRouteLayer,
     localImageEffectRouteLayer,
     attachmentsEffectRouteLayer,
     staticAndDevEffectRouteLayer,
@@ -298,6 +302,46 @@ const projectFaviconEffectRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 
+// Resolves a real website favicon by domain (cached server-side, deduped by host)
+// so the UI can replace generic globe icons. Mirrors project-favicon's auth +
+// SVG-fallback shape; the actual fetch/cache logic lives in siteFaviconCache.ts.
+const siteFaviconEffectRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/site-favicon",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+
+    // Loaded via <img> tags, which cannot attach Authorization headers — accept the
+    // same startup-token rule the local-image/attachments routes use so favicons
+    // load in local dev without a session cookie.
+    const config = yield* ServerConfig;
+    if (!isLegacyTokenAuthorized({ config, url })) {
+      yield* requireAuthenticatedRequest;
+    }
+
+    const domainParam = url.searchParams.get("domain") ?? url.searchParams.get("url");
+    if (!domainParam) return HttpServerResponse.text("Missing domain parameter", { status: 400 });
+    const host = tryParseHost(domainParam);
+    if (!host) return HttpServerResponse.text("Invalid domain", { status: 400 });
+
+    const favicon = yield* Effect.promise(() => resolveFavicon(host));
+    if (!favicon.bytes) {
+      return HttpServerResponse.text(FALLBACK_SITE_FAVICON_SVG, {
+        status: 200,
+        contentType: "image/svg+xml",
+        headers: { "Cache-Control": SITE_FAVICON_CACHE_CONTROL_FALLBACK },
+      });
+    }
+    return HttpServerResponse.uint8Array(favicon.bytes, {
+      status: 200,
+      contentType: favicon.contentType ?? "image/x-icon",
+      headers: { "Cache-Control": SITE_FAVICON_CACHE_CONTROL_SUCCESS },
+    });
+  }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
+);
+
 export const localImageEffectRouteLayer = HttpRouter.add(
   "GET",
   LOCAL_IMAGE_ROUTE_PATH,
@@ -484,6 +528,8 @@ const staticAndDevEffectRouteLayer = HttpRouter.add(
 );
 
 const FALLBACK_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="project-favicon"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z"/></svg>`;
+
+const FALLBACK_SITE_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="site-favicon"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20M12 2a14.5 14.5 0 0 1 0 20M2 12h20"/></svg>`;
 
 type Respond = (
   statusCode: number,

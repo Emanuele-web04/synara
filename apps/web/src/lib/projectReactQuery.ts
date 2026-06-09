@@ -1,4 +1,5 @@
 import type {
+  ProjectDiscoverScriptsResult,
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesResult,
 } from "@t3tools/contracts";
@@ -7,6 +8,8 @@ import { ensureNativeApi } from "~/nativeApi";
 
 export const projectQueryKeys = {
   all: ["projects"] as const,
+  discoverScripts: (cwd: string | null, depth: number) =>
+    ["projects", "discover-scripts", cwd, depth] as const,
   searchEntries: (cwd: string | null, query: string, limit: number) =>
     ["projects", "search-entries", cwd, query, limit] as const,
   searchLocalEntries: (rootPath: string | null, query: string, limit: number) =>
@@ -15,16 +18,46 @@ export const projectQueryKeys = {
 
 const DEFAULT_SEARCH_ENTRIES_LIMIT = 80;
 const DEFAULT_SEARCH_ENTRIES_STALE_TIME = 15_000;
+const DEFAULT_DISCOVER_SCRIPTS_DEPTH = 2;
+const DEFAULT_DISCOVER_SCRIPTS_STALE_TIME = 30_000;
 const DEFAULT_SEARCH_LOCAL_ENTRIES_LIMIT = 50;
 const DEFAULT_SEARCH_LOCAL_ENTRIES_STALE_TIME = 10_000;
 const EMPTY_SEARCH_ENTRIES_RESULT: ProjectSearchEntriesResult = {
   entries: [],
   truncated: false,
 };
+const EMPTY_DISCOVER_SCRIPTS_RESULT: ProjectDiscoverScriptsResult = {
+  targets: [],
+};
 const EMPTY_SEARCH_LOCAL_ENTRIES_RESULT: ProjectSearchLocalEntriesResult = {
   entries: [],
   truncated: false,
 };
+
+export function projectDiscoverScriptsQueryOptions(input: {
+  cwd: string | null;
+  enabled?: boolean;
+  depth?: number;
+  staleTime?: number;
+}) {
+  const depth = input.depth ?? DEFAULT_DISCOVER_SCRIPTS_DEPTH;
+  return queryOptions({
+    queryKey: projectQueryKeys.discoverScripts(input.cwd, depth),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd) {
+        throw new Error("Project script discovery is unavailable.");
+      }
+      return api.projects.discoverScripts({
+        cwd: input.cwd,
+        depth,
+      });
+    },
+    enabled: (input.enabled ?? true) && input.cwd !== null,
+    staleTime: input.staleTime ?? DEFAULT_DISCOVER_SCRIPTS_STALE_TIME,
+    placeholderData: (previous) => previous ?? EMPTY_DISCOVER_SCRIPTS_RESULT,
+  });
+}
 
 export function projectSearchEntriesQueryOptions(input: {
   cwd: string | null;

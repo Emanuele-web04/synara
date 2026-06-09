@@ -1,5 +1,6 @@
 import type { ChatMessage } from "./types";
 import { stripEmbeddedAssistantSelections } from "./lib/assistantSelections";
+import { pluralize } from "@t3tools/shared/text";
 
 export interface BootstrapInputResult {
   text: string;
@@ -32,7 +33,7 @@ function attachmentSummary(message: ChatMessage): string | null {
     const namesSummary = names.join(", ");
     const extraCount = count - names.length;
     const extraSummary = extraCount > 0 ? ` (+${extraCount} more)` : "";
-    summaries.push(`[Attached image${count === 1 ? "" : "s"}: ${namesSummary}${extraSummary}]`);
+    summaries.push(`[Attached ${pluralize(count, "image")}: ${namesSummary}${extraSummary}]`);
   }
 
   const selectionCount = assistantSelections?.length ?? 0;
@@ -44,7 +45,7 @@ function attachmentSummary(message: ChatMessage): string | null {
     const extraCount = selectionCount - previews.length;
     const extraSummary = extraCount > 0 ? ` (+${extraCount} more)` : "";
     summaries.push(
-      `[Referenced assistant selection${selectionCount === 1 ? "" : "s"}: ${previews.join(", ")}${extraSummary}]`,
+      `[Referenced assistant ${pluralize(selectionCount, "selection")}: ${previews.join(", ")}${extraSummary}]`,
     );
   }
 

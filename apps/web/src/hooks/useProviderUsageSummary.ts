@@ -2,7 +2,11 @@
 // Purpose: Merge usage signals from thread activities, server-side local archives,
 // and provider-specific snapshots into one UI-friendly summary.
 
-import type { OrchestrationThread, ProviderKind } from "@t3tools/contracts";
+import type {
+  OrchestrationThread,
+  ProviderKind,
+  ServerGetProviderUsageSnapshotResult,
+} from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
@@ -12,6 +16,7 @@ import {
 } from "~/lib/openUsageRateLimits";
 import { openUsageProviderSnapshotQueryOptions } from "~/lib/openUsageReactQuery";
 import {
+  isProviderUsageSnapshotNonOk,
   normalizeServerProviderUsageLines,
   normalizeServerProviderUsageRateLimit,
 } from "~/lib/providerUsageSnapshot";
@@ -22,28 +27,57 @@ import {
   mergeProviderRateLimits,
   type ProviderRateLimit,
 } from "~/lib/rateLimits";
-import { serverProviderUsageSnapshotQueryOptions } from "~/lib/serverReactQuery";
+import {
+  serverAllProviderUsageQueryOptions,
+  serverProviderUsageSnapshotQueryOptions,
+} from "~/lib/serverReactQuery";
 
 export function useProviderUsageSummary(input: {
   provider: ProviderKind | null | undefined;
-  threads: ReadonlyArray<Pick<OrchestrationThread, "activities">>;
+  threads?: ReadonlyArray<Pick<OrchestrationThread, "activities">>;
+  threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
   codexHomePath?: string | null;
+  providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
 }) {
-  const providerUsageSnapshotQuery = useQuery(
+  const allProviderUsageQuery = useQuery(
+    serverAllProviderUsageQueryOptions({
+      enabled: input.provider !== null && input.provider !== undefined,
+    }),
+  );
+  const localUsageSnapshotQuery = useQuery(
     serverProviderUsageSnapshotQueryOptions({
       provider: input.provider,
       homePath: input.provider === "codex" ? input.codexHomePath || null : null,
     }),
   );
   const openUsageSnapshotQuery = useQuery(openUsageProviderSnapshotQueryOptions(input.provider));
+  const liveProviderSnapshot = useMemo(
+    () =>
+      (allProviderUsageQuery.data ?? []).find((snapshot) => snapshot.provider === input.provider),
+    [allProviderUsageQuery.data, input.provider],
+  );
+  const authoritativeLiveSnapshot = useMemo(
+    () => liveProviderSnapshot ?? input.providerSnapshot ?? null,
+    [input.providerSnapshot, liveProviderSnapshot],
+  );
+  // Explicit live failures are authoritative; only fall back when no live snapshot exists.
+  const blocksProviderUsageFallback = isProviderUsageSnapshotNonOk(authoritativeLiveSnapshot);
+  const accountRateLimits = useMemo(
+    () => input.threadRateLimits ?? deriveAccountRateLimits(input.threads ?? []),
+    [input.threadRateLimits, input.threads],
+  );
 
   const rateLimits = useMemo<ReadonlyArray<ProviderRateLimit>>(() => {
-    const derivedRateLimits = deriveAccountRateLimits(input.threads).filter((rateLimit) =>
+    if (blocksProviderUsageFallback) {
+      return [];
+    }
+
+    const localSnapshot = localUsageSnapshotQuery.data ?? null;
+    const derivedRateLimits = accountRateLimits.filter((rateLimit) =>
       input.provider ? rateLimit.provider === input.provider : true,
     );
-    const serverUsageRateLimit = normalizeServerProviderUsageRateLimit(
-      providerUsageSnapshotQuery.data,
-    );
+    const liveUsageRateLimit = normalizeServerProviderUsageRateLimit(authoritativeLiveSnapshot);
+    const localUsageRateLimit = normalizeServerProviderUsageRateLimit(localSnapshot);
     const openUsageSnapshot = normalizeOpenUsageSnapshot(
       openUsageSnapshotQuery.data,
       input.provider,
@@ -51,19 +85,42 @@ export function useProviderUsageSummary(input: {
     return mergeProviderRateLimits(
       derivedRateLimits,
       mergeProviderRateLimits(
-        serverUsageRateLimit ? [serverUsageRateLimit] : [],
-        openUsageSnapshot ? [openUsageSnapshot] : [],
+        liveUsageRateLimit ? [liveUsageRateLimit] : [],
+        mergeProviderRateLimits(
+          localUsageRateLimit ? [localUsageRateLimit] : [],
+          openUsageSnapshot ? [openUsageSnapshot] : [],
+        ),
       ),
     );
-  }, [input.provider, input.threads, openUsageSnapshotQuery.data, providerUsageSnapshotQuery.data]);
+  }, [
+    accountRateLimits,
+    authoritativeLiveSnapshot,
+    blocksProviderUsageFallback,
+    input.provider,
+    localUsageSnapshotQuery.data,
+    openUsageSnapshotQuery.data,
+  ]);
 
   const usageLines = useMemo(() => {
-    const serverUsageLines = normalizeServerProviderUsageLines(providerUsageSnapshotQuery.data);
-    if (serverUsageLines.length > 0) {
-      return serverUsageLines;
+    if (blocksProviderUsageFallback) {
+      return [];
+    }
+
+    const liveUsageLines = normalizeServerProviderUsageLines(authoritativeLiveSnapshot);
+    if (liveUsageLines.length > 0) {
+      return liveUsageLines;
+    }
+    const localUsageLines = normalizeServerProviderUsageLines(localUsageSnapshotQuery.data);
+    if (localUsageLines.length > 0) {
+      return localUsageLines;
     }
     return normalizeOpenUsageUsageLines(openUsageSnapshotQuery.data);
-  }, [openUsageSnapshotQuery.data, providerUsageSnapshotQuery.data]);
+  }, [
+    authoritativeLiveSnapshot,
+    blocksProviderUsageFallback,
+    localUsageSnapshotQuery.data,
+    openUsageSnapshotQuery.data,
+  ]);
 
   const learnMoreHref = useMemo(
     () =>
@@ -74,7 +131,8 @@ export function useProviderUsageSummary(input: {
   const isLoading =
     input.provider !== null &&
     input.provider !== undefined &&
-    providerUsageSnapshotQuery.isPending &&
+    allProviderUsageQuery.isPending &&
+    localUsageSnapshotQuery.isPending &&
     rateLimits.length === 0 &&
     usageLines.length === 0;
 

@@ -8,9 +8,19 @@
 //          use floating overlay only. The card surface and content are identical either way.
 // Layer: Environment panel container
 
-import type { EditorId, ResolvedKeybindingsConfig, ThreadId } from "@t3tools/contracts";
+import type {
+  EditorId,
+  MessageId,
+  PinnedMessage,
+  ResolvedKeybindingsConfig,
+  ThreadId,
+  ThreadMarker,
+  ThreadMarkerId,
+} from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 
+import { useAppSettings } from "~/appSettings";
+import { SETTINGS_TARGETS } from "~/settingsNavigation";
 import {
   ENVIRONMENT_PANEL_MOTION_CLASS,
   ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
@@ -19,16 +29,22 @@ import BranchToolbar, { type BranchToolbarProps } from "~/components/BranchToolb
 import ChatMarkdown from "~/components/ChatMarkdown";
 import GitActionsControl from "~/components/GitActionsControl";
 import { IconButton } from "~/components/ui/icon-button";
-import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
-import { ChangesIcon, SettingsIcon } from "~/lib/icons";
+import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
+import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import { EnvironmentEditorSection } from "./EnvironmentEditorSection";
+import { EnvironmentLocalServersSection } from "./EnvironmentLocalServersSection";
+import { EnvironmentMarkersSection } from "./EnvironmentMarkersSection";
+import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
+import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "./environmentPanelStyles";
 import {
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
+  EnvironmentCollapsibleSection,
   EnvironmentPanelTitle,
   EnvironmentRow,
+  EnvironmentSectionDivider,
   EnvironmentSectionLabel,
 } from "./EnvironmentRow";
 
@@ -53,6 +69,10 @@ export interface EnvironmentPanelProps {
   variant: "docked" | "floating";
   gitCwd: string | null;
   openInCwd: string | null;
+  githubRepository?: {
+    readonly nameWithOwner: string;
+    readonly url: string;
+  } | null;
   isGitRepo: boolean;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
@@ -63,8 +83,8 @@ export interface EnvironmentPanelProps {
   diffOpen: boolean;
   /** Non-null when the diff panel cannot be opened (e.g. no repo / no changes yet). */
   diffDisabledReason?: string | null;
-  /** Background refresh cadence for the diff totals badge, or false to fetch once. */
-  diffBadgeRefreshIntervalMs?: number | false;
+  /** Shared diff totals from ChatView so the mounted panel does not duplicate patch parsing. */
+  diffTotals: RepoDiffTotals;
   /** Env/branch picker config — `variant` is supplied by the panel. */
   branchToolbar: Omit<BranchToolbarProps, "variant">;
   /** Compact idle-generated chat memory for the top of the panel. */
@@ -73,13 +93,41 @@ export interface EnvironmentPanelProps {
     readonly status: "idle" | "pending" | "error";
     readonly updatedAt: string | null;
   } | null;
+  /** Per-thread pinned-message checklist (server-synced). */
+  pinnedMessages: readonly PinnedMessage[];
+  /** Per-thread text markers (server-synced). */
+  threadMarkers: readonly ThreadMarker[];
+  /** Live text of pinned messages still present in the transcript (for labels/availability). */
+  pinnedMessageTextById: ReadonlyMap<MessageId, string>;
+  /** Live text of marked messages still present in the transcript (for labels/availability). */
+  markerMessageTextById: ReadonlyMap<MessageId, string>;
+  /** Per-thread freeform scratchpad notes (server-synced). */
+  notes: string;
   /** Toggle the Diff panel/route (same handler the header diff toggle used). */
   onToggleDiff: () => void;
+  /** Open the repository URL in the in-app browser panel. */
+  onOpenGithubRepository?: (url: string) => void;
+  /** Scroll the transcript to a pinned message. */
+  onJumpToPinnedMessage: (messageId: MessageId) => void;
+  /** Toggle a pinned message's done state (strikethrough; stays pinned). */
+  onTogglePinnedMessageDone: (messageId: MessageId) => void;
+  /** Remove a message from the pinned checklist. */
+  onUnpinMessage: (messageId: MessageId) => void;
+  /** Set (`null` clears to auto) a pinned message's label. */
+  onRenamePinnedMessage: (messageId: MessageId, label: string | null) => void;
+  /** Scroll the transcript to a text marker. */
+  onJumpToThreadMarker: (marker: ThreadMarker) => void;
+  /** Toggle a marker's done state. */
+  onToggleThreadMarkerDone: (markerId: ThreadMarkerId) => void;
+  /** Remove a text marker. */
+  onRemoveThreadMarker: (markerId: ThreadMarkerId) => void;
+  /** Set (`null` clears to auto) a marker label. */
+  onRenameThreadMarker: (markerId: ThreadMarkerId, label: string | null) => void;
+  /** Persist updated notes for the given thread (bound per section instance, not the active thread). */
+  onNotesChange: (threadId: ThreadId, notes: string) => Promise<void>;
   /** Dismiss the panel overlay — invoked after actions that open the dock. */
   onClose: () => void;
 }
-
-const PANEL_DIVIDER_CLASS_NAME = "my-1 border-t border-[color:var(--color-border-light)]";
 
 function EnvironmentRecapSection({
   recap,
@@ -89,24 +137,25 @@ function EnvironmentRecapSection({
   markdownCwd: string | undefined;
 }) {
   return (
-    <div className="flex flex-col gap-1.5 pb-2.5 pt-1">
-      <EnvironmentSectionLabel>Recap</EnvironmentSectionLabel>
-      {recap.text ? (
-        <div className="px-2">
-          <ChatMarkdown
-            text={recap.text}
-            cwd={markdownCwd}
-            isStreaming={false}
-            className={ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME}
-          />
-        </div>
-      ) : (
-        <div className="flex flex-col gap-1.5 px-2" aria-hidden>
-          <div className="h-2.5 w-full rounded bg-[var(--color-background-button-secondary-hover)]/45 motion-safe:animate-pulse" />
-          <div className="h-2.5 w-4/5 rounded bg-[var(--color-background-button-secondary-hover)]/35 motion-safe:animate-pulse" />
-        </div>
-      )}
-    </div>
+    <EnvironmentCollapsibleSection label="Recap">
+      <div className="flex flex-col gap-1.5 pb-1.5">
+        {recap.text ? (
+          <div className="px-2">
+            <ChatMarkdown
+              text={recap.text}
+              cwd={markdownCwd}
+              isStreaming={false}
+              className={ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME}
+            />
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1.5 px-2" aria-hidden>
+            <div className="h-2.5 w-full rounded bg-[var(--color-background-button-secondary-hover)]/45 motion-safe:animate-pulse" />
+            <div className="h-2.5 w-4/5 rounded bg-[var(--color-background-button-secondary-hover)]/35 motion-safe:animate-pulse" />
+          </div>
+        )}
+      </div>
+    </EnvironmentCollapsibleSection>
   );
 }
 
@@ -115,6 +164,7 @@ export function EnvironmentPanel({
   variant,
   gitCwd,
   openInCwd,
+  githubRepository = null,
   isGitRepo,
   keybindings,
   availableEditors,
@@ -122,18 +172,30 @@ export function EnvironmentPanel({
   showGitActions,
   diffOpen,
   diffDisabledReason = null,
-  diffBadgeRefreshIntervalMs = false,
+  diffTotals,
   branchToolbar,
   recap = null,
+  pinnedMessages,
+  threadMarkers,
+  pinnedMessageTextById,
+  markerMessageTextById,
+  notes,
   onToggleDiff,
+  onOpenGithubRepository,
+  onJumpToPinnedMessage,
+  onTogglePinnedMessageDone,
+  onUnpinMessage,
+  onRenamePinnedMessage,
+  onJumpToThreadMarker,
+  onToggleThreadMarkerDone,
+  onRemoveThreadMarker,
+  onRenameThreadMarker,
+  onNotesChange,
   onClose,
 }: EnvironmentPanelProps) {
   const navigate = useNavigate();
-  const { additions, deletions, hasChanges } = useRepoDiffTotals({
-    gitCwd,
-    isGitRepo,
-    refetchInterval: diffBadgeRefreshIntervalMs,
-  });
+  const { settings } = useAppSettings();
+  const { additions, deletions, hasChanges } = diffTotals;
 
   // Disable the Changes row only when the diff cannot be opened *and* is not already open
   // (so an open diff stays toggleable closed even when there are no pending changes).
@@ -146,9 +208,14 @@ export function EnvironmentPanel({
       <div className="flex items-center justify-between gap-2 px-2 pb-0.5 pt-0.5">
         <EnvironmentPanelTitle>Environment</EnvironmentPanelTitle>
         <IconButton
-          label="Environment settings"
-          tooltip="Environment settings"
-          onClick={() => void navigate({ to: "/settings" })}
+          label="Panel sections"
+          tooltip="Panel sections"
+          onClick={() =>
+            void navigate({
+              to: "/settings",
+              search: { target: SETTINGS_TARGETS.environmentPanel },
+            })
+          }
         >
           <SettingsIcon className="size-3.5" />
         </IconButton>
@@ -180,18 +247,85 @@ export function EnvironmentPanel({
         <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} variant="panel" />
       ) : null}
 
-      <div className={PANEL_DIVIDER_CLASS_NAME} />
+      <EnvironmentLocalServersSection enabled={open} />
 
-      <EnvironmentEditorSection
-        keybindings={keybindings}
-        availableEditors={availableEditors}
-        openInCwd={openInCwd}
-      />
-
-      {showRecap && recap ? (
+      {/*
+        Optional sections below the git block. Each renders its own leading divider only when it
+        actually shows, so toggling any section via the header gear menu never leaves a doubled or
+        dangling rule. Visibility is gated on the per-section AppSettings flags.
+      */}
+      {settings.showEnvironmentRepository && githubRepository && onOpenGithubRepository ? (
         <>
-          <div className={PANEL_DIVIDER_CLASS_NAME} />
+          <EnvironmentSectionDivider />
+          <div className="flex flex-col gap-0.5">
+            <EnvironmentSectionLabel>Repository</EnvironmentSectionLabel>
+            <EnvironmentRow
+              icon={<GitHubIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+              label={<span className="truncate">{githubRepository.nameWithOwner}</span>}
+              trailing={
+                <ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />
+              }
+              onClick={() => {
+                onOpenGithubRepository(githubRepository.url);
+                onClose();
+              }}
+            />
+          </div>
+        </>
+      ) : null}
+
+      {settings.showEnvironmentEditor ? (
+        <EnvironmentEditorSection
+          keybindings={keybindings}
+          availableEditors={availableEditors}
+          openInCwd={openInCwd}
+        />
+      ) : null}
+
+      {settings.showEnvironmentRecap && showRecap && recap ? (
+        <>
+          <EnvironmentSectionDivider />
           <EnvironmentRecapSection recap={recap} markdownCwd={markdownCwd} />
+        </>
+      ) : null}
+
+      {settings.showEnvironmentPinned && pinnedMessages.length > 0 ? (
+        <>
+          <EnvironmentSectionDivider />
+          <EnvironmentPinnedSection
+            pins={pinnedMessages}
+            messageTextById={pinnedMessageTextById}
+            onJump={onJumpToPinnedMessage}
+            onToggleDone={onTogglePinnedMessageDone}
+            onUnpin={onUnpinMessage}
+            onRename={onRenamePinnedMessage}
+          />
+        </>
+      ) : null}
+
+      {settings.showEnvironmentMarkers && threadMarkers.length > 0 ? (
+        <>
+          <EnvironmentSectionDivider />
+          <EnvironmentMarkersSection
+            markers={threadMarkers}
+            messageTextById={markerMessageTextById}
+            onJump={onJumpToThreadMarker}
+            onToggleDone={onToggleThreadMarkerDone}
+            onRemove={onRemoveThreadMarker}
+            onRename={onRenameThreadMarker}
+          />
+        </>
+      ) : null}
+
+      {settings.showEnvironmentNotepad && activeThreadId ? (
+        <>
+          <EnvironmentSectionDivider />
+          <EnvironmentNotesSection
+            key={activeThreadId}
+            threadId={activeThreadId}
+            notes={notes}
+            onChange={onNotesChange}
+          />
         </>
       ) : null}
     </div>

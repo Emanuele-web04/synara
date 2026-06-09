@@ -12,11 +12,26 @@ export const SETTINGS_SECTION_IDS = [
   "archived",
   "models",
   "providers",
+  "usage",
   "advanced",
 ] as const;
 
 export type SettingsSectionId = (typeof SETTINGS_SECTION_IDS)[number];
 export type SettingsNavGroupId = "app" | "synara";
+
+/**
+ * Deep-link scroll targets inside a settings panel. Each id is shared by the element that owns
+ * it (its `id` + scroll ref), the panel effect that scrolls it into view, and any caller that
+ * navigates to it via `?target=…`. Centralizing them keeps the anchor and its links from
+ * silently drifting apart.
+ */
+export const SETTINGS_TARGETS = {
+  providerUpdates: "provider-updates",
+  providerInstalls: "provider-installs",
+  environmentPanel: "environment-panel",
+} as const;
+
+export type SettingsTargetId = (typeof SETTINGS_TARGETS)[keyof typeof SETTINGS_TARGETS];
 
 export type SettingsNavItem = {
   id: SettingsSectionId;
@@ -98,8 +113,16 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "synara",
     label: "Providers",
     description: "Choose visible providers, review CLI installs, and update provider tools.",
-    icon: "plugin-1",
+    icon: "puzzle",
     eyebrow: "Picker visibility",
+  },
+  {
+    id: "usage",
+    group: "synara",
+    label: "Usage",
+    description: "Remaining quota and credits for each signed-in provider.",
+    icon: "gauge",
+    eyebrow: "Limits & credits",
   },
   {
     id: "advanced",

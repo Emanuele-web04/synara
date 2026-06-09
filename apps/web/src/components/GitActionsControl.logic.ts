@@ -444,6 +444,28 @@ export function resolveCreatePrActionAvailability(input: {
   };
 }
 
+export function resolvePullActionAvailability(input: {
+  gitStatus: GitStatusResult | null;
+  isBusy: boolean;
+}): { canRun: boolean; hint: string | null } {
+  const { gitStatus, isBusy } = input;
+  if (isBusy) return { canRun: false, hint: "Git action in progress." };
+  if (!gitStatus) return { canRun: false, hint: "Git status is unavailable." };
+  if (gitStatus.branch === null) {
+    return { canRun: false, hint: "Detached HEAD: checkout a branch before pulling." };
+  }
+  if (!gitStatus.hasUpstream) {
+    return { canRun: false, hint: "Current branch has no upstream to pull from." };
+  }
+  if (gitStatus.aheadCount > 0 && gitStatus.behindCount > 0) {
+    return { canRun: false, hint: "Branch has diverged from upstream. Rebase/merge first." };
+  }
+  if (gitStatus.behindCount <= 0) {
+    return { canRun: false, hint: "Branch is already up to date." };
+  }
+  return { canRun: true, hint: null };
+}
+
 export function shouldOfferCreateBranchPrompt(input: {
   activeWorktreePath: string | null;
   gitStatus: Pick<GitStatusResult, "branch" | "hasUpstream"> | null;

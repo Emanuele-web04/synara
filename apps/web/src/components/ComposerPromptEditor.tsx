@@ -25,6 +25,8 @@ import {
   KEY_TAB_COMMAND,
   COMMAND_PRIORITY_HIGH,
   KEY_BACKSPACE_COMMAND,
+  PASTE_COMMAND,
+  TextNode,
   $getRoot,
   type ElementNode,
   type LexicalNode,
@@ -50,7 +52,11 @@ import {
   expandCollapsedComposerCursor,
   isCollapsedCursorAdjacentToInlineToken,
 } from "~/composer-logic";
-import { splitPromptIntoComposerSegments } from "~/composer-editor-mentions";
+import {
+  matchComposerLinkToken,
+  splitPromptIntoComposerSegments,
+} from "~/composer-editor-mentions";
+import { parseBareComposerLink } from "~/lib/linkChips";
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
@@ -68,10 +74,12 @@ import {
   ComposerSkillNode,
   ComposerAgentMentionNode,
   ComposerTerminalContextNode,
+  ComposerLinkNode,
   $createComposerMentionNode,
   $createComposerSkillNode,
   $createComposerAgentMentionNode,
   $createComposerTerminalContextNode,
+  $createComposerLinkNode,
   isComposerInlineTokenNode,
   COMPOSER_NODE_CLASSES,
   type ComposerInlineTokenNode,
@@ -215,6 +223,10 @@ function getAbsoluteOffsetForPoint(node: LexicalNode, pointOffset: number): numb
     current = nextParent;
   }
 
+  if (node instanceof ComposerLinkNode || node instanceof ComposerTerminalContextNode) {
+    return getAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
+  }
+
   if ($isTextNode(node)) {
     if (
       node instanceof ComposerMentionNode ||
@@ -224,9 +236,6 @@ function getAbsoluteOffsetForPoint(node: LexicalNode, pointOffset: number): numb
       return getAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
     }
     return offset + Math.min(pointOffset, node.getTextContentSize());
-  }
-  if (node instanceof ComposerTerminalContextNode) {
-    return getAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
   }
 
   if ($isLineBreakNode(node)) {
@@ -266,6 +275,10 @@ function getExpandedAbsoluteOffsetForPoint(node: LexicalNode, pointOffset: numbe
     current = nextParent;
   }
 
+  if (node instanceof ComposerLinkNode || node instanceof ComposerTerminalContextNode) {
+    return getExpandedAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
+  }
+
   if ($isTextNode(node)) {
     if (
       node instanceof ComposerMentionNode ||
@@ -275,9 +288,6 @@ function getExpandedAbsoluteOffsetForPoint(node: LexicalNode, pointOffset: numbe
       return getExpandedAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
     }
     return offset + Math.min(pointOffset, node.getTextContentSize());
-  }
-  if (node instanceof ComposerTerminalContextNode) {
-    return getExpandedAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
   }
 
   if ($isLineBreakNode(node)) {
@@ -305,11 +315,10 @@ function findSelectionPointAtOffset(
   if (
     node instanceof ComposerMentionNode ||
     node instanceof ComposerSkillNode ||
-    node instanceof ComposerAgentMentionNode
+    node instanceof ComposerAgentMentionNode ||
+    node instanceof ComposerLinkNode ||
+    node instanceof ComposerTerminalContextNode
   ) {
-    return findSelectionPointForInlineToken(node, remainingRef);
-  }
-  if (node instanceof ComposerTerminalContextNode) {
     return findSelectionPointForInlineToken(node, remainingRef);
   }
 
@@ -454,6 +463,10 @@ function $setComposerEditorPrompt(
     }
     if (segment.type === "agent-mention") {
       paragraph.append($createComposerAgentMentionNode(segment.alias, segment.color));
+      continue;
+    }
+    if (segment.type === "link") {
+      paragraph.append($createComposerLinkNode(segment.url));
       continue;
     }
     $appendTextWithLineBreaks(paragraph, segment.text);
@@ -733,6 +746,70 @@ function ComposerInlineTokenBackspacePlugin() {
   return null;
 }
 
+// Converts a bare URL into a link chip as soon as a delimiter follows it while typing, mirroring
+// the read-only message bubble. The controlled value→editor sync never re-tokenizes user input
+// (the editor text already equals the prompt string, so the rewrite is skipped), so live chipping
+// must run as a node transform. A chip's text content is the raw URL, so the serialized prompt is
+// unchanged and selection/length stay stable.
+function ComposerLinkTransformPlugin() {
+  const [editor] = useLexicalComposerContext();
+
+  useEffect(() => {
+    // registerNodeTransform(TextNode) fires only for plain text nodes; the chip subclasses have
+    // their own node types and are skipped. The isComposerInlineTokenNode guard is defensive.
+    return editor.registerNodeTransform(TextNode, (node) => {
+      if (isComposerInlineTokenNode(node)) {
+        return;
+      }
+      const match = matchComposerLinkToken(node.getTextContent(), {
+        includeTrailingTokenAtEnd: false,
+      });
+      if (!match) {
+        return;
+      }
+      const splitNodes = node.splitText(match.start, match.end);
+      const urlNode = match.start === 0 ? splitNodes[0] : splitNodes[1];
+      urlNode?.replace($createComposerLinkNode(match.url));
+    });
+  }, [editor]);
+
+  return null;
+}
+
+// A paste whose entire payload is one bare URL chips immediately, with no trailing delimiter,
+// matching how the sent-message bubble renders it. Mixed or prose pastes fall through to the
+// default handler; ComposerLinkTransformPlugin then chips any delimiter-terminated URLs in them.
+function ComposerLinkPastePlugin() {
+  const [editor] = useLexicalComposerContext();
+
+  useEffect(() => {
+    return editor.registerCommand(
+      PASTE_COMMAND,
+      (event) => {
+        const clipboardData = event instanceof ClipboardEvent ? event.clipboardData : null;
+        const url = parseBareComposerLink(clipboardData?.getData("text/plain") ?? "");
+        if (!url) {
+          return false;
+        }
+        // Command listeners already run inside an editor update, so read the selection and insert
+        // synchronously here (a nested editor.update would be deferred, letting the default paste
+        // also run — a double insert). When there is no caret to insert at, fall through to the
+        // default paste so the URL is still pasted as text and the transform chips it later.
+        const selection = $getSelection();
+        if (!$isRangeSelection(selection)) {
+          return false;
+        }
+        event.preventDefault();
+        selection.insertNodes([$createComposerLinkNode(url)]);
+        return true;
+      },
+      COMMAND_PRIORITY_HIGH,
+    );
+  }, [editor]);
+
+  return null;
+}
+
 function ComposerPromptEditorInner({
   value,
   cursor,
@@ -995,6 +1072,8 @@ function ComposerPromptEditorInner({
         <ComposerInlineTokenArrowPlugin />
         <ComposerInlineTokenSelectionNormalizePlugin />
         <ComposerInlineTokenBackspacePlugin />
+        <ComposerLinkTransformPlugin />
+        <ComposerLinkPastePlugin />
         <HistoryPlugin />
       </div>
     </ComposerTerminalContextActionsContext.Provider>
@@ -1029,12 +1108,7 @@ export const ComposerPromptEditor = forwardRef<
     () => ({
       namespace: "t3tools-composer-editor",
       editable: true,
-      nodes: [
-        ComposerMentionNode,
-        ComposerSkillNode,
-        ComposerTerminalContextNode,
-        ComposerAgentMentionNode,
-      ],
+      nodes: [...COMPOSER_NODE_CLASSES],
       editorState: () => {
         $setComposerEditorPrompt(
           initialValueRef.current,

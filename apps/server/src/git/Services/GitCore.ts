@@ -49,6 +49,9 @@ export interface ExecuteGitResult {
 }
 
 export interface GitStatusDetails extends Omit<GitStatusResult, "pr"> {
+  isRepo: boolean;
+  hasOriginRemote: boolean;
+  isDefaultBranch: boolean;
   upstreamRef: string | null;
 }
 

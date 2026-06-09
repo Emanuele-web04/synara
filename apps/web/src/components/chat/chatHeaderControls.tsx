@@ -16,7 +16,7 @@ import { forwardRef, type ComponentProps, type ReactNode } from "react";
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@t3tools/shared/desktopChrome";
 
 import { CentralIcon } from "~/lib/central-icons";
-import type { LucideIcon } from "~/lib/icons";
+import { Columns2Icon, type LucideIcon, Rows3Icon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
@@ -47,7 +47,7 @@ export const CHAT_SURFACE_HEADER_PADDING_X_CLASS = "px-3 sm:px-5";
 
 /**
  * Bottom hairline shared by every chat-surface chrome bar (chat header, workspace
- * header, dock pane + tab strip headers, diff panel header, single-thread skeleton).
+ * header, dock pane + tab strip headers, diff panel header).
  * Implemented as the `.chat-surface-divider` component class (a 1px background gradient,
  * see index.css) rather than a CSS border: it reads from the SAME `--app-surface-divider`
  * token as the vertical sidebar↔chat seam, and — because it's a gradient — the seam corner
@@ -60,7 +60,7 @@ export const CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME = "chat-surface-divider";
 /**
  * Standard chat-surface chrome-bar row: the shared flex baseline + fixed height + bottom
  * hairline that the simple headers all repeat (empty-state chat header, dock pane header,
- * right-dock tab strip, single-thread skeleton). Call sites add only their own gap/padding
+ * right-dock tab strip). Call sites add only their own gap/padding
  * and extras (drag-region, traffic-light gutter). Headers with bespoke layout (the main
  * chat header with its split toolbar, the diff panel header with `justify-between`) compose
  * {@link CHAT_SURFACE_HEADER_HEIGHT_CLASS} + {@link CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME}
@@ -107,7 +107,7 @@ export const CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME =
  */
 export const CHAT_SURFACE_CHIP_CLASS_NAME = cn(
   CHAT_HEADER_CONTROL_CLASS_NAME,
-  "gap-1.5 border-0 px-2 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors",
+  "gap-1.5 border-0 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors",
   CHAT_SURFACE_CONTROL_IDLE_TEXT_CLASS_NAME,
   CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
 );
@@ -291,6 +291,57 @@ export function ChatHeaderSplitGroup({
 /** Hairline separator between a split-button's leading and trailing controls. */
 export function ChatHeaderSplitDivider() {
   return <div aria-hidden="true" className="w-px self-stretch bg-border" />;
+}
+
+export type DiffRenderMode = "stacked" | "split";
+
+/** Stacked/split diff layout toggle — same chrome as the git split-button group. */
+export function ChatHeaderDiffRenderModePicker(props: {
+  mode: DiffRenderMode;
+  onChange: (mode: DiffRenderMode) => void;
+  className?: string;
+}) {
+  return (
+    <ChatHeaderSplitGroup label="Diff view mode" className={cn("shrink-0", props.className)}>
+      <Button
+        type="button"
+        variant="chrome-outline"
+        size="icon-xs"
+        aria-label="Stacked diff view"
+        aria-pressed={props.mode === "stacked"}
+        className={cn(
+          CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
+          CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
+          CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
+          props.mode === "stacked" && CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
+        )}
+        onClick={() => {
+          props.onChange("stacked");
+        }}
+      >
+        <Rows3Icon className={CHAT_SURFACE_CHIP_ICON_CLASS_NAME} />
+      </Button>
+      <ChatHeaderSplitDivider />
+      <Button
+        type="button"
+        variant="chrome-outline"
+        size="icon-xs"
+        aria-label="Split diff view"
+        aria-pressed={props.mode === "split"}
+        className={cn(
+          CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
+          CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
+          CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
+          props.mode === "split" && CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
+        )}
+        onClick={() => {
+          props.onChange("split");
+        }}
+      >
+        <Columns2Icon className={CHAT_SURFACE_CHIP_ICON_CLASS_NAME} />
+      </Button>
+    </ChatHeaderSplitGroup>
+  );
 }
 
 /** Visual treatment shared across the header row. */

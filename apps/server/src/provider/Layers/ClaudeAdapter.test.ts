@@ -1458,6 +1458,70 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("treats an external SIGTERM (exit code 143) as a benign suspend", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+
+      const runtimeEventsFiber = Effect.runFork(
+        Stream.runForEach(adapter.streamEvents, (event) =>
+          Effect.sync(() => {
+            runtimeEvents.push(event);
+          }),
+        ),
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      const turn = yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "hello",
+        attachments: [],
+      });
+
+      // The Claude SDK surfaces an external SIGTERM as this error string.
+      harness.query.fail(new Error("Claude Code process exited with code 143"));
+
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      runtimeEventsFiber.interruptUnsafe();
+
+      // A graceful termination must not surface a runtime.error toast.
+      assert.equal(
+        runtimeEvents.some((event) => event.type === "runtime.error"),
+        false,
+      );
+
+      const turnCompleted = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.equal(turnCompleted?.type, "turn.completed");
+      if (turnCompleted?.type === "turn.completed") {
+        assert.equal(String(turnCompleted.turnId), String(turn.turnId));
+        assert.equal(turnCompleted.payload.state, "interrupted");
+        assert.equal(
+          turnCompleted.payload.errorMessage,
+          "Claude runtime stopped and will resume on your next message.",
+        );
+      }
+
+      // The session is torn down so the next message resumes from the cursor.
+      assert.equal(
+        runtimeEvents.some((event) => event.type === "session.exited"),
+        true,
+      );
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+      assert.equal(harness.query.closeCalls, 1);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("stopSession does not throw into the SDK prompt consumer", () => {
     // The SDK consumes user messages via `for await (... of prompt)`.
     // Stopping a session must end that loop cleanly — not throw an error.

@@ -3,11 +3,12 @@
 // Layer: Chat transcript shell
 // Depends on: MessagesTimeline and ChatView's list-owned scroll contract.
 
-import { type MessageId, type ThreadId, type TurnId } from "@t3tools/contracts";
+import { type MessageId, type ThreadId, type ThreadMarker, type TurnId } from "@t3tools/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   memo,
   type ComponentProps,
+  type CSSProperties,
   type MouseEventHandler,
   type PointerEventHandler,
   type RefObject,
@@ -20,7 +21,7 @@ import { ArrowDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ChatEmptyStateHero } from "./ChatEmptyStateHero";
-import { MessagesTimeline } from "./MessagesTimeline";
+import { MessagesTimeline, type MessagesTimelineController } from "./MessagesTimeline";
 import { AgentActivityDetailView } from "./AgentActivityDetailView";
 import type { AgentActivityDetail } from "./agentActivity.logic";
 
@@ -40,6 +41,10 @@ interface ChatTranscriptPaneProps {
   isWorking: boolean;
   followLiveOutput: boolean;
   listRef: RefObject<LegendListRef | null>;
+  timelineControllerRef?: RefObject<MessagesTimelineController | null>;
+  pinnedMessageIds?: ReadonlySet<MessageId>;
+  onTogglePinMessage?: (messageId: MessageId) => void;
+  threadMarkers?: readonly ThreadMarker[];
   markdownCwd: string | undefined;
   onExpandTimelineImage: (preview: ExpandedImagePreview) => void;
   onMessagesClickCapture: MouseEventHandler<HTMLDivElement>;
@@ -87,6 +92,10 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   isWorking,
   followLiveOutput,
   listRef,
+  timelineControllerRef,
+  pinnedMessageIds,
+  onTogglePinMessage,
+  threadMarkers,
   markdownCwd,
   onExpandTimelineImage,
   onMessagesClickCapture,
@@ -117,6 +126,10 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   turnDiffSummaryByAssistantMessageId,
   workspaceRoot,
 }: ChatTranscriptPaneProps) {
+  const scrollButtonFrameStyle: CSSProperties | undefined = contentInsetRightPx
+    ? { paddingRight: contentInsetRightPx }
+    : undefined;
+
   return (
     <div
       data-chat-transcript-pane="true"
@@ -148,6 +161,10 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             activeTurnInProgress={activeTurnInProgress}
             activeTurnStartedAt={activeTurnStartedAt}
             listRef={listRef}
+            {...(timelineControllerRef ? { controllerRef: timelineControllerRef } : {})}
+            {...(pinnedMessageIds ? { pinnedMessageIds } : {})}
+            {...(onTogglePinMessage ? { onTogglePinMessage } : {})}
+            {...(threadMarkers ? { threadMarkers } : {})}
             timelineEntries={timelineEntries}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
             onOpenTurnDiff={onOpenTurnDiff}
@@ -176,7 +193,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             workspaceRoot={workspaceRoot}
             bottomContentInsetPx={bottomContentInsetPx}
             contentInsetRightPx={contentInsetRightPx}
-            onOpenAgentActivity={onOpenAgentActivity}
+            {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
             emptyStateContent={<ChatEmptyStateHero projectName={emptyStateProjectName} />}
             {...(expandedWorkGroups ? { expandedWorkGroups } : {})}
             {...(onToggleWorkGroup ? { onToggleWorkGroup } : {})}
@@ -184,7 +201,12 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
         )}
 
         {scrollButtonVisible && !agentActivityDetail ? (
-          <div className="pointer-events-none absolute bottom-6 left-1/2 z-30 flex -translate-x-1/2 justify-center py-1">
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-6 z-30 flex justify-center py-1"
+            // Follow the same right inset as transcript rows so the button centers in the
+            // visible chat column while the side panel overlays the viewport edge.
+            style={scrollButtonFrameStyle}
+          >
             <button
               type="button"
               onClick={onScrollToBottom}

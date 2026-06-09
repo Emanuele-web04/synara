@@ -3,7 +3,6 @@ import "../index.css";
 import {
   EventId,
   MessageId,
-  ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
   ThreadId,
@@ -11,11 +10,9 @@ import {
   type OrchestrationEvent,
   type OrchestrationReadModel,
   type OrchestrationShellStreamEvent,
-  type OrchestrationShellSnapshot,
   type OrchestrationThread,
   type ServerConfig,
   type WsWelcomePayload,
-  WS_CHANNELS,
   WS_METHODS,
 } from "@t3tools/contracts";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
@@ -27,8 +24,17 @@ import { render } from "vitest-browser-react";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { getRouter } from "../router";
 import { useStore } from "../store";
+import {
+  createShellSnapshotFromReadModel,
+  flattenEffectRpcRequestPayload,
+  readEffectRpcClientMessage,
+  sendEffectRpcChunk,
+  sendEffectRpcExit,
+  type EffectRpcWebSocketClient,
+} from "../test/effectRpcWebSocketMock";
 import { getThreadFromState } from "../threadDerivation";
 import { useWorkspaceStore } from "../workspaceStore";
+import { resetWsNativeApiForTest } from "../wsNativeApi";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-root-browser-test");
 const OTHER_THREAD_ID = ThreadId.makeUnsafe("thread-other-browser-test");
@@ -42,8 +48,9 @@ interface TestFixture {
 }
 
 let fixture: TestFixture;
-let wsClient: { send: (data: string) => void } | null = null;
-let pushSequence = 1;
+let wsClient: EffectRpcWebSocketClient | null = null;
+let shellStreamRequestId: string | null = null;
+const threadStreamRequestIdByThreadId = new Map<ThreadId, string>();
 let delayNextThreadSnapshot = false;
 let subscribeShellRequestCount = 0;
 const subscribeThreadRequestCountById = new Map<ThreadId, number>();
@@ -155,59 +162,6 @@ function buildFixture(): TestFixture {
   };
 }
 
-function createShellSnapshotFromFixtureSnapshot(
-  snapshot: OrchestrationReadModel,
-): OrchestrationShellSnapshot {
-  return {
-    snapshotSequence: snapshot.snapshotSequence,
-    projects: snapshot.projects
-      .filter((project) => project.deletedAt === null)
-      .map((project) => ({
-        id: project.id,
-        kind: project.kind,
-        title: project.title,
-        workspaceRoot: project.workspaceRoot,
-        defaultModelSelection: project.defaultModelSelection,
-        scripts: project.scripts,
-        createdAt: project.createdAt,
-        updatedAt: project.updatedAt,
-      })),
-    threads: snapshot.threads
-      .filter((thread) => thread.deletedAt === null)
-      .map((thread) => ({
-        id: thread.id,
-        projectId: thread.projectId,
-        title: thread.title,
-        modelSelection: thread.modelSelection,
-        interactionMode: thread.interactionMode,
-        runtimeMode: thread.runtimeMode,
-        envMode: thread.envMode,
-        branch: thread.branch,
-        worktreePath: thread.worktreePath,
-        associatedWorktreePath: thread.associatedWorktreePath ?? null,
-        associatedWorktreeBranch: thread.associatedWorktreeBranch ?? null,
-        associatedWorktreeRef: thread.associatedWorktreeRef ?? null,
-        parentThreadId: thread.parentThreadId ?? null,
-        subagentAgentId: thread.subagentAgentId ?? null,
-        subagentNickname: thread.subagentNickname ?? null,
-        subagentRole: thread.subagentRole ?? null,
-        forkSourceThreadId: thread.forkSourceThreadId ?? null,
-        sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
-        latestTurn: thread.latestTurn,
-        latestUserMessageAt: thread.latestUserMessageAt ?? null,
-        hasPendingApprovals: thread.hasPendingApprovals ?? false,
-        hasPendingUserInput: thread.hasPendingUserInput ?? false,
-        hasActionableProposedPlan: thread.hasActionableProposedPlan ?? false,
-        createdAt: thread.createdAt,
-        updatedAt: thread.updatedAt,
-        archivedAt: thread.archivedAt ?? null,
-        handoff: thread.handoff ?? null,
-        session: thread.session,
-      })),
-    updatedAt: snapshot.updatedAt,
-  };
-}
-
 function getThreadDetailFromFixtureSnapshot(threadId: ThreadId): OrchestrationThread {
   const thread = fixture.snapshot.threads.find((entry) => entry.id === threadId);
   if (!thread) {
@@ -216,7 +170,14 @@ function getThreadDetailFromFixtureSnapshot(threadId: ThreadId): OrchestrationTh
   return thread;
 }
 
+function findThreadDetailFromFixtureSnapshot(threadId: ThreadId): OrchestrationThread | null {
+  return fixture.snapshot.threads.find((entry) => entry.id === threadId) ?? null;
+}
+
 function resolveWsRpc(tag: string, body?: unknown): unknown {
+  if (tag === ORCHESTRATION_WS_METHODS.getShellSnapshot) {
+    return createShellSnapshotFromReadModel(fixture.snapshot);
+  }
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
   }
@@ -257,77 +218,74 @@ function resolveWsRpc(tag: string, body?: unknown): unknown {
 const worker = setupWorker(
   wsLink.addEventListener("connection", ({ client }) => {
     wsClient = client;
-    pushSequence = 1;
-    client.send(
-      JSON.stringify({
-        type: "push",
-        sequence: pushSequence++,
-        channel: WS_CHANNELS.serverWelcome,
-        data: fixture.welcome,
-      }),
-    );
     client.addEventListener("message", (event) => {
       if (typeof event.data !== "string") {
         return;
       }
-      let request: { id: string; body: { _tag: string } };
-      try {
-        request = JSON.parse(event.data);
-      } catch {
+      const parsed = readEffectRpcClientMessage(client, event.data);
+      if (parsed.kind !== "request") {
         return;
       }
-      const method = request.body?._tag;
-      if (typeof method !== "string") {
-        return;
-      }
+      const request = parsed.request;
+      const requestBody = flattenEffectRpcRequestPayload(request.tag, request.payload);
+      const method = requestBody._tag;
       if (method === ORCHESTRATION_WS_METHODS.subscribeShell) {
         subscribeShellRequestCount += 1;
+        shellStreamRequestId = request.id;
+        sendEffectRpcChunk(client, request.id, {
+          kind: "snapshot",
+          snapshot: createShellSnapshotFromReadModel(fixture.snapshot),
+        });
+        return;
       }
-      client.send(
-        JSON.stringify({
-          id: request.id,
-          result: resolveWsRpc(method, request.body),
-        }),
-      );
-      if (method === ORCHESTRATION_WS_METHODS.subscribeShell) {
-        client.send(
-          JSON.stringify({
-            type: "push",
-            sequence: pushSequence++,
-            channel: ORCHESTRATION_WS_CHANNELS.shellEvent,
-            data: {
-              kind: "snapshot",
-              snapshot: createShellSnapshotFromFixtureSnapshot(fixture.snapshot),
-            },
-          }),
-        );
+      if (method === WS_METHODS.subscribeServerLifecycle) {
+        sendEffectRpcChunk(client, request.id, {
+          type: "welcome",
+          payload: fixture.welcome,
+        });
+        return;
       }
-      if (method === ORCHESTRATION_WS_METHODS.subscribeThread && "threadId" in request.body) {
-        const threadId = request.body.threadId as ThreadId;
+      if (method === WS_METHODS.subscribeServerConfig) {
+        sendEffectRpcChunk(client, request.id, {
+          type: "snapshot",
+          config: fixture.serverConfig,
+        });
+        return;
+      }
+      if (
+        method === WS_METHODS.subscribeServerProviderStatuses ||
+        method === WS_METHODS.subscribeServerSettings ||
+        method === WS_METHODS.subscribeTerminalEvents ||
+        method === WS_METHODS.subscribeOrchestrationDomainEvents
+      ) {
+        return;
+      }
+      if (method === ORCHESTRATION_WS_METHODS.subscribeThread && "threadId" in requestBody) {
+        const threadId = requestBody.threadId as ThreadId;
         subscribeThreadRequestCountById.set(
           threadId,
           (subscribeThreadRequestCountById.get(threadId) ?? 0) + 1,
         );
         subscribeThreadRequests.push(threadId);
+        threadStreamRequestIdByThreadId.set(threadId, request.id);
         if (delayNextThreadSnapshot) {
           delayNextThreadSnapshot = false;
           return;
         }
-        client.send(
-          JSON.stringify({
-            type: "push",
-            sequence: pushSequence++,
-            channel: ORCHESTRATION_WS_CHANNELS.threadEvent,
-            data: {
-              kind: "snapshot",
-              snapshot: {
-                snapshotSequence: fixture.snapshot.snapshotSequence,
-                thread: getThreadDetailFromFixtureSnapshot(threadId),
-              },
-            },
-          }),
-        );
+        const thread = findThreadDetailFromFixtureSnapshot(threadId);
+        if (!thread) {
+          return;
+        }
+        sendEffectRpcChunk(client, request.id, {
+          kind: "snapshot",
+          snapshot: {
+            snapshotSequence: fixture.snapshot.snapshotSequence,
+            thread,
+          },
+        });
+        return;
       }
+      sendEffectRpcExit(client, request.id, resolveWsRpc(method, requestBody));
     });
   }),
   http.get("*/attachments/:attachmentId", () => new HttpResponse(null, { status: 204 })),
@@ -377,51 +335,41 @@ function sendThreadEventPush(event: OrchestrationEvent) {
   if (!wsClient) {
     throw new Error("WebSocket client not connected");
   }
-  wsClient.send(
-    JSON.stringify({
-      type: "push",
-      sequence: pushSequence++,
-      channel: ORCHESTRATION_WS_CHANNELS.threadEvent,
-      data: {
-        kind: "event",
-        event,
-      },
-    }),
-  );
+  const requestId = threadStreamRequestIdByThreadId.get(event.aggregateId as ThreadId);
+  if (!requestId) {
+    throw new Error(`Thread stream is not connected for ${event.aggregateId}`);
+  }
+  sendEffectRpcChunk(wsClient, requestId, {
+    kind: "event",
+    event,
+  });
 }
 
 function sendThreadSnapshotPush(threadId: ThreadId, snapshotSequence: number) {
   if (!wsClient) {
     throw new Error("WebSocket client not connected");
   }
-  wsClient.send(
-    JSON.stringify({
-      type: "push",
-      sequence: pushSequence++,
-      channel: ORCHESTRATION_WS_CHANNELS.threadEvent,
-      data: {
-        kind: "snapshot",
-        snapshot: {
-          snapshotSequence,
-          thread: getThreadDetailFromFixtureSnapshot(threadId),
-        },
-      },
-    }),
-  );
+  const requestId = threadStreamRequestIdByThreadId.get(threadId);
+  if (!requestId) {
+    throw new Error(`Thread stream is not connected for ${threadId}`);
+  }
+  sendEffectRpcChunk(wsClient, requestId, {
+    kind: "snapshot",
+    snapshot: {
+      snapshotSequence,
+      thread: getThreadDetailFromFixtureSnapshot(threadId),
+    },
+  });
 }
 
 function sendShellEventPush(event: OrchestrationShellStreamEvent) {
   if (!wsClient) {
     throw new Error("WebSocket client not connected");
   }
-  wsClient.send(
-    JSON.stringify({
-      type: "push",
-      sequence: pushSequence++,
-      channel: ORCHESTRATION_WS_CHANNELS.shellEvent,
-      data: event,
-    }),
-  );
+  if (!shellStreamRequestId) {
+    throw new Error("Shell stream is not connected");
+  }
+  sendEffectRpcChunk(wsClient, shellStreamRequestId, event);
 }
 
 describe("EventRouter scoped orchestration sync", () => {
@@ -439,9 +387,11 @@ describe("EventRouter scoped orchestration sync", () => {
   });
 
   beforeEach(() => {
+    resetWsNativeApiForTest();
     fixture = buildFixture();
     document.body.innerHTML = "";
-    pushSequence = 1;
+    shellStreamRequestId = null;
+    threadStreamRequestIdByThreadId.clear();
     delayNextThreadSnapshot = false;
     localStorage.clear();
     useComposerDraftStore.setState({
@@ -487,6 +437,7 @@ describe("EventRouter scoped orchestration sync", () => {
   });
 
   afterEach(() => {
+    resetWsNativeApiForTest();
     document.body.innerHTML = "";
   });
 
@@ -666,7 +617,7 @@ describe("EventRouter scoped orchestration sync", () => {
         kind: "thread-upserted",
         sequence: 3,
         thread: {
-          ...createShellSnapshotFromFixtureSnapshot(fixture.snapshot).threads[0]!,
+          ...createShellSnapshotFromReadModel(fixture.snapshot).threads[0]!,
           updatedAt: "2026-03-04T12:00:06.000Z",
           session: sessionReady.payload.session,
         },
@@ -1021,7 +972,7 @@ describe("EventRouter scoped orchestration sync", () => {
       sendShellEventPush({
         kind: "thread-upserted",
         sequence: 2,
-        thread: createShellSnapshotFromFixtureSnapshot(fixture.snapshot).threads.find(
+        thread: createShellSnapshotFromReadModel(fixture.snapshot).threads.find(
           (thread) => thread.id === draftThreadId,
         )!,
       });

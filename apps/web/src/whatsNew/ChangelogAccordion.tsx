@@ -8,6 +8,7 @@
 
 import { useState } from "react";
 
+import { pluralize } from "@t3tools/shared/text";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { cn } from "~/lib/utils";
@@ -66,7 +67,7 @@ function ChangelogAccordionRow({
   const [open, setOpen] = useState(defaultOpen);
 
   const featureCount = entry.features.length;
-  const featureLabel = featureCount === 1 ? "1 update" : `${featureCount} updates`;
+  const featureLabel = `${featureCount} ${pluralize(featureCount, "update")}`;
 
   return (
     <li className={cn(!isLast && "border-b border-border/40")}>

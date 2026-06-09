@@ -12,9 +12,14 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import {
   defaultTerminalTitleForCliKind,
   consumeTerminalIdentityInput,
-  deriveTerminalOutputIdentity,
 } from "@t3tools/shared/terminalThreads";
 import { describeErrorMessage } from "@t3tools/shared/errorMessages";
+import {
+  TERMINAL_MAX_COLS,
+  TERMINAL_MAX_ROWS,
+  TERMINAL_MIN_COLS,
+  TERMINAL_MIN_ROWS,
+} from "@t3tools/contracts";
 import type { TerminalSessionSnapshot } from "@t3tools/contracts";
 import { Terminal } from "@xterm/xterm";
 
@@ -140,7 +145,6 @@ function scheduleFontSettleRefit(entry: TerminalRuntimeEntry): void {
 
 function resetForSnapshotReplay(entry: TerminalRuntimeEntry): void {
   entry.titleInputBuffer = "";
-  entry.outputIdentityBuffer = "";
   entry.linkMatchCache.clear();
   clearPendingWrites(entry);
   entry.terminal.write("\u001bc");
@@ -152,6 +156,25 @@ function snapshotReplayPayload(snapshot: TerminalSessionSnapshot): string {
 
 function snapshotHasReplayPayload(snapshot: TerminalSessionSnapshot): boolean {
   return snapshot.history.length > 0 || (snapshot.replayPreamble?.length ?? 0) > 0;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+// Fit xterm to its container, then clamp the result into the PTY contract bounds.
+// An ultrawide viewport at a small font can legitimately propose more than the
+// old 400-column cap, and a fit before fonts settle can momentarily report a
+// glitched (tiny char width -> huge column count) size. Forcing xterm back into
+// range keeps the open/resize payloads valid — so the terminal always opens —
+// and keeps the rendered grid consistent with what the backend PTY believes.
+function fitTerminal(entry: TerminalRuntimeEntry): void {
+  entry.fitAddon.fit();
+  const cols = clamp(entry.terminal.cols, TERMINAL_MIN_COLS, TERMINAL_MAX_COLS);
+  const rows = clamp(entry.terminal.rows, TERMINAL_MIN_ROWS, TERMINAL_MAX_ROWS);
+  if (cols !== entry.terminal.cols || rows !== entry.terminal.rows) {
+    entry.terminal.resize(cols, rows);
+  }
 }
 
 function buildOpenInput(entry: TerminalRuntimeEntry) {
@@ -171,9 +194,6 @@ function replaySnapshot(
   onParsed?: () => void,
 ): void {
   resetForSnapshotReplay(entry);
-  if (snapshot.history.length > 0) {
-    maybePromoteTerminalIdentityFromOutput(entry, snapshot.history);
-  }
   const payload = snapshotReplayPayload(snapshot);
   if (payload.length > 0) {
     setRuntimeStatus(entry, "replaying");
@@ -325,7 +345,7 @@ function runTerminalResize(
     )?.clearTextureAtlas?.();
   }
 
-  entry.fitAddon.fit();
+  fitTerminal(entry);
   if (wasAtBottom) {
     entry.terminal.scrollToBottom();
   } else {
@@ -569,24 +589,6 @@ function maybeLoadWebglAddon(entry: TerminalRuntimeEntry): void {
   });
 }
 
-function maybePromoteTerminalIdentityFromOutput(entry: TerminalRuntimeEntry, output: string): void {
-  if (entry.terminalCliKind !== null) {
-    return;
-  }
-  const nextOutputBuffer = `${entry.outputIdentityBuffer}${output}`;
-  const outputIdentity =
-    deriveTerminalOutputIdentity(output) ?? deriveTerminalOutputIdentity(nextOutputBuffer);
-  entry.outputIdentityBuffer = nextOutputBuffer.slice(-8192);
-  if (!outputIdentity?.cliKind) {
-    return;
-  }
-  entry.terminalCliKind = outputIdentity.cliKind;
-  entry.callbacks.onTerminalMetadataChange(entry.terminalId, {
-    cliKind: outputIdentity.cliKind,
-    label: outputIdentity.title,
-  });
-}
-
 function applyInitialVisualResize(entry: TerminalRuntimeEntry): void {
   if (!entry.viewState.isVisible) return;
 
@@ -799,7 +801,6 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     fitAddon,
     searchAddon,
     webglAddon: null,
-    outputIdentityBuffer: "",
     titleInputBuffer: "",
     hasHandledExit: false,
     runtimeStatus: "connecting",
@@ -947,20 +948,14 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
 
               if (match.kind === "url") {
                 void api.shell.openExternal(match.text).catch((error) => {
-                  writeSystemMessage(
-                    terminal,
-                    describeErrorMessage(error, "Unable to open link"),
-                  );
+                  writeSystemMessage(terminal, describeErrorMessage(error, "Unable to open link"));
                 });
                 return;
               }
 
               const target = resolvePathLinkTarget(match.text, entry.cwd);
               void openInPreferredEditor(api, target).catch((error) => {
-                writeSystemMessage(
-                  terminal,
-                  describeErrorMessage(error, "Unable to open path"),
-                );
+                writeSystemMessage(terminal, describeErrorMessage(error, "Unable to open path"));
               });
             },
           })),
@@ -973,11 +968,12 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     terminal.onData((data) => {
       const nextIdentityState = consumeTerminalIdentityInput(entry.titleInputBuffer, data);
       entry.titleInputBuffer = nextIdentityState.buffer;
-      if (nextIdentityState.identity?.cliKind && entry.terminalCliKind === null) {
-        entry.terminalCliKind = nextIdentityState.identity.cliKind;
+      const submittedIdentity = nextIdentityState.identity;
+      if (submittedIdentity && (submittedIdentity.cliKind || entry.terminalCliKind !== null)) {
+        entry.terminalCliKind = submittedIdentity.cliKind;
         entry.callbacks.onTerminalMetadataChange(entry.terminalId, {
-          cliKind: nextIdentityState.identity.cliKind,
-          label: nextIdentityState.identity.title,
+          cliKind: submittedIdentity.cliKind,
+          label: submittedIdentity.title,
         });
       }
       const api = readNativeApi();
@@ -985,10 +981,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
       void api.terminal
         .write({ threadId: entry.threadId, terminalId: entry.terminalId, data })
         .catch((error) =>
-          writeSystemMessage(
-            terminal,
-            describeErrorMessage(error, "Terminal write failed"),
-          ),
+          writeSystemMessage(terminal, describeErrorMessage(error, "Terminal write failed")),
         );
     }),
   );
@@ -1012,7 +1005,6 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
       if (event.type === "output") {
         setRuntimeStatus(entry, "ready");
         entry.outputEventVersion += 1;
-        maybePromoteTerminalIdentityFromOutput(entry, event.data);
         scheduleWrite(entry, event.data, event.byteLength ?? terminalByteLength(event.data));
         return;
       }
@@ -1031,7 +1023,6 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
 
       if (event.type === "cleared") {
         entry.titleInputBuffer = "";
-        entry.outputIdentityBuffer = "";
         entry.linkMatchCache.clear();
         clearPendingWrites(entry);
         terminal.clear();
@@ -1040,11 +1031,11 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
       }
 
       if (event.type === "activity") {
-        if (event.cliKind && entry.terminalCliKind !== event.cliKind) {
+        if (entry.terminalCliKind !== event.cliKind) {
           entry.terminalCliKind = event.cliKind;
           entry.callbacks.onTerminalMetadataChange(entry.terminalId, {
             cliKind: event.cliKind,
-            label: defaultTerminalTitleForCliKind(event.cliKind),
+            label: event.cliKind ? defaultTerminalTitleForCliKind(event.cliKind) : "Terminal",
           });
         }
         entry.callbacks.onTerminalActivityChange(entry.terminalId, {
@@ -1093,7 +1084,7 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
   const api = readNativeApi();
   if (!api || entry.opened) return;
 
-  entry.fitAddon.fit();
+  fitTerminal(entry);
   entry.lastSentResize = null;
   entry.opened = true;
   setRuntimeStatus(entry, "connecting");
@@ -1146,10 +1137,7 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
       if (entry.disposed) return;
       entry.opened = false;
       setRuntimeStatus(entry, "error");
-      writeSystemMessage(
-        entry.terminal,
-        describeErrorMessage(error, "Failed to open terminal"),
-      );
+      writeSystemMessage(entry.terminal, describeErrorMessage(error, "Failed to open terminal"));
     });
 }
 

@@ -344,6 +344,30 @@ function interruptionMessageFromClaudeCause(cause: Cause.Cause<Error>): string {
   return isClaudeInterruptedMessage(message) ? "Claude runtime interrupted." : message;
 }
 
+// SIGINT (130) and SIGTERM (143) are graceful stop requests, not crashes. When the
+// Claude subprocess receives one from outside our own stop path (an idle reaper, the
+// OS, or a parent process tearing the process group down), the SDK stream throws
+// "Claude Code process exited with code 143". Treat that as a suspend-and-resume,
+// not a hard failure with an error toast. SIGKILL (137) is intentionally excluded:
+// it usually signals an OOM/forced kill that is worth surfacing.
+const CLAUDE_BENIGN_TERMINATION_EXIT_CODES = new Set([130, 143]);
+
+const CLAUDE_BENIGN_TERMINATION_MESSAGE =
+  "Claude runtime stopped and will resume on your next message.";
+
+function isClaudeBenignTerminationMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  const exitCode = normalized.match(/exited with code (\d+)/)?.[1];
+  if (exitCode !== undefined) {
+    return CLAUDE_BENIGN_TERMINATION_EXIT_CODES.has(Number.parseInt(exitCode, 10));
+  }
+  return normalized.includes("signal sigterm") || normalized.includes("signal sigint");
+}
+
+function isClaudeBenignTerminationCause(cause: Cause.Cause<Error>): boolean {
+  return normalizeClaudeStreamMessages(cause).some(isClaudeBenignTerminationMessage);
+}
+
 function resultErrorsText(result: SDKResultMessage): string {
   return "errors" in result && Array.isArray(result.errors)
     ? result.errors.join(" ").toLowerCase()
@@ -2794,6 +2818,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 "interrupted",
                 interruptionMessageFromClaudeCause(exit.cause),
               );
+            }
+          } else if (isClaudeBenignTerminationCause(exit.cause)) {
+            // External SIGTERM/SIGINT: a graceful stop, not a crash. Suspend the turn
+            // without an error toast so the session resumes on the next message.
+            yield* Effect.logInfo("claude.session.benign_termination", {
+              threadId: context.session.threadId,
+              detail: messageFromClaudeStreamCause(exit.cause, "Claude runtime terminated."),
+            });
+            if (context.turnState) {
+              yield* completeTurn(context, "interrupted", CLAUDE_BENIGN_TERMINATION_MESSAGE);
             }
           } else {
             const message = messageFromClaudeStreamCause(

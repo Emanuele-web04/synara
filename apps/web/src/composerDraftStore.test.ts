@@ -293,6 +293,17 @@ describe("composerDraftStore clearComposerContent", () => {
     expect(draft).toBeUndefined();
     expect(revokeSpy).not.toHaveBeenCalledWith("blob:optimistic");
   });
+
+  it("clears selected provider references with composer content", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setPrompt(threadId, "Use @linear and /check-code");
+    store.setSkills(threadId, [{ name: "check-code", path: "/skills/check-code" }]);
+    store.setMentions(threadId, [{ name: "linear", path: "plugin://linear" }]);
+    store.clearComposerContent(threadId);
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
 });
 
 describe("composerDraftStore copyTransferableComposerState", () => {
@@ -315,6 +326,12 @@ describe("composerDraftStore copyTransferableComposerState", () => {
 
     useComposerDraftStore.getState().setPrompt(sourceThreadId, copiedPrompt);
     useComposerDraftStore.getState().setTerminalContexts(sourceThreadId, [sourceContext]);
+    useComposerDraftStore
+      .getState()
+      .setSkills(sourceThreadId, [{ name: "check-code", path: "/skills/check-code" }]);
+    useComposerDraftStore
+      .getState()
+      .setMentions(sourceThreadId, [{ name: "linear", path: "plugin://linear" }]);
 
     useComposerDraftStore.getState().copyTransferableComposerState(sourceThreadId, targetThreadId);
 
@@ -332,6 +349,8 @@ describe("composerDraftStore copyTransferableComposerState", () => {
           text: sourceContext.text,
         }),
       ],
+      skills: [{ name: "check-code", path: "/skills/check-code" }],
+      mentions: [{ name: "linear", path: "plugin://linear" }],
     });
   });
 
@@ -359,6 +378,53 @@ describe("composerDraftStore copyTransferableComposerState", () => {
       },
       activeProvider: "claudeAgent",
     });
+  });
+});
+
+describe("composerDraftStore provider references", () => {
+  const threadId = ThreadId.makeUnsafe("thread-provider-refs");
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("persists selected plugin mentions with regular composer drafts", () => {
+    const selectedSkill = { name: "check-code", path: "/skills/check-code" };
+    const selectedMention = { name: "linear", path: "plugin://linear" };
+    const store = useComposerDraftStore.getState();
+
+    store.setPrompt(threadId, "Use @linear with /check-code");
+    store.setSkills(threadId, [selectedSkill]);
+    store.setMentions(threadId, [selectedMention]);
+
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+      draftsByThreadId?: Record<
+        string,
+        {
+          skills?: Array<Record<string, unknown>>;
+          mentions?: Array<Record<string, unknown>>;
+        }
+      >;
+    };
+
+    expect(persistedState.draftsByThreadId?.[threadId]?.skills).toEqual([selectedSkill]);
+    expect(persistedState.draftsByThreadId?.[threadId]?.mentions).toEqual([selectedMention]);
+
+    const mergedState = persistApi
+      .getOptions()
+      .merge(persistedState, useComposerDraftStore.getInitialState());
+
+    expect(mergedState.draftsByThreadId[threadId]?.skills).toEqual([selectedSkill]);
+    expect(mergedState.draftsByThreadId[threadId]?.mentions).toEqual([selectedMention]);
   });
 });
 
@@ -1350,11 +1416,15 @@ describe("composerDraftStore queued follow-ups", () => {
     const store = useComposerDraftStore.getState();
 
     store.setPrompt(threadId, "temporary prompt");
+    store.setSkills(threadId, [{ name: "check-code", path: "/skills/check-code" }]);
+    store.setMentions(threadId, [{ name: "linear", path: "plugin://linear" }]);
     store.enqueueQueuedTurn(threadId, makeQueuedTurn("queued-1"));
     store.clearComposerContent(threadId);
 
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toMatchObject({
       prompt: "",
+      skills: [],
+      mentions: [],
       queuedTurns: [makeQueuedTurn("queued-1")],
     });
   });

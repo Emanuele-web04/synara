@@ -6,7 +6,14 @@
 import { ThreadId, type NativeApi } from "@t3tools/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { checkpointDiffQueryOptions, providerQueryKeys } from "./providerReactQuery";
+import {
+  CHECKPOINT_DIFF_PENDING_REFETCH_INTERVAL_MS,
+  CHECKPOINT_DIFF_PENDING_REFETCH_MAX_ATTEMPTS,
+  checkpointDiffQueryOptions,
+  isCheckpointTemporarilyUnavailable,
+  providerQueryKeys,
+  resolveCheckpointDiffQueryDisplayState,
+} from "./providerReactQuery";
 import * as nativeApi from "../nativeApi";
 
 const threadId = ThreadId.makeUnsafe("thread-id");
@@ -97,7 +104,7 @@ describe("checkpointDiffQueryOptions", () => {
     expect(getFullThreadDiff).not.toHaveBeenCalled();
   });
 
-  it("uses explicit full thread diff API when range starts from zero", async () => {
+  it("uses full thread diff API only for conversation-wide ranges from zero", async () => {
     const getTurnDiff = vi.fn().mockResolvedValue({ diff: "patch" });
     const getFullThreadDiff = vi.fn().mockResolvedValue({ diff: "patch" });
     mockNativeApi({ getTurnDiff, getFullThreadDiff });
@@ -107,7 +114,7 @@ describe("checkpointDiffQueryOptions", () => {
       fromTurnCount: 0,
       toTurnCount: 2,
       ignoreWhitespace: false,
-      cacheScope: "thread:all",
+      cacheScope: "conversation:turn-a,turn-b",
     });
 
     const queryClient = new QueryClient();
@@ -119,6 +126,31 @@ describe("checkpointDiffQueryOptions", () => {
       ignoreWhitespace: false,
     });
     expect(getTurnDiff).not.toHaveBeenCalled();
+  });
+
+  it("uses turn diff API for single-turn ranges that start from zero", async () => {
+    const getTurnDiff = vi.fn().mockResolvedValue({ diff: "patch" });
+    const getFullThreadDiff = vi.fn().mockResolvedValue({ diff: "patch" });
+    mockNativeApi({ getTurnDiff, getFullThreadDiff });
+
+    const options = checkpointDiffQueryOptions({
+      threadId,
+      fromTurnCount: 0,
+      toTurnCount: 1,
+      ignoreWhitespace: true,
+      cacheScope: "turn:turn-1",
+    });
+
+    const queryClient = new QueryClient();
+    await queryClient.fetchQuery(options);
+
+    expect(getTurnDiff).toHaveBeenCalledWith({
+      threadId,
+      fromTurnCount: 0,
+      toTurnCount: 1,
+      ignoreWhitespace: true,
+    });
+    expect(getFullThreadDiff).not.toHaveBeenCalled();
   });
 
   it("fails fast on invalid range and does not call provider RPC", async () => {
@@ -190,5 +222,82 @@ describe("checkpointDiffQueryOptions", () => {
     expect(typeof checkpointDelay).toBe("number");
     expect(typeof genericDelay).toBe("number");
     expect((checkpointDelay ?? 0) > (genericDelay ?? 0)).toBe(true);
+  });
+
+  it("keeps polling while checkpoint diffs are still materializing", () => {
+    const options = checkpointDiffQueryOptions({
+      threadId,
+      fromTurnCount: 1,
+      toTurnCount: 2,
+      ignoreWhitespace: true,
+      cacheScope: "turn:abc",
+    });
+    const refetchInterval = options.refetchInterval;
+    expect(typeof refetchInterval).toBe("function");
+    if (typeof refetchInterval !== "function") {
+      throw new Error("Expected refetchInterval to be a function.");
+    }
+
+    expect(
+      refetchInterval({
+        state: { error: new Error("Checkpoint diff is not available yet for turn 1.") },
+      } as never),
+    ).toBe(CHECKPOINT_DIFF_PENDING_REFETCH_INTERVAL_MS);
+    expect(refetchInterval({ state: { error: new Error("Permanent failure.") } } as never)).toBe(
+      false,
+    );
+    expect(
+      refetchInterval({
+        state: {
+          error: new Error("Checkpoint diff is not available yet for turn 1."),
+          errorUpdateCount: CHECKPOINT_DIFF_PENDING_REFETCH_MAX_ATTEMPTS,
+        },
+      } as never),
+    ).toBe(false);
+  });
+});
+
+describe("resolveCheckpointDiffQueryDisplayState", () => {
+  it("shows loading instead of an error while retries are in flight", () => {
+    const pendingError = new Error("Checkpoint diff is not available yet for turn 1.");
+
+    expect(
+      resolveCheckpointDiffQueryDisplayState({
+        isLoading: false,
+        isFetching: true,
+        data: undefined,
+        error: pendingError,
+      }),
+    ).toEqual({
+      isLoading: true,
+      error: null,
+    });
+  });
+
+  it("surfaces the normalized error once fetching stops", () => {
+    expect(
+      resolveCheckpointDiffQueryDisplayState({
+        isLoading: false,
+        isFetching: false,
+        data: undefined,
+        error: new Error("Checkpoint diff is not available yet for turn 1."),
+      }),
+    ).toEqual({
+      isLoading: false,
+      error: "Checkpoint diff is not available yet for turn 1.",
+    });
+  });
+});
+
+describe("isCheckpointTemporarilyUnavailable", () => {
+  it("recognizes placeholder checkpoint errors", () => {
+    expect(
+      isCheckpointTemporarilyUnavailable(
+        new Error("Checkpoint diff is not available yet for turn 1."),
+      ),
+    ).toBe(true);
+    expect(
+      isCheckpointTemporarilyUnavailable(new Error("Filesystem checkpoint is unavailable.")),
+    ).toBe(false);
   });
 });

@@ -4,6 +4,7 @@
 // Note: the "Create branch" footer row uses raw <button> because it is a
 // menu-item-style affordance inside a ComboboxPopup, not a generic action.
 import type { GitBranch, GitStashInfoResult, GitStatusResult, NativeApi } from "@t3tools/contracts";
+import { pluralize } from "@t3tools/shared/text";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDownIcon, PlusIcon } from "~/lib/icons";
@@ -159,10 +160,10 @@ function isGitIndexWriteError(error: unknown): boolean {
 function formatDirtyWorktreeDescription(files: string[]): string {
   const basenames = files.map((file) => file.split("/").pop() ?? file);
   if (basenames.length <= 3) {
-    return `${basenames.join(", ")} ${basenames.length === 1 ? "has" : "have"} uncommitted changes. Commit or stash before switching.`;
+    return `${basenames.join(", ")} ${pluralize(basenames.length, "has", "have")} uncommitted changes. Commit or stash before switching.`;
   }
   const remaining = basenames.length - 2;
-  return `${basenames.slice(0, 2).join(", ")} and ${remaining} other file${remaining === 1 ? "" : "s"} have uncommitted changes. Commit or stash before switching.`;
+  return `${basenames.slice(0, 2).join(", ")} and ${remaining} other ${pluralize(remaining, "file")} have uncommitted changes. Commit or stash before switching.`;
 }
 
 function handleCheckoutError(
@@ -802,7 +803,7 @@ export function BranchToolbarBranchSelector({
               <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] leading-4">
                 <span className="text-muted-foreground">
                   Uncommitted: {currentBranchChangeSummary.fileCount.toLocaleString()}{" "}
-                  {currentBranchChangeSummary.fileCount === 1 ? "file" : "files"}
+                  {pluralize(currentBranchChangeSummary.fileCount, "file")}
                 </span>
                 <span className="font-mono tabular-nums text-success">
                   +{currentBranchChangeSummary.insertions.toLocaleString()}
