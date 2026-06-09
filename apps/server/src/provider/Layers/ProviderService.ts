@@ -7,13 +7,16 @@
  *
  * It does not implement provider protocol details (adapter concern).
  *
+ * Pure helpers/schemas live in ProviderService.helpers.ts; the directory-binding
+ * writer cluster lives in ProviderService.sessionBinding.ts.
+ *
+ * Exports: ProviderServiceLiveOptions, ProviderServiceLive, makeProviderServiceLive.
+ *
  * @module ProviderServiceLive
  */
 import {
   ProviderCompactThreadInput,
   ProviderForkThreadInput,
-  ModelSelection,
-  NonNegativeInt,
   ThreadId,
   ProviderInterruptTurnInput,
   ProviderRespondToRequestInput,
@@ -23,183 +26,33 @@ import {
   ProviderSteerTurnInput,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
-  ProviderStartOptions,
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@t3tools/contracts";
-import { Cause, Effect, Layer, Option, PubSub, Schema, SchemaIssue, Stream } from "effect";
+import { Effect, Layer, Option, PubSub, Stream } from "effect";
 
-import { ProviderValidationError } from "../Errors.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
 import {
   ProviderSessionDirectory,
   type ProviderRuntimeBinding,
-  type ProviderSessionDirectoryWriteError,
 } from "../Services/ProviderSessionDirectory.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import {
+  PROVIDER_RUNTIME_IDLE_STOP_MS,
+  ProviderRollbackConversationInput,
+  decodeInputOrValidationError,
+  readPersistedCwd,
+  readPersistedModelSelection,
+  readPersistedProviderOptions,
+  toValidationError,
+} from "./ProviderService.helpers.ts";
+import { makeSessionBindingWriters } from "./ProviderService.sessionBinding.ts";
 import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
 
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogPath?: string;
   readonly canonicalEventLogger?: EventNdjsonLogger;
-}
-
-const DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS = 10 * 60 * 1000;
-const configuredProviderRuntimeIdleStopMs =
-  process.env.SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS ??
-  process.env.DPCODE_PROVIDER_RUNTIME_IDLE_STOP_MS;
-const PROVIDER_RUNTIME_IDLE_STOP_MS = Number.isFinite(Number(configuredProviderRuntimeIdleStopMs))
-  ? Math.max(0, Number(configuredProviderRuntimeIdleStopMs))
-  : DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS;
-
-const ProviderRollbackConversationInput = Schema.Struct({
-  threadId: ThreadId,
-  numTurns: NonNegativeInt,
-});
-
-function toValidationError(
-  operation: string,
-  issue: string,
-  cause?: unknown,
-): ProviderValidationError {
-  return new ProviderValidationError({
-    operation,
-    issue,
-    ...(cause !== undefined ? { cause } : {}),
-  });
-}
-
-const decodeInputOrValidationError = <S extends Schema.Top>(input: {
-  readonly operation: string;
-  readonly schema: S;
-  readonly payload: unknown;
-}) =>
-  Schema.decodeUnknownEffect(input.schema)(input.payload).pipe(
-    Effect.mapError(
-      (schemaError) =>
-        new ProviderValidationError({
-          operation: input.operation,
-          issue: SchemaIssue.makeFormatterDefault()(schemaError.issue),
-          cause: schemaError,
-        }),
-    ),
-  );
-
-function toRuntimeStatus(session: ProviderSession): "starting" | "running" | "stopped" | "error" {
-  switch (session.status) {
-    case "connecting":
-      return "starting";
-    case "error":
-      return "error";
-    case "closed":
-      return "stopped";
-    case "ready":
-    case "running":
-    default:
-      return "running";
-  }
-}
-
-function toRuntimePayloadFromSession(
-  session: ProviderSession,
-  extra?: {
-    readonly modelSelection?: unknown;
-    readonly providerOptions?: unknown;
-    readonly lastRuntimeEvent?: string;
-    readonly lastRuntimeEventAt?: string;
-  },
-): Record<string, unknown> {
-  return {
-    cwd: session.cwd ?? null,
-    model: session.model ?? null,
-    activeTurnId: session.activeTurnId ?? null,
-    lastError: session.lastError ?? null,
-    ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
-    ...(extra?.providerOptions !== undefined ? { providerOptions: extra.providerOptions } : {}),
-    ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
-    ...(extra?.lastRuntimeEventAt !== undefined
-      ? { lastRuntimeEventAt: extra.lastRuntimeEventAt }
-      : {}),
-  };
-}
-
-function readPersistedModelSelection(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): ModelSelection | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
-    return undefined;
-  }
-  const raw = "modelSelection" in runtimePayload ? runtimePayload.modelSelection : undefined;
-  return Schema.is(ModelSelection)(raw) ? raw : undefined;
-}
-
-function readPersistedProviderOptions(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): ProviderStartOptions | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
-    return undefined;
-  }
-  const raw = "providerOptions" in runtimePayload ? runtimePayload.providerOptions : undefined;
-  return Schema.is(ProviderStartOptions)(raw) ? raw : undefined;
-}
-
-function readPersistedCwd(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): string | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
-    return undefined;
-  }
-  const rawCwd = "cwd" in runtimePayload ? runtimePayload.cwd : undefined;
-  if (typeof rawCwd !== "string") return undefined;
-  const trimmed = rawCwd.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function runtimePayloadRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function runtimeStatusForEvent(event: ProviderRuntimeEvent): "running" | "stopped" | "error" {
-  switch (event.type) {
-    case "session.state.changed":
-      switch (event.payload.state) {
-        case "stopped":
-          return "stopped";
-        case "error":
-          return "error";
-        default:
-          return "running";
-      }
-    case "session.exited":
-    case "turn.completed":
-    case "turn.aborted":
-      // A completed turn can still carry a resume cursor, but it must not keep
-      // the desktop app treating the provider process as active after restart.
-      return "stopped";
-    case "runtime.error":
-      return "error";
-    default:
-      return "running";
-  }
-}
-
-function runtimeLastErrorForEvent(event: ProviderRuntimeEvent): string | null | undefined {
-  switch (event.type) {
-    case "runtime.error":
-      return event.payload.message;
-    case "session.state.changed":
-      return event.payload.state === "error" ? (event.payload.reason ?? "Session error") : null;
-    case "turn.started":
-    case "turn.completed":
-    case "turn.aborted":
-    case "session.exited":
-      return null;
-    default:
-      return undefined;
-  }
 }
 
 const makeProviderService = (options?: ProviderServiceLiveOptions) =>
@@ -268,125 +121,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         Effect.asVoid,
       );
 
-    const upsertSessionBinding = (
-      session: ProviderSession,
-      threadId: ThreadId,
-      extra?: {
-        readonly modelSelection?: unknown;
-        readonly providerOptions?: unknown;
-        readonly lastRuntimeEvent?: string;
-        readonly lastRuntimeEventAt?: string;
-      },
-    ) =>
-      directory.upsert({
-        threadId,
-        provider: session.provider,
-        runtimeMode: session.runtimeMode,
-        status: toRuntimeStatus(session),
-        ...(session.resumeCursor !== undefined ? { resumeCursor: session.resumeCursor } : {}),
-        runtimePayload: toRuntimePayloadFromSession(session, extra),
-      });
-
-    const upsertStoppedSessionBinding = (
-      session: ProviderSession,
-      stoppedAt: string,
-    ): Effect.Effect<void, ProviderSessionDirectoryWriteError> =>
-      directory.upsert({
-        threadId: session.threadId,
-        provider: session.provider,
-        runtimeMode: session.runtimeMode,
-        status: "stopped",
-        ...(session.resumeCursor !== undefined ? { resumeCursor: session.resumeCursor } : {}),
-        runtimePayload: {
-          ...toRuntimePayloadFromSession(session, {
-            lastRuntimeEvent: "provider.stopAll",
-            lastRuntimeEventAt: stoppedAt,
-          }),
-          activeTurnId: null,
-        },
-      });
-
-    const markPersistedThreadStopped = (
-      threadId: ThreadId,
-      stoppedAt: string,
-    ): Effect.Effect<void, ProviderSessionDirectoryWriteError> =>
-      directory.getProvider(threadId).pipe(
-        Effect.flatMap((provider) =>
-          directory.upsert({
-            threadId,
-            provider,
-            status: "stopped",
-            runtimePayload: {
-              activeTurnId: null,
-              lastRuntimeEvent: "provider.stopAll",
-              lastRuntimeEventAt: stoppedAt,
-            },
-          }),
-        ),
-      );
-
-    const updateSessionBindingFromRuntimeEvent = (
-      event: ProviderRuntimeEvent,
-    ): Effect.Effect<void> => {
-      switch (event.type) {
-        case "session.started":
-        case "session.state.changed":
-        case "thread.started":
-        case "turn.started":
-        case "turn.completed":
-        case "turn.aborted":
-        case "session.exited":
-        case "runtime.error":
-          break;
-        default:
-          return Effect.void;
-      }
-
-      return Effect.gen(function* () {
-        const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
-        if (!binding) {
-          return;
-        }
-
-        const activeTurnId =
-          event.type === "turn.started"
-            ? (event.turnId ?? null)
-            : event.type === "turn.completed" ||
-                event.type === "turn.aborted" ||
-                event.type === "session.exited" ||
-                event.type === "runtime.error" ||
-                (event.type === "session.state.changed" &&
-                  (event.payload.state === "ready" ||
-                    event.payload.state === "stopped" ||
-                    event.payload.state === "error"))
-              ? null
-              : (runtimePayloadRecord(binding.runtimePayload).activeTurnId ?? null);
-        const lastError = runtimeLastErrorForEvent(event);
-
-        yield* directory.upsert({
-          threadId: event.threadId,
-          provider: binding.provider,
-          ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
-          ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
-          status: runtimeStatusForEvent(event),
-          ...(binding.resumeCursor !== undefined ? { resumeCursor: binding.resumeCursor } : {}),
-          runtimePayload: {
-            activeTurnId,
-            lastRuntimeEvent: event.type,
-            lastRuntimeEventAt: event.createdAt,
-            ...(lastError !== undefined ? { lastError } : {}),
-          },
-        });
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("provider.session.runtime_binding_update_failed", {
-            threadId: event.threadId,
-            eventType: event.type,
-            cause: Cause.pretty(cause),
-          }),
-        ),
-      );
-    };
+    const {
+      upsertSessionBinding,
+      upsertStoppedSessionBinding,
+      markPersistedThreadStopped,
+      updateSessionBindingFromRuntimeEvent,
+    } = makeSessionBindingWriters({ directory });
 
     const providers = yield* registry.listProviders();
     const adapters = yield* Effect.forEach(providers, (provider) =>
