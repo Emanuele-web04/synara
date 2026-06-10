@@ -1,8 +1,9 @@
-import { Effect, FileSystem, Layer } from "effect";
+import { Effect, FileSystem, Layer, Path } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ServerConfig } from "../config";
+import { ServerSettingsLive } from "../serverSettings";
 import { AnalyticsService } from "../telemetry/Services/AnalyticsService";
 import { ProviderUnsupportedError } from "./Errors";
 import { makeClaudeAdapterLive } from "./Layers/ClaudeAdapter";
@@ -29,6 +30,7 @@ export function makeServerProviderLayer(): Layer.Layer<
   | SqlClient.SqlClient
   | ServerConfig
   | FileSystem.FileSystem
+  | Path.Path
   | AnalyticsService
   | ChildProcessSpawner.ChildProcessSpawner
 > {
@@ -87,6 +89,9 @@ export function makeServerProviderLayer(): Layer.Layer<
     ).pipe(Layer.provide(adapterRegistryLayer), Layer.provide(providerSessionDirectoryLayer));
     const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
       Layer.provide(adapterRegistryLayer),
+      // Skill toggles live in server settings; the shared ServerSettingsLive
+      // layer is memoized so this reuses the instance built at the top level.
+      Layer.provide(ServerSettingsLive),
     );
     return Layer.mergeAll(
       providerServiceLayer,

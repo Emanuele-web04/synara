@@ -493,7 +493,6 @@ export function PluginLibrary() {
       provider: selectedProvider,
       cwd: discoveryCwd,
       threadId: providerThreadId,
-      query: selectedTab === "skills" ? deferredSkillSearch : "",
       enabled: selectedTab === "skills" && canListSkills && discoveryCwd !== null,
     }),
   );
