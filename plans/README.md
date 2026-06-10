@@ -31,7 +31,7 @@ path arguments to Vitest.
 | 010  | Replace invalid path-forwarded `bun run test` commands in Devin plans                  | P1       | S      | —          | DONE        |
 | 006  | Harden Devin ACP form elicitation with adapter tests and server-side answer validation | P1       | M      | —          | DONE        |
 | 007  | Make Devin slash-command discovery thread-scoped and prove runtime command updates     | P1       | S      | —          | DONE        |
-| 008  | Stop guessing ACP model config id when the session does not advertise one              | P2       | S      | —          | TODO        |
+| 008  | Stop guessing ACP model config id when the session does not advertise one              | P2       | S      | —          | IN PROGRESS |
 | 009  | Redact persisted user-input resolved answers across providers                          | P2       | M      | —          | TODO        |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)

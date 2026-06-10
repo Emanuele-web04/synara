@@ -564,7 +564,25 @@ const makeAcpSessionRuntime = (
       setConfigOption,
       setModel: (model) =>
         getStartedState.pipe(
-          Effect.flatMap((started) => setConfigOption(started.modelConfigId ?? "model", model)),
+          Effect.flatMap((started) => {
+            if (!started.modelConfigId) {
+              return Ref.get(configOptionsRef).pipe(
+                Effect.flatMap((configOptions) =>
+                  Effect.fail(
+                    new EffectAcpErrors.AcpRequestError({
+                      code: -32602,
+                      errorMessage: "ACP session did not advertise a model config option.",
+                      data: {
+                        requestedModel: model,
+                        configOptionIds: configOptions.map((option) => option.id),
+                      },
+                    }),
+                  ),
+                ),
+              );
+            }
+            return setConfigOption(started.modelConfigId, model);
+          }),
           Effect.asVoid,
         ),
       request: (method, payload) =>
