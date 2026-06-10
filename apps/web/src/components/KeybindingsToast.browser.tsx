@@ -19,6 +19,9 @@ import { render } from "vitest-browser-react";
 
 import { useComposerDraftStore } from "../composerDraftStore";
 import { getRouter } from "../router";
+import { createShellSnapshotFromFixtureSnapshot } from "../test/fixtureToShell";
+import { installRpcBridge } from "../test/wsRpcMockBridge";
+import { __resetWsNativeApiForTests } from "../wsNativeApi";
 import { useStore } from "../store";
 
 const THREAD_ID = "thread-kb-toast-test" as ThreadId;
@@ -173,31 +176,35 @@ const worker = setupWorker(
   wsLink.addEventListener("connection", ({ client }) => {
     wsClient = client;
     pushSequence = 1;
-    client.send(
-      JSON.stringify({
-        type: "push",
-        sequence: pushSequence++,
-        channel: WS_CHANNELS.serverWelcome,
-        data: fixture.welcome,
-      }),
-    );
-    client.addEventListener("message", (event) => {
-      const rawData = event.data;
-      if (typeof rawData !== "string") return;
-      let request: { id: string; body: { _tag: string; [key: string]: unknown } };
-      try {
-        request = JSON.parse(rawData);
-      } catch {
-        return;
-      }
-      const method = request.body?._tag;
-      if (typeof method !== "string") return;
-      client.send(
-        JSON.stringify({
-          id: request.id,
-          result: resolveWsRpc(method),
-        }),
-      );
+    installRpcBridge(client, {
+      resolveRpc: (tag) => {
+        if (tag === ORCHESTRATION_WS_METHODS.getShellSnapshot) {
+          return createShellSnapshotFromFixtureSnapshot(fixture.snapshot);
+        }
+        return resolveWsRpc(tag);
+      },
+      onStreamOpen: (tag, payload, emit) => {
+        if (tag === WS_METHODS.subscribeServerLifecycle) {
+          emit({ type: "welcome", payload: fixture.welcome });
+        } else if (tag === ORCHESTRATION_WS_METHODS.subscribeShell) {
+          emit({
+            kind: "snapshot",
+            snapshot: createShellSnapshotFromFixtureSnapshot(fixture.snapshot),
+          });
+        } else if (tag === ORCHESTRATION_WS_METHODS.subscribeThread) {
+          const threadId = (payload as { threadId?: ThreadId })?.threadId;
+          if (!threadId) return;
+          const thread = fixture.snapshot.threads.find((entry) => entry.id === threadId);
+          if (!thread) return;
+          emit({
+            kind: "snapshot",
+            snapshot: {
+              snapshotSequence: fixture.snapshot.snapshotSequence,
+              thread,
+            },
+          });
+        }
+      },
     });
   }),
   http.get("*/attachments/:attachmentId", () => new HttpResponse(null, { status: 204 })),
@@ -321,6 +328,7 @@ describe("Keybindings update toast", () => {
   });
 
   afterEach(() => {
+    __resetWsNativeApiForTests();
     document.body.innerHTML = "";
   });
 

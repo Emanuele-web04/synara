@@ -869,21 +869,32 @@ export function createWsNativeApi(): NativeApi {
   return api;
 }
 
+function teardownWsNativeApi(): void {
+  instance?.transport.dispose();
+  instance = null;
+  welcomeListeners.clear();
+  serverConfigUpdatedListeners.clear();
+  serverProviderStatusesUpdatedListeners.clear();
+  serverSettingsUpdatedListeners.clear();
+  gitActionProgressListeners.clear();
+  reviewUpdatedListeners.clear();
+  stopReviewUpdatedSubscription();
+  terminalEventListeners.clear();
+  orchestrationDomainEventListeners.clear();
+  orchestrationShellEventListeners.clear();
+  orchestrationThreadEventListeners.clear();
+  fallbackBrowserStateListeners.clear();
+}
+
+// Test-only: dispose the singleton transport so each browser test starts from a
+// fresh WebSocket connection (and a fresh mock-WS bridge) instead of inheriting
+// subscription state from a prior test. Never called in production.
+export function __resetWsNativeApiForTests(): void {
+  teardownWsNativeApi();
+}
+
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    instance?.transport.dispose();
-    instance = null;
-    welcomeListeners.clear();
-    serverConfigUpdatedListeners.clear();
-    serverProviderStatusesUpdatedListeners.clear();
-    serverSettingsUpdatedListeners.clear();
-    gitActionProgressListeners.clear();
-    reviewUpdatedListeners.clear();
-    stopReviewUpdatedSubscription();
-    terminalEventListeners.clear();
-    orchestrationDomainEventListeners.clear();
-    orchestrationShellEventListeners.clear();
-    orchestrationThreadEventListeners.clear();
-    fallbackBrowserStateListeners.clear();
+    teardownWsNativeApi();
   });
 }

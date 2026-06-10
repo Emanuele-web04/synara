@@ -26,6 +26,8 @@ import { render } from "vitest-browser-react";
 
 import { useComposerDraftStore } from "../composerDraftStore";
 import { getRouter } from "../router";
+import { installRpcBridge } from "../test/wsRpcMockBridge";
+import { __resetWsNativeApiForTests } from "../wsNativeApi";
 import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 import { useWorkspaceStore } from "../workspaceStore";
@@ -258,76 +260,44 @@ const worker = setupWorker(
   wsLink.addEventListener("connection", ({ client }) => {
     wsClient = client;
     pushSequence = 1;
-    client.send(
-      JSON.stringify({
-        type: "push",
-        sequence: pushSequence++,
-        channel: WS_CHANNELS.serverWelcome,
-        data: fixture.welcome,
-      }),
-    );
-    client.addEventListener("message", (event) => {
-      if (typeof event.data !== "string") {
-        return;
-      }
-      let request: { id: string; body: { _tag: string } };
-      try {
-        request = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-      const method = request.body?._tag;
-      if (typeof method !== "string") {
-        return;
-      }
-      if (method === ORCHESTRATION_WS_METHODS.subscribeShell) {
-        subscribeShellRequestCount += 1;
-      }
-      client.send(
-        JSON.stringify({
-          id: request.id,
-          result: resolveWsRpc(method, request.body),
-        }),
-      );
-      if (method === ORCHESTRATION_WS_METHODS.subscribeShell) {
-        client.send(
-          JSON.stringify({
-            type: "push",
-            sequence: pushSequence++,
-            channel: ORCHESTRATION_WS_CHANNELS.shellEvent,
-            data: {
-              kind: "snapshot",
-              snapshot: createShellSnapshotFromFixtureSnapshot(fixture.snapshot),
-            },
-          }),
-        );
-      }
-      if (method === ORCHESTRATION_WS_METHODS.subscribeThread && "threadId" in request.body) {
-        const threadId = request.body.threadId as ThreadId;
-        subscribeThreadRequestCountById.set(
-          threadId,
-          (subscribeThreadRequestCountById.get(threadId) ?? 0) + 1,
-        );
-        subscribeThreadRequests.push(threadId);
-        if (delayNextThreadSnapshot) {
-          delayNextThreadSnapshot = false;
+    installRpcBridge(client, {
+      resolveRpc: (tag, payload) => resolveWsRpc(tag, payload),
+      onStreamOpen: (tag, payload, emit) => {
+        if (tag === WS_METHODS.subscribeServerLifecycle) {
+          emit({ type: "welcome", payload: fixture.welcome });
           return;
         }
-        client.send(
-          JSON.stringify({
-            type: "push",
-            sequence: pushSequence++,
-            channel: ORCHESTRATION_WS_CHANNELS.threadEvent,
-            data: {
-              kind: "snapshot",
-              snapshot: {
-                snapshotSequence: fixture.snapshot.snapshotSequence,
-                thread: getThreadDetailFromFixtureSnapshot(threadId),
-              },
+        if (tag === ORCHESTRATION_WS_METHODS.subscribeShell) {
+          subscribeShellRequestCount += 1;
+          emit({
+            kind: "snapshot",
+            snapshot: createShellSnapshotFromFixtureSnapshot(fixture.snapshot),
+          });
+          return;
+        }
+        if (tag === ORCHESTRATION_WS_METHODS.subscribeThread) {
+          const threadId = (payload as { threadId?: ThreadId })?.threadId;
+          if (!threadId) return;
+          subscribeThreadRequestCountById.set(
+            threadId,
+            (subscribeThreadRequestCountById.get(threadId) ?? 0) + 1,
+          );
+          subscribeThreadRequests.push(threadId);
+          if (delayNextThreadSnapshot) {
+            delayNextThreadSnapshot = false;
+            return;
+          }
+          const thread = fixture.snapshot.threads.find((entry) => entry.id === threadId);
+          if (!thread) return;
+          emit({
+            kind: "snapshot",
+            snapshot: {
+              snapshotSequence: fixture.snapshot.snapshotSequence,
+              thread,
             },
-          }),
-        );
-      }
+          });
+        }
+      },
     });
   }),
   http.get("*/attachments/:attachmentId", () => new HttpResponse(null, { status: 204 })),
@@ -487,6 +457,7 @@ describe("EventRouter scoped orchestration sync", () => {
   });
 
   afterEach(() => {
+    __resetWsNativeApiForTests();
     document.body.innerHTML = "";
   });
 

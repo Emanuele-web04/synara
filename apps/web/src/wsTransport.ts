@@ -221,9 +221,15 @@ export class WsTransport {
     this.state = "disposed";
     for (const cleanup of this.streamCleanups.values()) cleanup();
     this.streamCleanups.clear();
-    void this.runtime.runPromise(Scope.close(this.clientScope, Exit.void)).finally(() => {
-      this.runtime.dispose();
-    });
+    void this.runtime
+      .runPromise(Scope.close(this.clientScope, Exit.void))
+      .catch(() => {
+        // Scope close can reject if the runtime is already tearing down; the
+        // transport is disposed either way, so this rejection is terminal noise.
+      })
+      .finally(() => {
+        this.runtime.dispose();
+      });
   }
 
   private createSession() {
@@ -262,9 +268,14 @@ export class WsTransport {
 
     this.state = "connecting";
 
-    void oldRuntime.runPromise(Scope.close(oldClientScope, Exit.void)).finally(() => {
-      oldRuntime.dispose();
-    });
+    void oldRuntime
+      .runPromise(Scope.close(oldClientScope, Exit.void))
+      .catch(() => {
+        // The old runtime is being replaced; a close rejection here is terminal noise.
+      })
+      .finally(() => {
+        oldRuntime.dispose();
+      });
 
     this.reconnectPromise = this.openReconnectSession().finally(() => {
       this.reconnectPromise = null;
