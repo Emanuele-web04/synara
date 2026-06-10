@@ -16,11 +16,21 @@ export default mergeConfig(
     },
     test: {
       include: ["src/components/**/*.browser.tsx"],
+      server: {
+        port: process.env.VITEST_BROWSER_PORT ? Number(process.env.VITEST_BROWSER_PORT) : undefined,
+        strictPort: false,
+      },
       browser: {
         enabled: true,
         provider: playwright(),
         instances: [{ browser: "chromium" }],
         headless: true,
+        api: {
+          port: process.env.VITEST_BROWSER_PORT
+            ? Number(process.env.VITEST_BROWSER_PORT)
+            : undefined,
+          strictPort: false,
+        },
       },
       testTimeout: 30_000,
       hookTimeout: 30_000,

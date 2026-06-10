@@ -48,7 +48,8 @@ function channelToStreamTag(channel: string): string | null {
   if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent) {
     return WS_METHODS.subscribeOrchestrationDomainEvents;
   }
-  if (channel === ORCHESTRATION_WS_CHANNELS.shellEvent) return ORCHESTRATION_WS_METHODS.subscribeShell;
+  if (channel === ORCHESTRATION_WS_CHANNELS.shellEvent)
+    return ORCHESTRATION_WS_METHODS.subscribeShell;
   if (channel === ORCHESTRATION_WS_CHANNELS.threadEvent) {
     return ORCHESTRATION_WS_METHODS.subscribeThread;
   }
@@ -96,11 +97,7 @@ export interface RpcBridgeHandlers {
   readonly resolveRpc: (tag: string, payload: unknown) => unknown;
   // Called when a stream subscription opens. `emit` pushes a stream-item value
   // as a Chunk on that subscription's request id. Return value is ignored.
-  readonly onStreamOpen?: (
-    tag: string,
-    payload: unknown,
-    emit: (value: unknown) => void,
-  ) => void;
+  readonly onStreamOpen?: (tag: string, payload: unknown, emit: (value: unknown) => void) => void;
 }
 
 export interface RpcBridge {
