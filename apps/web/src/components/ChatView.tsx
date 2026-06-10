@@ -108,7 +108,6 @@ import {
   resolveActiveThreadTitle,
   resolveCodexSessionPrewarmKey,
   resolveCommittedProviderModel,
-  revokeBlobPreviewUrlsAfterPaint,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
 } from "./ChatView.logic";
@@ -308,6 +307,7 @@ import { useChatTerminalDrawerProps } from "./chat/useChatTerminalDrawerProps";
 import { useComposerModelHintByProvider } from "./chat/useComposerModelHintByProvider";
 import { useChatActiveProposedPlan } from "./chat/useChatActiveProposedPlan";
 import { useChatTimeline } from "./chat/useChatTimeline";
+import { useChatAttachmentPreviewHandoff } from "./chat/useChatAttachmentPreviewHandoff";
 import { useChatActiveTaskList } from "./chat/useChatActiveTaskList";
 import { AVAILABLE_PROVIDER_OPTIONS } from "./chat/ProviderModelPicker";
 import { ComposerModelEffortPicker } from "./chat/ComposerModelEffortPicker";
@@ -389,7 +389,6 @@ import {
   PullRequestDialogState,
   readFileAsDataUrl,
   resolveRuntimeModeAfterApprovalDecision,
-  revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -416,7 +415,6 @@ import {
   waitForRecoverableProjectForDuplicateCreate,
 } from "../lib/projectCreateRecovery";
 
-const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_MESSAGES: ChatMessage[] = [];
@@ -635,9 +633,11 @@ export default function ChatView({
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
   const [pullRequestDialogState, setPullRequestDialogState] =
     useState<PullRequestDialogState | null>(null);
-  const [attachmentPreviewHandoffByMessageId, setAttachmentPreviewHandoffByMessageId] = useState<
-    Record<string, string[]>
-  >({});
+  const {
+    attachmentPreviewHandoffByMessageId,
+    handoffAttachmentPreviews,
+    clearAttachmentPreviewHandoffs,
+  } = useChatAttachmentPreviewHandoff();
   const [composerCursor, setComposerCursor] = useState(() =>
     collapseExpandedComposerCursor(prompt, prompt.length),
   );
@@ -706,8 +706,6 @@ export default function ChatView({
   const autoDispatchingQueuedTurnRef = useRef(false);
   const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
   const localDirectoryMenuRef = useRef<ComposerLocalDirectoryMenuHandle | null>(null);
-  const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
-  const attachmentPreviewHandoffTimeoutByMessageIdRef = useRef<Record<string, number>>({});
   const sendInFlightRef = useRef(false);
   const dragDepthRef = useRef(0);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
@@ -1747,22 +1745,6 @@ export default function ChatView({
     activePendingProgress?.activeQuestion?.id,
   ]);
   useEffect(() => {
-    attachmentPreviewHandoffByMessageIdRef.current = attachmentPreviewHandoffByMessageId;
-  }, [attachmentPreviewHandoffByMessageId]);
-  const clearAttachmentPreviewHandoffs = useCallback(() => {
-    for (const timeoutId of Object.values(attachmentPreviewHandoffTimeoutByMessageIdRef.current)) {
-      window.clearTimeout(timeoutId);
-    }
-    attachmentPreviewHandoffTimeoutByMessageIdRef.current = {};
-    for (const previewUrls of Object.values(attachmentPreviewHandoffByMessageIdRef.current)) {
-      for (const previewUrl of previewUrls) {
-        revokeBlobPreviewUrl(previewUrl);
-      }
-    }
-    attachmentPreviewHandoffByMessageIdRef.current = {};
-    setAttachmentPreviewHandoffByMessageId({});
-  }, []);
-  useEffect(() => {
     return () => {
       clearAttachmentPreviewHandoffs();
       for (const message of optimisticUserMessagesRef.current) {
@@ -1770,44 +1752,6 @@ export default function ChatView({
       }
     };
   }, [clearAttachmentPreviewHandoffs]);
-  const handoffAttachmentPreviews = useCallback((messageId: MessageId, previewUrls: string[]) => {
-    if (previewUrls.length === 0) return;
-
-    const previousPreviewUrls = attachmentPreviewHandoffByMessageIdRef.current[messageId] ?? [];
-    const replacedPreviewUrls = previousPreviewUrls.filter(
-      (previewUrl) => !previewUrls.includes(previewUrl),
-    );
-    revokeBlobPreviewUrlsAfterPaint(replacedPreviewUrls);
-    setAttachmentPreviewHandoffByMessageId((existing) => {
-      const next = {
-        ...existing,
-        [messageId]: previewUrls,
-      };
-      attachmentPreviewHandoffByMessageIdRef.current = next;
-      return next;
-    });
-
-    const existingTimeout = attachmentPreviewHandoffTimeoutByMessageIdRef.current[messageId];
-    if (typeof existingTimeout === "number") {
-      window.clearTimeout(existingTimeout);
-    }
-    attachmentPreviewHandoffTimeoutByMessageIdRef.current[messageId] = window.setTimeout(() => {
-      const currentPreviewUrls = attachmentPreviewHandoffByMessageIdRef.current[messageId];
-      setAttachmentPreviewHandoffByMessageId((existing) => {
-        if (!(messageId in existing)) return existing;
-        const next = { ...existing };
-        delete next[messageId];
-        attachmentPreviewHandoffByMessageIdRef.current = next;
-        return next;
-      });
-      delete attachmentPreviewHandoffTimeoutByMessageIdRef.current[messageId];
-      // Let React swap the transcript back to persisted /attachments URLs before
-      // invalidating blob previews that may still be mounted in the old row.
-      if (currentPreviewUrls) {
-        revokeBlobPreviewUrlsAfterPaint(currentPreviewUrls);
-      }
-    }, ATTACHMENT_PREVIEW_HANDOFF_TTL_MS);
-  }, []);
   const serverMessages = activeThread?.messages;
   const { timelineMessages, timelineEntries } = useChatTimeline({
     serverMessages,
