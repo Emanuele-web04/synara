@@ -10,6 +10,7 @@ import type {
 } from "../acp/AcpSessionRuntime.ts";
 import type { AcpSessionModeState } from "../acp/AcpRuntimeModel.ts";
 import { buildDevinAcpSpawnInput, resolveDevinAcpAuthMethodId } from "../acp/DevinAcpSupport.ts";
+import { DEVIN_FALLBACK_MODELS } from "../acp/DevinModelCatalog.ts";
 import { DevinAdapter } from "../Services/DevinAdapter";
 import { ProviderAdapterRequestError } from "../Errors.ts";
 import { makeDevinAdapterLive } from "./DevinAdapter";
@@ -18,6 +19,7 @@ const threadId = ThreadId.makeUnsafe("thread-devin");
 
 function makeMockRuntime(input?: {
   readonly sessionId?: string;
+  readonly configOptions?: ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
   readonly prompt?: (
     payload: Omit<EffectAcpSchema.PromptRequest, "sessionId">,
   ) => Effect.Effect<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>;
@@ -51,7 +53,7 @@ function makeMockRuntime(input?: {
       } as unknown as AcpSessionRuntimeStartResult),
     getEvents: () => Stream.empty,
     getModeState: Effect.succeed(input?.modeState),
-    getConfigOptions: Effect.succeed([]),
+    getConfigOptions: Effect.succeed(input?.configOptions ?? []),
     prompt:
       input?.prompt ??
       (() => Effect.succeed({ stopReason: "end_turn" } as EffectAcpSchema.PromptResponse)),
@@ -404,4 +406,101 @@ describe("DevinAdapterLive", () => {
       ),
     );
   });
+
+  it.effect("lists models from the live ACP session config options", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      const result = yield* adapter.listModels();
+
+      assert.strictEqual(result.source, "devin.acp");
+      assert.strictEqual(result.cached, false);
+      assert.strictEqual(result.models.length, 2);
+      assert.deepStrictEqual(
+        result.models.find((m) => m.slug === "swe-1-6"),
+        { slug: "swe-1-6", name: "SWE 1.6" },
+      );
+      assert.deepStrictEqual(
+        result.models.find((m) => m.slug === "claude-opus-4-8-medium"),
+        { slug: "claude-opus-4-8-medium", name: "Claude Opus 4.8 Medium" },
+      );
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () =>
+            Effect.succeed(
+              makeMockRuntime({
+                configOptions: [
+                  {
+                    id: "model",
+                    category: "model",
+                    type: "select",
+                    currentValue: "swe-1-6",
+                    options: [
+                      { value: "swe-1-6", name: "SWE 1.6" },
+                      {
+                        value: "claude-opus-4-8-medium",
+                        name: "Claude Opus 4.8 Medium",
+                      },
+                    ],
+                  } as unknown as EffectAcpSchema.SessionConfigOption,
+                ],
+              }),
+            ),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("falls back to the static catalog when no session is live", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+
+      const result = yield* adapter.listModels();
+
+      assert.strictEqual(result.source, "devin.fallback");
+      assert.strictEqual(result.cached, true);
+      assert.deepStrictEqual(result.models, DEVIN_FALLBACK_MODELS);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("falls back when the live session exposes no model option", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      const result = yield* adapter.listModels();
+
+      assert.strictEqual(result.source, "devin.fallback");
+      assert.strictEqual(result.cached, true);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () =>
+            Effect.succeed(
+              makeMockRuntime({
+                configOptions: [],
+              }),
+            ),
+        }),
+      ),
+    ),
+  );
 });
