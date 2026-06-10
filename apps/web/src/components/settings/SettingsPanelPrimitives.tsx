@@ -61,7 +61,7 @@ export function SettingsRow({
   children,
   onClick,
 }: {
-  title: string;
+  title: ReactNode;
   description: string;
   status?: ReactNode;
   resetAction?: ReactNode;

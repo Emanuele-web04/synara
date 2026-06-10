@@ -84,7 +84,9 @@ export const COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME = composerInlineChipClassNam
 export const COMPOSER_INLINE_LINK_CHIP_CLASS_NAME = composerInlineChipClassName({
   fill: "plain",
   tone: "accent",
-  className: "cursor-pointer hover:underline",
+  // `text-left` resets the UA `<button>` default of `text-align: center`, which
+  // otherwise centers a wrapped URL label in the timeline's interactive chip.
+  className: "cursor-pointer text-left hover:underline",
 });
 
 // ── Shared icon / label ───────────────────────────────────────────────

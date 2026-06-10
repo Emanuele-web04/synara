@@ -13,7 +13,7 @@ const projectionThreadsColumnNames = (sql: SqlClient.SqlClient) =>
   `.pipe(Effect.map((rows) => rows.map((row) => row.name)));
 
 layer("039_ReconcileLegacyPinnedThreads", (it) => {
-  it.effect("heals legacy DBs whose tracker skipped Synara migration 36", () =>
+  it.effect("heals legacy DBs whose tracker recorded a foreign migration 36", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
@@ -22,15 +22,24 @@ layer("039_ReconcileLegacyPinnedThreads", (it) => {
         INSERT INTO effect_sql_migrations (migration_id, name)
         VALUES (36, 'LegacyProjectionThreadsPinned')
       `;
+
+      // The lineage reconciler spots the foreign row at ID 36 before the
+      // migrator runs, so Synara's 36 is replayed in the same pass instead of
+      // being skipped by the max-ID gate.
       yield* runMigrations({ toMigrationInclusive: 38 });
-
-      const beforeColumns = yield* projectionThreadsColumnNames(sql);
-      assert.notInclude(beforeColumns, "is_pinned");
-
-      yield* runMigrations();
 
       const afterColumns = yield* projectionThreadsColumnNames(sql);
       assert.include(afterColumns, "is_pinned");
+
+      const [row36] = yield* sql<{ readonly name: string }>`
+        SELECT name FROM effect_sql_migrations WHERE migration_id = 36
+      `;
+      assert.strictEqual(row36?.name, "ProjectionThreadsPinned");
+
+      yield* runMigrations();
+
+      const finalColumns = yield* projectionThreadsColumnNames(sql);
+      assert.include(finalColumns, "is_pinned");
     }),
   );
 

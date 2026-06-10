@@ -7,8 +7,12 @@
  *
  * Migration #023 previously held this self-healing logic, but legacy DBs
  * also have a row for ID 23 (T3 Code's `ProjectionThreadShellSummary`),
- * so the migrator skipped it too. This migration is at a fresh ID beyond
- * any T3 Code migration, guaranteeing it runs on import.
+ * so the migrator skipped it too. This migration was renumbered past the
+ * T3 Code migrations known at the time, but legacy trackers eventually
+ * outran it as well (SYN-99). `reconcileMigrationLineage` in Migrations.ts
+ * now repairs foreign trackers before the migrator runs, so this migration
+ * is guaranteed to execute on legacy imports regardless of the imported
+ * tracker's high-water mark.
  *
  * Idempotent and a no-op for fresh Synara installs (every column already
  * exists from the in-order runs of 17-31).

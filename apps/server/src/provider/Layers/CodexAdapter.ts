@@ -53,6 +53,7 @@ import {
 import { isNonFatalCodexErrorMessage } from "../../codexErrorClassification.ts";
 import { ServerConfig } from "../../config.ts";
 import { extractProposedPlanMarkdown } from "../planMode.ts";
+import { synaraSkillsDir } from "../skillsCatalog.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "codex" as const;
@@ -1556,7 +1557,12 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           return options.manager;
         }
         const services = yield* Effect.services<never>();
-        return options?.makeManager?.(services) ?? new CodexAppServerManager(services);
+        return (
+          options?.makeManager?.(services) ??
+          new CodexAppServerManager(services, {
+            synaraSkillsDir: synaraSkillsDir(serverConfig.baseDir),
+          })
+        );
       }),
       (manager) =>
         Effect.sync(() => {

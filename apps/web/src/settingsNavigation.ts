@@ -12,6 +12,7 @@ export const SETTINGS_SECTION_IDS = [
   "archived",
   "models",
   "providers",
+  "skills",
   "usage",
   "advanced",
 ] as const;
@@ -115,6 +116,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "Choose visible providers, review CLI installs, and update provider tools.",
     icon: "puzzle",
     eyebrow: "Picker visibility",
+  },
+  {
+    id: "skills",
+    group: "synara",
+    label: "Skills",
+    description: "Every skill found across providers, with toggles to control availability.",
+    icon: "building-blocks",
+    eyebrow: "Agent skills",
   },
   {
     id: "usage",

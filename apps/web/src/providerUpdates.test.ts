@@ -66,6 +66,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       pi: { ...provider, binaryPath: "pi", agentDir: "" },
       ...overrides,
     },
+    skills: { disabled: [] },
   };
 }
 

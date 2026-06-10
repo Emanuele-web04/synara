@@ -41,6 +41,7 @@ import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
+import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
@@ -1073,6 +1074,23 @@ export const makeWsRpcLayer = () =>
           rpcEffect(providerDiscoveryService.listCommands(input), "Failed to list commands"),
         [WS_METHODS.providerListSkills]: (input) =>
           rpcEffect(providerDiscoveryService.listSkills(input), "Failed to list skills"),
+        [WS_METHODS.providerListSkillsCatalog]: (input) =>
+          rpcEffect(
+            Effect.tryPromise(() =>
+              discoverSkillsCatalog({
+                cwd: input.cwd ?? null,
+                homeDir: config.homeDir,
+                synaraBaseDir: config.baseDir,
+                includeDuplicateOrigins: true,
+              }),
+            ).pipe(
+              Effect.map((skills) => ({
+                skills,
+                synaraSkillsDir: synaraSkillsDir(config.baseDir),
+              })),
+            ),
+            "Failed to list the skills catalog",
+          ),
         [WS_METHODS.providerListPlugins]: (input) =>
           rpcEffect(providerDiscoveryService.listPlugins(input), "Failed to list plugins"),
         [WS_METHODS.providerReadPlugin]: (input) =>
