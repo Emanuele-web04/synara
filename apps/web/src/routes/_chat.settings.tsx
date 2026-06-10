@@ -122,6 +122,7 @@ import {
 import {
   serverConfigQueryOptions,
   serverQueryKeys,
+  serverSettingsQueryOptions,
   serverWorktreesQueryOptions,
 } from "../lib/serverReactQuery";
 import { cn, isMacPlatform } from "../lib/utils";
@@ -152,6 +153,10 @@ import { createAllThreadsSelector } from "../storeSelectors";
 import { formatRelativeTime } from "../components/Sidebar";
 import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 import { sameProviderOrder } from "../providerOrdering";
+import {
+  getVisibleProviderUpdateStatuses,
+  shouldShowProviderUpdateStatus,
+} from "../providerUpdates";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
 
@@ -596,6 +601,7 @@ function SettingsRouteView() {
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const serverWorktreesQuery = useQuery(serverWorktreesQueryOptions());
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const removeDeletedThreadFromClientState = useStore(
@@ -720,20 +726,16 @@ function SettingsRouteView() {
       new Map((serverConfigQuery.data?.providers ?? []).map((status) => [status.provider, status])),
     [serverConfigQuery.data?.providers],
   );
-  const outdatedProviderCount = useMemo(
-    () =>
-      (serverConfigQuery.data?.providers ?? []).filter(
-        (status) => status.versionAdvisory?.status === "behind_latest",
-      ).length,
-    [serverConfigQuery.data?.providers],
-  );
   const outdatedProviderStatuses = useMemo(
     () =>
-      (serverConfigQuery.data?.providers ?? []).filter(
-        (status) => status.versionAdvisory?.status === "behind_latest",
-      ),
-    [serverConfigQuery.data?.providers],
+      getVisibleProviderUpdateStatuses({
+        providers: serverConfigQuery.data?.providers ?? [],
+        hiddenProviders: settings.hiddenProviders,
+        serverSettings: serverSettingsQuery.data ?? null,
+      }),
+    [serverConfigQuery.data?.providers, serverSettingsQuery.data, settings.hiddenProviders],
   );
+  const outdatedProviderCount = outdatedProviderStatuses.length;
   useSettingsTargetScroll(
     activeSection === "providers" && settingsTarget === SETTINGS_TARGETS.providerUpdates,
     providerUpdatesRef,
@@ -2640,8 +2642,20 @@ function SettingsRouteView() {
                                 ? piBinaryPath
                                 : codexBinaryPath;
                 const providerStatus = providerStatusByProvider.get(providerSettings.provider);
+                const showProviderUpdateStatus = providerStatus
+                  ? shouldShowProviderUpdateStatus({
+                      provider: providerStatus,
+                      hiddenProviderSet,
+                      serverSettings: serverSettingsQuery.data ?? null,
+                    })
+                  : false;
+                const providerUpdateSuppressed =
+                  providerStatus?.versionAdvisory?.status === "behind_latest" &&
+                  !showProviderUpdateStatus;
                 const providerUpdateLabel = providerStatus
-                  ? providerUpdateStatusLabel(providerStatus)
+                  ? providerUpdateSuppressed
+                    ? null
+                    : providerUpdateStatusLabel(providerStatus)
                   : null;
                 const updateAdvisory = providerStatus?.versionAdvisory;
                 const providerUpdateState = providerStatus?.updateState?.status;
@@ -2650,9 +2664,14 @@ function SettingsRouteView() {
                   providerUpdateState === "running" ||
                   updatingProviders.has(providerSettings.provider);
                 const canUpdateProvider =
+                  showProviderUpdateStatus &&
                   updateAdvisory?.status === "behind_latest" &&
                   updateAdvisory.canUpdate &&
                   !isProviderUpdateActive;
+                const shouldShowProviderUpdateButton =
+                  showProviderUpdateStatus &&
+                  updateAdvisory?.status === "behind_latest" &&
+                  updateAdvisory.canUpdate;
 
                 return (
                   <Collapsible
@@ -2704,7 +2723,7 @@ function SettingsRouteView() {
                             )}
                           />
                         </button>
-                        {updateAdvisory?.status === "behind_latest" && updateAdvisory.canUpdate ? (
+                        {shouldShowProviderUpdateButton ? (
                           <Button
                             type="button"
                             size="xs"
@@ -2734,7 +2753,8 @@ function SettingsRouteView() {
                         <div className="border-t border-border/70 bg-muted/20 px-3 py-3">
                           <div className="space-y-3">
                             <ProviderDocsLinks docs={providerSettings.docs} />
-                            {updateAdvisory?.status === "behind_latest" ? (
+                            {showProviderUpdateStatus &&
+                            updateAdvisory?.status === "behind_latest" ? (
                               <div className="text-xs text-muted-foreground">
                                 {updateAdvisory.canUpdate && updateAdvisory.updateCommand ? (
                                   <>

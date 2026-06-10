@@ -76,9 +76,18 @@ import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitRea
 import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { useProviderAuthRefreshOnFocus } from "../hooks/useProviderAuthRefreshOnFocus";
+import { useProviderStatusRefresh } from "../hooks/useProviderStatusRefresh";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
+import { useAppSettings } from "../appSettings";
+import {
+  getVisibleProviderUpdateStatuses,
+  isProviderUpdateActive,
+  providerUpdateNotificationKey,
+  PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS,
+  PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
+} from "../providerUpdates";
 import {
   getGitInvalidationThreadIdForEvent,
   resolveGitInvalidationCwdForThreadId,
@@ -97,22 +106,6 @@ type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
 type ActiveProviderUpdateToast =
   | { readonly kind: "prompt"; readonly key: string; readonly toastId: ProviderUpdateToastId }
   | { readonly kind: "update"; readonly key: string; readonly toastId: ProviderUpdateToastId };
-
-function isProviderUpdateActive(provider: ServerProviderStatus): boolean {
-  return provider.updateState?.status === "queued" || provider.updateState?.status === "running";
-}
-
-function providerUpdateNotificationKey(
-  providers: ReadonlyArray<ServerProviderStatus>,
-): string | null {
-  const parts = providers
-    .map((provider) =>
-      [provider.provider, provider.versionAdvisory?.latestVersion ?? "unknown"].join(":"),
-    )
-    .toSorted();
-
-  return parts.length > 0 ? parts.join("|") : null;
-}
 
 function shellThreadHasStarted(thread: OrchestrationShellSnapshot["threads"][number]): boolean {
   return thread.latestTurn !== null || thread.session !== null;
@@ -215,21 +208,28 @@ function GitProgressToastPreviewDev() {
 function ProviderUpdateNotifications() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { settings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const [isUpdatingAll, setIsUpdatingAll] = useState(false);
   const activeToastRef = useRef<ActiveProviderUpdateToast | null>(null);
   const isUpdatingAllRef = useRef(false);
   const progressToastDismissedRef = useRef(false);
+  // Provider latest-version checks are slow/network-backed, so keep this much
+  // coarser than auth focus refreshes while still avoiding manual-only refreshes.
+  useProviderStatusRefresh({
+    initialDelayMs: PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS,
+    intervalMs: PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
+  });
   const outdatedProviders = useMemo(
     () =>
-      (serverConfigQuery.data?.providers ?? []).filter(
-        (provider) =>
-          provider.versionAdvisory?.status === "behind_latest" &&
-          provider.versionAdvisory.latestVersion !== null &&
-          provider.versionAdvisory.canUpdate === true &&
-          provider.versionAdvisory.updateCommand !== null,
-      ),
-    [serverConfigQuery.data?.providers],
+      getVisibleProviderUpdateStatuses({
+        providers: serverConfigQuery.data?.providers ?? [],
+        hiddenProviders: settings.hiddenProviders,
+        serverSettings: serverSettingsQuery.data ?? null,
+        oneClickOnly: true,
+      }),
+    [serverConfigQuery.data?.providers, serverSettingsQuery.data, settings.hiddenProviders],
   );
   const oneClickProviders = useMemo(
     () => outdatedProviders.filter((provider) => !isProviderUpdateActive(provider)),

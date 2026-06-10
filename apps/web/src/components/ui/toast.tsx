@@ -244,13 +244,16 @@ function ToastActions({
 
 function ToastCloseButton({
   compact = false,
+  onDismiss,
   onClose,
 }: {
   compact?: boolean;
+  onDismiss: () => void;
   onClose?: (() => void) | undefined;
 }) {
   return (
-    <Toast.Close
+    <button
+      type="button"
       aria-label="Dismiss toast"
       className={cn(
         // pointer-events-auto keeps the X clickable even when a stacked/collapsed
@@ -259,11 +262,14 @@ function ToastCloseButton({
         compact ? "size-5" : "absolute top-2 right-2 size-6",
       )}
       data-slot="toast-close"
-      onClick={onClose}
+      onClick={() => {
+        onClose?.();
+        onDismiss();
+      }}
       title="Dismiss toast"
     >
       <XIcon className={compact ? "size-3" : "size-3.5"} />
-    </Toast.Close>
+    </button>
   );
 }
 
@@ -271,10 +277,12 @@ function ToastSurface({
   toast,
   compact,
   hideCollapsedContent,
+  onDismiss,
 }: {
   toast: ToastObject<ThreadToastData>;
   compact: boolean;
   hideCollapsedContent: boolean;
+  onDismiss: () => void;
 }) {
   const Icon = toast.type ? TOAST_ICONS[toast.type as keyof typeof TOAST_ICONS] : null;
 
@@ -325,7 +333,7 @@ function ToastSurface({
         ) : null}
       </div>
 
-      <ToastCloseButton compact={compact} onClose={toast.data?.onClose} />
+      <ToastCloseButton compact={compact} onClose={toast.data?.onClose} onDismiss={onDismiss} />
     </Toast.Content>
   );
 }
@@ -465,6 +473,7 @@ function Toasts({ position = "top-center" }: { position: ToastPosition }) {
               <ToastSurface
                 compact={compact}
                 hideCollapsedContent={hideCollapsedContent}
+                onDismiss={() => toastManager.close(toast.id)}
                 toast={toast}
               />
             </Toast.Root>
@@ -527,7 +536,12 @@ function AnchoredToasts() {
                       <Toast.Title data-slot="toast-title" />
                     </Toast.Content>
                   ) : (
-                    <ToastSurface compact={compact} hideCollapsedContent={false} toast={toast} />
+                    <ToastSurface
+                      compact={compact}
+                      hideCollapsedContent={false}
+                      onDismiss={() => anchoredToastManager.close(toast.id)}
+                      toast={toast}
+                    />
                   )}
                 </Toast.Root>
               </Toast.Positioner>
