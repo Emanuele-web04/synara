@@ -78,6 +78,120 @@ function propertyOptions(
   }
 }
 
+export interface DevinElicitationValidationResult {
+  readonly valid: boolean;
+  readonly issues: ReadonlyArray<string>;
+}
+
+/**
+ * Validates submitted user-input answers against a Devin ACP form elicitation
+ * request before the adapter resolves the pending deferred.
+ *
+ * Pure and total: never throws; invalid input yields `valid: false` with
+ * human-readable issue strings. Null answers mean "skipped" and are only
+ * invalid when the property is listed in `requestedSchema.required`.
+ */
+export function validateUserInputAnswersForElicitation(
+  request: ElicitationForm,
+  answers: Record<string, string | ReadonlyArray<string> | null>,
+): DevinElicitationValidationResult {
+  const properties = request.requestedSchema.properties;
+  const hasProperties = properties !== undefined && Object.keys(properties).length > 0;
+  const issues: string[] = [];
+
+  // unknown keys: only the synthetic "response" key is allowed when the form has no properties
+  for (const key of Object.keys(answers)) {
+    if (hasProperties) {
+      if (!properties[key]) {
+        issues.push(`Unknown answer key '${key}'.`);
+      }
+    } else if (key !== "response") {
+      issues.push(`Unknown answer key '${key}'; expected only 'response'.`);
+    }
+  }
+
+  // required properties must be present and non-null
+  for (const key of request.requestedSchema.required ?? []) {
+    if (answers[key] === undefined || answers[key] === null) {
+      issues.push(`Missing required answer '${key}'.`);
+    }
+  }
+
+  // per-property value validation
+  if (hasProperties) {
+    for (const [key, value] of Object.entries(answers)) {
+      const prop = properties[key];
+      if (!prop || value === null) continue;
+      const issue = validateAnswerValue(key, prop, value);
+      if (issue !== undefined) {
+        issues.push(issue);
+      }
+    }
+  }
+
+  return { valid: issues.length === 0, issues };
+}
+
+function validateAnswerValue(
+  key: string,
+  prop: ElicitationProperty,
+  value: string | ReadonlyArray<string>,
+): string | undefined {
+  switch (prop.type) {
+    case "string": {
+      const raw = normalizeStringValue(value);
+      if (prop.enum && prop.enum.length > 0 && !prop.enum.includes(raw)) {
+        return `Answer '${key}' must be one of: ${prop.enum.join(", ")}.`;
+      }
+      if (prop.oneOf && prop.oneOf.length > 0) {
+        const allowed = prop.oneOf.map((opt) => opt.const);
+        if (!allowed.includes(raw)) {
+          return `Answer '${key}' must be one of: ${allowed.join(", ")}.`;
+        }
+      }
+      return undefined;
+    }
+
+    case "boolean":
+      return normalizeBooleanValue(value) === undefined
+        ? `Answer '${key}' must be Yes, No, true, or false.`
+        : undefined;
+
+    case "number":
+    case "integer": {
+      const num = Number(value);
+      if (!Number.isFinite(num)) {
+        return `Answer '${key}' must be a finite number.`;
+      }
+      if (prop.type === "integer" && !Number.isInteger(num)) {
+        return `Answer '${key}' must be an integer.`;
+      }
+      return undefined;
+    }
+
+    case "array": {
+      const selected = Array.isArray(value) ? value : [String(value)];
+      const items = prop.items;
+      const allowed =
+        "enum" in items && Array.isArray(items.enum)
+          ? items.enum
+          : "anyOf" in items && Array.isArray(items.anyOf)
+            ? items.anyOf.map((opt) => opt.const)
+            : undefined;
+      if (allowed && allowed.length > 0) {
+        const disallowed = selected.filter((entry) => !allowed.includes(entry));
+        if (disallowed.length > 0) {
+          return `Answer '${key}' contains disallowed values: ${disallowed.join(", ")}. Allowed: ${allowed.join(", ")}.`;
+        }
+      }
+      return undefined;
+    }
+
+    default:
+      return undefined;
+  }
+}
+
 export function userInputAnswersToElicitationContent(
   request: ElicitationForm,
   answers: Record<string, string | ReadonlyArray<string> | null>,

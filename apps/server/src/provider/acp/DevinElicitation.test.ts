@@ -8,6 +8,7 @@ import { describe, it, assert } from "@effect/vitest";
 import {
   elicitationFormToUserInputQuestions,
   userInputAnswersToElicitationContent,
+  validateUserInputAnswersForElicitation,
 } from "./DevinElicitation.ts";
 
 const baseForm = {
@@ -414,5 +415,228 @@ describe("userInputAnswersToElicitationContent", () => {
       flag: true,
       tags: ["a"],
     });
+  });
+});
+
+describe("validateUserInputAnswersForElicitation", () => {
+  const enumForm = {
+    ...baseForm,
+    requestedSchema: {
+      type: "object" as const,
+      properties: {
+        choice: { type: "string" as const, enum: ["a", "b"] },
+      },
+    },
+  };
+
+  it("rejects a string enum value not in the enum", () => {
+    const result = validateUserInputAnswersForElicitation(enumForm, {
+      choice: "not-allowed",
+    });
+    assert.strictEqual(result.valid, false);
+    assert.strictEqual(result.issues.length, 1);
+    assert.match(result.issues[0]!, /must be one of: a, b/);
+  });
+
+  it("accepts a string enum value in the enum", () => {
+    const result = validateUserInputAnswersForElicitation(enumForm, { choice: "a" });
+    assert.strictEqual(result.valid, true);
+    assert.deepStrictEqual(result.issues, []);
+  });
+
+  it("rejects a string oneOf value not in the allowed constants", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          kind: {
+            type: "string" as const,
+            oneOf: [
+              { const: "bug", title: "Bug fix" },
+              { const: "feature", title: "New feature" },
+            ],
+          },
+        },
+      },
+    };
+
+    const invalid = validateUserInputAnswersForElicitation(form, { kind: "chore" });
+    assert.strictEqual(invalid.valid, false);
+    assert.match(invalid.issues[0]!, /must be one of: bug, feature/);
+
+    const valid = validateUserInputAnswersForElicitation(form, { kind: "feature" });
+    assert.strictEqual(valid.valid, true);
+  });
+
+  it("rejects an array enum value containing an unlisted item", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          tags: {
+            type: "array" as const,
+            items: { enum: ["ux", "api"], type: "string" as const },
+          },
+        },
+      },
+    };
+
+    const invalid = validateUserInputAnswersForElicitation(form, {
+      tags: ["ux", "db"],
+    });
+    assert.strictEqual(invalid.valid, false);
+    assert.match(invalid.issues[0]!, /disallowed values: db/);
+
+    const valid = validateUserInputAnswersForElicitation(form, { tags: ["ux"] });
+    assert.strictEqual(valid.valid, true);
+  });
+
+  it("rejects an array anyOf value containing an unlisted item", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          files: {
+            type: "array" as const,
+            items: {
+              anyOf: [
+                { const: "f1", title: "File One" },
+                { const: "f2", title: "File Two" },
+              ],
+            },
+          },
+        },
+      },
+    };
+
+    const invalid = validateUserInputAnswersForElicitation(form, { files: ["f3"] });
+    assert.strictEqual(invalid.valid, false);
+    assert.match(invalid.issues[0]!, /disallowed values: f3/);
+  });
+
+  it("wraps a lone string for an array property before checking allowed items", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          tags: {
+            type: "array" as const,
+            items: { enum: ["a", "b"], type: "string" as const },
+          },
+        },
+      },
+    };
+
+    assert.strictEqual(validateUserInputAnswersForElicitation(form, { tags: "a" }).valid, true);
+    assert.strictEqual(validateUserInputAnswersForElicitation(form, { tags: "x" }).valid, false);
+  });
+
+  it("rejects missing required answers", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          choice: { type: "string" as const, enum: ["a", "b"] },
+        },
+        required: ["choice"],
+      },
+    };
+
+    const missing = validateUserInputAnswersForElicitation(form, {});
+    assert.strictEqual(missing.valid, false);
+    assert.match(missing.issues[0]!, /Missing required answer 'choice'/);
+
+    const nulled = validateUserInputAnswersForElicitation(form, { choice: null });
+    assert.strictEqual(nulled.valid, false);
+    assert.match(nulled.issues[0]!, /Missing required answer 'choice'/);
+  });
+
+  it("allows null answers for optional properties", () => {
+    const result = validateUserInputAnswersForElicitation(enumForm, { choice: null });
+    assert.strictEqual(result.valid, true);
+  });
+
+  it("rejects non-integer text for an integer property", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          count: { type: "integer" as const },
+        },
+      },
+    };
+
+    const nonNumeric = validateUserInputAnswersForElicitation(form, { count: "abc" });
+    assert.strictEqual(nonNumeric.valid, false);
+    assert.match(nonNumeric.issues[0]!, /must be a finite number/);
+
+    const fractional = validateUserInputAnswersForElicitation(form, { count: "4.5" });
+    assert.strictEqual(fractional.valid, false);
+    assert.match(fractional.issues[0]!, /must be an integer/);
+
+    const valid = validateUserInputAnswersForElicitation(form, { count: "42" });
+    assert.strictEqual(valid.valid, true);
+  });
+
+  it("rejects a non-boolean answer for a boolean property", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          flag: { type: "boolean" as const },
+        },
+      },
+    };
+
+    const invalid = validateUserInputAnswersForElicitation(form, { flag: "maybe" });
+    assert.strictEqual(invalid.valid, false);
+    assert.match(invalid.issues[0]!, /must be Yes, No, true, or false/);
+
+    assert.strictEqual(validateUserInputAnswersForElicitation(form, { flag: "Yes" }).valid, true);
+    assert.strictEqual(validateUserInputAnswersForElicitation(form, { flag: "false" }).valid, true);
+  });
+
+  it("rejects unknown keys when properties exist", () => {
+    const result = validateUserInputAnswersForElicitation(enumForm, {
+      choice: "a",
+      extra: "nope",
+    });
+    assert.strictEqual(result.valid, false);
+    assert.match(result.issues[0]!, /Unknown answer key 'extra'/);
+  });
+
+  it("accepts the synthetic response key when properties are empty", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: { type: "object" as const },
+    };
+
+    assert.strictEqual(
+      validateUserInputAnswersForElicitation(form, { response: "continue" }).valid,
+      true,
+    );
+    assert.strictEqual(validateUserInputAnswersForElicitation(form, { other: "x" }).valid, false);
+  });
+
+  it("accepts free-form string answers without enum constraints", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          note: { type: "string" as const },
+        },
+      },
+    };
+
+    const result = validateUserInputAnswersForElicitation(form, { note: "anything goes" });
+    assert.strictEqual(result.valid, true);
   });
 });
