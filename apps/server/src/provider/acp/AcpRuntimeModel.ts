@@ -52,6 +52,11 @@ export interface AcpPermissionRequest {
   readonly toolCall?: AcpToolCallState;
 }
 
+export interface AcpAvailableCommand {
+  readonly name: string;
+  readonly description?: string;
+}
+
 export type AcpParsedSessionEvent =
   | {
       readonly _tag: "ModeChanged";
@@ -86,6 +91,11 @@ export type AcpParsedSessionEvent =
       readonly _tag: "UsageUpdated";
       readonly usage: ThreadTokenUsageSnapshot;
       readonly cost?: EffectAcpSchema.Cost | null | undefined;
+      readonly rawPayload: unknown;
+    }
+  | {
+      readonly _tag: "AvailableCommandsUpdated";
+      readonly commands: ReadonlyArray<AcpAvailableCommand>;
       readonly rawPayload: unknown;
     };
 
@@ -624,6 +634,18 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
           rawPayload: params,
         });
       }
+      break;
+    }
+    case "available_commands_update": {
+      const commands = upd.availableCommands
+        .map((command) => {
+          const name = command.name.trim();
+          if (!name) return undefined;
+          const description = command.description?.trim() || undefined;
+          return description !== undefined ? { name, description } : { name };
+        })
+        .filter((c): c is AcpAvailableCommand => c !== undefined);
+      events.push({ _tag: "AvailableCommandsUpdated", commands, rawPayload: params });
       break;
     }
     case "tool_call": {

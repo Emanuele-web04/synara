@@ -482,6 +482,87 @@ describe("AcpRuntimeModel", () => {
     ]);
   });
 
+  it("projects ACP available_commands_update into AvailableCommandsUpdated events", () => {
+    const result = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [
+          { name: "/revert", description: "Revert changes" },
+          { name: "/steps", description: "" },
+          { name: "  /fork  ", description: "  Fork session  " },
+        ],
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(result.events).toEqual([
+      {
+        _tag: "AvailableCommandsUpdated",
+        commands: [
+          { name: "/revert", description: "Revert changes" },
+          { name: "/steps" },
+          { name: "/fork", description: "Fork session" },
+        ],
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [
+              { name: "/revert", description: "Revert changes" },
+              { name: "/steps", description: "" },
+              { name: "  /fork  ", description: "  Fork session  " },
+            ],
+          },
+        },
+      },
+    ]);
+  });
+
+  it("drops empty-name entries from available_commands_update", () => {
+    const result = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [
+          { name: "   ", description: "no name" },
+          { name: "/revert" },
+        ],
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(result.events).toEqual([
+      {
+        _tag: "AvailableCommandsUpdated",
+        commands: [{ name: "/revert" }],
+        rawPayload: expect.any(Object),
+      },
+    ]);
+  });
+
+  it("emits AvailableCommandsUpdated with empty commands for empty availableCommands array", () => {
+    const result = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [],
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(result.events).toEqual([
+      {
+        _tag: "AvailableCommandsUpdated",
+        commands: [],
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [],
+          },
+        },
+      },
+    ]);
+  });
+
   it("keeps permission request parsing compatible with loose extension payloads", () => {
     const request = parsePermissionRequest({
       sessionId: "session-1",
