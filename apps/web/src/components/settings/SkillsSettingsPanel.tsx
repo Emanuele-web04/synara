@@ -31,11 +31,12 @@ function SkillProviderStack({ providers }: { providers: ReadonlyArray<ProviderKi
   }
 
   const label = providers.map(providerDisplayName).join(", ");
+  const stackLabel = `Provider ${providers.length === 1 ? "copy" : "copies"}: ${label}`;
   return (
     <span
       className="inline-flex shrink-0 items-center -space-x-1"
-      aria-label={`Available from ${label}`}
-      title={label}
+      aria-label={stackLabel}
+      title={stackLabel}
     >
       {providers.map((provider) => (
         <span

@@ -59,7 +59,7 @@ describe("buildSettingsSkillGroups", () => {
     expect(cursorOnly?.providers).toEqual(["cursor"]);
   });
 
-  it("shows shared alias skills as available to providers that read .agents", () => {
+  it("does not show provider icons for shared alias-only skills", () => {
     const groups = buildSettingsSkillGroups([
       skill({
         name: "portable-review",
@@ -69,16 +69,8 @@ describe("buildSettingsSkillGroups", () => {
       }),
     ]);
 
-    expect(groups[0]?.providers).toEqual([
-      "codex",
-      "cursor",
-      "gemini",
-      "grok",
-      "kilo",
-      "opencode",
-      "pi",
-    ]);
-    expect(groups[0]?.section).toBe("shared");
+    expect(groups[0]?.providers).toEqual([]);
+    expect(groups[0]?.section).toBe("agents");
   });
 });
 

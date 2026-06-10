@@ -89,16 +89,8 @@ export function skillOriginInfo(scope: string | undefined): SkillOriginInfo {
 }
 
 export function providersForSkillOrigin(origin: string): ProviderKind[] {
-  switch (origin) {
-    case "synara":
-      return [...PROVIDER_STACK_ORDER];
-    case "agents":
-      return sortProviderStack(["codex", "cursor", "gemini", "grok", "kilo", "opencode", "pi"]);
-    default: {
-      const provider = skillOriginInfo(origin).provider;
-      return provider ? [provider] : [];
-    }
-  }
+  const provider = skillOriginInfo(origin).provider;
+  return provider ? [provider] : [];
 }
 
 export function settingsSkillNameKey(name: string): string {
@@ -174,9 +166,7 @@ export function buildSettingsSkillGroups(
           .filter((provider, index, all) => all.indexOf(provider) === index),
       );
       const section =
-        sources.length > 1 || providers.length > 1
-          ? SHARED_SKILLS_SECTION
-          : sources[0]?.origin ?? PERSONAL_ORIGIN;
+        sources.length > 1 ? SHARED_SKILLS_SECTION : sources[0]?.origin ?? PERSONAL_ORIGIN;
       const description =
         primarySkill.interface?.shortDescription ?? primarySkill.description ?? "No description.";
       return {
