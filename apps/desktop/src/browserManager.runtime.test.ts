@@ -120,7 +120,14 @@ const hoisted = vi.hoisted(() => {
     contentView = { addChildView, removeChildView };
   }
 
-  return { createdViews, addChildView, removeChildView, idBox, FakeWebContentsView, FakeBrowserWindow };
+  return {
+    createdViews,
+    addChildView,
+    removeChildView,
+    idBox,
+    FakeWebContentsView,
+    FakeBrowserWindow,
+  };
 });
 
 const { createdViews, addChildView, removeChildView } = hoisted;

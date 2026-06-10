@@ -23,16 +23,9 @@ import {
   shell,
   systemPreferences,
 } from "electron";
-import type {
-  BrowserWindowConstructorOptions,
-  IpcMainEvent,
-  MenuItemConstructorOptions,
-} from "electron";
+import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions } from "electron";
 import * as Effect from "effect/Effect";
-import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
 import { autoUpdater, CancellationToken } from "electron-updater";
-
-import type { ContextMenuItem } from "@t3tools/contracts";
 import { NetService } from "@t3tools/shared/Net";
 import { RotatingFileSink } from "@t3tools/shared/logging";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
@@ -42,42 +35,9 @@ import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { shouldAllowMediaPermissionRequest } from "./mediaPermissions";
 import { ServerListeningDetector } from "./serverListeningDetector";
 import { syncShellEnvironment } from "./syncShellEnvironment";
-import {
-  type DownloadProgressSample,
-  getAutoUpdateDisabledReason,
-  getDownloadStallTimeoutMessage,
-  hasDownloadProgressAdvanced,
-  isExpectedStalledDownloadCancellationError,
-  isUpdateVersionNewer,
-  shouldBroadcastDownloadProgress,
-  shouldCheckForUpdatesOnForeground,
-} from "./updateState";
+import { getAutoUpdateDisabledReason } from "./updateState";
 import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
-import {
-  createInitialDesktopUpdateState,
-  reduceDesktopUpdateStateOnCheckFailure,
-  reduceDesktopUpdateStateOnCheckStart,
-  reduceDesktopUpdateStateOnDownloadComplete,
-  reduceDesktopUpdateStateOnDownloadFailure,
-  reduceDesktopUpdateStateOnDownloadProgress,
-  reduceDesktopUpdateStateOnDownloadStart,
-  reduceDesktopUpdateStateOnInstallFailure,
-  reduceDesktopUpdateStateOnNoUpdate,
-  reduceDesktopUpdateStateOnUpdateAvailable,
-} from "./updateMachine";
-import {
-  PendingUpdateCacheClearQueue,
-  resolveElectronUpdaterCacheDirName,
-  resolveElectronUpdaterPendingCacheDir,
-} from "./updatePendingCache";
-import {
-  buildGitHubReleaseDownloadBaseUrl,
-  type LatestGitHubRelease,
-  resolveGitHubUpdateSource,
-  resolveLatestStableGitHubRelease,
-} from "./githubUpdateFeed";
-import { CachedGitHubUpdateFeedRefresher } from "./updateFeedCache";
-import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
+import { resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { DesktopBrowserManager } from "./browserManager";
 import { BROWSER_IPC_CHANNELS, registerBrowserIpcHandlers, sendBrowserState } from "./browserIpc";
 import {
@@ -87,11 +47,7 @@ import {
   SYNARA_BROWSER_USE_PIPE_PATH,
   T3CODE_BROWSER_USE_PIPE_ENV,
 } from "./browserUsePipeServer";
-import {
-  DESKTOP_WS_URL_CHANNEL,
-  normalizeDesktopWsUrl,
-  resolveDesktopWsUrlFromEnv,
-} from "./desktopWsBridge";
+import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import {
   resolveDesktopAppDataBase,
   resolveDesktopUserDataPath,
@@ -112,8 +68,6 @@ import {
   BACKEND_FORCE_KILL_DELAY_MS,
   BACKEND_SHUTDOWN_TIMEOUT_MS,
   BROWSER_PERF_SAMPLE_INTERVAL_MS,
-  CONFIRM_CHANNEL,
-  CONTEXT_MENU_CHANNEL,
   DESKTOP_MENU_MAX_ZOOM_FACTOR,
   DESKTOP_MENU_MIN_ZOOM_FACTOR,
   DESKTOP_SCHEME,
@@ -122,27 +76,10 @@ import {
   LOG_FILE_MAX_BYTES,
   LOG_FILE_MAX_FILES,
   MENU_ACTION_CHANNEL,
-  NOTIFICATIONS_IS_SUPPORTED_CHANNEL,
-  NOTIFICATIONS_SHOW_CHANNEL,
-  OPEN_EXTERNAL_CHANNEL,
-  PICK_FOLDER_CHANNEL,
-  SAVE_FILE_CHANNEL,
-  SET_THEME_CHANNEL,
-  SHOW_IN_FOLDER_CHANNEL,
   SYNARA_BROWSER_LABEL,
-  UPDATE_CHECK_CHANNEL,
-  UPDATE_DOWNLOAD_CHANNEL,
-  UPDATE_GET_STATE_CHANNEL,
-  UPDATE_INSTALL_CHANNEL,
   UPDATE_STATE_CHANNEL,
 } from "./main.constants";
-import {
-  formatErrorMessage,
-  getSafeExternalUrl,
-  getSafeTheme,
-  isSaveFileInput,
-  normalizeCommitHash,
-} from "./main.inputGuards";
+import { formatErrorMessage, getSafeExternalUrl, normalizeCommitHash } from "./main.inputGuards";
 import {
   resolveIconPath as resolveIconPathFromDir,
   resolveNotificationIconPath as resolveNotificationIconPathFromDir,
@@ -150,7 +87,10 @@ import {
 } from "./main.resources";
 import { isStaticAssetRequest, resolveDesktopStaticPath } from "./main.staticAssets";
 import { buildApplicationMenuTemplate } from "./main.menu";
-import { StalledDownloadCancellationSuppression } from "./updateStallSuppression";
+import { NotificationBadgeState } from "./main.notificationBadge";
+import { registerMainIpc } from "./main.ipc";
+import { BackendProcessController } from "./main.backendProcess";
+import { DesktopUpdateController } from "./main.updateController";
 
 syncShellEnvironment();
 
@@ -172,22 +112,14 @@ const browserPerfLoggingEnabled =
   process.env.DPCODE_BROWSER_PERF === "1" ||
   process.env.T3CODE_BROWSER_PERF === "1";
 
-type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
-
 let mainWindow: BrowserWindow | null = null;
-let backendProcess: ChildProcess.ChildProcess | null = null;
 let backendPort = 0;
 let backendAuthToken = "";
 let backendHttpUrl = "";
 let backendWsUrl = "";
 let backendReadinessAbortController: AbortController | null = null;
 let backendInitialWindowOpenInFlight: Promise<void> | null = null;
-let backendListeningDetector: ServerListeningDetector | null = null;
-let restartAttempt = 0;
-let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let isQuitting = false;
-let isUpdaterInstallPreparing = false;
-let isUpdaterQuitAndInstallInFlight = false;
 let desktopShutdownPromise: Promise<void> | null = null;
 let desktopShutdownComplete = false;
 let desktopProtocolRegistered = false;
@@ -196,14 +128,13 @@ let appUpdateYmlCache: Record<string, string> | null | undefined;
 let desktopLogSink: RotatingFileSink | null = null;
 let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
-let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const browserManager = new DesktopBrowserManager();
+const notificationBadge = new NotificationBadgeState({
+  setBadgeCount: (count) => app.setBadgeCount(count),
+  getWindow: () => mainWindow,
+});
 let browserUsePipeServer: BrowserUsePipeServer | null = null;
-let configuredGitHubUpdateSource: ReturnType<typeof resolveGitHubUpdateSource> = null;
-let configuredGitHubUpdateToken = "";
-let configuredGitHubUpdateFeedRefresher: CachedGitHubUpdateFeedRefresher | null = null;
-let configuredUpdaterCacheDirName: string | null = null;
 
 browserManager.subscribe((state) => {
   sendBrowserState(mainWindow?.webContents, state);
@@ -256,9 +187,6 @@ const desktopRuntimeInfo = resolveDesktopRuntimeInfo({
   processArch: process.arch,
   runningUnderArm64Translation: app.runningUnderARM64Translation === true,
 });
-const initialUpdateState = (): DesktopUpdateState =>
-  createInitialDesktopUpdateState(app.getVersion(), desktopRuntimeInfo);
-
 function logTimestamp(): string {
   return new Date().toISOString();
 }
@@ -325,7 +253,7 @@ async function reserveBackendEndpoint(reason: string): Promise<void> {
 
 async function waitForBackendWindowReady(baseUrl: string): Promise<"listening" | "http"> {
   return await waitForBackendStartupReady({
-    listeningPromise: backendListeningDetector?.promise ?? null,
+    listeningPromise: backendProcessController.getListeningPromise(),
     waitForHttpReady: () =>
       waitForBackendHttpReady(baseUrl, {
         path: "/health",
@@ -446,19 +374,6 @@ function initializePackagedLogging(): void {
   }
 }
 
-function captureBackendOutput(child: ChildProcess.ChildProcess): void {
-  const attachStream = (stream: NodeJS.ReadableStream | null | undefined): void => {
-    stream?.on("data", (chunk: unknown) => {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
-      backendLogSink?.write(buffer);
-      backendListeningDetector?.push(buffer);
-    });
-  };
-
-  attachStream(child.stdout);
-  attachStream(child.stderr);
-}
-
 initializePackagedLogging();
 
 function getDestructiveMenuIcon(): Electron.NativeImage | undefined {
@@ -483,39 +398,40 @@ function getDestructiveMenuIcon(): Electron.NativeImage | undefined {
     return undefined;
   }
 }
-let updatePollTimer: ReturnType<typeof setInterval> | null = null;
-let updateStartupTimer: ReturnType<typeof setTimeout> | null = null;
-let updateCheckInFlight = false;
-let updateDownloadInFlight = false;
-let updaterConfigured = false;
-let updateState: DesktopUpdateState = initialUpdateState();
-let updateBackgroundedAtMs: number | null = null;
-let updateBackgroundBlurTimer: ReturnType<typeof setTimeout> | null = null;
-let updateCheckTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
-let updateDownloadStallTimer: ReturnType<typeof setTimeout> | null = null;
-let updateDownloadCancellationToken: CancellationToken | null = null;
-let rejectUpdateDownloadStall: ((error: Error) => void) | null = null;
-let lastUpdateDownloadProgressSample: DownloadProgressSample | null = null;
-const stalledDownloadCancellationSuppression = new StalledDownloadCancellationSuppression(
-  AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS,
-);
-const pendingUpdateCacheClearQueue = new PendingUpdateCacheClearQueue();
-
-function resolveUpdaterErrorContext(): DesktopUpdateErrorContext {
-  if (isUpdaterInstallPreparing || isUpdaterQuitAndInstallInFlight) return "install";
-  if (updateDownloadInFlight) return "download";
-  if (updateCheckInFlight) return "check";
-  return updateState.errorContext;
-}
-
-function clearUpdaterInstallInFlightAfterError(): void {
-  if (!isUpdaterInstallPreparing && !isUpdaterQuitAndInstallInFlight) {
-    return;
-  }
-  isUpdaterInstallPreparing = false;
-  isUpdaterQuitAndInstallInFlight = false;
-  isQuitting = false;
-}
+const updateController = new DesktopUpdateController({
+  autoUpdater,
+  createCancellationToken: () => new CancellationToken(),
+  getAppVersion: () => app.getVersion(),
+  getAppName: () => app.getName(),
+  desktopRuntimeInfo,
+  getAllWindows: () => BrowserWindow.getAllWindows(),
+  resolveAutoUpdateDisabledReason,
+  readAppUpdateYml,
+  getIsQuitting: () => isQuitting,
+  setIsQuitting: (value) => {
+    isQuitting = value;
+  },
+  stopBackendAndWaitForExit: () => stopBackendAndWaitForExit(),
+  clearNotificationBadge: () => notificationBadge.clear(),
+  formatErrorMessage,
+  githubToken: () =>
+    process.env.T3CODE_DESKTOP_UPDATE_GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || "",
+  constants: {
+    stateChannel: UPDATE_STATE_CHANNEL,
+    updateChannel: DESKTOP_UPDATE_CHANNEL,
+    allowPrerelease: DESKTOP_UPDATE_ALLOW_PRERELEASE,
+    checkTimeoutMs: AUTO_UPDATE_CHECK_TIMEOUT_MS,
+    downloadSettleTimeoutMs: AUTO_UPDATE_DOWNLOAD_SETTLE_TIMEOUT_MS,
+    downloadStallTimeoutMs: AUTO_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS,
+    feedCacheTtlMs: AUTO_UPDATE_FEED_CACHE_TTL_MS,
+    feedRefreshTimeoutMs: AUTO_UPDATE_FEED_REFRESH_TIMEOUT_MS,
+    foregroundRecheckMinBackgroundMs: AUTO_UPDATE_FOREGROUND_RECHECK_MIN_BACKGROUND_MS,
+    foregroundRecheckMinIntervalMs: AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS,
+    pollIntervalMs: AUTO_UPDATE_POLL_INTERVAL_MS,
+    stalledCancellationSuppressionMs: AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS,
+    startupDelayMs: AUTO_UPDATE_STARTUP_DELAY_MS,
+  },
+});
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -772,19 +688,20 @@ function handleCheckForUpdatesMenuClick(): void {
 async function checkForUpdatesFromMenu(): Promise<void> {
   await checkForUpdates("menu");
 
-  if (updateState.status === "up-to-date") {
+  const state = updateController.getState();
+  if (state.status === "up-to-date") {
     void dialog.showMessageBox({
       type: "info",
       title: "You're up to date!",
-      message: `Synara ${updateState.currentVersion} is currently the newest version available.`,
+      message: `Synara ${state.currentVersion} is currently the newest version available.`,
       buttons: ["OK"],
     });
-  } else if (updateState.status === "error") {
+  } else if (state.status === "error") {
     void dialog.showMessageBox({
       type: "warning",
       title: "Update check failed",
       message: "Could not check for updates.",
-      detail: updateState.message ?? "An unknown error occurred. Please try again later.",
+      detail: state.message ?? "An unknown error occurred. Please try again later.",
       buttons: ["OK"],
     });
   }
@@ -812,32 +729,6 @@ function resolveIconPath(ext: "ico" | "icns" | "png"): string | null {
 
 function resolveNotificationIconPath(): string | null {
   return resolveNotificationIconPathFromDir(__dirname);
-}
-
-// Keep the app badge aligned with desktop notifications that arrive off-focus.
-function syncUnreadNotificationBadge(): void {
-  app.setBadgeCount(unreadBackgroundNotificationCount);
-}
-
-// Count minimized, hidden, or unfocused windows as background notification targets.
-function isMainWindowForeground(window: BrowserWindow | null): boolean {
-  if (!window) {
-    return false;
-  }
-  return window.isVisible() && !window.isMinimized() && window.isFocused();
-}
-
-function incrementUnreadNotificationBadge(): void {
-  unreadBackgroundNotificationCount = Math.min(unreadBackgroundNotificationCount + 1, 99);
-  syncUnreadNotificationBadge();
-}
-
-function clearUnreadNotificationBadge(): void {
-  if (unreadBackgroundNotificationCount === 0) {
-    return;
-  }
-  unreadBackgroundNotificationCount = 0;
-  syncUnreadNotificationBadge();
 }
 
 // Reuse the existing desktop window when the app is launched again so users
@@ -876,12 +767,12 @@ function showDesktopNotification(input: {
     silent: input.silent === true,
     ...(iconPath ? { icon: iconPath } : {}),
   });
-  if (!isMainWindowForeground(mainWindow)) {
-    incrementUnreadNotificationBadge();
+  if (!notificationBadge.isMainWindowForeground()) {
+    notificationBadge.increment();
   }
 
   notification.on("click", () => {
-    clearUnreadNotificationBadge();
+    notificationBadge.clear();
     focusMainWindow();
     if (!mainWindow) {
       return;
@@ -904,10 +795,16 @@ function showDesktopNotification(input: {
  */
 function resolveUserDataPath(): string {
   const appDataBase = resolveDesktopAppDataBase();
-  const userDataPath = resolveDesktopUserDataPath({ appDataBase, isDevelopment });
+  const userDataPath = resolveDesktopUserDataPath({
+    appDataBase,
+    isDevelopment,
+  });
   const seedResult = seedDesktopUserDataProfileFromLegacy({
     targetPath: userDataPath,
-    legacyPaths: resolveLegacyDesktopUserDataPaths({ appDataBase, isDevelopment }),
+    legacyPaths: resolveLegacyDesktopUserDataPaths({
+      appDataBase,
+      isDevelopment,
+    }),
   });
   if (seedResult.status === "seeded") {
     console.info("[desktop] Seeded Synara Electron profile from legacy profile", {
@@ -964,541 +861,52 @@ function applyLegacyMacDockIcon(): void {
   app.dock.setIcon(image);
 }
 
-function clearUpdatePollTimer(): void {
-  if (updateStartupTimer) {
-    clearTimeout(updateStartupTimer);
-    updateStartupTimer = null;
-  }
-  if (updatePollTimer) {
-    clearInterval(updatePollTimer);
-    updatePollTimer = null;
-  }
-}
-
 function emitUpdateState(): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.isDestroyed()) continue;
-    window.webContents.send(UPDATE_STATE_CHANNEL, updateState);
-  }
+  updateController.emitState();
 }
 
-function setUpdateState(patch: Partial<DesktopUpdateState>): void {
-  updateState = { ...updateState, ...patch };
-  emitUpdateState();
-}
-
-function shouldEnableAutoUpdates(): boolean {
-  return resolveAutoUpdateDisabledReason() === null;
-}
-
-function applyConfiguredGitHubUpdateFeed(latestRelease: LatestGitHubRelease): void {
-  if (configuredGitHubUpdateSource === null) {
-    return;
-  }
-  autoUpdater.setFeedURL({
-    provider: "generic",
-    url: buildGitHubReleaseDownloadBaseUrl(configuredGitHubUpdateSource, latestRelease.tag),
-    ...(configuredGitHubUpdateToken
-      ? {
-          requestHeaders: {
-            authorization: `token ${configuredGitHubUpdateToken}`,
-          },
-        }
-      : {}),
-  });
-}
-
-async function resolveLatestConfiguredGitHubRelease(): Promise<LatestGitHubRelease | null> {
-  if (configuredGitHubUpdateSource === null) {
-    return null;
-  }
-
-  const controller = new AbortController();
-  let timedOut = false;
-  const timeoutTimer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, AUTO_UPDATE_FEED_REFRESH_TIMEOUT_MS);
-  timeoutTimer.unref();
-
-  try {
-    return await resolveLatestStableGitHubRelease(
-      configuredGitHubUpdateSource,
-      configuredGitHubUpdateToken,
-      { signal: controller.signal },
-    );
-  } catch (error) {
-    if (timedOut) {
-      throw new Error("Timed out while refreshing the desktop update feed.");
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeoutTimer);
-  }
-}
-
-function shouldForceUpdateFeedRefresh(reason: string): boolean {
-  return reason === "menu" || reason === "renderer";
-}
-
-// Explicit user checks bypass the feed TTL; automatic checks keep startup/foreground latency low.
-async function refreshConfiguredUpdateFeed(
-  options: { readonly force?: boolean } = {},
-): Promise<void> {
-  await configuredGitHubUpdateFeedRefresher?.refresh(options);
-}
-
-function isKnownUpdateVersionNewer(version: string | null | undefined): boolean {
-  return typeof version === "string" && isUpdateVersionNewer(app.getVersion(), version);
-}
-
-function getPendingUpdateCacheDir(): string | null {
-  return resolveElectronUpdaterPendingCacheDir({
-    cacheDirName: configuredUpdaterCacheDirName,
-    platform: process.platform,
-    homeDir: OS.homedir(),
-    localAppData: process.env.LOCALAPPDATA ?? null,
-    xdgCacheHome: process.env.XDG_CACHE_HOME ?? null,
-  });
-}
-
-// electron-updater can leave a same-version ZIP in `pending` after a restart or
-// a failed install attempt. Clearing it prevents stale "ready" states.
-async function clearPendingUpdateCache(reason: string): Promise<void> {
-  const pendingDir = getPendingUpdateCacheDir();
-  if (!pendingDir || updateDownloadInFlight) {
-    return;
-  }
-  try {
-    await FS.promises.rm(pendingDir, { recursive: true, force: true });
-    console.info(`[desktop-updater] Cleared pending update cache (${reason}).`);
-  } catch (error) {
-    console.warn(
-      `[desktop-updater] Failed to clear pending update cache (${reason}): ${formatErrorMessage(error)}`,
-    );
-  }
-}
-
-// Terminal updater events can arrive before downloadUpdate() settles; defer cache deletion
-// until the updater has released its in-flight download bookkeeping.
-function clearPendingUpdateCacheWhenSafe(reason: string): void {
-  pendingUpdateCacheClearQueue.request(reason, updateDownloadInFlight, (safeReason) => {
-    void clearPendingUpdateCache(safeReason);
-  });
+function clearUpdatePollTimer(): void {
+  updateController.clearPollTimer();
 }
 
 function clearUpdateBackgroundBlurTimer(): void {
-  if (updateBackgroundBlurTimer) {
-    clearTimeout(updateBackgroundBlurTimer);
-    updateBackgroundBlurTimer = null;
-  }
+  updateController.clearBackgroundBlurTimer();
 }
 
-// Fail closed if electron-updater never emits a terminal check outcome.
 function clearUpdateCheckTimeoutTimer(): void {
-  if (updateCheckTimeoutTimer) {
-    clearTimeout(updateCheckTimeoutTimer);
-    updateCheckTimeoutTimer = null;
-  }
-}
-
-function armUpdateCheckTimeout(reason: string): void {
-  clearUpdateCheckTimeoutTimer();
-  updateCheckTimeoutTimer = setTimeout(() => {
-    updateCheckTimeoutTimer = null;
-    if (updateState.status !== "checking") {
-      return;
-    }
-    updateCheckInFlight = false;
-    setUpdateState(
-      reduceDesktopUpdateStateOnCheckFailure(
-        updateState,
-        "Timed out while checking for updates. Try again.",
-        new Date().toISOString(),
-      ),
-    );
-    console.error(`[desktop-updater] Update check timed out (${reason}).`);
-  }, AUTO_UPDATE_CHECK_TIMEOUT_MS);
-  updateCheckTimeoutTimer.unref();
-}
-
-function clearUpdateDownloadStallTimer(): void {
-  if (updateDownloadStallTimer) {
-    clearTimeout(updateDownloadStallTimer);
-    updateDownloadStallTimer = null;
-  }
-}
-
-// Bounds a silent updater download while allowing slow downloads that keep making progress.
-function armUpdateDownloadStallTimer(reason: string): void {
-  clearUpdateDownloadStallTimer();
-  updateDownloadStallTimer = setTimeout(() => {
-    updateDownloadStallTimer = null;
-    if (!updateDownloadInFlight || updateState.status !== "downloading") {
-      return;
-    }
-
-    const error = new Error(getDownloadStallTimeoutMessage(AUTO_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS));
-    console.error(`[desktop-updater] ${error.message} (${reason}).`);
-    stalledDownloadCancellationSuppression.arm();
-    rejectUpdateDownloadStall?.(error);
-    updateDownloadCancellationToken?.cancel();
-  }, AUTO_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS);
-  updateDownloadStallTimer.unref();
-}
-
-function updateDownloadStallTimerOnProgress(progress: DownloadProgressSample): void {
-  if (!updateDownloadInFlight) {
-    return;
-  }
-  if (!hasDownloadProgressAdvanced(lastUpdateDownloadProgressSample, progress)) {
-    return;
-  }
-  lastUpdateDownloadProgressSample = {
-    percent: progress.percent ?? null,
-    transferred: progress.transferred ?? null,
-  };
-  armUpdateDownloadStallTimer(`download progress ${Math.floor(progress.percent ?? 0)}%`);
-}
-
-function isDesktopAppForegrounded(): boolean {
-  return BrowserWindow.getAllWindows().some(
-    (window) => !window.isDestroyed() && window.isFocused(),
-  );
+  updateController.clearCheckTimeoutTimer();
 }
 
 function markDesktopAppBackgrounded(): void {
-  clearUpdateBackgroundBlurTimer();
-  updateBackgroundBlurTimer = setTimeout(() => {
-    updateBackgroundBlurTimer = null;
-    if (isDesktopAppForegrounded()) {
-      return;
-    }
-    updateBackgroundedAtMs = Date.now();
-  }, 0);
+  updateController.markBackgrounded();
 }
 
 function handleDesktopAppForegrounded(): void {
-  clearUpdateBackgroundBlurTimer();
-  clearUnreadNotificationBadge();
-  const foregroundedAtMs = Date.now();
-  const backgroundedAtMs = updateBackgroundedAtMs;
-  updateBackgroundedAtMs = null;
-  const shouldCheck = shouldCheckForUpdatesOnForeground({
-    checkedAt: updateState.checkedAt,
-    backgroundedAtMs,
-    foregroundedAtMs,
-    minBackgroundDurationMs: AUTO_UPDATE_FOREGROUND_RECHECK_MIN_BACKGROUND_MS,
-    minIntervalMs: AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS,
-  });
-  if (!shouldCheck) {
-    return;
-  }
-  void checkForUpdates("foreground");
+  updateController.handleForegrounded();
 }
 
 async function checkForUpdates(reason: string): Promise<void> {
-  if (isQuitting || !updaterConfigured || updateCheckInFlight) return;
-  if (
-    updateState.status === "checking" ||
-    updateState.status === "downloading" ||
-    updateState.status === "downloaded"
-  ) {
-    console.info(
-      `[desktop-updater] Skipping update check (${reason}) while status=${updateState.status}.`,
-    );
-    return;
-  }
-  updateCheckInFlight = true;
-  setUpdateState(reduceDesktopUpdateStateOnCheckStart(updateState, new Date().toISOString()));
-  armUpdateCheckTimeout(reason);
-  console.info(`[desktop-updater] Checking for updates (${reason})...`);
-
-  try {
-    await refreshConfiguredUpdateFeed({ force: shouldForceUpdateFeedRefresh(reason) });
-    await autoUpdater.checkForUpdates();
-  } catch (error: unknown) {
-    clearUpdateCheckTimeoutTimer();
-    const message = error instanceof Error ? error.message : String(error);
-    setUpdateState(
-      reduceDesktopUpdateStateOnCheckFailure(updateState, message, new Date().toISOString()),
-    );
-    console.error(`[desktop-updater] Failed to check for updates: ${message}`);
-  } finally {
-    updateCheckInFlight = false;
-  }
+  await updateController.checkForUpdates(reason);
 }
 
 async function downloadAvailableUpdate(): Promise<{
   accepted: boolean;
   completed: boolean;
 }> {
-  if (!updaterConfigured || updateDownloadInFlight || updateState.status !== "available") {
-    return { accepted: false, completed: false };
-  }
-  if (!isKnownUpdateVersionNewer(updateState.availableVersion)) {
-    await clearPendingUpdateCache("available version is not newer than current app");
-    setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
-    console.info(
-      `[desktop-updater] Ignoring stale available update ${updateState.availableVersion ?? "unknown"} for current ${app.getVersion()}.`,
-    );
-    return { accepted: false, completed: false };
-  }
-  updateDownloadInFlight = true;
-  setUpdateState(reduceDesktopUpdateStateOnDownloadStart(updateState));
-  autoUpdater.disableDifferentialDownload = true;
-  // Keep existing cancellation suppressions across immediate retries; the old
-  // updater cancellation can arrive after a new download has already started.
-  lastUpdateDownloadProgressSample = null;
-  const cancellationToken = new CancellationToken();
-  updateDownloadCancellationToken = cancellationToken;
-  const downloadStalled = new Promise<never>((_, reject) => {
-    rejectUpdateDownloadStall = reject;
-  });
-  armUpdateDownloadStallTimer("download start");
-  console.info("[desktop-updater] Downloading update...");
-
-  // Track electron-updater's own download promise separately from the stall race.
-  // When the stall timer wins the race it cancels this promise, but the updater
-  // keeps its internal download promise set until that cancellation unwinds. We
-  // observe its settlement here (so a late rejection can't surface as an unhandled
-  // rejection) and wait on it before releasing the in-flight flag below.
-  let updaterDownloadSettled = false;
-  const updaterDownloadPromise = autoUpdater.downloadUpdate(cancellationToken);
-  const updaterDownloadSettledPromise = updaterDownloadPromise.then(
-    () => {
-      updaterDownloadSettled = true;
-    },
-    () => {
-      updaterDownloadSettled = true;
-    },
-  );
-
-  try {
-    await Promise.race([updaterDownloadPromise, downloadStalled]);
-    return { accepted: true, completed: true };
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    setUpdateState(reduceDesktopUpdateStateOnDownloadFailure(updateState, message));
-    console.error(`[desktop-updater] Failed to download update: ${message}`);
-    return { accepted: true, completed: false };
-  } finally {
-    clearUpdateDownloadStallTimer();
-    // Hold the in-flight flag until the updater download actually settles, so an
-    // immediate retry can't grab the still-cancelling promise (which would reject
-    // as "cancelled"). Bounded so a stuck updater promise can't wedge updates.
-    if (!updaterDownloadSettled) {
-      await Promise.race([
-        updaterDownloadSettledPromise,
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, AUTO_UPDATE_DOWNLOAD_SETTLE_TIMEOUT_MS).unref();
-        }),
-      ]);
-    }
-    if (updateDownloadCancellationToken === cancellationToken) {
-      updateDownloadCancellationToken = null;
-    }
-    rejectUpdateDownloadStall = null;
-    lastUpdateDownloadProgressSample = null;
-    updateDownloadInFlight = false;
-    const pendingCacheClearReason = pendingUpdateCacheClearQueue.consumeAfterDownload();
-    if (pendingCacheClearReason) {
-      await clearPendingUpdateCache(pendingCacheClearReason);
-    }
-  }
+  return updateController.downloadAvailableUpdate();
 }
 
 async function installDownloadedUpdate(): Promise<{
   accepted: boolean;
   completed: boolean;
 }> {
-  if (isQuitting || !updaterConfigured || updateState.status !== "downloaded") {
-    return { accepted: false, completed: false };
-  }
-  const versionToInstall = updateState.downloadedVersion ?? updateState.availableVersion;
-  if (!isKnownUpdateVersionNewer(versionToInstall)) {
-    await clearPendingUpdateCache("downloaded version is not newer than current app");
-    setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
-    console.info(
-      `[desktop-updater] Ignoring stale downloaded update ${versionToInstall ?? "unknown"} for current ${app.getVersion()}.`,
-    );
-    return { accepted: false, completed: false };
-  }
-
-  isQuitting = true;
-  isUpdaterInstallPreparing = true;
-  clearUpdatePollTimer();
-  try {
-    await stopBackendAndWaitForExit();
-    isUpdaterQuitAndInstallInFlight = true;
-    autoUpdater.quitAndInstall();
-    return { accepted: true, completed: true };
-  } catch (error: unknown) {
-    const message = formatErrorMessage(error);
-    isUpdaterInstallPreparing = false;
-    isUpdaterQuitAndInstallInFlight = false;
-    isQuitting = false;
-    setUpdateState(reduceDesktopUpdateStateOnInstallFailure(updateState, message));
-    console.error(`[desktop-updater] Failed to install update: ${message}`);
-    return { accepted: true, completed: false };
-  }
+  return updateController.installDownloadedUpdate();
 }
 
 function configureAutoUpdater(): void {
-  const appUpdateYml = readAppUpdateYml();
-  configuredUpdaterCacheDirName = resolveElectronUpdaterCacheDirName(appUpdateYml, app.getName());
-  const enabled = shouldEnableAutoUpdates();
-  setUpdateState({
-    ...createInitialDesktopUpdateState(app.getVersion(), desktopRuntimeInfo),
-    enabled,
-    status: enabled ? "idle" : "disabled",
-  });
-  if (!enabled) {
-    configuredGitHubUpdateSource = null;
-    configuredGitHubUpdateToken = "";
-    configuredGitHubUpdateFeedRefresher = null;
-    configuredUpdaterCacheDirName = null;
-    return;
-  }
-  updaterConfigured = true;
-  configuredGitHubUpdateSource = resolveGitHubUpdateSource(appUpdateYml);
-
-  const githubToken =
-    process.env.T3CODE_DESKTOP_UPDATE_GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || "";
-  configuredGitHubUpdateToken = githubToken;
-  configuredGitHubUpdateFeedRefresher =
-    configuredGitHubUpdateSource === null
-      ? null
-      : new CachedGitHubUpdateFeedRefresher({
-          cacheTtlMs: AUTO_UPDATE_FEED_CACHE_TTL_MS,
-          resolveLatestRelease: resolveLatestConfiguredGitHubRelease,
-          applyRelease: applyConfiguredGitHubUpdateFeed,
-          onStaleRefreshFailure: (error, release) => {
-            console.warn(
-              `[desktop-updater] Failed to refresh update feed; using cached ${release.tag}: ${formatErrorMessage(error)}`,
-            );
-          },
-        });
-
-  autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = false;
-  // Keep alpha branding, but force all installs onto the stable update track.
-  autoUpdater.channel = DESKTOP_UPDATE_CHANNEL;
-  autoUpdater.allowPrerelease = DESKTOP_UPDATE_ALLOW_PRERELEASE;
-  autoUpdater.allowDowngrade = false;
-  // We resolve the exact latest stable release when the feed cache is cold/stale
-  // and point the updater at that tag directly, so full downloads are more reliable
-  // than blockmap-based patching against a moving "latest" target.
-  autoUpdater.disableDifferentialDownload = true;
-  let lastLoggedDownloadMilestone = -1;
-
-  if (isArm64HostRunningIntelBuild(desktopRuntimeInfo)) {
-    console.info(
-      "[desktop-updater] Apple Silicon host detected while running Intel build; updates will switch to arm64 packages.",
-    );
-  }
-
-  autoUpdater.on("checking-for-update", () => {
-    console.info("[desktop-updater] Looking for updates...");
-  });
-  autoUpdater.on("update-available", (info) => {
-    clearUpdateCheckTimeoutTimer();
-    if (!isUpdateVersionNewer(app.getVersion(), info.version)) {
-      void clearPendingUpdateCache("available version is not newer than current app");
-      setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
-      lastLoggedDownloadMilestone = -1;
-      console.info(
-        `[desktop-updater] Ignoring non-newer update ${info.version}; current version is ${app.getVersion()}.`,
-      );
-      return;
-    }
-    setUpdateState(
-      reduceDesktopUpdateStateOnUpdateAvailable(
-        updateState,
-        info.version,
-        new Date().toISOString(),
-      ),
-    );
-    lastLoggedDownloadMilestone = -1;
-    console.info(`[desktop-updater] Update available: ${info.version}`);
-  });
-  autoUpdater.on("update-not-available", () => {
-    clearUpdateCheckTimeoutTimer();
-    void clearPendingUpdateCache("no newer update available");
-    setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
-    lastLoggedDownloadMilestone = -1;
-    console.info("[desktop-updater] No updates available.");
-  });
-  autoUpdater.on("error", (error) => {
-    clearUpdateCheckTimeoutTimer();
-    const message = formatErrorMessage(error);
-    const errorContext = resolveUpdaterErrorContext();
-    if (
-      isExpectedStalledDownloadCancellationError({
-        suppressionArmed: stalledDownloadCancellationSuppression.isArmed(),
-        errorContext,
-        message,
-      })
-    ) {
-      stalledDownloadCancellationSuppression.consume();
-      console.warn("[desktop-updater] Ignored expected cancellation after stalled download.");
-      return;
-    }
-    clearUpdaterInstallInFlightAfterError();
-    if (!updateCheckInFlight && !updateDownloadInFlight) {
-      setUpdateState({
-        status: "error",
-        message,
-        checkedAt: new Date().toISOString(),
-        downloadPercent: null,
-        errorContext,
-        canRetry: updateState.availableVersion !== null || updateState.downloadedVersion !== null,
-      });
-    }
-    console.error(`[desktop-updater] Updater error: ${message}`);
-  });
-  autoUpdater.on("download-progress", (progress) => {
-    const percent = Math.floor(progress.percent);
-    updateDownloadStallTimerOnProgress(progress);
-    if (
-      shouldBroadcastDownloadProgress(updateState, progress.percent) ||
-      updateState.message !== null
-    ) {
-      setUpdateState(reduceDesktopUpdateStateOnDownloadProgress(updateState, progress.percent));
-    }
-    const milestone = percent - (percent % 10);
-    if (milestone > lastLoggedDownloadMilestone) {
-      lastLoggedDownloadMilestone = milestone;
-      console.info(`[desktop-updater] Download progress: ${percent}%`);
-    }
-  });
-  autoUpdater.on("update-downloaded", (info) => {
-    clearUpdateDownloadStallTimer();
-    if (!isUpdateVersionNewer(app.getVersion(), info.version)) {
-      clearPendingUpdateCacheWhenSafe("downloaded version is not newer than current app");
-      setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
-      console.info(
-        `[desktop-updater] Ignoring downloaded non-newer update ${info.version}; current version is ${app.getVersion()}.`,
-      );
-      return;
-    }
-    setUpdateState(reduceDesktopUpdateStateOnDownloadComplete(updateState, info.version));
-    console.info(`[desktop-updater] Update downloaded: ${info.version}`);
-  });
-
-  clearUpdatePollTimer();
-
-  updateStartupTimer = setTimeout(() => {
-    updateStartupTimer = null;
-    void checkForUpdates("startup");
-  }, AUTO_UPDATE_STARTUP_DELAY_MS);
-  updateStartupTimer.unref();
-
-  updatePollTimer = setInterval(() => {
-    void checkForUpdates("poll");
-  }, AUTO_UPDATE_POLL_INTERVAL_MS);
-  updatePollTimer.unref();
+  updateController.configure();
 }
+
 function backendEnv(): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -1519,184 +927,39 @@ function backendEnv(): NodeJS.ProcessEnv {
   };
 }
 
-function scheduleBackendRestart(reason: string): void {
-  if (isQuitting || restartTimer) return;
-
-  const delayMs = Math.min(500 * 2 ** restartAttempt, 10_000);
-  restartAttempt += 1;
-  console.error(`[desktop] backend exited unexpectedly (${reason}); restarting in ${delayMs}ms`);
-
-  restartTimer = setTimeout(() => {
-    restartTimer = null;
-    void restartBackendAfterCrash(reason);
-  }, delayMs);
-}
-
-async function restartBackendAfterCrash(reason: string): Promise<void> {
-  if (isQuitting || backendProcess) {
-    return;
-  }
-
-  cancelBackendReadinessWait();
-  try {
-    await reserveBackendEndpoint("backend restart");
-  } catch (error) {
-    scheduleBackendRestart(
-      `failed to reserve restart port after ${reason}: ${formatErrorMessage(error)}`,
-    );
-    return;
-  }
-
-  startBackend();
-  ensureInitialBackendWindowOpen(backendHttpUrl);
-}
+const backendProcessController = new BackendProcessController({
+  spawn: ChildProcess.spawn,
+  execPath: process.execPath,
+  resolveBackendEntry,
+  resolveBackendCwd,
+  backendEntryExists: (entry) => FS.existsSync(entry),
+  buildEnv: backendEnv,
+  getBackendPort: () => backendPort,
+  createListeningDetector: () => new ServerListeningDetector(),
+  captureBackendLogs: () => app.isPackaged && backendLogSink !== null,
+  writeBackendLog: (buffer) => {
+    backendLogSink?.write(buffer);
+  },
+  writeSessionBoundary: writeBackendSessionBoundary,
+  getIsQuitting: () => isQuitting,
+  cancelReadinessWait: cancelBackendReadinessWait,
+  reserveEndpoint: reserveBackendEndpoint,
+  ensureInitialWindowOpen: () => ensureInitialBackendWindowOpen(backendHttpUrl),
+  formatErrorMessage,
+  forceKillDelayMs: BACKEND_FORCE_KILL_DELAY_MS,
+  shutdownTimeoutMs: BACKEND_SHUTDOWN_TIMEOUT_MS,
+});
 
 function startBackend(): void {
-  if (isQuitting || backendProcess) return;
-
-  const backendEntry = resolveBackendEntry();
-  if (!FS.existsSync(backendEntry)) {
-    scheduleBackendRestart(`missing server entry at ${backendEntry}`);
-    return;
-  }
-
-  const captureBackendLogs = app.isPackaged && backendLogSink !== null;
-  const child = ChildProcess.spawn(process.execPath, [backendEntry], {
-    cwd: resolveBackendCwd(),
-    // In Electron main, process.execPath points to the Electron binary.
-    // Run the child in Node mode so this backend process does not become a GUI app instance.
-    env: {
-      ...backendEnv(),
-      ELECTRON_RUN_AS_NODE: "1",
-    },
-    stdio: captureBackendLogs ? ["ignore", "pipe", "pipe"] : "inherit",
-  });
-  const listeningDetector = new ServerListeningDetector();
-  backendListeningDetector = listeningDetector;
-  backendProcess = child;
-  let backendSessionClosed = false;
-  const closeBackendSession = (details: string) => {
-    if (backendSessionClosed) return;
-    backendSessionClosed = true;
-    writeBackendSessionBoundary("END", details);
-  };
-  writeBackendSessionBoundary(
-    "START",
-    `pid=${child.pid ?? "unknown"} port=${backendPort} cwd=${resolveBackendCwd()}`,
-  );
-  captureBackendOutput(child);
-
-  child.once("spawn", () => {
-    restartAttempt = 0;
-  });
-
-  child.on("error", (error) => {
-    if (backendListeningDetector === listeningDetector) {
-      listeningDetector.fail(error);
-      backendListeningDetector = null;
-    }
-    if (backendProcess === child) {
-      backendProcess = null;
-    }
-    closeBackendSession(`pid=${child.pid ?? "unknown"} error=${error.message}`);
-    scheduleBackendRestart(error.message);
-  });
-
-  child.on("exit", (code, signal) => {
-    if (backendListeningDetector === listeningDetector) {
-      listeningDetector.fail(
-        new Error(
-          `backend exited before logging readiness (code=${code ?? "null"} signal=${signal ?? "null"})`,
-        ),
-      );
-      backendListeningDetector = null;
-    }
-    if (backendProcess === child) {
-      backendProcess = null;
-    }
-    closeBackendSession(
-      `pid=${child.pid ?? "unknown"} code=${code ?? "null"} signal=${signal ?? "null"}`,
-    );
-    if (isQuitting) return;
-    const reason = `code=${code ?? "null"} signal=${signal ?? "null"}`;
-    scheduleBackendRestart(reason);
-  });
+  backendProcessController.start();
 }
 
 function stopBackend(): void {
-  cancelBackendReadinessWait();
-  backendListeningDetector = null;
-  if (restartTimer) {
-    clearTimeout(restartTimer);
-    restartTimer = null;
-  }
-
-  const child = backendProcess;
-  backendProcess = null;
-  if (!child) return;
-
-  if (child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGTERM");
-    setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-      }
-    }, BACKEND_FORCE_KILL_DELAY_MS).unref();
-  }
+  backendProcessController.stop();
 }
 
 async function stopBackendAndWaitForExit(timeoutMs = BACKEND_SHUTDOWN_TIMEOUT_MS): Promise<void> {
-  cancelBackendReadinessWait();
-  backendListeningDetector = null;
-  if (restartTimer) {
-    clearTimeout(restartTimer);
-    restartTimer = null;
-  }
-
-  const child = backendProcess;
-  backendProcess = null;
-  if (!child) return;
-  const backendChild = child;
-  if (backendChild.exitCode !== null || backendChild.signalCode !== null) return;
-
-  await new Promise<void>((resolve) => {
-    let settled = false;
-    let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
-    let exitTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
-
-    function settle(): void {
-      if (settled) return;
-      settled = true;
-      backendChild.off("exit", onExit);
-      if (forceKillTimer) {
-        clearTimeout(forceKillTimer);
-      }
-      if (exitTimeoutTimer) {
-        clearTimeout(exitTimeoutTimer);
-      }
-      resolve();
-    }
-
-    function onExit(): void {
-      settle();
-    }
-
-    backendChild.once("exit", onExit);
-    backendChild.kill("SIGTERM");
-
-    const forceKillDelayMs = Math.min(BACKEND_FORCE_KILL_DELAY_MS, Math.max(1, timeoutMs - 500));
-    forceKillTimer = setTimeout(() => {
-      if (backendChild.exitCode === null && backendChild.signalCode === null) {
-        backendChild.kill("SIGKILL");
-      }
-    }, forceKillDelayMs);
-    forceKillTimer.unref();
-
-    exitTimeoutTimer = setTimeout(() => {
-      settle();
-    }, timeoutMs);
-    exitTimeoutTimer.unref();
-  });
+  await backendProcessController.stopAndWaitForExit(timeoutMs);
 }
 
 async function disposeBrowserUsePipeServerForShutdown(reason: string): Promise<void> {
@@ -1741,7 +1004,7 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
 }
 
 function requestGracefulAppQuit(reason: string): void {
-  if (isUpdaterInstallPreparing) {
+  if (updateController.isInstallPreparing()) {
     writeDesktopLogHeader(`${reason} waiting for updater quit-and-install`);
     return;
   }
@@ -1758,246 +1021,27 @@ function requestGracefulAppQuit(reason: string): void {
 }
 
 function registerIpcHandlers(): void {
-  ipcMain.removeAllListeners(DESKTOP_WS_URL_CHANNEL);
-  ipcMain.on(DESKTOP_WS_URL_CHANNEL, (event: IpcMainEvent) => {
-    // The backend port is reserved at runtime, so preload asks main for the
-    // live URL instead of trusting build-time or inherited renderer env.
-    event.returnValue =
-      normalizeDesktopWsUrl(backendWsUrl) ?? resolveDesktopWsUrlFromEnv(process.env);
-  });
-
-  ipcMain.removeHandler(PICK_FOLDER_CHANNEL);
-  ipcMain.handle(PICK_FOLDER_CHANNEL, async () => {
-    const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
-    const result = owner
-      ? await dialog.showOpenDialog(owner, {
-          properties: ["openDirectory", "createDirectory"],
-        })
-      : await dialog.showOpenDialog({
-          properties: ["openDirectory", "createDirectory"],
-        });
-    if (result.canceled) return null;
-    return result.filePaths[0] ?? null;
-  });
-
-  ipcMain.removeHandler(SAVE_FILE_CHANNEL);
-  ipcMain.handle(SAVE_FILE_CHANNEL, async (_event, input: unknown) => {
-    if (!isSaveFileInput(input)) {
-      throw new Error("Invalid save file input.");
-    }
-
-    const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
-    const options = {
-      defaultPath: input.defaultFilename,
-      ...(input.filters ? { filters: input.filters } : {}),
-    };
-    const result = owner
-      ? await dialog.showSaveDialog(owner, options)
-      : await dialog.showSaveDialog(options);
-
-    if (result.canceled || !result.filePath) {
-      return null;
-    }
-
-    await FS.promises.writeFile(result.filePath, input.contents, "utf8");
-    return result.filePath;
-  });
-
-  ipcMain.removeHandler(CONFIRM_CHANNEL);
-  ipcMain.handle(CONFIRM_CHANNEL, async (_event, message: unknown) => {
-    if (typeof message !== "string") {
-      return false;
-    }
-
-    const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
-    return showDesktopConfirmDialog(message, owner);
-  });
-
-  ipcMain.removeHandler(SET_THEME_CHANNEL);
-  ipcMain.handle(SET_THEME_CHANNEL, async (_event, rawTheme: unknown) => {
-    const theme = getSafeTheme(rawTheme);
-    if (!theme) {
-      return;
-    }
-
-    nativeTheme.themeSource = theme;
-  });
-
-  ipcMain.removeHandler(CONTEXT_MENU_CHANNEL);
-  ipcMain.handle(
-    CONTEXT_MENU_CHANNEL,
-    async (_event, items: ContextMenuItem[], position?: { x: number; y: number }) => {
-      const normalizedItems = items
-        .filter((item) => typeof item.id === "string" && typeof item.label === "string")
-        .map((item) => ({
-          id: item.id,
-          label: item.label,
-          separatorBefore: item.separatorBefore === true,
-          destructive: item.destructive === true,
-        }));
-      if (normalizedItems.length === 0) {
-        return null;
-      }
-
-      const popupPosition =
-        position &&
-        Number.isFinite(position.x) &&
-        Number.isFinite(position.y) &&
-        position.x >= 0 &&
-        position.y >= 0
-          ? {
-              x: Math.floor(position.x),
-              y: Math.floor(position.y),
-            }
-          : null;
-
-      const window = BrowserWindow.getFocusedWindow() ?? mainWindow;
-      if (!window) return null;
-
-      return new Promise<string | null>((resolve) => {
-        const template: MenuItemConstructorOptions[] = [];
-        let hasInsertedDestructiveSeparator = false;
-        for (const item of normalizedItems) {
-          const shouldInsertSeparator =
-            item.separatorBefore ||
-            (item.destructive && !hasInsertedDestructiveSeparator && template.length > 0);
-          if (shouldInsertSeparator && template.length > 0) {
-            template.push({ type: "separator" });
-          }
-          if (item.destructive) {
-            hasInsertedDestructiveSeparator = true;
-          }
-          const itemOption: MenuItemConstructorOptions = {
-            label: item.label,
-            click: () => resolve(item.id),
-          };
-          if (item.destructive) {
-            const destructiveIcon = getDestructiveMenuIcon();
-            if (destructiveIcon) {
-              itemOption.icon = destructiveIcon;
-            }
-          }
-          template.push(itemOption);
-        }
-
-        const menu = Menu.buildFromTemplate(template);
-        menu.popup({
-          window,
-          ...popupPosition,
-          callback: () => resolve(null),
-        });
+  registerMainIpc(ipcMain, {
+    getBackendWsUrl: () => backendWsUrl,
+    resolveWsUrl: (url) => normalizeDesktopWsUrl(url) ?? resolveDesktopWsUrlFromEnv(process.env),
+    getMainWindow: () => mainWindow,
+    showConfirmDialog: showDesktopConfirmDialog,
+    showNotification: showDesktopNotification,
+    getDestructiveMenuIcon,
+    getUpdateState: () => updateController.getState(),
+    isQuitting: () => isQuitting,
+    checkForUpdates,
+    downloadAvailableUpdate,
+    installDownloadedUpdate,
+    registerExtraHandlers: (registeredIpcMain) => {
+      registerDesktopVoiceTranscriptionHandler();
+      startBrowserPerformanceLogging();
+      void ensureBrowserUsePipeServer().catch((error) => {
+        console.warn("[Synara browser] Failed to start browser-use native pipe", error);
       });
+      registerBrowserIpcHandlers(registeredIpcMain, browserManager);
     },
-  );
-
-  ipcMain.removeHandler(OPEN_EXTERNAL_CHANNEL);
-  ipcMain.handle(OPEN_EXTERNAL_CHANNEL, async (_event, rawUrl: unknown) => {
-    const externalUrl = getSafeExternalUrl(rawUrl);
-    if (!externalUrl) {
-      return false;
-    }
-
-    try {
-      await shell.openExternal(externalUrl);
-      return true;
-    } catch {
-      return false;
-    }
   });
-
-  ipcMain.removeHandler(SHOW_IN_FOLDER_CHANNEL);
-  ipcMain.handle(SHOW_IN_FOLDER_CHANNEL, async (_event, rawPath: unknown) => {
-    if (typeof rawPath !== "string" || rawPath.trim().length === 0) {
-      throw new Error("Missing folder path.");
-    }
-    const resolvedPath = Path.resolve(rawPath);
-
-    let stats: FS.Stats;
-    try {
-      stats = await FS.promises.stat(resolvedPath);
-    } catch {
-      throw new Error(`Folder not found: ${resolvedPath}`);
-    }
-
-    if (stats.isDirectory()) {
-      const errorMessage = await shell.openPath(resolvedPath);
-      if (errorMessage.trim().length > 0) {
-        throw new Error(errorMessage);
-      }
-      return;
-    }
-
-    shell.showItemInFolder(resolvedPath);
-  });
-
-  ipcMain.removeHandler(UPDATE_GET_STATE_CHANNEL);
-  ipcMain.handle(UPDATE_GET_STATE_CHANNEL, async () => updateState);
-
-  ipcMain.removeHandler(UPDATE_CHECK_CHANNEL);
-  ipcMain.handle(UPDATE_CHECK_CHANNEL, async () => {
-    await checkForUpdates("renderer");
-    return updateState;
-  });
-
-  ipcMain.removeHandler(UPDATE_DOWNLOAD_CHANNEL);
-  ipcMain.handle(UPDATE_DOWNLOAD_CHANNEL, async () => {
-    const result = await downloadAvailableUpdate();
-    return {
-      accepted: result.accepted,
-      completed: result.completed,
-      state: updateState,
-    } satisfies DesktopUpdateActionResult;
-  });
-
-  ipcMain.removeHandler(UPDATE_INSTALL_CHANNEL);
-  ipcMain.handle(UPDATE_INSTALL_CHANNEL, async () => {
-    if (isQuitting) {
-      return {
-        accepted: false,
-        completed: false,
-        state: updateState,
-      } satisfies DesktopUpdateActionResult;
-    }
-    const result = await installDownloadedUpdate();
-    return {
-      accepted: result.accepted,
-      completed: result.completed,
-      state: updateState,
-    } satisfies DesktopUpdateActionResult;
-  });
-
-  ipcMain.removeHandler(NOTIFICATIONS_IS_SUPPORTED_CHANNEL);
-  ipcMain.handle(NOTIFICATIONS_IS_SUPPORTED_CHANNEL, async () => Notification.isSupported());
-
-  ipcMain.removeHandler(NOTIFICATIONS_SHOW_CHANNEL);
-  ipcMain.handle(
-    NOTIFICATIONS_SHOW_CHANNEL,
-    async (
-      _event,
-      input:
-        | {
-            title?: unknown;
-            body?: unknown;
-            silent?: unknown;
-            threadId?: unknown;
-          }
-        | null
-        | undefined,
-    ) =>
-      showDesktopNotification({
-        title: typeof input?.title === "string" ? input.title : "",
-        body: typeof input?.body === "string" ? input.body : "",
-        silent: input?.silent === true,
-        ...(typeof input?.threadId === "string" ? { threadId: input.threadId } : {}),
-      }),
-  );
-  registerDesktopVoiceTranscriptionHandler();
-  startBrowserPerformanceLogging();
-  void ensureBrowserUsePipeServer().catch((error) => {
-    console.warn("[Synara browser] Failed to start browser-use native pipe", error);
-  });
-
-  registerBrowserIpcHandlers(ipcMain, browserManager);
 }
 
 function getIconOption(): { icon: string } | Record<string, never> {
@@ -2016,7 +1060,9 @@ function getIconOption(): { icon: string } | Record<string, never> {
 // (`show: false`), so this color is not expected to match a custom in-app theme exactly.
 function getWindowMaterialOptions(): BrowserWindowConstructorOptions {
   if (process.platform !== "darwin") {
-    return { backgroundColor: nativeTheme.shouldUseDarkColors ? "#181818" : "#ffffff" };
+    return {
+      backgroundColor: nativeTheme.shouldUseDarkColors ? "#181818" : "#ffffff",
+    };
   }
   return {
     vibrancy: "under-window",
@@ -2231,13 +1277,13 @@ app.on("before-quit", (event) => {
     return;
   }
 
-  if (isUpdaterQuitAndInstallInFlight) {
+  if (updateController.isQuitAndInstallInFlight()) {
     // Electron's updater owns this quit; canceling it would turn install into a plain app quit.
     writeDesktopLogHeader("before-quit allowing updater quit-and-install");
     return;
   }
 
-  if (isUpdaterInstallPreparing) {
+  if (updateController.isInstallPreparing()) {
     // Keep user/system quits from preempting the pending updater install with a plain app.quit().
     writeDesktopLogHeader("before-quit waiting for updater quit-and-install");
     event.preventDefault();

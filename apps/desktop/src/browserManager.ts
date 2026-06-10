@@ -28,7 +28,11 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 
-import { BROWSER_THREAD_SUSPEND_DELAY_MS, LIVE_TAB_STATUS, SUSPENDED_TAB_STATUS } from "./browserManager.types";
+import {
+  BROWSER_THREAD_SUSPEND_DELAY_MS,
+  LIVE_TAB_STATUS,
+  SUSPENDED_TAB_STATUS,
+} from "./browserManager.types";
 import type {
   BrowserPerformanceSnapshot,
   BrowserStateListener,
@@ -51,10 +55,7 @@ import {
   syncTabStateFromRuntime,
   syncThreadLastError,
 } from "./browserManager.helpers";
-import {
-  BrowserRuntimeController,
-  type BrowserRuntimePerfCounter,
-} from "./browserManager.runtime";
+import { BrowserRuntimeController, type BrowserRuntimePerfCounter } from "./browserManager.runtime";
 
 export type { BrowserUseSnapshot, BrowserUseCdpEvent } from "./browserManager.types";
 
