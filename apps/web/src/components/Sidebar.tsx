@@ -21,7 +21,7 @@ import {
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch, FiPlus } from "react-icons/fi";
 import { GoRepoForked } from "react-icons/go";
-import { HiOutlineArchiveBox, HiOutlineFolderOpen } from "react-icons/hi2";
+import { HiOutlineArchiveBox } from "react-icons/hi2";
 import { BsChat } from "react-icons/bs";
 import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2, TbCursorText } from "react-icons/tb";
 import {
@@ -115,6 +115,9 @@ import { ChatSortMenu, ProjectSortMenu, SidebarPrimaryAction } from "./Sidebar.m
 import { SidebarSegmentedPicker } from "./Sidebar.picker";
 import { SidebarSubagentLabel } from "./Sidebar.subagent";
 import { SidebarSearchPaletteController } from "./Sidebar.searchController";
+import { useSidebarThreadActions } from "./useSidebarThreadActions";
+import { useSidebarKeybindings } from "./useSidebarKeybindings";
+import { useSidebarContextMenus } from "./useSidebarContextMenus";
 import {
   type SortableProjectHandleProps,
   SortableProjectItem,
@@ -289,15 +292,6 @@ const DebugFeatureFlagsMenu = import.meta.env.DEV
       })),
     )
   : null;
-const PROJECT_CONTEXT_MENU_FOLDER_ICON = renderToStaticMarkup(<HiOutlineFolderOpen />);
-const PROJECT_CONTEXT_MENU_EDIT_ICON =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>';
-const PROJECT_CONTEXT_MENU_REMOVE_ICON =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
-const PROJECT_CONTEXT_MENU_COPY_PATH_ICON =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
-const PROJECT_CONTEXT_MENU_ARCHIVE_ICON = renderToStaticMarkup(<HiOutlineArchiveBox />);
-const PROJECT_CONTEXT_MENU_DELETE_THREADS_ICON = renderToStaticMarkup(<Trash2 />);
 
 type DebugFeatureFlagsWindow = Window & {
   synaraShowFeatureFlags?: () => void;
@@ -1556,845 +1550,75 @@ export default function Sidebar() {
     [prewarmThreadDetailForIntent],
   );
 
-  /**
-   * Delete a single thread: stop session, close terminal, dispatch delete,
-   * clean up drafts/state, and optionally remove orphaned worktree.
-   * Callers handle thread-level confirmation; this still prompts for worktree removal.
-   */
-  const deleteThread = useCallback(
-    async (
-      threadId: ThreadId,
-      opts: {
-        deletedThreadIds?: ReadonlySet<ThreadId>;
-        worktreeCleanupMode?: "prompt" | "skip";
-      } = {},
-    ): Promise<void> => {
-      const api = readNativeApi();
-      if (!api) return;
-      const state = useStore.getState();
-      const thread = getThreadFromState(state, threadId);
-      if (!thread) return;
-      const threadProject = projectById.get(thread.projectId);
-      const allThreads = getThreadsFromState(state);
-      // When bulk-deleting, exclude the other threads being deleted so
-      // getOrphanedWorktreePathForThread correctly detects that no surviving
-      // threads will reference this worktree.
-      const deletedIds = opts.deletedThreadIds;
-      const survivingThreads =
-        deletedIds && deletedIds.size > 0
-          ? allThreads.filter((t) => t.id === threadId || !deletedIds.has(t.id))
-          : allThreads;
-      const orphanedWorktreePath = getOrphanedWorktreePathForThread(survivingThreads, threadId);
-      const displayWorktreePath = orphanedWorktreePath
-        ? formatWorktreePathForDisplay(orphanedWorktreePath)
-        : null;
-      const canDeleteWorktree = orphanedWorktreePath !== null && threadProject !== undefined;
-      const worktreeCleanupMode = opts.worktreeCleanupMode ?? "prompt";
-      const shouldDeleteWorktree =
-        worktreeCleanupMode === "prompt" &&
-        canDeleteWorktree &&
-        (await api.dialogs.confirm(
-          [
-            "This thread is the only one linked to this worktree:",
-            displayWorktreePath ?? orphanedWorktreePath,
-            "",
-            "Delete the worktree too?",
-          ].join("\n"),
-        ));
+  const {
+    deleteThread,
+    copyThreadIdToClipboard,
+    copyPathToClipboard,
+    handoffThread,
+    confirmAndDeleteThread,
+    archiveThread,
+    confirmAndArchiveThread,
+    inlineConfirmArchiveThread,
+    archiveAllThreadsInProject,
+    deleteProjectThreads,
+    deleteAllThreadsInProject,
+  } = useSidebarThreadActions({
+    appSettings,
+    sidebarThreads,
+    sidebarThreadSummaryById,
+    projectById,
+    routeThreadId,
+    routeSearch,
+    activeSplitView,
+    navigate,
+    removeWorktreeMutation,
+    handleNewChat,
+    createThreadHandoff,
+    clearComposerDraftForThread,
+    clearProjectDraftThreadById,
+    clearTerminalState,
+    clearTemporaryThread,
+    removeThreadFromSplitViews,
+    unpinThread,
+    removeFromSelection,
+    setPendingArchiveConfirmationThreadId,
+  });
 
-      if (thread.session && thread.session.status !== "closed") {
-        await api.orchestration
-          .dispatchCommand({
-            type: "thread.session.stop",
-            commandId: newCommandId(),
-            threadId,
-            createdAt: new Date().toISOString(),
-          })
-          .catch(() => undefined);
-      }
-
-      try {
-        terminalRuntimeRegistry.disposeThread(threadId);
-        await api.terminal.close({ threadId, deleteHistory: true });
-      } catch {
-        // Terminal may already be closed
-      }
-
-      const allDeletedIds = deletedIds ?? new Set<ThreadId>();
-      const shouldNavigateToFallback = routeThreadId === threadId;
-      const fallbackThreadId = getFallbackThreadIdAfterDelete({
-        threads: sidebarThreads,
-        deletedThreadId: threadId,
-        deletedThreadIds: allDeletedIds,
-        sortOrder: appSettings.sidebarThreadSortOrder,
-      });
-      const activeSplitViewId = routeSearch.splitViewId ?? null;
-      const deletedPaneInActiveSplit = activeSplitView
-        ? resolveSplitViewPaneIdForThread(activeSplitView, threadId)
-        : null;
-      await api.orchestration.dispatchCommand({
-        type: "thread.delete",
-        commandId: newCommandId(),
-        threadId,
-      });
-      unpinThread(threadId);
-      clearComposerDraftForThread(threadId);
-      clearProjectDraftThreadById(thread.projectId, thread.id);
-      clearTerminalState(threadId);
-      removeThreadFromSplitViews(threadId);
-      clearTemporaryThread(threadId);
-
-      if (activeSplitViewId && deletedPaneInActiveSplit) {
-        const nextActiveSplitView =
-          useSplitViewStore.getState().splitViewsById[activeSplitViewId] ?? null;
-        const nextFocusedThreadId = nextActiveSplitView
-          ? resolveSplitViewFocusedThreadId(nextActiveSplitView)
-          : null;
-        if (nextActiveSplitView && nextFocusedThreadId) {
-          void navigate({
-            to: "/$threadId",
-            params: { threadId: nextFocusedThreadId },
-            replace: true,
-            search: () => ({ splitViewId: nextActiveSplitView.id }),
-          });
-        } else if (shouldNavigateToFallback && fallbackThreadId) {
-          void navigate({
-            to: "/$threadId",
-            params: { threadId: fallbackThreadId },
-            replace: true,
-          });
-        } else if (shouldNavigateToFallback) {
-          void handleNewChat({ fresh: true });
-        }
-      } else if (shouldNavigateToFallback) {
-        if (fallbackThreadId) {
-          void navigate({
-            to: "/$threadId",
-            params: { threadId: fallbackThreadId },
-            replace: true,
-          });
-        } else {
-          void handleNewChat({ fresh: true });
-        }
-      }
-
-      if (!shouldDeleteWorktree || !orphanedWorktreePath || !threadProject) {
-        return;
-      }
-
-      try {
-        await removeWorktreeMutation.mutateAsync({
-          cwd: threadProject.cwd,
-          path: orphanedWorktreePath,
-          force: true,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown error removing worktree.";
-        console.error("Failed to remove orphaned worktree after thread deletion", {
-          threadId,
-          projectCwd: threadProject.cwd,
-          worktreePath: orphanedWorktreePath,
-          error,
-        });
-        toastManager.add({
-          type: "error",
-          title: "Thread deleted, but worktree removal failed",
-          description: `Could not remove ${displayWorktreePath ?? orphanedWorktreePath}. ${message}`,
-        });
-      }
-    },
-    [
-      appSettings.sidebarThreadSortOrder,
-      clearComposerDraftForThread,
-      clearProjectDraftThreadById,
-      clearTerminalState,
-      handleNewChat,
-      navigate,
-      projectById,
-      removeWorktreeMutation,
-      routeThreadId,
-      routeSearch.splitViewId,
-      activeSplitView,
-      removeThreadFromSplitViews,
-      clearTemporaryThread,
+  const { handleThreadContextMenu, handleMultiSelectContextMenu, handleProjectContextMenu } =
+    useSidebarContextMenus({
+      appSettings,
       sidebarThreads,
-      unpinThread,
-    ],
-  );
-
-  const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{
-    threadId: ThreadId;
-  }>({
-    onCopy: (ctx) => {
-      toastManager.add({
-        type: "success",
-        title: "Thread ID copied",
-        description: ctx.threadId,
-      });
-    },
-    onError: (error) => {
-      toastManager.add({
-        type: "error",
-        title: "Failed to copy thread ID",
-        description: error instanceof Error ? error.message : "An error occurred.",
-      });
-    },
-  });
-  const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{
-    path: string;
-  }>({
-    onCopy: (ctx) => {
-      toastManager.add({
-        type: "success",
-        title: "Path copied",
-        description: ctx.path,
-      });
-    },
-    onError: (error) => {
-      toastManager.add({
-        type: "error",
-        title: "Failed to copy path",
-        description: error instanceof Error ? error.message : "An error occurred.",
-      });
-    },
-  });
-  const handoffThread = useCallback(
-    async (thread: Thread, targetProvider: ProviderKind) => {
-      try {
-        await createThreadHandoff(thread, targetProvider);
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not create handoff thread",
-          description:
-            error instanceof Error
-              ? error.message
-              : "An error occurred while creating the handoff thread.",
-        });
-      }
-    },
-    [createThreadHandoff],
-  );
-  const confirmAndDeleteThread = useCallback(
-    async (threadId: ThreadId) => {
-      const thread = sidebarThreadSummaryById[threadId];
-      if (!thread) return;
-
-      if (appSettings.confirmThreadDelete) {
-        const api = readNativeApi();
-        const confirmationMessage = [
-          `Delete thread "${thread.title}"?`,
-          "This permanently clears conversation history for this thread.",
-        ].join("\n");
-        const confirmed = api
-          ? await api.dialogs.confirm(confirmationMessage)
-          : await showConfirmDialogFallback(confirmationMessage);
-        if (!confirmed) return;
-      }
-
-      await deleteThread(threadId);
-    },
-    [appSettings.confirmThreadDelete, deleteThread, sidebarThreadSummaryById],
-  );
-
-  /**
-   * Archive a thread: stop any running session first, then dispatch archive command.
-   * Archived threads are hidden from the sidebar but can be restored later.
-   */
-  const archiveThread = useCallback(
-    async (threadId: ThreadId): Promise<void> => {
-      const api = readNativeApi();
-      if (!api) return;
-      const thread = getThreadFromState(useStore.getState(), threadId);
-      if (!thread) return;
-
-      // Cannot archive a running thread
-      if (thread.session?.status === "running" && thread.session.activeTurnId != null) {
-        toastManager.add({
-          type: "error",
-          title: "Cannot archive",
-          description: "Stop the running session before archiving this thread.",
-        });
-        return;
-      }
-
-      await api.orchestration.dispatchCommand({
-        type: "thread.archive",
-        commandId: newCommandId(),
-        threadId,
-      });
-
-      // Navigate away if viewing the archived thread
-      if (routeThreadId === threadId) {
-        const fallbackThreadId = getFallbackThreadIdAfterDelete({
-          threads: sidebarThreads,
-          deletedThreadId: threadId,
-          deletedThreadIds: new Set<ThreadId>(),
-          sortOrder: appSettings.sidebarThreadSortOrder,
-        });
-        if (fallbackThreadId) {
-          void navigate({
-            to: "/$threadId",
-            params: { threadId: fallbackThreadId },
-            replace: true,
-          });
-        } else {
-          void handleNewChat({ fresh: true });
-        }
-      }
-    },
-    [appSettings.sidebarThreadSortOrder, handleNewChat, navigate, routeThreadId, sidebarThreads],
-  );
-
-  const confirmAndArchiveThread = useCallback(
-    async (threadId: ThreadId) => {
-      const thread = sidebarThreadSummaryById[threadId];
-      if (!thread) return;
-
-      if (appSettings.confirmThreadArchive) {
-        const api = readNativeApi();
-        const confirmationMessage = [
-          `Archive thread "${thread.title}"?`,
-          "Archived threads are hidden from the sidebar but can be restored later.",
-        ].join("\n");
-        const confirmed = api
-          ? await api.dialogs.confirm(confirmationMessage)
-          : await showConfirmDialogFallback(confirmationMessage);
-        if (!confirmed) return;
-      }
-
-      await archiveThread(threadId);
-      setPendingArchiveConfirmationThreadId((current) => (current === threadId ? null : current));
-    },
-    [appSettings.confirmThreadArchive, archiveThread, sidebarThreadSummaryById],
-  );
-
-  const inlineConfirmArchiveThread = useCallback(
-    async (threadId: ThreadId) => {
-      setPendingArchiveConfirmationThreadId((current) => (current === threadId ? null : current));
-      await archiveThread(threadId);
-    },
-    [archiveThread],
-  );
-
-  /**
-   * Archive every non-archived thread for a given project in one pass.
-   * Skips (and reports) threads with a running session since the server
-   * rejects archiving an active turn. Confirms the batch once up-front
-   * rather than prompting per-thread to avoid dialog spam on large projects.
-   */
-  const archiveAllThreadsInProject = useCallback(
-    async (projectId: ProjectId): Promise<void> => {
-      const api = readNativeApi();
-      if (!api) return;
-      const project = projectById.get(projectId);
-      if (!project) return;
-
-      const projectThreads = sidebarThreads.filter(
-        (thread) => thread.projectId === projectId && thread.archivedAt == null,
-      );
-      if (projectThreads.length === 0) {
-        toastManager.add({
-          type: "info",
-          title: "Nothing to archive",
-          description: `"${project.name}" has no threads to archive.`,
-        });
-        return;
-      }
-
-      const archivableThreads = projectThreads.filter(
-        (thread) => !(thread.session?.status === "running" && thread.session.activeTurnId != null),
-      );
-      const runningCount = projectThreads.length - archivableThreads.length;
-
-      if (archivableThreads.length === 0) {
-        toastManager.add({
-          type: "error",
-          title: "Cannot archive threads",
-          description:
-            runningCount === 1
-              ? "The only thread in this project is running. Stop it before archiving."
-              : `All ${runningCount} threads in this project are running. Stop them before archiving.`,
-        });
-        return;
-      }
-
-      // Bulk archive always confirms — this is a folder-level operation, and
-      // `appSettings.confirmThreadArchive` (default `false`) is scoped to
-      // single-thread archiving where the user explicitly picked one row.
-      const archiveLines = [
-        `Archive ${archivableThreads.length} thread${archivableThreads.length === 1 ? "" : "s"} in "${project.name}"?`,
-        "Archived threads are hidden from the sidebar but can be restored later.",
-      ];
-      if (runningCount > 0) {
-        archiveLines.push(
-          "",
-          `${runningCount} running thread${runningCount === 1 ? " is" : "s are"} currently active and will be skipped.`,
-        );
-      }
-      const archiveConfirmed = api
-        ? await api.dialogs.confirm(archiveLines.join("\n"))
-        : await showConfirmDialogFallback(archiveLines.join("\n"));
-      if (!archiveConfirmed) return;
-
-      let archivedCount = 0;
-      let failureCount = 0;
-      for (const thread of archivableThreads) {
-        try {
-          await archiveThread(thread.id);
-          archivedCount += 1;
-        } catch (error) {
-          failureCount += 1;
-          console.error("Failed to archive thread during bulk archive", {
-            threadId: thread.id,
-            projectId,
-            error,
-          });
-        }
-      }
-
-      // Clear any transient selection that pointed at just-archived rows.
-      removeFromSelection(archivableThreads.map((thread) => thread.id));
-
-      if (archivedCount > 0) {
-        const skippedDescription =
-          runningCount > 0
-            ? ` Skipped ${runningCount} running thread${runningCount === 1 ? "" : "s"}.`
-            : "";
-        toastManager.add({
-          type: failureCount > 0 ? "warning" : "success",
-          title: archivedCount === 1 ? "Thread archived" : `Archived ${archivedCount} threads`,
-          description:
-            failureCount > 0
-              ? `Failed to archive ${failureCount} thread${failureCount === 1 ? "" : "s"}.${skippedDescription}`
-              : runningCount > 0
-                ? skippedDescription.trim()
-                : `"${project.name}" cleared.`,
-        });
-      } else if (failureCount > 0) {
-        toastManager.add({
-          type: "error",
-          title: "Failed to archive threads",
-          description: `Could not archive ${failureCount} thread${failureCount === 1 ? "" : "s"} in "${project.name}".`,
-        });
-      }
-    },
-    [archiveThread, projectById, removeFromSelection, sidebarThreads],
-  );
-
-  /**
-   * Delete every thread for a given project in one pass. Uses the shared
-   * `deleteThread` helper so running sessions are stopped, worktrees are
-   * cleaned up, and draft/pinned/split view state is pruned consistently.
-   * A single `deletedThreadIds` set is passed through so orphan-worktree
-   * detection treats the whole batch as "going away" at once.
-   */
-  const deleteProjectThreads = useCallback(
-    async (
-      projectId: ProjectId,
-      options?: {
-        confirmMessage?: string | null;
-        showEmptyToast?: boolean;
-        showResultToast?: boolean;
-        worktreeCleanupMode?: "prompt" | "skip";
-      },
-    ): Promise<{
-      deletedCount: number;
-      failureCount: number;
-      totalCount: number;
-      projectName: string;
-    } | null> => {
-      const api = readNativeApi();
-      if (!api) return null;
-      const project = projectById.get(projectId);
-      if (!project) return null;
-
-      const projectThreads = sidebarThreads.filter((thread) => thread.projectId === projectId);
-      if (projectThreads.length === 0) {
-        if (options?.showEmptyToast ?? true) {
-          toastManager.add({
-            type: "info",
-            title: "Nothing to delete",
-            description: `"${project.name}" has no threads to delete.`,
-          });
-        }
-        return {
-          deletedCount: 0,
-          failureCount: 0,
-          totalCount: 0,
-          projectName: project.name,
-        };
-      }
-
-      const deleteConfirmationMessage =
-        options?.confirmMessage === undefined
-          ? [
-              `Delete ${projectThreads.length} thread${projectThreads.length === 1 ? "" : "s"} in "${project.name}"?`,
-              "This permanently clears conversation history for these threads.",
-            ].join("\n")
-          : options.confirmMessage;
-      if (deleteConfirmationMessage !== null) {
-        // Bulk delete always confirms unless a caller already collected a higher-level confirmation.
-        const deleteConfirmed = await api.dialogs.confirm(deleteConfirmationMessage);
-        if (!deleteConfirmed) return null;
-      }
-
-      const deletedIds = new Set<ThreadId>(projectThreads.map((thread) => thread.id));
-      let deletedCount = 0;
-      let failureCount = 0;
-      for (const thread of projectThreads) {
-        try {
-          await deleteThread(thread.id, {
-            deletedThreadIds: deletedIds,
-            ...(options?.worktreeCleanupMode
-              ? { worktreeCleanupMode: options.worktreeCleanupMode }
-              : {}),
-          });
-          deletedCount += 1;
-        } catch (error) {
-          failureCount += 1;
-          console.error("Failed to delete thread during bulk delete", {
-            threadId: thread.id,
-            projectId,
-            error,
-          });
-        }
-      }
-
-      removeFromSelection([...deletedIds]);
-
-      if (options?.showResultToast ?? true) {
-        if (deletedCount > 0) {
-          toastManager.add({
-            type: failureCount > 0 ? "warning" : "success",
-            title: deletedCount === 1 ? "Thread deleted" : `Deleted ${deletedCount} threads`,
-            description:
-              failureCount > 0
-                ? `Failed to delete ${failureCount} thread${failureCount === 1 ? "" : "s"}.`
-                : `"${project.name}" cleared.`,
-          });
-        } else if (failureCount > 0) {
-          toastManager.add({
-            type: "error",
-            title: "Failed to delete threads",
-            description: `Could not delete ${failureCount} thread${failureCount === 1 ? "" : "s"} in "${project.name}".`,
-          });
-        }
-      }
-
-      return {
-        deletedCount,
-        failureCount,
-        totalCount: projectThreads.length,
-        projectName: project.name,
-      };
-    },
-    [deleteThread, projectById, removeFromSelection, sidebarThreads],
-  );
-
-  const deleteAllThreadsInProject = useCallback(
-    async (projectId: ProjectId): Promise<void> => {
-      await deleteProjectThreads(projectId);
-    },
-    [deleteProjectThreads],
-  );
-
-  const handleThreadContextMenu = useCallback(
-    async (
-      threadId: ThreadId,
-      position: { x: number; y: number },
-      options?: {
-        extraItems?: Array<{
-          id: "return-to-single-chat";
-          label: string;
-        }>;
-        onExtraAction?: (itemId: "return-to-single-chat") => Promise<void> | void;
-      },
-    ) => {
-      const api = readNativeApi();
-      if (!api) return;
-      const thread = getThreadFromState(useStore.getState(), threadId);
-      if (!thread) return;
-      const threadSummary = sidebarThreadSummaryById[threadId];
-      const isPinned = pinnedThreadIdSet.has(threadId);
-      const hasPendingApprovals =
-        threadSummary?.hasPendingApprovals ?? derivePendingApprovals(thread.activities).length > 0;
-      const hasPendingUserInput =
-        threadSummary?.hasPendingUserInput ?? derivePendingUserInputs(thread.activities).length > 0;
-      const canHandoff = canCreateThreadHandoff({
-        thread,
-        hasPendingApprovals,
-        hasPendingUserInput,
-      });
-      const threadStatus = threadSummary ? resolveThreadStatusForSidebar(threadSummary) : null;
-      const handoffTargets = canHandoff
-        ? resolveAvailableHandoffTargetProviders(thread.modelSelection.provider)
-        : [];
-      const handoffItems = handoffTargets.map((provider, index) => ({
-        id: `handoff:${provider}`,
-        label: `Handoff to ${PROVIDER_DISPLAY_NAMES[provider]}`,
-        separatorBefore: index === 0,
-      }));
-      const threadWorkspacePath = resolveThreadWorkspaceCwd({
-        projectCwd: projectCwdById.get(thread.projectId) ?? null,
-        envMode: thread.envMode,
-        worktreePath: thread.worktreePath,
-      });
-      const clicked = await api.contextMenu.show(
-        [
-          { id: "rename", label: "Rename thread" },
-          { id: "toggle-pin", label: isPinned ? "Unpin thread" : "Pin thread" },
-          ...(threadStatus?.dismissible
-            ? [{ id: "clear-notification", label: "Clear notification" }]
-            : []),
-          { id: "mark-unread", label: "Mark unread" },
-          ...handoffItems,
-          { id: "copy-path", label: "Copy Path", separatorBefore: true },
-          ...(threadWorkspacePath
-            ? [{ id: "open-path-in-terminal", label: "Open Path in Terminal" }]
-            : []),
-          { id: "copy-thread-id", label: "Copy Thread ID" },
-          ...(options?.extraItems ?? []),
-          { id: "archive", label: "Archive", separatorBefore: true },
-          { id: "delete", label: "Delete", destructive: true },
-        ],
-        position,
-      );
-
-      if (clicked === "rename") {
-        setRenamingThreadId(threadId);
-        setRenamingTitle(thread.title);
-        renamingCommittedRef.current = false;
-        return;
-      }
-      if (clicked === "toggle-pin") {
-        toggleThreadPinned(threadId);
-        return;
-      }
-
-      if (clicked === "mark-unread") {
-        clearDismissedThreadStatus(threadId);
-        markThreadUnread(threadId);
-        return;
-      }
-      if (clicked === "clear-notification") {
-        clearThreadNotification(threadId);
-        return;
-      }
-      if (typeof clicked === "string" && clicked.startsWith("handoff:")) {
-        const targetProvider = clicked.slice("handoff:".length);
-        if (handoffTargets.includes(targetProvider as ProviderKind)) {
-          await handoffThread(thread, targetProvider as ProviderKind);
-        }
-        return;
-      }
-      if (clicked === "copy-path") {
-        if (!threadWorkspacePath) {
-          toastManager.add({
-            type: "error",
-            title: "Path unavailable",
-            description: "This thread does not have a workspace path to copy.",
-          });
-          return;
-        }
-        copyPathToClipboard(threadWorkspacePath, { path: threadWorkspacePath });
-        return;
-      }
-      if (clicked === "open-path-in-terminal") {
-        if (!threadWorkspacePath) {
-          toastManager.add({
-            type: "error",
-            title: "Path unavailable",
-            description: "This thread does not have a workspace path to open.",
-          });
-          return;
-        }
-        await navigate({ to: "/$threadId", params: { threadId } });
-        const terminalStore = useTerminalStateStore.getState();
-        const currentTerminalState = selectThreadTerminalState(
-          terminalStore.terminalStateByThreadId,
-          threadId,
-        );
-
-        // Reuse the active terminal when one is already open and idle so that
-        // repeatedly invoking "Open Path in Terminal" doesn't pile up tabs.
-        // Only spawn a fresh tab when there is no terminal yet, the active id
-        // is stale (no longer in the layout), or the active terminal is busy
-        // running a subprocess.
-        const candidateBaseTerminalId =
-          currentTerminalState.activeTerminalId ||
-          currentTerminalState.terminalIds[0] ||
-          DEFAULT_THREAD_TERMINAL_ID;
-        const baseTerminalAvailable =
-          currentTerminalState.terminalOpen &&
-          currentTerminalState.terminalIds.includes(candidateBaseTerminalId) &&
-          !currentTerminalState.runningTerminalIds.includes(candidateBaseTerminalId);
-        const shouldCreateNewTerminal = !baseTerminalAvailable;
-        const targetTerminalId = shouldCreateNewTerminal
-          ? `terminal-${randomUUID()}`
-          : candidateBaseTerminalId;
-
-        const previousTerminalOpen = currentTerminalState.terminalOpen;
-        const previousPresentationMode = currentTerminalState.presentationMode;
-        const previousActiveTerminalId = currentTerminalState.activeTerminalId;
-
-        terminalStore.setTerminalPresentationMode(threadId, "drawer");
-        terminalStore.setTerminalOpen(threadId, true);
-        if (shouldCreateNewTerminal) {
-          terminalStore.newTerminal(threadId, targetTerminalId);
-        } else {
-          terminalStore.setActiveTerminal(threadId, targetTerminalId);
-        }
-
-        const cdCommand = `cd ${quotePosixShellArgument(threadWorkspacePath)}\r`;
-        try {
-          if (shouldCreateNewTerminal) {
-            // A brand new PTY needs an explicit cwd so that the shell's first
-            // prompt already shows the workspace path. The follow-up `cd` write
-            // makes the navigation visible in the scrollback (it's effectively
-            // a no-op since the shell is already there, but it matches the
-            // user-typed-it experience).
-            await api.terminal.open({
-              threadId,
-              terminalId: targetTerminalId,
-              cwd: threadWorkspacePath,
-            });
-          }
-          // For existing PTYs we deliberately skip api.terminal.open: the
-          // server would otherwise tear down and respawn the shell whenever
-          // the requested cwd differs from the session's recorded cwd, which
-          // would silently kill any state the user already has set up (env
-          // vars, shell history, etc.). Writing `cd` instead navigates in
-          // place inside the live shell.
-          await api.terminal.write({
-            threadId,
-            terminalId: targetTerminalId,
-            data: cdCommand,
-          });
-        } catch (error) {
-          if (shouldCreateNewTerminal) {
-            terminalStore.closeTerminal(threadId, targetTerminalId);
-          }
-          terminalStore.setTerminalPresentationMode(threadId, previousPresentationMode);
-          terminalStore.setTerminalOpen(threadId, previousTerminalOpen);
-          if (previousActiveTerminalId) {
-            terminalStore.setActiveTerminal(threadId, previousActiveTerminalId);
-          }
-          toastManager.add({
-            type: "error",
-            title: "Unable to open terminal",
-            description:
-              error instanceof Error ? error.message : "The terminal could not be opened.",
-          });
-        }
-        return;
-      }
-      if (clicked === "copy-thread-id") {
-        copyThreadIdToClipboard(threadId, { threadId });
-        return;
-      }
-      if (clicked === "return-to-single-chat") {
-        await options?.onExtraAction?.("return-to-single-chat");
-        return;
-      }
-      if (clicked === "archive") {
-        await confirmAndArchiveThread(threadId);
-        return;
-      }
-      if (clicked !== "delete") return;
-      await confirmAndDeleteThread(threadId);
-    },
-    [
-      confirmAndArchiveThread,
-      confirmAndDeleteThread,
-      copyPathToClipboard,
-      copyThreadIdToClipboard,
-      clearDismissedThreadStatus,
-      clearThreadNotification,
-      handoffThread,
-      markThreadUnread,
-      navigate,
+      sidebarThreadSummaryById,
+      projects,
       pinnedThreadIdSet,
       projectCwdById,
-      resolveThreadStatusForSidebar,
-      sidebarThreadSummaryById,
-      toggleThreadPinned,
-    ],
-  );
-  const handleMultiSelectContextMenu = useCallback(
-    async (position: { x: number; y: number }) => {
-      const api = readNativeApi();
-      if (!api) return;
-      const ids = [...selectedThreadIds];
-      if (ids.length === 0) return;
-      const count = ids.length;
-
-      const clicked = await api.contextMenu.show(
-        [
-          { id: "mark-unread", label: `Mark unread (${count})` },
-          { id: "archive", label: `Archive (${count})` },
-          { id: "delete", label: `Delete (${count})`, destructive: true },
-        ],
-        position,
-      );
-
-      if (clicked === "mark-unread") {
-        for (const id of ids) {
-          clearDismissedThreadStatus(id);
-          markThreadUnread(id);
-        }
-        clearSelection();
-        return;
-      }
-
-      if (clicked === "archive") {
-        if (appSettings.confirmThreadArchive) {
-          const confirmed = await api.dialogs.confirm(
-            [
-              `Archive ${count} thread${count === 1 ? "" : "s"}?`,
-              "Archived threads are hidden from the sidebar but can be restored later.",
-            ].join("\n"),
-          );
-          if (!confirmed) return;
-        }
-
-        for (const id of ids) {
-          await archiveThread(id);
-        }
-        removeFromSelection(ids);
-        return;
-      }
-
-      if (clicked !== "delete") return;
-
-      if (appSettings.confirmThreadDelete) {
-        const confirmed = await api.dialogs.confirm(
-          [
-            `Delete ${count} thread${count === 1 ? "" : "s"}?`,
-            "This permanently clears conversation history for these threads.",
-          ].join("\n"),
-        );
-        if (!confirmed) return;
-      }
-
-      const deletedIds = new Set<ThreadId>(ids);
-      for (const id of ids) {
-        await deleteThread(id, { deletedThreadIds: deletedIds });
-      }
-      removeFromSelection(ids);
-    },
-    [
-      appSettings.confirmThreadArchive,
-      appSettings.confirmThreadDelete,
-      archiveThread,
-      clearSelection,
-      clearDismissedThreadStatus,
-      deleteThread,
-      markThreadUnread,
-      removeFromSelection,
       selectedThreadIds,
-    ],
-  );
+      navigate,
+      resolveThreadStatusForSidebar,
+      markThreadUnread,
+      clearDismissedThreadStatus,
+      clearThreadNotification,
+      toggleThreadPinned,
+      clearSelection,
+      removeFromSelection,
+      clearProjectDraftThreads,
+      handoffThread,
+      copyPathToClipboard,
+      copyThreadIdToClipboard,
+      confirmAndArchiveThread,
+      confirmAndDeleteThread,
+      archiveThread,
+      deleteThread,
+      archiveAllThreadsInProject,
+      deleteAllThreadsInProject,
+      deleteProjectThreads,
+      setRenamingThreadId,
+      setRenamingTitle,
+      renamingCommittedRef,
+      setRenamingProjectId,
+      setRenamingProjectName,
+      renamingProjectCommittedRef,
+    });
 
   const rememberLastThreadRouteNow = useCallback(
     (nextLastThreadRoute: LastThreadRoute) => {
@@ -2441,177 +1665,6 @@ export default function Sidebar() {
     terminalStateByThreadId,
   });
 
-  const handleProjectContextMenu = useCallback(
-    async (projectId: ProjectId, position: { x: number; y: number }) => {
-      const api = readNativeApi();
-      if (!api) return;
-      const project = projects.find((entry) => entry.id === projectId);
-      if (!project) return;
-
-      const projectThreadsForMenu = sidebarThreads.filter(
-        (thread) => thread.projectId === projectId,
-      );
-      const hasAnyThreads = projectThreadsForMenu.length > 0;
-      const hasArchivableThreads = projectThreadsForMenu.some(
-        (thread) => thread.archivedAt == null,
-      );
-
-      type ProjectContextMenuId =
-        | "open-in-finder"
-        | "copy-path"
-        | "rename"
-        | "archive-threads"
-        | "delete-threads"
-        | "delete";
-
-      const items: {
-        id: ProjectContextMenuId;
-        label: string;
-        icon: string;
-        destructive?: boolean;
-      }[] = [
-        {
-          id: "open-in-finder",
-          label: "Open in Finder",
-          icon: PROJECT_CONTEXT_MENU_FOLDER_ICON,
-        },
-        {
-          id: "copy-path",
-          label: "Copy Path",
-          icon: PROJECT_CONTEXT_MENU_COPY_PATH_ICON,
-        },
-        {
-          id: "rename",
-          label: "Edit name",
-          icon: PROJECT_CONTEXT_MENU_EDIT_ICON,
-        },
-      ];
-
-      if (hasArchivableThreads) {
-        items.push({
-          id: "archive-threads",
-          label: "Archive threads",
-          icon: PROJECT_CONTEXT_MENU_ARCHIVE_ICON,
-        });
-      }
-      if (hasAnyThreads) {
-        items.push({
-          id: "delete-threads",
-          label: "Delete threads",
-          icon: PROJECT_CONTEXT_MENU_DELETE_THREADS_ICON,
-          destructive: true,
-        });
-      }
-
-      items.push({
-        id: "delete",
-        label: "Remove",
-        destructive: true,
-        icon: PROJECT_CONTEXT_MENU_REMOVE_ICON,
-      });
-
-      const clicked = await showContextMenuFallback<ProjectContextMenuId>(items, position);
-
-      if (clicked === "open-in-finder") {
-        try {
-          await api.shell.showInFolder(project.cwd);
-        } catch (error) {
-          toastManager.add({
-            type: "error",
-            title: "Unable to open in Finder",
-            description:
-              error instanceof Error
-                ? error.message
-                : "An unknown error occurred opening the folder.",
-          });
-        }
-        return;
-      }
-      if (clicked === "copy-path") {
-        copyPathToClipboard(project.cwd, { path: project.cwd });
-        return;
-      }
-      if (clicked === "rename") {
-        renamingProjectCommittedRef.current = false;
-        setRenamingProjectId(projectId);
-        setRenamingProjectName(project.localName ?? project.name);
-        return;
-      }
-      if (clicked === "archive-threads") {
-        await archiveAllThreadsInProject(projectId);
-        return;
-      }
-      if (clicked === "delete-threads") {
-        await deleteAllThreadsInProject(projectId);
-        return;
-      }
-      if (clicked !== "delete") return;
-
-      const projectThreads = sidebarThreads.filter((thread) => thread.projectId === projectId);
-      const confirmed = await api.dialogs.confirm(
-        projectThreads.length > 0
-          ? [
-              `Remove project "${project.name}"?`,
-              `This will delete ${projectThreads.length} thread${projectThreads.length === 1 ? "" : "s"} in this folder and remove the project.`,
-            ].join("\n")
-          : `Remove project "${project.name}"?`,
-      );
-      if (!confirmed) return;
-
-      try {
-        // `project.delete` refuses non-empty folders, so `Remove` clears threads first.
-        const deletionResult = await deleteProjectThreads(projectId, {
-          confirmMessage: null,
-          showEmptyToast: false,
-          showResultToast: false,
-          worktreeCleanupMode: "skip",
-        });
-        if (deletionResult === null) {
-          return;
-        }
-        if (deletionResult.failureCount > 0) {
-          toastManager.add({
-            type: "error",
-            title: `Failed to remove "${project.name}"`,
-            description: `Could not delete ${deletionResult.failureCount} thread${deletionResult.failureCount === 1 ? "" : "s"} in "${project.name}".`,
-          });
-          return;
-        }
-
-        await api.orchestration.dispatchCommand({
-          type: "project.delete",
-          commandId: newCommandId(),
-          projectId,
-        });
-        clearProjectDraftThreads(projectId);
-        toastManager.add({
-          type: "success",
-          title: `Removed "${project.name}"`,
-          description:
-            deletionResult.deletedCount > 0
-              ? `Deleted ${deletionResult.deletedCount} thread${deletionResult.deletedCount === 1 ? "" : "s"} and removed the project.`
-              : "Project removed.",
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown error removing project.";
-        console.error("Failed to remove project", { projectId, error });
-        toastManager.add({
-          type: "error",
-          title: `Failed to remove "${project.name}"`,
-          description: message,
-        });
-      }
-    },
-    [
-      archiveAllThreadsInProject,
-      clearProjectDraftThreads,
-      copyPathToClipboard,
-      deleteProjectThreads,
-      deleteAllThreadsInProject,
-      projects,
-      sidebarThreads,
-    ],
-  );
 
   const projectDnDSensors = useSensors(
     useSensor(PointerSensor, {
@@ -4103,168 +3156,24 @@ export default function Sidebar() {
     };
   }, [clearSelection, selectedThreadIds.size]);
 
-  useEffect(() => {
-    const clearThreadJumpHints = () => {
-      setThreadJumpLabelByThreadId((current) =>
-        current === EMPTY_THREAD_JUMP_LABELS ? current : EMPTY_THREAD_JUMP_LABELS,
-      );
-      setShowThreadJumpHints(false);
-    };
-    const shouldIgnoreThreadJumpHintUpdate = (event: KeyboardEvent) =>
-      !event.metaKey &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      !event.shiftKey &&
-      event.key !== "Meta" &&
-      event.key !== "Control" &&
-      event.key !== "Alt" &&
-      event.key !== "Shift" &&
-      !showThreadJumpHintsRef.current &&
-      threadJumpLabelsRef.current === EMPTY_THREAD_JUMP_LABELS;
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-
-      if (
-        (event.metaKey || event.ctrlKey) &&
-        event.key === "k" &&
-        !event.shiftKey &&
-        !event.altKey
-      ) {
-        event.preventDefault();
-        event.stopPropagation();
-        setSearchPaletteMode("search");
-        setSearchPaletteInitialQuery(null);
-        setSearchPaletteOpen((prev) => !prev || searchPaletteMode !== "search");
-        return;
-      }
-
-      const shortcutContext = getCurrentSidebarShortcutContext();
-      if (!shouldIgnoreThreadJumpHintUpdate(event)) {
-        const shouldShowHints = shouldShowThreadJumpHints(event, keybindings, {
-          platform: navigator.platform,
-          context: shortcutContext,
-        });
-        if (!shouldShowHints) {
-          if (
-            showThreadJumpHintsRef.current ||
-            threadJumpLabelsRef.current !== EMPTY_THREAD_JUMP_LABELS
-          ) {
-            clearThreadJumpHints();
-          }
-        } else {
-          setThreadJumpLabelByThreadId((current) => {
-            const nextLabelMap = buildThreadJumpLabelMap({
-              keybindings,
-              platform: navigator.platform,
-              terminalOpen: shortcutContext.terminalOpen,
-              threadJumpCommandByThreadId,
-            });
-            return threadJumpLabelMapsEqual(current, nextLabelMap) ? current : nextLabelMap;
-          });
-          setShowThreadJumpHints(true);
-        }
-      }
-
-      const command = resolveShortcutCommand(event, keybindings, {
-        context: shortcutContext,
-      });
-      if (command === "sidebar.search") {
-        event.preventDefault();
-        event.stopPropagation();
-        setSearchPaletteMode("search");
-        setSearchPaletteInitialQuery(null);
-        setSearchPaletteOpen((prev) => !prev || searchPaletteMode !== "search");
-        return;
-      }
-      if (command === "sidebar.addProject") {
-        event.preventDefault();
-        event.stopPropagation();
-        setSearchPaletteMode("search");
-        setSearchPaletteInitialQuery(getInitialBrowseQuery(homeDir));
-        setSearchPaletteOpen(true);
-        return;
-      }
-      if (command === "sidebar.importThread") {
-        event.preventDefault();
-        event.stopPropagation();
-        setSearchPaletteMode("import");
-        setSearchPaletteInitialQuery(null);
-        setSearchPaletteOpen((prev) => !prev || searchPaletteMode !== "import");
-        return;
-      }
-      const jumpIndex = threadJumpIndexFromCommand(command ?? "");
-      if (jumpIndex !== null) {
-        event.preventDefault();
-        event.stopPropagation();
-        const threadJumpTargetId = threadJumpThreadIds[jumpIndex];
-        if (threadJumpTargetId) {
-          activateThreadFromSidebarIntent(threadJumpTargetId);
-        }
-        return;
-      }
-      if (command !== "chat.visible.next" && command !== "chat.visible.previous") {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-      const nextThreadId = getNextVisibleSidebarThreadId({
-        visibleThreadIds: visibleSidebarThreadIds,
-        activeThreadId: activeSidebarThreadId ?? undefined,
-        direction: command === "chat.visible.previous" ? "backward" : "forward",
-      });
-      if (nextThreadId && nextThreadId !== activeSidebarThreadId) {
-        activateThreadFromSidebarIntent(nextThreadId);
-      }
-    };
-    const onKeyUp = (event: KeyboardEvent) => {
-      if (shouldIgnoreThreadJumpHintUpdate(event)) {
-        return;
-      }
-      const shortcutContext = getCurrentSidebarShortcutContext();
-      const shouldShowHints = shouldShowThreadJumpHints(event, keybindings, {
-        platform: navigator.platform,
-        context: shortcutContext,
-      });
-      if (!shouldShowHints) {
-        clearThreadJumpHints();
-        return;
-      }
-      setThreadJumpLabelByThreadId((current) => {
-        const nextLabelMap = buildThreadJumpLabelMap({
-          keybindings,
-          platform: navigator.platform,
-          terminalOpen: shortcutContext.terminalOpen,
-          threadJumpCommandByThreadId,
-        });
-        return threadJumpLabelMapsEqual(current, nextLabelMap) ? current : nextLabelMap;
-      });
-      setShowThreadJumpHints(true);
-    };
-    const onWindowBlur = () => {
-      clearThreadJumpHints();
-    };
-
-    window.addEventListener("keydown", onKeyDown, { capture: true });
-    window.addEventListener("keyup", onKeyUp, { capture: true });
-    window.addEventListener("blur", onWindowBlur);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown, { capture: true });
-      window.removeEventListener("keyup", onKeyUp, { capture: true });
-      window.removeEventListener("blur", onWindowBlur);
-    };
-  }, [
-    activateThreadFromSidebarIntent,
-    activeSidebarThreadId,
+  useSidebarKeybindings({
     keybindings,
-    getCurrentSidebarShortcutContext,
     homeDir,
     searchPaletteMode,
     threadJumpCommandByThreadId,
     threadJumpThreadIds,
     visibleSidebarThreadIds,
-  ]);
+    activeSidebarThreadId,
+    showThreadJumpHintsRef,
+    threadJumpLabelsRef,
+    getCurrentSidebarShortcutContext,
+    activateThreadFromSidebarIntent,
+    setSearchPaletteMode,
+    setSearchPaletteOpen,
+    setSearchPaletteInitialQuery,
+    setThreadJumpLabelByThreadId,
+    setShowThreadJumpHints,
+  });
 
   useEffect(() => {
     if (!isElectron) return;
