@@ -51,11 +51,31 @@ import {
   resolveBrowserAddressSync,
   type BrowserAddressSuggestion,
 } from "./BrowserPanel.logic";
+import {
+  BROWSER_BLANK_URL,
+  BROWSER_BOUNDS_SYNC_BURST_FRAMES,
+  BROWSER_BOUNDS_SYNC_STABLE_FRAME_TARGET,
+  BROWSER_PERF_SAMPLE_INTERVAL_MS,
+  BROWSER_WEBVIEW_PARTITION,
+  type BrowserViewportPerfCounters,
+  type BrowserWebviewElement,
+  createBrowserViewportPerfCounters,
+  SYNARA_BROWSER_LABEL,
+  VIEWPORT_TRANSITION_PROPERTIES,
+  closeButtonClassName,
+  formatBrowserActionError,
+  hasNativeBrowserObscuringOverlay,
+  ignoreBrowserBoundsSyncError,
+  isBrowserPerfLoggingEnabled,
+  isNativeBrowserTransitionSignalTarget,
+  setBrowserWebviewOverlayOcclusion,
+} from "./BrowserPanel.overlay";
+import { BrowserNavButton } from "./BrowserNavButton";
+import { BrowserRuntimePreview } from "./BrowserRuntimePreview";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "./ui/menu";
-import { Skeleton } from "./ui/skeleton";
 import { toastManager } from "./ui/toast";
 
 interface BrowserPanelProps {
@@ -66,276 +86,7 @@ interface BrowserPanelProps {
   onRequestLive?: () => void;
 }
 
-const BROWSER_BOUNDS_SYNC_BURST_FRAMES = 30;
-const BROWSER_BOUNDS_SYNC_STABLE_FRAME_TARGET = 2;
-const BROWSER_WEBVIEW_PARTITION = "persist:synara-browser";
-const BROWSER_BLANK_URL = "about:blank";
-const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
-const SYNARA_BROWSER_LABEL = "Synara browser";
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
-const NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR = [
-  "[data-slot='dialog-backdrop']",
-  "[data-slot='dialog-popup']",
-  "[data-slot='dialog-viewport']",
-  "[data-slot='alert-dialog-backdrop']",
-  "[data-slot='alert-dialog-popup']",
-  "[data-slot='alert-dialog-viewport']",
-  "[data-slot='command-dialog-backdrop']",
-  "[data-slot='command-dialog-popup']",
-  "[data-slot='command-dialog-viewport']",
-  "[data-slot='toast-popup']",
-  "[role='dialog'][aria-modal='true']",
-].join(", ");
-
-// The browser itself lives inside a sheet, and toast portals/positioners are just
-// layout containers. Treating either as blockers hides the WebContentsView.
-const NATIVE_BROWSER_NON_OBSCURING_OVERLAY_SELECTOR = [
-  "[data-panel-resize-overlay='true']",
-  "[data-slot='sheet-backdrop']",
-  "[data-slot='sheet-popup']",
-  "[data-slot='toast-portal']",
-  "[data-slot='toast-portal-anchored']",
-  "[data-slot='toast-viewport']",
-  "[data-slot='toast-viewport-anchored']",
-  "[data-slot='toast-positioner']",
-].join(", ");
-
-interface BrowserViewportPerfCounters {
-  syncAttempts: number;
-  syncSkips: number;
-  syncSends: number;
-  resizeSchedules: number;
-  resizeScheduleSkips: number;
-  burstStarts: number;
-  burstExtensions: number;
-  burstFrames: number;
-  transitionSignals: number;
-  ignoredTransitionSignals: number;
-}
-
-interface BrowserWebviewElement extends HTMLElement {
-  getWebContentsId?: () => number;
-}
-
-const VIEWPORT_TRANSITION_PROPERTIES = new Set([
-  "transform",
-  "translate",
-  "scale",
-  "rotate",
-  "width",
-  "max-width",
-  "min-width",
-  "height",
-  "max-height",
-  "min-height",
-  "left",
-  "right",
-  "top",
-  "bottom",
-  "inset",
-  "inset-inline",
-  "inset-inline-start",
-  "inset-inline-end",
-  "inset-block",
-  "inset-block-start",
-  "inset-block-end",
-]);
-function closeButtonClassName(isActive: boolean) {
-  return cn(
-    "ml-1 size-5 shrink-0 rounded-sm p-0 text-muted-foreground/70 hover:bg-background/80 hover:text-foreground",
-    isActive ? "hover:bg-background" : "hover:bg-card",
-  );
-}
-
-function formatBrowserActionError(error: unknown): string | null {
-  if (!(error instanceof Error)) {
-    return "Couldn't complete that browser action.";
-  }
-  if (/ERR_ABORTED|\(-3\)/i.test(error.message)) {
-    return null;
-  }
-  return "Couldn't complete that browser action.";
-}
-
-function ignoreBrowserBoundsSyncError(): void {
-  // Bounds sync is best-effort plumbing between the React shell and the native
-  // browser surface. Avoid surfacing transient geometry-sync failures as user-facing
-  // browser errors because they do not reflect page navigation health.
-}
-
-function setBrowserWebviewOverlayOcclusion(
-  webview: BrowserWebviewElement | null,
-  occluded: boolean,
-): void {
-  if (!webview) {
-    return;
-  }
-  webview.style.visibility = occluded ? "hidden" : "visible";
-  webview.style.pointerEvents = occluded ? "none" : "auto";
-}
-
-function isVisibleOverlayElement(element: HTMLElement): boolean {
-  const styles = window.getComputedStyle(element);
-  if (styles.display === "none" || styles.visibility === "hidden" || styles.opacity === "0") {
-    return false;
-  }
-  return element.getClientRects().length > 0;
-}
-
-function isNativeBrowserNonObscuringOverlayElement(element: HTMLElement): boolean {
-  return (
-    element.closest("[data-slot='toast-popup']") === null &&
-    element.closest(NATIVE_BROWSER_NON_OBSCURING_OVERLAY_SELECTOR) !== null
-  );
-}
-
-const NATIVE_BROWSER_OVERLAY_SAMPLE_POINTS = [
-  [0.5, 0.5],
-  [0.2, 0.2],
-  [0.8, 0.2],
-  [0.2, 0.8],
-  [0.8, 0.8],
-] as const;
-
-function rectsIntersect(a: DOMRect, b: DOMRect): boolean {
-  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-}
-
-function candidateObscuresNativeBrowser(candidate: HTMLElement, element: HTMLElement): boolean {
-  if (candidate === element || candidate.contains(element) || element.contains(candidate)) {
-    return false;
-  }
-  if (!isVisibleOverlayElement(candidate)) {
-    return false;
-  }
-
-  const elementRect = element.getBoundingClientRect();
-  const candidateRects = candidate.getClientRects();
-  for (const candidateRect of candidateRects) {
-    if (rectsIntersect(elementRect, candidateRect)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function hasTopLayerDomObstruction(element: HTMLElement): boolean {
-  const rect = element.getBoundingClientRect();
-  if (rect.width <= 0 || rect.height <= 0) {
-    return false;
-  }
-
-  for (const [xRatio, yRatio] of NATIVE_BROWSER_OVERLAY_SAMPLE_POINTS) {
-    const x = rect.left + rect.width * xRatio;
-    const y = rect.top + rect.height * yRatio;
-    if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) {
-      continue;
-    }
-
-    const hitElements = document.elementsFromPoint(x, y);
-    for (const hitElement of hitElements) {
-      if (!(hitElement instanceof HTMLElement)) {
-        continue;
-      }
-      if (hitElement === element || element.contains(hitElement) || hitElement.contains(element)) {
-        continue;
-      }
-      if (isNativeBrowserNonObscuringOverlayElement(hitElement)) {
-        continue;
-      }
-      if (!isVisibleOverlayElement(hitElement)) {
-        continue;
-      }
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function hasNativeBrowserObscuringOverlay(element: HTMLElement): boolean {
-  const candidates = document.querySelectorAll<HTMLElement>(
-    NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR,
-  );
-  for (const candidate of candidates) {
-    if (candidateObscuresNativeBrowser(candidate, element)) {
-      return true;
-    }
-  }
-
-  return hasTopLayerDomObstruction(element);
-}
-
-function isNativeBrowserTransitionSignalTarget(
-  target: EventTarget | null,
-  viewportElement: HTMLElement,
-): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-
-  if (viewportElement.contains(target) || target.contains(viewportElement)) {
-    return true;
-  }
-
-  return (
-    target.closest(NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR) !== null ||
-    target.closest("[data-slot='sidebar-container']") !== null ||
-    target.closest("[data-slot='sheet-popup']") !== null
-  );
-}
-
-function isBrowserPerfLoggingEnabled(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  try {
-    return (
-      window.localStorage.getItem("synara:browser-perf") === "1" ||
-      window.localStorage.getItem("dpcode:browser-perf") === "1" ||
-      window.localStorage.getItem("t3code:browser-perf") === "1"
-    );
-  } catch {
-    return false;
-  }
-}
-
-// Keeps a restored browser pane visually occupied while the live webview hydrates.
-function BrowserRuntimePreview(props: { title: string; detail: string }) {
-  return (
-    <div
-      className="absolute inset-0 flex items-center justify-center bg-background/35 p-6"
-      role="status"
-      aria-live="polite"
-    >
-      <div className="w-full max-w-sm rounded-xl border border-border/60 bg-card/70 p-4 shadow-sm">
-        <div className="mb-4 flex items-center gap-3">
-          <Skeleton className="size-9 rounded-lg" />
-          <div className="min-w-0 flex-1 space-y-2">
-            <Skeleton className="h-3.5 w-2/3 rounded-full" />
-            <Skeleton className="h-2.5 w-full rounded-full" />
-          </div>
-        </div>
-        <div className="space-y-2">
-          <Skeleton className="h-20 w-full rounded-lg" />
-          <div className="grid grid-cols-3 gap-2">
-            <Skeleton className="h-8 rounded-md" />
-            <Skeleton className="h-8 rounded-md" />
-            <Skeleton className="h-8 rounded-md" />
-          </div>
-        </div>
-        <div className="mt-4 min-w-0 text-center">
-          <p className="text-xs font-medium text-foreground">Restoring browser</p>
-          <p className="mt-1 truncate text-[11px] text-muted-foreground" title={props.detail}>
-            {props.title}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 export function BrowserPanel({
   mode,
@@ -374,18 +125,7 @@ export function BrowserPanel({
   const boundsBurstFrameRef = useRef<number | null>(null);
   const burstFramesRemainingRef = useRef(0);
   const burstStableFramesRef = useRef(0);
-  const perfCountersRef = useRef<BrowserViewportPerfCounters>({
-    syncAttempts: 0,
-    syncSkips: 0,
-    syncSends: 0,
-    resizeSchedules: 0,
-    resizeScheduleSkips: 0,
-    burstStarts: 0,
-    burstExtensions: 0,
-    burstFrames: 0,
-    transitionSignals: 0,
-    ignoredTransitionSignals: 0,
-  });
+  const perfCountersRef = useRef<BrowserViewportPerfCounters>(createBrowserViewportPerfCounters());
   const [addressValue, setAddressValue] = useState("");
   const [isAddressFocused, setIsAddressFocused] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
@@ -967,11 +707,9 @@ export function BrowserPanel({
       {/* Keep the browser chrome interactive inside Electron's draggable titlebar. */}
       <div className="relative flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
         <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="size-7 shrink-0"
+          <BrowserNavButton
+            icon={<ArrowLeftIcon className="size-3.5" />}
+            srLabel="Go back"
             disabled={!activeTab?.canGoBack}
             onClick={() => {
               if (!ensureLiveRuntime()) return;
@@ -984,15 +722,10 @@ export function BrowserPanel({
                 }
               });
             }}
-          >
-            <ArrowLeftIcon className="size-3.5" />
-            <span className="sr-only">Go back</span>
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="size-7 shrink-0"
+          />
+          <BrowserNavButton
+            icon={<ArrowRightIcon className="size-3.5" />}
+            srLabel="Go forward"
             disabled={!activeTab?.canGoForward}
             onClick={() => {
               if (!ensureLiveRuntime()) return;
@@ -1005,15 +738,16 @@ export function BrowserPanel({
                 }
               });
             }}
-          >
-            <ArrowRightIcon className="size-3.5" />
-            <span className="sr-only">Go forward</span>
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="size-7 shrink-0"
+          />
+          <BrowserNavButton
+            icon={
+              loading ? (
+                <LoaderCircleIcon className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCwIcon className="size-3.5" />
+              )
+            }
+            srLabel="Reload"
             disabled={!activeTab}
             onClick={() => {
               if (!ensureLiveRuntime()) return;
@@ -1026,14 +760,7 @@ export function BrowserPanel({
                 }
               });
             }}
-          >
-            {loading ? (
-              <LoaderCircleIcon className="size-3.5 animate-spin" />
-            ) : (
-              <RefreshCwIcon className="size-3.5" />
-            )}
-            <span className="sr-only">Reload</span>
-          </Button>
+          />
         </div>
         <form
           className="min-w-0 flex-1 [-webkit-app-region:no-drag]"
