@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.1.7 - 2026-06-10
+
+### Added
+
+- Added Claude Fable 5 to the Claude and Cursor model surfaces, including the shared model contract, Cursor model variants, keybinding metadata, provider discovery invalidation, and focused model-picker coverage.
+- Added Cursor ACP model discovery and refresh handling so Cursor-backed sessions can recover from stale, partial, or invalid model state more reliably.
+- Added provider usage infrastructure for Codex, Claude, Cursor, and Gemini, including credential discovery, provider-specific parsers, shared display helpers, SQLite-backed snapshot caching, server RPC routes, and client snapshot normalization.
+- Added provider usage UI in chat and settings: Environment panel usage rows, compact usage menu controls, progress tracks, line lists, limit rows, rate-limit opening helpers, and provider usage settings navigation.
+- Added desktop backend Node option handling and tests, memory diagnostics, WebSocket stream backpressure guards, and provider runtime ingestion buffer coverage.
+- Added centralized Windows desktop caption controls, top-bar gutter support, preload IPC wiring, and focused browser/unit coverage for sidebar, keybinding, composer, usage, and provider discovery paths.
+
+### Changed
+
+- Reworked the composer model/options picker flow so split pickers are used where they help, empty threads stay focused, and stacked composer panels share steadier sizing/content helpers.
+- Refined Cursor provider integration around ACP capability checks, model support parsing, discovery refreshes, provider health, and adapter behavior.
+- Unified provider usage display and pacing logic across server snapshots, shared helpers, React hooks, settings panels, and in-chat usage sections.
+- Tightened Codex app-server recovery, backend memory limits, and streaming behavior so reconnects, partial streams, and live provider updates stay more predictable.
+- Refined Windows desktop chrome to keep native-style controls in one fixed cluster and avoid custom titlebar paths outside Windows.
+- Updated Linux download metadata to use the current `-x64` AppImage asset naming.
+
+### Fixed
+
+- Fixed plugin mention icons in sent user bubbles so selected plugin/file identity is preserved after sending.
+- Fixed provider discovery invalidation so refreshed model lists can update the UI without stale model state lingering.
+- Fixed usage parsing/display edge cases for provider-specific quota and pacing data.
+- Fixed composer stacked panel sizing, queued/live-change header alignment, and trait-picker behavior around compact controls.
+- Fixed sidebar/search palette state and route metadata edge cases covered by new tests.
+- Fixed WebSocket backpressure and buffered provider-runtime ingestion cases that could otherwise leave live updates stale under load.
+
+### Verification
+
+- `bun run fmt:check` initially failed on `apps/web/src/routes/__root.tsx`; after formatting that file with `bunx oxfmt apps/web/src/routes/__root.tsx`, `bun run fmt:check` passed.
+- `bun run lint` passed with 148 warnings, 0 errors.
+- `bun run typecheck` initially failed in `apps/web/src/components/chat/TraitsPicker.browser.tsx`, `apps/web/src/store.ts`, `apps/server/src/provider/Layers/CursorAdapter.ts`, and `apps/server/src/wsRpc.ts`; after targeted fixes, `bun run typecheck` passed with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed.
+- `bun run build` passed. Vite still warns about large web chunks and plugin timings.
+- `bun run test` failed in `packages/effect-acp/src/client.test.ts` on `returns formatted invalid params when a typed extension request payload is wrong` and `replays buffered notifications to handlers registered after they arrive`, both with 5000ms timeouts; Turbo then canceled `t3:test` and `@t3tools/web:test` with code 130.
+- `bun run test src/client.test.ts -t "returns formatted invalid params when a typed extension request payload is wrong|replays buffered notifications to handlers registered after they arrive"` from `packages/effect-acp` passed (2 tests passed, 3 skipped).
+- `bun run test` from `packages/effect-acp` passed (3 files passed; 24 tests passed).
+- `bun run test` from `apps/server` passed (118 files passed, 1 skipped; 1136 tests passed, 6 skipped).
+- `bun run test` from `apps/web` passed (147 files passed; 1690 tests passed).
+- Final `bun run fmt:check` passed.
+- Final `bun run lint` passed with 148 warnings, 0 errors.
+- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.1.7`.
+
 ## 0.1.6 - 2026-06-09
 
 ### Added

@@ -545,9 +545,14 @@ function providerReferenceArraysEqual(
   left:
     | ReadonlyArray<Pick<NonNullable<ChatMessage["mentions"]>[number], "name" | "path">>
     | undefined,
-  right: ReadonlyArray<Pick<NonNullable<ChatMessage["mentions"]>[number], "name" | "path">>,
+  right:
+    | ReadonlyArray<Pick<NonNullable<ChatMessage["mentions"]>[number], "name" | "path">>
+    | undefined,
 ): boolean {
-  if (!left || left.length !== right.length) {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right || left.length !== right.length) {
     return false;
   }
   for (let index = 0; index < left.length; index += 1) {

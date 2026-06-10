@@ -1058,7 +1058,7 @@ export const makeWsRpcLayer = () =>
               label: "server.settings",
               onDroppedEvents: failLiveUiStreamForSnapshotResync,
             }).pipe(Stream.map((settings) => ({ settings }))),
-          ),
+          ).pipe(Stream.mapError((cause) => toWsRpcError(cause, "Server settings stream failed"))),
 
         [WS_METHODS.providerGetComposerCapabilities]: (input) =>
           rpcEffect(

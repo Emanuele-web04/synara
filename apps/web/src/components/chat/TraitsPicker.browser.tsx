@@ -539,7 +539,7 @@ describe("TraitsPicker (Cursor)", () => {
         supportedReasoningEfforts: [
           { value: "low", label: "Low" },
           { value: "medium", label: "Medium" },
-          { value: "high", label: "High", isDefault: true },
+          { value: "high", label: "High" },
           { value: "xhigh", label: "Extra High" },
           { value: "max", label: "Max" },
         ],

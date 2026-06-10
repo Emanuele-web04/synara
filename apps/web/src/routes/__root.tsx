@@ -1274,8 +1274,9 @@ function EventRouter() {
       });
     });
     const unsubProviderStatusesUpdated = onServerProviderStatusesUpdated((payload) => {
-      const nextProviderDiscoveryFingerprint =
-        providerModelDiscoveryInvalidationFingerprint(payload.providers);
+      const nextProviderDiscoveryFingerprint = providerModelDiscoveryInvalidationFingerprint(
+        payload.providers,
+      );
       const currentConfig = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
       const previousProviderDiscoveryFingerprint =
         providerDiscoveryInvalidationFingerprint ??

@@ -120,7 +120,7 @@ function mergeCursorModelDescriptors(
   additionalModels: ReadonlyArray<ProviderListModelsResult["models"][number]>,
 ): ProviderListModelsResult["models"] {
   const seen = new Set<string>();
-  const merged: ProviderListModelsResult["models"] = [];
+  const merged: Array<ProviderListModelsResult["models"][number]> = [];
   for (const model of [...preferredModels, ...additionalModels]) {
     const key = model.slug.trim().toLowerCase();
     if (!key || seen.has(key)) {
