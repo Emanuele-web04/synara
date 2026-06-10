@@ -926,6 +926,66 @@ label:has(> select#reasoning-effort) select {
   font-family: inherit !important;
 }
 
+.editor-file-viewer__plain,
+.editor-file-viewer__highlight .shiki {
+  min-height: 100%;
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent !important;
+  padding: 1rem;
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code, 12px);
+  line-height: 1.65;
+  tab-size: 2;
+}
+
+.editor-file-viewer::-webkit-scrollbar-corner {
+  background: var(--color-background-surface);
+}
+
+.editor-file-viewer__plain {
+  color: color-mix(in srgb, var(--foreground) 88%, transparent);
+}
+
+.editor-file-viewer__highlight {
+  min-height: 100%;
+  width: max-content;
+  min-width: 100%;
+}
+
+.editor-file-viewer__highlight .shiki code,
+.editor-file-viewer__highlight .shiki * {
+  font-family: inherit !important;
+}
+
+/* Line-number gutter for the read-only file preview. Rendered via CSS counters
+   on the per-line spans (Shiki and the plain fallback both emit .line), so the
+   numbers stay out of text selection, clipboard copies, and the selection
+   line-range math used by "Reference lines in chat". */
+.editor-file-viewer__plain code,
+.editor-file-viewer__highlight .shiki code {
+  counter-reset: editor-file-line;
+}
+
+.editor-file-viewer__plain .line::before,
+.editor-file-viewer__highlight .shiki .line::before {
+  counter-increment: editor-file-line;
+  content: counter(editor-file-line);
+  position: sticky;
+  left: 0;
+  display: inline-block;
+  min-width: 4ch;
+  margin-right: 1.5ch;
+  padding-right: 0.75ch;
+  text-align: right;
+  color: color-mix(in srgb, var(--foreground) 30%, transparent);
+  background: var(--color-background-surface);
+  user-select: none;
+}
+
 /* Generated image preview/download card rendered inline from markdown ![alt](file.png) */
 .chat-generated-image {
   position: relative;
@@ -1182,6 +1242,11 @@ diffs-container {
   border-radius: 0.5rem;
   overflow: clip;
   background: color-mix(in srgb, var(--card) 92%, var(--background));
+}
+
+.diff-render-file [data-diffs-header],
+.diff-render-file [data-file-info] {
+  cursor: pointer;
 }
 
 /* Composer surface follows Codex's renderer token path: light uses

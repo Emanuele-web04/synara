@@ -38,6 +38,33 @@ export function shouldInvalidateGitQueriesForEvent(event: OrchestrationEvent): b
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Activities stream while a turn is still running; file-change tool calls are the
+// earliest signal that workspace files were touched. Invalidating the project
+// file queries on them lets the editor file tree and open file preview refresh
+// mid-turn instead of waiting for the turn diff to complete.
+export function getProjectFileInvalidationThreadIdForEvent(
+  event: OrchestrationEvent,
+): ThreadId | null {
+  if (event.type !== "thread.activity-appended") {
+    return null;
+  }
+  const payload = isRecord(event.payload.activity.payload) ? event.payload.activity.payload : null;
+  if (!payload) {
+    return null;
+  }
+  const data = isRecord(payload.data) ? payload.data : null;
+  const item = data && isRecord(data.item) ? data.item : null;
+  const itemType = payload.itemType ?? data?.itemType ?? item?.type ?? item?.kind;
+  if (payload.requestKind === "file-change" || itemType === "file_change") {
+    return event.payload.threadId;
+  }
+  return null;
+}
+
 export function getGitInvalidationThreadIdForEvent(event: OrchestrationEvent): ThreadId | null {
   if (!shouldInvalidateGitQueriesForEvent(event)) {
     return null;

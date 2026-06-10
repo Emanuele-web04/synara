@@ -32,6 +32,31 @@ function getSelectionRect(selection: Selection): DOMRect | null {
   return boundingRect.width > 0 || boundingRect.height > 0 ? boundingRect : null;
 }
 
+// Rect of the active window selection, for positioning floating selection actions.
+export function getActiveSelectionRect(): DOMRect | null {
+  const selection = window.getSelection();
+  if (!selection) {
+    return null;
+  }
+  return getSelectionRect(selection);
+}
+
+// `closest()` that escapes open shadow roots (e.g. the @pierre/diffs custom
+// element) by hopping from a shadow root to its host element.
+export function closestThroughShadow(start: Node | null, selector: string): HTMLElement | null {
+  let node: Node | null = start;
+  while (node) {
+    const element = node instanceof HTMLElement ? node : node.parentElement;
+    const match = element?.closest<HTMLElement>(selector) ?? null;
+    if (match) {
+      return match;
+    }
+    const root = (element ?? node).getRootNode();
+    node = root instanceof ShadowRoot ? root.host : null;
+  }
+  return null;
+}
+
 function selectionContainerForNode(node: Node | null): HTMLElement | null {
   if (!node) {
     return null;

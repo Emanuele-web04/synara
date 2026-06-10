@@ -14,15 +14,19 @@ export function PickerTriggerButton(
     icon: ReactNode;
     label: ReactNode;
     compact?: boolean;
+    // Icon-only mode for narrow composers; the label stays available to
+    // assistive tech and as a hover title.
+    hideLabel?: boolean;
   } & Omit<ComponentProps<typeof Button>, "children" | "size" | "variant">,
 ) {
-  const { icon, label, compact, className, ...buttonProps } = props;
+  const { icon, label, compact, hideLabel, className, ...buttonProps } = props;
 
   return (
     <Button
       {...buttonProps}
       size="sm"
       variant="chrome"
+      {...(hideLabel && typeof label === "string" ? { title: label } : {})}
       className={cn(
         "min-w-0 justify-start overflow-hidden whitespace-nowrap px-1.5 text-[var(--color-text-foreground)] [&_svg]:mx-0",
         COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
@@ -33,11 +37,15 @@ export function PickerTriggerButton(
       <span
         className={cn(
           "flex min-w-0 w-full items-center gap-2 overflow-hidden",
-          compact ? "max-w-44" : undefined,
+          hideLabel ? "gap-1" : compact ? "max-w-44" : undefined,
         )}
       >
         <span className="inline-flex size-3.5 shrink-0 items-center justify-center">{icon}</span>
-        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {hideLabel ? (
+          <span className="sr-only">{label}</span>
+        ) : (
+          <span className="min-w-0 flex-1 truncate">{label}</span>
+        )}
         <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
       </span>
     </Button>

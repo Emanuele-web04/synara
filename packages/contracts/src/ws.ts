@@ -58,6 +58,7 @@ import {
 import { KeybindingRule } from "./keybindings";
 import {
   ProjectListDirectoriesInput,
+  ProjectReadFileInput,
   ProjectSearchEntriesInput,
   ProjectSearchLocalEntriesInput,
   ProjectWriteFileInput,
@@ -96,6 +97,7 @@ export const WS_METHODS = {
   projectsListDirectories: "projects.listDirectories",
   projectsSearchEntries: "projects.searchEntries",
   projectsSearchLocalEntries: "projects.searchLocalEntries",
+  projectsReadFile: "projects.readFile",
   projectsWriteFile: "projects.writeFile",
 
   // Filesystem browse methods
@@ -217,6 +219,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.projectsListDirectories, ProjectListDirectoriesInput),
   tagRequestBody(WS_METHODS.projectsSearchEntries, ProjectSearchEntriesInput),
   tagRequestBody(WS_METHODS.projectsSearchLocalEntries, ProjectSearchLocalEntriesInput),
+  tagRequestBody(WS_METHODS.projectsReadFile, ProjectReadFileInput),
   tagRequestBody(WS_METHODS.projectsWriteFile, ProjectWriteFileInput),
 
   // Filesystem browse

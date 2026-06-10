@@ -11,6 +11,7 @@ import {
   type CSSProperties,
   type MouseEventHandler,
   type PointerEventHandler,
+  type ReactNode,
   type RefObject,
   type TouchEventHandler,
   type WheelEventHandler,
@@ -34,6 +35,7 @@ interface ChatTranscriptPaneProps {
   bottomContentInsetPx?: ComponentProps<typeof MessagesTimeline>["bottomContentInsetPx"];
   contentInsetRightPx?: ComponentProps<typeof MessagesTimeline>["contentInsetRightPx"];
   chatFontSizePx: number;
+  emptyStateContent?: ReactNode;
   emptyStateProjectName: string | undefined;
   expandedWorkGroups?: Record<string, boolean>;
   hasMessages: boolean;
@@ -84,6 +86,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   bottomContentInsetPx,
   contentInsetRightPx,
   chatFontSizePx,
+  emptyStateContent,
   emptyStateProjectName,
   expandedWorkGroups,
   hasMessages,
@@ -191,7 +194,13 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             bottomContentInsetPx={bottomContentInsetPx}
             contentInsetRightPx={contentInsetRightPx}
             {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
-            emptyStateContent={<ChatEmptyStateHero projectName={emptyStateProjectName} />}
+            emptyStateContent={
+              emptyStateContent === undefined ? (
+                <ChatEmptyStateHero projectName={emptyStateProjectName} />
+              ) : (
+                emptyStateContent
+              )
+            }
             {...(expandedWorkGroups ? { expandedWorkGroups } : {})}
             {...(onToggleWorkGroup ? { onToggleWorkGroup } : {})}
           />

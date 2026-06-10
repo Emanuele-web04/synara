@@ -5,6 +5,7 @@
 
 import {
   type EditorId,
+  type ProjectId,
   type ProjectScript,
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
@@ -12,18 +13,31 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
-import React, { memo, useEffect, useRef, useState } from "react";
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiGitBranch } from "react-icons/fi";
 import { HiMiniArrowsPointingOut } from "react-icons/hi2";
 import { TbExchange } from "react-icons/tb";
 import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
-import { ArrowRightIcon, HandoffIcon, PanelRightCloseIcon, TerminalIcon, XIcon } from "~/lib/icons";
+import {
+  ArrowRightIcon,
+  CheckIcon,
+  Columns2Icon,
+  HandoffIcon,
+  HistoryIcon,
+  MessageCircleIcon,
+  PanelRightCloseIcon,
+  PlusIcon,
+  TerminalIcon,
+  XIcon,
+} from "~/lib/icons";
+import { formatRelativeTime } from "~/lib/relativeTime";
 import {
   CHAT_HEADER_TOGGLE_CLASS_NAME,
   ChatHeaderButton,
   ChatHeaderIconButton,
   SurfaceChipIcon,
+  SurfaceTabChip,
 } from "./chatHeaderControls";
 import { IconButton } from "../ui/icon-button";
 import { Badge } from "../ui/badge";
@@ -35,6 +49,15 @@ import { SidebarHeaderNavigationControls } from "../SidebarHeaderNavigationContr
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
 import { Toggle } from "../ui/toggle";
 import { useSidebar } from "../ui/sidebar";
+import { useAppSettings } from "../../appSettings";
+import { useStore } from "../../store";
+import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
+import { sortThreadsForSidebar } from "../Sidebar.logic";
+import {
+  readEditorRailChatTabs,
+  storeEditorRailChatTabs,
+  type EditorRailChatTabSnapshot,
+} from "../../editorViewState";
 import { cn } from "~/lib/utils";
 import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
 import { useOpenFavoriteEditorShortcut } from "~/hooks/useOpenFavoriteEditorShortcut";
@@ -59,6 +82,8 @@ interface ChatHeaderProps {
     threadId: ThreadId;
     title: string;
   }>;
+  className?: string;
+  hideSidebarControls?: boolean;
   hideHandoffControls?: boolean;
   isGitRepo: boolean;
   openInCwd: string | null;
@@ -76,6 +101,7 @@ interface ChatHeaderProps {
   gitCwd: string | null;
   diffTotals: RepoDiffTotals;
   showGitActions?: boolean;
+  showDiffToggle?: boolean;
   diffOpen: boolean;
   diffDisabledReason?: string | null;
   surfaceMode?: "single" | "split";
@@ -90,9 +116,27 @@ interface ChatHeaderProps {
     shortcutLabel: string | null;
     onClick: () => void;
   } | null;
+  viewModeAction?: {
+    label: string;
+    active: boolean;
+    onClick: () => void;
+  } | null;
   changeThreadAction?: {
     label: string;
     onClick: () => void;
+  } | null;
+  // Editor-rail chat controls rendered beside the title: a "new chat" button and
+  // a project chat-history menu. Provided only by the editor workspace chat pane.
+  editorChatControls?: {
+    projectId: ProjectId;
+    activeSurface: "chat" | "terminal";
+    terminalAvailable: boolean;
+    terminalHasRunningActivity: boolean;
+    onNewChat: () => void;
+    onNewTerminal: () => void;
+    onOpenChat: (threadId: ThreadId) => void;
+    onOpenTerminal: () => void;
+    onCloseTerminal: () => void;
   } | null;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
@@ -103,6 +147,325 @@ interface ChatHeaderProps {
   onNavigateToThread: (threadId: ThreadId) => void;
   onRenameThread: () => void;
   onCloseThreadPane?: () => void;
+}
+
+const EDITOR_CHAT_HISTORY_LIMIT = 30;
+
+type EditorRailChatTab = EditorRailChatTabSnapshot;
+
+// Compact recent-chats picker for the editor rail; selecting a thread keeps the
+// editor view because the caller's navigation preserves the `view` search param.
+function EditorChatHistoryMenu(props: {
+  projectId: ProjectId;
+  activeThreadId: ThreadId;
+  onNavigateToThread: (threadId: ThreadId) => void;
+}) {
+  const { settings } = useAppSettings();
+  const selectDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
+  const displayThreads = useStore(selectDisplayThreads);
+  const historyThreads = useMemo(
+    () =>
+      sortThreadsForSidebar(
+        displayThreads.filter((thread) => thread.projectId === props.projectId),
+        settings.sidebarThreadSortOrder,
+      ).slice(0, EDITOR_CHAT_HISTORY_LIMIT),
+    [displayThreads, props.projectId, settings.sidebarThreadSortOrder],
+  );
+
+  return (
+    <Menu modal={false}>
+      <MenuTrigger
+        render={
+          <IconButton
+            variant="ghost"
+            size="icon-xs"
+            label="Chat history"
+            title="Chat history"
+            className="size-5 shrink-0 text-muted-foreground hover:text-foreground"
+          >
+            <HistoryIcon className="size-3.5" />
+          </IconButton>
+        }
+      />
+      <ComposerPickerMenuPopup align="start" side="bottom" sideOffset={6} className="w-72 min-w-72">
+        {historyThreads.length === 0 ? (
+          <MenuItem disabled>No chats in this project yet</MenuItem>
+        ) : (
+          historyThreads.map((thread) => (
+            <MenuItem
+              key={thread.id}
+              onClick={() => {
+                if (thread.id !== props.activeThreadId) {
+                  props.onNavigateToThread(thread.id);
+                }
+              }}
+            >
+              <ProviderIcon
+                provider={thread.session?.provider ?? thread.modelSelection.provider}
+                tone="header"
+                className="size-3.5 shrink-0"
+              />
+              <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+              {thread.id === props.activeThreadId ? (
+                <CheckIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              ) : (
+                <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+                  {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
+                </span>
+              )}
+            </MenuItem>
+          ))
+        )}
+      </ComposerPickerMenuPopup>
+    </Menu>
+  );
+}
+
+function EditorRailTabs(props: {
+  projectId: ProjectId;
+  activeThreadId: ThreadId;
+  activeThreadTitle: string;
+  activeProvider: ProviderKind;
+  activeSurface: "chat" | "terminal";
+  terminalAvailable: boolean;
+  terminalHasRunningActivity: boolean;
+  onNewChat: () => void;
+  onNewTerminal: () => void;
+  onOpenChat: (threadId: ThreadId) => void;
+  onOpenTerminal: () => void;
+  onCloseTerminal: () => void;
+  onNavigateToThread: (threadId: ThreadId) => void;
+}) {
+  const { settings } = useAppSettings();
+  const [openChatTabs, setOpenChatTabs] = useState<ReadonlyArray<EditorRailChatTab>>(() => {
+    const storedTabs = readEditorRailChatTabs(props.projectId);
+    return storedTabs.length > 0
+      ? storedTabs
+      : [
+          {
+            id: props.activeThreadId,
+            title: props.activeThreadTitle,
+            provider: props.activeProvider,
+          },
+        ];
+  });
+  const [terminalTabOpen, setTerminalTabOpen] = useState(props.terminalAvailable);
+  const selectDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
+  const displayThreads = useStore(selectDisplayThreads);
+  const currentChatTab = useMemo<EditorRailChatTab>(
+    () => ({
+      id: props.activeThreadId,
+      title: props.activeThreadTitle,
+      provider: props.activeProvider,
+    }),
+    [props.activeProvider, props.activeThreadId, props.activeThreadTitle],
+  );
+  const setAndStoreOpenChatTabs = useCallback(
+    (updater: (current: ReadonlyArray<EditorRailChatTab>) => ReadonlyArray<EditorRailChatTab>) => {
+      setOpenChatTabs((current) => {
+        const next = updater(current);
+        storeEditorRailChatTabs(props.projectId, next);
+        return next;
+      });
+    },
+    [props.projectId],
+  );
+  useEffect(() => {
+    const storedTabs = readEditorRailChatTabs(props.projectId);
+    setOpenChatTabs(
+      storedTabs.length > 0
+        ? storedTabs
+        : [
+            {
+              id: props.activeThreadId,
+              title: props.activeThreadTitle,
+              provider: props.activeProvider,
+            },
+          ],
+    );
+  }, [props.activeProvider, props.activeThreadId, props.activeThreadTitle, props.projectId]);
+  useEffect(() => {
+    if (props.terminalAvailable) {
+      setTerminalTabOpen(true);
+    }
+  }, [props.terminalAvailable]);
+  useEffect(() => {
+    if (props.activeSurface !== "chat") {
+      return;
+    }
+    setAndStoreOpenChatTabs((current) => {
+      const existingIndex = current.findIndex((thread) => thread.id === currentChatTab.id);
+      if (existingIndex < 0) {
+        return [...current, currentChatTab];
+      }
+      const existing = current[existingIndex];
+      if (
+        existing?.title === currentChatTab.title &&
+        existing.provider === currentChatTab.provider
+      ) {
+        return current;
+      }
+      return current.map((thread) => (thread.id === currentChatTab.id ? currentChatTab : thread));
+    });
+  }, [currentChatTab, props.activeSurface, setAndStoreOpenChatTabs]);
+  const chatTabs = useMemo(() => {
+    const sortedProjectThreads = sortThreadsForSidebar(
+      displayThreads.filter((thread) => thread.projectId === props.projectId),
+      settings.sidebarThreadSortOrder,
+    );
+    const sidebarThreadById = new Map(
+      sortedProjectThreads.map((thread) => [
+        thread.id,
+        {
+          id: thread.id,
+          title: thread.title,
+          provider: thread.session?.provider ?? thread.modelSelection.provider,
+        },
+      ]),
+    );
+    const activeChatAlreadyOpen = openChatTabs.some((thread) => thread.id === props.activeThreadId);
+    const orderedOpenTabs =
+      props.activeSurface === "chat" && !activeChatAlreadyOpen
+        ? [...openChatTabs, currentChatTab]
+        : openChatTabs;
+    return orderedOpenTabs.map((thread) => sidebarThreadById.get(thread.id) ?? thread);
+  }, [
+    currentChatTab,
+    displayThreads,
+    props.activeSurface,
+    props.activeThreadId,
+    openChatTabs,
+    props.projectId,
+    settings.sidebarThreadSortOrder,
+  ]);
+  const terminalTabVisible = terminalTabOpen || props.terminalAvailable;
+  const tabCount = chatTabs.length + (terminalTabVisible ? 1 : 0);
+  const shouldShowTabs = tabCount > 1;
+  const newTerminalTab = () => {
+    setTerminalTabOpen(true);
+    props.onNewTerminal();
+  };
+  const openTerminalTab = () => {
+    setTerminalTabOpen(true);
+    props.onOpenTerminal();
+  };
+  const closeTerminalTab = () => {
+    setTerminalTabOpen(false);
+    props.onCloseTerminal();
+  };
+  const openChatTab = (threadId: ThreadId) => {
+    const sidebarThread = displayThreads.find((thread) => thread.id === threadId);
+    if (sidebarThread) {
+      const nextTab = {
+        id: sidebarThread.id,
+        title: sidebarThread.title,
+        provider: sidebarThread.session?.provider ?? sidebarThread.modelSelection.provider,
+      };
+      setAndStoreOpenChatTabs((current) =>
+        current.some((thread) => thread.id === threadId) ? current : [...current, nextTab],
+      );
+    }
+    props.onOpenChat(threadId);
+  };
+  const closeChatTab = (threadId: ThreadId) => {
+    const closingActiveChat = props.activeSurface === "chat" && threadId === props.activeThreadId;
+    const nextChatTab = chatTabs.find((thread) => thread.id !== threadId);
+    setAndStoreOpenChatTabs((current) => current.filter((thread) => thread.id !== threadId));
+    if (!closingActiveChat) {
+      return;
+    }
+    if (nextChatTab) {
+      props.onOpenChat(nextChatTab.id);
+      return;
+    }
+    if (terminalTabVisible) {
+      openTerminalTab();
+    }
+  };
+
+  return (
+    <div className="flex min-w-0 shrink items-center gap-2 [-webkit-app-region:no-drag]">
+      <div className="flex shrink-0 items-center gap-0.5">
+        <Menu modal={false}>
+          <MenuTrigger
+            render={
+              <IconButton
+                variant="ghost"
+                size="icon-xs"
+                label="New editor rail item"
+                title="New"
+                className="size-5 shrink-0 text-muted-foreground hover:text-foreground"
+              >
+                <PlusIcon className="size-3.5" />
+              </IconButton>
+            }
+          />
+          <ComposerPickerMenuPopup
+            align="start"
+            side="bottom"
+            sideOffset={6}
+            className="w-44 min-w-44"
+          >
+            <MenuItem onClick={props.onNewChat}>
+              <MessageCircleIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <span>New chat</span>
+            </MenuItem>
+            <MenuItem onClick={newTerminalTab}>
+              <TerminalIcon className="size-3.5 shrink-0 text-[var(--color-text-accent)]" />
+              <span>New terminal</span>
+            </MenuItem>
+          </ComposerPickerMenuPopup>
+        </Menu>
+        <EditorChatHistoryMenu
+          projectId={props.projectId}
+          activeThreadId={props.activeThreadId}
+          onNavigateToThread={openChatTab}
+        />
+      </div>
+      {shouldShowTabs ? (
+        // Same chip tabs as the right dock's pane strip so every tab row in the
+        // app reads identically — centered in the header, no detached borders.
+        <div className="flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {chatTabs.map((thread, index) => (
+            <SurfaceTabChip
+              key={thread.id}
+              active={props.activeSurface === "chat" && thread.id === props.activeThreadId}
+              title={thread.title}
+              label={`Chat ${index + 1}`}
+              labelClassName="max-w-24"
+              icon={
+                <ProviderIcon
+                  provider={thread.provider}
+                  tone="header"
+                  className="size-3 shrink-0"
+                />
+              }
+              closeLabel={`Close ${thread.title}`}
+              onSelect={() => openChatTab(thread.id)}
+              onClose={() => closeChatTab(thread.id)}
+            />
+          ))}
+          {terminalTabVisible ? (
+            <SurfaceTabChip
+              active={props.activeSurface === "terminal"}
+              title="Terminal"
+              label="Terminal"
+              labelClassName="max-w-24"
+              icon={<TerminalIcon className="size-3 shrink-0 text-[var(--color-text-accent)]" />}
+              trailing={
+                props.terminalHasRunningActivity ? (
+                  <span className="size-1.5 shrink-0 rounded-full bg-emerald-500/80" />
+                ) : null
+              }
+              onSelect={openTerminalTab}
+              closeLabel="Close Terminal"
+              onClose={closeTerminalTab}
+            />
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export type ChatHeaderThreadIconKind = "none" | "provider" | "terminal";
@@ -124,6 +487,8 @@ export const ChatHeader = memo(function ChatHeader({
   activeProvider,
   activeProjectName,
   threadBreadcrumbs,
+  className,
+  hideSidebarControls = false,
   hideHandoffControls = false,
   isGitRepo,
   openInCwd,
@@ -141,13 +506,16 @@ export const ChatHeader = memo(function ChatHeader({
   gitCwd,
   diffTotals,
   showGitActions = true,
+  showDiffToggle = true,
   diffOpen,
   diffDisabledReason = null,
   surfaceMode = "single",
   isSidechat = false,
   environment = null,
   chatLayoutAction = null,
+  viewModeAction = null,
   changeThreadAction = null,
+  editorChatControls = null,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
@@ -211,7 +579,7 @@ export const ChatHeader = memo(function ChatHeader({
   // the header in both layouts — beside the Environment button when that is enabled, and
   // inside the legacy cluster otherwise — so the familiar right-sidebar control is always a
   // single click away. Declared once here to avoid duplicating the markup across branches.
-  const diffToggleControl = (
+  const diffToggleControl = showDiffToggle ? (
     <Tooltip>
       <TooltipTrigger
         render={
@@ -251,19 +619,27 @@ export const ChatHeader = memo(function ChatHeader({
               : "Toggle diff panel"}
       </TooltipPopup>
     </Tooltip>
-  );
+  ) : null;
 
   return (
-    <div ref={headerRef} className="flex min-w-0 flex-1 items-center gap-2">
+    <div ref={headerRef} className={cn("flex min-w-0 flex-1 items-center gap-2", className)}>
       <div
         className={cn(
-          "flex min-w-0 flex-1 items-center overflow-hidden",
+          "flex min-w-0 flex-1 items-center",
+          editorChatControls ? "h-full overflow-visible" : "overflow-hidden",
           !isMobile && state === "collapsed" ? "gap-4" : "gap-2 sm:gap-3",
         )}
       >
-        <SidebarHeaderNavigationControls />
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <div className="flex min-w-0 flex-1 flex-col">
+        {hideSidebarControls ? null : <SidebarHeaderNavigationControls />}
+        <div
+          className={cn("flex min-w-0 flex-1 items-center gap-2", editorChatControls && "h-full")}
+        >
+          <div
+            className={cn(
+              "flex min-w-0 flex-1 flex-col",
+              editorChatControls && "h-full justify-center",
+            )}
+          >
             {threadBreadcrumbs.length > 0 ? (
               <div className="flex min-w-0 items-center gap-1 overflow-hidden text-[11px] text-muted-foreground/55">
                 {threadBreadcrumbs.map((breadcrumb, index) => (
@@ -283,7 +659,7 @@ export const ChatHeader = memo(function ChatHeader({
                 ))}
               </div>
             ) : null}
-            <div className="flex min-w-0 items-center gap-2">
+            <div className={cn("flex min-w-0 items-center gap-2", editorChatControls && "h-full")}>
               <div
                 className={cn(
                   "flex min-w-0 items-center gap-2",
@@ -331,6 +707,23 @@ export const ChatHeader = memo(function ChatHeader({
                   </IconButton>
                 ) : null}
               </div>
+              {editorChatControls ? (
+                <EditorRailTabs
+                  projectId={editorChatControls.projectId}
+                  activeThreadId={activeThreadId}
+                  activeThreadTitle={activeThreadTitle}
+                  activeProvider={activeProvider}
+                  activeSurface={editorChatControls.activeSurface}
+                  terminalAvailable={editorChatControls.terminalAvailable}
+                  terminalHasRunningActivity={editorChatControls.terminalHasRunningActivity}
+                  onNewChat={editorChatControls.onNewChat}
+                  onNewTerminal={editorChatControls.onNewTerminal}
+                  onOpenChat={editorChatControls.onOpenChat}
+                  onOpenTerminal={editorChatControls.onOpenTerminal}
+                  onCloseTerminal={editorChatControls.onCloseTerminal}
+                  onNavigateToThread={onNavigateToThread}
+                />
+              ) : null}
               {!hideHandoffControls && handoffBadgeLabel ? (
                 <Tooltip>
                   <TooltipTrigger
@@ -420,6 +813,26 @@ export const ChatHeader = memo(function ChatHeader({
               }
             />
             <TooltipPopup side="bottom">{inlineChatLayoutAction.label}</TooltipPopup>
+          </Tooltip>
+        ) : null}
+
+        {!isDisposableThread && viewModeAction ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <ChatHeaderButton
+                  type="button"
+                  tone="outline"
+                  aria-pressed={viewModeAction.active}
+                  onClick={viewModeAction.onClick}
+                  className={compact ? "gap-1" : "gap-1.5"}
+                >
+                  <Columns2Icon className="size-3.5" />
+                  {!compact ? <span className="truncate font-normal">Editor</span> : null}
+                </ChatHeaderButton>
+              }
+            />
+            <TooltipPopup side="bottom">{viewModeAction.label}</TooltipPopup>
           </Tooltip>
         ) : null}
 

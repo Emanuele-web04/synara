@@ -88,7 +88,41 @@ const DEFAULT_OPEN_ROWS = 30;
 const PROVIDER_INPUT_ACTIVITY_GRACE_MS = 120_000;
 const PROVIDER_OUTPUT_ACTIVITY_GRACE_MS = 30_000;
 const POSIX_TREE_WALK_MAX_VISITED = 256;
-const TERMINAL_ENV_BLOCKLIST = new Set(["PORT", "ELECTRON_RENDERER_PORT", "ELECTRON_RUN_AS_NODE"]);
+const TERMINAL_ENV_BLOCKLIST = new Set([
+  "PORT",
+  "ELECTRON_RENDERER_PORT",
+  "ELECTRON_RUN_AS_NODE",
+  // Host-terminal identity must not leak into the PTY: sessions render in the
+  // app's xterm.js surface, not in whichever emulator launched this server.
+  // An inherited TERM like "xterm-ghostty" (plus its TERMINFO pointers) makes
+  // spawned shells use wrong/missing terminfo — "unknown terminal type"
+  // errors and garbled line-editor redraw.
+  "TERM",
+  "TERMINFO",
+  "TERMINFO_DIRS",
+  "TERM_PROGRAM",
+  "TERM_PROGRAM_VERSION",
+  "TERM_SESSION_ID",
+  "GHOSTTY_RESOURCES_DIR",
+  "GHOSTTY_BIN_DIR",
+  "ITERM_PROFILE",
+  "ITERM_SESSION_ID",
+  "KITTY_WINDOW_ID",
+  "KITTY_PID",
+  "KITTY_INSTALLATION_DIR",
+  "WEZTERM_EXECUTABLE",
+  "WEZTERM_CONFIG_FILE",
+  "WEZTERM_PANE",
+  "WEZTERM_UNIX_SOCKET",
+  "ALACRITTY_SOCKET",
+  "ALACRITTY_WINDOW_ID",
+]);
+
+// What the app's embedded xterm.js surface actually implements; mirrors the
+// `name` passed to the PTY adapters (node-pty only uses `name` when the env
+// carries no TERM of its own, so we pin it explicitly).
+const TERMINAL_SPAWN_TERM =
+  globalThis.process.platform === "win32" ? "xterm-color" : "xterm-256color";
 const MANAGED_TERMINAL_WRAPPER_DIRNAME = "_managed-bin";
 const MANAGED_TERMINAL_ZSH_DIRNAME = "_managed-zsh";
 
@@ -180,7 +214,7 @@ function shellCandidateFromCommand(command: string | null): ShellCandidate | nul
   if (!command || command.length === 0) return null;
   const shellName = path.basename(command).toLowerCase();
   if (process.platform !== "win32" && shellName === "zsh") {
-    return { shell: command, args: ["-o", "nopromptsp"] };
+    return { shell: command, args: ["-l", "-o", "nopromptsp"] };
   }
   return { shell: command };
 }
@@ -817,6 +851,9 @@ function createTerminalSpawnEnv(
     if (shouldExcludeTerminalEnvKey(key)) continue;
     spawnEnv[key] = value;
   }
+  // Pin TERM to the embedded renderer's capabilities; a caller-provided
+  // runtimeEnv may still override it deliberately below.
+  spawnEnv.TERM = TERMINAL_SPAWN_TERM;
   if (runtimeEnv) {
     for (const [key, value] of Object.entries(runtimeEnv)) {
       spawnEnv[key] = value;

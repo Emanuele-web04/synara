@@ -903,6 +903,49 @@ describe("TerminalManager", () => {
     }
   });
 
+  it("pins TERM to the embedded renderer and drops host-terminal identity env", async () => {
+    const originalValues = new Map<string, string | undefined>();
+    const setEnv = (key: string, value: string) => {
+      if (!originalValues.has(key)) {
+        originalValues.set(key, process.env[key]);
+      }
+      process.env[key] = value;
+    };
+    const restoreEnv = () => {
+      for (const [key, value] of originalValues) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    };
+
+    setEnv("TERM", "xterm-ghostty");
+    setEnv("TERM_PROGRAM", "ghostty");
+    setEnv("TERMINFO", "/Applications/Ghostty.app/Contents/Resources/terminfo");
+    setEnv("GHOSTTY_RESOURCES_DIR", "/Applications/Ghostty.app/Contents/Resources");
+
+    try {
+      const { manager, ptyAdapter } = makeManager();
+      await manager.open(openInput());
+      const spawnInput = ptyAdapter.spawnInputs[0];
+      expect(spawnInput).toBeDefined();
+      if (!spawnInput) return;
+
+      expect(spawnInput.env.TERM).toBe(
+        process.platform === "win32" ? "xterm-color" : "xterm-256color",
+      );
+      expect(spawnInput.env.TERM_PROGRAM).toBeUndefined();
+      expect(spawnInput.env.TERMINFO).toBeUndefined();
+      expect(spawnInput.env.GHOSTTY_RESOURCES_DIR).toBeUndefined();
+
+      manager.dispose();
+    } finally {
+      restoreEnv();
+    }
+  });
+
   it("injects runtime env overrides into spawned terminals", async () => {
     const { manager, ptyAdapter } = makeManager();
     await manager.open(
@@ -925,7 +968,7 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
-  it("starts zsh with prompt spacer disabled to avoid `%` end markers", async () => {
+  it("starts zsh as a login shell with prompt spacer disabled", async () => {
     if (process.platform === "win32") return;
     const { manager, ptyAdapter } = makeManager(5, {
       shellResolver: () => "/bin/zsh",
@@ -936,7 +979,7 @@ describe("TerminalManager", () => {
     if (!spawnInput) return;
 
     expect(spawnInput.shell).toBe("/bin/zsh");
-    expect(spawnInput.args).toEqual(["-o", "nopromptsp"]);
+    expect(spawnInput.args).toEqual(["-l", "-o", "nopromptsp"]);
 
     manager.dispose();
   });

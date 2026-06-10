@@ -4,14 +4,73 @@
 // Layer: Diff panel UI
 
 import type { FileDiffMetadata } from "@pierre/diffs/react";
-import { memo, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
-import { ChevronDownIcon } from "~/lib/icons";
+import { memo, useCallback, type MouseEvent as ReactMouseEvent } from "react";
+import { ChevronDownIcon, CopyIcon, EllipsisIcon, MessageCircleIcon } from "~/lib/icons";
 
 import { buildFileDiffRenderKey, resolveFileDiffPath } from "~/lib/diffRendering";
 import { FileDiffCard, FileDiffSurface } from "./chat/FileDiffView";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
+import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
+import { IconButton } from "./ui/icon-button";
+import { Menu, MenuItem, MenuTrigger } from "./ui/menu";
 
 type DiffRenderMode = "stacked" | "split";
+
+export interface DiffFileChatActions {
+  onReferenceInChat: (filePath: string) => void;
+  onAskWhyChanged: (filePath: string) => void;
+}
+
+const DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground";
+
+// Per-file actions menu rendered inside the diff header, left of the collapse
+// chevron. Marked with data-diff-header-menu so header clicks on it do not
+// toggle the file collapse state.
+function DiffFileHeaderActionsMenu(props: { filePath: string; chatActions: DiffFileChatActions }) {
+  return (
+    <Menu>
+      <MenuTrigger
+        render={
+          <IconButton
+            variant="ghost"
+            size="icon-xs"
+            label="File actions"
+            title="File actions"
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <EllipsisIcon className="size-3.5" />
+          </IconButton>
+        }
+      />
+      <ComposerPickerMenuPopup align="end" side="bottom" sideOffset={6} className="w-60 min-w-60">
+        <MenuItem
+          onClick={() => {
+            props.chatActions.onReferenceInChat(props.filePath);
+          }}
+        >
+          <MessageCircleIcon className={DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME} />
+          <span>Reference in chat</span>
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            props.chatActions.onAskWhyChanged(props.filePath);
+          }}
+        >
+          <MessageCircleIcon className={DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME} />
+          <span>Ask why this changed</span>
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            void navigator.clipboard?.writeText(props.filePath);
+          }}
+        >
+          <CopyIcon className={DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME} />
+          <span>Copy path</span>
+        </MenuItem>
+      </ComposerPickerMenuPopup>
+    </Menu>
+  );
+}
 
 function DiffFileCollapseChevron(props: { collapsed: boolean }) {
   return (
@@ -43,17 +102,34 @@ const DiffPanelFileRow = memo(function DiffPanelFileRow(props: {
   diffWordWrap: boolean;
   isCollapsed: boolean;
   onToggleFileCollapsed: (fileKey: string) => void;
+  chatActions?: DiffFileChatActions | undefined;
 }) {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const fileKey = buildFileDiffRenderKey(props.fileDiff);
+  const { chatActions, isCollapsed } = props;
   const renderHeaderMetadata = useCallback(
-    () => <DiffFileCollapseChevron collapsed={props.isCollapsed} />,
-    [props.isCollapsed],
+    () => (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
+        {chatActions ? (
+          <span data-diff-header-menu="true" style={{ display: "inline-flex" }}>
+            <DiffFileHeaderActionsMenu filePath={filePath} chatActions={chatActions} />
+          </span>
+        ) : null}
+        <DiffFileCollapseChevron collapsed={isCollapsed} />
+      </span>
+    ),
+    [chatActions, filePath, isCollapsed],
   );
   const handleClickCapture = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
       const nativeEvent = event.nativeEvent;
       const composedPath = nativeEvent.composedPath?.() ?? [];
+      // Clicks on the per-file actions menu must not toggle collapse.
+      const clickedHeaderMenu = composedPath.some(
+        (node: EventTarget) =>
+          node instanceof Element && node.hasAttribute("data-diff-header-menu"),
+      );
+      if (clickedHeaderMenu) return;
       const clickedHeader = composedPath.some((node: EventTarget) => {
         if (!(node instanceof Element)) return false;
         return node.hasAttribute("data-diffs-header") || node.hasAttribute("data-file-info");
@@ -106,6 +182,7 @@ export const DiffPanelFileList = memo(
     diffWordWrap: boolean;
     collapsedFiles: ReadonlySet<string>;
     onToggleFileCollapsed: (fileKey: string) => void;
+    chatActions?: DiffFileChatActions | undefined;
   }) {
     if (props.renderableFiles.length === 0) {
       return (
@@ -131,6 +208,7 @@ export const DiffPanelFileList = memo(
               diffWordWrap={props.diffWordWrap}
               isCollapsed={props.collapsedFiles.has(fileKey)}
               onToggleFileCollapsed={props.onToggleFileCollapsed}
+              chatActions={props.chatActions}
             />
           );
         })}
@@ -144,7 +222,8 @@ export const DiffPanelFileList = memo(
       previous.diffRenderMode === next.diffRenderMode &&
       previous.diffWordWrap === next.diffWordWrap &&
       areCollapsedSetsEqual(previous.collapsedFiles, next.collapsedFiles) &&
-      previous.onToggleFileCollapsed === next.onToggleFileCollapsed
+      previous.onToggleFileCollapsed === next.onToggleFileCollapsed &&
+      previous.chatActions === next.chatActions
     );
   },
 );

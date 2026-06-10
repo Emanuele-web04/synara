@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@pierre/diffs", () => ({
+  getFiletypeFromFileName: (fileName: string) => (fileName.endsWith(".ts") ? "ts" : "text"),
   getSharedHighlighter: () =>
     Promise.resolve({
       codeToHtml(code: string) {

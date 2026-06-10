@@ -25,6 +25,15 @@ import { useStore } from "../store";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 
+export interface NewThreadNavigationOptions {
+  /**
+   * Search params applied when the hook navigates to the created thread.
+   * Lets callers keep view-level state (e.g. the editor workspace view)
+   * across the route change; default navigation clears all search params.
+   */
+  search?: (previous: Record<string, unknown>) => Record<string, unknown>;
+}
+
 export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
   const { settings } = useAppSettings();
@@ -36,7 +45,11 @@ export function useHandleNewThread() {
   const markTemporaryThread = useTemporaryThreadStore((store) => store.markTemporaryThread);
 
   const handleNewThread = useCallback(
-    (projectId: ProjectId, options?: NewThreadOptions): Promise<void> => {
+    (
+      projectId: ProjectId,
+      options?: NewThreadOptions,
+      navigation?: NewThreadNavigationOptions,
+    ): Promise<void> => {
       const entryPoint = options?.entryPoint ?? "chat";
       const wantsTemporaryThread = options?.temporary === true;
       const applyProviderOverride = (threadId: ThreadId) => {
@@ -208,6 +221,7 @@ export function useHandleNewThread() {
           await navigate({
             to: "/$threadId",
             params: { threadId: bootstrapPlan.threadId },
+            ...(navigation?.search ? { search: navigation.search } : {}),
           });
           restoreComposerDraft(bootstrapPlan.threadId, preservedComposerDraft);
           if (entryPoint === "terminal") {
@@ -270,6 +284,7 @@ export function useHandleNewThread() {
         await navigate({
           to: "/$threadId",
           params: { threadId },
+          ...(navigation?.search ? { search: navigation.search } : {}),
         });
         if (entryPoint === "terminal") {
           await createTerminalThread(

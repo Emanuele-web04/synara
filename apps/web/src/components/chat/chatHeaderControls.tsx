@@ -16,7 +16,7 @@ import { forwardRef, type ComponentProps, type ReactNode } from "react";
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@t3tools/shared/desktopChrome";
 
 import { CentralIcon } from "~/lib/central-icons";
-import { Columns2Icon, type LucideIcon, Rows3Icon } from "~/lib/icons";
+import { type LucideIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
@@ -147,7 +147,7 @@ export const DOCK_TAB_CHIP_CLASS_NAME = cn(
  *  Color is muted while the tab (not the close button) is hovered and brightens to full
  *  foreground on direct hover of the close button so the X reads as interactive. */
 export const DOCK_TAB_ICON_SLOT_CLASS_NAME =
-  "relative flex size-4 shrink-0 items-center justify-center rounded-full bg-transparent text-[var(--color-text-foreground-secondary)] transition-colors group-hover/dock-tab:bg-[var(--color-background-button-secondary-hover)] group-focus-within/dock-tab:bg-[var(--color-background-button-secondary-hover)] hover:bg-[var(--color-background-button-secondary)] hover:text-[var(--color-text-foreground)]";
+  "relative flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full bg-transparent text-[var(--color-text-foreground-secondary)] transition-colors group-hover/dock-tab:bg-[var(--color-background-button-secondary-hover)] group-focus-within/dock-tab:bg-[var(--color-background-button-secondary-hover)] hover:bg-[var(--color-background-button-secondary)] hover:text-[var(--color-text-foreground)]";
 
 /** Dock-only extra: fade the resting glyph out so the hover X can swap in.
  *  Layered on top of {@link SurfaceChipIcon}'s shared size/strength. */
@@ -294,55 +294,6 @@ export function ChatHeaderSplitDivider() {
 }
 
 export type DiffRenderMode = "stacked" | "split";
-
-/** Stacked/split diff layout toggle — same chrome as the git split-button group. */
-export function ChatHeaderDiffRenderModePicker(props: {
-  mode: DiffRenderMode;
-  onChange: (mode: DiffRenderMode) => void;
-  className?: string;
-}) {
-  return (
-    <ChatHeaderSplitGroup label="Diff view mode" className={cn("shrink-0", props.className)}>
-      <Button
-        type="button"
-        variant="chrome-outline"
-        size="icon-xs"
-        aria-label="Stacked diff view"
-        aria-pressed={props.mode === "stacked"}
-        className={cn(
-          CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
-          CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
-          CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
-          props.mode === "stacked" && CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
-        )}
-        onClick={() => {
-          props.onChange("stacked");
-        }}
-      >
-        <Rows3Icon className={CHAT_SURFACE_CHIP_ICON_CLASS_NAME} />
-      </Button>
-      <ChatHeaderSplitDivider />
-      <Button
-        type="button"
-        variant="chrome-outline"
-        size="icon-xs"
-        aria-label="Split diff view"
-        aria-pressed={props.mode === "split"}
-        className={cn(
-          CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
-          CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
-          CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
-          props.mode === "split" && CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
-        )}
-        onClick={() => {
-          props.onChange("split");
-        }}
-      >
-        <Columns2Icon className={CHAT_SURFACE_CHIP_ICON_CLASS_NAME} />
-      </Button>
-    </ChatHeaderSplitGroup>
-  );
-}
 
 /** Visual treatment shared across the header row. */
 export type ChatHeaderControlTone = "plain" | "outline";

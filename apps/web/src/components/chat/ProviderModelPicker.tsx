@@ -513,6 +513,8 @@ type ProviderModelPickerProps = {
   providerOrder?: ReadonlyArray<ProviderKind>;
   activeProviderIconClassName?: string;
   compact?: boolean;
+  // Icon-only trigger for narrow composers; the model name moves to title/sr-only.
+  hideLabel?: boolean;
   disabled?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -574,6 +576,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
     <PickerTriggerButton
       disabled={props.disabled ?? false}
       compact={props.compact ?? false}
+      hideLabel={props.hideLabel ?? false}
       icon={
         <ProviderIcon
           aria-hidden="true"

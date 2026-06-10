@@ -271,6 +271,8 @@ import {
   useComposerThreadDraft,
   useEffectiveComposerModelState,
 } from "../composerDraftStore";
+import { useComposerFocusRequestStore } from "../composerFocusRequestStore";
+import { appendComposerPromptText, CHAT_FILE_REFERENCE_DRAG_TYPE } from "../lib/chatReferences";
 import {
   appendOriginalTerminalContextBlock,
   appendTerminalContextsToPrompt,
@@ -293,7 +295,11 @@ import {
   deriveSelectedContextWindowSnapshot,
 } from "../lib/contextWindow";
 import { formatVoiceRecordingDuration, useVoiceRecorder } from "../lib/voiceRecorder";
-import { shouldUseCompactComposerFooter } from "./composerFooterLayout";
+import {
+  composerFooterPlanForTier,
+  resolveNextComposerFooterTier,
+  shouldUseCompactComposerFooter,
+} from "./composerFooterLayout";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { collectTerminalIdsFromLayout } from "../terminalPaneLayout";
 import {
@@ -330,8 +336,13 @@ import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimelin
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
-import { AVAILABLE_PROVIDER_OPTIONS } from "./chat/ProviderModelPicker";
+import {
+  AVAILABLE_PROVIDER_OPTIONS,
+  ProviderModelPicker,
+  resolveProviderModelLabel,
+} from "./chat/ProviderModelPicker";
 import { ComposerModelEffortPicker } from "./chat/ComposerModelEffortPicker";
+import { resolveTraitsTriggerSummary, TraitsPicker } from "./chat/TraitsPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
 import {
   ComposerLocalDirectoryMenu,
@@ -764,6 +775,7 @@ interface ChatViewProps {
   threadId: ThreadId;
   paneScopeId?: string;
   surfaceMode?: "single" | "split";
+  presentationMode?: "default" | "editor";
   isFocusedPane?: boolean;
   panelState?: SplitViewPanePanelState;
   onToggleDiffPanel?: () => void;
@@ -772,6 +784,11 @@ interface ChatViewProps {
   onOpenTurnDiffPanel?: (turnId: TurnId, filePath?: string) => void;
   onSplitSurface?: () => void;
   onMaximizeSurface?: () => void;
+  viewModeAction?: {
+    label: string;
+    active: boolean;
+    onClick: () => void;
+  } | null;
   onChangeThreadInSplitPane?: () => void;
   onCloseThreadPane?: () => void;
 }
@@ -780,6 +797,7 @@ export default function ChatView({
   threadId,
   paneScopeId = "single",
   surfaceMode = "single",
+  presentationMode = "default",
   isFocusedPane = true,
   panelState,
   onToggleDiffPanel,
@@ -788,6 +806,7 @@ export default function ChatView({
   onOpenTurnDiffPanel,
   onSplitSurface,
   onMaximizeSurface,
+  viewModeAction = null,
   onChangeThreadInSplitPane,
   onCloseThreadPane,
 }: ChatViewProps) {
@@ -811,6 +830,7 @@ export default function ChatView({
   const { resolvedTheme } = useTheme();
   const queryClient = useQueryClient();
   const createWorktreeMutation = useMutation(gitCreateWorktreeMutationOptions({ queryClient }));
+  const isEditorRail = presentationMode === "editor";
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
   const composerDraft = useComposerThreadDraft(threadId);
   const prompt = composerDraft.prompt;
@@ -931,6 +951,14 @@ export default function ChatView({
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [activeTaskListCompact, setActiveTaskListCompact] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
+  // Width-aware visibility for the footer picker cluster (context meter,
+  // model name, traits label). Inputs live in a ref so the resize observer
+  // can re-plan without re-subscribing; the sync function is exposed via ref
+  // so label changes can re-plan without a resize.
+  const [composerFooterTier, setComposerFooterTier] = useState(0);
+  const composerFooterTierRef = useRef(0);
+  const composerFooterDemotionWidthsRef = useRef<ReadonlyArray<number | undefined>>([]);
+  const composerFooterLayoutSyncRef = useRef<(() => void) | null>(null);
   const [confirmedCustomBinaryPathsByProvider, setConfirmedCustomBinaryPathsByProvider] = useState<
     Partial<Record<ProviderKind, string>>
   >(loadConfirmedCustomBinaryPaths);
@@ -1070,6 +1098,7 @@ export default function ChatView({
   const storeSetTerminalWorkspaceLayout = useTerminalStateStore(
     (s) => s.setTerminalWorkspaceLayout,
   );
+  const storeOpenChatThreadPage = useTerminalStateStore((s) => s.openChatThreadPage);
   const storeOpenTerminalThreadPage = useTerminalStateStore((s) => s.openTerminalThreadPage);
   const storeSetTerminalWorkspaceTab = useTerminalStateStore((s) => s.setTerminalWorkspaceTab);
   const storeSetTerminalHeight = useTerminalStateStore((s) => s.setTerminalHeight);
@@ -2311,7 +2340,8 @@ export default function ChatView({
   // Empty top-level threads render the centered landing composer instead of the transcript pane.
   // Home-scoped chats get the global "What should we work on?" copy plus the project picker,
   // while project-scoped drafts reuse the same centered layout with folder-specific copy.
-  const isCenteredEmptyLanding = timelineEntries.length === 0 && !activeThread?.parentThreadId;
+  const isCenteredEmptyLanding =
+    timelineEntries.length === 0 && !activeThread?.parentThreadId && !isEditorRail;
   const isEmptyChatLanding =
     isCenteredEmptyLanding && Boolean(homeDir) && activeProject?.cwd === homeDir;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
@@ -2903,8 +2933,6 @@ export default function ChatView({
     () => shortcutLabelForCommand(keybindings, "chat.split"),
     [keybindings],
   );
-  // The combined picker uses the same configurable keybinding command that the
-  // keydown handler resolves, keeping synced keybindings and tooltip labels aligned.
   const modelPickerShortcutLabel = useMemo(
     () =>
       shortcutLabelForCommand(keybindings, "modelPicker.toggle") ??
@@ -2916,6 +2944,10 @@ export default function ChatView({
         altKey: false,
         modKey: true,
       }),
+    [keybindings],
+  );
+  const traitsPickerShortcutLabel = useMemo(
+    () => shortcutLabelForCommand(keybindings, "traitsPicker.toggle"),
     [keybindings],
   );
   const onToggleDiff = useCallback(() => {
@@ -3112,6 +3144,16 @@ export default function ChatView({
       focusComposer();
     });
   }, [focusComposer]);
+  // External panels (diff headers, file explorer, preview) bump this nonce after
+  // inserting a reference so the composer visibly receives the text.
+  const composerFocusRequestNonce = useComposerFocusRequestStore(
+    (store) => store.requestsByThreadId[threadId] ?? 0,
+  );
+  useEffect(() => {
+    if (composerFocusRequestNonce > 0) {
+      scheduleComposerFocus();
+    }
+  }, [composerFocusRequestNonce, scheduleComposerFocus]);
   // Context gate is intentionally prompt-independent so the suggestion list stays
   // mounted while the user types — that lets us animate it closed instead of an
   // abrupt unmount (which jolted the centered composer).
@@ -3543,7 +3585,7 @@ export default function ChatView({
   // The Environment panel replaces the old header diff toggle + footer pickers for normal
   // threads; disposable (temporary/draft) threads keep the legacy inline controls.
   const isDisposableThread = useIsDisposableThread(threadId);
-  const environmentEnabled = !isDisposableThread;
+  const environmentEnabled = !isDisposableThread && !isEditorRail;
   const environmentDefaultOpen = resolveDefaultEnvironmentPanelOpen({
     environmentEnabled,
     isCenteredEmptyLanding,
@@ -4268,7 +4310,34 @@ export default function ChatView({
         hasWideActions: composerFooterHasWideActions,
       });
       setIsComposerFooterCompact((previous) => (previous === nextCompact ? previous : nextCompact));
+      // Tier the footer controls by MEASURED overflow: demote one step while
+      // the footer row's content is wider than the row, promote back (with
+      // hysteresis) when the recorded overflow width is comfortably exceeded.
+      const footerRow = composerForm.querySelector<HTMLElement>("[data-chat-composer-footer]");
+      if (footerRow) {
+        const rowOverflows = footerRow.scrollWidth > footerRow.clientWidth + 1;
+        // The leading cluster clips (overflow-hidden) in compact mode instead
+        // of growing the row's scrollWidth, so check it directly — a clipped
+        // "+"/access-rules cluster must also demote the tier.
+        const leadingCluster = footerRow.querySelector<HTMLElement>("[data-chat-composer-leading]");
+        const leadingClips =
+          nextCompact &&
+          leadingCluster !== null &&
+          leadingCluster.scrollWidth > leadingCluster.clientWidth + 1;
+        const nextStep = resolveNextComposerFooterTier({
+          currentTier: composerFooterTierRef.current,
+          clientWidth: footerRow.clientWidth,
+          isOverflowing: rowOverflows || leadingClips,
+          demotionWidths: composerFooterDemotionWidthsRef.current,
+        });
+        composerFooterDemotionWidthsRef.current = nextStep.demotionWidths;
+        if (nextStep.tier !== composerFooterTierRef.current) {
+          composerFooterTierRef.current = nextStep.tier;
+          setComposerFooterTier(nextStep.tier);
+        }
+      }
     };
+    composerFooterLayoutSyncRef.current = syncComposerFooterLayout;
 
     const measuredHeight = Math.ceil(composerForm.getBoundingClientRect().height);
     composerFormHeightRef.current = measuredHeight;
@@ -5216,8 +5285,14 @@ export default function ChatView({
     addComposerImages(imageFiles);
   };
 
+  // Image files and dragged file references (from the editor explorer/diff
+  // sidebars) share the same drop affordance.
+  const isComposerHandledDrag = (dataTransfer: DataTransfer) =>
+    dataTransfer.types.includes("Files") ||
+    dataTransfer.types.includes(CHAT_FILE_REFERENCE_DRAG_TYPE);
+
   const onComposerDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!event.dataTransfer.types.includes("Files")) {
+    if (!isComposerHandledDrag(event.dataTransfer)) {
       return;
     }
     event.preventDefault();
@@ -5226,7 +5301,7 @@ export default function ChatView({
   };
 
   const onComposerDragOver = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!event.dataTransfer.types.includes("Files")) {
+    if (!isComposerHandledDrag(event.dataTransfer)) {
       return;
     }
     event.preventDefault();
@@ -5235,7 +5310,7 @@ export default function ChatView({
   };
 
   const onComposerDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!event.dataTransfer.types.includes("Files")) {
+    if (!isComposerHandledDrag(event.dataTransfer)) {
       return;
     }
     event.preventDefault();
@@ -5250,12 +5325,17 @@ export default function ChatView({
   };
 
   const onComposerDrop = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!event.dataTransfer.types.includes("Files")) {
+    if (!isComposerHandledDrag(event.dataTransfer)) {
       return;
     }
     event.preventDefault();
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
+    const referenceText = event.dataTransfer.getData(CHAT_FILE_REFERENCE_DRAG_TYPE);
+    if (referenceText) {
+      appendComposerPromptText(threadId, referenceText);
+      return;
+    }
     const files = Array.from(event.dataTransfer.files);
     addComposerImages(files);
     focusComposer();
@@ -6822,11 +6902,49 @@ export default function ChatView({
       }),
     [runtimeUsageContextWindow, composerTraitSelection.contextWindow, selectedProvider],
   );
+  const useSplitComposerPickerControls = isLocalDraftThread && !hasThreadStarted;
+  const composerFooterControlsPlan = useMemo(
+    () => composerFooterPlanForTier(composerFooterTier, Boolean(runtimeUsageContextWindow)),
+    [composerFooterTier, runtimeUsageContextWindow],
+  );
+  // The displayed labels changed (model switch, effort change, picker layout):
+  // recorded overflow widths no longer apply, so reset to the richest tier and
+  // let the measured-overflow loop demote again before paint if needed.
+  const composerFooterModelLabel = resolveProviderModelLabel({
+    provider: selectedProvider,
+    lockedProvider,
+    model: selectedModelForPickerWithCustomFallback,
+    modelOptionsByProvider,
+  });
+  const composerFooterTraitsSummary = resolveTraitsTriggerSummary({
+    provider: selectedProvider,
+    model: selectedModelForPickerWithCustomFallback,
+    prompt,
+    modelOptions: selectedProviderModelOptions,
+    ...(selectedRuntimeModel ? { runtimeModel: selectedRuntimeModel } : {}),
+    runtimeAgents: dynamicAgents,
+  });
+  const composerFooterPlanInputsKey = [
+    composerFooterModelLabel,
+    composerFooterTraitsSummary.summaryText,
+    Boolean(runtimeUsageContextWindow),
+    useSplitComposerPickerControls,
+  ].join(":");
+  useLayoutEffect(() => {
+    composerFooterDemotionWidthsRef.current = [];
+    composerFooterTierRef.current = 0;
+    setComposerFooterTier(0);
+    composerFooterLayoutSyncRef.current?.();
+  }, [composerFooterPlanInputsKey]);
+  // After a tier renders, re-measure before paint: a still-overflowing footer
+  // demotes another step until it fits (bounded by COMPOSER_FOOTER_MAX_TIER).
+  useLayoutEffect(() => {
+    composerFooterLayoutSyncRef.current?.();
+  }, [composerFooterTier]);
+  const composerModelPickerWidthClassName = isComposerFooterCompact ? "w-32" : "w-36 sm:w-44";
+  const composerOptionsPickerWidthClassName = isComposerFooterCompact ? "w-28" : "w-32";
   const composerModelEffortPickerWidthClassName = isComposerFooterCompact ? "w-40" : "w-44 sm:w-52";
   const isComposerModelEffortPickerOpen = isModelPickerOpen || isTraitsPickerOpen;
-  // Both shortcuts (Mod+Shift+M and Mod+Shift+E) now drop into the same combined
-  // surface; clear both mirrors on close so the existing keyboard handler stays
-  // in sync without needing to know about the new picker.
   const handleComposerModelEffortPickerOpenChange = useCallback(
     (open: boolean) => {
       if (open) {
@@ -6838,15 +6956,65 @@ export default function ChatView({
     },
     [handleModelPickerOpenChange],
   );
-  const composerModelEffortPickerControl = showComposerModelBootstrapSkeleton ? (
-    selectedProviderRuntimeModelDiscoveryPending ? (
+  const composerPickerControls = showComposerModelBootstrapSkeleton ? (
+    useSplitComposerPickerControls ? (
+      <>
+        {selectedProviderRuntimeModelDiscoveryPending ? (
+          <ComposerModelLoadingControl widthClassName={composerModelPickerWidthClassName} />
+        ) : (
+          <ComposerControlSkeleton widthClassName={composerModelPickerWidthClassName} />
+        )}
+        <ComposerControlSkeleton widthClassName={composerOptionsPickerWidthClassName} />
+      </>
+    ) : selectedProviderRuntimeModelDiscoveryPending ? (
       <ComposerModelLoadingControl widthClassName={composerModelEffortPickerWidthClassName} />
     ) : (
       <ComposerControlSkeleton widthClassName={composerModelEffortPickerWidthClassName} />
     )
+  ) : useSplitComposerPickerControls ? (
+    <>
+      <ProviderModelPicker
+        compact={isComposerFooterCompact}
+        hideLabel={!composerFooterControlsPlan.showModelLabel}
+        provider={selectedProvider}
+        model={selectedModelForPickerWithCustomFallback}
+        lockedProvider={lockedProvider}
+        providers={providerStatuses}
+        modelOptionsByProvider={modelOptionsByProvider}
+        loadingModelProviders={{
+          cursor: cursorModelDiscoveryPending,
+          kilo: kiloModelDiscoveryPending,
+        }}
+        hiddenProviders={settings.hiddenProviders}
+        providerOrder={settings.providerOrder}
+        onProviderModelChange={onProviderModelSelect}
+        onSelectionCommitted={scheduleComposerFocus}
+        open={isModelPickerOpen}
+        onOpenChange={handleModelPickerOpenChange}
+        shortcutLabel={modelPickerShortcutLabel}
+      />
+      <TraitsPicker
+        provider={selectedProvider}
+        threadId={threadId}
+        model={selectedModelForPickerWithCustomFallback}
+        runtimeModel={selectedRuntimeModel}
+        runtimeModels={runtimeModelsByProvider[selectedProvider]}
+        runtimeAgents={dynamicAgents}
+        modelOptions={selectedProviderModelOptions}
+        prompt={prompt}
+        onPromptChange={setPromptFromTraits}
+        open={isTraitsPickerOpen}
+        onOpenChange={handleTraitsPickerOpenChange}
+        onSelectionCommitted={scheduleComposerFocus}
+        shortcutLabel={traitsPickerShortcutLabel}
+        hideLabel={!composerFooterControlsPlan.showTraitsLabel}
+      />
+    </>
   ) : (
     <ComposerModelEffortPicker
       compact={isComposerFooterCompact}
+      hideModelLabel={!composerFooterControlsPlan.showModelLabel}
+      hideStatusLabel={!composerFooterControlsPlan.showTraitsLabel}
       provider={selectedProvider}
       model={selectedModelForPickerWithCustomFallback}
       lockedProvider={lockedProvider}
@@ -7590,11 +7758,47 @@ export default function ChatView({
       void navigate({
         to: "/$threadId",
         params: { threadId: nextThreadId },
-        search: (previous) => stripDiffSearchParams(previous),
+        search: (previous) =>
+          isEditorRail
+            ? { ...stripDiffSearchParams(previous), view: "editor" }
+            : stripDiffSearchParams(previous),
       });
     },
-    [navigate],
+    [isEditorRail, navigate],
   );
+  const activeProjectIdForNewChat = activeProject?.id ?? null;
+  const onNewEditorChat = useCallback(() => {
+    if (!activeProjectIdForNewChat) {
+      return;
+    }
+    // Keep the editor workspace view (and any open file) across the new-thread
+    // navigation; the default new-thread flow clears all search params.
+    void handleNewThread(activeProjectIdForNewChat, undefined, {
+      search: (previous) => ({ ...stripDiffSearchParams(previous), view: "editor" }),
+    });
+  }, [activeProjectIdForNewChat, handleNewThread]);
+  const onOpenEditorChat = useCallback(
+    (nextThreadId: ThreadId) => {
+      storeOpenChatThreadPage(nextThreadId);
+      onNavigateToThread(nextThreadId);
+    },
+    [onNavigateToThread, storeOpenChatThreadPage],
+  );
+  const onOpenEditorTerminal = useCallback(() => {
+    if (!activeThreadId) return;
+    setTerminalPresentationMode("workspace");
+    setTerminalWorkspaceLayout("terminal-only");
+    setTerminalWorkspaceTab("terminal");
+    setTerminalFocusRequestId((value) => value + 1);
+  }, [
+    activeThreadId,
+    setTerminalPresentationMode,
+    setTerminalWorkspaceLayout,
+    setTerminalWorkspaceTab,
+  ]);
+  const onCloseEditorTerminal = useCallback(() => {
+    void closeTerminal(terminalState.activeTerminalId);
+  }, [closeTerminal, terminalState.activeTerminalId]);
   const onRevertUserMessage = useCallback(
     (messageId: MessageId) => {
       const targetTurnCount = revertTurnCountByUserMessageId.get(messageId);
@@ -7733,6 +7937,30 @@ export default function ChatView({
     activeContextWindowLabel: contextWindowSelectionStatus.activeLabel,
     pendingContextWindowLabel: contextWindowSelectionStatus.pendingSelectedLabel,
   };
+  // The composer's leading controls (extras "+" menu, access-rules/runtime
+  // indicator). At the narrowest footer tier they relocate from the footer to
+  // the branch-toolbar row below the input instead of getting clipped; the
+  // relocated variant is icon-only since relocation means space is minimal.
+  const relocateComposerLeadingControls = composerFooterControlsPlan.relocateLeadingControls;
+  const renderComposerLeadingControls = (options: { iconOnly: boolean }) => (
+    <>
+      <ComposerExtrasMenu
+        interactionMode={interactionMode}
+        supportsFastMode={composerTraitSelection.caps.supportsFastMode}
+        fastModeEnabled={composerTraitSelection.fastModeEnabled}
+        onAddPhotos={addComposerImages}
+        onToggleFastMode={toggleFastMode}
+        onSetPlanMode={setPlanMode}
+      />
+      {!isVoiceRecording && !isVoiceTranscribing ? (
+        <RuntimeUsageControls
+          {...runtimeUsageControlsProps}
+          className="shrink-0"
+          hideLabel={options.iconOnly}
+        />
+      ) : null}
+    </>
+  );
   const branchToolbarProps = {
     threadId: activeThread.id,
     onEnvModeChange,
@@ -8019,6 +8247,7 @@ export default function ChatView({
                     )}
                   >
                     <div
+                      data-chat-composer-leading="true"
                       className={cn(
                         "flex items-center",
                         isVoiceRecording || isVoiceTranscribing
@@ -8028,22 +8257,12 @@ export default function ChatView({
                             : "min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-w-max sm:overflow-visible",
                       )}
                     >
-                      <ComposerExtrasMenu
-                        interactionMode={interactionMode}
-                        supportsFastMode={composerTraitSelection.caps.supportsFastMode}
-                        fastModeEnabled={composerTraitSelection.fastModeEnabled}
-                        onAddPhotos={addComposerImages}
-                        onToggleFastMode={toggleFastMode}
-                        onSetPlanMode={setPlanMode}
-                      />
+                      {relocateComposerLeadingControls
+                        ? null
+                        : renderComposerLeadingControls({ iconOnly: false })}
 
                       {!isVoiceRecording && !isVoiceTranscribing ? (
                         <>
-                          <RuntimeUsageControls
-                            {...runtimeUsageControlsProps}
-                            className="shrink-0"
-                          />
-
                           {interactionMode === "plan" ? (
                             <Button
                               variant="ghost"
@@ -8093,7 +8312,10 @@ export default function ChatView({
                           Preparing worktree...
                         </span>
                       ) : null}
-                      {!isVoiceRecording && !isVoiceTranscribing && runtimeUsageContextWindow ? (
+                      {!isVoiceRecording &&
+                      !isVoiceTranscribing &&
+                      runtimeUsageContextWindow &&
+                      composerFooterControlsPlan.showContextMeter ? (
                         <ContextWindowMeter
                           usage={runtimeUsageContextWindow}
                           {...(activeCumulativeCostUsd != null
@@ -8112,9 +8334,7 @@ export default function ChatView({
                             : {})}
                         />
                       ) : null}
-                      {!isVoiceRecording && !isVoiceTranscribing
-                        ? composerModelEffortPickerControl
-                        : null}
+                      {!isVoiceRecording && !isVoiceTranscribing ? composerPickerControls : null}
                       {showVoiceNotesControl && (isVoiceRecording || isVoiceTranscribing) ? (
                         <ComposerVoiceRecorderBar
                           disabled={isComposerApprovalState || isConnecting || isSendBusy}
@@ -8324,9 +8544,9 @@ export default function ChatView({
       <header
         className={cn(
           CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-          CHAT_SURFACE_HEADER_PADDING_X_CLASS,
+          !isEditorRail && CHAT_SURFACE_HEADER_PADDING_X_CLASS,
           "flex items-center",
-          CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+          isEditorRail ? "h-10" : CHAT_SURFACE_HEADER_HEIGHT_CLASS,
           isElectron && "drag-region",
           desktopTopBarTrafficLightGutterClassName,
         )}
@@ -8336,13 +8556,17 @@ export default function ChatView({
           activeThreadTitle={activeThreadDisplayTitle}
           activeThreadEntryPoint={terminalState.entryPoint}
           activeProvider={activeThread.session?.provider ?? activeThread.modelSelection.provider}
-          activeProjectName={activeProjectDisplayName}
+          activeProjectName={isEditorRail ? undefined : activeProjectDisplayName}
           threadBreadcrumbs={threadBreadcrumbs}
+          {...(isEditorRail
+            ? { className: cn(CHAT_SURFACE_HEADER_PADDING_X_CLASS, "h-full") }
+            : {})}
           isSidechat={Boolean(activeThread.sidechatSourceThreadId)}
-          hideHandoffControls={terminalWorkspaceTerminalTabActive}
+          hideSidebarControls={isEditorRail}
+          hideHandoffControls={terminalWorkspaceTerminalTabActive || isEditorRail}
           isGitRepo={isGitRepo}
           openInCwd={threadWorkspaceCwd}
-          activeProjectScripts={activeProjectScripts}
+          activeProjectScripts={isEditorRail ? undefined : activeProjectScripts}
           preferredScriptId={
             activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
           }
@@ -8357,10 +8581,11 @@ export default function ChatView({
           handoffBadgeTargetProvider={handoffBadgeTargetProvider}
           gitCwd={threadWorkspaceCwd}
           diffTotals={repoDiffTotals}
-          showGitActions={showGitActions}
+          showGitActions={showGitActions && !isEditorRail}
+          showDiffToggle={!isEditorRail}
           diffOpen={resolvedDiffOpen}
           diffDisabledReason={diffDisabledReason}
-          environment={environmentHeaderState}
+          environment={isEditorRail ? null : environmentHeaderState}
           surfaceMode={surfaceMode}
           chatLayoutAction={
             surfaceMode === "single" && onSplitSurface
@@ -8378,6 +8603,22 @@ export default function ChatView({
                     onClick: onMaximizeSurface,
                   }
                 : null
+          }
+          viewModeAction={viewModeAction}
+          editorChatControls={
+            isEditorRail && activeProject
+              ? {
+                  projectId: activeProject.id,
+                  activeSurface: terminalWorkspaceTerminalTabActive ? "terminal" : "chat",
+                  terminalAvailable: terminalState.terminalOpen,
+                  terminalHasRunningActivity: terminalState.runningTerminalIds.length > 0,
+                  onNewChat: onNewEditorChat,
+                  onNewTerminal: onOpenEditorTerminal,
+                  onOpenChat: onOpenEditorChat,
+                  onOpenTerminal: onOpenEditorTerminal,
+                  onCloseTerminal: onCloseEditorTerminal,
+                }
+              : null
           }
           changeThreadAction={
             surfaceMode === "split" && isFocusedPane && onChangeThreadInSplitPane
@@ -8416,7 +8657,7 @@ export default function ChatView({
         rateLimitStatus={visibleActiveRateLimitStatus}
         onDismiss={dismissActiveRateLimitBanner}
       />
-      {terminalWorkspaceOpen ? (
+      {terminalWorkspaceOpen && !isEditorRail ? (
         <TerminalWorkspaceTabs
           activeTab={terminalState.workspaceActiveTab}
           isWorking={isWorking}
@@ -8472,9 +8713,19 @@ export default function ChatView({
                     </h2>
                   </div>
                   {composerSection}
-                  {isGitRepo && !environmentEnabled && !isCenteredEmptyLanding ? (
+                  {(isGitRepo && !environmentEnabled && !isCenteredEmptyLanding) ||
+                  relocateComposerLeadingControls ? (
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
-                      <BranchToolbar {...branchToolbarProps} />
+                      <div className="flex w-full items-center gap-1">
+                        {relocateComposerLeadingControls ? (
+                          <div className="flex shrink-0 items-center gap-1 pl-1">
+                            {renderComposerLeadingControls({ iconOnly: true })}
+                          </div>
+                        ) : null}
+                        {isGitRepo && !environmentEnabled && !isCenteredEmptyLanding ? (
+                          <BranchToolbar {...branchToolbarProps} className="min-w-0 flex-1" />
+                        ) : null}
+                      </div>
                     </div>
                   ) : null}
                   {showComposerSuggestions ? (
@@ -8524,6 +8775,7 @@ export default function ChatView({
                     chatFontSizePx={settings.chatFontSizePx}
                     timestampFormat={timestampFormat}
                     workspaceRoot={activeProject?.cwd ?? undefined}
+                    emptyStateContent={isEditorRail ? <span aria-hidden="true" /> : undefined}
                     emptyStateProjectName={activeProjectDisplayName}
                     terminalWorkspaceTerminalTabActive={terminalWorkspaceTerminalTabActive}
                     onMessagesScroll={onMessagesScroll}
@@ -8572,10 +8824,20 @@ export default function ChatView({
                 >
                   {composerSection}
                 </div>
-                {secondaryChromeReady && isGitRepo && !environmentEnabled ? (
+                {secondaryChromeReady &&
+                ((isGitRepo && !environmentEnabled) || relocateComposerLeadingControls) ? (
                   <div className={CHAT_COLUMN_GUTTER_CLASS_NAME}>
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
-                      <BranchToolbar {...branchToolbarProps} />
+                      <div className="flex w-full items-center gap-1">
+                        {relocateComposerLeadingControls ? (
+                          <div className="flex shrink-0 items-center gap-1 pl-1">
+                            {renderComposerLeadingControls({ iconOnly: true })}
+                          </div>
+                        ) : null}
+                        {isGitRepo && !environmentEnabled ? (
+                          <BranchToolbar {...branchToolbarProps} className="min-w-0 flex-1" />
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                 ) : null}
