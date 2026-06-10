@@ -41,6 +41,7 @@ import {
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { ProviderAdapterRequestError, ProviderServiceError } from "../../provider/Errors.ts";
+import { buildInlineSkillInstructions } from "../../provider/skillPromptInjection.ts";
 import {
   TextGeneration,
   type BranchNameGenerationInput,
@@ -933,10 +934,35 @@ const make = Effect.gen(function* () {
         : priorTranscriptBootstrapText
           ? `<thread_context>\n${priorTranscriptBootstrapText}\n</thread_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
           : boundaryMessageText;
+    // Portable skills fallback: providers that cannot load the referenced skill
+    // file natively get the skill instructions inlined into the prompt.
+    const skillInlineText =
+      input.skills !== undefined && input.skills.length > 0
+        ? yield* Effect.tryPromise(() =>
+            buildInlineSkillInstructions({
+              provider: selectedProvider as ProviderKind,
+              skills: input.skills ?? [],
+              maxChars: Math.max(
+                0,
+                PROVIDER_SEND_TURN_MAX_INPUT_CHARS - providerInput.length - 1_000,
+              ),
+            }),
+          ).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("failed to inline portable skill instructions", {
+                threadId: input.threadId,
+                error,
+              }).pipe(Effect.as("")),
+            ),
+          )
+        : "";
+    const providerInputWithSkills = skillInlineText
+      ? `${providerInput}\n\n${skillInlineText}`
+      : providerInput;
     const normalizedInput = toNonEmptyProviderInput(
       normalizeSkillMentionTextForProvider({
         provider: selectedProvider as ProviderKind,
-        messageText: providerInput,
+        messageText: providerInputWithSkills,
         ...(input.skills !== undefined ? { skills: input.skills } : {}),
       }),
     );
@@ -1057,10 +1083,13 @@ const make = Effect.gen(function* () {
             const retryProviderInput = retryBootstrapText
               ? `<thread_context>\n${retryBootstrapText}\n</thread_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
               : boundaryMessageText;
+            const retryProviderInputWithSkills = skillInlineText
+              ? `${retryProviderInput}\n\n${skillInlineText}`
+              : retryProviderInput;
             const retryNormalizedInput = toNonEmptyProviderInput(
               normalizeSkillMentionTextForProvider({
                 provider: selectedProvider as ProviderKind,
-                messageText: retryProviderInput,
+                messageText: retryProviderInputWithSkills,
                 ...(input.skills !== undefined ? { skills: input.skills } : {}),
               }),
             );

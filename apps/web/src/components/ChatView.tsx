@@ -2480,10 +2480,6 @@ export default function ChatView({
     composerCommandPicker === null &&
     isMentionTrigger &&
     isLocalFolderMentionQuery(mentionTriggerQuery);
-  const skillTriggerQuery =
-    composerTrigger?.kind === "skill" || composerTrigger?.kind === "slash-command"
-      ? composerTrigger.query
-      : "";
   const isSkillTrigger = composerTriggerKind === "skill";
   const [debouncedPathQuery, composerPathQueryDebouncer] = useDebouncedValue(
     mentionTriggerQuery,
@@ -2541,7 +2537,6 @@ export default function ChatView({
       cwd: composerSkillCwd,
       threadId,
       agentDir: selectedProvider === "pi" ? settings.piAgentDir || null : null,
-      query: skillTriggerQuery,
       enabled:
         (isSkillTrigger || composerTriggerKind === "slash-command" || selectedProvider === "pi") &&
         canDiscoverProviderSkills &&

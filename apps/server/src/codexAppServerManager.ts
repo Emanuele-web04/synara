@@ -717,9 +717,33 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly modelCache = new Map<string, ProviderListModelsResult>();
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
-  constructor(services?: ServiceMap.ServiceMap<never>) {
+  private readonly synaraSkillsDir: string | undefined;
+  constructor(
+    services?: ServiceMap.ServiceMap<never>,
+    options?: { readonly synaraSkillsDir?: string },
+  ) {
     super();
     this.runPromise = services ? Effect.runPromiseWith(services) : Effect.runPromise;
+    this.synaraSkillsDir = options?.synaraSkillsDir;
+  }
+
+  // Registers `~/.synara/skills` as a codex skill root so portable skills are
+  // first-class: skills/list returns them and turn/start `skill` items inject
+  // their instructions. Verified live: skill items with paths outside known
+  // roots are silently ignored by codex app-server, so this call is required.
+  private async registerSynaraSkillsRoot(context: CodexSessionContext): Promise<void> {
+    if (!this.synaraSkillsDir) {
+      return;
+    }
+    try {
+      await this.sendRequest(context, "skills/extraRoots/set", {
+        extraRoots: [this.synaraSkillsDir],
+      });
+    } catch (error) {
+      // Older codex builds (< extra-roots support) keep working; Synara-only
+      // skills simply stay invisible to codex on those versions.
+      console.log("codex skills/extraRoots/set unavailable", error);
+    }
   }
 
   async startSession(input: CodexAppServerStartSessionInput): Promise<ProviderSession> {
@@ -791,6 +815,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
 
       this.writeMessage(context, { method: "initialized" });
+      await this.registerSynaraSkillsRoot(context);
       try {
         const modelListResponse = await this.sendRequest(context, "model/list", {});
         console.log("codex model/list response", modelListResponse);
@@ -1407,6 +1432,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
       this.writeMessage(context, { method: "initialized" });
+      await this.registerSynaraSkillsRoot(context);
       try {
         const accountReadResponse = await this.sendRequest(context, "account/read", {});
         context.account = readCodexAccountSnapshot(accountReadResponse);
@@ -1997,6 +2023,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     try {
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
       this.writeMessage(context, { method: "initialized" });
+      await this.registerSynaraSkillsRoot(context);
       try {
         const accountReadResponse = await this.sendRequest(context, "account/read", {});
         context.account = readCodexAccountSnapshot(accountReadResponse);
