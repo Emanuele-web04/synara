@@ -49,7 +49,7 @@ function availableAuthMethodIds(
   return new Set((initializeResult.authMethods ?? []).map((method) => method.id.trim()));
 }
 
-function hasDevinApiKeyEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+export function hasDevinApiKeyEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   return DEVIN_API_KEY_ENV_KEYS.some((key) => Boolean(env[key]?.trim()));
 }
 

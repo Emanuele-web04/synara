@@ -25,7 +25,7 @@ update your row when done.
 | 002  | Extract DevinModeMapper                                                                | P2       | S      | —          | DONE        |
 | 003  | Structured user-input via ACP form elicitation                                         | P1       | M      | —          | DONE        |
 | 004  | Native slash-command discovery via `available_commands_update`                         | P2       | M      | —          | DONE        |
-| 005  | Align Devin health auth with runtime auth (WINDSURF_API_KEY)                           | P3       | S      | —          | TODO        |
+| 005  | Align Devin health auth with runtime auth (WINDSURF_API_KEY)                           | P3       | S      | —          | IN PROGRESS |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 

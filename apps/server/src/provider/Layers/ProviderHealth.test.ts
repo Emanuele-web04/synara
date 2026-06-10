@@ -1265,6 +1265,47 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       assert.strictEqual(parsed.authStatus, "unauthenticated");
     });
 
+    it("treats WINDSURF_API_KEY as authenticated when devin auth status reports logged out", () => {
+      const parsed = parseDevinAuthStatusFromOutput(
+        {
+          stdout: "Not logged in. Run `devin auth login`.",
+          stderr: "",
+          code: 1,
+        },
+        { hasApiKeyEnv: true },
+      );
+      assert.strictEqual(parsed.status, "ready");
+      assert.strictEqual(parsed.authStatus, "authenticated");
+      assert.match(parsed.message ?? "", /WINDSURF_API_KEY/);
+    });
+
+    it("still reports unauthenticated without the API key env", () => {
+      const parsed = parseDevinAuthStatusFromOutput(
+        {
+          stdout: "Not logged in. Run `devin auth login`.",
+          stderr: "",
+          code: 1,
+        },
+        { hasApiKeyEnv: false },
+      );
+      assert.strictEqual(parsed.status, "error");
+      assert.strictEqual(parsed.authStatus, "unauthenticated");
+    });
+
+    it("JSON auth=false with API key env present is still authenticated-via-key", () => {
+      const parsed = parseDevinAuthStatusFromOutput(
+        {
+          stdout: '{"auth":false}\n',
+          stderr: "",
+          code: 0,
+        },
+        { hasApiKeyEnv: true },
+      );
+      assert.strictEqual(parsed.status, "ready");
+      assert.strictEqual(parsed.authStatus, "authenticated");
+      assert.match(parsed.message ?? "", /WINDSURF_API_KEY/);
+    });
+
     it("text login requirement is unauthenticated", () => {
       const parsed = parseDevinAuthStatusFromOutput({
         stdout: "",

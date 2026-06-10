@@ -54,6 +54,7 @@ import { ServerSettingsService } from "../../serverSettings";
 import { isWindowsShellCommandMissingResult } from "../../shell-command-detection";
 import { normalizeGeminiCapabilityProbeResult, probeGeminiCapabilities } from "../geminiAcpProbe";
 import { DEFAULT_CURSOR_AGENT_BINARY, resolveCursorAgentBinaryPath } from "../acp/CursorAcpCommand";
+import { hasDevinApiKeyEnv } from "../acp/DevinAcpSupport";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
 import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHealth";
 import {
@@ -1631,7 +1632,25 @@ export const checkCursorProviderStatus = makeCheckCursorProviderStatus();
 
 // ── Devin health check ──────────────────────────────────────────────
 
-export function parseDevinAuthStatusFromOutput(result: CommandResult): {
+const DEVIN_API_KEY_AUTHENTICATED_STATUS = {
+  status: "ready" as const,
+  authStatus: "authenticated" as const,
+  message: "Devin CLI login not detected; using WINDSURF_API_KEY for authentication.",
+};
+
+function extractDevinAuthBoolean(value: unknown): boolean | undefined {
+  const genericAuth = extractAuthBoolean(value);
+  if (genericAuth !== undefined || !value || typeof value !== "object" || Array.isArray(value)) {
+    return genericAuth;
+  }
+  const directAuth = (value as Record<string, unknown>).auth;
+  return typeof directAuth === "boolean" ? directAuth : undefined;
+}
+
+export function parseDevinAuthStatusFromOutput(
+  result: CommandResult,
+  options?: { readonly hasApiKeyEnv?: boolean },
+): {
   readonly status: ServerProviderStatusState;
   readonly authStatus: ServerProviderAuthStatus;
   readonly message?: string;
@@ -1646,6 +1665,9 @@ export function parseDevinAuthStatusFromOutput(result: CommandResult): {
     lowerOutput.includes("run `devin auth login`") ||
     lowerOutput.includes("run devin auth login")
   ) {
+    if (options?.hasApiKeyEnv) {
+      return DEVIN_API_KEY_AUTHENTICATED_STATUS;
+    }
     return {
       status: "error",
       authStatus: "unauthenticated",
@@ -1661,7 +1683,7 @@ export function parseDevinAuthStatusFromOutput(result: CommandResult): {
     try {
       return {
         attemptedJsonParse: true as const,
-        auth: extractAuthBoolean(JSON.parse(trimmed)),
+        auth: extractDevinAuthBoolean(JSON.parse(trimmed)),
       };
     } catch {
       return { attemptedJsonParse: false as const, auth: undefined as boolean | undefined };
@@ -1672,6 +1694,9 @@ export function parseDevinAuthStatusFromOutput(result: CommandResult): {
     return { status: "ready", authStatus: "authenticated" };
   }
   if (parsedAuth.auth === false) {
+    if (options?.hasApiKeyEnv) {
+      return DEVIN_API_KEY_AUTHENTICATED_STATUS;
+    }
     return {
       status: "error",
       authStatus: "unauthenticated",
@@ -1786,7 +1811,9 @@ export const makeCheckDevinProviderStatus = (
       } satisfies ServerProviderStatus;
     }
 
-    const parsed = parseDevinAuthStatusFromOutput(authProbe.success.value);
+    const parsed = parseDevinAuthStatusFromOutput(authProbe.success.value, {
+      hasApiKeyEnv: hasDevinApiKeyEnv(),
+    });
     return {
       provider: DEVIN_PROVIDER,
       status: parsed.status,
