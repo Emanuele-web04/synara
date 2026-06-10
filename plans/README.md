@@ -15,7 +15,9 @@ Execute in the order below unless dependencies say otherwise. Each executor:
 read the plan fully before starting, honor its STOP conditions, run the
 `bun fmt && bun lint && bun typecheck` trio exactly once as a final pass
 (never `bun test`; always `bun run test` / `bunx vitest run <file>`), and
-update your row when done.
+update your row when done. For path-scoped tests, prefer
+`bunx vitest run <file-or-glob>`; the root `bun run test` script does not forward
+path arguments to Vitest.
 
 ## Execution order & status
 
@@ -26,6 +28,11 @@ update your row when done.
 | 003  | Structured user-input via ACP form elicitation                                         | P1       | M      | —          | DONE        |
 | 004  | Native slash-command discovery via `available_commands_update`                         | P2       | M      | —          | DONE        |
 | 005  | Align Devin health auth with runtime auth (WINDSURF_API_KEY)                           | P3       | S      | —          | DONE        |
+| 010  | Replace invalid path-forwarded `bun run test` commands in Devin plans                  | P1       | S      | —          | TODO        |
+| 006  | Harden Devin ACP form elicitation with adapter tests and server-side answer validation | P1       | M      | —          | TODO        |
+| 007  | Make Devin slash-command discovery thread-scoped and prove runtime command updates     | P1       | S      | —          | TODO        |
+| 008  | Stop guessing ACP model config id when the session does not advertise one              | P2       | S      | —          | TODO        |
+| 009  | Redact persisted user-input resolved answers across providers                          | P2       | M      | —          | TODO        |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
@@ -36,6 +43,14 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   plan's drift check tells the executor which prior-plan drift is expected.
 - 002 before 003/004 is preferred (it shrinks the adapter, making later diffs cleaner).
 - 005 is independent (health + support files only) and can land any time.
+- 006 and 007 are merge-readiness blockers found in the final review; run them before
+  treating the Devin provider branch as merge-ready.
+- 008 is independent but should land before broad ACP provider reuse relies on model
+  switching semantics.
+- 009 is a broader cross-provider data-retention/security hardening plan; it can land
+  after Devin merge-readiness if release pressure is high, but it should not be ignored.
+- 010 is docs-only and should be run early so future executor agents get valid
+  verification commands.
 
 ## Findings considered and rejected
 
@@ -56,6 +71,9 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 - **Removing `MODEL_OPTIONS_BY_PROVIDER.devin` from contracts** — it stays as the
   single static list; Plan 001 makes the server catalog derive from it instead of
   duplicating it.
+- **Treating raw `user-input.resolved` answer persistence as Devin-only** — rejected
+  during final review because Cursor, Claude, Codex, and OpenCode already emit raw
+  answers too. Plan 009 handles this as a cross-provider ingestion policy.
 
 ## Not audited (scope statement)
 
