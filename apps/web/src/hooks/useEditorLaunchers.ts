@@ -23,6 +23,8 @@ export interface EditorLaunchers {
   primaryOption: EditorOption | null;
   /** Shortcut label for "open favorite editor", or null when unbound. */
   openFavoriteShortcutLabel: string | null;
+  /** Persist the editor used by primary open actions and the global shortcut. */
+  setDefaultEditor: (editorId: EditorId) => void;
   /** Open the project cwd in the given editor (or the preferred one when null). */
   openInEditor: (editorId: EditorId | null) => void;
 }
@@ -42,6 +44,12 @@ export function useEditorLaunchers({
     [availableEditors],
   );
   const primaryOption = options.find(({ value }) => value === preferredEditor) ?? null;
+  const setDefaultEditor = useCallback(
+    (editorId: EditorId) => {
+      setPreferredEditor(editorId);
+    },
+    [setPreferredEditor],
+  );
 
   const openInEditor = useCallback(
     (editorId: EditorId | null) => {
@@ -50,9 +58,9 @@ export function useEditorLaunchers({
       const editor = editorId ?? preferredEditor;
       if (!editor) return;
       void api.shell.openInEditor(openInCwd, editor);
-      setPreferredEditor(editor);
+      setDefaultEditor(editor);
     },
-    [preferredEditor, openInCwd, setPreferredEditor],
+    [preferredEditor, openInCwd, setDefaultEditor],
   );
 
   const openFavoriteShortcutLabel = useMemo(
@@ -60,5 +68,12 @@ export function useEditorLaunchers({
     [keybindings],
   );
 
-  return { options, preferredEditor, primaryOption, openFavoriteShortcutLabel, openInEditor };
+  return {
+    options,
+    preferredEditor,
+    primaryOption,
+    openFavoriteShortcutLabel,
+    setDefaultEditor,
+    openInEditor,
+  };
 }

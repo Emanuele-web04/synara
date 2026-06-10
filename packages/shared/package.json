@@ -116,6 +116,10 @@
       "types": "./src/localImage.ts",
       "import": "./src/localImage.ts"
     },
+    "./editorIcons": {
+      "types": "./src/editorIcons.ts",
+      "import": "./src/editorIcons.ts"
+    },
     "./providerUsage": {
       "types": "./src/providerUsage.ts",
       "import": "./src/providerUsage.ts"

@@ -1309,6 +1309,16 @@ diffs-container {
   border-top-right-radius: calc(var(--composer-radius) - 1px);
 }
 
+/* A stacked panel marked attachedToPrevious merges into the panel above it:
+   drop its top radius so the seam reads as one continuous, inline surface
+   instead of a separate rounded card. The panel above has border-b-0, so this
+   panel's own top border becomes the 1px divider between the fused sections —
+   the same way live-change and queued follow-up rows fuse above the composer. */
+.chat-composer-stacked-top[data-composer-stacked-attached="true"] {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
 .chat-composer-surface {
   background: var(--composer-surface);
   backdrop-filter: var(--app-composer-backdrop-filter, none);

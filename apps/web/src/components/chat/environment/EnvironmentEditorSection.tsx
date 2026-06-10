@@ -9,7 +9,7 @@ import type { EditorId, ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { useEditorLaunchers } from "~/hooks/useEditorLaunchers";
 
 import { ComposerPickerMenuPopup } from "../ComposerPickerMenuPopup";
-import { Menu, MenuItem, MenuShortcut, MenuTrigger } from "../../ui/menu";
+import { Menu, MenuRadioGroup, MenuRadioItem, MenuShortcut, MenuTrigger } from "../../ui/menu";
 import {
   ENVIRONMENT_ROW_CLASS_NAME,
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
@@ -27,12 +27,18 @@ export function EnvironmentEditorSection({
   availableEditors: ReadonlyArray<EditorId>;
   openInCwd: string | null;
 }) {
-  const { options, preferredEditor, primaryOption, openFavoriteShortcutLabel, openInEditor } =
-    useEditorLaunchers({
-      keybindings,
-      availableEditors,
-      openInCwd,
-    });
+  const {
+    options,
+    preferredEditor,
+    primaryOption,
+    openFavoriteShortcutLabel,
+    setDefaultEditor,
+    openInEditor,
+  } = useEditorLaunchers({
+    keybindings,
+    availableEditors,
+    openInCwd,
+  });
 
   if (options.length === 0) {
     return null;
@@ -59,17 +65,31 @@ export function EnvironmentEditorSection({
           />
         </MenuTrigger>
         <ComposerPickerMenuPopup align="start" side="bottom" className="w-44 min-w-44">
-          {options.map(({ label, Icon, value }) => (
-            <MenuItem key={value} onClick={() => openInEditor(value)}>
-              <span className="shrink-0">
-                <Icon aria-hidden className="size-3.5 text-muted-foreground" />
-              </span>
-              {label}
-              {value === preferredEditor && openFavoriteShortcutLabel ? (
-                <MenuShortcut>{openFavoriteShortcutLabel}</MenuShortcut>
-              ) : null}
-            </MenuItem>
-          ))}
+          <MenuRadioGroup
+            value={preferredEditor ?? ""}
+            onValueChange={(value) => setDefaultEditor(value as EditorId)}
+          >
+            {options.map(({ label, Icon, value }) => (
+              <MenuRadioItem
+                key={value}
+                preserveChildLayout
+                trailing={
+                  value === preferredEditor && openFavoriteShortcutLabel ? (
+                    <MenuShortcut>{openFavoriteShortcutLabel}</MenuShortcut>
+                  ) : null
+                }
+                value={value}
+                onClick={() => openInEditor(value)}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="shrink-0">
+                    <Icon aria-hidden className="size-3.5 text-muted-foreground" />
+                  </span>
+                  <span className="truncate">{label}</span>
+                </span>
+              </MenuRadioItem>
+            ))}
+          </MenuRadioGroup>
         </ComposerPickerMenuPopup>
       </Menu>
     </EnvironmentLabeledSection>

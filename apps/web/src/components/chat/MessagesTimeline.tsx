@@ -2138,6 +2138,14 @@ function workEntryPreview(
   return null;
 }
 
+// Provider read tools (e.g. Claude's `Read`) arrive as generic dynamic tool calls
+// without a `file-read` requestKind, so match their tool name to surface the eye icon
+// instead of the generic tool/wrench fallback.
+function isFileReadToolEntry(workEntry: TimelineWorkEntry): boolean {
+  const name = (workEntry.toolName ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  return name === "read" || name === "readfile" || name === "viewfile";
+}
+
 function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.requestKind === "command") return TerminalIcon;
   if (workEntry.requestKind === "file-read") return EyeIcon;
@@ -2153,6 +2161,7 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.requestKind === "file-read") return EyeIcon;
   if (workEntry.itemType === "image_generation") return ZapIcon;
   if (workEntry.itemType === "image_view") return EyeIcon;
+  if (isFileReadToolEntry(workEntry)) return EyeIcon;
 
   switch (workEntry.itemType) {
     case "mcp_tool_call":
@@ -2171,7 +2180,7 @@ function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
   return Boolean(toolName?.startsWith("mcp__codex_apps__github"));
 }
 
-// Keep command, agent-task, and file-change rows visually compact so their icon can trail the label.
+// Render command, agent-task, and file-change rows at the tighter compact density.
 function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
   const EntryIcon = workEntryIcon(workEntry);
   return (
@@ -2209,15 +2218,6 @@ function combineWorkEntryDisplayText(heading: string, preview: string | null): s
   return normalizeWorkDisplayText(heading) === normalizeWorkDisplayText(preview)
     ? heading
     : `${heading} ${preview}`;
-}
-
-// Splits compact work labels so the action verb can carry visual emphasis.
-function splitWorkEntryActionText(value: string): { action: string; rest: string } | null {
-  const match = /^(\S+)([\s\S]*)$/.exec(value.trim());
-  if (!match?.[1]) {
-    return null;
-  }
-  return { action: match[1], rest: match[2] ?? "" };
 }
 
 function isFileChangeWorkEntry(workEntry: TimelineWorkEntry): boolean {
@@ -2337,18 +2337,14 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   } = props;
   const compact = density === "compact";
   const EntryIcon = workEntryIcon(workEntry);
-  const usesTrailingCompactIcon =
-    EntryIcon === TerminalIcon || EntryIcon === HammerIcon || EntryIcon === AgentTaskIcon;
-  const showIconRight = compact && usesTrailingCompactIcon;
-  const showIconLeft = !compact;
-  const showInlineWebSearchIcon = compact && workEntry.itemType === "web_search";
-  const showInlineGitHubIcon = compact && isGitHubMcpToolCall(workEntry);
-  const showInlineMcpIcon =
-    compact && workEntry.itemType === "mcp_tool_call" && !showInlineGitHubIcon;
+  // Every tool row leads with a single left icon; keep branded glyphs for GitHub/MCP rows.
+  const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
+  const isMcpToolRow = workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow;
+  const LeftIcon = isGitHubToolRow ? GitHubIcon : isMcpToolRow ? McpIcon : EntryIcon;
+  const leftIconKind = isGitHubToolRow ? "github" : isMcpToolRow ? "mcp" : undefined;
   const heading = toolWorkEntryHeading(workEntry);
   const preview = workEntryPreview(workEntry);
   const displayText = combineWorkEntryDisplayText(heading, preview);
-  const displayTextParts = splitWorkEntryActionText(displayText);
   const showInlineAgentTaskPreview =
     workEntry.itemType === "collab_agent_tool_call" &&
     (workEntry.subagents?.length ?? 0) === 0 &&
@@ -2579,16 +2575,15 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         (() => {
           const rowContentChildren = (
             <>
-              {showIconLeft && (
-                <span
-                  className={cn(
-                    "flex shrink-0 items-center justify-center text-muted-foreground/40",
-                    compact ? "size-4" : "size-5",
-                  )}
-                >
-                  <EntryIcon className={compact ? "size-2.5" : "size-3"} />
-                </span>
-              )}
+              <span
+                className={cn(
+                  "flex shrink-0 items-center justify-center text-muted-foreground/40",
+                  compact ? "size-4" : "size-5",
+                )}
+                data-tool-icon={leftIconKind}
+              >
+                <LeftIcon className={compact ? "size-3.5" : "size-4"} />
+              </span>
               <div className="min-w-0 flex-1 overflow-hidden">
                 {showInlineAgentTaskPreview ? (
                   <div className={cn(compact ? "space-y-[1px]" : "space-y-0.5")}>
@@ -2615,69 +2610,15 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   <p
                     className={cn(
                       compact ? "truncate leading-5" : "truncate leading-6",
-                      "text-muted-foreground/50",
+                      // Match the leading icon's tone so the row reads as one muted unit.
+                      "text-muted-foreground/40",
                     )}
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
-                    {showInlineWebSearchIcon || showInlineGitHubIcon || showInlineMcpIcon ? (
-                      <span
-                        className="mr-1 inline-flex align-[-0.125em] text-muted-foreground/38"
-                        data-inline-tool-icon={
-                          showInlineGitHubIcon ? "github" : showInlineMcpIcon ? "mcp" : "web-search"
-                        }
-                      >
-                        {showInlineGitHubIcon ? (
-                          <GitHubIcon
-                            style={{
-                              width: `${rowFontSizePx}px`,
-                              height: `${rowFontSizePx}px`,
-                            }}
-                          />
-                        ) : null}
-                        {showInlineMcpIcon ? (
-                          <McpIcon
-                            style={{
-                              width: `${rowFontSizePx}px`,
-                              height: `${rowFontSizePx}px`,
-                            }}
-                          />
-                        ) : null}
-                        {showInlineWebSearchIcon ? (
-                          <GlobeIcon
-                            style={{
-                              width: `${rowFontSizePx}px`,
-                              height: `${rowFontSizePx}px`,
-                            }}
-                          />
-                        ) : null}
-                      </span>
-                    ) : null}
-                    <span className="text-muted-foreground/48" data-work-entry-display-text="true">
-                      {displayTextParts ? (
-                        <>
-                          <span
-                            className="font-medium text-muted-foreground/72"
-                            data-work-entry-action-word="true"
-                          >
-                            {displayTextParts.action}
-                          </span>
-                          {displayTextParts.rest}
-                        </>
-                      ) : (
-                        displayText
-                      )}
-                    </span>
+                    <span data-work-entry-display-text="true">{displayText}</span>
                   </p>
                 )}
               </div>
-              {showIconRight && (
-                <span
-                  className="flex shrink-0 items-center justify-center text-muted-foreground/40"
-                  style={{ width: rowFontSizePx, height: rowFontSizePx }}
-                >
-                  <EntryIcon style={{ width: rowFontSizePx, height: rowFontSizePx }} />
-                </span>
-              )}
             </>
           );
           const rowContent = (

@@ -1782,7 +1782,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       const vscodeOption = await waitForElement(
         () =>
-          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="menu-item"]')).find(
+          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="menu-radio-item"]')).find(
             (item) => item.textContent?.trim() === "VS Code",
           ) ?? null,
         "Unable to find VS Code editor option.",

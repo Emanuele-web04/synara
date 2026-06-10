@@ -1150,7 +1150,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Tool 5");
   });
 
-  it("highlights the action word on Cursor-style inline tool rows", async () => {
+  it("renders Cursor-style inline tool rows with a uniform label", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1204,8 +1204,9 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain(
-      '<span class="font-medium text-muted-foreground/72" data-work-entry-action-word="true">Searched</span> 2 files found',
+      '<span data-work-entry-display-text="true">Searched 2 files found</span>',
     );
+    expect(markup).not.toContain("data-work-entry-action-word");
   });
 
   it("renders Claude agent task output through the shared markdown renderer", async () => {
@@ -1661,7 +1662,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Searched");
-    expect(markup).toContain('data-work-entry-action-word="true"');
+    expect(markup).not.toContain("data-work-entry-action-word");
     expect(markup).toContain("rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src");
     expect(markup).toContain(
       `title="/bin/zsh -lc &#x27;rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src&#x27;"`,
@@ -1712,7 +1713,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Listed");
-    expect(markup).toContain('data-work-entry-action-word="true"');
+    expect(markup).not.toContain("data-work-entry-action-word");
     expect(markup).toContain("find apps/web/src -maxdepth 2 -type d");
     expect(markup).not.toContain(">Listed web<");
   });
@@ -1893,7 +1894,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Codex Apps: Github Fetch Pr");
-    expect(markup).toContain('data-inline-tool-icon="github"');
+    expect(markup).toContain('data-tool-icon="github"');
   });
 
   it("shows an MCP icon next to compact non-GitHub MCP rows", async () => {
@@ -1937,7 +1938,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Codex Apps: Slack Search");
-    expect(markup).toContain('data-inline-tool-icon="mcp"');
+    expect(markup).toContain('data-tool-icon="mcp"');
   });
 
   it("anchors the changed-files summary at the end of a collapsed file-change turn", async () => {

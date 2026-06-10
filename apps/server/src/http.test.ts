@@ -6,7 +6,9 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { DateTime, Effect, FileSystem, Path } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
+import { EDITOR_ICON_ROUTE_PATH } from "@t3tools/shared/editorIcons";
 
+import { clearEditorIconInFlightCache } from "./editorAppIcons";
 import { createHttpRequestHandler, isLegacyTokenAuthorized } from "./http";
 import type { ServerAuthShape } from "./auth/Services/ServerAuth";
 import { deriveServerPaths, type ServerConfigShape } from "./config";
@@ -16,6 +18,7 @@ import type { ServerReadiness } from "./server/readiness";
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  clearEditorIconInFlightCache();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -95,6 +98,83 @@ async function makeHandler(
         }
       : {}),
   });
+}
+
+function makeTempDir(prefix: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function writeFakeMacAppIcon(input: {
+  readonly homeDir: string;
+  readonly appName: string;
+  readonly iconName: string;
+  readonly bytes: Uint8Array;
+}): void {
+  const appContentsDir = path.join(
+    input.homeDir,
+    "Applications",
+    `${input.appName}.app`,
+    "Contents",
+  );
+  const resourcesDir = path.join(appContentsDir, "Resources");
+  fs.mkdirSync(resourcesDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(appContentsDir, "Info.plist"),
+    `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIconFile</key>
+  <string>${input.iconName}</string>
+</dict>
+</plist>`,
+  );
+  fs.writeFileSync(path.join(resourcesDir, `${input.iconName}.png`), input.bytes);
+}
+
+function writeFakeLinuxDesktopIcon(input: {
+  readonly homeDir: string;
+  readonly bytes: Uint8Array;
+}): void {
+  const applicationsDir = path.join(input.homeDir, ".local", "share", "applications");
+  const iconsDir = path.join(
+    input.homeDir,
+    ".local",
+    "share",
+    "icons",
+    "hicolor",
+    "256x256",
+    "apps",
+  );
+  fs.mkdirSync(applicationsDir, { recursive: true });
+  fs.mkdirSync(iconsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(applicationsDir, "com.cursor.Cursor.desktop"),
+    ["[Desktop Entry]", "Name=Cursor", "Exec=cursor %F", "Icon=cursor-http-test"].join("\n"),
+  );
+  fs.writeFileSync(path.join(iconsDir, "cursor-http-test.png"), input.bytes);
+}
+
+function writeNativeEditorIconFixture(homeDir: string): {
+  readonly editorId: string;
+  readonly bytes: Uint8Array;
+} | null {
+  const bytes = new Uint8Array([137, 80, 78, 71, 9, 8, 7]);
+  if (process.platform === "darwin") {
+    writeFakeMacAppIcon({
+      homeDir,
+      appName: "Ghostty",
+      iconName: "Ghostty",
+      bytes,
+    });
+    return { editorId: "ghostty", bytes };
+  }
+  if (process.platform === "linux") {
+    writeFakeLinuxDesktopIcon({ homeDir, bytes });
+    return { editorId: "cursor", bytes };
+  }
+  return null;
 }
 
 function makeAuthDescriptor() {
@@ -260,6 +340,26 @@ describe("createHttpRequestHandler", () => {
       expect(response.status).toBe(200);
       expect(response.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
       await expect(response.text()).resolves.toBe("payload");
+    });
+  });
+
+  it("serves cached native editor icons before dev/static fallback", async () => {
+    const homeDir = makeTempDir("synara-http-editor-icon-home-");
+    const fixture = writeNativeEditorIconFixture(homeDir);
+    if (!fixture) return;
+
+    const config = await makeConfig({ devUrl: new URL("http://localhost:5173/"), homeDir });
+    const handler = await makeHandler(config);
+
+    await withServer(handler, async (origin) => {
+      const response = await fetch(`${origin}${EDITOR_ICON_ROUTE_PATH}?id=${fixture.editorId}`, {
+        redirect: "manual",
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("public, max-age=86400");
+      expect(response.headers.get("content-type")).toContain("image/png");
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(fixture.bytes);
     });
   });
 
