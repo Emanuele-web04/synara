@@ -25,16 +25,11 @@ import {
 } from "electron";
 import type {
   BrowserWindowConstructorOptions,
-  FileFilter,
   IpcMainEvent,
   MenuItemConstructorOptions,
 } from "electron";
 import * as Effect from "effect/Effect";
-import type {
-  DesktopTheme,
-  DesktopUpdateActionResult,
-  DesktopUpdateState,
-} from "@t3tools/contracts";
+import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
 import { autoUpdater, CancellationToken } from "electron-updater";
 
 import type { ContextMenuItem } from "@t3tools/contracts";
@@ -58,11 +53,6 @@ import {
   shouldCheckForUpdatesOnForeground,
 } from "./updateState";
 import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
-import {
-  resolveDesktopMenuAccelerator,
-  resolveKeyboardShortcutsMenuAccelerator,
-  shouldUseNativeZoomMenuRoles,
-} from "./menuShortcuts";
 import {
   createInitialDesktopUpdateState,
   reduceDesktopUpdateStateOnCheckFailure,
@@ -108,63 +98,75 @@ import {
   resolveLegacyDesktopUserDataPaths,
   seedDesktopUserDataProfileFromLegacy,
 } from "./desktopUserDataProfile";
+import {
+  AUTO_UPDATE_CHECK_TIMEOUT_MS,
+  AUTO_UPDATE_DOWNLOAD_SETTLE_TIMEOUT_MS,
+  AUTO_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS,
+  AUTO_UPDATE_FEED_CACHE_TTL_MS,
+  AUTO_UPDATE_FEED_REFRESH_TIMEOUT_MS,
+  AUTO_UPDATE_FOREGROUND_RECHECK_MIN_BACKGROUND_MS,
+  AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS,
+  AUTO_UPDATE_POLL_INTERVAL_MS,
+  AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS,
+  AUTO_UPDATE_STARTUP_DELAY_MS,
+  BACKEND_FORCE_KILL_DELAY_MS,
+  BACKEND_SHUTDOWN_TIMEOUT_MS,
+  BROWSER_PERF_SAMPLE_INTERVAL_MS,
+  CONFIRM_CHANNEL,
+  CONTEXT_MENU_CHANNEL,
+  DESKTOP_MENU_MAX_ZOOM_FACTOR,
+  DESKTOP_MENU_MIN_ZOOM_FACTOR,
+  DESKTOP_SCHEME,
+  DESKTOP_UPDATE_ALLOW_PRERELEASE,
+  DESKTOP_UPDATE_CHANNEL,
+  LOG_FILE_MAX_BYTES,
+  LOG_FILE_MAX_FILES,
+  MENU_ACTION_CHANNEL,
+  NOTIFICATIONS_IS_SUPPORTED_CHANNEL,
+  NOTIFICATIONS_SHOW_CHANNEL,
+  OPEN_EXTERNAL_CHANNEL,
+  PICK_FOLDER_CHANNEL,
+  SAVE_FILE_CHANNEL,
+  SET_THEME_CHANNEL,
+  SHOW_IN_FOLDER_CHANNEL,
+  SYNARA_BROWSER_LABEL,
+  UPDATE_CHECK_CHANNEL,
+  UPDATE_DOWNLOAD_CHANNEL,
+  UPDATE_GET_STATE_CHANNEL,
+  UPDATE_INSTALL_CHANNEL,
+  UPDATE_STATE_CHANNEL,
+} from "./main.constants";
+import {
+  formatErrorMessage,
+  getSafeExternalUrl,
+  getSafeTheme,
+  isSaveFileInput,
+  normalizeCommitHash,
+} from "./main.inputGuards";
+import {
+  resolveIconPath as resolveIconPathFromDir,
+  resolveNotificationIconPath as resolveNotificationIconPathFromDir,
+  resolveResourcePath as resolveResourcePathFromDir,
+} from "./main.resources";
+import { isStaticAssetRequest, resolveDesktopStaticPath } from "./main.staticAssets";
+import { buildApplicationMenuTemplate } from "./main.menu";
+import { StalledDownloadCancellationSuppression } from "./updateStallSuppression";
 
 syncShellEnvironment();
 
-const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
-const SAVE_FILE_CHANNEL = "desktop:save-file";
-const CONFIRM_CHANNEL = "desktop:confirm";
-const SET_THEME_CHANNEL = "desktop:set-theme";
-const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
-const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
-const SHOW_IN_FOLDER_CHANNEL = "desktop:show-in-folder";
-const MENU_ACTION_CHANNEL = "desktop:menu-action";
-const UPDATE_STATE_CHANNEL = "desktop:update-state";
-const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
-const UPDATE_CHECK_CHANNEL = "desktop:update-check";
-const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
-const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
-const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
-const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
 const BASE_DIR =
   process.env.SYNARA_HOME?.trim() ||
   process.env.DPCODE_HOME?.trim() ||
   process.env.T3CODE_HOME?.trim() ||
   Path.join(OS.homedir(), ".synara");
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
-const DESKTOP_SCHEME = "t3";
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const APP_DISPLAY_NAME = isDevelopment ? "Synara (Dev)" : "Synara";
 const APP_USER_MODEL_ID = isDevelopment ? "com.t3tools.synara.dev" : "com.t3tools.synara";
-const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
-const COMMIT_HASH_DISPLAY_LENGTH = 12;
 const LOG_DIR = Path.join(STATE_DIR, "logs");
-const LOG_FILE_MAX_BYTES = 10 * 1024 * 1024;
-const LOG_FILE_MAX_FILES = 10;
 const APP_RUN_ID = Crypto.randomBytes(6).toString("hex");
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
-const AUTO_UPDATE_STARTUP_DELAY_MS = 15_000;
-const AUTO_UPDATE_POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
-const AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
-const AUTO_UPDATE_FOREGROUND_RECHECK_MIN_BACKGROUND_MS = 30 * 1000;
-const AUTO_UPDATE_CHECK_TIMEOUT_MS = 45 * 1000;
-const AUTO_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS = 90 * 1000;
-// Upper bound on how long we wait for electron-updater to release a cancelled
-// download before allowing a retry, so a wedged updater promise can't block updates.
-const AUTO_UPDATE_DOWNLOAD_SETTLE_TIMEOUT_MS = 30 * 1000;
-const AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS = 2 * 60 * 1000;
-const AUTO_UPDATE_FEED_CACHE_TTL_MS = 30 * 60 * 1000;
-const AUTO_UPDATE_FEED_REFRESH_TIMEOUT_MS = 10 * 1000;
-const BACKEND_FORCE_KILL_DELAY_MS = 8_000;
-const BACKEND_SHUTDOWN_TIMEOUT_MS = 10_000;
-const DESKTOP_UPDATE_CHANNEL = "latest";
-const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
-const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
-const DESKTOP_MENU_ZOOM_FACTOR_STEP = 1.1;
-const DESKTOP_MENU_MIN_ZOOM_FACTOR = 0.25;
-const DESKTOP_MENU_MAX_ZOOM_FACTOR = 5;
-const SYNARA_BROWSER_LABEL = "Synara browser";
 const browserPerfLoggingEnabled =
   process.env.SYNARA_BROWSER_PERF === "1" ||
   process.env.DPCODE_BROWSER_PERF === "1" ||
@@ -280,72 +282,6 @@ function writeBackendSessionBoundary(phase: "START" | "END", details: string): v
   backendLogSink.write(
     `[${logTimestamp()}] ---- APP SESSION ${phase} run=${APP_RUN_ID} ${normalizedDetails} ----\n`,
   );
-}
-
-function formatErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
-}
-
-function getSafeExternalUrl(rawUrl: unknown): string | null {
-  if (typeof rawUrl !== "string" || rawUrl.length === 0) {
-    return null;
-  }
-
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(rawUrl);
-  } catch {
-    return null;
-  }
-
-  if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
-    return null;
-  }
-
-  return parsedUrl.toString();
-}
-
-function getSafeTheme(rawTheme: unknown): DesktopTheme | null {
-  if (rawTheme === "light" || rawTheme === "dark" || rawTheme === "system") {
-    return rawTheme;
-  }
-
-  return null;
-}
-
-function isSaveFileInput(input: unknown): input is {
-  defaultFilename: string;
-  contents: string;
-  filters?: FileFilter[];
-} {
-  if (!input || typeof input !== "object") {
-    return false;
-  }
-  const record = input as Record<string, unknown>;
-  if (typeof record.defaultFilename !== "string" || record.defaultFilename.trim().length === 0) {
-    return false;
-  }
-  if (typeof record.contents !== "string") {
-    return false;
-  }
-  if (record.filters === undefined) {
-    return true;
-  }
-  if (!Array.isArray(record.filters)) {
-    return false;
-  }
-  return record.filters.every((filter) => {
-    if (!filter || typeof filter !== "object") return false;
-    const filterRecord = filter as Record<string, unknown>;
-    return (
-      typeof filterRecord.name === "string" &&
-      Array.isArray(filterRecord.extensions) &&
-      filterRecord.extensions.every((extension) => typeof extension === "string")
-    );
-  });
 }
 
 async function waitForBackendHttpReady(
@@ -560,8 +496,9 @@ let updateDownloadStallTimer: ReturnType<typeof setTimeout> | null = null;
 let updateDownloadCancellationToken: CancellationToken | null = null;
 let rejectUpdateDownloadStall: ((error: Error) => void) | null = null;
 let lastUpdateDownloadProgressSample: DownloadProgressSample | null = null;
-let stalledDownloadCancellationSuppressionsRemaining = 0;
-let stalledDownloadCancellationSuppressionExpiresAtMs = 0;
+const stalledDownloadCancellationSuppression = new StalledDownloadCancellationSuppression(
+  AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS,
+);
 const pendingUpdateCacheClearQueue = new PendingUpdateCacheClearQueue();
 
 function resolveUpdaterErrorContext(): DesktopUpdateErrorContext {
@@ -633,17 +570,6 @@ function parseAppUpdateYml(): Record<string, string> | null {
   }
 }
 
-function normalizeCommitHash(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!COMMIT_HASH_PATTERN.test(trimmed)) {
-    return null;
-  }
-  return trimmed.slice(0, COMMIT_HASH_DISPLAY_LENGTH).toLowerCase();
-}
-
 function resolveEmbeddedCommitHash(): string | null {
   const packageJsonPath = Path.join(resolveAppRoot(), "package.json");
   if (!FS.existsSync(packageJsonPath)) {
@@ -706,38 +632,6 @@ function resolveDesktopStaticDir(): string | null {
   }
 
   return null;
-}
-
-function resolveDesktopStaticPath(staticRoot: string, requestUrl: string): string {
-  const url = new URL(requestUrl);
-  const rawPath = decodeURIComponent(url.pathname);
-  const normalizedPath = Path.posix.normalize(rawPath).replace(/^\/+/, "");
-  if (normalizedPath.includes("..")) {
-    return Path.join(staticRoot, "index.html");
-  }
-
-  const requestedPath = normalizedPath.length > 0 ? normalizedPath : "index.html";
-  const resolvedPath = Path.join(staticRoot, requestedPath);
-
-  if (Path.extname(resolvedPath)) {
-    return resolvedPath;
-  }
-
-  const nestedIndex = Path.join(resolvedPath, "index.html");
-  if (FS.existsSync(nestedIndex)) {
-    return nestedIndex;
-  }
-
-  return Path.join(staticRoot, "index.html");
-}
-
-function isStaticAssetRequest(requestUrl: string): boolean {
-  try {
-    const url = new URL(requestUrl);
-    return Path.extname(url.pathname).length > 0;
-  } catch {
-    return false;
-  }
 }
 
 function handleFatalStartupError(stage: string, error: unknown): void {
@@ -897,157 +791,27 @@ async function checkForUpdatesFromMenu(): Promise<void> {
 }
 
 function configureApplicationMenu(): void {
-  const template: MenuItemConstructorOptions[] = [];
-  const keyboardShortcutsAccelerator = resolveKeyboardShortcutsMenuAccelerator(process.platform);
-  const acceleratorProps = (
-    accelerator: MenuItemConstructorOptions["accelerator"],
-  ): Pick<MenuItemConstructorOptions, "accelerator"> => {
-    const resolved = resolveDesktopMenuAccelerator(process.platform, accelerator);
-    return resolved ? { accelerator: resolved } : {};
-  };
-  const zoomMenuItems: MenuItemConstructorOptions[] = shouldUseNativeZoomMenuRoles(process.platform)
-    ? [
-        { role: "resetZoom" },
-        { role: "zoomIn", ...acceleratorProps("CmdOrCtrl+=") },
-        { role: "zoomIn", ...acceleratorProps("CmdOrCtrl+Plus"), visible: false },
-        { role: "zoomOut" },
-      ]
-    : [
-        { label: "Reset Zoom", click: () => resetWindowZoomFromMenu() },
-        {
-          label: "Zoom In",
-          click: () => adjustWindowZoomFromMenu(DESKTOP_MENU_ZOOM_FACTOR_STEP),
-        },
-        {
-          label: "Zoom Out",
-          click: () => adjustWindowZoomFromMenu(1 / DESKTOP_MENU_ZOOM_FACTOR_STEP),
-        },
-      ];
-
-  if (process.platform === "darwin") {
-    template.push({
-      label: app.name,
-      submenu: [
-        { role: "about" },
-        {
-          label: "Check for Updates...",
-          click: () => handleCheckForUpdatesMenuClick(),
-        },
-        { type: "separator" },
-        {
-          label: "Settings...",
-          accelerator: "CmdOrCtrl+,",
-          click: () => dispatchMenuAction("open-settings"),
-        },
-        { type: "separator" },
-        { role: "services" },
-        { type: "separator" },
-        { role: "hide" },
-        { role: "hideOthers" },
-        { role: "unhide" },
-        { type: "separator" },
-        { role: "quit" },
-      ],
-    });
-  }
-
-  template.push(
-    {
-      label: "File",
-      submenu: [
-        ...(process.platform === "darwin"
-          ? []
-          : [
-              {
-                label: "Settings...",
-                ...acceleratorProps("CmdOrCtrl+,"),
-                click: () => dispatchMenuAction("open-settings"),
-              },
-              { type: "separator" as const },
-            ]),
-        { role: process.platform === "darwin" ? "close" : "quit" },
-      ],
-    },
-    { role: "editMenu" },
-    {
-      label: "View",
-      submenu: [
-        {
-          label: "New Terminal Tab",
-          ...acceleratorProps("CmdOrCtrl+T"),
-          click: () => dispatchMenuAction("new-terminal-tab"),
-        },
-        { type: "separator" },
-        {
-          label: "Toggle Sidebar",
-          ...acceleratorProps("CmdOrCtrl+B"),
-          click: () => dispatchMenuAction("toggle-sidebar"),
-        },
-        {
-          label: "Toggle Browser",
-          ...acceleratorProps("CmdOrCtrl+Shift+B"),
-          click: () => dispatchMenuAction("toggle-browser"),
-        },
-        { type: "separator" },
-        { role: "reload" },
-        { role: "forceReload" },
-        { role: "toggleDevTools" },
-        { type: "separator" },
-        ...zoomMenuItems,
-        { type: "separator" },
-        { role: "togglefullscreen" },
-      ],
-    },
-    { role: "windowMenu" },
-    {
-      role: "help",
-      submenu: [
-        {
-          label: "Keyboard Shortcuts",
-          ...(keyboardShortcutsAccelerator ? { accelerator: keyboardShortcutsAccelerator } : {}),
-          click: () => dispatchMenuAction("show-shortcuts"),
-        },
-        { type: "separator" },
-        {
-          label: "Check for Updates...",
-          click: () => handleCheckForUpdatesMenuClick(),
-        },
-      ],
-    },
-  );
-
+  const template = buildApplicationMenuTemplate({
+    platform: process.platform,
+    appName: app.name,
+    dispatchMenuAction,
+    handleCheckForUpdatesMenuClick,
+    resetWindowZoomFromMenu,
+    adjustWindowZoomFromMenu,
+  });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 function resolveResourcePath(fileName: string): string | null {
-  const candidates = [
-    Path.join(__dirname, "../resources", fileName),
-    Path.join(__dirname, "../prod-resources", fileName),
-    Path.join(process.resourcesPath, "resources", fileName),
-    Path.join(process.resourcesPath, fileName),
-  ];
-
-  for (const candidate of candidates) {
-    if (FS.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return null;
+  return resolveResourcePathFromDir(__dirname, fileName);
 }
 
 function resolveIconPath(ext: "ico" | "icns" | "png"): string | null {
-  return resolveResourcePath(`icon.${ext}`);
+  return resolveIconPathFromDir(__dirname, ext);
 }
 
 function resolveNotificationIconPath(): string | null {
-  if (process.platform === "darwin") {
-    return null;
-  }
-  if (process.platform === "win32") {
-    return resolveResourcePath("synara.png") ?? resolveIconPath("ico");
-  }
-  return resolveResourcePath("synara.png") ?? resolveIconPath("png");
+  return resolveNotificationIconPathFromDir(__dirname);
 }
 
 // Keep the app badge aligned with desktop notifications that arrive off-focus.
@@ -1365,38 +1129,6 @@ function clearUpdateDownloadStallTimer(): void {
   }
 }
 
-function clearStalledDownloadCancellationSuppression(): void {
-  stalledDownloadCancellationSuppressionsRemaining = 0;
-  stalledDownloadCancellationSuppressionExpiresAtMs = 0;
-}
-
-function armStalledDownloadCancellationSuppression(): void {
-  stalledDownloadCancellationSuppressionsRemaining += 1;
-  stalledDownloadCancellationSuppressionExpiresAtMs =
-    Date.now() + AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS;
-}
-
-function isStalledDownloadCancellationSuppressionArmed(): boolean {
-  if (stalledDownloadCancellationSuppressionsRemaining <= 0) {
-    return false;
-  }
-  if (Date.now() <= stalledDownloadCancellationSuppressionExpiresAtMs) {
-    return true;
-  }
-  clearStalledDownloadCancellationSuppression();
-  return false;
-}
-
-function consumeStalledDownloadCancellationSuppression(): void {
-  stalledDownloadCancellationSuppressionsRemaining = Math.max(
-    0,
-    stalledDownloadCancellationSuppressionsRemaining - 1,
-  );
-  if (stalledDownloadCancellationSuppressionsRemaining === 0) {
-    stalledDownloadCancellationSuppressionExpiresAtMs = 0;
-  }
-}
-
 // Bounds a silent updater download while allowing slow downloads that keep making progress.
 function armUpdateDownloadStallTimer(reason: string): void {
   clearUpdateDownloadStallTimer();
@@ -1408,7 +1140,7 @@ function armUpdateDownloadStallTimer(reason: string): void {
 
     const error = new Error(getDownloadStallTimeoutMessage(AUTO_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS));
     console.error(`[desktop-updater] ${error.message} (${reason}).`);
-    armStalledDownloadCancellationSuppression();
+    stalledDownloadCancellationSuppression.arm();
     rejectUpdateDownloadStall?.(error);
     updateDownloadCancellationToken?.cancel();
   }, AUTO_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS);
@@ -1703,12 +1435,12 @@ function configureAutoUpdater(): void {
     const errorContext = resolveUpdaterErrorContext();
     if (
       isExpectedStalledDownloadCancellationError({
-        suppressionArmed: isStalledDownloadCancellationSuppressionArmed(),
+        suppressionArmed: stalledDownloadCancellationSuppression.isArmed(),
         errorContext,
         message,
       })
     ) {
-      consumeStalledDownloadCancellationSuppression();
+      stalledDownloadCancellationSuppression.consume();
       console.warn("[desktop-updater] Ignored expected cancellation after stalled download.");
       return;
     }
