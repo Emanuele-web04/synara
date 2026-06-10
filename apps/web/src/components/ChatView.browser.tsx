@@ -52,6 +52,7 @@ const NOW_ISO = "2026-03-04T12:00:00.000Z";
 const BASE_TIME_MS = Date.parse(NOW_ISO);
 const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='300'></svg>";
 let attachmentResponseDelayMs = 0;
+let nextDispatchSequence = 0;
 
 interface WsRequestEnvelope {
   id: string;
@@ -742,6 +743,10 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
   }
+  if (tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+    nextDispatchSequence += 1;
+    return { sequence: nextDispatchSequence };
+  }
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
   }
@@ -1091,7 +1096,9 @@ async function measureUserRow(options: {
 
   const timelineRoot =
     row!.closest<HTMLElement>('[data-timeline-root="true"]') ??
-    host.querySelector<HTMLElement>('[data-timeline-root="true"]');
+    host.querySelector<HTMLElement>('[data-timeline-root="true"]') ??
+    row!.closest<HTMLElement>("[data-chat-scroll-container='true']") ??
+    host.querySelector<HTMLElement>("[data-chat-scroll-container='true']");
   if (!(timelineRoot instanceof HTMLElement)) {
     throw new Error("Unable to locate timeline root container.");
   }
@@ -1234,6 +1241,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   beforeEach(async () => {
     await setViewport(DEFAULT_VIEWPORT);
     attachmentResponseDelayMs = 0;
+    nextDispatchSequence = 0;
     localStorage.clear();
     document.body.innerHTML = "";
     wsRequests.length = 0;

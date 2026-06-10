@@ -306,7 +306,8 @@ import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopT
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
-import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
+import { useExpandedImagePreview } from "./chat/useExpandedImagePreview";
+import { useDeferredSecondaryChrome } from "./chat/useDeferredSecondaryChrome";
 import { AVAILABLE_PROVIDER_OPTIONS } from "./chat/ProviderModelPicker";
 import { ComposerModelEffortPicker } from "./chat/ComposerModelEffortPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
@@ -581,7 +582,14 @@ export default function ChatView({
   );
   const promptRef = useRef(prompt);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
-  const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
+  const {
+    expandedImage,
+    expandedImageItem,
+    openExpandedImage: onExpandTimelineImage,
+    closeExpandedImage,
+    navigateExpandedImage,
+    resetExpandedImage,
+  } = useExpandedImagePreview();
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
@@ -2537,38 +2545,10 @@ export default function ChatView({
   const secondaryChromeThreadId = activeThread?.id ?? threadId;
   const shouldDeferSecondaryChrome =
     activeThread !== undefined && !isCenteredEmptyLanding && !terminalWorkspaceTerminalTabActive;
-  const [secondaryChromeState, setSecondaryChromeState] = useState(() => ({
-    threadId: secondaryChromeThreadId,
-    ready: true,
-  }));
-  const secondaryChromeReady =
-    !shouldDeferSecondaryChrome ||
-    (secondaryChromeState.threadId === secondaryChromeThreadId && secondaryChromeState.ready);
-
-  useEffect(() => {
-    if (!shouldDeferSecondaryChrome) {
-      setSecondaryChromeState((current) =>
-        current.threadId === secondaryChromeThreadId && current.ready
-          ? current
-          : { threadId: secondaryChromeThreadId, ready: true },
-      );
-      return;
-    }
-
-    setSecondaryChromeState({
-      threadId: secondaryChromeThreadId,
-      ready: false,
-    });
-    const frame = window.requestAnimationFrame(() => {
-      setSecondaryChromeState({
-        threadId: secondaryChromeThreadId,
-        ready: true,
-      });
-    });
-    return () => {
-      window.cancelAnimationFrame(frame);
-    };
-  }, [secondaryChromeThreadId, shouldDeferSecondaryChrome]);
+  const secondaryChromeReady = useDeferredSecondaryChrome({
+    secondaryChromeThreadId,
+    shouldDeferSecondaryChrome,
+  });
   const terminalWorkspaceChatTabActive =
     terminalWorkspaceOpen &&
     terminalState.workspaceLayout === "both" &&
@@ -3883,8 +3863,8 @@ export default function ChatView({
       }
       return [];
     });
-    setExpandedImage(null);
-  }, [threadId]);
+    resetExpandedImage();
+  }, [resetExpandedImage, threadId]);
 
   useEffect(() => {
     voiceTranscriptionRequestIdRef.current += 1;
@@ -3906,8 +3886,8 @@ export default function ChatView({
     setSelectedComposerMentions([]);
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
-    setExpandedImage(null);
-  }, [cancelVoiceRecording, threadId]);
+    resetExpandedImage();
+  }, [cancelVoiceRecording, resetExpandedImage, threadId]);
 
   useEffect(() => {
     if (canStartVoiceNotes || !isVoiceRecording) {
@@ -3995,54 +3975,6 @@ export default function ChatView({
     syncComposerDraftPersistedAttachments,
     threadId,
   ]);
-
-  const closeExpandedImage = useCallback(() => {
-    setExpandedImage(null);
-  }, []);
-  const navigateExpandedImage = useCallback((direction: -1 | 1) => {
-    setExpandedImage((existing) => {
-      if (!existing || existing.images.length <= 1) {
-        return existing;
-      }
-      const nextIndex =
-        (existing.index + direction + existing.images.length) % existing.images.length;
-      if (nextIndex === existing.index) {
-        return existing;
-      }
-      return { ...existing, index: nextIndex };
-    });
-  }, []);
-
-  useEffect(() => {
-    if (!expandedImage) {
-      return;
-    }
-
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        closeExpandedImage();
-        return;
-      }
-      if (expandedImage.images.length <= 1) {
-        return;
-      }
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        event.stopPropagation();
-        navigateExpandedImage(-1);
-        return;
-      }
-      if (event.key !== "ArrowRight") return;
-      event.preventDefault();
-      event.stopPropagation();
-      navigateExpandedImage(1);
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeExpandedImage, expandedImage, navigateExpandedImage]);
 
   useEffect(() => {
     if (!composerMenuOpen) {
@@ -6971,10 +6903,6 @@ export default function ChatView({
     }
     return false;
   };
-  const onExpandTimelineImage = useCallback((preview: ExpandedImagePreview) => {
-    setExpandedImage(preview);
-  }, []);
-  const expandedImageItem = expandedImage ? expandedImage.images[expandedImage.index] : null;
   const onScrollToBottom = useCallback(() => {
     isAtEndRef.current = true;
     showScrollDebouncer.current.cancel();
@@ -7341,7 +7269,7 @@ export default function ChatView({
                       assistantSelections={composerAssistantSelections}
                       images={composerImages}
                       nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
-                      onExpandImage={setExpandedImage}
+                      onExpandImage={onExpandTimelineImage}
                       onRemoveAssistantSelections={clearComposerAssistantSelectionsFromDraft}
                       onRemoveImage={removeComposerImage}
                     />
