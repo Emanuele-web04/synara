@@ -166,7 +166,7 @@ export function buildSettingsSkillGroups(
           .filter((provider, index, all) => all.indexOf(provider) === index),
       );
       const section =
-        sources.length > 1 ? SHARED_SKILLS_SECTION : sources[0]?.origin ?? PERSONAL_ORIGIN;
+        sources.length > 1 ? SHARED_SKILLS_SECTION : (sources[0]?.origin ?? PERSONAL_ORIGIN);
       const description =
         primarySkill.interface?.shortDescription ?? primarySkill.description ?? "No description.";
       return {

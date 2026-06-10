@@ -99,11 +99,7 @@ describe("discoverSkillsCatalog", () => {
       "opencode-only",
       "OpenCode",
     );
-    await writeSkill(
-      path.join(homeDir, ".pi", "agent", "skills", "pi-only"),
-      "pi-only",
-      "Pi",
-    );
+    await writeSkill(path.join(homeDir, ".pi", "agent", "skills", "pi-only"), "pi-only", "Pi");
 
     const skills = await discoverSkillsCatalog({ homeDir, synaraBaseDir });
     const byName = new Map(skills.map((skill) => [skill.name, skill]));
