@@ -145,18 +145,13 @@ import {
   derivePendingApprovals,
   derivePendingUserInputs,
   derivePhase,
-  deriveTimelineEntries,
   deriveActiveWorkStartedAt,
-  deriveActiveTaskListState,
-  deriveActiveBackgroundTasksState,
   findSidebarProposedPlan,
-  findLatestProposedPlan,
   deriveWorkLogEntries,
   hasActionableProposedPlan,
   hasLiveTurnTailWork,
   isLatestTurnSettled,
   WORK_LOG_PRESENTATION_VERSION,
-  type ActiveTaskListState,
 } from "../session-logic";
 import {
   buildPendingUserInputAnswers,
@@ -305,10 +300,15 @@ import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationContro
 import { SidebarHeaderTrigger } from "./ui/sidebar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
-import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
+import { useChatTurnDiffAnchoring } from "./chat/useChatTurnDiffAnchoring";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { useExpandedImagePreview } from "./chat/useExpandedImagePreview";
 import { useDeferredSecondaryChrome } from "./chat/useDeferredSecondaryChrome";
+import { useChatTerminalDrawerProps } from "./chat/useChatTerminalDrawerProps";
+import { useComposerModelHintByProvider } from "./chat/useComposerModelHintByProvider";
+import { useChatActiveProposedPlan } from "./chat/useChatActiveProposedPlan";
+import { useChatTimeline } from "./chat/useChatTimeline";
+import { useChatActiveTaskList } from "./chat/useChatActiveTaskList";
 import { AVAILABLE_PROVIDER_OPTIONS } from "./chat/ProviderModelPicker";
 import { ComposerModelEffortPicker } from "./chat/ComposerModelEffortPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
@@ -382,7 +382,6 @@ import {
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
-  filterSidechatTranscriptMessages,
   hasServerAcknowledgedLocalDispatch,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
@@ -1064,31 +1063,11 @@ export default function ChatView({
   const featureFlags = useFeatureFlags();
   const showExpandedCursorModelVariants = featureFlags["show-expanded-cursor-model-variants"];
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
-  const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
-    const threadModelSelection = activeThread?.modelSelection ?? null;
-    const projectModelSelection = activeProject?.defaultModelSelection ?? null;
-    const draftSelections = composerDraft.modelSelectionByProvider;
-
-    const resolveHint = (provider: ProviderKind): string | null =>
-      draftSelections[provider]?.model ??
-      (threadModelSelection?.provider === provider ? threadModelSelection.model : null) ??
-      (projectModelSelection?.provider === provider ? projectModelSelection.model : null);
-
-    return {
-      codex: resolveHint("codex"),
-      claudeAgent: resolveHint("claudeAgent"),
-      cursor: resolveHint("cursor"),
-      gemini: resolveHint("gemini"),
-      grok: resolveHint("grok"),
-      kilo: resolveHint("kilo"),
-      opencode: resolveHint("opencode"),
-      pi: resolveHint("pi"),
-    };
-  }, [
-    activeProject?.defaultModelSelection,
-    activeThread?.modelSelection,
-    composerDraft.modelSelectionByProvider,
-  ]);
+  const composerModelHintByProvider = useComposerModelHintByProvider({
+    threadModelSelection: activeThread?.modelSelection ?? null,
+    projectModelSelection: activeProject?.defaultModelSelection ?? null,
+    draftSelections: composerDraft.modelSelectionByProvider,
+  });
   const claudeDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({ provider: "claudeAgent" }),
   );
@@ -1547,15 +1526,11 @@ export default function ChatView({
   const activePendingIsResponding = activePendingUserInput
     ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
-  const activeProposedPlan = useMemo(() => {
-    if (!latestTurnSettled) {
-      return null;
-    }
-    return findLatestProposedPlan(
-      activeThread?.proposedPlans ?? [],
-      activeLatestTurn?.turnId ?? null,
-    );
-  }, [activeLatestTurn?.turnId, activeThread?.proposedPlans, latestTurnSettled]);
+  const activeProposedPlan = useChatActiveProposedPlan({
+    latestTurnSettled,
+    proposedPlans: activeThread?.proposedPlans,
+    latestTurnId: activeLatestTurn?.turnId,
+  });
   const sidebarPlanSourceThreadId = !latestTurnSettled
     ? (activeLatestTurn?.sourceProposedPlan?.threadId ?? null)
     : null;
@@ -1605,39 +1580,12 @@ export default function ChatView({
   const [activeTaskListCardHeight, setActiveTaskListCardHeight] = useState(0);
   const activeTaskListCardRef = useRef<HTMLDivElement | null>(null);
   const previousActiveTaskListCardHeightRef = useRef(0);
-  const activeTaskList = useMemo((): ActiveTaskListState | null => {
-    if (showDebugTaskBanner) {
-      return {
-        createdAt: new Date().toISOString(),
-        turnId: activeLatestTurn?.turnId ?? null,
-        tasks: [
-          {
-            task: "Inspect banner layout without overlapping transcript text",
-            status: "inProgress",
-          },
-          {
-            task: "Confirm compact task banner width",
-            status: "pending",
-          },
-          {
-            task: "Verify sidebar task controls",
-            status: "completed",
-          },
-        ],
-      };
-    }
-
-    return latestTurnSettled
-      ? null
-      : deriveActiveTaskListState(threadActivities, activeLatestTurn?.turnId ?? undefined);
-  }, [activeLatestTurn?.turnId, latestTurnSettled, showDebugTaskBanner, threadActivities]);
-  const activeBackgroundTasks = useMemo(
-    () =>
-      latestTurnSettled
-        ? null
-        : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
-  );
+  const { activeTaskList, activeBackgroundTasks } = useChatActiveTaskList({
+    showDebugTaskBanner,
+    latestTurnSettled,
+    latestTurnId: activeLatestTurn?.turnId,
+    threadActivities,
+  });
   useLayoutEffect(() => {
     if (!activeTaskList || planSidebarOpen) {
       setActiveTaskListCardHeight(0);
@@ -1861,72 +1809,14 @@ export default function ChatView({
     }, ATTACHMENT_PREVIEW_HANDOFF_TTL_MS);
   }, []);
   const serverMessages = activeThread?.messages;
-  const timelineMessages = useMemo(() => {
-    const messages = filterSidechatTranscriptMessages(
-      serverMessages ?? [],
-      Boolean(activeThread?.sidechatSourceThreadId),
-    );
-    const serverMessagesWithPreviewHandoff =
-      Object.keys(attachmentPreviewHandoffByMessageId).length === 0
-        ? messages
-        : // Spread only fires for the few messages that actually changed;
-          // unchanged ones early-return their original reference.
-          // In-place mutation would break React's immutable state contract.
-          // oxlint-disable-next-line no-map-spread
-          messages.map((message) => {
-            if (
-              message.role !== "user" ||
-              !message.attachments ||
-              message.attachments.length === 0
-            ) {
-              return message;
-            }
-            const handoffPreviewUrls = attachmentPreviewHandoffByMessageId[message.id];
-            if (!handoffPreviewUrls || handoffPreviewUrls.length === 0) {
-              return message;
-            }
-
-            let changed = false;
-            let imageIndex = 0;
-            const attachments = message.attachments.map((attachment) => {
-              if (attachment.type !== "image") {
-                return attachment;
-              }
-              const handoffPreviewUrl = handoffPreviewUrls[imageIndex];
-              imageIndex += 1;
-              if (!handoffPreviewUrl || attachment.previewUrl === handoffPreviewUrl) {
-                return attachment;
-              }
-              changed = true;
-              return {
-                ...attachment,
-                previewUrl: handoffPreviewUrl,
-              };
-            });
-
-            return changed ? { ...message, attachments } : message;
-          });
-
-    if (optimisticUserMessages.length === 0) {
-      return serverMessagesWithPreviewHandoff;
-    }
-    const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
-    const pendingMessages = optimisticUserMessages.filter((message) => !serverIds.has(message.id));
-    if (pendingMessages.length === 0) {
-      return serverMessagesWithPreviewHandoff;
-    }
-    return [...serverMessagesWithPreviewHandoff, ...pendingMessages];
-  }, [
-    activeThread?.sidechatSourceThreadId,
+  const { timelineMessages, timelineEntries } = useChatTimeline({
     serverMessages,
+    isSidechat: Boolean(activeThread?.sidechatSourceThreadId),
     attachmentPreviewHandoffByMessageId,
     optimisticUserMessages,
-  ]);
-  const timelineEntries = useMemo(
-    () =>
-      deriveTimelineEntries(timelineMessages, activeThread?.proposedPlans ?? [], workLogEntries),
-    [activeThread?.proposedPlans, timelineMessages, workLogEntries],
-  );
+    proposedPlans: activeThread?.proposedPlans,
+    workLogEntries,
+  });
   // Empty top-level threads render the centered landing composer instead of the transcript pane.
   // Home-scoped chats get the global "What should we work on?" copy plus the project picker,
   // while project-scoped drafts reuse the same centered layout with folder-specific copy.
@@ -1935,56 +1825,13 @@ export default function ChatView({
     isCenteredEmptyLanding && Boolean(homeDir) && activeProject?.cwd === homeDir;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
-  const turnDiffSummaryByAssistantMessageId = useMemo(() => {
-    const messagesForDiffAnchoring: {
-      id: MessageId;
-      role: "user" | "assistant" | "system";
-      turnId: TurnId | null;
-    }[] = [];
-    for (const message of timelineMessages) {
-      messagesForDiffAnchoring.push({
-        id: message.id,
-        role: message.role,
-        turnId: message.turnId ?? null,
-      });
-    }
-    return buildTurnDiffSummaryByAssistantMessageId({
+  const { turnDiffSummaryByAssistantMessageId, revertTurnCountByUserMessageId } =
+    useChatTurnDiffAnchoring({
+      timelineMessages,
+      timelineEntries,
       turnDiffSummaries,
-      messages: messagesForDiffAnchoring,
+      inferredCheckpointTurnCountByTurnId,
     });
-  }, [turnDiffSummaries, timelineMessages]);
-  const revertTurnCountByUserMessageId = useMemo(() => {
-    const byUserMessageId = new Map<MessageId, number>();
-    for (let index = 0; index < timelineEntries.length; index += 1) {
-      const entry = timelineEntries[index];
-      if (!entry || entry.kind !== "message" || entry.message.role !== "user") {
-        continue;
-      }
-
-      for (let nextIndex = index + 1; nextIndex < timelineEntries.length; nextIndex += 1) {
-        const nextEntry = timelineEntries[nextIndex];
-        if (!nextEntry || nextEntry.kind !== "message") {
-          continue;
-        }
-        if (nextEntry.message.role === "user") {
-          break;
-        }
-        const summary = turnDiffSummaryByAssistantMessageId.get(nextEntry.message.id);
-        if (!summary) {
-          continue;
-        }
-        const turnCount =
-          summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId];
-        if (typeof turnCount !== "number") {
-          break;
-        }
-        byUserMessageId.set(entry.message.id, Math.max(0, turnCount - 1));
-        break;
-      }
-    }
-
-    return byUserMessageId;
-  }, [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId]);
 
   const threadWorkspaceCwd = activeProject
     ? resolveSharedThreadWorkspaceCwd({
@@ -3007,99 +2854,33 @@ export default function ChatView({
     terminalState.workspaceLayout,
     terminalWorkspaceOpen,
   ]);
-  const terminalDrawerProps = useMemo(
-    () => ({
-      threadId,
-      cwd: gitCwd ?? activeProject?.cwd ?? "",
-      runtimeEnv: threadTerminalRuntimeEnv,
-      height: terminalState.terminalHeight,
-      terminalIds: terminalState.terminalIds,
-      terminalLabelsById: terminalState.terminalLabelsById,
-      terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
-      terminalCliKindsById: terminalState.terminalCliKindsById,
-      terminalAttentionStatesById: terminalState.terminalAttentionStatesById ?? {},
-      runningTerminalIds: terminalState.runningTerminalIds,
-      activeTerminalId: terminalState.activeTerminalId,
-      terminalGroups: terminalState.terminalGroups,
-      activeTerminalGroupId: terminalState.activeTerminalGroupId,
-      focusRequestId: terminalFocusRequestId,
-      onSplitTerminal: splitTerminalRight,
-      onSplitTerminalDown: splitTerminalDown,
-      onNewTerminal: createNewTerminal,
-      onNewTerminalTab: createNewTerminalTab,
-      onMoveTerminalToGroup: moveTerminalToNewGroup,
-      splitShortcutLabel: splitTerminalShortcutLabel ?? undefined,
-      splitDownShortcutLabel: splitTerminalDownShortcutLabel ?? undefined,
-      newShortcutLabel: newTerminalShortcutLabel ?? undefined,
-      closeShortcutLabel: closeTerminalShortcutLabel ?? undefined,
-      workspaceCloseShortcutLabel: closeWorkspaceShortcutLabel ?? undefined,
-      onActiveTerminalChange: activateTerminal,
-      onCloseTerminal: closeTerminal,
-      onCloseTerminalGroup: (groupId: string) => {
-        if (!activeThreadId) return;
-        storeCloseTerminalGroup(activeThreadId, groupId);
-      },
-      onHeightChange: setTerminalHeight,
-      onResizeTerminalSplit: (groupId: string, splitId: string, weights: number[]) => {
-        if (!activeThreadId) return;
-        storeResizeTerminalSplit(activeThreadId, groupId, splitId, weights);
-      },
-      onTerminalMetadataChange: (
-        terminalId: string,
-        metadata: { cliKind: "codex" | "claude" | null; label: string },
-      ) => {
-        if (!activeThreadId) return;
-        storeSetTerminalMetadata(activeThreadId, terminalId, metadata);
-      },
-      onTerminalActivityChange: (
-        terminalId: string,
-        activity: {
-          hasRunningSubprocess: boolean;
-          agentState: "running" | "attention" | "review" | null;
-        },
-      ) => {
-        if (!activeThreadId) return;
-        storeSetTerminalActivity(activeThreadId, terminalId, activity);
-      },
-      onAddTerminalContext: addTerminalContextToDraft,
-    }),
-    [
-      activeProject?.cwd,
-      activateTerminal,
-      addTerminalContextToDraft,
-      closeTerminal,
-      closeTerminalShortcutLabel,
-      closeWorkspaceShortcutLabel,
-      createNewTerminal,
-      createNewTerminalTab,
-      moveTerminalToNewGroup,
-      gitCwd,
-      activeThreadId,
-      newTerminalShortcutLabel,
-      setTerminalHeight,
-      splitTerminalRight,
-      splitTerminalDown,
-      splitTerminalShortcutLabel,
-      splitTerminalDownShortcutLabel,
-      storeCloseTerminalGroup,
-      storeResizeTerminalSplit,
-      storeSetTerminalActivity,
-      storeSetTerminalMetadata,
-      terminalFocusRequestId,
-      terminalState.activeTerminalGroupId,
-      terminalState.activeTerminalId,
-      terminalState.terminalAttentionStatesById,
-      terminalState.terminalCliKindsById,
-      terminalState.terminalGroups,
-      terminalState.terminalHeight,
-      terminalState.terminalIds,
-      terminalState.terminalLabelsById,
-      terminalState.terminalTitleOverridesById,
-      terminalState.runningTerminalIds,
-      threadId,
-      threadTerminalRuntimeEnv,
-    ],
-  );
+  const terminalDrawerProps = useChatTerminalDrawerProps({
+    threadId,
+    gitCwd,
+    activeProject,
+    threadTerminalRuntimeEnv,
+    terminalState,
+    terminalFocusRequestId,
+    splitTerminalRight,
+    splitTerminalDown,
+    createNewTerminal,
+    createNewTerminalTab,
+    moveTerminalToNewGroup,
+    splitTerminalShortcutLabel,
+    splitTerminalDownShortcutLabel,
+    newTerminalShortcutLabel,
+    closeTerminalShortcutLabel,
+    closeWorkspaceShortcutLabel,
+    activateTerminal,
+    closeTerminal,
+    activeThreadId,
+    storeCloseTerminalGroup,
+    setTerminalHeight,
+    storeResizeTerminalSplit,
+    storeSetTerminalMetadata,
+    storeSetTerminalActivity,
+    addTerminalContextToDraft,
+  });
   const runProjectScript = useCallback(
     async (
       script: ProjectScript,
