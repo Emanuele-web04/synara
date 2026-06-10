@@ -152,7 +152,7 @@ export function buildSettingsSkillGroups(
   }
 
   return [...groups.entries()]
-    .map(([key, unsortedSources]) => {
+    .map(([key, unsortedSources]): SettingsSkillGroup | null => {
       const sources = [...unsortedSources].sort((left, right) =>
         sourceSortKey(left).localeCompare(sourceSortKey(right)),
       );

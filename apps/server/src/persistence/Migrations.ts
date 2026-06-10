@@ -11,6 +11,9 @@
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+
+import { MigrationLineageError } from "./Errors.ts";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -121,6 +124,79 @@ export const makeMigrationLoader = (throughId?: number) =>
   );
 
 /**
+ * Highest migration ID whose content is identical across every lineage Synara
+ * can import (T3 Code, DP Code, Synara). A name mismatch at or below this ID
+ * means the database does not come from any known lineage, so re-running
+ * migrations could destroy data — refuse to start instead.
+ */
+const LAST_SHARED_LINEAGE_MIGRATION_ID = 16;
+
+/**
+ * Repairs the migration tracker of an imported legacy database before the
+ * migrator runs.
+ *
+ * Legacy ~/.t3 / ~/.dpcode imports (homeMigration.ts) carry their own
+ * `effect_sql_migrations` rows, recorded under that lineage's migration names
+ * at the same numeric IDs. The migrator gates purely on max(migration_id), so
+ * once the imported tracker's high-water mark reaches Synara's latest ID,
+ * every Synara migration is skipped silently and startup crashes on missing
+ * columns such as `projection_threads.env_mode`. Renumbering self-heal
+ * migrations past the legacy IDs (#023, then #032) loses that race whenever
+ * the legacy lineage ships more migrations.
+ *
+ * Instead, compare the recorded (id, name) pairs against Synara's lineage and
+ * delete every tracker row from the first divergence onward. The migrator
+ * then re-runs those migrations in order; every migration past
+ * {@link LAST_SHARED_LINEAGE_MIGRATION_ID} is idempotent, so re-running them
+ * over a legacy-evolved schema is safe and loses no data.
+ */
+export const reconcileMigrationLineage = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+
+  // The tracker table (Migrator's default name) does not exist before the
+  // first migration run on a fresh database.
+  const trackerTables = yield* sql<{ readonly name: string }>`
+    SELECT name FROM sqlite_master
+    WHERE type = 'table' AND name = 'effect_sql_migrations'
+  `;
+  if (trackerTables.length === 0) {
+    return;
+  }
+
+  const recorded = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+    SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC
+  `;
+  const highWaterMark = recorded[recorded.length - 1]?.migration_id;
+  if (highWaterMark === undefined) {
+    return;
+  }
+
+  const recordedNamesById = new Map(recorded.map((row) => [row.migration_id, row.name]));
+  const diverged = migrationEntries.find(
+    ([id, name]) => id <= highWaterMark && recordedNamesById.get(id) !== name,
+  );
+  if (diverged === undefined) {
+    // Healthy tracker. Recorded IDs beyond our latest migration mean the
+    // database was written by a newer build; leave those rows for it.
+    return;
+  }
+
+  const [firstDivergedId, expectedName] = diverged;
+  const recordedName = recordedNamesById.get(firstDivergedId) ?? "<missing>";
+  if (firstDivergedId <= LAST_SHARED_LINEAGE_MIGRATION_ID) {
+    return yield* Effect.fail(
+      new MigrationLineageError({ firstDivergedId, expectedName, recordedName }),
+    );
+  }
+
+  yield* Effect.logWarning(
+    "Migration tracker diverges from the Synara lineage (legacy import); re-running migrations from the divergence point",
+  ).pipe(Effect.annotateLogs({ firstDivergedId, expectedName, recordedName, highWaterMark }));
+
+  yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= ${firstDivergedId}`;
+});
+
+/**
  * Migrator run function - no schema dumping needed
  * Uses the base Migrator.make without platform dependencies
  */
@@ -142,6 +218,7 @@ export interface RunMigrationsOptions {
  */
 export const runMigrations = ({ toMigrationInclusive }: RunMigrationsOptions = {}) =>
   Effect.gen(function* () {
+    yield* reconcileMigrationLineage;
     yield* Effect.log(
       toMigrationInclusive === undefined
         ? "Running all migrations..."

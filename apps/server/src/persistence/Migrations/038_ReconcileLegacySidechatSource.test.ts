@@ -13,7 +13,7 @@ const projectionThreadsColumnNames = (sql: SqlClient.SqlClient) =>
   `.pipe(Effect.map((rows) => rows.map((row) => row.name)));
 
 layer("038_ReconcileLegacySidechatSource", (it) => {
-  it.effect("heals legacy DBs whose tracker skipped Synara migration 33", () =>
+  it.effect("heals legacy DBs whose tracker recorded a foreign migration 33", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
@@ -22,15 +22,24 @@ layer("038_ReconcileLegacySidechatSource", (it) => {
         INSERT INTO effect_sql_migrations (migration_id, name)
         VALUES (33, 'BackfillMissingLiveThreadProjects')
       `;
+
+      // The lineage reconciler spots the foreign row at ID 33 before the
+      // migrator runs, so Synara's 33 is replayed in the same pass instead of
+      // being skipped by the max-ID gate.
       yield* runMigrations({ toMigrationInclusive: 37 });
-
-      const beforeColumns = yield* projectionThreadsColumnNames(sql);
-      assert.notInclude(beforeColumns, "sidechat_source_thread_id");
-
-      yield* runMigrations();
 
       const afterColumns = yield* projectionThreadsColumnNames(sql);
       assert.include(afterColumns, "sidechat_source_thread_id");
+
+      const [row33] = yield* sql<{ readonly name: string }>`
+        SELECT name FROM effect_sql_migrations WHERE migration_id = 33
+      `;
+      assert.strictEqual(row33?.name, "ProjectionThreadsSidechatSource");
+
+      yield* runMigrations();
+
+      const finalColumns = yield* projectionThreadsColumnNames(sql);
+      assert.include(finalColumns, "sidechat_source_thread_id");
     }),
   );
 
