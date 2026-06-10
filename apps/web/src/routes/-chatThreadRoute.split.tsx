@@ -5,14 +5,7 @@
 
 import { type ThreadId as ThreadIdType, type TurnId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import {
-  startTransition,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { startTransition, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
 import { ProviderIcon } from "../components/ProviderIcon";
 import { stripDiffSearchParams, type ChatRightPanel } from "../diffRouteSearch";

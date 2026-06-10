@@ -615,7 +615,6 @@ export const makeGitManager = Effect.gen(function* () {
     },
   );
 
-
   const runFeatureBranchStep = (
     cwd: string,
     branch: string | null,

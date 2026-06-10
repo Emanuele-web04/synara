@@ -9,11 +9,7 @@ import { type OrchestrationEvent, type OrchestrationReadModel } from "@t3tools/c
 import { type ChatMessage, type Thread } from "../types";
 import { arraysShallowEqual } from "./equality";
 import { normalizeTurnDiffFiles } from "./threadNormalization";
-import {
-  MAX_THREAD_MESSAGES,
-  mergeStreamingMessage,
-  normalizeChatMessage,
-} from "./threadMessages";
+import { MAX_THREAD_MESSAGES, mergeStreamingMessage, normalizeChatMessage } from "./threadMessages";
 
 type ReadModelThread = OrchestrationReadModel["threads"][number];
 type ThreadMessageSentEvent = Extract<OrchestrationEvent, { type: "thread.message-sent" }>;

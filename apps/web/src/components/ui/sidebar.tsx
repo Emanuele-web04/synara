@@ -2,7 +2,11 @@
 //   split across the cohesive ui/sidebar.* sibling modules so import paths stay stable.
 // Layer: ui primitive (shadcn sidebar) barrel.
 // Exports: the complete sidebar component + hook + type surface (see below).
-export { SidebarInstanceProvider, SidebarProvider, useSidebar } from "~/components/ui/sidebar.context";
+export {
+  SidebarInstanceProvider,
+  SidebarProvider,
+  useSidebar,
+} from "~/components/ui/sidebar.context";
 export type { SidebarResizableOptions } from "~/components/ui/sidebar.context";
 export {
   Sidebar,

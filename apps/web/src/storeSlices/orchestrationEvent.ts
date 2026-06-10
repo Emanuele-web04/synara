@@ -10,10 +10,7 @@ import type { AppState } from "../store";
 import { type Thread } from "../types";
 import { arraysShallowEqual, deepEqualJson, normalizeModelSelection } from "./equality";
 import { resolveCreateBranchFlowCompletedMerge } from "./threadMerge";
-import {
-  normalizeThreadErrorMessage,
-  normalizeThreadSession,
-} from "./threadNormalization";
+import { normalizeThreadErrorMessage, normalizeThreadSession } from "./threadNormalization";
 import {
   applyThreadMessageSentEvent,
   applyTurnDiffSummaryToThread,

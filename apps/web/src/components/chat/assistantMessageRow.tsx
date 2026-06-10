@@ -164,8 +164,7 @@ export function AssistantMessageRow({
         ? inlineToolEntries.slice(-MAX_VISIBLE_INLINE_TOOL_ENTRIES)
         : inlineToolEntries.slice(0, MAX_VISIBLE_INLINE_TOOL_ENTRIES);
   const hiddenInlineToolCount = inlineToolEntries.length - visibleInlineToolEntries.length;
-  const inlineWorkSummary =
-    inlineToolEntries.length > 0 ? null : formatInlineWorkSummary();
+  const inlineWorkSummary = inlineToolEntries.length > 0 ? null : formatInlineWorkSummary();
   const assistantCopyState = resolveAssistantMessageCopyState({
     text: row.message.text ?? null,
     showCopyButton: row.showAssistantCopyButton,
@@ -182,8 +181,7 @@ export function AssistantMessageRow({
     ]),
   );
   const hasGenericInlineFileChangeEntry = inlineToolEntries.some(
-    (workEntry) =>
-      isFileChangeWorkEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) === 0,
+    (workEntry) => isFileChangeWorkEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) === 0,
   );
   const visibleRenderableInlineToolEntries = visibleInlineToolEntries.filter(
     (workEntry) =>
@@ -200,8 +198,7 @@ export function AssistantMessageRow({
   const inlineFileChangeDetailsAlreadyVisible =
     inlineEditedFilesFromTurnSummary.length > 0 ||
     visibleRenderableInlineToolEntries.some(
-      (workEntry) =>
-        isFileChangeWorkEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) > 0,
+      (workEntry) => isFileChangeWorkEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) > 0,
     );
   const assistantMeta = row.message.streaming ? (
     nowIso ? (
@@ -266,9 +263,7 @@ export function AssistantMessageRow({
               style={{ fontSize: chatTypographyStyle.fontSize }}
             >
               <span>
-                {row.collapsedWorkElapsed
-                  ? `Worked for ${row.collapsedWorkElapsed}`
-                  : "Details"}
+                {row.collapsedWorkElapsed ? `Worked for ${row.collapsedWorkElapsed}` : "Details"}
               </span>
               <DisclosureChevron
                 open={isCollapsedWorkExpanded}
@@ -340,21 +335,18 @@ export function AssistantMessageRow({
                 />
               ))}
             </div>
-            {inlineToolGroupId &&
-              inlineToolEntries.length > MAX_VISIBLE_INLINE_TOOL_ENTRIES && (
-                <div className="py-0.5">
-                  <button
-                    type="button"
-                    className="text-muted-foreground/70 transition-colors duration-150 hover:text-foreground/72"
-                    style={{ fontSize: `${normalizedChatFontSizePx}px` }}
-                    onClick={() => handleToggleWorkGroup(inlineToolGroupId)}
-                  >
-                    {inlineToolExpanded
-                      ? "Show less"
-                      : `+${hiddenInlineToolCount} more tool calls`}
-                  </button>
-                </div>
-              )}
+            {inlineToolGroupId && inlineToolEntries.length > MAX_VISIBLE_INLINE_TOOL_ENTRIES && (
+              <div className="py-0.5">
+                <button
+                  type="button"
+                  className="text-muted-foreground/70 transition-colors duration-150 hover:text-foreground/72"
+                  style={{ fontSize: `${normalizedChatFontSizePx}px` }}
+                  onClick={() => handleToggleWorkGroup(inlineToolGroupId)}
+                >
+                  {inlineToolExpanded ? "Show less" : `+${hiddenInlineToolCount} more tool calls`}
+                </button>
+              </div>
+            )}
           </div>
         )}
         {!hasCollapsedWork && inlineStatusEntries.length > 0 && (

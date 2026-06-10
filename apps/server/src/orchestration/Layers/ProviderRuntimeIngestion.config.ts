@@ -1,4 +1,10 @@
-import { type AssistantDeliveryMode, CommandId, type ProviderRuntimeEvent, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  type AssistantDeliveryMode,
+  CommandId,
+  type ProviderRuntimeEvent,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import { Duration } from "effect";
 
 // FILE: ProviderRuntimeIngestion.config.ts

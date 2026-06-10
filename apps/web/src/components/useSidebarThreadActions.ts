@@ -14,10 +14,7 @@ import { newCommandId } from "../lib/utils";
 import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
 import { toastManager } from "./ui/toast";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import {
-  formatWorktreePathForDisplay,
-  getOrphanedWorktreePathForThread,
-} from "../worktreeCleanup";
+import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { getFallbackThreadIdAfterDelete } from "./Sidebar.logic";
 import {
   resolveSplitViewFocusedThreadId,
@@ -46,7 +43,9 @@ export interface SidebarThreadActionsDeps {
   activeSplitView: SplitView | null;
   navigate: ReturnType<typeof useNavigate>;
   removeWorktreeMutation: RemoveWorktreeMutation;
-  handleNewChat: (options?: { fresh?: boolean }) => Promise<{ ok: true } | { ok: false; error: string }>;
+  handleNewChat: (options?: {
+    fresh?: boolean;
+  }) => Promise<{ ok: true } | { ok: false; error: string }>;
   createThreadHandoff: (thread: Thread, targetProvider: ProviderKind) => Promise<Thread["id"]>;
   clearComposerDraftForThread: (threadId: ThreadId) => void;
   clearProjectDraftThreadById: (projectId: ProjectId, threadId: ThreadId) => void;

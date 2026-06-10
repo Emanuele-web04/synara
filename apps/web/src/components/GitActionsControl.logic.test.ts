@@ -1,8 +1,11 @@
 import type { GitStatusResult } from "@t3tools/contracts";
 import { assert, describe, it } from "vitest";
 import {
+  type ActiveGitActionProgress,
   buildGitActionProgressStages,
   buildMenuItems,
+  formatElapsedDescription,
+  getMenuActionDisabledReason,
   requiresFeatureBranchForDefaultBranchAction,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
@@ -10,10 +13,25 @@ import {
   resolveDefaultCreateBranchName,
   resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
+  resolveProgressDescription,
   resolveQuickAction,
   shouldOfferCreateBranchPrompt,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
+
+function progress(overrides: Partial<ActiveGitActionProgress> = {}): ActiveGitActionProgress {
+  return {
+    toastId: "toast",
+    actionId: "action",
+    title: "Pushing...",
+    phaseStartedAtMs: null,
+    hookStartedAtMs: null,
+    hookName: null,
+    lastOutputLine: null,
+    currentPhaseLabel: null,
+    ...overrides,
+  };
+}
 
 function status(overrides: Partial<GitStatusResult> = {}): GitStatusResult {
   return {
@@ -1471,6 +1489,121 @@ describe("shouldOfferCreateBranchPrompt", () => {
         },
         createBranchFlowCompleted: false,
       }),
+    );
+  });
+});
+
+describe("when: describing in-flight git action progress", () => {
+  it("formatElapsedDescription returns undefined when not started", () => {
+    assert.strictEqual(formatElapsedDescription(null), undefined);
+  });
+
+  it("formatElapsedDescription reports seconds under a minute", () => {
+    assert.strictEqual(formatElapsedDescription(0, 45_000), "Running for 45s");
+  });
+
+  it("formatElapsedDescription reports minutes and seconds past a minute", () => {
+    assert.strictEqual(formatElapsedDescription(0, 90_000), "Running for 1m 30s");
+  });
+
+  it("formatElapsedDescription clamps negative elapsed to zero", () => {
+    assert.strictEqual(formatElapsedDescription(10_000, 0), "Running for 0s");
+  });
+
+  it("resolveProgressDescription prefers the last output line", () => {
+    assert.strictEqual(
+      resolveProgressDescription(progress({ lastOutputLine: "running tests" })),
+      "running tests",
+    );
+  });
+
+  it("resolveProgressDescription falls back to hook elapsed when no output", () => {
+    assert.strictEqual(
+      resolveProgressDescription(progress({ hookStartedAtMs: 0 }), 5_000),
+      "Running for 5s",
+    );
+  });
+
+  it("resolveProgressDescription falls back to phase elapsed when no hook", () => {
+    assert.strictEqual(
+      resolveProgressDescription(progress({ phaseStartedAtMs: 0 }), 3_000),
+      "Running for 3s",
+    );
+  });
+});
+
+describe("when: explaining a disabled git menu item", () => {
+  it("returns null for an enabled item", () => {
+    assert.isNull(
+      getMenuActionDisabledReason({
+        item: { id: "push", label: "Push", disabled: false, icon: "push", kind: "open_dialog" },
+        gitStatus: status(),
+        isBusy: false,
+        hasOriginRemote: true,
+      }),
+    );
+  });
+
+  it("reports a busy action first", () => {
+    assert.strictEqual(
+      getMenuActionDisabledReason({
+        item: { id: "push", label: "Push", disabled: true, icon: "push", kind: "open_dialog" },
+        gitStatus: status(),
+        isBusy: true,
+        hasOriginRemote: true,
+      }),
+      "Git action in progress.",
+    );
+  });
+
+  it("explains a clean worktree for commit", () => {
+    assert.strictEqual(
+      getMenuActionDisabledReason({
+        item: {
+          id: "commit",
+          label: "Commit",
+          disabled: true,
+          icon: "commit",
+          kind: "open_dialog",
+        },
+        gitStatus: status({ hasWorkingTreeChanges: false }),
+        isBusy: false,
+        hasOriginRemote: true,
+      }),
+      "Worktree is clean. Make changes before committing.",
+    );
+  });
+
+  it("explains a detached head for push", () => {
+    assert.strictEqual(
+      getMenuActionDisabledReason({
+        item: { id: "push", label: "Push", disabled: true, icon: "push", kind: "open_dialog" },
+        gitStatus: status({ branch: null }),
+        isBusy: false,
+        hasOriginRemote: true,
+      }),
+      "Detached HEAD: checkout a branch before pushing.",
+    );
+  });
+
+  it("explains an open PR for the pr item", () => {
+    assert.strictEqual(
+      getMenuActionDisabledReason({
+        item: { id: "pr", label: "Create PR", disabled: true, icon: "pr", kind: "open_pr" },
+        gitStatus: status({
+          pr: {
+            state: "open",
+            url: "https://x",
+            number: 1,
+            title: "t",
+            baseBranch: "main",
+            headBranch: "feature/test",
+          },
+        }),
+        isBusy: false,
+        hasOriginRemote: true,
+      }),
+      "View PR is currently unavailable.",
     );
   });
 });

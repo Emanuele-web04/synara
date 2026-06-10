@@ -10,10 +10,7 @@ import {
   type OrchestrationThread,
 } from "@t3tools/contracts";
 
-import {
-  finalizePromotedDraftThreads,
-  markPromotedDraftThreads,
-} from "../composerDraftStore";
+import { finalizePromotedDraftThreads, markPromotedDraftThreads } from "../composerDraftStore";
 import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 

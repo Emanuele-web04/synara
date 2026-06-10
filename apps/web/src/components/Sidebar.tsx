@@ -1665,7 +1665,6 @@ export default function Sidebar() {
     terminalStateByThreadId,
   });
 
-
   const projectDnDSensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 6 },

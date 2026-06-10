@@ -200,7 +200,11 @@ export function ModelsSettings(props: {
                   setSelectedCustomModelProvider(value);
                 }}
               >
-                <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Custom model provider">
+                <SelectTrigger
+                  size="sm"
+                  className="w-full sm:w-40"
+                  aria-label="Custom model provider"
+                >
                   <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
                 </SelectTrigger>
                 <SettingsSelectPopup align="start">

@@ -26,10 +26,7 @@ import {
   gitStatusQueryOptions,
   invalidateGitQueries,
 } from "../lib/gitReactQuery";
-import {
-  handleCheckoutError,
-  toBranchActionErrorMessage,
-} from "./BranchToolbarCheckoutErrors";
+import { handleCheckoutError, toBranchActionErrorMessage } from "./BranchToolbarCheckoutErrors";
 import { readNativeApi } from "../nativeApi";
 import { parsePullRequestReference } from "../pullRequestReference";
 import {

@@ -87,12 +87,8 @@ export const RawGitHubReviewPullRequestSchema = Schema.Struct({
   isDraft: Schema.optional(Schema.Boolean),
   additions: Schema.optional(Schema.NullOr(Schema.Number)),
   deletions: Schema.optional(Schema.NullOr(Schema.Number)),
-  statusCheckRollup: Schema.optional(
-    Schema.NullOr(Schema.Array(RawStatusCheckRollupEntrySchema)),
-  ),
-  reviewRequests: Schema.optional(
-    Schema.NullOr(Schema.Array(RawReviewRequestSchema)),
-  ),
+  statusCheckRollup: Schema.optional(Schema.NullOr(Schema.Array(RawStatusCheckRollupEntrySchema))),
+  reviewRequests: Schema.optional(Schema.NullOr(Schema.Array(RawReviewRequestSchema))),
 });
 
 export const FAILING_CHECK_STATES = new Set([
@@ -126,9 +122,7 @@ export const RawReviewCommitSchema = Schema.Struct({
   messageBody: Schema.optional(Schema.NullOr(Schema.String)),
   authoredDate: Schema.optional(Schema.NullOr(Schema.String)),
   committedDate: Schema.optional(Schema.NullOr(Schema.String)),
-  authors: Schema.optional(
-    Schema.NullOr(Schema.Array(RawReviewCommitAuthorSchema)),
-  ),
+  authors: Schema.optional(Schema.NullOr(Schema.Array(RawReviewCommitAuthorSchema))),
 });
 
 export const RawReviewLabelSchema = Schema.Struct({
@@ -173,16 +167,10 @@ export const RawGitHubReviewDetailSchema = Schema.Struct({
   milestone: Schema.optional(Schema.NullOr(RawReviewMilestoneSchema)),
   labels: Schema.optional(Schema.NullOr(Schema.Array(RawReviewLabelSchema))),
   assignees: Schema.optional(Schema.NullOr(Schema.Array(RawReviewUserSchema))),
-  reviewRequests: Schema.optional(
-    Schema.NullOr(Schema.Array(RawReviewRequestSchema)),
-  ),
-  latestReviews: Schema.optional(
-    Schema.NullOr(Schema.Array(RawReviewLatestReviewSchema)),
-  ),
+  reviewRequests: Schema.optional(Schema.NullOr(Schema.Array(RawReviewRequestSchema))),
+  latestReviews: Schema.optional(Schema.NullOr(Schema.Array(RawReviewLatestReviewSchema))),
   commits: Schema.optional(Schema.NullOr(Schema.Array(RawReviewCommitSchema))),
-  statusCheckRollup: Schema.optional(
-    Schema.NullOr(Schema.Array(RawStatusCheckRollupEntrySchema)),
-  ),
+  statusCheckRollup: Schema.optional(Schema.NullOr(Schema.Array(RawStatusCheckRollupEntrySchema))),
 });
 
 export const RawConversationCommentSchema = Schema.Struct({
@@ -201,12 +189,8 @@ export const RawConversationReviewSchema = Schema.Struct({
 });
 
 export const RawGitHubConversationSchema = Schema.Struct({
-  comments: Schema.optional(
-    Schema.NullOr(Schema.Array(RawConversationCommentSchema)),
-  ),
-  reviews: Schema.optional(
-    Schema.NullOr(Schema.Array(RawConversationReviewSchema)),
-  ),
+  comments: Schema.optional(Schema.NullOr(Schema.Array(RawConversationCommentSchema))),
+  reviews: Schema.optional(Schema.NullOr(Schema.Array(RawConversationReviewSchema))),
   commits: Schema.optional(Schema.NullOr(Schema.Array(RawReviewCommitSchema))),
 });
 
@@ -312,9 +296,7 @@ export const RawReviewThreadsResponseSchema = Schema.Struct({
                 Schema.NullOr(
                   Schema.Struct({
                     reviewThreads: Schema.Struct({
-                      pageInfo: Schema.optional(
-                        Schema.NullOr(RawPageInfoSchema),
-                      ),
+                      pageInfo: Schema.optional(Schema.NullOr(RawPageInfoSchema)),
                       nodes: Schema.Array(RawReviewThreadSchema),
                     }),
                   }),
@@ -353,16 +335,12 @@ export const RawProjectSummarySchema = Schema.Struct({
   title: Schema.String,
   url: Schema.optional(Schema.NullOr(Schema.String)),
   owner: Schema.optional(
-    Schema.NullOr(
-      Schema.Struct({ login: Schema.optional(Schema.NullOr(Schema.String)) }),
-    ),
+    Schema.NullOr(Schema.Struct({ login: Schema.optional(Schema.NullOr(Schema.String)) })),
   ),
 });
 
 export const RawProjectListSchema = Schema.Struct({
-  projects: Schema.optional(
-    Schema.NullOr(Schema.Array(RawProjectSummarySchema)),
-  ),
+  projects: Schema.optional(Schema.NullOr(Schema.Array(RawProjectSummarySchema))),
 });
 
 export const RawProjectFieldSchema = Schema.Struct({
@@ -370,11 +348,7 @@ export const RawProjectFieldSchema = Schema.Struct({
   name: Schema.String,
   type: Schema.optional(Schema.NullOr(Schema.String)),
   options: Schema.optional(
-    Schema.NullOr(
-      Schema.Array(
-        Schema.Struct({ id: TrimmedNonEmptyString, name: Schema.String }),
-      ),
-    ),
+    Schema.NullOr(Schema.Array(Schema.Struct({ id: TrimmedNonEmptyString, name: Schema.String }))),
   ),
 });
 
@@ -383,9 +357,7 @@ export const RawProjectFieldListSchema = Schema.Struct({
 });
 
 export const RawProjectItemListSchema = Schema.Struct({
-  items: Schema.optional(
-    Schema.NullOr(Schema.Array(Schema.Record(Schema.String, Schema.Unknown))),
-  ),
+  items: Schema.optional(Schema.NullOr(Schema.Array(Schema.Record(Schema.String, Schema.Unknown)))),
 });
 
 export const RawProjectItemContentSchema = Schema.Struct({
@@ -394,13 +366,9 @@ export const RawProjectItemContentSchema = Schema.Struct({
   title: Schema.optional(Schema.NullOr(Schema.String)),
   url: Schema.optional(Schema.NullOr(Schema.String)),
   repository: Schema.optional(Schema.NullOr(Schema.String)),
-  author: Schema.optional(
-    Schema.NullOr(Schema.Struct({ login: Schema.optional(Schema.String) })),
-  ),
+  author: Schema.optional(Schema.NullOr(Schema.Struct({ login: Schema.optional(Schema.String) }))),
   assignees: Schema.optional(
-    Schema.NullOr(
-      Schema.Array(Schema.Struct({ login: Schema.optional(Schema.String) })),
-    ),
+    Schema.NullOr(Schema.Array(Schema.Struct({ login: Schema.optional(Schema.String) }))),
   ),
 });
 

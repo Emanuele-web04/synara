@@ -35,10 +35,7 @@ import {
   reviewEventFlag,
   reviewEventName,
 } from "./GitHubCli.parsing.ts";
-import {
-  enrichConversationAvatars,
-  fetchPullRequestReviewThreads,
-} from "./GitHubCli.commands.ts";
+import { enrichConversationAvatars, fetchPullRequestReviewThreads } from "./GitHubCli.commands.ts";
 import {
   DEFAULT_REVIEW_PULL_REQUEST_LIST_LIMIT,
   DEFAULT_TIMEOUT_MS,
@@ -96,9 +93,7 @@ const makeGitHubCli = Effect.sync(() => {
                 "GitHub CLI returned invalid PR list JSON.",
               ),
         ),
-        Effect.map((pullRequests) =>
-          pullRequests.map(normalizePullRequestSummary),
-        ),
+        Effect.map((pullRequests) => pullRequests.map(normalizePullRequestSummary)),
       ),
     getPullRequest: (input) =>
       execute({
@@ -147,9 +142,7 @@ const makeGitHubCli = Effect.sync(() => {
                 "GitHub CLI returned invalid PR list JSON.",
               ),
         ),
-        Effect.map((pullRequests) =>
-          pullRequests.map(normalizeReviewPullRequest),
-        ),
+        Effect.map((pullRequests) => pullRequests.map(normalizeReviewPullRequest)),
       ),
     getReviewPullRequestOverview: (input) =>
       execute({
@@ -180,13 +173,7 @@ const makeGitHubCli = Effect.sync(() => {
     getReviewConversation: (input) =>
       execute({
         cwd: input.cwd,
-        args: [
-          "pr",
-          "view",
-          input.reference,
-          "--json",
-          "comments,reviews,commits",
-        ],
+        args: ["pr", "view", input.reference, "--json", "comments,reviews,commits"],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>
@@ -198,9 +185,7 @@ const makeGitHubCli = Effect.sync(() => {
           ),
         ),
         Effect.map(normalizeConversation),
-        Effect.flatMap((events) =>
-          enrichConversationAvatars(execute, input.cwd, events),
-        ),
+        Effect.flatMap((events) => enrichConversationAvatars(execute, input.cwd, events)),
       ),
     getAuthenticatedUser: (input) =>
       execute({
@@ -212,12 +197,9 @@ const makeGitHubCli = Effect.sync(() => {
             login?: unknown;
             avatarUrl?: unknown;
           };
-          const login =
-            typeof parsed.login === "string" ? parsed.login.trim() : "";
+          const login = typeof parsed.login === "string" ? parsed.login.trim() : "";
           const avatarUrl =
-            typeof parsed.avatarUrl === "string"
-              ? normalizeAvatarUrl(parsed.avatarUrl)
-              : undefined;
+            typeof parsed.avatarUrl === "string" ? normalizeAvatarUrl(parsed.avatarUrl) : undefined;
           return { login, ...(avatarUrl ? { avatarUrl } : {}) };
         }),
       ),
@@ -230,15 +212,7 @@ const makeGitHubCli = Effect.sync(() => {
     getPullRequestHeadSha: (input) =>
       execute({
         cwd: input.cwd,
-        args: [
-          "pr",
-          "view",
-          input.reference,
-          "--json",
-          "headRefOid",
-          "-q",
-          ".headRefOid",
-        ],
+        args: ["pr", "view", input.reference, "--json", "headRefOid", "-q", ".headRefOid"],
       }).pipe(Effect.map((result) => result.stdout.trim())),
     submitPullRequestReview: (input) =>
       execute({
@@ -277,9 +251,7 @@ const makeGitHubCli = Effect.sync(() => {
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>
           raw.length === 0
-            ? Effect.succeed(
-                {} as Schema.Schema.Type<typeof RawCreateReviewResponseSchema>,
-              )
+            ? Effect.succeed({} as Schema.Schema.Type<typeof RawCreateReviewResponseSchema>)
             : decodeGitHubJson(
                 raw,
                 RawCreateReviewResponseSchema,
@@ -307,13 +279,7 @@ const makeGitHubCli = Effect.sync(() => {
     getRepositoryCloneUrls: (input) =>
       execute({
         cwd: input.cwd,
-        args: [
-          "repo",
-          "view",
-          input.repository,
-          "--json",
-          "nameWithOwner,url,sshUrl",
-        ],
+        args: ["repo", "view", input.repository, "--json", "nameWithOwner,url,sshUrl"],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>
@@ -345,14 +311,7 @@ const makeGitHubCli = Effect.sync(() => {
     getDefaultBranch: (input) =>
       execute({
         cwd: input.cwd,
-        args: [
-          "repo",
-          "view",
-          "--json",
-          "defaultBranchRef",
-          "--jq",
-          ".defaultBranchRef.name",
-        ],
+        args: ["repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"],
       }).pipe(
         Effect.map((value) => {
           const trimmed = value.stdout.trim();
@@ -362,32 +321,16 @@ const makeGitHubCli = Effect.sync(() => {
     checkoutPullRequest: (input) =>
       execute({
         cwd: input.cwd,
-        args: [
-          "pr",
-          "checkout",
-          input.reference,
-          ...(input.force ? ["--force"] : []),
-        ],
+        args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
       }).pipe(Effect.asVoid),
     projectScopeAvailable: (input) =>
       execute({
         cwd: input.cwd,
-        args: [
-          "project",
-          "list",
-          "--owner",
-          "@me",
-          "--limit",
-          "1",
-          "--format",
-          "json",
-        ],
+        args: ["project", "list", "--owner", "@me", "--limit", "1", "--format", "json"],
       }).pipe(
         Effect.as(true),
         Effect.catchTag("GitHubCliError", (error) =>
-          isProjectScopeError(error)
-            ? Effect.succeed(false)
-            : Effect.fail(error),
+          isProjectScopeError(error) ? Effect.succeed(false) : Effect.fail(error),
         ),
       ),
     listProjects: (input) =>
@@ -415,24 +358,13 @@ const makeGitHubCli = Effect.sync(() => {
                 "GitHub CLI returned invalid project list JSON.",
               ),
         ),
-        Effect.map((decoded) =>
-          (decoded.projects ?? []).map(normalizeProjectSummary),
-        ),
+        Effect.map((decoded) => (decoded.projects ?? []).map(normalizeProjectSummary)),
       ),
     getProjectBoard: (input) =>
       Effect.gen(function* () {
         const summaries = yield* execute({
           cwd: input.cwd,
-          args: [
-            "project",
-            "list",
-            "--owner",
-            input.owner,
-            "--limit",
-            "100",
-            "--format",
-            "json",
-          ],
+          args: ["project", "list", "--owner", input.owner, "--limit", "100", "--format", "json"],
         }).pipe(
           Effect.map((result) => result.stdout.trim()),
           Effect.flatMap((raw) =>
@@ -445,9 +377,7 @@ const makeGitHubCli = Effect.sync(() => {
                   "GitHub CLI returned invalid project list JSON.",
                 ),
           ),
-          Effect.map((decoded) =>
-            (decoded.projects ?? []).map(normalizeProjectSummary),
-          ),
+          Effect.map((decoded) => (decoded.projects ?? []).map(normalizeProjectSummary)),
         );
         const project =
           summaries.find((summary) => summary.number === input.number) ??
@@ -511,9 +441,7 @@ const makeGitHubCli = Effect.sync(() => {
           ),
           Effect.map((decoded) =>
             (decoded.items ?? [])
-              .map((item) =>
-                normalizeProjectItem(item, statusField?.name ?? null),
-              )
+              .map((item) => normalizeProjectItem(item, statusField?.name ?? null))
               .filter((item): item is GitHubProjectItem => item !== null),
           ),
         );

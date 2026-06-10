@@ -85,10 +85,7 @@ export function normalizeGitHubCliError(
     }
 
     const lower = error.message.toLowerCase();
-    if (
-      lower.includes("missing required scopes") ||
-      lower.includes("read:project")
-    ) {
+    if (lower.includes("missing required scopes") || lower.includes("read:project")) {
       return new GitHubCliError({
         operation,
         detail: PROJECT_SCOPE_MISSING_DETAIL,
@@ -104,8 +101,7 @@ export function normalizeGitHubCliError(
     ) {
       return new GitHubCliError({
         operation,
-        detail:
-          "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
+        detail: "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
         cause: error,
       });
     }
@@ -118,8 +114,7 @@ export function normalizeGitHubCliError(
     ) {
       return new GitHubCliError({
         operation,
-        detail:
-          "Pull request not found. Check the PR number or URL and try again.",
+        detail: "Pull request not found. Check the PR number or URL and try again.",
         cause: error,
       });
     }
@@ -144,10 +139,7 @@ function normalizePullRequestState(input: {
 }): "open" | "closed" | "merged" {
   const mergedAt = input.mergedAt;
   const state = input.state;
-  if (
-    (typeof mergedAt === "string" && mergedAt.trim().length > 0) ||
-    state === "MERGED"
-  ) {
+  if ((typeof mergedAt === "string" && mergedAt.trim().length > 0) || state === "MERGED") {
     return "merged";
   }
   if (state === "CLOSED") {
@@ -157,9 +149,7 @@ function normalizePullRequestState(input: {
 }
 
 function rollupChecksStatus(
-  entries: ReadonlyArray<
-    Schema.Schema.Type<typeof RawStatusCheckRollupEntrySchema>
-  >,
+  entries: ReadonlyArray<Schema.Schema.Type<typeof RawStatusCheckRollupEntrySchema>>,
 ): GitHubChecksStatus {
   if (entries.length === 0) {
     return "none";
@@ -193,21 +183,15 @@ function normalizeReviewRequests(
   requests: ReadonlyArray<Schema.Schema.Type<typeof RawReviewRequestSchema>>,
 ): ReadonlyArray<string> {
   return requests
-    .map((request) =>
-      (request.login ?? request.name ?? request.slug ?? "").trim(),
-    )
+    .map((request) => (request.login ?? request.name ?? request.slug ?? "").trim())
     .filter((value) => value.length > 0);
 }
 
 function nonNegativeInt(value: number | null | undefined): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.max(0, Math.trunc(value))
-    : 0;
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
 }
 
-export function normalizeAvatarUrl(
-  value: string | null | undefined,
-): string | undefined {
+export function normalizeAvatarUrl(value: string | null | undefined): string | undefined {
   const avatarUrl = (value ?? "").trim();
   return avatarUrl.length > 0 ? avatarUrl : undefined;
 }
@@ -260,8 +244,7 @@ function mapReviewCheckState(
     return "pending";
   }
   const value =
-    (entry.conclusion ?? "").trim().toUpperCase() ||
-    (entry.state ?? "").trim().toUpperCase();
+    (entry.conclusion ?? "").trim().toUpperCase() || (entry.state ?? "").trim().toUpperCase();
   switch (value) {
     case "SUCCESS":
       return "success";
@@ -283,9 +266,7 @@ function mapReviewCheckState(
 }
 
 export function normalizeReviewChecks(
-  entries: ReadonlyArray<
-    Schema.Schema.Type<typeof RawStatusCheckRollupEntrySchema>
-  >,
+  entries: ReadonlyArray<Schema.Schema.Type<typeof RawStatusCheckRollupEntrySchema>>,
 ): ReadonlyArray<GitHubReviewCheck> {
   const checks: GitHubReviewCheck[] = [];
   for (const entry of entries) {
@@ -347,12 +328,8 @@ function normalizeReviewerState(value: string): GitHubReviewerState {
 }
 
 function normalizeReviewers(
-  latestReviews: ReadonlyArray<
-    Schema.Schema.Type<typeof RawReviewLatestReviewSchema>
-  >,
-  reviewRequests: ReadonlyArray<
-    Schema.Schema.Type<typeof RawReviewRequestSchema>
-  >,
+  latestReviews: ReadonlyArray<Schema.Schema.Type<typeof RawReviewLatestReviewSchema>>,
+  reviewRequests: ReadonlyArray<Schema.Schema.Type<typeof RawReviewRequestSchema>>,
 ): ReadonlyArray<GitHubReviewer> {
   const byLogin = new Map<string, GitHubReviewer>();
   for (const review of latestReviews) {
@@ -386,9 +363,7 @@ function normalizeReviewMergeable(
   value: string | null | undefined,
 ): "MERGEABLE" | "CONFLICTING" | "UNKNOWN" {
   const normalized = (value ?? "").trim().toUpperCase();
-  return normalized === "MERGEABLE" || normalized === "CONFLICTING"
-    ? normalized
-    : "UNKNOWN";
+  return normalized === "MERGEABLE" || normalized === "CONFLICTING" ? normalized : "UNKNOWN";
 }
 
 export function normalizeReviewDetail(
@@ -432,10 +407,7 @@ export function normalizeReviewDetail(
     assignees: (raw.assignees ?? [])
       .map(normalizeReviewUserRef)
       .filter((user): user is NonNullable<typeof user> => user !== null),
-    reviewers: normalizeReviewers(
-      raw.latestReviews ?? [],
-      raw.reviewRequests ?? [],
-    ),
+    reviewers: normalizeReviewers(raw.latestReviews ?? [], raw.reviewRequests ?? []),
   };
 }
 
@@ -490,9 +462,7 @@ export function normalizeConversation(
       createdAt: commit.authoredDate ?? commit.committedDate ?? "",
     });
   }
-  return events.toSorted(
-    (a, b) => (Date.parse(a.createdAt) || 0) - (Date.parse(b.createdAt) || 0),
-  );
+  return events.toSorted((a, b) => (Date.parse(a.createdAt) || 0) - (Date.parse(b.createdAt) || 0));
 }
 
 export function normalizePullRequestSummary(
@@ -501,8 +471,7 @@ export function normalizePullRequestSummary(
   const headRepositoryNameWithOwner = raw.headRepository?.nameWithOwner ?? null;
   const headRepositoryOwnerLogin =
     raw.headRepositoryOwner?.login ??
-    (typeof headRepositoryNameWithOwner === "string" &&
-    headRepositoryNameWithOwner.includes("/")
+    (typeof headRepositoryNameWithOwner === "string" && headRepositoryNameWithOwner.includes("/")
       ? (headRepositoryNameWithOwner.split("/")[0] ?? null)
       : null);
   return {
@@ -530,9 +499,7 @@ export function normalizeRepositoryCloneUrls(
   };
 }
 
-function normalizeReviewSide(
-  value: string | null | undefined,
-): "LEFT" | "RIGHT" | undefined {
+function normalizeReviewSide(value: string | null | undefined): "LEFT" | "RIGHT" | undefined {
   return value === "LEFT" || value === "RIGHT" ? value : undefined;
 }
 
@@ -558,9 +525,7 @@ export function normalizeReviewThreadNode(input: {
   readonly node: Schema.Schema.Type<typeof RawReviewThreadSchema>;
   readonly pullRequestNumber: number;
   readonly nodeIndex: number;
-  readonly comments: ReadonlyArray<
-    Schema.Schema.Type<typeof RawReviewThreadCommentSchema>
-  >;
+  readonly comments: ReadonlyArray<Schema.Schema.Type<typeof RawReviewThreadCommentSchema>>;
 }): GitHubReviewThread {
   const { node, pullRequestNumber, nodeIndex } = input;
   const comments = input.comments.map(normalizeReviewThreadComment);
@@ -648,16 +613,14 @@ export function normalizeProjectItem(
   if (itemId.length === 0) {
     return null;
   }
-  const contentResult = Schema.decodeUnknownExit(
-    Schema.NullOr(RawProjectItemContentSchema),
-  )(raw["content"] ?? null);
+  const contentResult = Schema.decodeUnknownExit(Schema.NullOr(RawProjectItemContentSchema))(
+    raw["content"] ?? null,
+  );
   const content = contentResult._tag === "Success" ? contentResult.value : null;
   const statusKey = statusFieldName ? camelCaseFieldName(statusFieldName) : "";
   const statusRaw = statusKey.length > 0 ? raw[statusKey] : undefined;
   const statusName =
-    typeof statusRaw === "string" && statusRaw.trim().length > 0
-      ? statusRaw
-      : null;
+    typeof statusRaw === "string" && statusRaw.trim().length > 0 ? statusRaw : null;
   const contentNumber = content?.number;
   const author =
     content?.author?.login?.trim() ??
@@ -672,14 +635,10 @@ export function normalizeProjectItem(
     statusName,
     contentType: content?.type ?? "",
     number:
-      typeof contentNumber === "number" &&
-      Number.isFinite(contentNumber) &&
-      contentNumber > 0
+      typeof contentNumber === "number" && Number.isFinite(contentNumber) && contentNumber > 0
         ? Math.trunc(contentNumber)
         : null,
-    title:
-      content?.title?.trim() ??
-      (typeof raw["title"] === "string" ? raw["title"] : ""),
+    title: content?.title?.trim() ?? (typeof raw["title"] === "string" ? raw["title"] : ""),
     author,
     ...(url.length > 0 ? { url } : {}),
     ...(repository.length > 0 ? { repositoryNameWithOwner: repository } : {}),
@@ -690,12 +649,8 @@ export function normalizeCreateReviewResult(
   response: Schema.Schema.Type<typeof RawCreateReviewResponseSchema>,
 ): GitHubCreateReviewResult {
   return {
-    ...(typeof response.id === "number" && response.id > 0
-      ? { reviewId: response.id }
-      : {}),
-    ...(response.html_url && response.html_url.length > 0
-      ? { url: response.html_url }
-      : {}),
+    ...(typeof response.id === "number" && response.id > 0 ? { reviewId: response.id } : {}),
+    ...(response.html_url && response.html_url.length > 0 ? { url: response.html_url } : {}),
   };
 }
 
@@ -720,20 +675,14 @@ export function decodeGitHubJson<S extends Schema.Top>(
       (error) =>
         new GitHubCliError({
           operation,
-          detail:
-            error instanceof Error
-              ? `${invalidDetail}: ${error.message}`
-              : invalidDetail,
+          detail: error instanceof Error ? `${invalidDetail}: ${error.message}` : invalidDetail,
           cause: error,
         }),
     ),
   );
 }
 
-export function optionalCursorArg(
-  name: string,
-  value: string | null,
-): ReadonlyArray<string> {
+export function optionalCursorArg(name: string, value: string | null): ReadonlyArray<string> {
   return value !== null && value.length > 0 ? ["-F", `${name}=${value}`] : [];
 }
 

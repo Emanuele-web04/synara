@@ -14,11 +14,7 @@ import {
   type PullRequestInfo,
   type ResolvedPullRequest,
 } from "./GitManager.types.ts";
-import {
-  appendUnique,
-  extractBranchFromRef,
-  gitManagerError,
-} from "./GitManager.commits.ts";
+import { appendUnique, extractBranchFromRef, gitManagerError } from "./GitManager.commits.ts";
 import {
   extractPullRequestUrlFromError,
   inferPullRequestHeadRemoteInfoFromSelector,

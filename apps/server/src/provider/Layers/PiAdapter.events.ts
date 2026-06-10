@@ -17,7 +17,12 @@ import {
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
 import { makeSessionSnapshot } from "./PiAdapter.session.ts";
 import { normalizeTokenUsage } from "./PiAdapter.token.ts";
-import { textFromToolResult, toolItemType, toolLifecycleData, toolTitle } from "./PiAdapter.tools.ts";
+import {
+  textFromToolResult,
+  toolItemType,
+  toolLifecycleData,
+  toolTitle,
+} from "./PiAdapter.tools.ts";
 import { type PiSessionContext, type PiTrackedToolCall } from "./PiAdapter.types.ts";
 
 export interface PiEventBase {

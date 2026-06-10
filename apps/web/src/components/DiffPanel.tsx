@@ -402,7 +402,10 @@ export default function DiffPanel({
   );
   const diffSummaryQueryOptions = useMemo(
     () =>
-      gitSummarizeDiffQueryOptions({ ...diffSummaryQueryInput, enabled: surfaceMode === "summary" }),
+      gitSummarizeDiffQueryOptions({
+        ...diffSummaryQueryInput,
+        enabled: surfaceMode === "summary",
+      }),
     [diffSummaryQueryInput, surfaceMode],
   );
   const diffSummaryQuery = useQuery(diffSummaryQueryOptions);

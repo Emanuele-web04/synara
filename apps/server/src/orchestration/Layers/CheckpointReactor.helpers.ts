@@ -26,10 +26,7 @@ export function toTurnId(value: string | undefined): TurnId | null {
   return value === undefined ? null : TurnId.makeUnsafe(String(value));
 }
 
-export function sameId(
-  left: string | null | undefined,
-  right: string | null | undefined,
-): boolean {
+export function sameId(left: string | null | undefined, right: string | null | undefined): boolean {
   if (left === null || left === undefined || right === null || right === undefined) {
     return false;
   }

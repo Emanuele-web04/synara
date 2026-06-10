@@ -205,7 +205,6 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     projectionPendingApprovalRepository,
   });
 
-
   const projectors: ReadonlyArray<ProjectorDefinition> = [
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.projects,

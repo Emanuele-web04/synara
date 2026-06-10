@@ -12,14 +12,8 @@ import {
 import { compareActivitiesByOrder } from "./session-logic.shared";
 import type { ChatMessage, SessionPhase, ThreadSession, TurnDiffSummary } from "./types";
 
-export type {
-  PendingApproval,
-  PendingUserInput,
-} from "./session-logic.pending";
-export {
-  derivePendingApprovals,
-  derivePendingUserInputs,
-} from "./session-logic.pending";
+export type { PendingApproval, PendingUserInput } from "./session-logic.pending";
+export { derivePendingApprovals, derivePendingUserInputs } from "./session-logic.pending";
 
 export type { LatestProposedPlanState } from "./session-logic.plan";
 export {
@@ -28,11 +22,7 @@ export {
   hasActionableProposedPlan,
 } from "./session-logic.plan";
 
-export type {
-  WorkLogEntry,
-  WorkLogSubagent,
-  WorkLogSubagentAction,
-} from "./session-logic.workLog";
+export type { WorkLogEntry, WorkLogSubagent, WorkLogSubagentAction } from "./session-logic.workLog";
 export {
   WORK_LOG_PRESENTATION_VERSION,
   deriveWorkLogEntries,
@@ -40,14 +30,8 @@ export {
   formatWorkLogEntryDetail,
 } from "./session-logic.workLog";
 
-export type {
-  CompactChatTimelineEntry,
-  TimelineEntry,
-} from "./session-logic.timeline";
-export {
-  deriveCompactChatTimelineEntries,
-  deriveTimelineEntries,
-} from "./session-logic.timeline";
+export type { CompactChatTimelineEntry, TimelineEntry } from "./session-logic.timeline";
+export { deriveCompactChatTimelineEntries, deriveTimelineEntries } from "./session-logic.timeline";
 
 export type ProviderPickerKind = ProviderKind;
 

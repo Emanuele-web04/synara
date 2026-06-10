@@ -64,13 +64,9 @@ export function enrichConversationAvatars(
     return Effect.succeed(events);
   }
 
-  return Effect.forEach(
-    missingLogins,
-    (login) => lookupUserAvatar(execute, cwd, login),
-    {
-      concurrency: 6,
-    },
-  ).pipe(
+  return Effect.forEach(missingLogins, (login) => lookupUserAvatar(execute, cwd, login), {
+    concurrency: 6,
+  }).pipe(
     Effect.map((entries) => {
       const avatarsByLogin = new Map(entries);
       return events.map((event) => {
@@ -94,10 +90,7 @@ function fetchReviewThreadsPage(
     readonly pullRequest: PullRequestCoordinates;
     readonly threadsCursor: string | null;
   },
-): Effect.Effect<
-  Schema.Schema.Type<typeof RawReviewThreadsResponseSchema>,
-  GitHubCliError
-> {
+): Effect.Effect<Schema.Schema.Type<typeof RawReviewThreadsResponseSchema>, GitHubCliError> {
   return execute({
     cwd: input.cwd,
     args: [
@@ -133,10 +126,7 @@ function fetchReviewThreadCommentsPage(
     readonly threadId: string;
     readonly commentsCursor: string | null;
   },
-): Effect.Effect<
-  Schema.Schema.Type<typeof RawReviewThreadCommentsResponseSchema>,
-  GitHubCliError
-> {
+): Effect.Effect<Schema.Schema.Type<typeof RawReviewThreadCommentsResponseSchema>, GitHubCliError> {
   return execute({
     cwd: input.cwd,
     args: [
@@ -169,10 +159,7 @@ function fetchRemainingReviewThreadComments(
     readonly initialComments: ReadonlyArray<
       Schema.Schema.Type<typeof RawReviewThreadCommentSchema>
     >;
-    readonly initialPageInfo:
-      | Schema.Schema.Type<typeof RawPageInfoSchema>
-      | null
-      | undefined;
+    readonly initialPageInfo: Schema.Schema.Type<typeof RawPageInfoSchema> | null | undefined;
   },
 ): Effect.Effect<
   ReadonlyArray<Schema.Schema.Type<typeof RawReviewThreadCommentSchema>>,

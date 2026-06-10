@@ -44,8 +44,13 @@ export interface CheckpointCaptureDeps {
 export type CheckpointCapture = ReturnType<typeof makeCheckpointCapture>;
 
 export function makeCheckpointCapture(deps: CheckpointCaptureDeps) {
-  const { orchestrationEngine, checkpointStore, executionRuntime, projectionSnapshotQuery, receiptBus } =
-    deps;
+  const {
+    orchestrationEngine,
+    checkpointStore,
+    executionRuntime,
+    projectionSnapshotQuery,
+    receiptBus,
+  } = deps;
 
   const appendCaptureFailureActivity = (input: {
     readonly threadId: ThreadId;

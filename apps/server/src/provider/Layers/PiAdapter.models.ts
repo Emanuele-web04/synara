@@ -2,11 +2,7 @@
 // Layer: pure functions only — no Effect, no session context.
 // Exports: thinking-level predicates/normalizers, supported-thinking-options, model resolution.
 
-import {
-  getSupportedThinkingLevels,
-  type Api,
-  type Model,
-} from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 
 import { trimToUndefined } from "./PiAdapter.shared.ts";

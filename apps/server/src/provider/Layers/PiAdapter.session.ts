@@ -4,10 +4,7 @@
 
 import path from "node:path";
 
-import {
-  getAgentDir,
-  type AgentSession as PiAgentSession,
-} from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type AgentSession as PiAgentSession } from "@earendil-works/pi-coding-agent";
 import { type ProviderSession, TurnId } from "@t3tools/contracts";
 
 import { textFromContent, trimToUndefined } from "./PiAdapter.shared.ts";

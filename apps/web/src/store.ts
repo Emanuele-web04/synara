@@ -71,11 +71,7 @@ import {
   writeThreadState,
 } from "./storeSlices/threadProjection";
 
-export {
-  arraysShallowEqual,
-  deepEqualJson,
-  normalizeModelSelection,
-} from "./storeSlices/equality";
+export { arraysShallowEqual, deepEqualJson, normalizeModelSelection } from "./storeSlices/equality";
 export { EMPTY_THREAD_IDS } from "./storeSlices/threadProjection";
 export { readPersistedState, persistState } from "./storePersistence/hydration";
 export {

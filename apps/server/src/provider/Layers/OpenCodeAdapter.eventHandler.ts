@@ -88,19 +88,8 @@ export interface OpenCodeEventHandler {
 }
 
 export function makeOpenCodeEventHandler(deps: OpenCodeEventHandlerDeps): OpenCodeEventHandler {
-  const {
-    provider,
-    emit,
-    buildEventBase,
-    emitters,
-    turn,
-    writeNativeEventBestEffort,
-  } = deps;
-  const {
-    emitContextCompactionProgress,
-    emitContextCompacted,
-    emitAssistantTextDelta,
-  } = emitters;
+  const { provider, emit, buildEventBase, emitters, turn, writeNativeEventBestEffort } = deps;
+  const { emitContextCompactionProgress, emitContextCompacted, emitAssistantTextDelta } = emitters;
   const { completeOpenCodeTurn, deferPrematureIdleCompletion } = turn;
 
   const handleSubscribedEvent = Effect.fn("handleSubscribedEvent")(function* (

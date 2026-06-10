@@ -33,10 +33,7 @@ import {
   DiffPanelShell,
   type DiffPanelMode,
 } from "../components/DiffPanelShell";
-import {
-  type ChatRightPanel,
-  type DiffRouteSearch,
-} from "../diffRouteSearch";
+import { type ChatRightPanel, type DiffRouteSearch } from "../diffRouteSearch";
 import {
   type LeafPane,
   type Pane,

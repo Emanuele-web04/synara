@@ -10,10 +10,7 @@ import {
 import { Effect } from "effect";
 
 import { applyGrokAcpModelSelection } from "../acp/GrokAcpSupport.ts";
-import {
-  type AcpSessionMode,
-  type AcpSessionModeState,
-} from "../acp/AcpRuntimeModel.ts";
+import { type AcpSessionMode, type AcpSessionModeState } from "../acp/AcpRuntimeModel.ts";
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 
 import {

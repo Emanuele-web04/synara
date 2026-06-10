@@ -12,9 +12,7 @@ import {
 } from "@t3tools/contracts";
 import { Effect, Option } from "effect";
 
-import {
-  type ProjectionThread,
-} from "../../persistence/Services/ProjectionThreads.ts";
+import { type ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
 import { deriveThreadSummaryState } from "@t3tools/shared/threadSummary";
 import type { ProjectorDefinition } from "./ProjectionPipeline.types.ts";
 import type { ProjectionProjectorDeps } from "./ProjectionPipeline.projectors.ts";

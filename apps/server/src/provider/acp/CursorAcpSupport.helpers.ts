@@ -16,10 +16,7 @@
 import { type CursorModelOptions, type ProviderModelDescriptor } from "@t3tools/contracts";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
-import type {
-  CursorAcpModelChoice,
-  CursorAcpSelectOption,
-} from "./CursorAcpSupport.types.ts";
+import type { CursorAcpModelChoice, CursorAcpSelectOption } from "./CursorAcpSupport.types.ts";
 import {
   buildCursorParameterizedModelSlug,
   cursorAcpParameterKeyForModel,
@@ -101,9 +98,7 @@ export function flattenCursorAcpModelChoices(
   return choices;
 }
 
-export function parseCursorCliModelList(
-  stdout: string,
-): ReadonlyArray<ProviderModelDescriptor> {
+export function parseCursorCliModelList(stdout: string): ReadonlyArray<ProviderModelDescriptor> {
   const seen = new Set<string>();
   const models: Array<ProviderModelDescriptor> = [];
   for (const line of stdout.split(/\r?\n/u)) {

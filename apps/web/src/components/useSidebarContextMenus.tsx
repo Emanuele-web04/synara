@@ -21,11 +21,11 @@ import { derivePendingApprovals, derivePendingUserInputs } from "../session-logi
 import { newCommandId, randomUUID } from "../lib/utils";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
-import { canCreateThreadHandoff, resolveAvailableHandoffTargetProviders } from "../lib/threadHandoff";
 import {
-  selectThreadTerminalState,
-  useTerminalStateStore,
-} from "../terminalStateStore";
+  canCreateThreadHandoff,
+  resolveAvailableHandoffTargetProviders,
+} from "../lib/threadHandoff";
+import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { toastManager } from "./ui/toast";
 import { showContextMenuFallback } from "../contextMenuFallback";
 import { DEFAULT_THREAD_TERMINAL_ID } from "../types";

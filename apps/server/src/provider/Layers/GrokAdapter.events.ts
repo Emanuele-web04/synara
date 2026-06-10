@@ -50,8 +50,13 @@ export interface GrokNotificationHandlerDeps {
 }
 
 export function makeGrokNotificationHandler(deps: GrokNotificationHandlerDeps) {
-  const { offerRuntimeEvent, makeEventStamp, logNative, emitPlanUpdate, activeTurnIdForGrokRuntimeEvent } =
-    deps;
+  const {
+    offerRuntimeEvent,
+    makeEventStamp,
+    logNative,
+    emitPlanUpdate,
+    activeTurnIdForGrokRuntimeEvent,
+  } = deps;
 
   return (ctx: GrokSessionContext, event: AcpParsedSessionEvent): Effect.Effect<void> =>
     Effect.gen(function* () {

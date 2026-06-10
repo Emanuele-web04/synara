@@ -21,12 +21,7 @@ import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import { type AppSettings } from "../../appSettings";
 import { CentralIcon } from "../../lib/central-icons";
-import {
-  ChevronDownIcon,
-  DownloadIcon,
-  ExternalLinkIcon,
-  Loader2Icon,
-} from "../../lib/icons";
+import { ChevronDownIcon, DownloadIcon, ExternalLinkIcon, Loader2Icon } from "../../lib/icons";
 import { SETTINGS_INSET_LIST_CLASS_NAME } from "../../settingsPanelStyles";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
