@@ -212,9 +212,8 @@ describe("derivePendingUserInputs", () => {
         tone: "info",
         payload: {
           requestId: "req-user-input-2",
-          answers: {
-            sandbox_mode: "workspace-write",
-          },
+          answeredQuestionIds: ["sandbox_mode"],
+          redacted: true,
         },
       }),
       makeActivity({
