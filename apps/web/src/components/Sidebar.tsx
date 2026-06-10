@@ -31,22 +31,10 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import {
-  DndContext,
-  type DragCancelEvent,
-  type CollisionDetection,
-  PointerSensor,
-  type DragStartEvent,
-  closestCorners,
-  pointerWithin,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
+import { DndContext, closestCorners } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import {
-  type DesktopUpdateState,
   type OrchestrationShellSnapshot,
   PROVIDER_DISPLAY_NAMES,
   ProjectId,
@@ -69,7 +57,7 @@ import {
 import { isElectron } from "../env";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import { isMacPlatform, newCommandId, newProjectId, newThreadId, randomUUID } from "../lib/utils";
-import { persistAppStateNow, useStore } from "../store";
+import { useStore } from "../store";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import {
   resolveShortcutCommand,
@@ -110,6 +98,10 @@ import { SidebarSearchPaletteController } from "./Sidebar.searchController";
 import { useSidebarThreadActions } from "./useSidebarThreadActions";
 import { useSidebarKeybindings } from "./useSidebarKeybindings";
 import { useSidebarContextMenus } from "./useSidebarContextMenus";
+import { useSidebarDesktopUpdate } from "./useSidebarDesktopUpdate";
+import { useSidebarWorkspaces } from "./useSidebarWorkspaces";
+import { useSidebarProjectDnd } from "./useSidebarProjectDnd";
+import { resolvePinnedThreadProjectLabel } from "./Sidebar.resolvePinnedThreadProjectLabel";
 import {
   type SortableProjectHandleProps,
   SortableProjectItem,
@@ -121,7 +113,6 @@ import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import { SidebarGlyph } from "./sidebarGlyphs";
 import { RenameThreadDialog } from "./RenameThreadDialog";
-import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
 import { type ImportProviderKind, type SidebarSearchPaletteMode } from "./SidebarSearchPalette";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -133,19 +124,6 @@ import {
   persistSidebarUiState,
   readSidebarUiState,
 } from "./Sidebar.uiState";
-import {
-  getArm64IntelBuildWarningDescription,
-  getDesktopUpdateActionError,
-  getDesktopUpdateAlreadyCurrentNotice,
-  getDesktopUpdateButtonPresentation,
-  getDesktopUpdateButtonTooltip,
-  getDesktopUpdateButtonVariant,
-  isDesktopUpdateButtonDisabled,
-  resolveDesktopUpdateButtonAction,
-  shouldShowArm64IntelBuildWarning,
-  shouldShowDesktopUpdateButton,
-  shouldToastDesktopUpdateActionResult,
-} from "./desktopUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -182,7 +160,6 @@ import {
   formatRelativeTime,
   readDebugFeatureFlagsMenuVisibility,
   resolveSplitPreviewTitle,
-  terminalStatusFromThreadState,
   threadJumpLabelMapsEqual,
   toThreadPr,
   type ThreadPr,
@@ -229,7 +206,7 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useThreadActivationController } from "../hooks/useThreadActivationController";
 import { usePinnedThreadsStore } from "../pinnedThreadsStore";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
-import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
+import { useWorkspaceStore } from "../workspaceStore";
 import type { SidebarSearchAction, SidebarSearchProject } from "./SidebarSearchPalette.logic";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { showContextMenuFallback } from "../contextMenuFallback";
@@ -306,10 +283,6 @@ export default function Sidebar() {
   const unpinThread = usePinnedThreadsStore((store) => store.unpinThread);
   const prunePinnedThreads = usePinnedThreadsStore((store) => store.prunePinnedThreads);
   const workspacePages = useWorkspaceStore((store) => store.workspacePages);
-  const createWorkspace = useWorkspaceStore((store) => store.createWorkspace);
-  const renameWorkspace = useWorkspaceStore((store) => store.renameWorkspace);
-  const deleteWorkspace = useWorkspaceStore((store) => store.deleteWorkspace);
-  const reorderWorkspace = useWorkspaceStore((store) => store.reorderWorkspace);
   const homeDir = useWorkspaceStore((store) => store.homeDir);
   const navigate = useNavigate();
   const pathname = useLocation({ select: (loc) => loc.pathname });
@@ -469,15 +442,9 @@ export default function Sidebar() {
   } | null>(null);
   const renamingProjectCommittedRef = useRef(false);
   const renamingProjectInputRef = useRef<HTMLInputElement | null>(null);
-  const dragInProgressRef = useRef(false);
-  const suppressProjectClickAfterDragRef = useRef(false);
   const intentThreadRetentionByIdRef = useRef(
     new Map<ThreadId, { release: () => void; timeoutId: number }>(),
   );
-  const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
-  const [renamingWorkspaceId, setRenamingWorkspaceId] = useState<string | null>(null);
-  const [renamingWorkspaceTitle, setRenamingWorkspaceTitle] = useState("");
-  const [installingDesktopUpdate, setInstallingDesktopUpdate] = useState(false);
   const selectedThreadIds = useThreadSelectionStore((s) => s.selectedThreadIds);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((s) => s.rangeSelectTo);
@@ -666,25 +633,6 @@ export default function Sidebar() {
   const projectById = useMemo(
     () => new Map(projects.map((project) => [project.id, project] as const)),
     [projects],
-  );
-  const workspaceRows = useMemo(
-    () =>
-      workspacePages.map((workspace) => {
-        const terminalState = selectThreadTerminalState(
-          terminalStateByThreadId,
-          workspaceThreadId(workspace.id),
-        );
-        return {
-          ...workspace,
-          terminalCount: terminalState.terminalOpen ? terminalState.terminalIds.length : 0,
-          terminalStatus: terminalStatusFromThreadState({
-            runningTerminalIds: terminalState.runningTerminalIds,
-            terminalAttentionStatesById: terminalState.terminalAttentionStatesById,
-          }),
-          runningTerminalIds: terminalState.runningTerminalIds,
-        };
-      }),
-    [terminalStateByThreadId, workspacePages],
   );
   const focusMostRecentThreadForProject = useCallback(
     (projectId: ProjectId) => {
@@ -910,6 +858,19 @@ export default function Sidebar() {
     [navigate],
   );
 
+  const {
+    workspaceRows,
+    renamingWorkspaceId,
+    renamingWorkspaceTitle,
+    setRenamingWorkspaceId,
+    setRenamingWorkspaceTitle,
+    handleCreateWorkspace,
+    beginWorkspaceRename,
+    commitWorkspaceRename,
+    handleDeleteWorkspace,
+    handleWorkspaceDragEnd,
+  } = useSidebarWorkspaces({ routeWorkspaceId, navigateToWorkspace });
+
   const handleSidebarViewChange = useCallback(
     (view: "threads" | "workspace") => {
       if (view === "workspace") {
@@ -963,11 +924,6 @@ export default function Sidebar() {
     ],
   );
 
-  const handleCreateWorkspace = useCallback(() => {
-    const workspaceId = createWorkspace();
-    navigateToWorkspace(workspaceId);
-  }, [createWorkspace, navigateToWorkspace]);
-
   useEffect(() => {
     if (!homeDir) {
       return;
@@ -980,67 +936,6 @@ export default function Sidebar() {
   const handleCreateHomeChat = useCallback(async () => {
     await handleNewChat({ fresh: true });
   }, [handleNewChat]);
-
-  const beginWorkspaceRename = useCallback((workspaceId: string, title: string) => {
-    setRenamingWorkspaceId(workspaceId);
-    setRenamingWorkspaceTitle(title);
-  }, []);
-
-  const commitWorkspaceRename = useCallback(() => {
-    if (!renamingWorkspaceId) {
-      return;
-    }
-    renameWorkspace(renamingWorkspaceId, renamingWorkspaceTitle);
-    setRenamingWorkspaceId(null);
-  }, [renameWorkspace, renamingWorkspaceId, renamingWorkspaceTitle]);
-
-  const handleDeleteWorkspace = useCallback(
-    async (workspaceId: string) => {
-      const workspaceThread = workspaceThreadId(workspaceId);
-      const api = readNativeApi();
-      const terminalState = selectThreadTerminalState(
-        useTerminalStateStore.getState().terminalStateByThreadId,
-        workspaceThread,
-      );
-
-      if (api && typeof api.terminal.close === "function") {
-        terminalRuntimeRegistry.disposeThread(workspaceThread);
-        await Promise.allSettled(
-          terminalState.terminalIds.map((terminalId) =>
-            api.terminal.close({
-              threadId: workspaceThread,
-              terminalId,
-              deleteHistory: true,
-            }),
-          ),
-        );
-      }
-
-      clearTerminalState(workspaceThread);
-      deleteWorkspace(workspaceId);
-
-      const nextWorkspaceId = useWorkspaceStore.getState().workspacePages[0]?.id ?? null;
-      if (routeWorkspaceId === workspaceId && nextWorkspaceId) {
-        navigateToWorkspace(nextWorkspaceId, { replace: true });
-      }
-    },
-    [clearTerminalState, deleteWorkspace, navigateToWorkspace, routeWorkspaceId],
-  );
-
-  const handleWorkspaceDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over || active.id === over.id) {
-        return;
-      }
-      const nextIndex = workspacePages.findIndex((workspace) => workspace.id === String(over.id));
-      if (nextIndex < 0) {
-        return;
-      }
-      reorderWorkspace(String(active.id), nextIndex);
-    },
-    [reorderWorkspace, workspacePages],
-  );
 
   const addProjectFromPath = useCallback(
     async (rawCwd: string, options: { createIfMissing?: boolean } = {}) => {
@@ -1564,51 +1459,19 @@ export default function Sidebar() {
     terminalStateByThreadId,
   });
 
-  const projectDnDSensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 6 },
-    }),
-  );
-  const projectCollisionDetection = useCallback<CollisionDetection>((args) => {
-    const pointerCollisions = pointerWithin(args);
-    if (pointerCollisions.length > 0) {
-      return pointerCollisions;
-    }
-
-    return closestCorners(args);
-  }, []);
-
-  const handleProjectDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      if (appSettings.sidebarProjectSortOrder !== "manual") {
-        dragInProgressRef.current = false;
-        return;
-      }
-      dragInProgressRef.current = false;
-      const { active, over } = event;
-      if (!over || active.id === over.id) return;
-      const activeProject = projects.find((project) => project.id === active.id);
-      const overProject = projects.find((project) => project.id === over.id);
-      if (!activeProject || !overProject) return;
-      reorderProjects(activeProject.id, overProject.id);
-    },
-    [appSettings.sidebarProjectSortOrder, projects, reorderProjects],
-  );
-
-  const handleProjectDragStart = useCallback(
-    (_event: DragStartEvent) => {
-      if (appSettings.sidebarProjectSortOrder !== "manual") {
-        return;
-      }
-      dragInProgressRef.current = true;
-      suppressProjectClickAfterDragRef.current = true;
-    },
-    [appSettings.sidebarProjectSortOrder],
-  );
-
-  const handleProjectDragCancel = useCallback((_event: DragCancelEvent) => {
-    dragInProgressRef.current = false;
-  }, []);
+  const {
+    projectDnDSensors,
+    projectCollisionDetection,
+    handleProjectDragEnd,
+    handleProjectDragStart,
+    handleProjectDragCancel,
+    dragInProgressRef,
+    suppressProjectClickAfterDragRef,
+  } = useSidebarProjectDnd({
+    sidebarProjectSortOrder: appSettings.sidebarProjectSortOrder,
+    projects,
+    reorderProjects,
+  });
 
   const animatedProjectListsRef = useRef(new WeakSet<HTMLElement>());
   const attachProjectListAutoAnimateRef = useCallback((node: HTMLElement | null) => {
@@ -2176,13 +2039,6 @@ export default function Sidebar() {
     };
   }, [activeSidebarThreadId, visibleSidebarThreadIds]);
 
-  // Pinned rows should show the user-facing project label, not the raw folder basename.
-  function resolvePinnedThreadProjectLabel(projectId: ProjectId): string | null {
-    const project = projectById.get(projectId);
-    if (!project) return null;
-    return project.name ?? project.folderName ?? null;
-  }
-
   // Keep hover actions in the same trailing slot used by the timestamp they replace.
   const handleConfirmArchive = useCallback(
     (threadId: ThreadId) => {
@@ -2216,7 +2072,7 @@ export default function Sidebar() {
       <SidebarPinnedThreadRow
         key={thread.id}
         thread={thread}
-        projectLabel={resolvePinnedThreadProjectLabel(thread.projectId)}
+        projectLabel={resolvePinnedThreadProjectLabel(projectById, thread.projectId)}
         terminalStateByThreadId={terminalStateByThreadId}
         pendingArchiveConfirmationThreadId={pendingArchiveConfirmationThreadId}
         visualActiveSidebarThreadId={visualActiveSidebarThreadId}
@@ -2404,83 +2260,17 @@ export default function Sidebar() {
     setShowThreadJumpHints,
   });
 
-  useEffect(() => {
-    if (!isElectron) return;
-    const bridge = window.desktopBridge;
-    if (
-      !bridge ||
-      typeof bridge.getUpdateState !== "function" ||
-      typeof bridge.onUpdateState !== "function"
-    ) {
-      return;
-    }
-
-    let disposed = false;
-    let receivedSubscriptionUpdate = false;
-    const unsubscribe = bridge.onUpdateState((nextState) => {
-      if (disposed) return;
-      receivedSubscriptionUpdate = true;
-      setDesktopUpdateState(nextState);
-    });
-
-    void bridge
-      .getUpdateState()
-      .then((nextState) => {
-        if (disposed || receivedSubscriptionUpdate) return;
-        setDesktopUpdateState(nextState);
-      })
-      .catch(() => undefined);
-
-    return () => {
-      disposed = true;
-      unsubscribe();
-    };
-  }, []);
-
-  const showDesktopUpdateButton = isElectron && shouldShowDesktopUpdateButton(desktopUpdateState);
-
-  const desktopUpdateTooltip = desktopUpdateState
-    ? getDesktopUpdateButtonTooltip(desktopUpdateState, {
-        installing: installingDesktopUpdate,
-      })
-    : "Update available";
-
-  const desktopUpdateButtonDisabled =
-    isDesktopUpdateButtonDisabled(desktopUpdateState) || installingDesktopUpdate;
-  const desktopUpdateButtonAction = desktopUpdateState
-    ? resolveDesktopUpdateButtonAction(desktopUpdateState)
-    : "none";
-  const desktopUpdateButtonPresentation = getDesktopUpdateButtonPresentation(desktopUpdateState, {
-    installing: installingDesktopUpdate,
-  });
-  const showArm64IntelBuildWarning =
-    isElectron && shouldShowArm64IntelBuildWarning(desktopUpdateState);
-  const arm64IntelBuildWarningDescription =
-    desktopUpdateState && showArm64IntelBuildWarning
-      ? getArm64IntelBuildWarningDescription(desktopUpdateState)
-      : null;
-  const desktopUpdateButtonInteractivityClasses = desktopUpdateButtonDisabled
-    ? "cursor-not-allowed opacity-60"
-    : "hover:brightness-110";
-  const desktopUpdateButtonVariant = getDesktopUpdateButtonVariant(desktopUpdateState, {
-    installing: installingDesktopUpdate,
-  });
-  const desktopUpdateButtonClasses =
-    desktopUpdateButtonVariant === "installing" || desktopUpdateButtonVariant === "progress"
-      ? "bg-sky-500 hover:bg-sky-600"
-      : desktopUpdateButtonVariant === "ready"
-        ? "bg-emerald-500 hover:bg-emerald-600"
-        : desktopUpdateButtonVariant === "error"
-          ? "bg-rose-500 hover:bg-rose-600"
-          : "bg-[var(--info)] hover:brightness-110";
-  const desktopUpdateButtonHasSecondaryLabel =
-    desktopUpdateButtonPresentation.secondaryLabel !== null;
-  const desktopUpdateRowButtonClasses = cn(
-    "inline-flex shrink-0 items-center justify-between gap-2 rounded-full px-2.5 text-center text-white transition-colors",
-    desktopUpdateButtonHasSecondaryLabel ? "min-h-6 py-1" : "h-6",
-    desktopUpdateButtonInteractivityClasses,
-    desktopUpdateButtonClasses,
-  );
+  const {
+    showDesktopUpdateButton,
+    desktopUpdateTooltip,
+    desktopUpdateButtonDisabled,
+    desktopUpdateButtonAction,
+    desktopUpdateButtonPresentation,
+    showArm64IntelBuildWarning,
+    arm64IntelBuildWarningDescription,
+    desktopUpdateRowButtonClasses,
+    handleDesktopUpdateButtonClick,
+  } = useSidebarDesktopUpdate();
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.new") ??
     shortcutLabelForCommand(keybindings, "chat.newLatestProject");
@@ -2577,132 +2367,6 @@ export default function Sidebar() {
     },
     [currentProjectShortcutTargetId, navigate, projectCwdById],
   );
-
-  const handleDesktopUpdateButtonClick = useCallback(() => {
-    const bridge = window.desktopBridge;
-    if (!bridge || !desktopUpdateState) return;
-    if (desktopUpdateButtonDisabled || desktopUpdateButtonAction === "none") return;
-
-    // Keep the sidebar action as the single visible entry point for manual checks.
-    if (desktopUpdateButtonAction === "check") {
-      void bridge
-        .checkForUpdates()
-        .then((nextState) => {
-          setInstallingDesktopUpdate(false);
-          setDesktopUpdateState(nextState);
-          if (nextState.status === "available") {
-            toastManager.add({
-              type: "success",
-              title: "Update available",
-              description: `Version ${nextState.availableVersion ?? "available"} is ready to download.`,
-            });
-            return;
-          }
-
-          if (nextState.status === "up-to-date") {
-            toastManager.add({
-              type: "info",
-              title: "You're up to date",
-              description: `Synara ${nextState.currentVersion} is already the newest version.`,
-            });
-            return;
-          }
-
-          if (nextState.status === "error") {
-            toastManager.add({
-              type: "error",
-              title: "Could not check for updates",
-              description: nextState.message ?? "An unexpected error occurred.",
-            });
-          }
-        })
-        .catch((error) => {
-          toastManager.add({
-            type: "error",
-            title: "Could not check for updates",
-            description: error instanceof Error ? error.message : "An unexpected error occurred.",
-          });
-        });
-      return;
-    }
-
-    if (desktopUpdateButtonAction === "download") {
-      void bridge
-        .downloadUpdate()
-        .then((result) => {
-          setInstallingDesktopUpdate(false);
-          setDesktopUpdateState(result.state);
-          if (result.completed) {
-            toastManager.add({
-              type: "success",
-              title: "Update downloaded",
-              description: "Restart the app from the update button to install it.",
-            });
-          }
-          const alreadyCurrentNotice = getDesktopUpdateAlreadyCurrentNotice(result);
-          if (alreadyCurrentNotice) {
-            toastManager.add({
-              type: "info",
-              title: "Already up to date",
-              description: alreadyCurrentNotice,
-            });
-            return;
-          }
-          if (!shouldToastDesktopUpdateActionResult(result)) return;
-          const actionError = getDesktopUpdateActionError(result);
-          if (!actionError) return;
-          toastManager.add({
-            type: "error",
-            title: "Could not download update",
-            description: actionError,
-          });
-        })
-        .catch((error) => {
-          toastManager.add({
-            type: "error",
-            title: "Could not start update download",
-            description: error instanceof Error ? error.message : "An unexpected error occurred.",
-          });
-        });
-      return;
-    }
-
-    if (desktopUpdateButtonAction === "install") {
-      setInstallingDesktopUpdate(true);
-      persistAppStateNow();
-      void bridge
-        .installUpdate()
-        .then((result) => {
-          setDesktopUpdateState(result.state);
-          setInstallingDesktopUpdate(false);
-          const alreadyCurrentNotice = getDesktopUpdateAlreadyCurrentNotice(result);
-          if (alreadyCurrentNotice) {
-            toastManager.add({
-              type: "info",
-              title: "Already up to date",
-              description: alreadyCurrentNotice,
-            });
-            return;
-          }
-          if (!shouldToastDesktopUpdateActionResult(result)) return;
-          const actionError = getDesktopUpdateActionError(result);
-          if (!actionError) return;
-          toastManager.add({
-            type: "error",
-            title: "Could not install update",
-            description: actionError,
-          });
-        })
-        .catch((error) => {
-          setInstallingDesktopUpdate(false);
-          toastManager.add({
-            type: "error",
-            title: "Could not install update",
-            description: error instanceof Error ? error.message : "An unexpected error occurred.",
-          });
-        });
-    }
-  }, [desktopUpdateButtonAction, desktopUpdateButtonDisabled, desktopUpdateState]);
 
   const expandThreadListForProject = useCallback((projectCwd: string) => {
     const cwdKey = normalizeSidebarProjectThreadListCwd(projectCwd);
