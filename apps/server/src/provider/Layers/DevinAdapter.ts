@@ -67,7 +67,7 @@ export interface DevinAcpRuntimeFactoryInput {
   readonly threadId: ThreadId;
   readonly resumeSessionId?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
-  readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
+  readonly childProcessSpawner?: ChildProcessSpawner.ChildProcessSpawner["Service"];
 }
 
 export interface DevinAdapterLiveOptions {
@@ -176,6 +176,11 @@ function extractDevinModelsFromConfigOptions(
 }
 
 function makeDefaultRuntimeFactory(input: DevinAcpRuntimeFactoryInput) {
+  if (!input.childProcessSpawner) {
+    throw new Error(
+      "childProcessSpawner is required for Devin ACP runtime (only omitted in test/mock paths)",
+    );
+  }
   const acpNativeLoggers = makeAcpNativeLoggers({
     nativeEventLogger: input.nativeEventLogger,
     provider: PROVIDER,
@@ -279,9 +284,7 @@ function makeProviderAdapter(
           threadId: input.threadId,
           ...(resumeSessionId ? { resumeSessionId } : {}),
           ...(options?.nativeEventLogger ? { nativeEventLogger: options.nativeEventLogger } : {}),
-          childProcessSpawner:
-            childProcessSpawner ??
-            (undefined as unknown as ChildProcessSpawner.ChildProcessSpawner["Service"]),
+          childProcessSpawner: childProcessSpawner ?? undefined,
         }).pipe(Effect.provideService(Scope.Scope, sessionScope));
 
         const started = yield* Effect.gen(function* () {
