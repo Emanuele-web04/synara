@@ -861,12 +861,15 @@ function makeProviderAdapter(
         }),
       listCommands: (input) =>
         Effect.gen(function* () {
-          const ctx = input.threadId
-            ? sessions.get(ThreadId.makeUnsafe(input.threadId))
-            : undefined;
-          if (ctx && !ctx.stopped) {
-            const commands = yield* ctx.acp.getAvailableCommands;
-            return { commands, source: "devin.acp", cached: false };
+          // A supplied threadId is a strict scope: never fall back to another
+          // session's commands, which could leak workspace-specific names.
+          if (input.threadId) {
+            const ctx = sessions.get(ThreadId.makeUnsafe(input.threadId));
+            if (ctx && !ctx.stopped) {
+              const commands = yield* ctx.acp.getAvailableCommands;
+              return { commands, source: "devin.acp", cached: false };
+            }
+            return { commands: [], source: "devin.acp", cached: false };
           }
           for (const candidate of sessions.values()) {
             if (candidate.stopped) continue;

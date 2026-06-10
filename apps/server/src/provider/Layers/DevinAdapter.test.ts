@@ -580,6 +580,108 @@ describe("DevinAdapterLive", () => {
     ),
   );
 
+  it.effect("does not return commands from another Devin session when threadId is unknown", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      const result = yield* adapter.listCommands!({
+        provider: "devin",
+        cwd: "/tmp/project",
+        threadId: "missing-thread",
+      });
+
+      assert.deepStrictEqual(result.commands, []);
+      assert.strictEqual(result.source, "devin.acp");
+      assert.strictEqual(result.cached, false);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () =>
+            Effect.succeed(
+              makeMockRuntime({
+                availableCommands: [{ name: "revert", description: "Revert changes" }],
+              }),
+            ),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("returns provider-global commands from any live session when threadId is omitted", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      const result = yield* adapter.listCommands!({ provider: "devin", cwd: "/tmp/project" });
+
+      assert.deepStrictEqual(result.commands, [
+        { name: "revert", description: "Revert changes" },
+        { name: "steps" },
+      ]);
+      assert.strictEqual(result.source, "devin.acp");
+      assert.strictEqual(result.cached, false);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () =>
+            Effect.succeed(
+              makeMockRuntime({
+                availableCommands: [
+                  { name: "revert", description: "Revert changes" },
+                  { name: "steps" },
+                ],
+              }),
+            ),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("does not return commands from a stopped matching session", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.stopSession(threadId);
+
+      const result = yield* adapter.listCommands!({
+        provider: "devin",
+        cwd: "/tmp/project",
+        threadId: String(threadId),
+      });
+
+      assert.deepStrictEqual(result.commands, []);
+      assert.strictEqual(result.source, "devin.acp");
+      assert.strictEqual(result.cached, false);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () =>
+            Effect.succeed(
+              makeMockRuntime({
+                availableCommands: [{ name: "revert", description: "Revert changes" }],
+              }),
+            ),
+        }),
+      ),
+    ),
+  );
+
   it.effect("composer capabilities advertise native slash-command discovery", () =>
     Effect.gen(function* () {
       const adapter = yield* DevinAdapter;
