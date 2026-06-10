@@ -1079,6 +1079,7 @@ export const makeWsRpcLayer = () =>
                 cwd: input.cwd ?? null,
                 homeDir: config.homeDir,
                 synaraBaseDir: config.baseDir,
+                includeDuplicateOrigins: true,
               }),
             ).pipe(
               Effect.map((skills) => ({

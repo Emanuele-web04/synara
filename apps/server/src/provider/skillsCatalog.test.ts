@@ -4,7 +4,7 @@
 // Layer: Server provider tests
 
 import { mkdtempSync, rmSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { access } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -87,6 +87,23 @@ describe("discoverSkillsCatalog", () => {
       "cursor-only",
       "Cursor",
     );
+    await writeSkill(
+      path.join(homeDir, ".gemini", "skills", "gemini-only"),
+      "gemini-only",
+      "Gemini",
+    );
+    await writeSkill(path.join(homeDir, ".grok", "skills", "grok-only"), "grok-only", "Grok");
+    await writeSkill(path.join(homeDir, ".kilo", "skills", "kilo-only"), "kilo-only", "Kilo");
+    await writeSkill(
+      path.join(homeDir, ".config", "opencode", "skills", "opencode-only"),
+      "opencode-only",
+      "OpenCode",
+    );
+    await writeSkill(
+      path.join(homeDir, ".pi", "agent", "skills", "pi-only"),
+      "pi-only",
+      "Pi",
+    );
 
     const skills = await discoverSkillsCatalog({ homeDir, synaraBaseDir });
     const byName = new Map(skills.map((skill) => [skill.name, skill]));
@@ -95,11 +112,51 @@ describe("discoverSkillsCatalog", () => {
     expect(byName.get("codex-only")?.scope).toBe("codex");
     expect(byName.get("claude-only")?.scope).toBe("claude");
     expect(byName.get("cursor-only")?.scope).toBe("cursor");
+    expect(byName.get("gemini-only")?.scope).toBe("gemini");
+    expect(byName.get("grok-only")?.scope).toBe("grok");
+    expect(byName.get("kilo-only")?.scope).toBe("kilo");
+    expect(byName.get("opencode-only")?.scope).toBe("opencode");
+    expect(byName.get("pi-only")?.scope).toBe("pi");
+  });
+
+  it("follows symlinked skill directories from provider homes", async () => {
+    const realSkillDir = path.join(root, "linked-skills", "check-code");
+    await writeSkill(realSkillDir, "check-code", "Linked Claude skill");
+    await mkdir(path.join(homeDir, ".claude", "skills"), { recursive: true });
+    await symlink(realSkillDir, path.join(homeDir, ".claude", "skills", "check-code"), "dir");
+
+    const skills = await discoverSkillsCatalog({
+      homeDir,
+      synaraBaseDir,
+      includeDuplicateOrigins: true,
+    });
+
+    const linkedSkill = skills.find((skill) => skill.name === "check-code");
+    expect(linkedSkill?.scope).toBe("claude");
+    expect(linkedSkill?.path).toContain(path.join(".claude", "skills", "check-code", "SKILL.md"));
+  });
+
+  it("can include duplicate skill names from different origins for settings", async () => {
+    await writeSkill(path.join(homeDir, ".codex", "skills", "reviewer"), "reviewer", "Codex");
+    await writeSkill(path.join(homeDir, ".claude", "skills", "reviewer"), "reviewer", "Claude");
+
+    const defaultCatalog = await discoverSkillsCatalog({ homeDir, synaraBaseDir });
+    expect(defaultCatalog.filter((skill) => skill.name === "reviewer")).toHaveLength(1);
+    expect(defaultCatalog.find((skill) => skill.name === "reviewer")?.scope).toBe("codex");
+
+    const settingsCatalog = await discoverSkillsCatalog({
+      homeDir,
+      synaraBaseDir,
+      includeDuplicateOrigins: true,
+    });
+    expect(settingsCatalog.filter((skill) => skill.name === "reviewer")).toHaveLength(2);
+    expect(settingsCatalog.map((skill) => skill.scope).sort()).toEqual(["claude", "codex"]);
   });
 
   it("prefers the provider-native copy and falls back to Synara for that provider", async () => {
     await writeSkill(path.join(synaraBaseDir, "skills", "shared"), "shared", "Synara copy");
     await writeSkill(path.join(homeDir, ".codex", "skills", "shared"), "shared", "Codex copy");
+    await writeSkill(path.join(homeDir, ".gemini", "skills", "shared"), "shared", "Gemini copy");
     await writeSkill(path.join(synaraBaseDir, "skills", "only-synara"), "only-synara", "Fallback");
 
     const codexView = await discoverSkillsCatalog({ homeDir, synaraBaseDir, provider: "codex" });
@@ -116,6 +173,70 @@ describe("discoverSkillsCatalog", () => {
     });
     const claudeShared = claudeView.find((skill) => skill.name === "shared");
     expect(claudeShared?.scope).toBe("synara");
+
+    const geminiView = await discoverSkillsCatalog({
+      homeDir,
+      synaraBaseDir,
+      provider: "gemini",
+    });
+    const geminiShared = geminiView.find((skill) => skill.name === "shared");
+    expect(geminiShared?.scope).toBe("gemini");
+  });
+
+  it("uses documented provider alias roots before Synara fallbacks", async () => {
+    await writeSkill(path.join(synaraBaseDir, "skills", "shared"), "shared", "Synara copy");
+    await writeSkill(path.join(homeDir, ".agents", "skills", "shared"), "shared", "Agents alias");
+    await writeSkill(path.join(homeDir, ".gemini", "skills", "shared"), "shared", "Gemini copy");
+
+    const geminiView = await discoverSkillsCatalog({
+      homeDir,
+      synaraBaseDir,
+      provider: "gemini",
+    });
+
+    expect(geminiView.find((skill) => skill.name === "shared")?.scope).toBe("agents");
+  });
+
+  it("uses provider-native roots before shared aliases for Grok and Pi", async () => {
+    await writeSkill(path.join(synaraBaseDir, "skills", "shared"), "shared", "Synara copy");
+    await writeSkill(path.join(homeDir, ".agents", "skills", "shared"), "shared", "Agents alias");
+    await writeSkill(path.join(homeDir, ".grok", "skills", "shared"), "shared", "Grok copy");
+    await writeSkill(path.join(homeDir, ".pi", "agent", "skills", "shared"), "shared", "Pi copy");
+
+    const grokView = await discoverSkillsCatalog({
+      homeDir,
+      synaraBaseDir,
+      provider: "grok",
+    });
+    const piView = await discoverSkillsCatalog({
+      homeDir,
+      synaraBaseDir,
+      provider: "pi",
+    });
+
+    expect(grokView.find((skill) => skill.name === "shared")?.scope).toBe("grok");
+    expect(piView.find((skill) => skill.name === "shared")?.scope).toBe("pi");
+  });
+
+  it("discovers Pi direct markdown skills from Pi roots", async () => {
+    const piRoot = path.join(homeDir, ".pi", "agent", "skills");
+    await mkdir(piRoot, { recursive: true });
+    await writeFile(
+      path.join(piRoot, "direct-review.md"),
+      `---
+name: direct-review
+description: Direct Pi markdown skill
+---
+
+# Direct Review
+`,
+    );
+
+    const skills = await discoverSkillsCatalog({ homeDir, synaraBaseDir });
+
+    const directSkill = skills.find((skill) => skill.name === "direct-review");
+    expect(directSkill?.scope).toBe("pi");
+    expect(directSkill?.path).toContain(path.join(".pi", "agent", "skills", "direct-review.md"));
   });
 
   it("serves cached results within the TTL and rescans on forceReload", async () => {

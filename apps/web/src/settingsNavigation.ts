@@ -122,7 +122,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "synara",
     label: "Skills",
     description: "Every skill found across providers, with toggles to control availability.",
-    icon: "sparkle",
+    icon: "building-blocks",
     eyebrow: "Agent skills",
   },
   {

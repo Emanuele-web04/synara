@@ -4,53 +4,50 @@
 // a skill comes from, and lets the user enable/disable each one. Disabled skills are
 // hidden from the composer skill picker on every provider.
 
-import type { ProviderKind, ProviderSkillDescriptor, ServerSettings } from "@t3tools/contracts";
-import { PROVIDER_DISPLAY_NAMES } from "@t3tools/contracts";
+import type { ProviderKind, ServerSettings } from "@t3tools/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { SettingsRow, SettingsSection } from "~/components/settings/SettingsPanelPrimitives";
 import { Switch } from "~/components/ui/switch";
+import { SkillCubeIcon } from "~/lib/icons";
 import { ensureNativeApi } from "~/nativeApi";
 import {
   providerDiscoveryQueryKeys,
   skillsCatalogQueryOptions,
 } from "~/lib/providerDiscoveryReactQuery";
 import { serverQueryKeys, serverSettingsQueryOptions } from "~/lib/serverReactQuery";
+import {
+  buildSettingsSkillGroups,
+  buildSettingsSkillSections,
+  providerDisplayName,
+  settingsSkillNameKey,
+} from "./skillsSettingsModel";
 
-interface SkillOriginInfo {
-  readonly label: string;
-  readonly provider: ProviderKind | null;
-}
-
-function skillOriginInfo(scope: string | undefined): SkillOriginInfo {
-  switch (scope) {
-    case "synara":
-      return { label: "Synara", provider: null };
-    case "codex":
-      return { label: PROVIDER_DISPLAY_NAMES.codex, provider: "codex" };
-    case "claude":
-      return { label: PROVIDER_DISPLAY_NAMES.claudeAgent, provider: "claudeAgent" };
-    case "cursor":
-      return { label: PROVIDER_DISPLAY_NAMES.cursor, provider: "cursor" };
-    case "agents":
-      return { label: "Shared (.agents)", provider: null };
-    case "project":
-      return { label: "Project", provider: null };
-    default:
-      return { label: scope ?? "Personal", provider: null };
+function SkillProviderStack({ providers }: { providers: ReadonlyArray<ProviderKind> }) {
+  if (providers.length === 0) {
+    return null;
   }
-}
 
-const ORIGIN_SECTION_ORDER = ["synara", "codex", "claude", "cursor", "agents", "project"] as const;
-
-function skillNameKey(name: string): string {
-  return name.trim().toLowerCase();
-}
-
-function skillDisplayName(skill: ProviderSkillDescriptor): string {
-  return skill.interface?.displayName ?? skill.name;
+  const label = providers.map(providerDisplayName).join(", ");
+  const stackLabel = `Provider ${providers.length === 1 ? "copy" : "copies"}: ${label}`;
+  return (
+    <span
+      className="inline-flex shrink-0 items-center -space-x-1"
+      aria-label={stackLabel}
+      title={stackLabel}
+    >
+      {providers.map((provider) => (
+        <span
+          key={provider}
+          className="inline-flex size-4 items-center justify-center rounded-full border border-background bg-background"
+        >
+          <ProviderIcon provider={provider} className="size-3" />
+        </span>
+      ))}
+    </span>
+  );
 }
 
 export function SkillsSettingsPanel() {
@@ -60,31 +57,18 @@ export function SkillsSettingsPanel() {
 
   const disabledSkillNames = useMemo(
     () =>
-      new Set((serverSettingsQuery.data?.skills.disabled ?? []).map((name) => skillNameKey(name))),
+      new Set(
+        (serverSettingsQuery.data?.skills.disabled ?? []).map((name) => settingsSkillNameKey(name)),
+      ),
     [serverSettingsQuery.data?.skills.disabled],
   );
 
-  const skillsByOrigin = useMemo(() => {
-    const groups = new Map<string, ProviderSkillDescriptor[]>();
-    for (const skill of catalogQuery.data?.skills ?? []) {
-      const origin = skill.scope ?? "personal";
-      const group = groups.get(origin) ?? [];
-      group.push(skill);
-      groups.set(origin, group);
-    }
-    for (const group of groups.values()) {
-      group.sort((left, right) => skillDisplayName(left).localeCompare(skillDisplayName(right)));
-    }
-    const orderedOrigins = [
-      ...ORIGIN_SECTION_ORDER.filter((origin) => groups.has(origin)),
-      ...[...groups.keys()].filter(
-        (origin) => !(ORIGIN_SECTION_ORDER as readonly string[]).includes(origin),
-      ),
-    ];
-    return orderedOrigins.map((origin) => ({
-      origin,
-      skills: groups.get(origin) ?? [],
-    }));
+  const skillGroups = useMemo(
+    () => buildSettingsSkillGroups(catalogQuery.data?.skills ?? []),
+    [catalogQuery.data?.skills],
+  );
+  const skillSections = useMemo(() => {
+    return buildSettingsSkillSections(catalogQuery.data?.skills ?? []);
   }, [catalogQuery.data?.skills]);
 
   const setSkillEnabled = (skillName: string, enabled: boolean) => {
@@ -92,8 +76,8 @@ export function SkillsSettingsPanel() {
     // build on each other instead of clobbering the previous patch.
     const latestSettings = queryClient.getQueryData<ServerSettings>(serverQueryKeys.settings());
     const currentDisabled = latestSettings?.skills.disabled ?? [...disabledSkillNames];
-    const key = skillNameKey(skillName);
-    const next = new Set(currentDisabled.map((name) => skillNameKey(name)));
+    const key = settingsSkillNameKey(skillName);
+    const next = new Set(currentDisabled.map((name) => settingsSkillNameKey(name)));
     if (enabled) {
       next.delete(key);
     } else {
@@ -119,10 +103,8 @@ export function SkillsSettingsPanel() {
       });
   };
 
-  const totalSkills = catalogQuery.data?.skills.length ?? 0;
-  const enabledSkills = (catalogQuery.data?.skills ?? []).filter(
-    (skill) => !disabledSkillNames.has(skillNameKey(skill.name)),
-  ).length;
+  const totalSkills = skillGroups.length;
+  const enabledSkills = skillGroups.filter((group) => !disabledSkillNames.has(group.key)).length;
   const synaraSkillsDir = catalogQuery.data?.synaraSkillsDir;
 
   return (
@@ -159,41 +141,54 @@ export function SkillsSettingsPanel() {
         <SettingsSection title="Skills">
           <SettingsRow
             title="No skills found"
-            description="Add a skill folder containing a SKILL.md to the Synara skills folder above, or install skills for Codex, Claude, or Cursor."
+            description="Add a skill folder containing a SKILL.md to the Synara skills folder above, or install skills for any supported provider."
           />
         </SettingsSection>
       ) : null}
 
-      {skillsByOrigin.map(({ origin, skills }) => {
-        const originInfo = skillOriginInfo(origin);
+      {skillSections.map((section) => {
         return (
-          <SettingsSection key={origin} title={`From ${originInfo.label}`}>
-            {skills.map((skill) => {
-              const enabled = !disabledSkillNames.has(skillNameKey(skill.name));
+          <SettingsSection key={section.key} title={section.title}>
+            {section.groups.map((group) => {
+              const enabled = !disabledSkillNames.has(group.key);
               return (
                 <SettingsRow
-                  key={skill.path}
-                  title={skillDisplayName(skill)}
-                  description={
-                    skill.interface?.shortDescription ?? skill.description ?? "No description."
-                  }
-                  status={
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <ProviderIcon
-                        provider={originInfo.provider}
-                        className="size-3 shrink-0"
-                        fallback={null}
+                  key={group.key}
+                  title={
+                    <span className="inline-flex min-w-0 items-center gap-1.5">
+                      <SkillCubeIcon
+                        aria-hidden="true"
+                        className="size-3.5 shrink-0 text-muted-foreground"
                       />
-                      <code className="truncate text-[11px] text-muted-foreground">
-                        {skill.path}
-                      </code>
+                      <span className="truncate">{group.displayName}</span>
+                    </span>
+                  }
+                  description={group.description}
+                  status={
+                    <span className="flex min-w-0 flex-col gap-1">
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <SkillProviderStack providers={group.providers} />
+                        <span className="truncate text-[11px] text-muted-foreground">
+                          {group.sources.map((source) => source.originInfo.label).join(" · ")}
+                        </span>
+                      </span>
+                      {group.sources.map((source) => (
+                        <code
+                          key={source.skill.path}
+                          className="truncate text-[11px] text-muted-foreground"
+                        >
+                          {source.skill.path}
+                        </code>
+                      ))}
                     </span>
                   }
                   control={
                     <Switch
                       checked={enabled}
-                      onCheckedChange={(checked) => setSkillEnabled(skill.name, Boolean(checked))}
-                      aria-label={`Enable the ${skillDisplayName(skill)} skill`}
+                      onCheckedChange={(checked) =>
+                        setSkillEnabled(group.primarySkill.name, Boolean(checked))
+                      }
+                      aria-label={`Enable the ${group.displayName} skill`}
                     />
                   }
                 />
