@@ -112,8 +112,8 @@ export function providerSkillsQueryOptions(input: {
 }
 
 // Unified cross-provider skills catalog (settings page); not filtered by toggles.
-// No placeholderData: the settings panel relies on `isLoading` to distinguish the
-// initial scan from a genuinely empty catalog.
+// Keep prior data during refetches so Settings does not flicker back to "Scanning..."
+// while the server refreshes filesystem discovery in the background.
 export function skillsCatalogQueryOptions(input?: { cwd?: string | null; enabled?: boolean }) {
   const cwd = input?.cwd ?? null;
   return queryOptions({
@@ -124,6 +124,7 @@ export function skillsCatalogQueryOptions(input?: { cwd?: string | null; enabled
     },
     enabled: input?.enabled ?? true,
     staleTime: 30_000,
+    placeholderData: (previous) => previous,
   });
 }
 

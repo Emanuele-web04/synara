@@ -72,7 +72,7 @@ description: Help globally
     }
   });
 
-  it("keeps the personal scope when the cwd lives under the home dir", async () => {
+  it("keeps the provider scope when the cwd lives under the home dir", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "cursor-skills-home-"));
     const homeDir = path.join(root, "home");
     const cwd = path.join(homeDir, "projects", "app");
@@ -95,7 +95,7 @@ description: Help globally
       const skills = await discoverCursorSkills({ cwd, homeDir });
 
       expect(skills).toHaveLength(1);
-      expect(skills[0]).toMatchObject({ name: "global-helper", scope: "personal" });
+      expect(skills[0]).toMatchObject({ name: "global-helper", scope: "cursor" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
