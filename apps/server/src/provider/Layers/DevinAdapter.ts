@@ -50,6 +50,7 @@ import { makeDevinAcpRuntime, type DevinAcpRuntimeSettings } from "../acp/DevinA
 import {
   elicitationFormToUserInputQuestions,
   userInputAnswersToElicitationContent,
+  validateUserInputAnswersForElicitation,
 } from "../acp/DevinElicitation.ts";
 import { applyDevinModeSelection } from "../acp/DevinModeMapper.ts";
 import { DEVIN_FALLBACK_MODELS, normalizeDevinModelSlug } from "../acp/DevinModelCatalog.ts";
@@ -85,7 +86,10 @@ interface PendingApproval {
   readonly kind: string;
 }
 
+type DevinFormElicitationRequest = Extract<EffectAcpSchema.ElicitationRequest, { mode: "form" }>;
+
 interface PendingUserInput {
+  readonly request: DevinFormElicitationRequest;
   readonly answers: Deferred.Deferred<ProviderUserInputAnswers>;
 }
 
@@ -336,7 +340,7 @@ function makeProviderAdapter(
               const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
               const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
               const answers = yield* Deferred.make<ProviderUserInputAnswers>();
-              pendingUserInputs.set(requestId, { answers });
+              pendingUserInputs.set(requestId, { request, answers });
               yield* publish({
                 type: "user-input.requested",
                 ...(yield* makeEventStamp()),
@@ -768,6 +772,16 @@ function makeProviderAdapter(
               provider: PROVIDER,
               method: "session/elicitation",
               detail: `Unknown pending user-input request: ${requestId}`,
+            });
+          }
+          // Reject invalid answers without resolving the deferred so the
+          // pending elicitation stays answerable.
+          const validation = validateUserInputAnswersForElicitation(pending.request, answers);
+          if (!validation.valid) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "respondToUserInput",
+              issue: `Invalid Devin elicitation answers: ${validation.issues.join("; ")}`,
             });
           }
           yield* Deferred.succeed(pending.answers, answers);
