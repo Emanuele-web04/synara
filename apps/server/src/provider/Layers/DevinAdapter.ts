@@ -220,7 +220,7 @@ function makeDefaultRuntimeFactory(input: DevinAcpRuntimeFactoryInput) {
     childProcessSpawner: input.childProcessSpawner,
     cwd: input.cwd,
     ...(input.resumeSessionId ? { resumeSessionId: input.resumeSessionId } : {}),
-    clientInfo: { name: "Synara", version: serverPackageJson.version },
+    clientInfo: { name: "windsurf", version: serverPackageJson.version },
     ...acpNativeLoggers,
   }).pipe(
     Effect.mapError(
