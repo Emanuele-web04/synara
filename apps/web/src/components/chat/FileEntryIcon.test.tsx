@@ -17,11 +17,11 @@ describe("FileEntryIcon", () => {
     expect(markup).toContain("text-[#61dafb]");
   });
 
-  it("tints folders with the shared folder color", () => {
+  it("renders folders with the neutral folder color", () => {
     const markup = renderToStaticMarkup(
       <FileEntryIcon pathValue="src/components" kind="directory" />,
     );
 
-    expect(markup).toContain("text-[#dcb85c]");
+    expect(markup).toContain("text-muted-foreground");
   });
 });

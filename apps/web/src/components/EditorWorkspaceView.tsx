@@ -8,12 +8,15 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Component,
   Suspense,
+  type ComponentPropsWithoutRef,
   type CSSProperties,
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
+  forwardRef,
+  memo,
   use,
   useCallback,
   useEffect,
@@ -22,8 +25,9 @@ import {
   useState,
 } from "react";
 
-import { ChangesIcon, DiffIcon, MessageCircleIcon, PanelRightCloseIcon } from "~/lib/icons";
+import { ChangesIcon, ChatBubbleIcon, DiffIcon, PanelRightCloseIcon } from "~/lib/icons";
 import { basenameOfPath } from "~/file-icons";
+import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
 import {
   buildFileDiffRenderKey,
   resolveDiffThemeName,
@@ -39,9 +43,10 @@ import {
 import {
   CHAT_FILE_REFERENCE_DRAG_TYPE,
   formatChatFileReference,
-  formatLineRangeLabel,
-  getSelectionLineRangeWithin,
+  formatSelectionLabel,
+  getSelectionWithin,
   type ChatFileReference,
+  type SelectionWithin,
 } from "~/lib/chatReferences";
 import {
   MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS,
@@ -62,6 +67,8 @@ import {
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
 } from "./chat/chatHeaderControls";
 import { FileEntryIcon } from "./chat/FileEntryIcon";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "./ui/collapsible";
+import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { DiffStat } from "./chat/DiffStatLabel";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
@@ -91,9 +98,9 @@ const EDITOR_EXPLORER_HIDDEN_DIRECTORY_NAMES = new Set([
 const EDITOR_CHAT_PANE_STORAGE_KEY = "synara.editor.chatPaneWidth";
 const EDITOR_SIDEBAR_VISIBLE_STORAGE_KEY = "synara.editor.sidebarVisible";
 const EDITOR_CHAT_PANE_VISIBLE_STORAGE_KEY = "synara.editor.chatPaneVisible";
-const EDITOR_CHAT_PANE_DEFAULT_WIDTH = 352;
-const EDITOR_CHAT_PANE_MIN_WIDTH = 288;
-const EDITOR_CHAT_PANE_MAX_WIDTH = 560;
+const EDITOR_CHAT_PANE_DEFAULT_WIDTH = 384;
+const EDITOR_CHAT_PANE_MIN_WIDTH = 320;
+const EDITOR_CHAT_PANE_MAX_WIDTH = 600;
 const EDITOR_CHAT_PANE_KEYBOARD_STEP = 24;
 
 interface EditorWorkspaceViewProps {
@@ -129,7 +136,7 @@ function setFileReferenceDragData(dataTransfer: DataTransfer, path: string): voi
 async function showFileReferenceContextMenu(input: {
   path: string;
   position: { x: number; y: number };
-  lineRange?: { startLine: number; endLine: number } | null;
+  selection?: SelectionWithin | null;
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
 }): Promise<void> {
@@ -137,9 +144,11 @@ async function showFileReferenceContextMenu(input: {
   if (!api) {
     return;
   }
-  const rangeLabel = input.lineRange
-    ? formatLineRangeLabel(input.lineRange.startLine, input.lineRange.endLine)
-    : null;
+  const reference: ChatFileReference = {
+    path: input.path,
+    ...(input.selection ?? {}),
+  };
+  const rangeLabel = formatSelectionLabel(reference);
   const clicked = await api.contextMenu.show(
     [
       ...(input.onReferenceInChat
@@ -163,11 +172,11 @@ async function showFileReferenceContextMenu(input: {
     input.position,
   );
   if (clicked === "reference-in-chat") {
-    input.onReferenceInChat?.({ path: input.path, ...input.lineRange });
+    input.onReferenceInChat?.(reference);
     return;
   }
   if (clicked === "ask-why-in-chat") {
-    input.onAskWhyInChat?.({ path: input.path, ...input.lineRange });
+    input.onAskWhyInChat?.(reference);
     return;
   }
   if (clicked === "copy-path") {
@@ -287,26 +296,47 @@ function useExplorerEntryPrefetch(cwd: string | null) {
   );
 }
 
-function ExplorerRow(props: {
-  entry: ProjectFileSystemEntry;
-  depth: number;
-  selected: boolean;
-  expanded: boolean;
-  onSelectFile: (path: string) => void;
-  onToggleDirectory: (path: string) => void;
-  onPrefetchEntry: (entry: ProjectFileSystemEntry) => void;
-  onEntryContextMenu: (entry: ProjectFileSystemEntry, position: { x: number; y: number }) => void;
-}) {
-  const { entry, expanded, onEntryContextMenu, onPrefetchEntry, onSelectFile, onToggleDirectory } =
-    props;
+// Forwards its ref and spreads incoming props so directory rows can act as the
+// Collapsible trigger (Base UI injects onClick/aria/data + ref onto this element).
+const ExplorerRow = forwardRef<
+  HTMLButtonElement,
+  {
+    entry: ProjectFileSystemEntry;
+    depth: number;
+    selected: boolean;
+    expanded: boolean;
+    onSelectFile: (path: string) => void;
+    onPrefetchEntry: (entry: ProjectFileSystemEntry) => void;
+    onEntryContextMenu: (entry: ProjectFileSystemEntry, position: { x: number; y: number }) => void;
+  } & ComponentPropsWithoutRef<"button">
+>(function ExplorerRow(
+  {
+    entry,
+    depth,
+    selected,
+    expanded,
+    onSelectFile,
+    onPrefetchEntry,
+    onEntryContextMenu,
+    className,
+    onClick,
+    ...rest
+  },
+  ref,
+) {
   const isDirectory = entry.kind === "directory";
-  const handleClick = useCallback(() => {
-    if (isDirectory) {
-      onToggleDirectory(entry.path);
-      return;
-    }
-    onSelectFile(entry.path);
-  }, [entry.path, isDirectory, onSelectFile, onToggleDirectory]);
+  // Directory rows are the Collapsible trigger: chain Base UI's injected onClick
+  // (which toggles open/close) and skip file selection. File rows open the preview.
+  const handleClick = useCallback(
+    (event: ReactMouseEvent<HTMLButtonElement>) => {
+      onClick?.(event);
+      if (isDirectory) {
+        return;
+      }
+      onSelectFile(entry.path);
+    },
+    [entry.path, isDirectory, onClick, onSelectFile],
+  );
   const handlePrefetch = useCallback(() => {
     onPrefetchEntry(entry);
   }, [entry, onPrefetchEntry]);
@@ -326,14 +356,17 @@ function ExplorerRow(props: {
 
   return (
     <button
+      {...rest}
+      ref={ref}
       type="button"
       className={cn(
         "flex h-7 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md pr-2 text-left text-[12px] transition-colors",
-        props.selected
+        selected
           ? "bg-[var(--color-background-button-secondary)] text-foreground"
           : "text-foreground/78 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
+        className,
       )}
-      style={{ paddingLeft: `${0.5 + props.depth * 0.75}rem` }}
+      style={{ paddingLeft: `${0.5 + depth * 0.75}rem` }}
       title={entry.path}
       draggable
       onDragStart={handleDragStart}
@@ -342,16 +375,19 @@ function ExplorerRow(props: {
       onFocus={handlePrefetch}
       onContextMenu={handleContextMenu}
     >
-      <FileEntryIcon
-        pathValue={entry.path}
-        kind={entry.kind}
-        expanded={expanded}
-        className="size-3.5 shrink-0 opacity-75"
-      />
+      {isDirectory ? (
+        <DisclosureChevron open={expanded} className="opacity-75" />
+      ) : (
+        <FileEntryIcon
+          pathValue={entry.path}
+          kind={entry.kind}
+          className="size-3.5 shrink-0 opacity-75"
+        />
+      )}
       <span className="min-w-0 truncate">{entry.name}</span>
     </button>
   );
-}
+});
 
 const EXPLORER_SKELETON_ROW_WIDTHS = ["w-9/12", "w-6/12", "w-7/12"];
 
@@ -407,20 +443,43 @@ function WorkspaceDirectory(props: {
   return (
     <>
       {(query.data?.entries ?? []).filter(shouldShowExplorerEntry).map((entry) => {
-        const expanded = entry.kind === "directory" && props.expandedDirectories.has(entry.path);
-        return (
-          <div key={entry.path}>
+        if (entry.kind !== "directory") {
+          return (
             <ExplorerRow
+              key={entry.path}
               entry={entry}
               depth={props.depth}
-              selected={entry.kind === "file" && entry.path === props.selectedFilePath}
-              expanded={expanded}
+              selected={entry.path === props.selectedFilePath}
+              expanded={false}
               onSelectFile={props.onSelectFile}
-              onToggleDirectory={props.onToggleDirectory}
               onPrefetchEntry={props.onPrefetchEntry}
               onEntryContextMenu={props.onEntryContextMenu}
             />
-            {expanded ? (
+          );
+        }
+        const expanded = props.expandedDirectories.has(entry.path);
+        return (
+          <Collapsible
+            key={entry.path}
+            open={expanded}
+            onOpenChange={() => props.onToggleDirectory(entry.path)}
+          >
+            <CollapsibleTrigger
+              render={
+                <ExplorerRow
+                  entry={entry}
+                  depth={props.depth}
+                  selected={false}
+                  expanded={expanded}
+                  onSelectFile={props.onSelectFile}
+                  onPrefetchEntry={props.onPrefetchEntry}
+                  onEntryContextMenu={props.onEntryContextMenu}
+                />
+              }
+            />
+            {/* Keep children mounted only while open (plus the closing transition Base UI
+                manages) so the height animation plays and lazy listings stay cached. */}
+            <CollapsiblePanel>
               <WorkspaceDirectory
                 cwd={props.cwd}
                 relativePath={entry.path}
@@ -432,8 +491,8 @@ function WorkspaceDirectory(props: {
                 onPrefetchEntry={props.onPrefetchEntry}
                 onEntryContextMenu={props.onEntryContextMenu}
               />
-            ) : null}
-          </div>
+            </CollapsiblePanel>
+          </Collapsible>
         );
       })}
     </>
@@ -539,7 +598,7 @@ function DiffFilesSidebar(props: {
   return (
     <aside className="flex min-h-[11rem] w-full shrink-0 flex-col border-b border-border/65 bg-[var(--color-background-surface)] lg:h-full lg:w-56 lg:border-b-0 lg:border-r">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/65 px-3">
-        <DiffIcon className="size-3.5 shrink-0 text-emerald-400" />
+        <DiffIcon className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/86">
           Changed files
         </span>
@@ -712,7 +771,12 @@ function SyntaxHighlightedFileContents(props: {
   themeName: DiffThemeName;
 }) {
   const language = useMemo(() => getSyntaxLanguageForPath(props.path), [props.path]);
-  const cacheKey = createSyntaxHighlightCacheKey(props.contents, language, props.themeName);
+  // The cache key hashes the whole file, so keep it off incidental re-renders
+  // (selection state, diff-warming churn) and only recompute when inputs change.
+  const cacheKey = useMemo(
+    () => createSyntaxHighlightCacheKey(props.contents, language, props.themeName),
+    [props.contents, language, props.themeName],
+  );
   const cachedHighlightedHtml = getCachedSyntaxHighlightedHtml(cacheKey);
 
   if (cachedHighlightedHtml != null) {
@@ -766,7 +830,14 @@ function UncachedSyntaxHighlightedFileContents(props: {
   );
 }
 
-function FileContentsView(props: { path: string; contents: string; themeName: DiffThemeName }) {
+// Memoized: its inputs (path, contents, themeName) are stable across the
+// FilePreview re-renders triggered by selection state and diff-warming, so the
+// highlighted body (and its cache lookup) is skipped unless the file changes.
+const FileContentsView = memo(function FileContentsView(props: {
+  path: string;
+  contents: string;
+  themeName: DiffThemeName;
+}) {
   const plain = <PlainFileContents contents={props.contents} />;
   if (props.contents.length === 0 || props.contents.length > MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS) {
     return plain;
@@ -783,7 +854,7 @@ function FileContentsView(props: { path: string; contents: string; themeName: Di
       </Suspense>
     </FilePreviewHighlightErrorBoundary>
   );
-}
+});
 
 // Mimics indented code lines so the placeholder reads as a file body
 // instead of a generic spinner block.
@@ -846,16 +917,16 @@ function FilePreview(props: {
     () => (fileContents.length === 0 ? 0 : fileContents.split("\n").length),
     [fileContents],
   );
-  // Highlight code -> floating "Add to chat" -> line-accurate reference,
-  // mirroring the transcript selection flow.
+  // Highlight code -> floating "Add to chat" -> reference that quotes exactly
+  // what was selected (down to a single word), mirroring the transcript flow.
   const readPreviewSelection = useCallback(
-    (container: HTMLElement) => getSelectionLineRangeWithin(container),
+    (container: HTMLElement) => getSelectionWithin(container),
     [],
   );
   const commitPreviewSelection = useCallback(
-    (lineRange: { startLine: number; endLine: number }) => {
+    (selection: SelectionWithin) => {
       if (selectedFilePath) {
-        onReferenceInChat?.({ path: selectedFilePath, ...lineRange });
+        onReferenceInChat?.({ path: selectedFilePath, ...selection });
       }
     },
     [onReferenceInChat, selectedFilePath],
@@ -874,11 +945,11 @@ function FilePreview(props: {
       }
       event.preventDefault();
       const container = contentsRef.current;
-      const lineRange = container ? getSelectionLineRangeWithin(container) : null;
+      const selection = container ? getSelectionWithin(container) : null;
       void showFileReferenceContextMenu({
         path: selectedFilePath,
         position: { x: event.clientX, y: event.clientY },
-        lineRange,
+        selection,
         onReferenceInChat,
         onAskWhyInChat,
       });
@@ -1030,13 +1101,17 @@ function EditorActivityBar(props: {
         active={props.centerMode === "diff" && props.sidebarVisible}
         onClick={() => props.onSelectMode("diff")}
       >
-        <ChangesIcon className="size-5 text-emerald-400" />
+        <ChangesIcon className="size-5" />
       </EditorActivityBarButton>
     </nav>
   );
 }
 
 export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
+  // The editor header sits flush against the window's left edge whenever the
+  // global sidebar is collapsed, so it has to clear the macOS traffic lights the
+  // same way every other chat-surface header does.
+  const trafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const [chatPaneWidth, setChatPaneWidth] = useState(readStoredEditorChatPaneWidth);
   const chatPaneResizeStateRef = useRef<EditorChatPaneResizeState | null>(null);
   // Both side surfaces can be hidden so the main content takes the full width:
@@ -1194,7 +1269,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
         )}
       >
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+        <div className={cn("flex min-w-0 flex-1 items-center gap-2", trafficLightGutterClassName)}>
           <span className="truncate text-[13px] font-medium text-foreground">
             {props.projectName ?? "Workspace"}
           </span>
@@ -1221,7 +1296,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           className="w-[5.5rem] gap-1.5"
           onClick={props.onExitEditorView}
         >
-          <MessageCircleIcon className="size-3.5" />
+          <ChatBubbleIcon className="size-3.5" />
           <span className="truncate font-normal">Chat</span>
         </ChatHeaderButton>
       </div>

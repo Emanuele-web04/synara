@@ -129,6 +129,8 @@ export interface EnvironmentPanelProps {
   onRenameThreadMarker: (markerId: ThreadMarkerId, label: string | null) => void;
   /** Persist updated notes for the given thread (bound per section instance, not the active thread). */
   onNotesChange: (threadId: ThreadId, notes: string) => Promise<void>;
+  /** Open the in-app editor workspace view (the Editor section's default first row). */
+  onOpenEditorView?: (() => void) | null;
   /** Dismiss the panel overlay — invoked after actions that open the dock. */
   onClose: () => void;
 }
@@ -196,6 +198,7 @@ export function EnvironmentPanel({
   onRemoveThreadMarker,
   onRenameThreadMarker,
   onNotesChange,
+  onOpenEditorView = null,
   onClose,
 }: EnvironmentPanelProps) {
   const navigate = useNavigate();
@@ -280,6 +283,14 @@ export function EnvironmentPanel({
           keybindings={keybindings}
           availableEditors={availableEditors}
           openInCwd={openInCwd}
+          {...(onOpenEditorView
+            ? {
+                onOpenEditorView: () => {
+                  onOpenEditorView();
+                  onClose();
+                },
+              }
+            : {})}
         />
       ) : null}
 

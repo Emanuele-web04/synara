@@ -1611,7 +1611,8 @@ function SettingsRouteView() {
           {renderBooleanSettingRow({
             settingKey: "showEnvironmentEditor",
             title: "Editor",
-            description: "Show the Open in editor picker in the chat Environment panel.",
+            description:
+              "Show the Editor section (in-app editor view and Open in editor picker) in the chat Environment panel.",
             resetLabel: "editor section",
             ariaLabel: "Show the Editor section in the Environment panel",
           })}

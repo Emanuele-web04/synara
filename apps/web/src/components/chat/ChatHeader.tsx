@@ -22,7 +22,6 @@ import GitActionsControl from "../GitActionsControl";
 import {
   ArrowRightIcon,
   CheckIcon,
-  Columns2Icon,
   HandoffIcon,
   HistoryIcon,
   MessageCircleIcon,
@@ -115,11 +114,6 @@ interface ChatHeaderProps {
     kind: "split" | "maximize";
     label: string;
     shortcutLabel: string | null;
-    onClick: () => void;
-  } | null;
-  viewModeAction?: {
-    label: string;
-    active: boolean;
     onClick: () => void;
   } | null;
   changeThreadAction?: {
@@ -514,7 +508,6 @@ export const ChatHeader = memo(function ChatHeader({
   isSidechat = false,
   environment = null,
   chatLayoutAction = null,
-  viewModeAction = null,
   changeThreadAction = null,
   editorChatControls = null,
   onRunProjectScript,
@@ -817,26 +810,6 @@ export const ChatHeader = memo(function ChatHeader({
               }
             />
             <TooltipPopup side="bottom">{inlineChatLayoutAction.label}</TooltipPopup>
-          </Tooltip>
-        ) : null}
-
-        {!isDisposableThread && viewModeAction ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <ChatHeaderButton
-                  type="button"
-                  tone="outline"
-                  aria-pressed={viewModeAction.active}
-                  onClick={viewModeAction.onClick}
-                  className={compact ? "gap-1" : "gap-1.5"}
-                >
-                  <Columns2Icon className="size-3.5" />
-                  {!compact ? <span className="truncate font-normal">Editor</span> : null}
-                </ChatHeaderButton>
-              }
-            />
-            <TooltipPopup side="bottom">{viewModeAction.label}</TooltipPopup>
           </Tooltip>
         ) : null}
 

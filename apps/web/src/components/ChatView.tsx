@@ -8165,6 +8165,7 @@ export default function ChatView({
     onRemoveThreadMarker: handleRemoveThreadMarker,
     onRenameThreadMarker: handleRenameThreadMarker,
     onNotesChange: handleNotesChange,
+    onOpenEditorView: viewModeAction?.onClick ?? null,
     onClose: () => setEnvironmentPanelOpen(false),
   };
   // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
@@ -8728,7 +8729,6 @@ export default function ChatView({
                   }
                 : null
           }
-          viewModeAction={viewModeAction}
           editorChatControls={
             isEditorRail && activeProject
               ? {
