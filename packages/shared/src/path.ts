@@ -20,3 +20,16 @@ export function isExplicitRelativePath(value: string): boolean {
     value.startsWith("..\\")
   );
 }
+
+// True for workspace-relative paths that cannot escape the workspace root:
+// rejects absolute paths (POSIX and Windows) and any "." / ".." segments.
+export function isWorkspaceRelativePathSafe(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+  if (trimmed.startsWith("/") || isWindowsAbsolutePath(trimmed)) {
+    return false;
+  }
+  return trimmed.split(/[\\/]/).every((segment) => segment !== ".." && segment !== ".");
+}

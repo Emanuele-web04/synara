@@ -40,6 +40,7 @@ import {
   IconFolder,
   IconFolderOpen,
   IconEdit,
+  IconHistory,
   IconInfoCircle,
   IconLayoutDistributeHorizontal,
   IconListCheck,
@@ -167,6 +168,7 @@ export const McpIcon: LucideIcon = (props) => (
 );
 export const PluginIcon: LucideIcon = centralIconWrapper("puzzle");
 export const HammerIcon = adaptIcon(IconTool);
+export const HistoryIcon = adaptIcon(IconHistory);
 export const InfoIcon = adaptIcon(IconInfoCircle);
 export const ListChecksIcon = adaptIcon(IconListCheck);
 export const ListTodoIcon = adaptIcon(IconListDetails);

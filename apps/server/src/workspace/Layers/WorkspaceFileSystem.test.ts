@@ -1,3 +1,5 @@
+import * as NodeFs from "node:fs/promises";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect } from "vitest";
 import { it } from "@effect/vitest";
@@ -39,6 +41,100 @@ const writeTextFile = Effect.fn(function* (cwd: string, relativePath: string, co
 });
 
 it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
+  describe("readFile", () => {
+    it.effect("reads files relative to the workspace root", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "src/app.ts", "export const value = 1;\n");
+
+        const result = yield* workspaceFileSystem.readFile({
+          cwd,
+          relativePath: "src/app.ts",
+        });
+
+        expect(result).toEqual({
+          relativePath: "src/app.ts",
+          contents: "export const value = 1;\n",
+          truncated: false,
+        });
+      }),
+    );
+
+    it.effect("returns a truncated prefix for large files", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "large.txt", "abcdef");
+
+        const result = yield* workspaceFileSystem.readFile({
+          cwd,
+          relativePath: "large.txt",
+          maxBytes: 3,
+        });
+
+        expect(result).toEqual({
+          relativePath: "large.txt",
+          contents: "abc",
+          truncated: true,
+        });
+      }),
+    );
+
+    it.effect("rejects reads outside the workspace root", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+
+        const error = yield* workspaceFileSystem
+          .readFile({ cwd, relativePath: "../escape.md" })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain(
+          "Workspace file path must be relative to the project root: ../escape.md",
+        );
+      }),
+    );
+
+    it.effect("rejects symlinks that escape the workspace root", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const outside = yield* makeTempDir;
+        yield* writeTextFile(outside, "secret.txt", "top secret\n");
+        yield* Effect.promise(() =>
+          NodeFs.symlink(path.join(outside, "secret.txt"), path.join(cwd, "innocent.txt")),
+        );
+
+        const error = yield* workspaceFileSystem
+          .readFile({ cwd, relativePath: "innocent.txt" })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain(
+          "Workspace file path must be relative to the project root: innocent.txt",
+        );
+      }),
+    );
+
+    it.effect("follows symlinks that resolve inside the workspace root", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "src/app.ts", "export const value = 1;\n");
+        yield* Effect.promise(() =>
+          NodeFs.symlink(path.join(cwd, "src/app.ts"), path.join(cwd, "alias.ts")),
+        );
+
+        const result = yield* workspaceFileSystem.readFile({ cwd, relativePath: "alias.ts" });
+
+        expect(result.contents).toBe("export const value = 1;\n");
+        expect(result.truncated).toBe(false);
+      }),
+    );
+  });
+
   describe("writeFile", () => {
     it.effect("writes files relative to the workspace root", () =>
       Effect.gen(function* () {

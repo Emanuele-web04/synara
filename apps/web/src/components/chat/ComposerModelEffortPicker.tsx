@@ -42,7 +42,6 @@ import {
   ComposerPickerMenuSubPopup,
   ComposerPickerTooltipPopup,
 } from "./ComposerPickerMenuPopup";
-import { COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME } from "./composerPickerStyles";
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
 import {
   getProviderIconClassName,
@@ -62,6 +61,10 @@ type ComposerModelEffortPickerProps = {
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
   compact?: boolean;
+  // Narrow-composer degradation: drop the model name (provider icon stays)
+  // and/or the effort/status label; both remain available to assistive tech.
+  hideModelLabel?: boolean;
+  hideStatusLabel?: boolean;
   disabled?: boolean;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
   onSelectionCommitted?: () => void;
@@ -180,6 +183,13 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
     props.onSelectionCommitted?.();
   }, [props, setMenuOpen]);
 
+  const hiddenTriggerTitle = [
+    props.hideModelLabel ? modelLabel : null,
+    props.hideStatusLabel ? triggerStatusLabel : null,
+  ]
+    .filter((part): part is string => typeof part === "string" && part.length > 0)
+    .join(" · ");
+
   const triggerButton = (
     <Button
       size="sm"
@@ -190,6 +200,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
         COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
       )}
       aria-label="Change model and reasoning"
+      {...(hiddenTriggerTitle.length > 0 ? { title: hiddenTriggerTitle } : {})}
     />
   );
 
@@ -202,7 +213,11 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
           getProviderIconClassName(activeProvider, "text-[var(--color-text-foreground)]"),
         )}
       />
-      <span className="min-w-0 truncate text-[var(--color-text-foreground)]">{modelLabel}</span>
+      {props.hideModelLabel ? (
+        <span className="sr-only">{modelLabel}</span>
+      ) : (
+        <span className="min-w-0 truncate text-[var(--color-text-foreground)]">{modelLabel}</span>
+      )}
       {showsFastBadge ? (
         <IoFlash
           aria-hidden="true"
@@ -210,9 +225,13 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
         />
       ) : null}
       {triggerStatusLabel ? (
-        <span className={cn("shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>
-          {triggerStatusLabel}
-        </span>
+        props.hideStatusLabel ? (
+          <span className="sr-only">{triggerStatusLabel}</span>
+        ) : (
+          <span className={cn("shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>
+            {triggerStatusLabel}
+          </span>
+        )
       ) : null}
       <ChevronDownIcon aria-hidden="true" className="ms-0.5 size-3 shrink-0 opacity-60" />
     </span>
@@ -250,6 +269,24 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
         <MenuTrigger render={triggerButton}>{triggerContent}</MenuTrigger>
       )}
       <ComposerPickerMenuPopup align="end" side="top" fixedWidth>
+        <ProviderModelMenuItems
+          provider={props.provider}
+          model={props.model}
+          lockedProvider={props.lockedProvider}
+          {...(props.providers ? { providers: props.providers } : {})}
+          modelOptionsByProvider={props.modelOptionsByProvider}
+          {...(props.loadingModelProviders
+            ? { loadingModelProviders: props.loadingModelProviders }
+            : {})}
+          {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
+          {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
+          {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
+          onProviderModelChange={props.onProviderModelChange}
+          onAfterSelection={handleAfterModelSelection}
+        />
+
+        {hasTraitsTopSection || supportsFastModeControl ? <MenuSeparator /> : null}
+
         {hasTraitsTopSection ? (
           <TraitsMenuContent
             provider={props.provider}
@@ -265,38 +302,6 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
             onSelectionComplete={handleAfterTraitsSelection}
           />
         ) : null}
-
-        {hasTraitsTopSection ? <MenuSeparator /> : null}
-
-        <MenuSub>
-          <MenuSubTrigger>
-            <ProviderIcon
-              aria-hidden="true"
-              className={cn("size-3 shrink-0", getProviderIconClassName(activeProvider))}
-            />
-            <span className="truncate">{modelLabel}</span>
-          </MenuSubTrigger>
-          <ComposerPickerMenuSubPopup
-            fixedWidth
-            className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
-          >
-            <ProviderModelMenuItems
-              provider={props.provider}
-              model={props.model}
-              lockedProvider={props.lockedProvider}
-              {...(props.providers ? { providers: props.providers } : {})}
-              modelOptionsByProvider={props.modelOptionsByProvider}
-              {...(props.loadingModelProviders
-                ? { loadingModelProviders: props.loadingModelProviders }
-                : {})}
-              {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
-              {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
-              {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
-              onProviderModelChange={props.onProviderModelChange}
-              onAfterSelection={handleAfterModelSelection}
-            />
-          </ComposerPickerMenuSubPopup>
-        </MenuSub>
 
         {supportsFastModeControl ? (
           <MenuSub>

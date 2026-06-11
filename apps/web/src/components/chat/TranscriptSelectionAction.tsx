@@ -10,8 +10,10 @@ interface TranscriptSelectionActionProps {
   left: number;
   top: number;
   placement: "top" | "bottom";
-  onHighlight: () => void;
-  onUnderline: () => void;
+  // Highlight/underline only make sense for transcript text; read-only code
+  // surfaces (file preview, diff view) omit them and get an add-only toolbar.
+  onHighlight?: (() => void) | undefined;
+  onUnderline?: (() => void) | undefined;
   onAddToChat: () => void;
 }
 
@@ -61,12 +63,16 @@ export function TranscriptSelectionAction(props: TranscriptSelectionActionProps)
           props.placement === "top" ? "origin-bottom" : "origin-top",
         )}
       >
-        <TranscriptSelectionToolbarButton label="Highlight" onClick={props.onHighlight}>
-          <PencilIcon className="size-3.5" />
-        </TranscriptSelectionToolbarButton>
-        <TranscriptSelectionToolbarButton label="Underline" onClick={props.onUnderline}>
-          <TextWrapIcon className="size-3.5" />
-        </TranscriptSelectionToolbarButton>
+        {props.onHighlight ? (
+          <TranscriptSelectionToolbarButton label="Highlight" onClick={props.onHighlight}>
+            <PencilIcon className="size-3.5" />
+          </TranscriptSelectionToolbarButton>
+        ) : null}
+        {props.onUnderline ? (
+          <TranscriptSelectionToolbarButton label="Underline" onClick={props.onUnderline}>
+            <TextWrapIcon className="size-3.5" />
+          </TranscriptSelectionToolbarButton>
+        ) : null}
         <TranscriptSelectionToolbarButton label="Add to chat" onClick={props.onAddToChat}>
           <MessageCircleIcon className="size-3.5" />
         </TranscriptSelectionToolbarButton>

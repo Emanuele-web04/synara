@@ -3,7 +3,6 @@
 // Layer: Web chat presentation component
 // Exports: ChatMarkdown
 
-import { DiffsHighlighter, getSharedHighlighter, SupportedLanguages } from "@pierre/diffs";
 import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
 import type { ThreadMarker } from "@t3tools/contracts";
 import React, {
@@ -30,12 +29,17 @@ import remarkMath from "remark-math";
 import { openInPreferredEditor } from "../editorPreferences";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
-import { fnv1a32 } from "../lib/diffRendering";
 import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeFence";
+import {
+  cacheSyntaxHighlightedHtml,
+  createSyntaxHighlightCacheKey,
+  getCachedSyntaxHighlightedHtml,
+  getSyntaxHighlighterPromise,
+  highlightCodeToHtmlWithFallback,
+} from "../lib/syntaxHighlighting";
 import { getFileIconName } from "../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
-import { LRUCache } from "../lib/lruCache";
 import { useTheme } from "../hooks/useTheme";
 import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
 import { readNativeApi } from "../nativeApi";
@@ -89,13 +93,6 @@ interface ChatMarkdownProps {
 }
 
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
-const MAX_HIGHLIGHT_CACHE_ENTRIES = 500;
-const MAX_HIGHLIGHT_CACHE_MEMORY_BYTES = 50 * 1024 * 1024;
-const highlightedCodeCache = new LRUCache<string>(
-  MAX_HIGHLIGHT_CACHE_ENTRIES,
-  MAX_HIGHLIGHT_CACHE_MEMORY_BYTES,
-);
-const highlighterPromiseCache = new Map<string, Promise<DiffsHighlighter>>();
 type MarkdownRemarkPlugins = NonNullable<
   React.ComponentProps<typeof ReactMarkdown>["remarkPlugins"]
 >;
@@ -673,35 +670,6 @@ function extractCodeBlock(
   };
 }
 
-function createHighlightCacheKey(code: string, language: string, themeName: DiffThemeName): string {
-  return `${fnv1a32(code).toString(36)}:${code.length}:${language}:${themeName}`;
-}
-
-function estimateHighlightedSize(html: string, code: string): number {
-  return Math.max(html.length * 2, code.length * 3);
-}
-
-function getHighlighterPromise(language: string): Promise<DiffsHighlighter> {
-  const cached = highlighterPromiseCache.get(language);
-  if (cached) return cached;
-
-  const promise = getSharedHighlighter({
-    themes: [resolveDiffThemeName("dark"), resolveDiffThemeName("light")],
-    langs: [language as SupportedLanguages],
-    preferredHighlighter: "shiki-js",
-  }).catch((err) => {
-    highlighterPromiseCache.delete(language);
-    if (language === "text") {
-      // "text" itself failed — Shiki cannot initialize at all, surface the error
-      throw err;
-    }
-    // Language not supported by Shiki — fall back to "text"
-    return getHighlighterPromise("text");
-  });
-  highlighterPromiseCache.set(language, promise);
-  return promise;
-}
-
 function CodeBlockHeaderTitle({ fence }: { fence: CodeFenceInfo }) {
   if (fence.isFileReference && fence.fileName) {
     return (
@@ -809,8 +777,8 @@ function SuspenseShikiCodeBlock({
   themeName,
   isStreaming,
 }: SuspenseShikiCodeBlockProps) {
-  const cacheKey = createHighlightCacheKey(code, language, themeName);
-  const cachedHighlightedHtml = !isStreaming ? highlightedCodeCache.get(cacheKey) : null;
+  const cacheKey = createSyntaxHighlightCacheKey(code, language, themeName);
+  const cachedHighlightedHtml = !isStreaming ? getCachedSyntaxHighlightedHtml(cacheKey) : null;
 
   if (cachedHighlightedHtml != null) {
     return (
@@ -821,28 +789,34 @@ function SuspenseShikiCodeBlock({
     );
   }
 
-  const highlighter = use(getHighlighterPromise(language));
+  // The uncached path lives in its own component: an early return above must
+  // not change this component's hook order once the cache fills.
+  return (
+    <UncachedShikiCodeBlock
+      cacheKey={cacheKey}
+      language={language}
+      code={code}
+      themeName={themeName}
+      isStreaming={isStreaming}
+    />
+  );
+}
+
+function UncachedShikiCodeBlock({
+  cacheKey,
+  language,
+  code,
+  themeName,
+  isStreaming,
+}: SuspenseShikiCodeBlockProps & { cacheKey: string }) {
+  const highlighter = use(getSyntaxHighlighterPromise(language));
   const highlightedHtml = useMemo(() => {
-    try {
-      return highlighter.codeToHtml(code, { lang: language, theme: themeName });
-    } catch (error) {
-      // Log highlighting failures for debugging while falling back to plain text
-      console.warn(
-        `Code highlighting failed for language "${language}", falling back to plain text.`,
-        error instanceof Error ? error.message : error,
-      );
-      // If highlighting fails for this language, render as plain text
-      return highlighter.codeToHtml(code, { lang: "text", theme: themeName });
-    }
+    return highlightCodeToHtmlWithFallback(highlighter, code, language, themeName);
   }, [code, highlighter, language, themeName]);
 
   useEffect(() => {
     if (!isStreaming) {
-      highlightedCodeCache.set(
-        cacheKey,
-        highlightedHtml,
-        estimateHighlightedSize(highlightedHtml, code),
-      );
+      cacheSyntaxHighlightedHtml(cacheKey, highlightedHtml, code);
     }
   }, [cacheKey, code, highlightedHtml, isStreaming]);
 

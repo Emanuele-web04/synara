@@ -7,7 +7,7 @@ import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { memo } from "react";
 import { cn } from "~/lib/utils";
 import type { RenderablePatch } from "~/lib/diffRendering";
-import { DiffPanelFileList } from "./DiffPanelFileList";
+import { DiffPanelFileList, type DiffFileChatActions } from "./DiffPanelFileList";
 import { DiffPanelLoadingState } from "./DiffPanelShell";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 
@@ -22,6 +22,7 @@ export const DiffPanelPatchViewport = memo(
     diffWordWrap: boolean;
     collapsedFiles: ReadonlySet<string>;
     onToggleFileCollapsed: (fileKey: string) => void;
+    chatActions?: DiffFileChatActions | undefined;
     isLoading: boolean;
     hasNoChanges: boolean;
     error: string | null;
@@ -79,6 +80,7 @@ export const DiffPanelPatchViewport = memo(
             diffWordWrap={props.diffWordWrap}
             collapsedFiles={props.collapsedFiles}
             onToggleFileCollapsed={props.onToggleFileCollapsed}
+            chatActions={props.chatActions}
           />
         </div>
       );
@@ -111,6 +113,7 @@ export const DiffPanelPatchViewport = memo(
       previous.diffWordWrap === next.diffWordWrap &&
       previous.collapsedFiles === next.collapsedFiles &&
       previous.onToggleFileCollapsed === next.onToggleFileCollapsed &&
+      previous.chatActions === next.chatActions &&
       previous.isLoading === next.isLoading &&
       previous.hasNoChanges === next.hasNoChanges &&
       previous.error === next.error &&

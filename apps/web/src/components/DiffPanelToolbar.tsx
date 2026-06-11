@@ -7,11 +7,12 @@
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import type { ThreadId, TurnId } from "@t3tools/contracts";
 import { FaPlusMinus } from "react-icons/fa6";
-import { memo, useMemo, type ReactNode } from "react";
+import { memo, useMemo, useState, type ReactNode } from "react";
 
 import GitActionsControl from "~/components/GitActionsControl";
 import {
   ChangesIcon,
+  Columns2Icon,
   CopyIcon,
   DiffIcon,
   EllipsisIcon,
@@ -19,6 +20,7 @@ import {
   GitBranchIcon,
   GitCommitIcon,
   ListChecksIcon,
+  Rows3Icon,
   XIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -37,11 +39,7 @@ import {
 import { DiffPanelFileJumpMenu } from "./DiffPanelFileJumpMenu";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { EnvironmentRowBody, EnvironmentRowChevron } from "./chat/environment/EnvironmentRow";
-import {
-  ChatHeaderDiffRenderModePicker,
-  DOCK_HEADER_ICON_BUTTON_CLASS,
-  type DiffRenderMode,
-} from "./chat/chatHeaderControls";
+import { DOCK_HEADER_ICON_BUTTON_CLASS, type DiffRenderMode } from "./chat/chatHeaderControls";
 import { DiffStat } from "./chat/DiffStatLabel";
 import { IconButton } from "./ui/icon-button";
 import {
@@ -66,6 +64,8 @@ const DIFF_PANEL_PICKER_TRIGGER_CLASS_NAME = cn(
 );
 
 const DIFF_PANEL_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground";
+const INITIAL_VISIBLE_TURN_COUNT = 5;
+const TURN_SHOW_MORE_INCREMENT = 20;
 
 const DIFF_PANEL_TOOLBAR_ICON_BUTTON_CLASS_NAME = "text-muted-foreground hover:text-foreground";
 
@@ -148,6 +148,7 @@ function resolveTurnNumber(
 }
 
 export const DiffPanelToolbar = memo(function DiffPanelToolbar(props: DiffPanelToolbarProps) {
+  const [visibleTurnCount, setVisibleTurnCount] = useState(INITIAL_VISIBLE_TURN_COUNT);
   const scopePickerLabel = useMemo(
     () => resolveDiffPanelPickerLabel(props.viewSource, props.turnScopeIntent),
     [props.turnScopeIntent, props.viewSource],
@@ -187,6 +188,22 @@ export const DiffPanelToolbar = memo(function DiffPanelToolbar(props: DiffPanelT
     latestTurnId,
     turnScopeIntent: props.turnScopeIntent,
   });
+  const selectedTurnIndex = props.selectedTurnId
+    ? props.orderedTurnDiffSummaries.findIndex((summary) => summary.turnId === props.selectedTurnId)
+    : -1;
+  const effectiveVisibleTurnCount = Math.max(
+    visibleTurnCount,
+    selectedTurnIndex >= 0 ? selectedTurnIndex + 1 : 0,
+  );
+  const visibleTurnSummaries = props.orderedTurnDiffSummaries.slice(0, effectiveVisibleTurnCount);
+  const hiddenTurnCount = Math.max(
+    0,
+    props.orderedTurnDiffSummaries.length - visibleTurnSummaries.length,
+  );
+  const nextVisibleTurnCount = Math.min(
+    props.orderedTurnDiffSummaries.length,
+    effectiveVisibleTurnCount + TURN_SHOW_MORE_INCREMENT,
+  );
 
   return (
     <div className="flex h-full w-full min-w-0 items-center gap-2 [-webkit-app-region:no-drag]">
@@ -296,6 +313,37 @@ export const DiffPanelToolbar = memo(function DiffPanelToolbar(props: DiffPanelT
             >
               <MenuGroup>
                 <MenuGroupLabel>View</MenuGroupLabel>
+                <div
+                  className="mx-2 mb-1 grid grid-cols-2 rounded-lg bg-[var(--color-background-elevated-secondary)] p-0.5"
+                  role="radiogroup"
+                  aria-label="Diff view"
+                >
+                  {(["stacked", "split"] as const).map((mode) => {
+                    const selected = props.diffRenderMode === mode;
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        className={cn(
+                          "flex h-7 min-w-0 cursor-pointer items-center justify-center gap-1.5 rounded-md px-2 text-[11px] transition-colors",
+                          selected
+                            ? "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
+                            : "text-muted-foreground hover:text-foreground",
+                        )}
+                        onClick={() => props.onDiffRenderModeChange(mode)}
+                      >
+                        {mode === "stacked" ? (
+                          <Rows3Icon className="size-3.5 shrink-0" />
+                        ) : (
+                          <Columns2Icon className="size-3.5 shrink-0" />
+                        )}
+                        <span className="truncate">{mode === "stacked" ? "Stacked" : "Split"}</span>
+                      </button>
+                    );
+                  })}
+                </div>
                 <MenuCheckboxItem
                   checked={props.diffIgnoreWhitespace}
                   variant="switch"
@@ -345,11 +393,6 @@ export const DiffPanelToolbar = memo(function DiffPanelToolbar(props: DiffPanelT
             selectedFilePath={props.selectedFilePath}
             resolvedTheme={props.resolvedTheme}
             onSelectFile={props.onSelectFile}
-          />
-
-          <ChatHeaderDiffRenderModePicker
-            mode={props.diffRenderMode}
-            onChange={props.onDiffRenderModeChange}
           />
         </div>
 
@@ -402,7 +445,7 @@ export const DiffPanelToolbar = memo(function DiffPanelToolbar(props: DiffPanelT
                   <GitCommitIcon className={DIFF_PANEL_MENU_ICON_CLASS_NAME} />
                   <span className="min-w-0 flex-1 truncate">All turns</span>
                 </MenuRadioItem>
-                {props.orderedTurnDiffSummaries.map((summary) => (
+                {visibleTurnSummaries.map((summary) => (
                   <MenuRadioItem key={summary.turnId} value={summary.turnId}>
                     <FaPlusMinus className="size-2.5 shrink-0 text-muted-foreground" />
                     <span className="min-w-0 flex-1 truncate">
@@ -414,6 +457,18 @@ export const DiffPanelToolbar = memo(function DiffPanelToolbar(props: DiffPanelT
                   </MenuRadioItem>
                 ))}
               </MenuRadioGroup>
+              {hiddenTurnCount > 0 ? (
+                <button
+                  type="button"
+                  className={cn(
+                    "mx-1 mt-1 flex h-8 w-[calc(100%-0.5rem)] cursor-pointer items-center justify-center rounded-md px-2 text-[11px]",
+                    "text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground",
+                  )}
+                  onClick={() => setVisibleTurnCount(nextVisibleTurnCount)}
+                >
+                  Show {Math.min(TURN_SHOW_MORE_INCREMENT, hiddenTurnCount)} more
+                </button>
+              ) : null}
             </MenuGroup>
           </ComposerPickerMenuPopup>
         </Menu>

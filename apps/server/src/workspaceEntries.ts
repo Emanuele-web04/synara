@@ -22,6 +22,7 @@ import {
   ProjectSearchLocalEntriesResult,
 } from "@t3tools/contracts";
 import { isExplicitRelativePath, isWindowsAbsolutePath } from "@t3tools/shared/path";
+import { resolveRealPathWithinRoot } from "./workspace/realPathContainment";
 
 const WORKSPACE_CACHE_TTL_MS = 15_000;
 const WORKSPACE_CACHE_MAX_KEYS = 4;
@@ -858,11 +859,38 @@ async function directoryHasChildDirectories(absolutePath: string): Promise<boole
   }
 }
 
+// Resolve a client-supplied relative directory against the workspace root and
+// refuse anything that escapes it (absolute paths, "..", "a/../../b", ...).
+// Same containment rule as WorkspacePaths.resolveRelativePathWithinRoot, but
+// the workspace root itself (empty relative path) is a valid listing target.
+function resolveDirectoryWithinRoot(cwd: string, relativePath: string): string {
+  if (path.isAbsolute(relativePath) || isWindowsAbsolutePath(relativePath)) {
+    throw new Error("Directory path is outside the workspace root.");
+  }
+  const absolutePath = path.resolve(cwd, relativePath);
+  const relativeToRoot = path.relative(cwd, absolutePath);
+  if (
+    relativeToRoot === ".." ||
+    relativeToRoot.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativeToRoot)
+  ) {
+    throw new Error("Directory path is outside the workspace root.");
+  }
+  return absolutePath;
+}
+
 export async function listWorkspaceDirectories(
   input: ProjectListDirectoriesInput,
 ): Promise<ProjectListDirectoriesResult> {
   const relativePath = input.relativePath?.trim() ?? "";
-  const targetDirectory = relativePath ? path.resolve(input.cwd, relativePath) : input.cwd;
+  const resolvedTarget = relativePath
+    ? resolveDirectoryWithinRoot(input.cwd, relativePath)
+    : input.cwd;
+  // String containment above cannot see symlinks; re-check on canonical paths.
+  const targetDirectory = await resolveRealPathWithinRoot(input.cwd, resolvedTarget);
+  if (targetDirectory === null) {
+    throw new Error("Directory path is outside the workspace root.");
+  }
   const dirents = await fs.readdir(targetDirectory, { withFileTypes: true });
   const entries = await mapWithConcurrency(
     dirents

@@ -117,12 +117,17 @@ export interface RuntimeUsageControlsProps {
   activeContextWindowLabel?: string | null | undefined;
   pendingContextWindowLabel?: string | null | undefined;
   className?: string | undefined;
+  // Force icon-only rendering regardless of container width. Used when the
+  // control is relocated outside the composer footer (which provides the
+  // @container the responsive sr-only fallback depends on).
+  hideLabel?: boolean | undefined;
 }
 
 export function RuntimeUsageControls({
   runtimeMode,
   onRuntimeModeChange,
   className,
+  hideLabel = false,
 }: RuntimeUsageControlsProps) {
   return (
     <div
@@ -157,10 +162,15 @@ export function RuntimeUsageControls({
               ) : (
                 <HiOutlineHandRaised className="size-3.5 shrink-0" />
               )}
-              <span className="truncate @max-[480px]:sr-only">
+              <span className={cn("truncate", hideLabel ? "sr-only" : "@max-[480px]:sr-only")}>
                 {runtimeMode === "full-access" ? "Full access" : "Default permissions"}
               </span>
-              <ChevronDownIcon className="size-3 shrink-0 opacity-70 @max-[480px]:hidden" />
+              <ChevronDownIcon
+                className={cn(
+                  "size-3 shrink-0 opacity-70",
+                  hideLabel ? "hidden" : "@max-[480px]:hidden",
+                )}
+              />
             </span>
           </MenuTrigger>
           <MenuPopup align="start" side="top" className="min-w-44">
