@@ -5998,12 +5998,13 @@ export default function Sidebar() {
             <SettingsSidebarNav
               activeSection={activeSettingsSection}
               onBack={handleBackToAppFromSettings}
-              onSelectSection={(section) => {
+              onSelectSection={(section, options) => {
                 void navigate({
                   to: "/settings",
                   search: (previous) => ({
                     ...previous,
                     section: section === "general" ? undefined : section,
+                    target: options?.target,
                   }),
                 });
               }}
