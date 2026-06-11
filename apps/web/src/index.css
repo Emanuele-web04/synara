@@ -679,15 +679,40 @@ label:has(> select#reasoning-effort) select {
 
 /* Chat markdown rendering */
 .chat-markdown {
+  --chat-text-primary: color-mix(in srgb, var(--foreground) 94%, transparent);
+  --chat-text-strong: color-mix(in srgb, var(--foreground) 98%, transparent);
+  --chat-text-secondary: color-mix(in srgb, var(--foreground) 76%, transparent);
+  --chat-text-muted: color-mix(in srgb, var(--foreground) 56%, transparent);
+  --chat-text-faint: color-mix(in srgb, var(--foreground) 40%, transparent);
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
+  color: var(--chat-text-primary);
+  font-kerning: normal;
+  text-rendering: optimizeLegibility;
 }
 
 .chat-markdown strong,
 .chat-markdown b {
-  font-weight: 500;
+  color: var(--chat-text-strong);
+  font-weight: 600;
   font-synthesis: none;
+}
+
+.chat-markdown--subtle {
+  --chat-text-primary: color-mix(in srgb, var(--foreground) 74%, transparent);
+  --chat-text-strong: color-mix(in srgb, var(--foreground) 86%, transparent);
+  --chat-text-secondary: color-mix(in srgb, var(--foreground) 62%, transparent);
+  --chat-text-muted: color-mix(in srgb, var(--foreground) 48%, transparent);
+  --chat-text-faint: color-mix(in srgb, var(--foreground) 34%, transparent);
+}
+
+.chat-markdown--process {
+  --chat-text-primary: color-mix(in srgb, var(--foreground) 52%, transparent);
+  --chat-text-strong: color-mix(in srgb, var(--foreground) 68%, transparent);
+  --chat-text-secondary: color-mix(in srgb, var(--foreground) 44%, transparent);
+  --chat-text-muted: color-mix(in srgb, var(--foreground) 34%, transparent);
+  --chat-text-faint: color-mix(in srgb, var(--foreground) 26%, transparent);
 }
 
 .chat-markdown > :first-child {
@@ -699,22 +724,100 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown p,
+.chat-markdown li,
+.chat-markdown blockquote {
+  max-width: 74ch;
+}
+
+.chat-markdown p,
 .chat-markdown ul,
 .chat-markdown ol,
 .chat-markdown blockquote,
 .chat-markdown pre,
 .chat-markdown table {
-  margin: 0.65rem 0;
+  margin: 0.9rem 0;
+}
+
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  max-width: 28ch;
+  margin: 1.45rem 0 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--chat-text-strong);
+}
+
+.chat-markdown h1 {
+  font-size: 1.72em;
+  line-height: 1.15;
+}
+
+.chat-markdown h2 {
+  font-size: 1.42em;
+  line-height: 1.2;
+}
+
+.chat-markdown h3 {
+  font-size: 1.2em;
+  line-height: 1.25;
+}
+
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  font-size: 1.05em;
+  line-height: 1.3;
+}
+
+.chat-markdown h1 + p,
+.chat-markdown h2 + p,
+.chat-markdown h3 + p,
+.chat-markdown h4 + p,
+.chat-markdown h5 + p,
+.chat-markdown h6 + p {
+  margin-top: 0.55rem;
+}
+
+.chat-markdown p:has(> strong:first-child) {
+  color: var(--chat-text-secondary);
+}
+
+.chat-markdown p:has(> strong:first-child) > strong:first-child {
+  color: var(--chat-text-strong);
+  font-weight: 650;
 }
 
 .chat-markdown ul {
-  padding-left: 1.25rem;
+  padding-left: 1.35rem;
   list-style-type: disc;
 }
 
 .chat-markdown ol {
-  padding-left: 1.25rem;
+  padding-left: 1.35rem;
   list-style-type: decimal;
+}
+
+.chat-markdown li::marker {
+  color: var(--chat-text-muted);
+}
+
+.chat-markdown li > p:has(> strong:first-child),
+.chat-markdown li:has(> strong:first-child) {
+  color: var(--chat-text-secondary);
+}
+
+.chat-markdown li > p:has(> strong:first-child) > strong:first-child,
+.chat-markdown li:has(> strong:first-child) > strong:first-child {
+  color: var(--chat-text-strong);
+  font-weight: 650;
+}
+
+.chat-markdown li li {
+  color: var(--chat-text-secondary);
 }
 
 .chat-markdown ul ul {
@@ -734,7 +837,7 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown li + li {
-  margin-top: 0.25rem;
+  margin-top: 0.38rem;
 }
 
 .chat-markdown a {
@@ -818,19 +921,33 @@ label:has(> select#reasoning-effort) select {
   box-shadow: none;
 }
 
+.chat-markdown hr {
+  margin: 1.2rem 0 1.1rem;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+}
+
 .chat-markdown blockquote {
-  border-left: 2px solid var(--border);
-  padding-left: 0.8rem;
-  color: var(--muted-foreground);
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--muted) 72%, transparent);
+  padding: 0.8rem 0.95rem;
+  color: var(--chat-text-secondary);
 }
 
 .chat-markdown :not(pre) > code {
-  border-radius: 0.4rem;
-  background: var(--app-user-message-background);
-  padding: 0.1rem 0.35rem;
-  color: var(--foreground);
+  border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent);
+  border-radius: 0.38rem;
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  box-shadow: none;
+  padding: 0.03rem 0.28rem 0.06rem;
+  color: color-mix(in srgb, var(--chat-text-strong) 90%, var(--chat-text-secondary));
   font-size: var(--app-font-size-chat-code);
   font-family: var(--font-chat-code-family);
+  font-weight: 500;
+  white-space: break-spaces;
 }
 
 .chat-markdown .katex,
@@ -864,11 +981,14 @@ label:has(> select#reasoning-effort) select {
 
 .chat-markdown pre {
   max-width: 100%;
-  overflow-x: auto;
-  border-radius: 1rem;
-  background: var(--app-chat-code-surface);
-  padding: 0.5rem 0.6rem;
+  overflow-x: hidden;
+  border: 1px solid color-mix(in srgb, var(--foreground) 14%, var(--border));
+  border-radius: 0.95rem;
+  background: color-mix(in srgb, var(--app-chat-code-surface) 94%, var(--background));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--foreground) 7%, transparent);
+  padding: 0.72rem 0.82rem;
   font-family: var(--font-chat-code-family);
+  white-space: pre-wrap;
 }
 
 .chat-markdown pre code {
@@ -878,13 +998,20 @@ label:has(> select#reasoning-effort) select {
   line-height: 1.5;
   font-size: var(--app-font-size-chat-code);
   font-family: inherit;
+  overflow-wrap: anywhere;
+  white-space: inherit;
+  word-break: break-word;
 }
 
 .chat-markdown .chat-markdown-codeblock {
-  margin: 0.65rem 0;
+  margin: 0.95rem 0;
   overflow: hidden;
-  border-radius: 0.65rem;
-  background: var(--app-chat-code-surface);
+  border: 1px solid color-mix(in srgb, var(--foreground) 14%, var(--border));
+  border-radius: 0.95rem;
+  background: color-mix(in srgb, var(--app-chat-code-surface) 94%, var(--background));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--foreground) 7%, transparent),
+    0 10px 28px -26px color-mix(in srgb, black 70%, transparent);
 }
 
 .chat-markdown .chat-markdown-codeblock__header {
@@ -892,7 +1019,9 @@ label:has(> select#reasoning-effort) select {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.1rem 0.4rem 0.1rem 0.6rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 9%, transparent);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  padding: 0.18rem 0.42rem 0.18rem 0.65rem;
 }
 
 .chat-markdown .chat-markdown-codeblock__lang {
@@ -902,7 +1031,7 @@ label:has(> select#reasoning-effort) select {
   font-size: 0.72rem;
   line-height: 1.4;
   letter-spacing: 0.01em;
-  color: var(--muted-foreground);
+  color: var(--chat-text-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
   user-select: none;
@@ -922,14 +1051,14 @@ label:has(> select#reasoning-effort) select {
   width: 0.85rem;
   height: 0.85rem;
   flex-shrink: 0;
-  color: var(--muted-foreground);
+  color: var(--chat-text-muted);
 }
 
 .chat-markdown .chat-markdown-codeblock__file-name {
   flex-shrink: 0;
   font-family: var(--font-chat-code-family);
   font-weight: 500;
-  color: var(--foreground);
+  color: var(--chat-text-strong);
   white-space: nowrap;
 }
 
@@ -937,7 +1066,7 @@ label:has(> select#reasoning-effort) select {
   min-width: 0;
   overflow: hidden;
   font-family: var(--font-chat-code-family);
-  color: var(--muted-foreground);
+  color: var(--chat-text-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -947,7 +1076,7 @@ label:has(> select#reasoning-effort) select {
   padding-left: 0.125rem;
   font-family: var(--font-chat-code-family);
   font-variant-numeric: tabular-nums;
-  color: color-mix(in srgb, var(--muted-foreground) 80%, transparent);
+  color: var(--chat-text-faint);
 }
 
 .chat-markdown .chat-markdown-codeblock__actions {
@@ -958,12 +1087,12 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown .chat-markdown-codeblock__action {
-  color: var(--muted-foreground);
+  color: var(--chat-text-muted);
 }
 
 .chat-markdown .chat-markdown-codeblock__action:hover,
 .chat-markdown .chat-markdown-codeblock__action[data-active="true"] {
-  color: var(--foreground);
+  color: var(--chat-text-strong);
 }
 
 .chat-markdown .chat-markdown-codeblock__body pre {
@@ -973,14 +1102,25 @@ label:has(> select#reasoning-effort) select {
   background: transparent;
 }
 
+.chat-markdown .chat-markdown-codeblock[data-wrap="false"] .chat-markdown-codeblock__body pre {
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.chat-markdown .chat-markdown-codeblock[data-wrap="false"] .chat-markdown-codeblock__body code {
+  overflow-wrap: normal;
+  white-space: pre;
+  word-break: normal;
+}
+
 .chat-markdown .chat-markdown-codeblock[data-wrap="true"] .chat-markdown-codeblock__body pre {
-  white-space: pre-wrap;
   overflow-x: hidden;
+  white-space: pre-wrap;
 }
 
 .chat-markdown .chat-markdown-codeblock[data-wrap="true"] .chat-markdown-codeblock__body code {
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
   word-break: break-word;
 }
 
@@ -1407,14 +1547,47 @@ label:has(> select#reasoning-effort) select {
 
 .chat-markdown table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--card) 96%, transparent);
+}
+
+.chat-markdown thead {
+  background: color-mix(in srgb, var(--muted) 80%, transparent);
 }
 
 .chat-markdown th,
 .chat-markdown td {
-  border: 1px solid var(--border);
-  padding: 0.35rem 0.45rem;
+  padding: 0.8rem 0.95rem;
   text-align: left;
+  vertical-align: top;
+}
+
+.chat-markdown th {
+  font-weight: 600;
+  color: var(--chat-text-strong);
+}
+
+.chat-markdown td {
+  color: var(--chat-text-secondary);
+}
+
+.chat-markdown tbody td:first-child {
+  color: var(--chat-text-primary);
+  font-weight: 500;
+}
+
+.chat-markdown tr + tr td,
+.chat-markdown tr + tr th {
+  border-top: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+}
+
+.chat-markdown th + th,
+.chat-markdown td + td {
+  border-left: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
 }
 
 /* Keep diff chrome aligned with the user-configured code font, not the base mono fallback. */

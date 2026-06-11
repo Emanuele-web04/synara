@@ -37,6 +37,24 @@ describe("ChatMarkdown", () => {
     expect(markup).not.toContain("text-neutral-900");
   });
 
+  it("applies contextual importance variants without dropping utility classes", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+
+    const markup = renderToStaticMarkup(
+      <ChatMarkdown
+        text="Reading tool output"
+        cwd={undefined}
+        isStreaming={false}
+        variant="process"
+        className="leading-relaxed"
+      />,
+    );
+
+    expect(markup).toContain("chat-markdown--process");
+    expect(markup).toContain("leading-relaxed");
+    expect(markup).toContain("text-foreground");
+  });
+
   it("renders inline math with KaTeX", async () => {
     const markup = await renderMarkdown("Euler wrote $e^{i\\\\pi} + 1 = 0$.");
 
@@ -245,5 +263,36 @@ describe("ChatMarkdown", () => {
     expect(proposedPlanCardSource).toContain("<ChatMarkdown");
     expect(messagesTimelineSource).toContain('import ChatMarkdown from "../ChatMarkdown"');
     expect(messagesTimelineSource).toContain("<ChatMarkdown");
+  });
+
+  it("keeps Claude-style inline and fenced code visually distinct", () => {
+    const css = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+
+    expect(css).toContain(".chat-markdown :not(pre) > code");
+    expect(css).toContain("border-radius: 0.38rem");
+    expect(css).toContain("box-shadow: none");
+    expect(css).toContain("padding: 0.03rem 0.28rem 0.06rem");
+    expect(css).toContain("box-decoration-break: clone");
+    expect(css).toContain("white-space: break-spaces");
+    expect(css).toContain(".chat-markdown .chat-markdown-codeblock__header");
+    expect(css).toContain("border-bottom: 1px solid");
+  });
+
+  it("wraps fenced code by default so long lines fit the chat width", async () => {
+    const markup = await renderMarkdown(
+      [
+        "```bash",
+        "bun run test -- src/components/ChatMarkdown.test.tsx src/components/chat/MessagesTimeline.test.tsx src/components/chat/AgentActivityDetailView.test.tsx src/appSettings.test.ts",
+        "```",
+      ].join("\n"),
+    );
+    const css = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+
+    expect(markup).toContain('class="chat-markdown-codeblock" data-wrap="true"');
+    expect(css).toContain(".chat-markdown pre");
+    expect(css).toContain("overflow-x: hidden");
+    expect(css).toContain("white-space: pre-wrap");
+    expect(css).toContain('.chat-markdown .chat-markdown-codeblock[data-wrap="false"]');
+    expect(css).toContain("overflow-x: auto");
   });
 });

@@ -16,9 +16,9 @@ export const USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME = [
 
 const CHAT_TRANSCRIPT_USER_CHAR_WIDTH_RATIO = 0.48;
 const CHAT_TRANSCRIPT_ASSISTANT_CHAR_WIDTH_RATIO = 0.52;
-// Matches Tailwind `leading-normal` (1.5). Shared by the assistant transcript text,
-// user message bubbles, and the composer input so every chat surface reads at one leading.
-const CHAT_TRANSCRIPT_LINE_HEIGHT_RATIO = 1.5;
+// Shared transcript leading for assistant responses, user bubbles, and composer input.
+// Slightly looser than Tailwind `leading-normal` so longer responses read less like logs.
+const CHAT_TRANSCRIPT_LINE_HEIGHT_RATIO = 1.62;
 
 export function getChatTranscriptLineHeightPx(chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX): number {
   return normalizeChatFontSizePx(chatFontSizePx) * CHAT_TRANSCRIPT_LINE_HEIGHT_RATIO;
