@@ -1090,10 +1090,26 @@ label:has(> select#reasoning-effort) select {
   justify-content: center;
   padding: 1rem;
   background:
-    linear-gradient(45deg, color-mix(in srgb, var(--foreground) 4%, transparent) 25%, transparent 25%),
-    linear-gradient(-45deg, color-mix(in srgb, var(--foreground) 4%, transparent) 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, color-mix(in srgb, var(--foreground) 4%, transparent) 75%),
-    linear-gradient(-45deg, transparent 75%, color-mix(in srgb, var(--foreground) 4%, transparent) 75%),
+    linear-gradient(
+      45deg,
+      color-mix(in srgb, var(--foreground) 4%, transparent) 25%,
+      transparent 25%
+    ),
+    linear-gradient(
+      -45deg,
+      color-mix(in srgb, var(--foreground) 4%, transparent) 25%,
+      transparent 25%
+    ),
+    linear-gradient(
+      45deg,
+      transparent 75%,
+      color-mix(in srgb, var(--foreground) 4%, transparent) 75%
+    ),
+    linear-gradient(
+      -45deg,
+      transparent 75%,
+      color-mix(in srgb, var(--foreground) 4%, transparent) 75%
+    ),
     color-mix(in srgb, var(--background) 96%, var(--foreground));
   background-position:
     0 0,
@@ -1126,12 +1142,14 @@ label:has(> select#reasoning-effort) select {
   color: var(--muted-foreground);
 }
 
+/* Shared frosted pill chrome for the preview's hover download button and the
+   error card's download action. */
 .local-image-preview__download,
-.local-image-preview__action {
+.local-image-error__action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.35rem;
+  border-radius: 0.45rem;
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   background: color-mix(in srgb, var(--background) 88%, transparent);
   color: var(--foreground);
@@ -1144,13 +1162,22 @@ label:has(> select#reasoning-effort) select {
     border-color 120ms ease;
 }
 
+.local-image-preview__download:hover,
+.local-image-preview__download:focus-visible,
+.local-image-error__action:hover,
+.local-image-error__action:focus-visible {
+  border-color: color-mix(in srgb, var(--border) 45%, var(--foreground));
+  background: color-mix(in srgb, var(--background) 72%, var(--foreground));
+  color: var(--foreground);
+  text-decoration: none;
+}
+
 .local-image-preview__download {
   position: absolute;
   top: 0.75rem;
   right: 0.75rem;
   width: 1.9rem;
   height: 1.9rem;
-  border-radius: 0.45rem;
   opacity: 0;
 }
 
@@ -1159,25 +1186,27 @@ label:has(> select#reasoning-effort) select {
   opacity: 1;
 }
 
-.local-image-preview__download:hover,
-.local-image-preview__download:focus-visible,
-.local-image-preview__action:hover,
-.local-image-preview__action:focus-visible {
-  border-color: color-mix(in srgb, var(--border) 45%, var(--foreground));
-  background: color-mix(in srgb, var(--background) 72%, var(--foreground));
-  color: var(--foreground);
-  text-decoration: none;
-}
-
-.local-image-preview--error {
+/* Shared error card used by chat markdown images and editor/diff previews. */
+.local-image-error {
+  display: inline-flex;
+  align-items: center;
+  /* Beats layout utilities (e.g. min-h-full) forwarded from preview callers,
+     so the card stays compact instead of stretching to the panel height. */
   min-height: 0;
-  justify-content: flex-start;
   gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.75rem;
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   background: color-mix(in srgb, var(--muted) 35%, transparent);
 }
 
-.local-image-preview__error-icon {
+/* Sits in chat prose: keep paragraph rhythm and match the image card width. */
+.local-image-error--prose {
+  margin: 0.55rem 0;
+  max-width: min(255px, 100%);
+}
+
+.local-image-error__icon {
   display: inline-flex;
   width: 1.7rem;
   height: 1.7rem;
@@ -1189,7 +1218,7 @@ label:has(> select#reasoning-effort) select {
   color: var(--destructive);
 }
 
-.local-image-preview__error-body {
+.local-image-error__body {
   display: inline-flex;
   min-width: 0;
   flex: 1 1 auto;
@@ -1197,20 +1226,21 @@ label:has(> select#reasoning-effort) select {
   gap: 0.05rem;
 }
 
-.local-image-preview__error-title {
+.local-image-error__title {
   font-size: 0.8rem;
   font-weight: 500;
   color: var(--foreground);
 }
 
-.local-image-preview__error-subtitle {
+.local-image-error__subtitle {
   font-size: 0.72rem;
   color: var(--muted-foreground);
 }
 
-.local-image-preview__action {
+/* Pill chrome shared with .local-image-preview__download above. */
+.local-image-error__action {
+  gap: 0.35rem;
   flex: 0 0 auto;
-  border-radius: 0.45rem;
   padding: 0.32rem 0.55rem;
   font-size: 0.74rem;
   font-weight: 500;
@@ -1373,73 +1403,6 @@ label:has(> select#reasoning-effort) select {
 .chat-generated-image__overlay-pill--download:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
-}
-
-/* Inline action used inside the error fallback */
-.chat-generated-image__action--inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  flex: 0 0 auto;
-  padding: 0.3rem 0.55rem;
-  border-radius: 0.5rem;
-  color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 6%, transparent);
-  text-decoration: none;
-  font-size: 0.74rem;
-  font-weight: 500;
-  transition:
-    background-color 120ms ease,
-    color 120ms ease;
-}
-
-.chat-generated-image__action--inline:hover,
-.chat-generated-image__action--inline:focus-visible {
-  background: color-mix(in srgb, var(--foreground) 12%, transparent);
-  color: var(--foreground);
-  text-decoration: none;
-}
-
-.chat-generated-image--error {
-  display: inline-flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.6rem 0.75rem;
-  border-radius: 0.75rem;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  background: color-mix(in srgb, var(--muted) 35%, transparent);
-}
-
-.chat-generated-image__error-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.6rem;
-  height: 1.6rem;
-  border-radius: 0.5rem;
-  background: color-mix(in srgb, var(--destructive) 18%, transparent);
-  color: var(--destructive);
-  flex: 0 0 auto;
-}
-
-.chat-generated-image__error-body {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 0.05rem;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.chat-generated-image__error-title {
-  font-size: 0.8rem;
-  font-weight: 500;
-  color: var(--foreground);
-}
-
-.chat-generated-image__error-subtitle {
-  font-size: 0.72rem;
-  color: var(--muted-foreground);
 }
 
 .chat-markdown table {

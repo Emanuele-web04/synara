@@ -1,23 +1,41 @@
 // FILE: LocalImagePreview.tsx
-// Purpose: Shared local-image preview surface for editor file and diff views.
+// Purpose: Shared local-image loading state and error card, plus the panel
+//          preview surface used by editor file and diff views.
 // Layer: Web UI primitive
+// Exports: useLocalImagePreview, LocalImageErrorCard, LocalImagePreview
+// Notes: Pure UI; image URL building lives in `~/lib/localImageUrls`. The chat
+//        markdown variant (`GeneratedMarkdownImage`) composes the same hook and
+//        error card with its own inline frame/overlay rendering.
 
-import { useEffect, useMemo, useState } from "react";
+import { type ImgHTMLAttributes, type MouseEvent, useEffect, useMemo, useState } from "react";
 
 import { DownloadIcon, Loader2Icon, TriangleAlertIcon } from "~/lib/icons";
 import { buildLocalImageUrl, localImageFileName } from "~/lib/localImageUrls";
 import { cn } from "~/lib/utils";
 
-type LocalImagePreviewStatus = "loading" | "ready" | "error";
+export type LocalImagePreviewStatus = "loading" | "ready" | "error";
 
-export function LocalImagePreview(props: {
+type LocalImagePreviewImgProps = Pick<
+  ImgHTMLAttributes<HTMLImageElement>,
+  "src" | "loading" | "decoding" | "draggable" | "onLoad" | "onError"
+>;
+
+export interface LocalImagePreviewState {
+  previewUrl: string;
+  downloadUrl: string;
+  fileName: string;
+  /** Value for `<a download>`: it needs a string, and an empty string still
+      hints the browser to download instead of navigating. */
+  downloadName: string;
+  status: LocalImagePreviewStatus;
+  imgProps: LocalImagePreviewImgProps;
+}
+
+export function useLocalImagePreview(input: {
   src: string;
   cwd: string | null | undefined;
-  alt: string;
-  className?: string;
-  imageClassName?: string;
-}) {
-  const { src, cwd } = props;
+}): LocalImagePreviewState {
+  const { src, cwd } = input;
   const previewUrl = useMemo(() => buildLocalImageUrl({ src, cwd: cwd ?? undefined }), [cwd, src]);
   const downloadUrl = useMemo(
     () => buildLocalImageUrl({ src, cwd: cwd ?? undefined, download: true }),
@@ -30,28 +48,74 @@ export function LocalImagePreview(props: {
     setStatus("loading");
   }, [previewUrl]);
 
+  const imgProps = useMemo<LocalImagePreviewImgProps>(
+    () => ({
+      src: previewUrl,
+      loading: "lazy",
+      decoding: "async",
+      draggable: false,
+      onLoad: () => setStatus("ready"),
+      onError: () => setStatus("error"),
+    }),
+    [previewUrl],
+  );
+
+  return { previewUrl, downloadUrl, fileName, downloadName: fileName || "", status, imgProps };
+}
+
+// Span-only markup so the card stays valid inside markdown paragraphs.
+export function LocalImageErrorCard(props: {
+  downloadUrl: string;
+  /** `downloadName` from useLocalImagePreview. */
+  downloadName: string;
+  className?: string | undefined;
+  downloadAriaLabel?: string;
+  onDownloadClick?: ((event: MouseEvent<HTMLElement>) => void) | undefined;
+}) {
+  return (
+    <span className={cn("local-image-error", props.className)}>
+      <span className="local-image-error__icon" aria-hidden="true">
+        <TriangleAlertIcon className="size-4" />
+      </span>
+      <span className="local-image-error__body">
+        <span className="local-image-error__title">Couldn’t open this image</span>
+        <span className="local-image-error__subtitle">
+          The file may have moved or be unavailable.
+        </span>
+      </span>
+      <a
+        href={props.downloadUrl}
+        download={props.downloadName}
+        onClick={props.onDownloadClick}
+        className="local-image-error__action"
+        aria-label={props.downloadAriaLabel ?? "Download image"}
+      >
+        <DownloadIcon className="size-3.5" aria-hidden="true" />
+        <span>Download</span>
+      </a>
+    </span>
+  );
+}
+
+export function LocalImagePreview(props: {
+  src: string;
+  cwd: string | null | undefined;
+  alt: string;
+  className?: string;
+  imageClassName?: string;
+}) {
+  const { downloadUrl, downloadName, status, imgProps } = useLocalImagePreview({
+    src: props.src,
+    cwd: props.cwd,
+  });
+
   if (status === "error") {
     return (
-      <div className={cn("local-image-preview local-image-preview--error", props.className)}>
-        <span className="local-image-preview__error-icon" aria-hidden="true">
-          <TriangleAlertIcon className="size-4" />
-        </span>
-        <span className="local-image-preview__error-body">
-          <span className="local-image-preview__error-title">Couldn’t open this image</span>
-          <span className="local-image-preview__error-subtitle">
-            The file may have moved or be unavailable.
-          </span>
-        </span>
-        <a
-          href={downloadUrl}
-          download={fileName || ""}
-          className="local-image-preview__action"
-          aria-label="Download image"
-        >
-          <DownloadIcon className="size-3.5" aria-hidden="true" />
-          <span>Download</span>
-        </a>
-      </div>
+      <LocalImageErrorCard
+        downloadUrl={downloadUrl}
+        downloadName={downloadName}
+        className={props.className}
+      />
     );
   }
 
@@ -63,18 +127,13 @@ export function LocalImagePreview(props: {
         </span>
       ) : null}
       <img
-        src={previewUrl}
+        {...imgProps}
         alt={props.alt}
-        loading="lazy"
-        decoding="async"
-        draggable={false}
-        onLoad={() => setStatus("ready")}
-        onError={() => setStatus("error")}
         className={cn("local-image-preview__img", props.imageClassName)}
       />
       <a
         href={downloadUrl}
-        download={fileName || ""}
+        download={downloadName}
         className="local-image-preview__download"
         aria-label="Download image"
         title="Download"

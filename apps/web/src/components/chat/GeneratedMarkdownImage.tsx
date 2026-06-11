@@ -3,19 +3,17 @@
 //          loading skeleton, hover overlay (expand/download), and inline error card.
 // Layer: Web chat presentation component
 // Exports: GeneratedMarkdownImage
-// Notes: Pure UI; image URL building lives in `~/lib/localImageUrls`. No data
-//        fetching here so the component stays trivially testable. The image
-//        frame uses raw <button> because it wires into class-based stylesheet
-//        selectors (`chat-generated-image__*`) rather than shadcn Button.
+// Notes: Pure UI; loading state and the error card are shared with the editor
+//        previews via `~/components/LocalImagePreview`. The image frame uses raw
+//        <button> because it wires into class-based stylesheet selectors
+//        (`chat-generated-image__*`) rather than shadcn Button.
 
-import { type MouseEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { type MouseEvent, useCallback } from "react";
 
-import { DownloadIcon, Loader2Icon, Maximize2, TriangleAlertIcon } from "~/lib/icons";
+import { DownloadIcon, Loader2Icon, Maximize2 } from "~/lib/icons";
 
-import { buildLocalImageUrl, localImageFileName } from "../../lib/localImageUrls";
+import { LocalImageErrorCard, useLocalImagePreview } from "../LocalImagePreview";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
-
-type GeneratedImageStatus = "loading" | "ready" | "error";
 
 export interface GeneratedMarkdownImageProps {
   src: string;
@@ -26,15 +24,9 @@ export interface GeneratedMarkdownImageProps {
 
 export function GeneratedMarkdownImage(props: GeneratedMarkdownImageProps) {
   const { src, alt, cwd, onImageExpand } = props;
-  const previewUrl = useMemo(() => buildLocalImageUrl({ src, cwd }), [src, cwd]);
-  const downloadUrl = useMemo(() => buildLocalImageUrl({ src, cwd, download: true }), [src, cwd]);
-  const fileName = useMemo(() => localImageFileName(src), [src]);
+  const { previewUrl, downloadUrl, fileName, downloadName, status, imgProps } =
+    useLocalImagePreview({ src, cwd });
   const accessibleName = alt?.trim() || "Generated image";
-  const [status, setStatus] = useState<GeneratedImageStatus>("loading");
-
-  useEffect(() => {
-    setStatus("loading");
-  }, [previewUrl]);
 
   const expandImage = useCallback(
     (event: MouseEvent<HTMLElement>) => {
@@ -54,33 +46,15 @@ export function GeneratedMarkdownImage(props: GeneratedMarkdownImageProps) {
     event.stopPropagation();
   }, []);
 
-  // <a download> needs a string; pass an empty string when we have no filename so
-  // we still hint the browser to download instead of navigating.
-  const downloadAttr = fileName || "";
-
   if (status === "error") {
     return (
-      <span className="chat-generated-image chat-generated-image--error">
-        <span className="chat-generated-image__error-icon" aria-hidden="true">
-          <TriangleAlertIcon className="size-4" />
-        </span>
-        <span className="chat-generated-image__error-body">
-          <span className="chat-generated-image__error-title">Couldn’t open this image</span>
-          <span className="chat-generated-image__error-subtitle">
-            The file may have moved or be unavailable.
-          </span>
-        </span>
-        <a
-          href={downloadUrl}
-          download={downloadAttr}
-          onClick={stopPropagation}
-          className="chat-generated-image__action chat-generated-image__action--inline"
-          aria-label="Download generated image"
-        >
-          <DownloadIcon className="size-3.5" aria-hidden="true" />
-          <span>Download</span>
-        </a>
-      </span>
+      <LocalImageErrorCard
+        downloadUrl={downloadUrl}
+        downloadName={downloadName}
+        className="local-image-error--prose"
+        downloadAriaLabel="Download generated image"
+        onDownloadClick={stopPropagation}
+      />
     );
   }
 
@@ -97,16 +71,7 @@ export function GeneratedMarkdownImage(props: GeneratedMarkdownImageProps) {
             <Loader2Icon className="size-4 animate-spin opacity-60" />
           </span>
         ) : null}
-        <img
-          src={previewUrl}
-          alt={accessibleName}
-          loading="lazy"
-          decoding="async"
-          draggable={false}
-          onLoad={() => setStatus("ready")}
-          onError={() => setStatus("error")}
-          className="chat-generated-image__img"
-        />
+        <img {...imgProps} alt={accessibleName} className="chat-generated-image__img" />
         <span className="chat-generated-image__overlay" aria-hidden="true">
           <span className="chat-generated-image__overlay-pill chat-generated-image__overlay-pill--expand">
             <Maximize2 className="size-3.5" />
@@ -116,7 +81,7 @@ export function GeneratedMarkdownImage(props: GeneratedMarkdownImageProps) {
       </button>
       <a
         href={downloadUrl}
-        download={downloadAttr}
+        download={downloadName}
         onClick={stopPropagation}
         onMouseDown={stopPropagation}
         className="chat-generated-image__overlay-pill chat-generated-image__overlay-pill--download"
