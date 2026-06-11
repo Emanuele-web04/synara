@@ -98,6 +98,26 @@ describe("file diff identity helpers", () => {
     if (reparsed?.kind !== "files") return;
     expect(reparsed.files.map((file) => buildFileDiffRenderKey(file))).toEqual(keys);
   });
+
+  it("keeps binary image diffs as renderable file rows", () => {
+    const patch = [
+      "diff --git a/assets/screenshot.png b/assets/screenshot.png",
+      "index 1111111..2222222 100644",
+      "Binary files a/assets/screenshot.png and b/assets/screenshot.png differ",
+      "",
+    ].join("\n");
+
+    const renderable = getRenderablePatch(patch, "git-pane:binary-image");
+    expect(renderable?.kind).toBe("files");
+    if (renderable?.kind !== "files") return;
+
+    expect(renderable.files).toHaveLength(1);
+    const [file] = renderable.files;
+    expect(file).toBeDefined();
+    if (!file) return;
+    expect(resolveFileDiffPath(file)).toBe("assets/screenshot.png");
+    expect(file.hunks).toEqual([]);
+  });
 });
 
 describe("splitRepoRelativePath", () => {

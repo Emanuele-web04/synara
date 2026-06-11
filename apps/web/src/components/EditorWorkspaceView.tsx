@@ -2,8 +2,9 @@
 // Purpose: Read-only editor-style thread surface with file explorer, file/diff preview, and chat.
 // Layer: Chat route presentation
 
-import type { ProjectFileSystemEntry } from "@t3tools/contracts";
+import type { ProjectFileSystemEntry, ProjectId } from "@t3tools/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
+import { isSupportedLocalImagePath } from "@t3tools/shared/localImage";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Component,
@@ -25,9 +26,22 @@ import {
   useState,
 } from "react";
 
-import { ChangesIcon, ChatBubbleIcon, DiffIcon, PanelRightCloseIcon } from "~/lib/icons";
+import {
+  ChangesIcon,
+  ChatBubbleIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  DiffIcon,
+  EyeIcon,
+  FileIcon,
+  FolderIcon,
+  PanelRightCloseIcon,
+} from "~/lib/icons";
 import { basenameOfPath } from "~/file-icons";
-import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
+import {
+  useDesktopTopBarTrafficLightGutterClassName,
+  useDesktopTopBarWindowControlsGutterClassName,
+} from "~/hooks/useDesktopTopBarGutter";
 import {
   buildFileDiffRenderKey,
   resolveDiffThemeName,
@@ -60,9 +74,11 @@ import {
 import { readNativeApi } from "~/nativeApi";
 import { cn } from "~/lib/utils";
 import { useTheme } from "~/hooks/useTheme";
+import ChatMarkdown from "./ChatMarkdown";
 import { Skeleton } from "./ui/skeleton";
 import {
   ChatHeaderButton,
+  ChatHeaderIconButton,
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
 } from "./chat/chatHeaderControls";
@@ -73,7 +89,9 @@ import { DiffStat } from "./chat/DiffStatLabel";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
 import { useCodeSelectionAction } from "./chat/useCodeSelectionAction";
+import { LocalImagePreview } from "./LocalImagePreview";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 
 type EditorCenterMode = "file" | "diff";
 
@@ -102,10 +120,13 @@ const EDITOR_CHAT_PANE_DEFAULT_WIDTH = 384;
 const EDITOR_CHAT_PANE_MIN_WIDTH = 320;
 const EDITOR_CHAT_PANE_MAX_WIDTH = 600;
 const EDITOR_CHAT_PANE_KEYBOARD_STEP = 24;
+const EDITOR_MARKDOWN_PREVIEW_EXTENSIONS = new Set([".markdown", ".md", ".mdx"]);
 
 interface EditorWorkspaceViewProps {
   workspaceRoot: string | null;
   projectName: string | null;
+  currentProjectId?: ProjectId | null;
+  projectOptions?: readonly EditorProjectOption[];
   selectedFilePath: string | null;
   expandedDirectories: ReadonlySet<string>;
   centerMode: EditorCenterMode;
@@ -122,6 +143,17 @@ interface EditorWorkspaceViewProps {
   onExitEditorView: () => void;
   onReferenceInChat?: (reference: ChatFileReference) => void;
   onAskWhyInChat?: (reference: ChatFileReference) => void;
+  onSelectProject?: (projectId: ProjectId) => void;
+}
+
+interface EditorProjectOption {
+  id: ProjectId;
+  name: string;
+  folderName: string;
+  localName: string | null;
+  cwd: string;
+  createdAt?: string | undefined;
+  updatedAt?: string | undefined;
 }
 
 // Marks the drag payload so the chat composer can accept it as a reference.
@@ -254,6 +286,137 @@ interface EditorChatPaneResizeState {
   restoreBodyUserSelect: string;
   onPointerMove: (event: PointerEvent) => void;
   onPointerEnd: (event: PointerEvent) => void;
+}
+
+function fileNameFromPath(path: string): string {
+  return path.split("/").filter(Boolean).at(-1) ?? path;
+}
+
+function parentDirectoryFromPath(path: string): string | null {
+  const normalized = path.replace(/\\/g, "/");
+  const separatorIndex = normalized.lastIndexOf("/");
+  if (separatorIndex <= 0) {
+    return null;
+  }
+  return normalized.slice(0, separatorIndex);
+}
+
+function joinWorkspaceRelativeDirectory(workspaceRoot: string, relativeDirectory: string): string {
+  const separator = workspaceRoot.includes("\\") ? "\\" : "/";
+  const normalizedRoot = workspaceRoot.replace(/[\\/]+$/, "");
+  const normalizedRelativeDirectory = relativeDirectory.split("/").join(separator);
+  return `${normalizedRoot}${separator}${normalizedRelativeDirectory}`;
+}
+
+function markdownPreviewCwd(workspaceRoot: string | null, filePath: string): string | undefined {
+  if (!workspaceRoot) {
+    return undefined;
+  }
+  const parentDirectory = parentDirectoryFromPath(filePath);
+  if (!parentDirectory) {
+    return workspaceRoot;
+  }
+  return joinWorkspaceRelativeDirectory(workspaceRoot, parentDirectory);
+}
+
+function editorProjectLabel(project: EditorProjectOption): {
+  primary: string;
+  secondary: string | null;
+} {
+  const folderName = basenameOfPath(project.cwd) ?? project.folderName ?? project.name;
+  const primary = project.localName?.trim() || folderName || project.name;
+  const secondary =
+    project.localName?.trim() && project.localName.trim() !== folderName ? folderName : null;
+  return { primary, secondary };
+}
+
+function compareEditorProjects(left: EditorProjectOption, right: EditorProjectOption): number {
+  const leftTime = Date.parse(left.updatedAt ?? left.createdAt ?? "") || 0;
+  const rightTime = Date.parse(right.updatedAt ?? right.createdAt ?? "") || 0;
+  if (leftTime !== rightTime) {
+    return rightTime - leftTime;
+  }
+  return editorProjectLabel(left).primary.localeCompare(editorProjectLabel(right).primary);
+}
+
+function EditorProjectSwitcher(props: {
+  workspaceRoot: string | null;
+  projectName: string | null;
+  currentProjectId: ProjectId | null | undefined;
+  projectOptions: readonly EditorProjectOption[];
+  onSelectProject: ((projectId: ProjectId) => void) | undefined;
+}) {
+  const {
+    currentProjectId,
+    onSelectProject,
+    projectName,
+    projectOptions,
+    workspaceRoot,
+  } = props;
+  const [open, setOpen] = useState(false);
+  const sortedProjects = useMemo(
+    () =>
+      projectOptions
+        .filter((project) => project.cwd.trim().length > 0)
+        .slice()
+        .sort(compareEditorProjects),
+    [projectOptions],
+  );
+
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-1.5">
+      <div className="flex min-w-0 items-baseline gap-2">
+        <span className="truncate text-[13px] font-medium text-foreground">
+          {projectName ?? "Workspace"}
+        </span>
+        <span className="hidden truncate text-[11px] text-muted-foreground/70 sm:inline">
+          {workspaceRoot ?? "No workspace"}
+        </span>
+      </div>
+      <Menu open={open} onOpenChange={setOpen}>
+        <MenuTrigger
+          render={
+            <ChatHeaderIconButton
+              type="button"
+              tone="plain"
+              label="Switch project"
+              title="Switch project"
+              className="size-6"
+            >
+              <ChevronDownIcon className="size-3.5" />
+            </ChatHeaderIconButton>
+          }
+        />
+        <MenuPopup align="start" side="bottom" sideOffset={8} className="w-64 min-w-64">
+          <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
+            Recent projects
+          </div>
+          {sortedProjects.length === 0 ? (
+            <div className="px-2 py-1.5 text-muted-foreground text-sm">No recent projects</div>
+          ) : (
+            sortedProjects.map((project) => {
+              const label = editorProjectLabel(project);
+              const isSelected = project.id === currentProjectId;
+              return (
+                <MenuItem
+                  key={project.id}
+                  className="h-9 cursor-pointer gap-2 px-2 text-sm transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
+                  onClick={() => {
+                    onSelectProject?.(project.id);
+                    setOpen(false);
+                  }}
+                >
+                  <FolderIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
+                  <span className="min-w-0 flex-1 truncate">{label.primary}</span>
+                  {isSelected ? <CheckIcon className="size-3.5 shrink-0" /> : null}
+                </MenuItem>
+              );
+            })
+          )}
+        </MenuPopup>
+      </Menu>
+    </div>
+  );
 }
 
 function shouldShowExplorerEntry(entry: ProjectFileSystemEntry): boolean {
@@ -856,6 +1019,12 @@ const FileContentsView = memo(function FileContentsView(props: {
   );
 });
 
+function isMarkdownPreviewablePath(filePath: string): boolean {
+  const dot = filePath.lastIndexOf(".");
+  if (dot < 0) return false;
+  return EDITOR_MARKDOWN_PREVIEW_EXTENSIONS.has(filePath.slice(dot).toLowerCase());
+}
+
 // Mimics indented code lines so the placeholder reads as a file body
 // instead of a generic spinner block.
 const FILE_PREVIEW_SKELETON_LINES = [
@@ -904,15 +1073,27 @@ function FilePreview(props: {
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const contentsRef = useRef<HTMLDivElement>(null);
   const { onAskWhyInChat, onReferenceInChat, selectedFilePath } = props;
+  const selectedFileIsImage =
+    selectedFilePath !== null && isSupportedLocalImagePath(selectedFilePath);
+  const selectedFileIsMarkdown =
+    selectedFilePath !== null && isMarkdownPreviewablePath(selectedFilePath);
+  const [markdownPreviewEnabled, setMarkdownPreviewEnabled] = useState(false);
   const fileQuery = useQuery(
     projectReadFileQueryOptions({
       cwd: props.workspaceRoot,
       relativePath: props.selectedFilePath,
-      enabled: props.workspaceRoot !== null && props.selectedFilePath !== null,
+      enabled:
+        props.workspaceRoot !== null &&
+        props.selectedFilePath !== null &&
+        !selectedFileIsImage,
     }),
   );
+  useEffect(() => {
+    setMarkdownPreviewEnabled(false);
+  }, [selectedFilePath]);
 
   const fileContents = fileQuery.data?.contents ?? "";
+  const showMarkdownPreview = selectedFileIsMarkdown && markdownPreviewEnabled;
   const lineCount = useMemo(
     () => (fileContents.length === 0 ? 0 : fileContents.split("\n").length),
     [fileContents],
@@ -997,8 +1178,37 @@ function FilePreview(props: {
         {fileQuery.data?.truncated ? (
           <span className="shrink-0 text-[10px] text-muted-foreground/70">Shown partially</span>
         ) : null}
+        {selectedFileIsMarkdown ? (
+          <ChatHeaderIconButton
+            type="button"
+            label={showMarkdownPreview ? "Show Markdown source" : "Show Markdown preview"}
+            title={showMarkdownPreview ? "Show Markdown source" : "Show Markdown preview"}
+            aria-pressed={showMarkdownPreview}
+            tone="plain"
+            onClick={() => setMarkdownPreviewEnabled((previous) => !previous)}
+          >
+            {showMarkdownPreview ? (
+              <FileIcon className="size-3.5" aria-hidden="true" />
+            ) : (
+              <EyeIcon className="size-3.5" aria-hidden="true" />
+            )}
+          </ChatHeaderIconButton>
+        ) : null}
       </div>
-      {fileQuery.isLoading ? (
+      {selectedFileIsImage ? (
+        <div
+          className="editor-file-viewer min-h-0 flex-1 overflow-auto"
+          onContextMenu={handleContentsContextMenu}
+        >
+          <LocalImagePreview
+            src={props.selectedFilePath}
+            cwd={props.workspaceRoot}
+            alt={fileNameFromPath(props.selectedFilePath)}
+            className="min-h-full"
+            imageClassName="max-h-[calc(100vh-13rem)]"
+          />
+        </div>
+      ) : fileQuery.isLoading ? (
         <FilePreviewLoadingState />
       ) : fileQuery.error ? (
         <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
@@ -1009,17 +1219,35 @@ function FilePreview(props: {
       ) : (
         <div
           ref={contentsRef}
-          className="editor-file-viewer min-h-0 flex-1 overflow-auto"
+          className={cn(
+            "editor-file-viewer min-h-0 flex-1 overflow-auto",
+            showMarkdownPreview && "editor-file-viewer--markdown-preview",
+          )}
           onContextMenu={handleContentsContextMenu}
-          onMouseUp={previewSelectionAction.onContainerMouseUp}
+          onMouseUp={
+            showMarkdownPreview ? undefined : previewSelectionAction.onContainerMouseUp
+          }
         >
-          <FileContentsView
-            path={props.selectedFilePath}
-            contents={fileContents}
-            themeName={diffThemeName}
-          />
-          {lineCount > 0 ? <span className="sr-only">{lineCount} lines</span> : null}
-          {previewSelectionAction.pendingAction ? (
+          {showMarkdownPreview ? (
+            <div className="editor-markdown-preview">
+              <ChatMarkdown
+                text={fileContents}
+                cwd={markdownPreviewCwd(props.workspaceRoot, props.selectedFilePath)}
+                isStreaming={false}
+                className="editor-markdown-preview__body text-sm leading-relaxed"
+              />
+            </div>
+          ) : (
+            <FileContentsView
+              path={props.selectedFilePath}
+              contents={fileContents}
+              themeName={diffThemeName}
+            />
+          )}
+          {!showMarkdownPreview && lineCount > 0 ? (
+            <span className="sr-only">{lineCount} lines</span>
+          ) : null}
+          {!showMarkdownPreview && previewSelectionAction.pendingAction ? (
             <TranscriptSelectionAction
               left={previewSelectionAction.pendingAction.left}
               top={previewSelectionAction.pendingAction.top}
@@ -1124,6 +1352,8 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   const [chatPaneVisible, setChatPaneVisible] = useState(() =>
     readStoredEditorVisibility(EDITOR_CHAT_PANE_VISIBLE_STORAGE_KEY),
   );
+  const desktopTopBarWindowControlsGutterClassName =
+    useDesktopTopBarWindowControlsGutterClassName();
   const { centerMode, onCenterModeChange } = props;
   const handleActivityBarSelectMode = useCallback(
     (mode: EditorCenterMode) => {
@@ -1267,15 +1497,17 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           "flex shrink-0 items-center gap-2 px-2 sm:px-3",
           CHAT_SURFACE_HEADER_HEIGHT_CLASS,
           CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
+          desktopTopBarWindowControlsGutterClassName,
         )}
       >
         <div className={cn("flex min-w-0 flex-1 items-center gap-2", trafficLightGutterClassName)}>
-          <span className="truncate text-[13px] font-medium text-foreground">
-            {props.projectName ?? "Workspace"}
-          </span>
-          <span className="hidden truncate text-[11px] text-muted-foreground/70 sm:inline">
-            {props.workspaceRoot ?? "No workspace"}
-          </span>
+          <EditorProjectSwitcher
+            workspaceRoot={props.workspaceRoot}
+            projectName={props.projectName}
+            currentProjectId={props.currentProjectId}
+            projectOptions={props.projectOptions ?? []}
+            onSelectProject={props.onSelectProject}
+          />
         </div>
         <ChatHeaderButton
           type="button"

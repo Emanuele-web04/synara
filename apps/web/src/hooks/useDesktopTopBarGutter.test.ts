@@ -1,11 +1,14 @@
 // FILE: useDesktopTopBarGutter.test.ts
-// Purpose: Covers the pure top-bar traffic-light gutter decision helper.
+// Purpose: Covers pure desktop top-bar gutter decision helpers.
 // Layer: Hook unit tests
-// Depends on: shouldReserveDesktopTopBarTrafficLightGutter and Vitest assertions.
+// Depends on: useDesktopTopBarGutter pure helpers and Vitest assertions.
 
 import { describe, expect, it } from "vitest";
 
-import { shouldReserveDesktopTopBarTrafficLightGutter } from "./useDesktopTopBarGutter";
+import {
+  shouldReserveDesktopTopBarTrafficLightGutter,
+  shouldReserveDesktopTopBarWindowControlsGutter,
+} from "./useDesktopTopBarGutter";
 
 describe("shouldReserveDesktopTopBarTrafficLightGutter", () => {
   it("never reserves a gutter in the browser build", () => {
@@ -63,5 +66,34 @@ describe("shouldReserveDesktopTopBarTrafficLightGutter", () => {
         }),
       ).toBe(true);
     }
+  });
+});
+
+describe("shouldReserveDesktopTopBarWindowControlsGutter", () => {
+  it("never reserves a gutter outside Electron", () => {
+    expect(
+      shouldReserveDesktopTopBarWindowControlsGutter({
+        isElectron: false,
+        isWindowsDesktop: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("never reserves a gutter for non-Windows desktop windows", () => {
+    expect(
+      shouldReserveDesktopTopBarWindowControlsGutter({
+        isElectron: true,
+        isWindowsDesktop: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("reserves a gutter for Windows Electron caption controls", () => {
+    expect(
+      shouldReserveDesktopTopBarWindowControlsGutter({
+        isElectron: true,
+        isWindowsDesktop: true,
+      }),
+    ).toBe(true);
   });
 });

@@ -20,6 +20,7 @@ export const DiffPanelPatchViewport = memo(
     resolvedTheme: "light" | "dark";
     diffRenderMode: DiffRenderMode;
     diffWordWrap: boolean;
+    workspaceRoot: string | null;
     collapsedFiles: ReadonlySet<string>;
     onToggleFileCollapsed: (fileKey: string) => void;
     chatActions?: DiffFileChatActions | undefined;
@@ -78,6 +79,7 @@ export const DiffPanelPatchViewport = memo(
             resolvedTheme={props.resolvedTheme}
             diffRenderMode={props.diffRenderMode}
             diffWordWrap={props.diffWordWrap}
+            workspaceRoot={props.workspaceRoot}
             collapsedFiles={props.collapsedFiles}
             onToggleFileCollapsed={props.onToggleFileCollapsed}
             chatActions={props.chatActions}
@@ -111,6 +113,7 @@ export const DiffPanelPatchViewport = memo(
       previous.resolvedTheme === next.resolvedTheme &&
       previous.diffRenderMode === next.diffRenderMode &&
       previous.diffWordWrap === next.diffWordWrap &&
+      previous.workspaceRoot === next.workspaceRoot &&
       previous.collapsedFiles === next.collapsedFiles &&
       previous.onToggleFileCollapsed === next.onToggleFileCollapsed &&
       previous.chatActions === next.chatActions &&
