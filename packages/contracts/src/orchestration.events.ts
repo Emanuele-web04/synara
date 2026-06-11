@@ -72,6 +72,9 @@ import {
   ThreadHandoff,
   ThreadMarker,
   ThreadMarkerLabel,
+  ThreadMarkers,
+  ThreadNotes,
+  ThreadPinnedMessages,
   TurnDispatchMode,
 } from "./orchestration.core";
 import { ClientOrchestrationCommand } from "./orchestration.commands";
@@ -140,6 +143,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   workspaceRoot: TrimmedNonEmptyString,
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
+  isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -151,6 +155,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
+  isPinned: Schema.optional(Schema.Boolean),
   updatedAt: IsoDateTime,
 });
 
@@ -256,6 +261,9 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   handoff: Schema.optional(Schema.NullOr(ThreadHandoff)),
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)),
   reviewChatTarget: Schema.optional(Schema.NullOr(OrchestrationReviewChatTarget)),
+  pinnedMessages: Schema.optional(ThreadPinnedMessages),
+  threadMarkers: Schema.optional(ThreadMarkers),
+  notes: Schema.optional(ThreadNotes),
   updatedAt: IsoDateTime,
 });
 

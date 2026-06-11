@@ -13,6 +13,7 @@ import { type CursorModelOptions, type ProviderModelDescriptor } from "@t3tools/
 import { Effect, Layer, Schema, Scope, ServiceMap } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpErrors from "effect-acp/errors";
+import * as EffectAcpErrorsRuntime from "effect-acp/errors";
 import * as EffectAcpSchema from "effect-acp/schema";
 
 import {
@@ -36,6 +37,7 @@ import {
 } from "./CursorAcpSupport.parsing.ts";
 import {
   CURSOR_PARAMETERIZED_MODEL_PICKER_CAPABILITIES,
+  type CursorAcpAvailableModel,
   type CursorAcpModelSelectionErrorContext,
   type CursorAcpModelSelectionRuntime,
   type CursorAcpRuntimeCursorSettings,
@@ -168,15 +170,20 @@ export function fetchCursorAcpModelDescriptors(
     Effect.flatMap((raw) =>
       decodeCursorAcpListAvailableModelsResult(raw).pipe(
         Effect.mapError((cause) =>
-          EffectAcpErrors.AcpRequestError.parseError(
+          EffectAcpErrorsRuntime.AcpRequestError.parseError(
             "Failed to decode Cursor available models response.",
             cause,
           ),
         ),
       ),
     ),
-    Effect.map((result) =>
-      buildCursorAcpModelDescriptorsFromAvailableModels(result.models),
-    ),
+    Effect.map((result) => {
+      const models: ReadonlyArray<CursorAcpAvailableModel> = result.models.map((model) => ({
+        value: model.value,
+        ...(model.name !== undefined ? { name: model.name } : {}),
+        ...(model.configOptions !== undefined ? { configOptions: model.configOptions } : {}),
+      }));
+      return buildCursorAcpModelDescriptorsFromAvailableModels(models);
+    }),
   );
 }

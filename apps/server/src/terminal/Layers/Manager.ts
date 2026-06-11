@@ -9,6 +9,7 @@ import path from "node:path";
 import treeKill from "tree-kill";
 
 import {
+  type TerminalAckOutputInput,
   type TerminalClearInput,
   type TerminalCloseInput,
   type TerminalEvent,
@@ -45,6 +46,7 @@ import {
   createTerminalSessionState,
   decodeTerminalClearInput,
   decodeTerminalCloseInput,
+  decodeTerminalAckOutputInput,
   decodeTerminalOpenInput,
   decodeTerminalResizeInput,
   decodeTerminalRestartInput,
@@ -205,7 +207,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           rows,
           env: input.env,
           history,
+          historyLimits: {
+            maxLines: this.historyLineLimit,
+            maxBytes: this.historyByteLimit,
+          },
         });
+        session.streamOutput = input.streamOutput ?? true;
         this.sessions.set(sessionKey, session);
         this.evictInactiveSessionsIfNeeded();
         await this.startSession(session, { ...input, cols, rows }, "started");
@@ -213,6 +220,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       }
 
       const nextRuntimeEnv = normalizedRuntimeEnv(input.env);
+      if (input.streamOutput !== undefined) {
+        existing.streamOutput = input.streamOutput;
+      }
       const currentRuntimeEnv = existing.runtimeEnv;
       const targetCols = input.cols ?? existing.cols;
       const targetRows = input.rows ?? existing.rows;
@@ -227,7 +237,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         await this.historyStore.persistHistory(
           existing.threadId,
           existing.terminalId,
-          existing.history,
+          existing.history.toString(),
         );
       } else if (existing.status === "exited" || existing.status === "error") {
         existing.runtimeEnv = nextRuntimeEnv;
@@ -235,7 +245,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         await this.historyStore.persistHistory(
           existing.threadId,
           existing.terminalId,
-          existing.history,
+          existing.history.toString(),
         );
       } else if (currentRuntimeEnv !== nextRuntimeEnv) {
         existing.runtimeEnv = nextRuntimeEnv;
@@ -287,6 +297,18 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.process.write(input.data);
   }
 
+  async ackOutput(raw: TerminalAckOutputInput): Promise<void> {
+    const input = decodeTerminalAckOutputInput(raw);
+    const session = this.sessions.get(toSessionKey(input.threadId, input.terminalId));
+    if (!session) return;
+
+    session.outputAckObserved = true;
+    session.outputUnackedBytes = Math.max(0, session.outputUnackedBytes - input.bytes);
+    if (session.outputUnackedBytes === 0) {
+      session.outputAckPauseRequested = false;
+    }
+  }
+
   async resize(raw: TerminalResizeInput): Promise<void> {
     const input = decodeTerminalResizeInput(raw);
     const session = this.requireSession(input.threadId, input.terminalId);
@@ -307,7 +329,11 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const session = this.requireSession(input.threadId, input.terminalId);
       resetSessionHistory(session);
       session.updatedAt = new Date().toISOString();
-      await this.historyStore.persistHistory(input.threadId, input.terminalId, session.history);
+      await this.historyStore.persistHistory(
+        input.threadId,
+        input.terminalId,
+        session.history.toString(),
+      );
       this.emitEvent({
         type: "cleared",
         threadId: input.threadId,
@@ -335,6 +361,10 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           rows,
           env: input.env,
           history: "",
+          historyLimits: {
+            maxLines: this.historyLineLimit,
+            maxBytes: this.historyByteLimit,
+          },
         });
         this.sessions.set(sessionKey, session);
         this.evictInactiveSessionsIfNeeded();
@@ -354,7 +384,11 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const rows = input.rows ?? session.rows;
 
       resetSessionHistory(session);
-      await this.historyStore.persistHistory(input.threadId, input.terminalId, session.history);
+      await this.historyStore.persistHistory(
+        input.threadId,
+        input.terminalId,
+        session.history.toString(),
+      );
       await this.startSession(session, { ...input, cols, rows }, "restarted");
       return this.snapshot(session);
     });
@@ -523,11 +557,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       this.emitActivityEvent(session);
     }
     if (sanitized.visibleText.length > 0) {
-      appendSessionHistory(session, sanitized.visibleText, {
-        maxLines: this.historyLineLimit,
-        maxBytes: this.historyByteLimit,
-      });
-      this.historyStore.queuePersist(session.threadId, session.terminalId, session.history);
+      appendSessionHistory(session, sanitized.visibleText);
+      this.historyStore.queuePersist(
+        session.threadId,
+        session.terminalId,
+        session.history.toString(),
+      );
       const normalizedSignature = normalizeProviderOutputSignature(sanitized.visibleText);
       if (normalizedSignature.length > 0 && normalizedSignature !== session.lastOutputSignature) {
         // Only refresh on genuinely new output. Repeated identical redraws (idle prompt
@@ -577,13 +612,18 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       session.outputPaused = false;
     }
 
-    this.emitEvent({
-      type: "output",
-      threadId: session.threadId,
-      terminalId: session.terminalId,
-      createdAt: new Date().toISOString(),
-      data,
-    });
+    if (session.streamOutput) {
+      this.emitEvent({
+        type: "output",
+        threadId: session.threadId,
+        terminalId: session.terminalId,
+        createdAt: new Date().toISOString(),
+        data,
+      });
+    }
+    if (session.outputAckObserved) {
+      session.outputUnackedBytes += Buffer.byteLength(data, "utf8");
+    }
   }
 
   private onProcessExit(session: TerminalSessionState, event: PtyExitEvent): void {
@@ -743,7 +783,11 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     for (const session of inactiveSessions.slice(0, toEvict)) {
       this.flushOutputBuffer(session);
       this.sessions.delete(toSessionKey(session.threadId, session.terminalId));
-      this.historyStore.evictSession(session.threadId, session.terminalId, session.history);
+      this.historyStore.evictSession(
+        session.threadId,
+        session.terminalId,
+        session.history.toString(),
+      );
       this.clearKillEscalationTimer(session.process);
     }
   }
@@ -902,7 +946,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       cwd: session.cwd,
       status: session.status,
       pid: session.pid,
-      history: session.history,
+      history: session.history.toString(),
       exitCode: session.exitCode,
       exitSignal: session.exitSignal,
       updatedAt: session.updatedAt,
@@ -965,6 +1009,12 @@ export const TerminalManagerLive = Layer.effect(
         Effect.tryPromise({
           try: () => runtime.write(input),
           catch: (cause) => new TerminalError({ message: "Failed to write to terminal", cause }),
+        }),
+      ackOutput: (input) =>
+        Effect.tryPromise({
+          try: () => runtime.ackOutput(input),
+          catch: (cause) =>
+            new TerminalError({ message: "Failed to acknowledge terminal output", cause }),
         }),
       resize: (input) =>
         Effect.tryPromise({

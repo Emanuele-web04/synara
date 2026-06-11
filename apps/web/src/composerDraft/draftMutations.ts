@@ -16,6 +16,8 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
     persistedAttachments: [],
     assistantSelections: [],
     terminalContexts: [],
+    skills: [],
+    mentions: [],
     queuedTurns: [],
     modelSelectionByProvider: {},
     activeProvider: null,
@@ -35,6 +37,8 @@ export function buildTransferredComposerDraft(input: {
     ...base,
     prompt: sourceDraft.prompt,
     assistantSelections: normalizeAssistantSelections(sourceDraft.assistantSelections),
+    skills: [...sourceDraft.skills],
+    mentions: [...sourceDraft.mentions],
     terminalContexts: normalizeTerminalContextsForThread(
       targetThreadId,
       sourceDraft.terminalContexts,

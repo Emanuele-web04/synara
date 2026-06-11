@@ -298,10 +298,12 @@ describe("wsNativeApi", () => {
             binaryPath: "opencode",
             serverUrl: "",
             serverPassword: "",
+            experimentalWebSockets: false,
             customModels: [],
           },
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
         },
+        skills: { disabled: [] },
         sandboxes: {
           defaultRemoteProvider: "",
           postCloneCommand: "",

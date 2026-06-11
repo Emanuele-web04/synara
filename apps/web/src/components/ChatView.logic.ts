@@ -39,6 +39,11 @@ import { hasLiveTurnTailWork, type WorkLogEntry } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
 import { type ProviderModelOption } from "../providerModelOptions";
 
+export {
+  cloneComposerImageAttachment as cloneComposerImageForRetry,
+  readFileAsDataUrl,
+} from "../lib/composerSend";
+
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "synara:last-invoked-script-by-project";
 export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "synara:dismissed-provider-health-banners";
 
@@ -651,12 +656,15 @@ export function buildExpiredTerminalContextToastCopy(
 }
 
 export function shouldRenderTerminalWorkspace(options: {
+  activeProjectExists: boolean;
   presentationMode: "drawer" | "workspace";
   terminalOpen: boolean;
 }): boolean {
   // The workspace shell should paint immediately; the terminal viewport gates the
   // backend attach until a valid cwd is available.
-  return options.terminalOpen && options.presentationMode === "workspace";
+  return (
+    options.activeProjectExists && options.terminalOpen && options.presentationMode === "workspace"
+  );
 }
 
 export function resolveProjectScriptTerminalTarget(options: {

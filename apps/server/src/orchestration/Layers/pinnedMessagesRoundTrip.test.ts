@@ -87,6 +87,7 @@ describe("pinned messages round-trip", () => {
           commandId: CommandId.makeUnsafe("cmd-pin-add"),
           threadId,
           messageId,
+          createdAt,
         }),
       );
       await system.run(
@@ -95,6 +96,7 @@ describe("pinned messages round-trip", () => {
           commandId: CommandId.makeUnsafe("cmd-pin-add-second"),
           threadId,
           messageId: secondMessageId,
+          createdAt,
         }),
       );
       await system.run(
@@ -104,6 +106,7 @@ describe("pinned messages round-trip", () => {
           threadId,
           messageId,
           done: true,
+          createdAt,
         }),
       );
       await system.run(
@@ -113,6 +116,7 @@ describe("pinned messages round-trip", () => {
           threadId,
           messageId,
           label: "Review this answer",
+          createdAt,
         }),
       );
 
@@ -197,6 +201,7 @@ describe("pinned messages round-trip", () => {
           selectedText: "important text",
           style: "highlight",
           color: "yellow",
+          createdAt,
         }),
       );
       await system.run(
@@ -211,6 +216,7 @@ describe("pinned messages round-trip", () => {
           selectedText: "underline",
           style: "underline",
           color: "blue",
+          createdAt,
         }),
       );
       await system.run(
@@ -220,6 +226,7 @@ describe("pinned messages round-trip", () => {
           threadId,
           markerId: firstMarkerId,
           done: true,
+          createdAt,
         }),
       );
       await system.run(
@@ -229,6 +236,7 @@ describe("pinned messages round-trip", () => {
           threadId,
           markerId: firstMarkerId,
           label: "Research later",
+          createdAt,
         }),
       );
       await system.run(
@@ -237,6 +245,7 @@ describe("pinned messages round-trip", () => {
           commandId: CommandId.makeUnsafe("cmd-marker-remove"),
           threadId,
           markerId: secondMarkerId,
+          createdAt,
         }),
       );
 

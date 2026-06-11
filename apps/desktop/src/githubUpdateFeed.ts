@@ -66,11 +66,14 @@ function normalizeGitHubReleaseRecord(value: unknown): GitHubReleaseRecord | nul
   if (!isRecord(value)) {
     return null;
   }
-  return {
-    tag_name: typeof value.tag_name === "string" ? value.tag_name : undefined,
+  const record: GitHubReleaseRecord = {
     draft: value.draft,
     prerelease: value.prerelease,
   };
+  if (typeof value.tag_name === "string") {
+    return { ...record, tag_name: value.tag_name };
+  }
+  return record;
 }
 
 function getGitHubApiBaseUrl(source: GitHubUpdateSource): URL {

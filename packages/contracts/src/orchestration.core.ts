@@ -303,6 +303,7 @@ export const OrchestrationProject = Schema.Struct({
   workspaceRoot: TrimmedNonEmptyString,
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
+  isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -316,6 +317,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   workspaceRoot: TrimmedNonEmptyString,
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
+  isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

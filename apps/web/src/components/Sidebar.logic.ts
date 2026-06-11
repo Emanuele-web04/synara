@@ -4,14 +4,12 @@
 // Layer: Sidebar logic (pure).
 // Exports: Sidebar row state derivation, add-project error helpers, sort utilities, status/PR indicators, and visibility helpers.
 
-import type {
-  KeybindingCommand,
-  ProjectId,
-  ResolvedKeybindingsConfig,
-  ThreadId,
-} from "@t3tools/contracts";
+import { MAX_PINNED_PROJECTS, type ProjectId, type ThreadId } from "@t3tools/contracts";
+import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import type { Project, SidebarThreadSummary, Thread } from "../types";
+import type { LastThreadRoute } from "../chatRouteRestore";
 import { cn } from "../lib/utils";
+import { derivePinnedIds, isLatestPinMutation, orderPinnedItemsFirst } from "../pinning.logic";
 import { shortcutLabelForCommand, threadJumpCommandForIndex } from "../keybindings";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import {
@@ -21,7 +19,7 @@ import {
   SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
-import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+import { isWorkspaceRootWithin, workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 
 export {
   extractDuplicateProjectCreateProjectId,
@@ -38,11 +36,13 @@ export {
 export {
   hasUnseenCompletion,
   prStatusIndicator,
+  resolvePrStatePresentation,
   resolveProjectStatusIndicator,
   resolveThreadStatusPill,
   terminalStatusFromThreadState,
   toThreadPr,
   type PrStatusIndicator,
+  type PrStatePresentation,
   type TerminalStatusIndicator,
   type ThreadPr,
   type ThreadStatusPill,
@@ -188,6 +188,119 @@ export function findWorkspaceRootMatch<T>(
   getWorkspaceRoot: (item: T) => string,
 ): T | undefined {
   return items.find((item) => workspaceRootsEqual(getWorkspaceRoot(item), targetWorkspaceRoot));
+}
+
+export function findDeepestWorkspaceRootMatch<T>(
+  items: readonly T[],
+  targetWorkspaceRoot: string,
+  getWorkspaceRoot: (item: T) => string,
+): T | undefined {
+  let bestMatch: T | undefined;
+  let bestLength = -1;
+  for (const item of items) {
+    const workspaceRoot = getWorkspaceRoot(item);
+    if (!isWorkspaceRootWithin(targetWorkspaceRoot, workspaceRoot)) {
+      continue;
+    }
+    if (workspaceRoot.length > bestLength) {
+      bestMatch = item;
+      bestLength = workspaceRoot.length;
+    }
+  }
+  return bestMatch;
+}
+
+export type SettingsBackTarget =
+  | { kind: "home" }
+  | { kind: "thread"; threadId: ThreadId; splitViewId?: string | undefined };
+
+export function buildSettingsBackAvailableThreadIds(input: {
+  sidebarThreadSummaryById: Record<string, unknown>;
+  draftThreadsByThreadId: Record<string, unknown>;
+}): Set<string> {
+  return new Set([
+    ...Object.keys(input.sidebarThreadSummaryById),
+    ...Object.keys(input.draftThreadsByThreadId),
+  ]);
+}
+
+export function resolveSettingsBackTarget(input: {
+  lastThreadRoute: LastThreadRoute | null;
+  availableThreadIds: ReadonlySet<string>;
+  availableSplitViewIds?: ReadonlySet<string> | undefined;
+  latestThreadId: ThreadId | string | null;
+}): SettingsBackTarget {
+  const lastThreadId = input.lastThreadRoute?.threadId;
+  if (lastThreadId && input.availableThreadIds.has(lastThreadId)) {
+    const splitViewId = input.lastThreadRoute?.splitViewId;
+    const splitViewAvailable =
+      splitViewId !== undefined && input.availableSplitViewIds?.has(splitViewId) === true;
+    return {
+      kind: "thread",
+      threadId: lastThreadId as ThreadId,
+      ...(splitViewAvailable ? { splitViewId } : {}),
+    };
+  }
+  if (input.latestThreadId && input.availableThreadIds.has(input.latestThreadId)) {
+    return { kind: "thread", threadId: input.latestThreadId as ThreadId };
+  }
+  return { kind: "home" };
+}
+
+export function derivePinnedThreadIdsForSidebar(input: {
+  threads: readonly (Pick<Thread, "id"> & { isPinned?: boolean | undefined })[];
+  persistedPinnedThreadIds: readonly ThreadId[];
+  optimisticPinnedStateByThreadId: ReadonlyMap<ThreadId, boolean>;
+}): ThreadId[] {
+  return derivePinnedIds({
+    items: input.threads,
+    persistedPinnedIds: input.persistedPinnedThreadIds,
+    optimisticPinnedStateById: input.optimisticPinnedStateByThreadId,
+  });
+}
+
+export function derivePinnedProjectIdsForSidebar(input: {
+  projects: readonly (Pick<Project, "id"> & { isPinned?: boolean | undefined })[];
+  persistedPinnedProjectIds: readonly ProjectId[];
+  optimisticPinnedStateByProjectId: ReadonlyMap<ProjectId, boolean>;
+}): ProjectId[] {
+  return derivePinnedIds({
+    items: input.projects,
+    persistedPinnedIds: input.persistedPinnedProjectIds,
+    optimisticPinnedStateById: input.optimisticPinnedStateByProjectId,
+    maxCount: MAX_PINNED_PROJECTS,
+  });
+}
+
+export function orderPinnedProjectsForSidebar<T extends Pick<Project, "id">>(
+  projects: readonly T[],
+  pinnedProjectIds: readonly ProjectId[],
+): T[] {
+  return orderPinnedItemsFirst(projects, pinnedProjectIds);
+}
+
+export function isLatestPinnedThreadMutation(input: {
+  threadId: ThreadId;
+  requestVersion: number;
+  latestMutationVersionByThreadId: ReadonlyMap<ThreadId, number>;
+}): boolean {
+  return isLatestPinMutation({
+    id: input.threadId,
+    requestVersion: input.requestVersion,
+    latestMutationVersionById: input.latestMutationVersionByThreadId,
+  });
+}
+
+export function isLatestPinnedProjectMutation(input: {
+  projectId: ProjectId;
+  requestVersion: number;
+  latestMutationVersionByProjectId: ReadonlyMap<ProjectId, number>;
+}): boolean {
+  return isLatestPinMutation({
+    id: input.projectId,
+    requestVersion: input.requestVersion,
+    latestMutationVersionById: input.latestMutationVersionByProjectId,
+  });
 }
 
 // Rechecks an existing local project against the server before the add flow decides to reuse it.

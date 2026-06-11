@@ -4,6 +4,7 @@ import { Option, Schema } from "effect";
 import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_SERVER_SETTINGS,
+  type AssistantDeliveryMode,
   TrimmedNonEmptyString,
   ProviderKind,
   type ProviderStartOptions,
@@ -228,6 +229,12 @@ export const AppSettingsSchema = Schema.Struct({
   sandboxCloudflareBridgeToken: SandboxStringSetting,
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
+
+export function resolveAssistantDeliveryMode(
+  settings: Pick<AppSettings, "enableAssistantStreaming">,
+): AssistantDeliveryMode {
+  return settings.enableAssistantStreaming ? "streaming" : "buffered";
+}
 
 /**
  * Resolve the workspace-level remote-runtime defaults a new remote thread should

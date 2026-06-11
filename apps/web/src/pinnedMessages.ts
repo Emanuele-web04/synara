@@ -159,8 +159,16 @@ async function dispatchSidepanelCommand(
   if (!api) {
     return;
   }
+  if (command.type === "thread.meta.update") {
+    await api.orchestration.dispatchCommand({
+      commandId: newCommandId(),
+      ...command,
+    });
+    return;
+  }
   await api.orchestration.dispatchCommand({
     commandId: newCommandId(),
+    createdAt: new Date().toISOString(),
     ...command,
   });
 }

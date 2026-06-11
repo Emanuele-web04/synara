@@ -122,6 +122,8 @@ export const PersistedComposerThreadDraftState = Schema.Struct({
     ),
   ),
   terminalContexts: Schema.optionalKey(Schema.Array(PersistedTerminalContextDraft)),
+  skills: Schema.optionalKey(Schema.Array(ProviderSkillReference)),
+  mentions: Schema.optionalKey(Schema.Array(ProviderMentionReference)),
   queuedTurns: Schema.optionalKey(Schema.Array(PersistedQueuedComposerTurn)),
   modelSelectionByProvider: Schema.optionalKey(
     Schema.Record(ProviderKind, Schema.optionalKey(ModelSelection)),

@@ -56,6 +56,7 @@ import { useStore } from "~/store";
 interface GitActionsControlProps {
   gitCwd: string | null;
   activeThreadId: ThreadId | null;
+  variant?: "default" | "environment" | "panel";
   hideQuickActionLabel?: boolean;
 }
 
@@ -87,6 +88,7 @@ interface RunGitActionWithToastInput {
 export default function GitActionsControl({
   gitCwd,
   activeThreadId,
+  variant: _variant,
   hideQuickActionLabel = false,
 }: GitActionsControlProps) {
   const { settings } = useAppSettings();

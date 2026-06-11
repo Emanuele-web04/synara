@@ -2861,6 +2861,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
           persistedAttachments: [],
           assistantSelections: [],
           terminalContexts: [],
+          skills: [],
+          mentions: [],
           queuedTurns: [],
           modelSelectionByProvider: {
             claudeAgent: {

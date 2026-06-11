@@ -7,6 +7,7 @@ import type {
   ProviderListPluginsResult,
   ProviderListSkillsResult,
   ProviderReadPluginResult,
+  ProviderSkillsCatalogResult,
 } from "@t3tools/contracts";
 import { queryOptions } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
@@ -48,10 +49,15 @@ export const providerDiscoveryQueryKeys = {
   all: ["provider-discovery"] as const,
   composerCapabilities: (provider: ProviderKind) =>
     ["provider-discovery", "composer-capabilities", provider] as const,
-  commands: (provider: ProviderKind, cwd: string | null, agentDir: string | null) =>
-    ["provider-discovery", "commands", provider, cwd, agentDir] as const,
+  commands: (
+    provider: ProviderKind,
+    cwd: string | null,
+    agentDir: string | null,
+    connectionKey: string | null = null,
+  ) => ["provider-discovery", "commands", provider, cwd, agentDir, connectionKey] as const,
   skills: (provider: ProviderKind, cwd: string | null, agentDir: string | null) =>
     ["provider-discovery", "skills", provider, cwd, agentDir] as const,
+  skillsCatalog: (cwd: string | null) => ["provider-discovery", "skills-catalog", cwd] as const,
   plugins: (provider: ProviderKind, cwd: string | null) =>
     ["provider-discovery", "plugins", provider, cwd] as const,
   plugin: (provider: ProviderKind, marketplacePath: string, pluginName: string) =>
@@ -103,18 +109,42 @@ export function providerSkillsQueryOptions(input: {
   });
 }
 
+export function skillsCatalogQueryOptions(input?: { cwd?: string | null; enabled?: boolean }) {
+  const cwd = input?.cwd ?? null;
+  return queryOptions({
+    queryKey: providerDiscoveryQueryKeys.skillsCatalog(cwd),
+    queryFn: async (): Promise<ProviderSkillsCatalogResult> => {
+      const api = ensureNativeApi();
+      return api.provider.listSkillsCatalog(cwd ? { cwd } : {});
+    },
+    enabled: input?.enabled ?? true,
+    staleTime: 30_000,
+  });
+}
+
 export function providerCommandsQueryOptions(input: {
   provider: ProviderKind;
   cwd: string | null;
   threadId?: string | null;
+  binaryPath?: string | null;
+  serverUrl?: string | null;
+  serverPassword?: string | null;
+  experimentalWebSockets?: boolean | undefined;
   agentDir?: string | null;
   enabled?: boolean;
 }) {
+  const connectionKey = JSON.stringify({
+    binaryPath: input.binaryPath ?? null,
+    serverUrl: input.serverUrl ?? null,
+    hasServerPassword: Boolean(input.serverPassword),
+    experimentalWebSockets: input.experimentalWebSockets ?? null,
+  });
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.commands(
       input.provider,
       input.cwd,
       input.agentDir ?? null,
+      connectionKey,
     ),
     queryFn: async () => {
       const api = ensureNativeApi();
@@ -125,6 +155,12 @@ export function providerCommandsQueryOptions(input: {
         provider: input.provider,
         cwd: input.cwd,
         ...(input.threadId ? { threadId: input.threadId } : {}),
+        ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+        ...(input.serverUrl ? { serverUrl: input.serverUrl } : {}),
+        ...(input.serverPassword ? { serverPassword: input.serverPassword } : {}),
+        ...(input.experimentalWebSockets !== undefined
+          ? { experimentalWebSockets: input.experimentalWebSockets }
+          : {}),
         ...(input.agentDir ? { agentDir: input.agentDir } : {}),
       });
     },

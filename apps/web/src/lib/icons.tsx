@@ -167,6 +167,7 @@ export const McpIcon: LucideIcon = (props) => (
   <VscMcp className={props.className} style={props.style} />
 );
 export const PluginIcon: LucideIcon = centralIconWrapper("puzzle");
+export const PlugIcon = PluginIcon;
 export const HammerIcon = adaptIcon(IconTool);
 export const HistoryIcon = adaptIcon(IconHistory);
 export const InfoIcon = adaptIcon(IconInfoCircle);

@@ -211,6 +211,22 @@ export function buildSkillSearchFields(
   ];
 }
 
+function buildProviderDiscoverySearchBlob(fields: readonly ProviderDiscoverySearchField[]): string {
+  return normalizeProviderDiscoveryText(
+    fields
+      .map((field) => field.value)
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .join(" "),
+  );
+}
+
+export function buildSkillSearchBlob(
+  skill: Pick<ProviderSkillDescriptor, "name" | "description" | "interface"> &
+    Partial<Pick<ProviderSkillDescriptor, "path">>,
+): string {
+  return buildProviderDiscoverySearchBlob(buildSkillSearchFields(skill));
+}
+
 export function isInstalledProviderPlugin(
   plugin: Pick<ProviderPluginDescriptor, "installed" | "enabled" | "installPolicy">,
 ): boolean {
@@ -232,6 +248,12 @@ export function buildPluginSearchFields(
   ];
 }
 
+export function buildPluginSearchBlob(
+  plugin: Pick<ProviderPluginDescriptor, "name" | "interface">,
+): string {
+  return buildProviderDiscoverySearchBlob(buildPluginSearchFields(plugin));
+}
+
 export function buildCommandSearchFields(
   command: Pick<ProviderNativeCommandDescriptor, "name" | "description">,
 ): ProviderDiscoverySearchField[] {
@@ -239,6 +261,12 @@ export function buildCommandSearchFields(
     { value: command.name },
     { value: command.description, weight: PROVIDER_DISCOVERY_SECONDARY_FIELD_WEIGHT },
   ];
+}
+
+export function buildCommandSearchBlob(
+  command: Pick<ProviderNativeCommandDescriptor, "name" | "description">,
+): string {
+  return buildProviderDiscoverySearchBlob(buildCommandSearchFields(command));
 }
 
 export function formatSkillScope(scope: string | undefined): string {

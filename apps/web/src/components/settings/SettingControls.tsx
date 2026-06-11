@@ -8,7 +8,14 @@ import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 import { Select, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import { Undo2Icon } from "~/lib/icons";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "~/components/ui/menu";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/input-group";
+import { ChevronDownIcon, Undo2Icon } from "~/lib/icons";
 import { SETTINGS_CONTROL_RADIUS_CLASS_NAME } from "~/settingsPanelStyles";
 import { SettingsSelectPopup } from "./SettingsPanelPrimitives";
 
@@ -66,6 +73,72 @@ export function SettingsSelectControl({
       </SelectTrigger>
       <SettingsSelectPopup>{children}</SettingsSelectPopup>
     </Select>
+  );
+}
+
+export type FontPreset = { label: string; value: string };
+
+export const UI_FONT_PRESETS: readonly FontPreset[] = [
+  { label: "System default", value: "" },
+  { label: "System UI", value: "system-ui" },
+  { label: "Inter", value: "Inter" },
+  { label: "Helvetica Neue", value: "Helvetica Neue" },
+  { label: "Arial", value: "Arial" },
+  { label: "Roboto", value: "Roboto" },
+  { label: "Segoe UI", value: "Segoe UI" },
+];
+
+export const CODE_FONT_PRESETS: readonly FontPreset[] = [
+  { label: "System default", value: "" },
+  { label: "JetBrains Mono", value: "JetBrains Mono" },
+  { label: "Fira Code", value: "Fira Code" },
+  { label: "SF Mono", value: "SF Mono" },
+  { label: "Menlo", value: "Menlo" },
+  { label: "Monaco", value: "Monaco" },
+  { label: "Consolas", value: "Consolas" },
+  { label: "Source Code Pro", value: "Source Code Pro" },
+];
+
+export function SettingsFontControl({
+  value,
+  onValueChange,
+  presets,
+  placeholder,
+  ariaLabel,
+}: {
+  value: string;
+  onValueChange: (value: string) => void;
+  presets: readonly FontPreset[];
+  placeholder: string;
+  ariaLabel: string;
+}) {
+  return (
+    <InputGroup className="w-full sm:w-48">
+      <InputGroupInput
+        value={value}
+        onChange={(event) => onValueChange(event.target.value)}
+        placeholder={placeholder}
+        spellCheck={false}
+        aria-label={ariaLabel}
+      />
+      <InputGroupAddon align="inline-end">
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            aria-label={`${ariaLabel} presets`}
+            className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground"
+          >
+            <ChevronDownIcon className="size-3.5" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-44">
+            {presets.map((preset) => (
+              <DropdownMenuItem key={preset.label} onClick={() => onValueChange(preset.value)}>
+                {preset.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </InputGroupAddon>
+    </InputGroup>
   );
 }
 

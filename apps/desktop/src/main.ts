@@ -1222,18 +1222,15 @@ function createWindow(): BrowserWindow {
     event.preventDefault();
     window.setTitle(APP_DISPLAY_NAME);
   });
-  for (const eventName of [
-    "maximize",
-    "unmaximize",
-    "minimize",
-    "restore",
-    "enter-full-screen",
-    "leave-full-screen",
-    "focus",
-    "blur",
-  ] as const) {
-    window.on(eventName, () => emitDesktopWindowState(window));
-  }
+  const emitCurrentWindowState = () => emitDesktopWindowState(window);
+  window.on("maximize", emitCurrentWindowState);
+  window.on("unmaximize", emitCurrentWindowState);
+  window.on("minimize", emitCurrentWindowState);
+  window.on("restore", emitCurrentWindowState);
+  window.on("enter-full-screen", emitCurrentWindowState);
+  window.on("leave-full-screen", emitCurrentWindowState);
+  window.on("focus", emitCurrentWindowState);
+  window.on("blur", emitCurrentWindowState);
   window.webContents.on("did-finish-load", () => {
     window.setTitle(APP_DISPLAY_NAME);
     emitDesktopWindowState(window);

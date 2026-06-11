@@ -44,9 +44,10 @@ function WorktreeGlyph({ className }: { className?: string }) {
   return <LuSplit className={cn("rotate-90", className)} />;
 }
 
-interface BranchToolbarProps {
+export interface BranchToolbarProps {
   threadId: ThreadId;
   className?: string;
+  variant?: "default" | "environment" | "panel";
   onEnvModeChange: (mode: EnvMode) => void;
   envLocked: boolean;
   onHandoffToWorktree?: () => void;
@@ -150,6 +151,7 @@ export function RuntimeUsageControls({
 export default function BranchToolbar({
   threadId,
   className,
+  variant: _variant,
   onEnvModeChange,
   envLocked,
   onHandoffToWorktree,

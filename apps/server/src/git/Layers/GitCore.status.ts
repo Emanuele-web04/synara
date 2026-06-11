@@ -217,6 +217,9 @@ export const makeGitStatus = (deps: GitStatusDeps): GitStatus => {
           : null;
       if (moveAwareWorkingTree) {
         return {
+          isRepo: true,
+          hasOriginRemote: upstreamRef !== null,
+          isDefaultBranch: false,
           branch,
           upstreamRef,
           upstreamBranch,
@@ -275,6 +278,9 @@ export const makeGitStatus = (deps: GitStatusDeps): GitStatus => {
       }
 
       return {
+        isRepo: true,
+        hasOriginRemote: upstreamRef !== null,
+        isDefaultBranch: false,
         branch,
         upstreamRef,
         upstreamBranch,

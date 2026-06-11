@@ -67,6 +67,19 @@ import type {
 // Exports: ProviderRuntimeIngestionLive
 // Depends on: ProviderRuntimeEvent contracts, OrchestrationEngine, Projection repositories
 
+export function appendCappedBufferedText(existingText: string, delta: string, maxChars: number): string {
+  const nextText = `${existingText}${delta}`;
+  if (nextText.length <= maxChars) {
+    return nextText;
+  }
+
+  const marker = "... [truncated]";
+  if (maxChars <= marker.length) {
+    return marker.slice(0, maxChars);
+  }
+  return `${nextText.slice(0, maxChars - marker.length)}${marker}`;
+}
+
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;

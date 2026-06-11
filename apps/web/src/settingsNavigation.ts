@@ -19,6 +19,14 @@ export const SETTINGS_SECTION_IDS = [
 export type SettingsSectionId = (typeof SETTINGS_SECTION_IDS)[number];
 export type SettingsNavGroupId = "app" | "synara";
 
+export const SETTINGS_TARGETS = {
+  providerUpdates: "provider-updates",
+  providerInstalls: "provider-installs",
+  environmentPanel: "environment-panel",
+} as const;
+
+export type SettingsTargetId = (typeof SETTINGS_TARGETS)[keyof typeof SETTINGS_TARGETS];
+
 export type SettingsNavItem = {
   id: SettingsSectionId;
   group: SettingsNavGroupId;

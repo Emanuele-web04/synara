@@ -171,6 +171,13 @@ export function applyOrchestrationEventsHotPath(
   return nextState;
 }
 
+export function removeDeletedThreadFromClientState(
+  state: AppState,
+  threadId: ThreadId,
+): AppState {
+  return removeThreadState(state, threadId);
+}
+
 // ── Pure state transition functions ────────────────────────────────────
 
 export function syncServerShellSnapshot(

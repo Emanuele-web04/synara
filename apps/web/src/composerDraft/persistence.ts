@@ -482,6 +482,12 @@ export function normalizePersistedDraftsByThreadId(
         })
       : [];
     const queuedTurns = normalizePersistedQueuedTurns(draftCandidate.queuedTurns);
+    const skills = Array.isArray(draftCandidate.skills)
+      ? draftCandidate.skills.filter(Schema.is(ProviderSkillReference))
+      : [];
+    const mentions = Array.isArray(draftCandidate.mentions)
+      ? draftCandidate.mentions.filter(Schema.is(ProviderMentionReference))
+      : [];
     const runtimeMode =
       draftCandidate.runtimeMode === "approval-required" ||
       draftCandidate.runtimeMode === "full-access"
@@ -549,6 +555,8 @@ export function normalizePersistedDraftsByThreadId(
       promptCandidate.length === 0 &&
       attachments.length === 0 &&
       terminalContexts.length === 0 &&
+      skills.length === 0 &&
+      mentions.length === 0 &&
       !hasQueuedTurns &&
       !hasModelData &&
       !runtimeMode &&
@@ -560,6 +568,8 @@ export function normalizePersistedDraftsByThreadId(
       prompt,
       attachments,
       ...(terminalContexts.length > 0 ? { terminalContexts } : {}),
+      ...(skills.length > 0 ? { skills } : {}),
+      ...(mentions.length > 0 ? { mentions } : {}),
       ...(hasQueuedTurns ? { queuedTurns: normalizedQueuedTurns } : {}),
       ...(hasModelData ? { modelSelectionByProvider, activeProvider } : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
@@ -695,6 +705,8 @@ export function partializeComposerDraftStoreState(
       draft.persistedAttachments.length === 0 &&
       draft.assistantSelections.length === 0 &&
       draft.terminalContexts.length === 0 &&
+      draft.skills.length === 0 &&
+      draft.mentions.length === 0 &&
       !hasQueuedTurns &&
       !hasModelData &&
       draft.runtimeMode === null &&
@@ -727,6 +739,8 @@ export function partializeComposerDraftStoreState(
             })),
           }
         : {}),
+      ...(draft.skills.length > 0 ? { skills: [...draft.skills] } : {}),
+      ...(draft.mentions.length > 0 ? { mentions: [...draft.mentions] } : {}),
       ...(hasQueuedTurns ? { queuedTurns: persistedQueuedTurns } : {}),
       ...(hasModelData
         ? {

@@ -81,6 +81,21 @@ export function formatWorkLogEntryDetail(entry: WorkLogEntry): string | null {
   return entry.detail ?? entry.command ?? null;
 }
 
+export function isFileChangeWorkLogEntry(
+  workEntry: Pick<WorkLogEntry, "itemType" | "requestKind">,
+): boolean {
+  return workEntry.requestKind === "file-change" || workEntry.itemType === "file_change";
+}
+
+export function isProviderFileEditWorkLogEntry(
+  workEntry: Pick<WorkLogEntry, "changedFiles" | "itemType" | "requestKind">,
+): boolean {
+  if (workEntry.itemType === "file_change") {
+    return true;
+  }
+  return workEntry.requestKind === "file-change" && (workEntry.changedFiles?.length ?? 0) > 0;
+}
+
 function isCollabAgentToolActivity(activity: OrchestrationThreadActivity): boolean {
   const payload = asRecord(activity.payload);
   return asTrimmedString(payload?.itemType) === "collab_agent_tool_call";

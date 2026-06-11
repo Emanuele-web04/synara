@@ -28,6 +28,8 @@ export {
   deriveWorkLogEntries,
   formatWorkLogEntryLabel,
   formatWorkLogEntryDetail,
+  isFileChangeWorkLogEntry,
+  isProviderFileEditWorkLogEntry,
 } from "./session-logic.workLog";
 
 export type { CompactChatTimelineEntry, TimelineEntry } from "./session-logic.timeline";
@@ -49,6 +51,15 @@ export const PROVIDER_OPTIONS: Array<{
   { value: "opencode", label: "OpenCode", available: true },
   { value: "pi", label: "Pi", available: true },
 ];
+
+export function canSessionAnswerPendingRequests(
+  session: Pick<ThreadSession, "status"> | null | undefined,
+): boolean {
+  if (!session) {
+    return true;
+  }
+  return session.status !== "closed" && session.status !== "error";
+}
 
 export interface ActiveTaskListState {
   createdAt: string;

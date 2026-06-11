@@ -26,4 +26,11 @@ export default Effect.gen(function* () {
       ADD COLUMN thread_markers_json TEXT
     `;
   }
+
+  if (!(yield* columnExists(sql, "projection_projects", "is_pinned"))) {
+    yield* sql`
+      ALTER TABLE projection_projects
+      ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0
+    `;
+  }
 });

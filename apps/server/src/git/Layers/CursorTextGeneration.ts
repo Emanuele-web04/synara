@@ -23,12 +23,14 @@ import {
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
   buildReviewFindingsPrompt,
+  buildThreadRecapPrompt,
   buildThreadTitlePrompt,
   decodeStructuredTextGenerationOutput,
   type RawTextFallback,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
   sanitizePrTitle,
+  sanitizeThreadRecap,
 } from "../textGenerationShared.ts";
 
 const CURSOR_TEXT_GENERATION_LABEL = "Cursor Agent";
@@ -46,7 +48,8 @@ type CursorTextGenerationOperation =
   | "generateDiffSummary"
   | "generateReviewFindings"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "generateThreadRecap";
 
 function mapCursorAcpError(
   operation: CursorTextGenerationOperation,
@@ -392,6 +395,37 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     };
   });
 
+  const generateThreadRecap: TextGenerationShape["generateThreadRecap"] = Effect.fn(
+    "CursorTextGeneration.generateThreadRecap",
+  )(function* (input) {
+    const modelSelection = resolveCursorModelSelection(input);
+    if (!modelSelection) {
+      return yield* new TextGenerationError({
+        operation: "generateThreadRecap",
+        detail: "Invalid Cursor model selection.",
+      });
+    }
+
+    const { prompt, outputSchemaJson, rawTextFallback } = buildThreadRecapPrompt({
+      ...(input.previousRecap ? { previousRecap: input.previousRecap } : {}),
+      newMaterial: input.newMaterial,
+      ...(input.currentState ? { currentState: input.currentState } : {}),
+    });
+    const generated = yield* runCursorJson({
+      operation: "generateThreadRecap",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      rawTextFallback,
+      modelSelection,
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
+
+    return {
+      recap: sanitizeThreadRecap(generated.recap, input.previousRecap),
+    };
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
@@ -399,6 +433,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     generateReviewFindings,
     generateBranchName,
     generateThreadTitle,
+    generateThreadRecap,
   } satisfies TextGenerationShape;
 });
 

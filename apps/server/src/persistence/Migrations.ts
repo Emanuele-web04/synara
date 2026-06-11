@@ -56,6 +56,7 @@ import Migration0040 from "./Migrations/040_ProjectionThreadsReviewChatTarget.ts
 import Migration0041 from "./Migrations/041_BackfillReviewChangesetPatchSignature.ts";
 import Migration0042 from "./Migrations/042_BackfillRuntimeWarningSummaries.ts";
 import Migration0043 from "./Migrations/043_ReconcileProjectionThreadAnnotations.ts";
+import Migration0044 from "./Migrations/044_ReconcileProjectionProjectsPinned.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -111,6 +112,7 @@ export const migrationEntries = [
   [41, "BackfillReviewChangesetPatchSignature", Migration0041],
   [42, "BackfillRuntimeWarningSummaries", Migration0042],
   [43, "ReconcileProjectionThreadAnnotations", Migration0043],
+  [44, "ReconcileProjectionProjectsPinned", Migration0044],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

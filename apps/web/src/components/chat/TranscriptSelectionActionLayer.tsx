@@ -7,8 +7,8 @@ import { TranscriptSelectionAction } from "./TranscriptSelectionAction";
 
 interface TranscriptSelectionActionLayerProps {
   action: PendingTranscriptSelectionAction | null;
-  onHighlight: () => void;
-  onUnderline: () => void;
+  onHighlight?: (() => void) | undefined;
+  onUnderline?: (() => void) | undefined;
   onAddToChat: () => void;
 }
 

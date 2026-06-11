@@ -11,6 +11,7 @@
 import path from "node:path";
 
 import {
+  TerminalAckOutputInput,
   TerminalClearInput,
   TerminalCloseInput,
   TerminalOpenInput,
@@ -32,7 +33,11 @@ import { Effect, Encoding, Schema } from "effect";
 import { applyManagedTerminalAgentWrapperEnv } from "../managedTerminalWrappers";
 import { ShellCandidate, TerminalSessionState } from "../Services/Manager";
 import type { PtyAdapterShape, PtyProcess } from "../Services/PTY";
-import { capHistoryByLimits, countCharacter, type HistoryLimits } from "../terminalHistory";
+import {
+  countCharacter,
+  TerminalHistoryBuffer,
+  type HistoryLimits,
+} from "../terminalHistory";
 
 export const DEFAULT_HISTORY_LINE_LIMIT = 5_000;
 export const DEFAULT_PERSIST_DEBOUNCE_MS = 40;
@@ -58,6 +63,7 @@ export const decodeTerminalWriteInput = Schema.decodeUnknownSync(TerminalWriteIn
 export const decodeTerminalResizeInput = Schema.decodeUnknownSync(TerminalResizeInput);
 export const decodeTerminalClearInput = Schema.decodeUnknownSync(TerminalClearInput);
 export const decodeTerminalCloseInput = Schema.decodeUnknownSync(TerminalCloseInput);
+export const decodeTerminalAckOutputInput = Schema.decodeUnknownSync(TerminalAckOutputInput);
 
 export function isProviderSessionBusy(session: TerminalSessionState, now: number): boolean {
   const lastInputAt = session.lastInputAt ?? 0;
@@ -210,15 +216,6 @@ export function measureHistory(history: string): {
     historyLineBreakCount: countCharacter(history, "\n"),
     historyEndsWithNewline: history.endsWith("\n"),
   };
-}
-
-function historyLineCount(
-  history: string,
-  lineBreakCount: number,
-  endsWithNewline: boolean,
-): number {
-  if (history.length === 0) return 0;
-  return lineBreakCount + (endsWithNewline ? 0 : 1);
 }
 
 function isCsiFinalByte(codePoint: number): boolean {
@@ -533,15 +530,13 @@ export function cliKindFromRuntimeEnv(
 }
 
 export function resetSessionHistory(session: TerminalSessionState): void {
-  session.history = "";
-  session.historyByteLength = 0;
-  session.historyLineBreakCount = 0;
-  session.historyEndsWithNewline = false;
+  session.history.reset();
   session.pendingHistoryControlSequence = "";
   session.pendingInputBuffer = "";
   session.managedAgentRunning = false;
   session.managedAgentState = null;
   session.managedAgentObserved = false;
+  session.providerDescendantObserved = false;
 }
 
 export function deriveActivityAgentState(
@@ -572,33 +567,9 @@ export function agentStateFromHookEvent(
 export function appendSessionHistory(
   session: TerminalSessionState,
   chunk: string,
-  limits: HistoryLimits,
 ): void {
   if (chunk.length === 0) return;
-
-  const nextHistory = `${session.history}${chunk}`;
-  const nextByteLength = session.historyByteLength + Buffer.byteLength(chunk, "utf8");
-  const nextLineBreakCount = session.historyLineBreakCount + countCharacter(chunk, "\n");
-  const nextEndsWithNewline = chunk.endsWith("\n");
-  const nextLineCount = historyLineCount(nextHistory, nextLineBreakCount, nextEndsWithNewline);
-
-  // Fast path: under both caps, keep the appended string and update metrics
-  // incrementally (Buffer.byteLength(chunk) is O(chunk), not O(history)).
-  if (nextLineCount <= limits.maxLines && nextByteLength <= limits.maxBytes) {
-    session.history = nextHistory;
-    session.historyByteLength = nextByteLength;
-    session.historyLineBreakCount = nextLineBreakCount;
-    session.historyEndsWithNewline = nextEndsWithNewline;
-    return;
-  }
-
-  // Over a cap: trim on a replay-safe boundary. The expensive UTF-8 pass only
-  // runs when a cap is crossed, and operates on a now-bounded buffer.
-  session.history = capHistoryByLimits(nextHistory, limits);
-  session.historyByteLength = Buffer.byteLength(session.history, "utf8");
-  const cappedMetrics = measureHistory(session.history);
-  session.historyLineBreakCount = cappedMetrics.historyLineBreakCount;
-  session.historyEndsWithNewline = cappedMetrics.historyEndsWithNewline;
+  session.history.append(chunk);
 }
 
 export function sanitizePersistedTerminalHistory(history: string): string {
@@ -683,19 +654,16 @@ export function createTerminalSessionState(params: {
   rows: number;
   env: Record<string, string> | undefined;
   history: string;
+  historyLimits: HistoryLimits;
 }): TerminalSessionState {
   const runtimeEnv = normalizedRuntimeEnv(params.env);
-  const historyMetrics = measureHistory(params.history);
   return {
     threadId: params.threadId,
     terminalId: params.terminalId,
     cwd: params.cwd,
     status: "starting",
     pid: null,
-    history: params.history,
-    historyByteLength: Buffer.byteLength(params.history, "utf8"),
-    historyLineBreakCount: historyMetrics.historyLineBreakCount,
-    historyEndsWithNewline: historyMetrics.historyEndsWithNewline,
+    history: TerminalHistoryBuffer.fromString(params.history, params.historyLimits),
     pendingHistoryControlSequence: "",
     exitCode: null,
     exitSignal: null,
@@ -707,15 +675,23 @@ export function createTerminalSessionState(params: {
     unsubscribeExit: null,
     hasRunningSubprocess: false,
     detectedCliKind: cliKindFromRuntimeEnv(runtimeEnv),
+    providerDescendantObserved: false,
     managedAgentRunning: false,
     managedAgentState: null,
     managedAgentObserved: false,
     runtimeEnv,
     pendingInputBuffer: "",
+    modeReplayTracker: null,
     pendingOutputChunks: [],
     pendingOutputLength: 0,
     outputFlushTimer: null,
+    streamOutput: true,
     outputPaused: false,
+    outputBufferPauseRequested: false,
+    outputAckPauseRequested: false,
+    outputAckObserved: false,
+    outputUnackedBytes: 0,
+    outputAckResumeTimer: null,
     lastInputAt: null,
     lastOutputAt: null,
     lastOutputSignature: null,

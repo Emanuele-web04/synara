@@ -33,6 +33,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     case "thread.archive":
     case "thread.unarchive":
     case "thread.meta.update":
+    case "thread.pinned-message.add":
+    case "thread.pinned-message.remove":
+    case "thread.pinned-message.done.set":
+    case "thread.pinned-message.label.set":
+    case "thread.marker.add":
+    case "thread.marker.remove":
+    case "thread.marker.done.set":
+    case "thread.marker.label.set":
     case "thread.runtime-mode.set":
     case "thread.interaction-mode.set":
       return yield* decideThreadLifecycleCommand({ command, readModel });

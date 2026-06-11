@@ -108,6 +108,8 @@ export function toHydratedThreadDraft(
     nonPersistedImageIds: [],
     persistedAttachments: [...persistedDraft.attachments],
     assistantSelections: normalizeAssistantSelections(persistedDraft.assistantSelections ?? []),
+    skills: [...(persistedDraft.skills ?? [])],
+    mentions: [...(persistedDraft.mentions ?? [])],
     terminalContexts:
       persistedDraft.terminalContexts?.map((context) => ({
         ...context,

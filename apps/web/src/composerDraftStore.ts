@@ -173,6 +173,8 @@ export interface ComposerThreadDraftState {
   persistedAttachments: PersistedComposerImageAttachment[];
   assistantSelections: ComposerAssistantSelectionAttachment[];
   terminalContexts: TerminalContextDraft[];
+  skills: ProviderSkillReference[];
+  mentions: ProviderMentionReference[];
   queuedTurns: QueuedComposerTurn[];
   modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
   activeProvider: ProviderKind | null;
@@ -215,6 +217,13 @@ export interface ComposerDraftStoreState {
     options?: SetProjectDraftThreadOptions,
   ) => void;
   setDraftThreadContext: (threadId: ThreadId, options: SetDraftThreadContextOptions) => void;
+  registerDraftThread: (
+    threadId: ThreadId,
+    options: Omit<SetDraftThreadContextOptions, "entryPoint"> & {
+      projectId: ProjectId;
+      entryPoint?: ThreadPrimarySurface;
+    },
+  ) => void;
   clearProjectDraftThreadId: (projectId: ProjectId, entryPoint?: ThreadPrimarySurface) => void;
   clearProjectDraftThreads: (projectId: ProjectId) => void;
   clearProjectDraftThreadById: (projectId: ProjectId, threadId: ThreadId) => void;
@@ -223,6 +232,8 @@ export interface ComposerDraftStoreState {
   clearDraftThread: (threadId: ThreadId) => void;
   setStickyModelSelection: (modelSelection: ModelSelection | null | undefined) => void;
   setPrompt: (threadId: ThreadId, prompt: string) => void;
+  setSkills: (threadId: ThreadId, skills: ProviderSkillReference[]) => void;
+  setMentions: (threadId: ThreadId, mentions: ProviderMentionReference[]) => void;
   setTerminalContexts: (threadId: ThreadId, contexts: TerminalContextDraft[]) => void;
   setModelSelection: (
     threadId: ThreadId,
@@ -282,10 +293,14 @@ const EMPTY_IMAGES: ComposerImageAttachment[] = [];
 const EMPTY_IDS: string[] = [];
 const EMPTY_PERSISTED_ATTACHMENTS: PersistedComposerImageAttachment[] = [];
 const EMPTY_TERMINAL_CONTEXTS: TerminalContextDraft[] = [];
+const EMPTY_SKILLS: ProviderSkillReference[] = [];
+const EMPTY_MENTIONS: ProviderMentionReference[] = [];
 const EMPTY_QUEUED_TURNS: QueuedComposerTurn[] = [];
 Object.freeze(EMPTY_IMAGES);
 Object.freeze(EMPTY_IDS);
 Object.freeze(EMPTY_PERSISTED_ATTACHMENTS);
+Object.freeze(EMPTY_SKILLS);
+Object.freeze(EMPTY_MENTIONS);
 Object.freeze(EMPTY_QUEUED_TURNS);
 const EMPTY_MODEL_SELECTION_BY_PROVIDER: Partial<Record<ProviderKind, ModelSelection>> =
   Object.freeze({});
@@ -297,6 +312,8 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   persistedAttachments: EMPTY_PERSISTED_ATTACHMENTS,
   assistantSelections: [],
   terminalContexts: EMPTY_TERMINAL_CONTEXTS,
+  skills: EMPTY_SKILLS,
+  mentions: EMPTY_MENTIONS,
   queuedTurns: EMPTY_QUEUED_TURNS,
   modelSelectionByProvider: EMPTY_MODEL_SELECTION_BY_PROVIDER,
   activeProvider: null,
@@ -396,6 +413,17 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
         }
         set((state) => setDraftThreadContextReducer(state, threadId, options));
       },
+      registerDraftThread: (threadId, options) => {
+        if (threadId.length === 0 || options.projectId.length === 0) {
+          return;
+        }
+        set((state) =>
+          setDraftThreadContextReducer(state, threadId, {
+            ...options,
+            entryPoint: options.entryPoint ?? "chat",
+          }),
+        );
+      },
       clearProjectDraftThreadId: (projectId, entryPoint = "chat") => {
         if (projectId.length === 0) {
           return;
@@ -449,6 +477,24 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           return;
         }
         set((state) => setPromptReducer(state, threadId, prompt));
+      },
+      setSkills: (threadId, skills) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId] ?? EMPTY_THREAD_DRAFT;
+          return commitDraft(state, threadId, { ...existing, skills: [...skills] });
+        });
+      },
+      setMentions: (threadId, mentions) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId] ?? EMPTY_THREAD_DRAFT;
+          return commitDraft(state, threadId, { ...existing, mentions: [...mentions] });
+        });
       },
       setTerminalContexts: (threadId, contexts) => {
         if (threadId.length === 0) {

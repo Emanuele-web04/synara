@@ -70,6 +70,7 @@ async function dispatchMarkerCommand(
   }
   await api.orchestration.dispatchCommand({
     commandId: newCommandId(),
+    createdAt: new Date().toISOString(),
     ...command,
   });
 }

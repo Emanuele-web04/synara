@@ -81,6 +81,7 @@ export const ProjectCreateCommand = Schema.Struct({
     Schema.withDecodingDefault(() => false),
   ),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   createdAt: IsoDateTime,
 });
 
@@ -93,6 +94,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
+  isPinned: Schema.optional(Schema.Boolean),
 });
 
 const ProjectDeleteCommand = Schema.Struct({

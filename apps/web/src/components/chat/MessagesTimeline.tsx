@@ -15,6 +15,7 @@ import {
   useRef,
   useState,
   type ComponentProps,
+  type CSSProperties,
   type RefObject,
   type ReactNode,
 } from "react";
@@ -132,6 +133,7 @@ interface MessagesTimelineProps {
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
   bottomContentInsetPx?: number | undefined;
+  contentInsetRightPx?: number | undefined;
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
@@ -174,6 +176,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   workspaceRoot,
   emptyStateContent,
   bottomContentInsetPx,
+  contentInsetRightPx,
 }: MessagesTimelineProps) {
   const normalizedChatFontSizePx = normalizeChatFontSizePx(chatFontSizePx);
   const appTypographyScale = useMemo(
@@ -251,6 +254,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const listFooter = useMemo(
     () => <div aria-hidden="true" style={{ height: bottomSpacerHeightPx }} />,
     [bottomSpacerHeightPx],
+  );
+  const listScrollStyle = useMemo<CSSProperties | undefined>(
+    () => (contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined),
+    [contentInsetRightPx],
   );
 
   const rawRows = useMemo(
@@ -608,6 +615,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         onWheel={onMessagesWheel}
         data-chat-scroll-container="true"
         ListFooterComponent={listFooter}
+        {...(listScrollStyle ? { style: listScrollStyle } : {})}
         className={cn(
           "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
           CHAT_COLUMN_GUTTER_CLASS_NAME,

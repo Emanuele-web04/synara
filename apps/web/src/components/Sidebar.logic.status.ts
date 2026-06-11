@@ -223,6 +223,36 @@ export interface PrStatusIndicator {
   url: string;
 }
 
+export interface PrStatePresentation {
+  label: "PR open" | "PR closed" | "PR merged";
+  colorClass: string;
+  iconKind: "pull-request" | "merged-simple";
+}
+
+export function resolvePrStatePresentation(
+  state: "open" | "closed" | "merged",
+): PrStatePresentation {
+  if (state === "open") {
+    return {
+      label: "PR open",
+      colorClass: "text-[var(--color-decoration-added)]",
+      iconKind: "pull-request",
+    };
+  }
+  if (state === "closed") {
+    return {
+      label: "PR closed",
+      colorClass: "text-zinc-500 dark:text-zinc-400/80",
+      iconKind: "pull-request",
+    };
+  }
+  return {
+    label: "PR merged",
+    colorClass: "text-violet-500 dark:text-violet-400",
+    iconKind: "merged-simple",
+  };
+}
+
 export type ThreadPr = GitStatusResult["pr"];
 
 export function toThreadPr(
