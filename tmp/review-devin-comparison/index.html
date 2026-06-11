@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Synara Review vs Devin Review Comparison</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #08090b;
+        --panel: #0d0f12;
+        --panel-2: #111317;
+        --border: rgb(255 255 255 / 0.08);
+        --text: #f4f4f5;
+        --muted: rgb(255 255 255 / 0.62);
+        --green: #4ade80;
+        --red: #f87171;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+
+      main {
+        width: min(1440px, calc(100vw - 48px));
+        margin: 0 auto;
+        padding: 32px 0 56px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 24px;
+        letter-spacing: 0;
+      }
+
+      .lede {
+        max-width: 920px;
+        margin: 0 0 28px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: minmax(280px, 0.78fr) minmax(420px, 1.22fr);
+        gap: 16px;
+        margin: 0 0 22px;
+        align-items: stretch;
+      }
+
+      .panel {
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--panel);
+      }
+
+      .panel-header {
+        display: flex;
+        min-height: 38px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        border-bottom: 1px solid var(--border);
+        padding: 10px 12px;
+      }
+
+      .panel-title {
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .badge {
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 2px 8px;
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .reference {
+        min-height: 180px;
+        padding: 14px;
+        background:
+          linear-gradient(180deg, rgb(255 255 255 / 0.025), transparent 36px), var(--panel);
+      }
+
+      .reference ul,
+      .notes ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+
+      .reference li,
+      .notes li {
+        margin: 0 0 9px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .reference strong,
+      .notes strong {
+        color: var(--text);
+        font-weight: 650;
+      }
+
+      .photo {
+        width: 100%;
+        max-height: 560px;
+        display: block;
+        object-fit: contain;
+        background: #000;
+      }
+
+      .notes {
+        border-top: 1px solid var(--border);
+        padding: 12px 14px 14px;
+        background: var(--panel-2);
+      }
+
+      .match {
+        color: var(--green);
+      }
+
+      .gap {
+        color: var(--red);
+      }
+
+      @media (max-width: 920px) {
+        main {
+          width: min(100vw - 28px, 720px);
+          padding-top: 20px;
+        }
+
+        .row {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Review Interface: Devin Reference vs Synara Capture</h1>
+      <p class="lede">
+        Left side records the visible traits from the Devin reference screenshots supplied in chat.
+        Right side is a fresh browser capture of the current Synara review fixture. The original
+        Devin screenshots are not available as local files in this workspace, so the left column is
+        a reference-readout rather than a pixel crop.
+      </p>
+
+      <section class="row">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Devin Reference: Full Review Workspace</span>
+            <span class="badge">Reference traits</span>
+          </div>
+          <div class="reference">
+            <ul>
+              <li>
+                <strong>One focused PR frame:</strong> route chrome stays quiet and the PR owns the
+                screen.
+              </li>
+              <li>
+                <strong>Three review zones:</strong> files/context on the left, diff in the center,
+                assistant/context on the right.
+              </li>
+              <li>
+                <strong>Black workspace:</strong> low-contrast borders and subtle surface
+                separation.
+              </li>
+            </ul>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Synara Current: Full Review Workspace</span>
+            <span class="badge">Actual capture</span>
+          </div>
+          <img
+            class="photo"
+            src="./synara-review-full.png"
+            alt="Current Synara full review workspace"
+          />
+          <div class="notes">
+            <ul>
+              <li>
+                <strong class="match">Similar:</strong> files-first layout, central diff, right Ask
+                Devin rail, black visual language.
+              </li>
+              <li>
+                <strong class="gap">Different:</strong> route/header density is still tighter and
+                more icon-heavy than the Devin reference.
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="row">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Devin Reference: Top / PR Header</span>
+            <span class="badge">Reference traits</span>
+          </div>
+          <div class="reference">
+            <ul>
+              <li>
+                <strong>PR identity first:</strong> title, number, branch context, checks/readiness.
+              </li>
+              <li>
+                <strong>Few primary actions:</strong> submit/review action is clear; secondary
+                controls recede.
+              </li>
+              <li>
+                <strong>No browser-tab shelf:</strong> PR review is not visually inside a tabbed
+                browser.
+              </li>
+            </ul>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Synara Current: Top / PR Header</span>
+            <span class="badge">Actual crop</span>
+          </div>
+          <img
+            class="photo"
+            src="./synara-section-topbar.png"
+            alt="Current Synara top review header crop"
+          />
+          <div class="notes">
+            <ul>
+              <li>
+                <strong class="match">Similar:</strong> compact PR-first header and no open browser
+                tabs on the detail surface.
+              </li>
+              <li>
+                <strong class="gap">Different:</strong> branch/readiness/submit/overview still
+                compete within a very short row.
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="row">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Devin Reference: File Tree</span>
+            <span class="badge">Reference traits</span>
+          </div>
+          <div class="reference">
+            <ul>
+              <li><strong>Folder tree:</strong> changed files are scannable by directory.</li>
+              <li>
+                <strong>Persistent progress:</strong> viewed state is visible without needing hover.
+              </li>
+              <li>
+                <strong>Readable width:</strong> enough room for repository paths and file names.
+              </li>
+            </ul>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Synara Current: File Tree</span>
+            <span class="badge">Actual crop</span>
+          </div>
+          <img
+            class="photo"
+            src="./synara-section-file-tree.png"
+            alt="Current Synara file tree crop"
+          />
+          <div class="notes">
+            <ul>
+              <li>
+                <strong class="match">Similar:</strong> true folder tree with changed counts and
+                selected file state.
+              </li>
+              <li>
+                <strong class="gap">Different:</strong> rail is narrower than Devin and the unviewed
+                target is too faint.
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="row">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Devin Reference: Diff Canvas</span>
+            <span class="badge">Reference traits</span>
+          </div>
+          <div class="reference">
+            <ul>
+              <li>
+                <strong>Dominant center canvas:</strong> diff area gets most horizontal and vertical
+                space.
+              </li>
+              <li>
+                <strong>Quiet controls:</strong> layout/wrap tools do not read as an editor toolbar.
+              </li>
+              <li>
+                <strong>Readable code:</strong> additions are clear without overpowering the dark
+                surface.
+              </li>
+            </ul>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Synara Current: Diff Canvas</span>
+            <span class="badge">Actual crop</span>
+          </div>
+          <img
+            class="photo"
+            src="./synara-section-diff.png"
+            alt="Current Synara diff canvas crop"
+          />
+          <div class="notes">
+            <ul>
+              <li>
+                <strong class="match">Similar:</strong> diff dominates the center, additions are
+                subdued, files stack vertically.
+              </li>
+              <li>
+                <strong class="gap">Different:</strong> explicit layout controls and the agent row
+                still add more toolbar texture than Devin.
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="row">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Devin Reference: Ask Devin Rail</span>
+            <span class="badge">Reference traits</span>
+          </div>
+          <div class="reference">
+            <ul>
+              <li>
+                <strong>Assistant-first:</strong> rail reads as a focused PR assistant, not a
+                generic inspector.
+              </li>
+              <li>
+                <strong>Checks visible:</strong> CI status is available without crowding the diff.
+              </li>
+              <li>
+                <strong>Composer anchored:</strong> ask box stays at the bottom with light prompt
+                affordances.
+              </li>
+            </ul>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Synara Current: Ask Devin Rail</span>
+            <span class="badge">Actual crop</span>
+          </div>
+          <img
+            class="photo"
+            src="./synara-section-ask-devin.png"
+            alt="Current Synara Ask Devin rail crop"
+          />
+          <div class="notes">
+            <ul>
+              <li>
+                <strong class="match">Similar:</strong> Ask Devin identity, checks list, bottom
+                composer, compact suggestions.
+              </li>
+              <li>
+                <strong class="gap">Different:</strong> checks still dominate the middle; richer PR
+                context/assistant empty state should come before raw checks.
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
