@@ -22,6 +22,60 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.1.8",
+    date: "Jun 11",
+    features: [
+      {
+        id: "editor-workspace",
+        title: "Editor workspace is built into chat",
+        description:
+          "You can now keep a project file workspace beside the conversation, inspect files, and move references into prompts without bouncing between tools.",
+        details:
+          "This release adds the editor workspace view, file reference selection state, syntax highlighting, project file-system APIs, and focused coverage for workspace entries, path containment, editor view state, and chat reference parsing.",
+      },
+      {
+        id: "native-editor-launchers",
+        title: "Open-in editor support is broader and prettier",
+        description:
+          "Ghostty, Terminal, JetBrains, Xcode, Zed, Cursor, VS Code, and other editor launchers now have better discovery, icons, and platform-specific launch behavior.",
+        details:
+          "Synara now discovers native editor apps and icons, caches icon assets server-side, exposes authenticated icon routes, and tightens macOS/Linux/Windows launcher handling, including Ghostty working-directory behavior and Linux desktop-entry matching.",
+      },
+      {
+        id: "portable-skills",
+        title: "Skills are unified across providers",
+        description:
+          "The settings skill catalog now understands provider roots and shared skill copies, so Codex, Claude, Cursor, and compatible providers show cleaner ownership instead of duplicate noise.",
+        details:
+          "A shared server-side skills catalog, provider prompt injection, provider discovery service updates, settings model, and provider icon chips now keep provider-specific and portable skills aligned across the UI.",
+      },
+      {
+        id: "composer-and-chat-polish",
+        title: "Composer, references, and diffs feel steadier",
+        description:
+          "Composer controls, inline chips, file references, markdown rendering, and diff navigation picked up tighter layout and interaction polish.",
+        details:
+          "The chat view now shares composer footer layout helpers, richer file-entry icons, code-selection actions, syntax highlighting, diff route search, improved diff toolbar/list behavior, and cleaner picker layout for model, trait, and open-in controls.",
+      },
+      {
+        id: "provider-refresh-and-auth",
+        title: "Provider status refreshes are less stale",
+        description:
+          "Codex auth overlays, provider status refreshes, and provider discovery invalidation now recover better after focus changes, settings updates, and native provider checks.",
+        details:
+          "The web app now refreshes provider auth/status on focus and root events, while the server-side provider discovery layer handles native skill and capability fallbacks more predictably.",
+      },
+      {
+        id: "migration-and-terminal-hardening",
+        title: "Older data and terminals recover more predictably",
+        description:
+          "Legacy migration trackers, pinned/sidechat reconciliation, terminal environment handling, and workspace path checks were tightened for early-WIP installs.",
+        details:
+          "Synara now reconciles legacy migration bookkeeping before running migrations, expands migration coverage, validates workspace real-path containment, and carries terminal environment updates through shared server and web contracts.",
+      },
+    ],
+  },
+  {
     version: "0.1.7",
     date: "Jun 10",
     features: [

@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.1.8 - 2026-06-11
+
+### Added
+
+- Added an editor workspace view beside chat, including file browsing, workspace view state, syntax highlighting, file reference selection, code selection actions, and focused tests around editor metadata, workspace file-system APIs, workspace entries, chat references, and route state.
+- Added native editor app discovery and icon caching, with authenticated editor icon routes, shared editor icon path constants, icon rendering in the web app, and broader launcher coverage for Ghostty, Terminal, JetBrains, Xcode, Zed, Cursor, VS Code, and platform-specific fallbacks.
+- Added a unified provider skills catalog with provider-root awareness, shared skill ownership display, provider skill prompt injection, skills settings UI/model state, and coverage for Codex/Cursor/native-discovery fallbacks.
+- Added provider status/auth refresh plumbing on focus and root orchestration events so Codex auth overlays and provider discovery state recover without stale UI.
+- Added composer footer layout helpers, file reference parsing helpers, relative time utilities, syntax highlighting helpers, diff route search, and extra web tests for composer layout, file icons, provider updates, and root invalidation.
+
+### Changed
+
+- Refined the chat header, chat view, composer controls, model/trait/open-in pickers, inline chips, transcript selection actions, and code-selection flows so references and controls stay easier to scan during active work.
+- Reworked the diff panel toolbar, file list, and patch viewport behavior to make large diffs easier to navigate from both repository and turn contexts.
+- Reworked provider skill discovery so provider-native skill lists can merge with Synara's catalog and fall back cleanly when a provider cannot answer.
+- Reconciled legacy migration trackers before running migrations and tightened older sidechat/pinned-thread migration paths.
+- Updated desktop stage dependency overrides to keep `@pierre/diffs` pinned to `1.2.8`.
+- Tightened terminal environment propagation, terminal manager behavior, workspace path containment, and provider command/runtime plumbing around recent server contracts.
+
+### Fixed
+
+- Fixed stale Codex auth overlay behavior so installed/authenticated Codex states refresh more reliably.
+- Fixed skill settings provider display so only providers that actually own a skill are shown for shared skill entries.
+- Fixed Ghostty/open-in behavior and native icon sizing so editor launchers open the intended project path and render consistently with other picker icons.
+- Fixed file reference selection and mention/chip rendering edge cases across composer text, sent user bubbles, and markdown/code selection surfaces.
+- Fixed migration startup edge cases for early installs that still had legacy tracker state.
+- Fixed several provider discovery and skill catalog edge cases around missing native provider binaries, invalid provider responses, and provider-root normalization.
+
+### Verification
+
+- `bun run fmt:check` passed.
+- `bun run lint` passed with 159 warnings, 0 errors.
+- `bun run typecheck` passed with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed.
+- `bun run build` passed. Vite still warns about large web chunks and plugin timings; desktop build still reports the existing typeless `tsdown.config.ts` module warning.
+- First `bun run test` attempt was interrupted by SIGTERM after partial success; no assertion failure was reported before termination, and `@t3tools/web:test` had already passed 152 files / 1740 tests.
+- Final rerun `bun run test` after version and release-note edits passed: 10 tasks successful; scripts 5 files / 36 tests, desktop 19 files / 149 tests, contracts 9 files / 90 tests, shared 22 files / 188 tests, effect-acp 3 files / 24 tests, web 152 files / 1740 tests, server 123 files passed / 1 skipped with 1187 passed / 6 skipped.
+- The rerun still logged expected test-harness WARN/ERROR lines from failure-path coverage and native binding/provider-binary mocks.
+- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.1.8`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+
 ## 0.1.7 - 2026-06-10
 
 ### Added
