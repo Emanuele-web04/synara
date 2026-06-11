@@ -4,11 +4,13 @@
 // Layer: Diff panel UI
 
 import type { FileDiffMetadata } from "@pierre/diffs/react";
+import { isSupportedLocalImagePath } from "@t3tools/shared/localImage";
 import { memo, useCallback, type MouseEvent as ReactMouseEvent } from "react";
 import { ChevronDownIcon, CopyIcon, EllipsisIcon, MessageCircleIcon } from "~/lib/icons";
 
 import { buildFileDiffRenderKey, resolveFileDiffPath } from "~/lib/diffRendering";
 import { FileDiffCard, FileDiffSurface } from "./chat/FileDiffView";
+import { LocalImagePreview } from "./LocalImagePreview";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { IconButton } from "./ui/icon-button";
@@ -100,6 +102,7 @@ const DiffPanelFileRow = memo(function DiffPanelFileRow(props: {
   resolvedTheme: "light" | "dark";
   diffRenderMode: DiffRenderMode;
   diffWordWrap: boolean;
+  workspaceRoot: string | null;
   isCollapsed: boolean;
   onToggleFileCollapsed: (fileKey: string) => void;
   chatActions?: DiffFileChatActions | undefined;
@@ -107,6 +110,8 @@ const DiffPanelFileRow = memo(function DiffPanelFileRow(props: {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const fileKey = buildFileDiffRenderKey(props.fileDiff);
   const { chatActions, isCollapsed } = props;
+  const shouldPreviewImage =
+    !isCollapsed && props.workspaceRoot !== null && isSupportedLocalImagePath(filePath);
   const renderHeaderMetadata = useCallback(
     () => (
       <span style={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
@@ -155,6 +160,15 @@ const DiffPanelFileRow = memo(function DiffPanelFileRow(props: {
         collapsed={props.isCollapsed}
         renderHeaderMetadata={renderHeaderMetadata}
       />
+      {shouldPreviewImage ? (
+        <LocalImagePreview
+          src={filePath}
+          cwd={props.workspaceRoot}
+          alt={`Preview of ${filePath}`}
+          className="diff-render-file__image-preview"
+          imageClassName="max-h-[320px]"
+        />
+      ) : null}
     </div>
   );
 });
@@ -180,6 +194,7 @@ export const DiffPanelFileList = memo(
     resolvedTheme: "light" | "dark";
     diffRenderMode: DiffRenderMode;
     diffWordWrap: boolean;
+    workspaceRoot: string | null;
     collapsedFiles: ReadonlySet<string>;
     onToggleFileCollapsed: (fileKey: string) => void;
     chatActions?: DiffFileChatActions | undefined;
@@ -206,6 +221,7 @@ export const DiffPanelFileList = memo(
               resolvedTheme={props.resolvedTheme}
               diffRenderMode={props.diffRenderMode}
               diffWordWrap={props.diffWordWrap}
+              workspaceRoot={props.workspaceRoot}
               isCollapsed={props.collapsedFiles.has(fileKey)}
               onToggleFileCollapsed={props.onToggleFileCollapsed}
               chatActions={props.chatActions}
@@ -221,6 +237,7 @@ export const DiffPanelFileList = memo(
       previous.resolvedTheme === next.resolvedTheme &&
       previous.diffRenderMode === next.diffRenderMode &&
       previous.diffWordWrap === next.diffWordWrap &&
+      previous.workspaceRoot === next.workspaceRoot &&
       areCollapsedSetsEqual(previous.collapsedFiles, next.collapsedFiles) &&
       previous.onToggleFileCollapsed === next.onToggleFileCollapsed &&
       previous.chatActions === next.chatActions

@@ -4,6 +4,7 @@
 // Depends on: EditorWorkspaceView and React server rendering.
 
 import type { FileDiffMetadata } from "@pierre/diffs/react";
+import { ProjectId } from "@t3tools/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -12,6 +13,10 @@ import { EditorWorkspaceView } from "./EditorWorkspaceView";
 
 vi.mock("../hooks/useTheme", () => ({
   useTheme: () => ({ resolvedTheme: "dark" }),
+}));
+
+vi.mock("~/hooks/useDesktopTopBarGutter", () => ({
+  useDesktopTopBarWindowControlsGutterClassName: () => "windows-caption-gutter",
 }));
 
 function createFileDiff(path: string, additions: number, deletions: number): FileDiffMetadata {
@@ -29,6 +34,64 @@ function createFileDiff(path: string, additions: number, deletions: number): Fil
 }
 
 describe("EditorWorkspaceView", () => {
+  it("renders a project switcher arrow beside the project title", () => {
+    const markup = renderToStaticMarkup(
+      <EditorWorkspaceView
+        workspaceRoot="/Users/tester/project"
+        projectName="project"
+        currentProjectId={ProjectId.makeUnsafe("project-current")}
+        projectOptions={[
+          {
+            id: ProjectId.makeUnsafe("project-current"),
+            name: "project",
+            folderName: "project",
+            localName: null,
+            cwd: "/Users/tester/project",
+          },
+        ]}
+        selectedFilePath={null}
+        expandedDirectories={new Set()}
+        centerMode="diff"
+        diffFiles={[]}
+        selectedDiffFilePath={null}
+        diffPanel={<div>Diff panel</div>}
+        chatPanel={<div>Chat panel</div>}
+        onSelectFile={vi.fn()}
+        onSelectDiffFile={vi.fn()}
+        onToggleDirectory={vi.fn()}
+        onCenterModeChange={vi.fn()}
+        onExitEditorView={vi.fn()}
+        onSelectProject={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Switch project"');
+    expect(markup).toContain("project");
+  });
+
+  it("reserves a top-bar gutter for Windows caption controls", () => {
+    const markup = renderToStaticMarkup(
+      <EditorWorkspaceView
+        workspaceRoot="/Users/tester/project"
+        projectName="project"
+        selectedFilePath={null}
+        expandedDirectories={new Set()}
+        centerMode="diff"
+        diffFiles={[]}
+        selectedDiffFilePath={null}
+        diffPanel={<div>Diff panel</div>}
+        chatPanel={<div>Chat panel</div>}
+        onSelectFile={vi.fn()}
+        onSelectDiffFile={vi.fn()}
+        onToggleDirectory={vi.fn()}
+        onCenterModeChange={vi.fn()}
+        onExitEditorView={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain("windows-caption-gutter");
+  });
+
   it("renders diff options beside the changed-file line totals", () => {
     const markup = renderToStaticMarkup(
       <EditorWorkspaceView
@@ -123,6 +186,64 @@ describe("EditorWorkspaceView", () => {
     const diffWrapperIndex = markup.indexOf("Diff panel body");
     const hiddenIndex = markup.lastIndexOf("hidden", diffWrapperIndex);
     expect(hiddenIndex).toBeGreaterThan(-1);
+  });
+
+  it("renders image files through the local image preview instead of text preview", () => {
+    const queryClient = new QueryClient();
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <EditorWorkspaceView
+          workspaceRoot="/Users/tester/project"
+          projectName="project"
+          selectedFilePath="assets/screenshot.png"
+          expandedDirectories={new Set()}
+          centerMode="file"
+          diffFiles={[]}
+          selectedDiffFilePath={null}
+          diffPanel={<div>Diff panel</div>}
+          chatPanel={<div>Chat panel</div>}
+          onSelectFile={vi.fn()}
+          onSelectDiffFile={vi.fn()}
+          onToggleDirectory={vi.fn()}
+          onCenterModeChange={vi.fn()}
+          onExitEditorView={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain("local-image-preview");
+    expect(markup).toContain(
+      "/api/local-image?path=assets%2Fscreenshot.png&amp;cwd=%2FUsers%2Ftester%2Fproject",
+    );
+    expect(markup).not.toContain("editor-file-viewer__plain");
+    expect(markup).not.toContain("editor-file-viewer__highlight");
+  });
+
+  it("shows a Markdown preview toggle for Markdown files", () => {
+    const queryClient = new QueryClient();
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <EditorWorkspaceView
+          workspaceRoot="/Users/tester/project"
+          projectName="project"
+          selectedFilePath="README.md"
+          expandedDirectories={new Set()}
+          centerMode="file"
+          diffFiles={[]}
+          selectedDiffFilePath={null}
+          diffPanel={<div>Diff panel</div>}
+          chatPanel={<div>Chat panel</div>}
+          onSelectFile={vi.fn()}
+          onSelectDiffFile={vi.fn()}
+          onToggleDirectory={vi.fn()}
+          onCenterModeChange={vi.fn()}
+          onExitEditorView={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain('aria-label="Show Markdown preview"');
+    expect(markup).toContain('aria-pressed="false"');
   });
 
   it("shows pointer cursor on activity buttons that switch files and diff", () => {

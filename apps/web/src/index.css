@@ -1053,6 +1053,160 @@ label:has(> select#reasoning-effort) select {
   user-select: none;
 }
 
+.editor-file-viewer--markdown-preview {
+  background: color-mix(in srgb, var(--background) 96%, var(--card));
+}
+
+.editor-markdown-preview {
+  min-height: 100%;
+  padding: 1rem;
+}
+
+.editor-markdown-preview__body {
+  max-width: 880px;
+  margin: 0 auto;
+  padding-bottom: 3rem;
+}
+
+.editor-markdown-preview__body > :first-child {
+  margin-top: 0;
+}
+
+/* Local image preview used by editor file and diff views. */
+.local-image-preview {
+  position: relative;
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background:
+    linear-gradient(45deg, color-mix(in srgb, var(--foreground) 4%, transparent) 25%, transparent 25%),
+    linear-gradient(-45deg, color-mix(in srgb, var(--foreground) 4%, transparent) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, color-mix(in srgb, var(--foreground) 4%, transparent) 75%),
+    linear-gradient(-45deg, transparent 75%, color-mix(in srgb, var(--foreground) 4%, transparent) 75%),
+    color-mix(in srgb, var(--background) 96%, var(--foreground));
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+  background-size: 16px 16px;
+}
+
+.local-image-preview__img {
+  display: block;
+  max-width: 100%;
+  object-fit: contain;
+  border-radius: 0.35rem;
+  box-shadow: 0 1px 16px -10px color-mix(in srgb, var(--foreground) 45%, transparent);
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.local-image-preview[data-status="loading"] .local-image-preview__img {
+  opacity: 0;
+}
+
+.local-image-preview__skeleton {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-foreground);
+}
+
+.local-image-preview__download,
+.local-image-preview__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--background) 88%, transparent);
+  color: var(--foreground);
+  text-decoration: none;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.local-image-preview__download {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 0.45rem;
+  opacity: 0;
+}
+
+.local-image-preview[data-status="ready"]:hover .local-image-preview__download,
+.local-image-preview[data-status="ready"]:focus-within .local-image-preview__download {
+  opacity: 1;
+}
+
+.local-image-preview__download:hover,
+.local-image-preview__download:focus-visible,
+.local-image-preview__action:hover,
+.local-image-preview__action:focus-visible {
+  border-color: color-mix(in srgb, var(--border) 45%, var(--foreground));
+  background: color-mix(in srgb, var(--background) 72%, var(--foreground));
+  color: var(--foreground);
+  text-decoration: none;
+}
+
+.local-image-preview--error {
+  min-height: 0;
+  justify-content: flex-start;
+  gap: 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+}
+
+.local-image-preview__error-icon {
+  display: inline-flex;
+  width: 1.7rem;
+  height: 1.7rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, var(--destructive) 18%, transparent);
+  color: var(--destructive);
+}
+
+.local-image-preview__error-body {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.05rem;
+}
+
+.local-image-preview__error-title {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+.local-image-preview__error-subtitle {
+  font-size: 0.72rem;
+  color: var(--muted-foreground);
+}
+
+.local-image-preview__action {
+  flex: 0 0 auto;
+  border-radius: 0.45rem;
+  padding: 0.32rem 0.55rem;
+  font-size: 0.74rem;
+  font-weight: 500;
+}
+
 /* Generated image preview/download card rendered inline from markdown ![alt](file.png) */
 .chat-generated-image {
   position: relative;
@@ -1314,6 +1468,11 @@ diffs-container {
 .diff-render-file [data-diffs-header],
 .diff-render-file [data-file-info] {
   cursor: pointer;
+}
+
+.diff-render-file__image-preview {
+  min-height: 150px;
+  border-top: 1px solid var(--border);
 }
 
 /* Composer surface follows Codex's renderer token path: light uses

@@ -1119,6 +1119,7 @@ export default function DiffPanel({
             resolvedTheme={resolvedTheme}
             diffRenderMode={diffRenderMode}
             diffWordWrap={diffWordWrap}
+            workspaceRoot={activeCwd ?? null}
             collapsedFiles={collapsedFiles}
             onToggleFileCollapsed={toggleFileCollapsed}
             chatActions={diffFileChatActions}
