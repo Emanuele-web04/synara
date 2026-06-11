@@ -28,6 +28,7 @@ import {
   NonNegativeInt,
   PositiveInt,
   ProjectId,
+  ThreadMarkerId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
@@ -130,6 +131,7 @@ export const OpenCodeProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   serverUrl: Schema.optional(TrimmedNonEmptyString),
   serverPassword: Schema.optional(TrimmedNonEmptyString),
+  experimentalWebSockets: Schema.optional(Schema.Boolean),
 });
 
 export const KiloProviderStartOptions = Schema.Struct({
@@ -211,9 +213,16 @@ export type OrchestrationMessageSource = typeof OrchestrationMessageSource.Type;
 export const PROVIDER_SEND_TURN_MAX_INPUT_CHARS = 120_000;
 export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 8;
 export const PROVIDER_SEND_TURN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+export const MAX_PINNED_PROJECTS = 3;
 const PROVIDER_SEND_TURN_MAX_IMAGE_DATA_URL_CHARS = 14_000_000;
 const CHAT_ATTACHMENT_ID_MAX_CHARS = 128;
 export const CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS = 4_000;
+export const THREAD_NOTES_MAX_CHARS = 16_384;
+export const PINNED_MESSAGES_MAX_COUNT = 100;
+export const PINNED_MESSAGE_LABEL_MAX_CHARS = 60;
+export const THREAD_MARKERS_MAX_COUNT = 200;
+export const THREAD_MARKER_LABEL_MAX_CHARS = 60;
+export const THREAD_MARKER_SELECTED_TEXT_MAX_CHARS = 4_000;
 // Correlation id is command id by design in this model.
 export const CorrelationId = CommandId;
 export type CorrelationId = typeof CorrelationId.Type;
@@ -478,6 +487,64 @@ export const OrchestrationReviewChatTarget = Schema.Struct({
 });
 export type OrchestrationReviewChatTarget = typeof OrchestrationReviewChatTarget.Type;
 
+export const ThreadNotes = Schema.String.check(Schema.isMaxLength(THREAD_NOTES_MAX_CHARS));
+export type ThreadNotes = typeof ThreadNotes.Type;
+
+export const PinnedMessageLabel = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(PINNED_MESSAGE_LABEL_MAX_CHARS),
+);
+export type PinnedMessageLabel = typeof PinnedMessageLabel.Type;
+
+export const PinnedMessage = Schema.Struct({
+  messageId: MessageId,
+  label: Schema.optional(Schema.NullOr(PinnedMessageLabel)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  done: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  pinnedAt: IsoDateTime,
+});
+export type PinnedMessage = typeof PinnedMessage.Type;
+
+export const ThreadPinnedMessages = Schema.Array(PinnedMessage).check(
+  Schema.isMaxLength(PINNED_MESSAGES_MAX_COUNT),
+);
+export type ThreadPinnedMessages = typeof ThreadPinnedMessages.Type;
+
+export const ThreadMarkerStyle = Schema.Literals(["highlight", "underline"]);
+export type ThreadMarkerStyle = typeof ThreadMarkerStyle.Type;
+
+export const ThreadMarkerColor = Schema.Literals(["yellow", "blue", "green", "pink"]);
+export type ThreadMarkerColor = typeof ThreadMarkerColor.Type;
+
+export const ThreadMarkerLabel = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(THREAD_MARKER_LABEL_MAX_CHARS),
+);
+export type ThreadMarkerLabel = typeof ThreadMarkerLabel.Type;
+
+export const ThreadMarker = Schema.Struct({
+  id: ThreadMarkerId,
+  messageId: MessageId,
+  startOffset: NonNegativeInt,
+  endOffset: NonNegativeInt,
+  selectedText: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(THREAD_MARKER_SELECTED_TEXT_MAX_CHARS),
+  ),
+  style: ThreadMarkerStyle,
+  color: ThreadMarkerColor,
+  label: Schema.optional(Schema.NullOr(ThreadMarkerLabel)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  done: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type ThreadMarker = typeof ThreadMarker.Type;
+
+export const ThreadMarkers = Schema.Array(ThreadMarker).check(
+  Schema.isMaxLength(THREAD_MARKERS_MAX_COUNT),
+);
+export type ThreadMarkers = typeof ThreadMarkers.Type;
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -540,6 +607,9 @@ export const OrchestrationThread = Schema.Struct({
   ),
   deletedAt: Schema.NullOr(IsoDateTime),
   handoff: Schema.NullOr(ThreadHandoff).pipe(Schema.withDecodingDefault(() => null)),
+  pinnedMessages: Schema.optional(ThreadPinnedMessages),
+  threadMarkers: Schema.optional(ThreadMarkers),
+  notes: Schema.optional(ThreadNotes),
   messages: Schema.Array(OrchestrationMessage),
   proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(Schema.withDecodingDefault(() => [])),
   activities: Schema.Array(OrchestrationThreadActivity),
@@ -609,6 +679,9 @@ export const OrchestrationThreadShell = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   handoff: Schema.NullOr(ThreadHandoff).pipe(Schema.withDecodingDefault(() => null)),
+  pinnedMessages: Schema.optional(ThreadPinnedMessages),
+  threadMarkers: Schema.optional(ThreadMarkers),
+  notes: Schema.optional(ThreadNotes),
   session: Schema.NullOr(OrchestrationSession),
 });
 export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;

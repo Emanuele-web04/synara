@@ -10,6 +10,7 @@ import {
   Option,
   Ref,
   Result,
+  Semaphore,
   ServiceMap,
   Scope,
   Stream,
@@ -23,13 +24,18 @@ import {
   DEFAULT_HOSTNAME,
   DEFAULT_OPENCODE_SERVER_TIMEOUT_MS,
   OPENCODE_CLI_SPEC,
+  OPENCODE_LOCAL_SERVER_IDLE_TTL_MS,
   OpenCodeRuntimeError,
+  buildOpenCodeServerProcessEnv,
   collectStreamAsString,
   ensureRuntimeError,
+  formatOpenCodeServerStartupDetail,
   openCodeRuntimeErrorDetail,
   parseOpenCodeCliModelsOutput,
   parseOpenCodeCredentialProviderIDs,
   parseServerUrlFromOutput,
+  pooledOpenCodeServerKey,
+  redactStartupOutput,
   resolveOpenCodeAuthFilePath,
   runOpenCodeSdk,
   supportsVerboseModelsCommandFailure,
@@ -43,9 +49,23 @@ import {
 
 export * from "./opencodeRuntime.helpers.ts";
 
+interface PooledOpenCodeServer {
+  readonly key: string;
+  readonly server: OpenCodeServerProcess;
+  readonly scope: Scope.Closeable;
+  refCount: number;
+  idleCloseFiber: Fiber.Fiber<void, never> | null;
+  exitWatchFiber: Fiber.Fiber<void, never> | null;
+}
+
 const makeOpenCodeRuntime = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const netService = yield* NetService;
+  const pooledServerScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+    Scope.close(scope, Exit.void),
+  );
+  const pooledServerMutex = yield* Semaphore.make(1);
+  const pooledServers = new Map<string, PooledOpenCodeServer>();
 
   const runOpenCodeCommand: OpenCodeRuntimeShape["runOpenCodeCommand"] = (input) =>
     Effect.gen(function* () {
@@ -101,15 +121,17 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
           ),
         ));
       const timeoutMs = input.timeoutMs ?? DEFAULT_OPENCODE_SERVER_TIMEOUT_MS;
-      const args = ["serve", `--hostname=${hostname}`, `--port=${port}`];
+      const args = ["serve", "--hostname", hostname, "--port", String(port)];
 
       const child = yield* spawner
         .spawn(
           ChildProcess.make(input.binaryPath, args, {
-            env: {
-              ...process.env,
-              [cliSpec.configContentEnvVar]: JSON.stringify({}),
-            },
+            env: buildOpenCodeServerProcessEnv({
+              cliSpec,
+              ...(input.experimentalWebSockets !== undefined
+                ? { experimentalWebSockets: input.experimentalWebSockets }
+                : {}),
+            }),
             detached: false,
             killSignal: "SIGKILL",
             forceKillAfter: "1500 millis",
@@ -161,21 +183,30 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       const exitFiber = yield* child.exitCode.pipe(
         Effect.flatMap((code) =>
           Effect.gen(function* () {
-            const stdout = yield* Ref.get(stdoutRef);
-            const stderr = yield* Ref.get(stderrRef);
+            const stdout = redactStartupOutput(yield* Ref.get(stdoutRef));
+            const stderr = redactStartupOutput(yield* Ref.get(stderrRef));
             const exitCode = Number(code);
             yield* Deferred.fail(
               readyDeferred,
               new OpenCodeRuntimeError({
                 operation: "startOpenCodeServerProcess",
-                detail: [
-                  `OpenCode server exited before startup completed (code: ${String(exitCode)}).`,
-                  stdout.trim() ? `stdout:\n${stdout.trim()}` : null,
-                  stderr.trim() ? `stderr:\n${stderr.trim()}` : null,
-                ]
-                  .filter(Boolean)
-                  .join("\n\n"),
-                cause: { exitCode, stdout, stderr },
+                detail: formatOpenCodeServerStartupDetail({
+                  displayName: cliSpec.displayName,
+                  summary: `${cliSpec.displayName} server exited before startup completed (code: ${String(exitCode)}).`,
+                  binaryPath: input.binaryPath,
+                  args,
+                  readyPrefix: cliSpec.serverReadyPrefix,
+                  stdout,
+                  stderr,
+                }),
+                cause: {
+                  exitCode,
+                  stdout,
+                  stderr,
+                  binaryPath: input.binaryPath,
+                  args,
+                  readyPrefix: cliSpec.serverReadyPrefix,
+                },
               }),
             ).pipe(Effect.ignore);
           }),
@@ -196,7 +227,10 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         const squashed = Cause.squash(readyExit.cause);
         return yield* ensureRuntimeError(
           "startOpenCodeServerProcess",
-          `Failed while waiting for OpenCode server startup: ${openCodeRuntimeErrorDetail(squashed)}`,
+          [
+            `Failed while waiting for ${cliSpec.displayName} server startup:`,
+            openCodeRuntimeErrorDetail(squashed),
+          ].join(" "),
           squashed,
         );
       }
@@ -204,9 +238,27 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       const readyOption = readyExit.value;
       if (Option.isNone(readyOption)) {
         yield* Fiber.interrupt(exitFiber).pipe(Effect.ignore);
+        const stdout = redactStartupOutput(yield* Ref.get(stdoutRef));
+        const stderr = redactStartupOutput(yield* Ref.get(stderrRef));
         return yield* new OpenCodeRuntimeError({
           operation: "startOpenCodeServerProcess",
-          detail: `Timed out waiting for OpenCode server start after ${timeoutMs}ms.`,
+          detail: formatOpenCodeServerStartupDetail({
+            displayName: cliSpec.displayName,
+            summary: `Timed out waiting for ${cliSpec.displayName} server start after ${timeoutMs}ms.`,
+            binaryPath: input.binaryPath,
+            args,
+            readyPrefix: cliSpec.serverReadyPrefix,
+            stdout,
+            stderr,
+          }),
+          cause: {
+            timeoutMs,
+            stdout,
+            stderr,
+            binaryPath: input.binaryPath,
+            args,
+            readyPrefix: cliSpec.serverReadyPrefix,
+          },
         });
       }
 
@@ -219,6 +271,154 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       } satisfies OpenCodeServerProcess;
     });
 
+  const cancelPooledServerIdleClose = Effect.fn("cancelPooledServerIdleClose")(function* (
+    pooledServer: PooledOpenCodeServer,
+  ) {
+    const idleCloseFiber = pooledServer.idleCloseFiber;
+    pooledServer.idleCloseFiber = null;
+    if (idleCloseFiber !== null) {
+      yield* Fiber.interrupt(idleCloseFiber).pipe(Effect.ignore);
+    }
+  });
+
+  const detachPooledServer = Effect.fn("detachPooledServer")(function* (
+    pooledServer: PooledOpenCodeServer,
+  ) {
+    pooledServers.delete(pooledServer.key);
+    pooledServer.refCount = 0;
+    yield* cancelPooledServerIdleClose(pooledServer);
+  });
+
+  const closePooledServer = Effect.fn("closePooledServer")(function* (
+    pooledServer: PooledOpenCodeServer,
+  ) {
+    yield* detachPooledServer(pooledServer);
+
+    const exitWatchFiber = pooledServer.exitWatchFiber;
+    pooledServer.exitWatchFiber = null;
+    if (exitWatchFiber !== null) {
+      yield* Fiber.interrupt(exitWatchFiber).pipe(Effect.ignore);
+    }
+
+    yield* Scope.close(pooledServer.scope, Exit.void).pipe(Effect.ignore);
+  });
+
+  const schedulePooledServerIdleClose = Effect.fn("schedulePooledServerIdleClose")(function* (
+    pooledServer: PooledOpenCodeServer,
+  ) {
+    yield* cancelPooledServerIdleClose(pooledServer);
+    const idleCloseFiber = yield* Effect.sleep(OPENCODE_LOCAL_SERVER_IDLE_TTL_MS).pipe(
+      Effect.andThen(
+        pooledServerMutex.withPermit(
+          Effect.gen(function* () {
+            if (pooledServers.get(pooledServer.key) !== pooledServer || pooledServer.refCount > 0) {
+              return;
+            }
+            pooledServer.idleCloseFiber = null;
+            yield* closePooledServer(pooledServer);
+          }),
+        ),
+      ),
+      Effect.forkIn(pooledServerScope),
+    );
+    pooledServer.idleCloseFiber = idleCloseFiber;
+  });
+
+  const watchPooledServerExit = Effect.fn("watchPooledServerExit")(function* (
+    pooledServer: PooledOpenCodeServer,
+  ) {
+    const exitWatchFiber = yield* pooledServer.server.exitCode.pipe(
+      Effect.flatMap(() =>
+        pooledServerMutex.withPermit(
+          Effect.gen(function* () {
+            if (pooledServers.get(pooledServer.key) !== pooledServer) {
+              return;
+            }
+            pooledServer.exitWatchFiber = null;
+            yield* detachPooledServer(pooledServer);
+            yield* Scope.close(pooledServer.scope, Exit.void).pipe(Effect.ignore);
+          }),
+        ),
+      ),
+      Effect.ignore,
+      Effect.forkIn(pooledServerScope),
+    );
+    pooledServer.exitWatchFiber = exitWatchFiber;
+  });
+
+  const acquirePooledServer = (input: {
+    readonly binaryPath: string;
+    readonly cliSpec?: OpenCodeCompatibleCliSpec;
+    readonly port?: number;
+    readonly hostname?: string;
+    readonly timeoutMs?: number;
+    readonly experimentalWebSockets?: boolean;
+  }) =>
+    pooledServerMutex.withPermit(
+      Effect.gen(function* () {
+        const key = pooledOpenCodeServerKey(input);
+        const existing = pooledServers.get(key);
+        if (existing) {
+          yield* cancelPooledServerIdleClose(existing);
+          existing.refCount += 1;
+          return existing;
+        }
+
+        return yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const serverScope = yield* Scope.make();
+            const startedExit = yield* Effect.exit(
+              restore(
+                startOpenCodeServerProcess(input).pipe(
+                  Effect.provideService(Scope.Scope, serverScope),
+                ),
+              ),
+            );
+
+            if (Exit.isFailure(startedExit)) {
+              yield* Scope.close(serverScope, Exit.void).pipe(Effect.ignore);
+              return yield* Effect.failCause(startedExit.cause);
+            }
+
+            const pooledServer: PooledOpenCodeServer = {
+              key,
+              server: startedExit.value,
+              scope: serverScope,
+              refCount: 1,
+              idleCloseFiber: null,
+              exitWatchFiber: null,
+            };
+            pooledServers.set(key, pooledServer);
+            yield* watchPooledServerExit(pooledServer);
+            return pooledServer;
+          }),
+        );
+      }),
+    );
+
+  const releasePooledServer = (pooledServer: PooledOpenCodeServer) =>
+    pooledServerMutex.withPermit(
+      Effect.gen(function* () {
+        if (pooledServers.get(pooledServer.key) !== pooledServer) {
+          return;
+        }
+        pooledServer.refCount = Math.max(0, pooledServer.refCount - 1);
+        if (pooledServer.refCount === 0) {
+          yield* schedulePooledServerIdleClose(pooledServer);
+        }
+      }),
+    );
+
+  yield* Effect.addFinalizer(() =>
+    pooledServerMutex.withPermit(
+      Effect.gen(function* () {
+        for (const pooledServer of Array.from(pooledServers.values())) {
+          yield* closePooledServer(pooledServer);
+        }
+      }),
+    ),
+  );
+
   const connectToOpenCodeServer: OpenCodeRuntimeShape["connectToOpenCodeServer"] = (input) => {
     const serverUrl = input.serverUrl?.trim();
     if (serverUrl) {
@@ -229,19 +429,25 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       });
     }
 
-    return startOpenCodeServerProcess({
-      binaryPath: input.binaryPath,
-      ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
-      ...(input.port !== undefined ? { port: input.port } : {}),
-      ...(input.hostname !== undefined ? { hostname: input.hostname } : {}),
-      ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
-    }).pipe(
-      Effect.map((server) => ({
-        url: server.url,
-        exitCode: server.exitCode,
+    return Effect.gen(function* () {
+      const callerScope = yield* Scope.Scope;
+      const pooledServer = yield* acquirePooledServer({
+        binaryPath: input.binaryPath,
+        ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
+        ...(input.port !== undefined ? { port: input.port } : {}),
+        ...(input.hostname !== undefined ? { hostname: input.hostname } : {}),
+        ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+        ...(input.experimentalWebSockets !== undefined
+          ? { experimentalWebSockets: input.experimentalWebSockets }
+          : {}),
+      });
+      yield* Scope.addFinalizer(callerScope, releasePooledServer(pooledServer));
+      return {
+        url: pooledServer.server.url,
+        exitCode: pooledServer.server.exitCode,
         external: false,
-      })),
-    );
+      };
+    });
   };
 
   const createOpenCodeSdkClient: OpenCodeRuntimeShape["createOpenCodeSdkClient"] = (input) =>

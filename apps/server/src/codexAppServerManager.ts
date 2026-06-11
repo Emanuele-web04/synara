@@ -155,6 +155,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
   private readonly services: ServiceMap.ServiceMap<never> | undefined;
   private readonly transportFactory: CodexTransportFactory | undefined;
+  private readonly synaraSkillsDir: string | undefined;
   private readonly handlerDeps: CodexHandlerDeps;
   private readonly discoveryQueryDeps: CodexDiscoveryQueryDeps;
   private readonly discoverySessionDeps: CodexDiscoverySessionDeps;
@@ -164,6 +165,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     super();
     this.services = services;
     this.transportFactory = options?.createTransport;
+    this.synaraSkillsDir = options?.synaraSkillsDir;
     this.runPromise = services ? Effect.runPromiseWith(services) : Effect.runPromise;
     this.handlerDeps = {
       emitEvent: (event) => this.emitEvent(event),
@@ -183,6 +185,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       sendRequest: (...args) => this.sendRequest(...args),
       writeMessage: (...args) => this.writeMessage(...args),
       updateSession: (...args) => this.updateSession(...args),
+      registerSynaraSkillsRoot: (...args) => this.registerSynaraSkillsRoot(...args),
       closeTransport: (...args) => this.closeTransport(...args),
       getOrCreateDiscoverySession: (...args) => this.getOrCreateDiscoverySession(...args),
       scheduleDiscoverySessionIdleStop: (...args) => this.scheduleDiscoverySessionIdleStop(...args),
@@ -205,6 +208,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       sendRequest: (...args) => this.sendRequest(...args),
       writeMessage: (...args) => this.writeMessage(...args),
       updateSession: (...args) => this.updateSession(...args),
+      registerSynaraSkillsRoot: (...args) => this.registerSynaraSkillsRoot(...args),
       resolveStartupDiscovery: (...args) => this.resolveStartupDiscovery(...args),
       selectSandboxCodexModel: (...args) => this.selectSandboxCodexModel(...args),
     };
@@ -253,6 +257,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         shell: process.platform === "win32",
       }),
     );
+  }
+
+  private async registerSynaraSkillsRoot(context: CodexSessionContext): Promise<void> {
+    if (!this.synaraSkillsDir) {
+      return;
+    }
+    try {
+      await this.sendRequest(context, "skills/extraRoots/set", {
+        extraRoots: [this.synaraSkillsDir],
+      });
+    } catch (error) {
+      console.log("codex skills/extraRoots/set unavailable", error);
+    }
   }
 
   private async resolveStartupDiscovery(

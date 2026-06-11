@@ -38,6 +38,7 @@ import {
   parseClaudeAuthStatusFromOutput,
 } from "./ProviderHealth.parsing";
 import {
+  CLAUDE_HEALTH_TIMEOUT_MS,
   CLAUDE_AGENT_PROVIDER,
   CODEX_PROVIDER,
   CURSOR_PROVIDER,
@@ -45,6 +46,7 @@ import {
   GEMINI_PROVIDER,
   GROK_PROVIDER,
   KILO_PROVIDER,
+  OPENCODE_HEALTH_TIMEOUT_MS,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
 } from "./ProviderHealth.config";
@@ -230,7 +232,7 @@ export const makeCheckClaudeProviderStatus = (
 
     // Probe 1: `claude --version` — is the CLI reachable?
     const versionProbe = yield* runClaudeCommand(["--version"], executable).pipe(
-      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.timeoutOption(CLAUDE_HEALTH_TIMEOUT_MS),
       Effect.result,
     );
 
@@ -278,7 +280,7 @@ export const makeCheckClaudeProviderStatus = (
 
     // Probe 2: `claude auth status` — is the user authenticated?
     const authProbe = yield* runClaudeCommand(["auth", "status"], executable).pipe(
-      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.timeoutOption(CLAUDE_HEALTH_TIMEOUT_MS),
       Effect.result,
     );
 
@@ -511,7 +513,7 @@ export const makeCheckOpenCodeProviderStatus = (
     const executable = nonEmptyTrimmed(binaryPath) ?? "opencode";
 
     const versionProbe = yield* runOpenCodeCommand(["--version"], executable).pipe(
-      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.timeoutOption(OPENCODE_HEALTH_TIMEOUT_MS),
       Effect.result,
     );
 

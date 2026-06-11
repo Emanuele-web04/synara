@@ -54,6 +54,7 @@ export const OpenCodeServerProviderSettings = Schema.Struct({
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "opencode")),
   serverUrl: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
   serverPassword: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+  experimentalWebSockets: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
 });
 export type OpenCodeServerProviderSettings = typeof OpenCodeServerProviderSettings.Type;
 
@@ -71,6 +72,15 @@ export const PiServerProviderSettings = Schema.Struct({
   agentDir: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
 });
 export type PiServerProviderSettings = typeof PiServerProviderSettings.Type;
+
+const DisabledSkillNames = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
+  Schema.withDecodingDefault(() => []),
+);
+
+export const SkillsServerSettings = Schema.Struct({
+  disabled: DisabledSkillNames,
+});
+export type SkillsServerSettings = typeof SkillsServerSettings.Type;
 
 /**
  * Remote sandbox/runtime-provider settings.
@@ -189,6 +199,7 @@ export const ServerSettings = Schema.Struct({
     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
+  skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   sandboxes: SandboxSettings.pipe(Schema.withDecodingDefault(() => ({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
@@ -292,6 +303,7 @@ export const ServerSettingsPatch = Schema.Struct({
           ...ProviderSettingsBasePatch,
           serverUrl: Schema.optionalKey(StringSetting),
           serverPassword: Schema.optionalKey(StringSetting),
+          experimentalWebSockets: Schema.optionalKey(Schema.Boolean),
         }),
       ),
       pi: Schema.optionalKey(
@@ -301,6 +313,11 @@ export const ServerSettingsPatch = Schema.Struct({
           agentDir: Schema.optionalKey(StringSetting),
         }),
       ),
+    }),
+  ),
+  skills: Schema.optionalKey(
+    Schema.Struct({
+      disabled: Schema.optionalKey(Schema.Array(Schema.String.check(Schema.isMaxLength(256)))),
     }),
   ),
   sandboxes: Schema.optionalKey(SandboxSettingsPatch),

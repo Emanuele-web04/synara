@@ -95,6 +95,38 @@
     "./reviewTargetKey": {
       "types": "./src/reviewTargetKey.ts",
       "import": "./src/reviewTargetKey.ts"
+    },
+    "./errorMessages": {
+      "types": "./src/errorMessages.ts",
+      "import": "./src/errorMessages.ts"
+    },
+    "./desktopChrome": {
+      "types": "./src/desktopChrome.ts",
+      "import": "./src/desktopChrome.ts"
+    },
+    "./localServers": {
+      "types": "./src/localServers.ts",
+      "import": "./src/localServers.ts"
+    },
+    "./pinnedMessages": {
+      "types": "./src/pinnedMessages.ts",
+      "import": "./src/pinnedMessages.ts"
+    },
+    "./threadMarkers": {
+      "types": "./src/threadMarkers.ts",
+      "import": "./src/threadMarkers.ts"
+    },
+    "./text": {
+      "types": "./src/text.ts",
+      "import": "./src/text.ts"
+    },
+    "./editorIcons": {
+      "types": "./src/editorIcons.ts",
+      "import": "./src/editorIcons.ts"
+    },
+    "./providerUsage": {
+      "types": "./src/providerUsage.ts",
+      "import": "./src/providerUsage.ts"
     }
   },
   "scripts": {

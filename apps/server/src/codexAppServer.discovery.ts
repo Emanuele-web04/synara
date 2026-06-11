@@ -27,6 +27,35 @@ import type {
   CodexSkillListInput,
 } from "./codexAppServer.types.ts";
 
+const CODEX_DISCOVERY_CACHE_MAX_ENTRIES = 128;
+
+function getRecentCacheEntry<K, V>(cache: Map<K, V>, key: K): V | undefined {
+  const value = cache.get(key);
+  if (value === undefined) {
+    return undefined;
+  }
+  cache.delete(key);
+  cache.set(key, value);
+  return value;
+}
+
+function setRecentCacheEntry<K, V>(
+  cache: Map<K, V>,
+  key: K,
+  value: V,
+  maxEntries = CODEX_DISCOVERY_CACHE_MAX_ENTRIES,
+): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > maxEntries) {
+    const oldestKey = cache.keys().next().value as K | undefined;
+    if (oldestKey === undefined) {
+      break;
+    }
+    cache.delete(oldestKey);
+  }
+}
+
 export interface CodexDiscoveryQueryDeps {
   readonly skillsCache: Map<string, ProviderListSkillsResult>;
   readonly pluginsCache: Map<string, ProviderListPluginsResult>;
@@ -50,7 +79,7 @@ export async function listSkills(
     threadId: input.threadId?.trim() || null,
   });
   if (!input.forceReload) {
-    const cached = deps.skillsCache.get(cacheKey);
+    const cached = getRecentCacheEntry(deps.skillsCache, cacheKey);
     if (cached) {
       return {
         ...cached,
@@ -81,7 +110,7 @@ export async function listSkills(
     source: "codex-app-server",
     cached: false,
   };
-  deps.skillsCache.set(cacheKey, result);
+  setRecentCacheEntry(deps.skillsCache, cacheKey, result);
   return result;
 }
 
@@ -96,7 +125,7 @@ export async function listPlugins(
     forceRemoteSync: input.forceRemoteSync === true,
   });
   if (!input.forceReload) {
-    const cached = deps.pluginsCache.get(cacheKey);
+    const cached = getRecentCacheEntry(deps.pluginsCache, cacheKey);
     if (cached) {
       return {
         ...cached,
@@ -115,7 +144,7 @@ export async function listPlugins(
     source: "codex-app-server",
     cached: false,
   };
-  deps.pluginsCache.set(cacheKey, result);
+  setRecentCacheEntry(deps.pluginsCache, cacheKey, result);
   return result;
 }
 
@@ -129,7 +158,7 @@ export async function readPlugin(
     marketplacePath,
     pluginName,
   });
-  const cached = deps.pluginDetailCache.get(cacheKey);
+  const cached = getRecentCacheEntry(deps.pluginDetailCache, cacheKey);
   if (cached) {
     return {
       ...cached,
@@ -147,7 +176,7 @@ export async function readPlugin(
     source: "codex-app-server",
     cached: false,
   };
-  deps.pluginDetailCache.set(cacheKey, result);
+  setRecentCacheEntry(deps.pluginDetailCache, cacheKey, result);
   return result;
 }
 
@@ -156,7 +185,7 @@ export async function listModels(
   threadId?: string,
 ): Promise<ProviderListModelsResult> {
   const cacheKey = threadId?.trim() || "__default__";
-  const cached = deps.modelCache.get(cacheKey);
+  const cached = getRecentCacheEntry(deps.modelCache, cacheKey);
   if (cached) {
     return {
       ...cached,
@@ -176,6 +205,6 @@ export async function listModels(
     source: "codex-app-server",
     cached: false,
   };
-  deps.modelCache.set(cacheKey, result);
+  setRecentCacheEntry(deps.modelCache, cacheKey, result);
   return result;
 }

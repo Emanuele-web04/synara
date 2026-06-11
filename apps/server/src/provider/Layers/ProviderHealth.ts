@@ -53,6 +53,7 @@ import {
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
 import {
   PACKAGE_MANAGED_PROVIDER_UPDATES,
+  PROVIDER_COMMAND_TIMEOUT_DETAIL,
   PROVIDERS,
   type ProviderStatuses,
   UPDATE_OUTPUT_MAX_BYTES,
@@ -96,7 +97,17 @@ export {
 
 // ── Snapshot helpers ────────────────────────────────────────────────
 
-function providerStatusesEqual(left: ProviderStatuses, right: ProviderStatuses): boolean {
+function comparableProviderVersionAdvisory(
+  advisory: ServerProviderStatus["versionAdvisory"] | undefined,
+): Omit<NonNullable<ServerProviderStatus["versionAdvisory"]>, "checkedAt"> | null {
+  if (!advisory) {
+    return null;
+  }
+  const { checkedAt: _checkedAt, ...comparableAdvisory } = advisory;
+  return comparableAdvisory;
+}
+
+export function providerStatusesEqual(left: ProviderStatuses, right: ProviderStatuses): boolean {
   if (left.length !== right.length) {
     return false;
   }
@@ -113,10 +124,52 @@ function providerStatusesEqual(left: ProviderStatuses, right: ProviderStatuses):
       status.voiceTranscriptionAvailable === next.voiceTranscriptionAvailable &&
       (status.version ?? null) === (next.version ?? null) &&
       (status.message ?? null) === (next.message ?? null) &&
-      JSON.stringify(status.versionAdvisory ?? null) ===
-        JSON.stringify(next.versionAdvisory ?? null) &&
+      JSON.stringify(comparableProviderVersionAdvisory(status.versionAdvisory)) ===
+        JSON.stringify(comparableProviderVersionAdvisory(next.versionAdvisory)) &&
       JSON.stringify(status.updateState ?? null) === JSON.stringify(next.updateState ?? null)
     );
+  });
+}
+
+function isTransientProviderCommandTimeout(status: ServerProviderStatus): boolean {
+  return (
+    status.status !== "ready" &&
+    status.authStatus === "unknown" &&
+    (status.message ?? "").includes(PROVIDER_COMMAND_TIMEOUT_DETAIL)
+  );
+}
+
+function wasPreviouslyUsableProviderStatus(status: ServerProviderStatus): boolean {
+  return status.available && status.status === "ready";
+}
+
+export function stabilizeProviderStatusesAgainstTransientTimeouts(
+  previousStatuses: ProviderStatuses,
+  nextStatuses: ProviderStatuses,
+): ProviderStatuses {
+  if (previousStatuses.length === 0) {
+    return nextStatuses;
+  }
+
+  const previousByProvider = new Map(
+    previousStatuses.map((status) => [status.provider, status] as const),
+  );
+
+  return nextStatuses.map((status) => {
+    const previous = previousByProvider.get(status.provider);
+    if (
+      !previous ||
+      !wasPreviouslyUsableProviderStatus(previous) ||
+      !isTransientProviderCommandTimeout(status)
+    ) {
+      return status;
+    }
+
+    return {
+      ...previous,
+      checkedAt: status.checkedAt,
+      ...(status.updateState !== undefined ? { updateState: status.updateState } : {}),
+    };
   });
 }
 
@@ -370,8 +423,13 @@ export const ProviderHealthLive = Layer.effect(
       );
 
     const refreshNow = Effect.gen(function* () {
-      const nextStatuses = yield* loadProviderStatuses;
+      yield* Cache.invalidate(claudeSubscriptionCache, "claude");
+      const loadedStatuses = yield* loadProviderStatuses;
       const previousStatuses = yield* Ref.get(statusesRef);
+      const nextStatuses = stabilizeProviderStatusesAgainstTransientTimeouts(
+        previousStatuses,
+        loadedStatuses,
+      );
       if (providerStatusesEqual(previousStatuses, nextStatuses)) {
         yield* Ref.set(statusesRef, nextStatuses);
         return nextStatuses;

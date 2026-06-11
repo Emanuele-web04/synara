@@ -16,6 +16,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
+  type ProjectDevServerEvent,
   type ReviewUpdatedPayload,
   type ServerProviderStatusesUpdatedPayload,
   type ServerLifecycleStreamEvent,
@@ -34,6 +35,7 @@ import {
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { WsTransport } from "./wsTransport";
+import { emitWsTransportState } from "./wsTransportEvents";
 
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
 const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
@@ -46,6 +48,7 @@ const serverSettingsUpdatedListeners = new Set<(payload: ServerSettingsUpdatedPa
 const gitActionProgressListeners = new Set<(payload: GitActionProgressEvent) => void>();
 const reviewUpdatedListeners = new Set<(payload: ReviewUpdatedPayload) => void>();
 let reviewUpdatedTransportUnsubscribe: (() => void) | null = null;
+const projectDevServerEventListeners = new Set<(payload: ProjectDevServerEvent) => void>();
 
 function omitNullUserInputAnswers(
   command: Parameters<NativeApi["orchestration"]["dispatchCommand"]>[0],
@@ -342,6 +345,7 @@ export function createWsNativeApi(): NativeApi {
   }
 
   const transport = new WsTransport();
+  transport.onStateChange((state) => emitWsTransportState(state));
 
   transport.subscribe(WS_CHANNELS.serverWelcome, (message) => {
     const payload = message.data;
@@ -413,6 +417,16 @@ export function createWsNativeApi(): NativeApi {
       }
     }
   });
+  transport.subscribe(WS_CHANNELS.projectDevServerEvent, (message) => {
+    const payload = message.data;
+    for (const listener of projectDevServerEventListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) => {
     const payload = message.data;
     for (const listener of orchestrationDomainEventListeners) {
@@ -472,6 +486,7 @@ export function createWsNativeApi(): NativeApi {
     terminal: {
       open: (input) => transport.request(WS_METHODS.terminalOpen, input),
       write: (input) => transport.request(WS_METHODS.terminalWrite, input),
+      ackOutput: (input) => transport.request(WS_METHODS.terminalAckOutput, input),
       resize: (input) => transport.request(WS_METHODS.terminalResize, input),
       clear: (input) => transport.request(WS_METHODS.terminalClear, input),
       restart: (input) => transport.request(WS_METHODS.terminalRestart, input),
@@ -486,9 +501,20 @@ export function createWsNativeApi(): NativeApi {
     projects: {
       listDirectories: (input) => transport.request(WS_METHODS.projectsListDirectories, input),
       searchEntries: (input) => transport.request(WS_METHODS.projectsSearchEntries, input),
+      discoverScripts: (input) => transport.request(WS_METHODS.projectsDiscoverScripts, input),
       searchLocalEntries: (input) =>
         transport.request(WS_METHODS.projectsSearchLocalEntries, input),
+      readFile: (input) => transport.request(WS_METHODS.projectsReadFile, input),
       writeFile: (input) => transport.request(WS_METHODS.projectsWriteFile, input),
+      runDevServer: (input) => transport.request(WS_METHODS.projectsRunDevServer, input),
+      stopDevServer: (input) => transport.request(WS_METHODS.projectsStopDevServer, input),
+      listDevServers: () => transport.request(WS_METHODS.projectsListDevServers),
+      onDevServerEvent: (callback) => {
+        projectDevServerEventListeners.add(callback);
+        return () => {
+          projectDevServerEventListeners.delete(callback);
+        };
+      },
     },
     filesystem: {
       browse: (input) => transport.request(WS_METHODS.filesystemBrowse, input),
@@ -517,6 +543,7 @@ export function createWsNativeApi(): NativeApi {
       },
     },
     git: {
+      githubRepository: (input) => transport.request(WS_METHODS.gitGithubRepository, input),
       pull: (input) => transport.request(WS_METHODS.gitPull, input),
       status: (input) => transport.request(WS_METHODS.gitStatus, input),
       readWorkingTreeDiff: (input) => transport.request(WS_METHODS.gitReadWorkingTreeDiff, input),
@@ -643,9 +670,16 @@ export function createWsNativeApi(): NativeApi {
       refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
       updateProvider: (input) => transport.request(WS_METHODS.serverUpdateProvider, input),
       listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
+      listLocalServers: () => transport.request(WS_METHODS.serverListLocalServers),
+      stopLocalServer: (input) => transport.request(WS_METHODS.serverStopLocalServer, input),
       getProviderUsageSnapshot: (input) =>
         transport.request(WS_METHODS.serverGetProviderUsageSnapshot, input),
+      listProviderUsage: (input) => transport.request(WS_METHODS.serverListProviderUsage, input),
       getDiagnostics: () => transport.request(WS_METHODS.serverGetDiagnostics),
+      generateThreadRecap: (input) =>
+        transport.request(WS_METHODS.serverGenerateThreadRecap, input, {
+          timeoutMs: null,
+        }),
       transcribeVoice: (input) => {
         if (window.desktopBridge?.server?.transcribeVoice) {
           return window.desktopBridge.server.transcribeVoice(input);
@@ -660,6 +694,7 @@ export function createWsNativeApi(): NativeApi {
       compactThread: (input) => transport.request(WS_METHODS.providerCompactThread, input),
       listCommands: (input) => transport.request(WS_METHODS.providerListCommands, input),
       listSkills: (input) => transport.request(WS_METHODS.providerListSkills, input),
+      listSkillsCatalog: (input) => transport.request(WS_METHODS.providerListSkillsCatalog, input),
       listPlugins: (input) => transport.request(WS_METHODS.providerListPlugins, input),
       readPlugin: (input) => transport.request(WS_METHODS.providerReadPlugin, input),
       listModels: (input) => transport.request(WS_METHODS.providerListModels, input),
@@ -875,15 +910,18 @@ function teardownWsNativeApi(): void {
   welcomeListeners.clear();
   serverConfigUpdatedListeners.clear();
   serverProviderStatusesUpdatedListeners.clear();
+  serverMaintenanceUpdatedListeners.clear();
   serverSettingsUpdatedListeners.clear();
   gitActionProgressListeners.clear();
   reviewUpdatedListeners.clear();
   stopReviewUpdatedSubscription();
   terminalEventListeners.clear();
+  projectDevServerEventListeners.clear();
   orchestrationDomainEventListeners.clear();
   orchestrationShellEventListeners.clear();
   orchestrationThreadEventListeners.clear();
   fallbackBrowserStateListeners.clear();
+  fallbackBrowserStates.clear();
 }
 
 // Test-only: dispose the singleton transport so each browser test starts from a

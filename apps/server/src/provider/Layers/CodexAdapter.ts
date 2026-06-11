@@ -32,6 +32,7 @@ import {
 } from "../../codexAppServerManager.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { synaraSkillsDir } from "../skillsCatalog.ts";
 import { PROVIDER, toMessage, toRequestError } from "./CodexAdapter.errors.ts";
 import { mapToRuntimeEvents } from "./CodexAdapter.events.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -61,7 +62,12 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           return options.manager;
         }
         const services = yield* Effect.services<never>();
-        return options?.makeManager?.(services) ?? new CodexAppServerManager(services);
+        return (
+          options?.makeManager?.(services) ??
+          new CodexAppServerManager(services, {
+            synaraSkillsDir: synaraSkillsDir(serverConfig.baseDir),
+          })
+        );
       }),
       (manager) =>
         Effect.sync(() => {

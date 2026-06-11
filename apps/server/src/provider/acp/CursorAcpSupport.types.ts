@@ -50,6 +50,12 @@ export interface CursorAcpModelChoice {
   readonly upstreamProviderName?: string;
 }
 
+export interface CursorAcpAvailableModel {
+  readonly value: string;
+  readonly name?: string | null;
+  readonly configOptions?: ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+}
+
 export interface CursorAcpSelectOption {
   readonly value: string;
   readonly name: string;

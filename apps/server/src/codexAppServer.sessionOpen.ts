@@ -73,6 +73,7 @@ export interface CodexSessionOpenDeps {
   ): Promise<TResponse>;
   writeMessage(context: CodexSessionContext, message: unknown): void;
   updateSession(context: CodexSessionContext, updates: Partial<ProviderSession>): void;
+  registerSynaraSkillsRoot(context: CodexSessionContext): Promise<void>;
   resolveStartupDiscovery(
     context: CodexSessionContext,
     cacheKey: string | undefined,
@@ -198,6 +199,7 @@ export async function startSession(
 
     if (!reusedPooledAppServer) {
       deps.writeMessage(context, { method: "initialized" });
+      await deps.registerSynaraSkillsRoot(context);
     }
     const discoveryCacheKey =
       input.createTransport === undefined ? `${codexBinaryPath}${codexHomePath ?? ""}` : undefined;
@@ -453,6 +455,7 @@ export async function forkThread(
 
     await deps.sendRequest(context, "initialize", buildCodexInitializeParams());
     deps.writeMessage(context, { method: "initialized" });
+    await deps.registerSynaraSkillsRoot(context);
     try {
       const accountReadResponse = await deps.sendRequest(context, "account/read", {});
       context.account = readCodexAccountSnapshot(accountReadResponse);

@@ -9,10 +9,11 @@
  *
  * @module CursorAcpSupport
  */
-import { type CursorModelOptions } from "@t3tools/contracts";
-import { Effect, Layer, Scope, ServiceMap } from "effect";
+import { type CursorModelOptions, type ProviderModelDescriptor } from "@t3tools/contracts";
+import { Effect, Layer, Schema, Scope, ServiceMap } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpErrors from "effect-acp/errors";
+import * as EffectAcpSchema from "effect-acp/schema";
 
 import {
   AcpSessionRuntime,
@@ -21,6 +22,7 @@ import {
 } from "./AcpSessionRuntime.ts";
 import { resolveCursorAgentBinaryPath } from "./CursorAcpCommand.ts";
 import {
+  buildCursorAcpModelDescriptorsFromAvailableModels,
   collectCursorAcpConfigUpdates,
   flattenCursorAcpModelChoices,
   normalizeCursorAcpRuntimeOptions,
@@ -42,17 +44,35 @@ import {
 
 export {
   buildCursorAcpModelDescriptors,
+  buildCursorAcpModelDescriptorsFromAvailableModels,
   flattenCursorAcpModelChoices,
   parseCursorCliModelList,
 } from "./CursorAcpSupport.helpers.ts";
 export { resolveCursorAcpBaseModelId } from "./CursorAcpSupport.parsing.ts";
 export {
   CURSOR_PARAMETERIZED_MODEL_PICKER_CAPABILITIES,
+  type CursorAcpAvailableModel,
   type CursorAcpModelChoice,
   type CursorAcpModelSelectionErrorContext,
   type CursorAcpRuntimeCursorSettings,
   type CursorAcpRuntimeInput,
 } from "./CursorAcpSupport.types.ts";
+
+export const CURSOR_LIST_AVAILABLE_MODELS_METHOD = "cursor/list_available_models";
+
+const CursorAcpAvailableModelSchema = Schema.Struct({
+  value: Schema.String,
+  name: Schema.optional(Schema.Union([Schema.String, Schema.Null])),
+  configOptions: Schema.optional(Schema.Array(EffectAcpSchema.SessionConfigOption)),
+});
+
+const CursorAcpListAvailableModelsResult = Schema.Struct({
+  models: Schema.Array(CursorAcpAvailableModelSchema),
+});
+
+const decodeCursorAcpListAvailableModelsResult = Schema.decodeUnknownEffect(
+  CursorAcpListAvailableModelsResult,
+);
 
 export function buildCursorAcpSpawnInput(
   cursorSettings: CursorAcpRuntimeCursorSettings | null | undefined,
@@ -138,4 +158,25 @@ export function applyCursorAcpModelSelection<E>(input: {
       );
     }
   });
+}
+
+export function fetchCursorAcpModelDescriptors(
+  runtime: Pick<AcpSessionRuntimeShape, "request">,
+  sessionId: string,
+): Effect.Effect<ReadonlyArray<ProviderModelDescriptor>, EffectAcpErrors.AcpError> {
+  return runtime.request(CURSOR_LIST_AVAILABLE_MODELS_METHOD, { sessionId }).pipe(
+    Effect.flatMap((raw) =>
+      decodeCursorAcpListAvailableModelsResult(raw).pipe(
+        Effect.mapError((cause) =>
+          EffectAcpErrors.AcpRequestError.parseError(
+            "Failed to decode Cursor available models response.",
+            cause,
+          ),
+        ),
+      ),
+    ),
+    Effect.map((result) =>
+      buildCursorAcpModelDescriptorsFromAvailableModels(result.models),
+    ),
+  );
 }

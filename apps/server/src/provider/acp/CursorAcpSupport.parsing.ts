@@ -204,7 +204,13 @@ export function parseCursorCliReasoningEffort(model: string): string | undefined
     if (token === "high" && tokens[index - 1] === "extra") {
       return "xhigh";
     }
-    if (token === "none" || token === "low" || token === "medium" || token === "high") {
+    if (
+      token === "max" ||
+      token === "none" ||
+      token === "low" ||
+      token === "medium" ||
+      token === "high"
+    ) {
       return token;
     }
   }
@@ -220,6 +226,9 @@ export function isCursorCliOneMillionContextModel(model: string): boolean {
     return true;
   }
   if (/^claude-4\.6-(?:opus|sonnet)(?:-|$)/u.test(normalized)) {
+    return true;
+  }
+  if (/^claude-(?:fable-5|opus-4-(?:7|8))-/u.test(normalized)) {
     return true;
   }
   return false;

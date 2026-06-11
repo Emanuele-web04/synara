@@ -3,6 +3,26 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_SERVER_SETTINGS, ServerSettings, ServerSettingsPatch } from "./settings";
 
 describe("ServerSettings sandbox config", () => {
+  it("keeps upstream skill toggles and opencode websocket settings with sandbox defaults", () => {
+    const decoded = Schema.decodeSync(ServerSettings)({
+      providers: {
+        opencode: { experimentalWebSockets: true },
+      },
+      skills: { disabled: ["reviewer", "planner"] },
+    });
+
+    expect(decoded.providers.opencode.experimentalWebSockets).toBe(true);
+    expect(decoded.skills.disabled).toEqual(["reviewer", "planner"]);
+    expect(decoded.sandboxes.defaultRemoteProvider).toBe("");
+
+    const patch = Schema.decodeSync(ServerSettingsPatch)({
+      providers: { opencode: { experimentalWebSockets: false } },
+      skills: { disabled: ["reviewer"] },
+    });
+    expect(patch.providers?.opencode?.experimentalWebSockets).toBe(false);
+    expect(patch.skills?.disabled).toEqual(["reviewer"]);
+  });
+
   it("decodes empty input with fully-defaulted, empty sandbox config", () => {
     const decoded = Schema.decodeSync(ServerSettings)({});
     expect(decoded.sandboxes).toEqual({

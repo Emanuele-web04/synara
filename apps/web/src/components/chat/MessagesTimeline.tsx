@@ -3,13 +3,14 @@
 // Layer: Web chat presentation component
 // Exports: MessagesTimeline
 
-import { type MessageId, ThreadId, type TurnId } from "@t3tools/contracts";
+import { type MessageId, type ThreadId, type ThreadMarker, type TurnId } from "@t3tools/contracts";
 import { resolveLatestTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
   memo,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -52,6 +53,42 @@ import { SimpleWorkEntryRow, prefersCompactWorkEntryRow } from "./workEntryRow";
 // space beyond the overlap to keep final cards from sitting flush against it.
 const MIN_BOTTOM_CONTENT_INSET_PX = 64;
 
+export interface MessagesTimelineController {
+  scrollToMessage: (messageId: MessageId) => void;
+  scrollToMarker: (marker: ThreadMarker) => void;
+}
+
+function getTimelineScrollRoot(
+  listRef: RefObject<LegendListRef | null>,
+): HTMLElement | Document | null {
+  const scrollNode = listRef.current?.getScrollableNode?.();
+  return scrollNode instanceof HTMLElement ? scrollNode : document;
+}
+
+function findElementByDataAttribute(
+  root: HTMLElement | Document,
+  attributeName: string,
+  value: string,
+): HTMLElement | null {
+  for (const element of root.querySelectorAll<HTMLElement>(`[${attributeName}]`)) {
+    if (element.getAttribute(attributeName) === value) {
+      return element;
+    }
+  }
+  return null;
+}
+
+function findThreadMarkerElement(
+  root: HTMLElement | Document,
+  markerId: string,
+): HTMLElement | null {
+  return findElementByDataAttribute(root, "data-thread-marker-id", markerId);
+}
+
+function findMessageElement(root: HTMLElement | Document, messageId: string): HTMLElement | null {
+  return findElementByDataAttribute(root, "data-message-id", messageId);
+}
+
 interface MessagesTimelineProps {
   hasMessages: boolean;
   isWorking: boolean;
@@ -60,6 +97,10 @@ interface MessagesTimelineProps {
   followLiveOutput?: boolean;
   emptyStateContent?: ReactNode;
   listRef?: RefObject<LegendListRef | null>;
+  controllerRef?: RefObject<MessagesTimelineController | null>;
+  pinnedMessageIds?: ReadonlySet<MessageId>;
+  onTogglePinMessage?: (messageId: MessageId) => void;
+  threadMarkers?: readonly ThreadMarker[];
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso?: string;
@@ -67,6 +108,7 @@ interface MessagesTimelineProps {
   onToggleWorkGroup?: (groupId: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread?: (threadId: ThreadId) => void;
+  onOpenAgentActivity?: (threadId: ThreadId) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
@@ -99,6 +141,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   activeTurnStartedAt,
   followLiveOutput = false,
   listRef,
+  controllerRef,
+  threadMarkers,
   timelineEntries,
   turnDiffSummaryByAssistantMessageId,
   nowIso,
@@ -201,6 +245,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const fallbackListRef = useRef<LegendListRef | null>(null);
   const resolvedListRef = listRef ?? fallbackListRef;
+  const timelineRootRef = useRef<HTMLDivElement | null>(null);
+  const activeMarkerElementRef = useRef<HTMLElement | null>(null);
   const bottomSpacerHeightPx = Math.max(bottomContentInsetPx ?? 0, MIN_BOTTOM_CONTENT_INSET_PX);
   const listFooter = useMemo(
     () => <div aria-hidden="true" style={{ height: bottomSpacerHeightPx }} />,
@@ -229,6 +275,37 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const markersByMessageId = useMemo(() => {
+    const map = new Map<MessageId, ThreadMarker[]>();
+    for (const marker of threadMarkers ?? []) {
+      const current = map.get(marker.messageId) ?? [];
+      current.push(marker);
+      map.set(marker.messageId, current);
+    }
+    return map;
+  }, [threadMarkers]);
+  useImperativeHandle(
+    controllerRef,
+    () => ({
+      scrollToMessage: (messageId) => {
+        const root = timelineRootRef.current ?? getTimelineScrollRoot(resolvedListRef);
+        const target = root ? findMessageElement(root, messageId) : null;
+        target?.scrollIntoView({ block: "center", behavior: "smooth" });
+      },
+      scrollToMarker: (marker) => {
+        const root = timelineRootRef.current ?? getTimelineScrollRoot(resolvedListRef);
+        const target = root ? findThreadMarkerElement(root, marker.id) : null;
+        activeMarkerElementRef.current?.classList.remove("thread-marker-active");
+        if (!target) {
+          return;
+        }
+        target.classList.add("thread-marker-active");
+        activeMarkerElementRef.current = target;
+        target.scrollIntoView({ block: "center", behavior: "smooth" });
+      },
+    }),
+    [controllerRef, resolvedListRef],
+  );
   const tailContentRowId = useMemo(() => {
     for (let index = rows.length - 1; index >= 0; index -= 1) {
       const row = rows[index]!;
@@ -453,6 +530,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           handleToggleWorkGroup={handleToggleWorkGroup}
           tailContentRowId={tailContentRowId}
           scrollTailExpansionToEnd={scrollTailExpansionToEnd}
+          markers={markersByMessageId.get(row.message.id)}
           {...(onOpenThread ? { onOpenThread } : {})}
         />
       )}
@@ -504,36 +582,38 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }
 
   return (
-    <LegendList<MessagesTimelineRow>
-      ref={resolvedListRef}
-      data={rows}
-      keyExtractor={(row) => row.id}
-      renderItem={({ item }) => renderRowContent(item)}
-      estimatedItemSize={90}
-      // LegendList caches rendered rows, so every local expansion map that changes row content
-      // has to be surfaced through extraData.
-      extraData={timelineExtraData}
-      initialScrollAtEnd
-      maintainScrollAtEnd={followLiveOutput}
-      maintainScrollAtEndThreshold={0.1}
-      maintainVisibleContentPosition
-      onClickCapture={onMessagesClickCapture}
-      onMouseUp={onMessagesMouseUp}
-      onPointerCancel={onMessagesPointerCancel}
-      onPointerDown={onMessagesPointerDown}
-      onPointerUp={onMessagesPointerUp}
-      onScroll={handleListScroll}
-      onTouchEnd={onMessagesTouchEnd}
-      onTouchMove={onMessagesTouchMove}
-      onTouchStart={onMessagesTouchStart}
-      onWheel={onMessagesWheel}
-      data-chat-scroll-container="true"
-      ListFooterComponent={listFooter}
-      className={cn(
-        "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
-        CHAT_COLUMN_GUTTER_CLASS_NAME,
-      )}
-    />
+    <div ref={timelineRootRef} className="h-full min-h-0">
+      <LegendList<MessagesTimelineRow>
+        ref={resolvedListRef}
+        data={rows}
+        keyExtractor={(row) => row.id}
+        renderItem={({ item }) => renderRowContent(item)}
+        estimatedItemSize={90}
+        // LegendList caches rendered rows, so every local expansion map that changes row content
+        // has to be surfaced through extraData.
+        extraData={timelineExtraData}
+        initialScrollAtEnd
+        maintainScrollAtEnd={followLiveOutput}
+        maintainScrollAtEndThreshold={0.1}
+        maintainVisibleContentPosition
+        onClickCapture={onMessagesClickCapture}
+        onMouseUp={onMessagesMouseUp}
+        onPointerCancel={onMessagesPointerCancel}
+        onPointerDown={onMessagesPointerDown}
+        onPointerUp={onMessagesPointerUp}
+        onScroll={handleListScroll}
+        onTouchEnd={onMessagesTouchEnd}
+        onTouchMove={onMessagesTouchMove}
+        onTouchStart={onMessagesTouchStart}
+        onWheel={onMessagesWheel}
+        data-chat-scroll-container="true"
+        ListFooterComponent={listFooter}
+        className={cn(
+          "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
+          CHAT_COLUMN_GUTTER_CLASS_NAME,
+        )}
+      />
+    </div>
   );
 });
 

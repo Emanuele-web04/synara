@@ -20,8 +20,15 @@ import type {
 } from "@opencode-ai/sdk/v2";
 import { Data, Effect, Predicate as P, Scope, Stream } from "effect";
 
-export const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 5_000;
+export const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 20_000;
 export const DEFAULT_HOSTNAME = "127.0.0.1";
+export const OPENCODE_LOCAL_SERVER_IDLE_TTL_MS = 5 * 60_000;
+const OPENCODE_STARTUP_OUTPUT_MAX_CHARS = 4_000;
+const REDACTED_STARTUP_SECRET = "[redacted]";
+const STARTUP_OUTPUT_AUTHORIZATION_PATTERN =
+  /(["']?)(authorization)\1(\s*[:=]\s*)(["']?)(bearer\s+)?[^"'\s,;}]+\4/giu;
+const STARTUP_OUTPUT_SECRET_ASSIGNMENT_PATTERN =
+  /(["']?)([A-Za-z0-9_-]*(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|secret|password)[A-Za-z0-9_-]*)\1(\s*[:=]\s*)(["']?)[^"'\s,;}]+\4/giu;
 
 export interface OpenCodeCompatibleCliSpec {
   readonly defaultBinaryPath: string;
@@ -148,6 +155,7 @@ export interface OpenCodeRuntimeShape {
     readonly port?: number;
     readonly hostname?: string;
     readonly timeoutMs?: number;
+    readonly experimentalWebSockets?: boolean;
   }) => Effect.Effect<OpenCodeServerProcess, OpenCodeRuntimeError, Scope.Scope>;
   readonly connectToOpenCodeServer: (input: {
     readonly binaryPath: string;
@@ -156,6 +164,7 @@ export interface OpenCodeRuntimeShape {
     readonly port?: number;
     readonly hostname?: string;
     readonly timeoutMs?: number;
+    readonly experimentalWebSockets?: boolean;
   }) => Effect.Effect<OpenCodeServerConnection, OpenCodeRuntimeError, Scope.Scope>;
   readonly runOpenCodeCommand: (input: {
     readonly binaryPath: string;
@@ -190,6 +199,70 @@ export function parseServerUrlFromOutput(output: string, readyPrefix: string): s
     return match?.[1] ?? null;
   }
   return null;
+}
+
+function formatCommandPart(value: string): string {
+  return /^[A-Za-z0-9_./:=@+-]+$/u.test(value) ? value : JSON.stringify(value);
+}
+
+export function redactStartupOutput(value: string): string {
+  return value
+    .replace(
+      STARTUP_OUTPUT_AUTHORIZATION_PATTERN,
+      (_match, keyQuote: string, key: string, separator: string, valueQuote: string, scheme = "") =>
+        `${keyQuote}${key}${keyQuote}${separator}${valueQuote}${scheme}${REDACTED_STARTUP_SECRET}${valueQuote}`,
+    )
+    .replace(
+      STARTUP_OUTPUT_SECRET_ASSIGNMENT_PATTERN,
+      (_match, keyQuote: string, key: string, separator: string, valueQuote: string) =>
+        `${keyQuote}${key}${keyQuote}${separator}${valueQuote}${REDACTED_STARTUP_SECRET}${valueQuote}`,
+    )
+    .slice(0, OPENCODE_STARTUP_OUTPUT_MAX_CHARS);
+}
+
+export function formatOpenCodeServerStartupDetail(input: {
+  readonly displayName: string;
+  readonly summary: string;
+  readonly binaryPath: string;
+  readonly args: ReadonlyArray<string>;
+  readonly readyPrefix: string;
+  readonly stdout: string;
+  readonly stderr: string;
+}): string {
+  const command = [input.binaryPath, ...input.args].map(formatCommandPart).join(" ");
+  const stdout = input.stdout.trim();
+  const stderr = input.stderr.trim();
+  return [
+    input.summary,
+    `command: ${command}`,
+    `${input.displayName} ready prefix: ${JSON.stringify(input.readyPrefix)}`,
+    stdout ? `stdout:\n${stdout}` : "stdout: <empty>",
+    stderr ? `stderr:\n${stderr}` : "stderr: <empty>",
+  ].join("\n\n");
+}
+
+export function pooledOpenCodeServerKey(input: {
+  readonly binaryPath: string;
+  readonly cliSpec?: OpenCodeCompatibleCliSpec;
+  readonly port?: number;
+  readonly hostname?: string;
+  readonly experimentalWebSockets?: boolean;
+}): string {
+  const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
+  return JSON.stringify({
+    binaryPath: input.binaryPath,
+    hostname: input.hostname ?? DEFAULT_HOSTNAME,
+    port: input.port ?? null,
+    experimentalWebSockets: input.experimentalWebSockets === true,
+    cliSpec: {
+      defaultBinaryPath: cliSpec.defaultBinaryPath,
+      displayName: cliSpec.displayName,
+      serverReadyPrefix: cliSpec.serverReadyPrefix,
+      configContentEnvVar: cliSpec.configContentEnvVar,
+      dataDirectoryName: cliSpec.dataDirectoryName,
+      serverAuthUsername: cliSpec.serverAuthUsername,
+    },
+  });
 }
 
 export function parseOpenCodeModelSlug(
@@ -630,6 +703,19 @@ export function buildOpenCodePermissionRules(runtimeMode: RuntimeMode): Permissi
     { permission: "doom_loop", pattern: "*", action: "ask" },
     { permission: "question", pattern: "*", action: "allow" },
   ];
+}
+
+export function buildOpenCodeServerProcessEnv(input: {
+  readonly cliSpec?: OpenCodeCompatibleCliSpec;
+  readonly experimentalWebSockets?: boolean;
+  readonly baseEnv?: NodeJS.ProcessEnv;
+}): NodeJS.ProcessEnv {
+  const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
+  return {
+    ...(input.baseEnv ?? process.env),
+    [cliSpec.configContentEnvVar]: JSON.stringify({}),
+    ...(input.experimentalWebSockets ? { OPENCODE_EXPERIMENTAL_WEBSOCKETS: "true" } : {}),
+  };
 }
 
 export function toOpenCodePermissionReply(

@@ -34,6 +34,7 @@ import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus"
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer";
 
+import { DevServerManagerLive } from "./devServerManager";
 import { KeybindingsLive } from "./keybindings";
 import { GitCoreLive } from "./git/Layers/GitCore";
 import { GitLayerLive, TextGenerationLayerLive } from "./git/runtimeLayer";
@@ -247,6 +248,7 @@ export function makeServerRuntimeServicesLayer() {
     executionRuntimeReconcilerLayer,
     runtimeRemoteConcernsLayer,
     GitLayerLive,
+    TextGenerationLayerLive,
     ReviewLayerLive,
     TerminalLayerLive,
     KeybindingsLive,
@@ -256,6 +258,7 @@ export function makeServerRuntimeServicesLayer() {
     authServicesLayer,
     ServerLifecycleEventsLive,
     ServerRuntimeStartupLive,
+    DevServerManagerLive.pipe(Layer.provide(TerminalLayerLive)),
     WorkspaceLayerLive,
     ProjectFaviconResolverLive,
   ).pipe(Layer.provideMerge(NodeServices.layer), Layer.provideMerge(FetchHttpClient.layer));

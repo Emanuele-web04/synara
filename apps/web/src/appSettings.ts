@@ -66,6 +66,23 @@ const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "t3code:server-settings-migrated:v
 export const MIN_CHAT_FONT_SIZE_PX = 11;
 export const MAX_CHAT_FONT_SIZE_PX = 18;
 export const DEFAULT_CHAT_FONT_SIZE_PX = 12;
+export const MIN_TERMINAL_FONT_SIZE_PX = 10;
+export const MAX_TERMINAL_FONT_SIZE_PX = 22;
+export const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
+export const DEFAULT_TERMINAL_FONT_FAMILY = "";
+export const TERMINAL_FONT_FAMILY_SUGGESTIONS: ReadonlyArray<string> = [
+  "JetBrains Mono",
+  "Fira Code",
+  "Cascadia Code",
+  "SF Mono",
+  "Menlo",
+  "Source Code Pro",
+  "IBM Plex Mono",
+  "Hack",
+  "Roboto Mono",
+  "Ubuntu Mono",
+  "Consolas",
+];
 
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
@@ -105,6 +122,10 @@ export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   chatFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_CHAT_FONT_SIZE_PX)),
   chatCodeFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
+  terminalFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_TERMINAL_FONT_SIZE_PX)),
+  terminalFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(
+    withDefaults(() => DEFAULT_TERMINAL_FONT_FAMILY),
+  ),
   codexBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -121,6 +142,7 @@ export const AppSettingsSchema = Schema.Struct({
   openCodeServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     withDefaults(() => ""),
   ),
+  openCodeExperimentalWebSockets: Schema.Boolean.pipe(withDefaults(() => false)),
   defaultThreadEnvMode: EnvMode.pipe(withDefaults(() => "local" as const satisfies EnvMode)),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   confirmThreadArchive: Schema.Boolean.pipe(withDefaults(() => false)),
@@ -129,6 +151,15 @@ export const AppSettingsSchema = Schema.Struct({
   // Local-only UI preference: show prompt suggestions under the composer on the
   // empty new-thread landing. Off hides the suggestion list entirely.
   enableComposerSuggestions: Schema.Boolean.pipe(withDefaults(() => true)),
+  showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
+  showWorkspaceSection: Schema.Boolean.pipe(withDefaults(() => false)),
+  showEnvironmentUsage: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentRepository: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentEditor: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentRecap: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentPinned: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentMarkers: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => true)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -232,10 +263,68 @@ export function normalizeChatFontSizePx(value: number | null | undefined): numbe
   return Math.min(MAX_CHAT_FONT_SIZE_PX, Math.max(MIN_CHAT_FONT_SIZE_PX, Math.round(value)));
 }
 
+export function normalizeTerminalFontSizePx(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_TERMINAL_FONT_SIZE_PX;
+  }
+
+  return Math.min(
+    MAX_TERMINAL_FONT_SIZE_PX,
+    Math.max(MIN_TERMINAL_FONT_SIZE_PX, Math.round(value)),
+  );
+}
+
+export function normalizeTerminalFontFamily(value: string | null | undefined): string {
+  return (value ?? "").replace(/[;{}<>\n\r]/g, "").slice(0, 256);
+}
+
+export function resolveTerminalFontFamilyStack(value: string | null | undefined): string | null {
+  const normalized = normalizeTerminalFontFamily(value).replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const hasGenericFallback = /\b(?:monospace|serif|sans-serif|system-ui|ui-monospace)\b/.test(
+    normalized,
+  );
+
+  if (normalized.includes(",")) {
+    return hasGenericFallback ? normalized : `${normalized}, monospace`;
+  }
+
+  const isQuoted = /^(["']).*\1$/.test(normalized);
+  const family = !isQuoted && /\s/.test(normalized) ? `"${normalized}"` : normalized;
+  return hasGenericFallback ? family : `${family}, monospace`;
+}
+
+function normalizeProviderBinaryPathOverride(
+  provider: ProviderKind,
+  value: string | null | undefined,
+): string {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed || trimmed === DEFAULT_SERVER_SETTINGS.providers[provider].binaryPath) {
+    return "";
+  }
+  return trimmed;
+}
+
 function normalizeAppSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
+    claudeBinaryPath: normalizeProviderBinaryPathOverride("claudeAgent", settings.claudeBinaryPath),
+    codexBinaryPath: normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath),
+    cursorBinaryPath: normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath),
+    geminiBinaryPath: normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath),
+    grokBinaryPath: normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath),
+    kiloBinaryPath: normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath),
+    openCodeBinaryPath: normalizeProviderBinaryPathOverride(
+      "opencode",
+      settings.openCodeBinaryPath,
+    ),
+    piBinaryPath: normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath),
     chatFontSizePx: normalizeChatFontSizePx(settings.chatFontSizePx),
+    terminalFontSizePx: normalizeTerminalFontSizePx(settings.terminalFontSizePx),
+    terminalFontFamily: normalizeTerminalFontFamily(settings.terminalFontFamily),
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
     customCursorModels: normalizeCustomModelSlugs(settings.customCursorModels, "cursor"),
@@ -265,6 +354,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     kiloServerPassword: settings.providers.kilo.serverPassword,
     kiloServerUrl: settings.providers.kilo.serverUrl,
     openCodeBinaryPath: settings.providers.opencode.binaryPath,
+    openCodeExperimentalWebSockets: settings.providers.opencode.experimentalWebSockets,
     openCodeServerPassword: settings.providers.opencode.serverPassword,
     openCodeServerUrl: settings.providers.opencode.serverUrl,
     piAgentDir: settings.providers.pi.agentDir,
@@ -377,6 +467,7 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
     hasOwn(patch, "openCodeBinaryPath") ||
     hasOwn(patch, "openCodeServerUrl") ||
     hasOwn(patch, "openCodeServerPassword") ||
+    hasOwn(patch, "openCodeExperimentalWebSockets") ||
     hasOwn(patch, "customOpenCodeModels")
   ) {
     providers.opencode = {
@@ -386,6 +477,9 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
       ...(hasOwn(patch, "openCodeServerUrl") ? { serverUrl: patch.openCodeServerUrl ?? "" } : {}),
       ...(hasOwn(patch, "openCodeServerPassword")
         ? { serverPassword: patch.openCodeServerPassword ?? "" }
+        : {}),
+      ...(hasOwn(patch, "openCodeExperimentalWebSockets")
+        ? { experimentalWebSockets: patch.openCodeExperimentalWebSockets === true }
         : {}),
       ...(hasOwn(patch, "customOpenCodeModels")
         ? { customModels: patch.customOpenCodeModels ?? [] }
@@ -437,6 +531,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "kiloServerPassword",
     "kiloServerUrl",
     "openCodeBinaryPath",
+    "openCodeExperimentalWebSockets",
     "openCodeServerPassword",
     "openCodeServerUrl",
     "piAgentDir",
@@ -486,74 +581,96 @@ export function getProviderStartOptions(
     | "kiloServerPassword"
     | "kiloServerUrl"
     | "openCodeBinaryPath"
+    | "openCodeExperimentalWebSockets"
     | "openCodeServerPassword"
     | "openCodeServerUrl"
     | "piAgentDir"
     | "piBinaryPath"
   >,
 ): ProviderStartOptions | undefined {
+  const codexBinaryPath = normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath);
+  const claudeBinaryPath = normalizeProviderBinaryPathOverride(
+    "claudeAgent",
+    settings.claudeBinaryPath,
+  );
+  const cursorBinaryPath = normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath);
+  const geminiBinaryPath = normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath);
+  const grokBinaryPath = normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath);
+  const kiloBinaryPath = normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath);
+  const openCodeBinaryPath = normalizeProviderBinaryPathOverride(
+    "opencode",
+    settings.openCodeBinaryPath,
+  );
+  const piBinaryPath = normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath);
+
   const providerOptions: ProviderStartOptions = {
-    ...(settings.codexBinaryPath || settings.codexHomePath
+    ...(codexBinaryPath || settings.codexHomePath
       ? {
           codex: {
-            ...(settings.codexBinaryPath ? { binaryPath: settings.codexBinaryPath } : {}),
+            ...(codexBinaryPath ? { binaryPath: codexBinaryPath } : {}),
             ...(settings.codexHomePath ? { homePath: settings.codexHomePath } : {}),
           },
         }
       : {}),
-    ...(settings.claudeBinaryPath
+    ...(claudeBinaryPath
       ? {
           claudeAgent: {
-            binaryPath: settings.claudeBinaryPath,
+            binaryPath: claudeBinaryPath,
           },
         }
       : {}),
-    ...(settings.cursorBinaryPath || settings.cursorApiEndpoint
+    ...(cursorBinaryPath || settings.cursorApiEndpoint
       ? {
           cursor: {
-            ...(settings.cursorBinaryPath ? { binaryPath: settings.cursorBinaryPath } : {}),
+            ...(cursorBinaryPath ? { binaryPath: cursorBinaryPath } : {}),
             ...(settings.cursorApiEndpoint ? { apiEndpoint: settings.cursorApiEndpoint } : {}),
           },
         }
       : {}),
-    ...(settings.geminiBinaryPath
+    ...(geminiBinaryPath
       ? {
           gemini: {
-            binaryPath: settings.geminiBinaryPath,
+            binaryPath: geminiBinaryPath,
           },
         }
       : {}),
-    ...(settings.grokBinaryPath
+    ...(grokBinaryPath
       ? {
           grok: {
-            binaryPath: settings.grokBinaryPath,
+            binaryPath: grokBinaryPath,
           },
         }
       : {}),
-    ...(settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword
+    ...(kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword
       ? {
           kilo: {
-            ...(settings.kiloBinaryPath ? { binaryPath: settings.kiloBinaryPath } : {}),
+            ...(kiloBinaryPath ? { binaryPath: kiloBinaryPath } : {}),
             ...(settings.kiloServerUrl ? { serverUrl: settings.kiloServerUrl } : {}),
             ...(settings.kiloServerPassword ? { serverPassword: settings.kiloServerPassword } : {}),
           },
         }
       : {}),
-    ...(settings.openCodeBinaryPath || settings.openCodeServerUrl || settings.openCodeServerPassword
+    ...(openCodeBinaryPath ||
+    settings.openCodeServerUrl ||
+    settings.openCodeServerPassword ||
+    settings.openCodeExperimentalWebSockets
       ? {
           opencode: {
-            ...(settings.openCodeBinaryPath ? { binaryPath: settings.openCodeBinaryPath } : {}),
+            ...(openCodeBinaryPath ? { binaryPath: openCodeBinaryPath } : {}),
             ...(settings.openCodeServerUrl ? { serverUrl: settings.openCodeServerUrl } : {}),
             ...(settings.openCodeServerPassword
               ? { serverPassword: settings.openCodeServerPassword }
               : {}),
+            ...(settings.openCodeExperimentalWebSockets
+              ? { experimentalWebSockets: true }
+              : {}),
           },
         }
       : {}),
-    ...(settings.piBinaryPath || settings.piAgentDir
+    ...(piBinaryPath || settings.piAgentDir
       ? {
           pi: {
-            ...(settings.piBinaryPath ? { binaryPath: settings.piBinaryPath } : {}),
+            ...(piBinaryPath ? { binaryPath: piBinaryPath } : {}),
             ...(settings.piAgentDir ? { agentDir: settings.piAgentDir } : {}),
           },
         }

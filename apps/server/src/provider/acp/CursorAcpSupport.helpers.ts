@@ -16,7 +16,11 @@
 import { type CursorModelOptions, type ProviderModelDescriptor } from "@t3tools/contracts";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
-import type { CursorAcpModelChoice, CursorAcpSelectOption } from "./CursorAcpSupport.types.ts";
+import type {
+  CursorAcpAvailableModel,
+  CursorAcpModelChoice,
+  CursorAcpSelectOption,
+} from "./CursorAcpSupport.types.ts";
 import {
   buildCursorParameterizedModelSlug,
   cursorAcpParameterKeyForModel,
@@ -27,6 +31,7 @@ import {
   cursorModelParametersToObject,
   cursorReasoningLabel,
   cursorReasoningParameterValue,
+  humanizeCursorModelName,
   inferCursorUpstreamProvider,
   normalizeCursorAcpModelName,
   normalizeCursorCliBaseModelId,
@@ -36,6 +41,8 @@ import {
   resolveCursorAcpBaseModelId,
   stripCursorParameterizedSuffix,
 } from "./CursorAcpSupport.parsing.ts";
+
+const CURSOR_ACP_AUTO_MODEL_ID = "default";
 
 function flattenSessionConfigSelectOptions(
   configOption: EffectAcpSchema.SessionConfigOption | undefined,
@@ -257,6 +264,106 @@ function isCursorContextConfigOption(option: EffectAcpSchema.SessionConfigOption
   const id = option.id.trim().toLowerCase();
   const name = option.name.trim().toLowerCase();
   return id === "context" || id === "context_size" || name.includes("context");
+}
+
+function cursorContextWindowLabel(value: string): string {
+  const normalized = value.trim();
+  return normalized.toLowerCase() === "1m" ? "1M" : normalized.toUpperCase();
+}
+
+function findCursorThinkingConfigOption(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+): EffectAcpSchema.SessionConfigOption | undefined {
+  return configOptions.find((option) => option.id.trim().toLowerCase() === "thinking");
+}
+
+function findCursorFastConfigOption(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+): EffectAcpSchema.SessionConfigOption | undefined {
+  return configOptions.find((option) => option.id.trim().toLowerCase() === "fast");
+}
+
+function buildCursorAcpAvailableModelDescriptor(
+  model: CursorAcpAvailableModel,
+): ProviderModelDescriptor | undefined {
+  const rawSlug = model.value.trim();
+  if (!rawSlug) {
+    return undefined;
+  }
+  const slug = rawSlug === CURSOR_ACP_AUTO_MODEL_ID ? "auto" : rawSlug;
+  const configOptions = model.configOptions ?? [];
+
+  const effortOption = findCursorEffortConfigOption(configOptions);
+  const supportedReasoningEfforts =
+    effortOption?.type === "select"
+      ? flattenSessionConfigSelectOptions(effortOption).flatMap((entry) => {
+          const value = normalizeCursorReasoningValue(entry.value);
+          return value ? [{ value, label: cursorReasoningLabel(value) }] : [];
+        })
+      : [];
+  const defaultReasoningEffort =
+    effortOption?.type === "select"
+      ? normalizeCursorReasoningValue(effortOption.currentValue)
+      : undefined;
+
+  const contextOption = configOptions.find(
+    (option) => option.category === "model_config" && isCursorContextConfigOption(option),
+  );
+  const contextWindowOptions =
+    contextOption?.type === "select"
+      ? flattenSessionConfigSelectOptions(contextOption).map((entry) =>
+          contextOption.currentValue === entry.value
+            ? {
+                value: entry.value,
+                label: cursorContextWindowLabel(entry.value),
+                isDefault: true as const,
+              }
+            : { value: entry.value, label: cursorContextWindowLabel(entry.value) },
+        )
+      : [];
+  const defaultContextWindow = contextWindowOptions.find((option) => option.isDefault)?.value;
+
+  const supportsThinkingToggle = findCursorThinkingConfigOption(configOptions) !== undefined;
+  const supportsFastMode = findCursorFastConfigOption(configOptions) !== undefined;
+
+  const name = model.name?.trim() || humanizeCursorModelName(slug);
+  const upstreamProvider = inferCursorUpstreamProvider({ value: slug, name });
+
+  return {
+    slug,
+    name,
+    ...upstreamProvider,
+    ...(supportedReasoningEfforts.length > 0
+      ? {
+          supportedReasoningEfforts,
+          ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+        }
+      : {}),
+    ...(supportsFastMode ? { supportsFastMode: true as const } : {}),
+    ...(supportsThinkingToggle ? { supportsThinkingToggle: true as const } : {}),
+    ...(contextWindowOptions.length > 0
+      ? {
+          contextWindowOptions,
+          ...(defaultContextWindow ? { defaultContextWindow } : {}),
+        }
+      : {}),
+  };
+}
+
+export function buildCursorAcpModelDescriptorsFromAvailableModels(
+  models: ReadonlyArray<CursorAcpAvailableModel>,
+): ReadonlyArray<ProviderModelDescriptor> {
+  const seen = new Set<string>();
+  const descriptors: Array<ProviderModelDescriptor> = [];
+  for (const model of models) {
+    const descriptor = buildCursorAcpAvailableModelDescriptor(model);
+    if (!descriptor || seen.has(descriptor.slug)) {
+      continue;
+    }
+    seen.add(descriptor.slug);
+    descriptors.push(descriptor);
+  }
+  return descriptors;
 }
 
 function withCursorVariantName(

@@ -19,6 +19,7 @@ import {
 } from "electron";
 import type {
   ContextMenuItem,
+  DesktopWindowState,
   DesktopUpdateActionResult,
   DesktopUpdateState,
 } from "@t3tools/contracts";
@@ -33,6 +34,12 @@ import {
   SAVE_FILE_CHANNEL,
   SET_THEME_CHANNEL,
   SHOW_IN_FOLDER_CHANNEL,
+  WINDOW_CLOSE_CHANNEL,
+  WINDOW_GET_STATE_CHANNEL,
+  WINDOW_MINIMIZE_CHANNEL,
+  WINDOW_STATE_CHANNEL,
+  WINDOW_TOGGLE_MAXIMIZE_CHANNEL,
+  ZOOM_FACTOR_CHANNEL,
   UPDATE_CHECK_CHANNEL,
   UPDATE_DOWNLOAD_CHANNEL,
   UPDATE_GET_STATE_CHANNEL,
@@ -44,6 +51,23 @@ import { DESKTOP_WS_URL_CHANNEL } from "./desktopWsBridge";
 interface UpdateActionResult {
   readonly accepted: boolean;
   readonly completed: boolean;
+}
+
+function getDesktopWindowState(window: BrowserWindow | null): DesktopWindowState {
+  return {
+    isMaximized: window?.isMaximized() ?? false,
+    isFullscreen: window?.isFullScreen() ?? false,
+  };
+}
+
+function emitDesktopWindowState(window: BrowserWindow | null): DesktopWindowState {
+  const state = getDesktopWindowState(window);
+  window?.webContents.send(WINDOW_STATE_CHANNEL, state);
+  return state;
+}
+
+function getTargetWindow(deps: MainIpcDeps): BrowserWindow | null {
+  return BrowserWindow.getFocusedWindow() ?? deps.getMainWindow();
 }
 
 export interface MainIpcDeps {
@@ -241,6 +265,40 @@ export function registerMainIpc(ipcMain: IpcMain, deps: MainIpcDeps): void {
     }
 
     shell.showItemInFolder(resolvedPath);
+  });
+
+  ipcMain.removeHandler(WINDOW_MINIMIZE_CHANNEL);
+  ipcMain.handle(WINDOW_MINIMIZE_CHANNEL, async () => {
+    const window = getTargetWindow(deps);
+    window?.minimize();
+    return emitDesktopWindowState(window);
+  });
+
+  ipcMain.removeHandler(WINDOW_TOGGLE_MAXIMIZE_CHANNEL);
+  ipcMain.handle(WINDOW_TOGGLE_MAXIMIZE_CHANNEL, async () => {
+    const window = getTargetWindow(deps);
+    if (window?.isMaximized()) {
+      window.unmaximize();
+    } else {
+      window?.maximize();
+    }
+    return emitDesktopWindowState(window);
+  });
+
+  ipcMain.removeHandler(WINDOW_CLOSE_CHANNEL);
+  ipcMain.handle(WINDOW_CLOSE_CHANNEL, async () => {
+    const window = getTargetWindow(deps);
+    const state = getDesktopWindowState(window);
+    window?.close();
+    return state;
+  });
+
+  ipcMain.removeHandler(WINDOW_GET_STATE_CHANNEL);
+  ipcMain.handle(WINDOW_GET_STATE_CHANNEL, async () => getDesktopWindowState(getTargetWindow(deps)));
+
+  ipcMain.removeAllListeners(ZOOM_FACTOR_CHANNEL);
+  ipcMain.on(ZOOM_FACTOR_CHANNEL, (event: IpcMainEvent) => {
+    event.returnValue = getTargetWindow(deps)?.webContents.getZoomFactor() ?? 1;
   });
 
   ipcMain.removeHandler(UPDATE_GET_STATE_CHANNEL);

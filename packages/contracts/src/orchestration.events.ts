@@ -31,6 +31,7 @@ import {
   RuntimeProcessId,
   RuntimeRouteId,
   RuntimeSnapshotId,
+  ThreadMarkerId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
@@ -54,6 +55,8 @@ import {
   OrchestrationThread,
   OrchestrationThreadActivity,
   OrchestrationThreadPullRequest,
+  PinnedMessage,
+  PinnedMessageLabel,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProjectScript,
   ProviderApprovalDecision,
@@ -67,6 +70,8 @@ import {
   SourceProposedPlanReference,
   ThreadEnvironmentMode,
   ThreadHandoff,
+  ThreadMarker,
+  ThreadMarkerLabel,
   TurnDispatchMode,
 } from "./orchestration.core";
 import { ClientOrchestrationCommand } from "./orchestration.commands";
@@ -81,6 +86,14 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.archived",
   "thread.unarchived",
   "thread.meta-updated",
+  "thread.pinned-message-added",
+  "thread.pinned-message-removed",
+  "thread.pinned-message-done-set",
+  "thread.pinned-message-label-set",
+  "thread.marker-added",
+  "thread.marker-removed",
+  "thread.marker-done-set",
+  "thread.marker-label-set",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.message-sent",
@@ -243,6 +256,58 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   handoff: Schema.optional(Schema.NullOr(ThreadHandoff)),
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)),
   reviewChatTarget: Schema.optional(Schema.NullOr(OrchestrationReviewChatTarget)),
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadPinnedMessageAddedPayload = Schema.Struct({
+  threadId: ThreadId,
+  pin: PinnedMessage,
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadPinnedMessageRemovedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadPinnedMessageDoneSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  done: Schema.Boolean,
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadPinnedMessageLabelSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  label: Schema.NullOr(PinnedMessageLabel),
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadMarkerAddedPayload = Schema.Struct({
+  threadId: ThreadId,
+  marker: ThreadMarker,
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadMarkerRemovedPayload = Schema.Struct({
+  threadId: ThreadId,
+  markerId: ThreadMarkerId,
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadMarkerDoneSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  markerId: ThreadMarkerId,
+  done: Schema.Boolean,
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadMarkerLabelSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  markerId: ThreadMarkerId,
+  label: Schema.NullOr(ThreadMarkerLabel),
   updatedAt: IsoDateTime,
 });
 
@@ -587,6 +652,46 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.meta-updated"),
     payload: ThreadMetaUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.pinned-message-added"),
+    payload: ThreadPinnedMessageAddedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.pinned-message-removed"),
+    payload: ThreadPinnedMessageRemovedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.pinned-message-done-set"),
+    payload: ThreadPinnedMessageDoneSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.pinned-message-label-set"),
+    payload: ThreadPinnedMessageLabelSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.marker-added"),
+    payload: ThreadMarkerAddedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.marker-removed"),
+    payload: ThreadMarkerRemovedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.marker-done-set"),
+    payload: ThreadMarkerDoneSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.marker-label-set"),
+    payload: ThreadMarkerLabelSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

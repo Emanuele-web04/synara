@@ -29,6 +29,7 @@ import {
   RuntimeProcessId,
   RuntimeRouteId,
   RuntimeSnapshotId,
+  ThreadMarkerId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
@@ -48,6 +49,7 @@ import {
   OrchestrationSession,
   OrchestrationThreadActivity,
   OrchestrationThreadPullRequest,
+  PinnedMessageLabel,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProjectScript,
   ProviderApprovalDecision,
@@ -61,6 +63,9 @@ import {
   SourceProposedPlanReference,
   ThreadEnvironmentMode,
   ThreadHandoff,
+  ThreadMarkerColor,
+  ThreadMarkerLabel,
+  ThreadMarkerStyle,
   TurnDispatchMode,
   UploadChatAttachment,
 } from "./orchestration.core";
@@ -265,6 +270,81 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadPinnedMessageAddCommand = Schema.Struct({
+  type: Schema.Literal("thread.pinned-message.add"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
+const ThreadPinnedMessageRemoveCommand = Schema.Struct({
+  type: Schema.Literal("thread.pinned-message.remove"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
+const ThreadPinnedMessageDoneSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.pinned-message.done.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  done: Schema.Boolean,
+  createdAt: IsoDateTime,
+});
+
+const ThreadPinnedMessageLabelSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.pinned-message.label.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  label: Schema.NullOr(PinnedMessageLabel),
+  createdAt: IsoDateTime,
+});
+
+const ThreadMarkerAddCommand = Schema.Struct({
+  type: Schema.Literal("thread.marker.add"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  markerId: ThreadMarkerId,
+  messageId: MessageId,
+  startOffset: NonNegativeInt,
+  endOffset: NonNegativeInt,
+  selectedText: TrimmedNonEmptyString.check(Schema.isMaxLength(4_000)),
+  style: ThreadMarkerStyle,
+  color: ThreadMarkerColor,
+  label: Schema.optional(Schema.NullOr(ThreadMarkerLabel)),
+  createdAt: IsoDateTime,
+});
+
+const ThreadMarkerRemoveCommand = Schema.Struct({
+  type: Schema.Literal("thread.marker.remove"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  markerId: ThreadMarkerId,
+  createdAt: IsoDateTime,
+});
+
+const ThreadMarkerDoneSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.marker.done.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  markerId: ThreadMarkerId,
+  done: Schema.Boolean,
+  createdAt: IsoDateTime,
+});
+
+const ThreadMarkerLabelSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.marker.label.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  markerId: ThreadMarkerId,
+  label: Schema.NullOr(ThreadMarkerLabel),
+  createdAt: IsoDateTime,
+});
+
 export const ThreadTurnStartCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.start"),
   commandId: CommandId,
@@ -454,6 +534,14 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadPinnedMessageAddCommand,
+  ThreadPinnedMessageRemoveCommand,
+  ThreadPinnedMessageDoneSetCommand,
+  ThreadPinnedMessageLabelSetCommand,
+  ThreadMarkerAddCommand,
+  ThreadMarkerRemoveCommand,
+  ThreadMarkerDoneSetCommand,
+  ThreadMarkerLabelSetCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -482,6 +570,14 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadPinnedMessageAddCommand,
+  ThreadPinnedMessageRemoveCommand,
+  ThreadPinnedMessageDoneSetCommand,
+  ThreadPinnedMessageLabelSetCommand,
+  ThreadMarkerAddCommand,
+  ThreadMarkerRemoveCommand,
+  ThreadMarkerDoneSetCommand,
+  ThreadMarkerLabelSetCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,

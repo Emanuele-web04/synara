@@ -16,6 +16,9 @@ import { normalizeCommandPath } from "../providerMaintenance";
 import type { PackageManagedProviderMaintenanceDefinition } from "../providerMaintenance";
 
 export const DEFAULT_TIMEOUT_MS = 4_000;
+export const CLAUDE_HEALTH_TIMEOUT_MS = 20_000;
+export const OPENCODE_HEALTH_TIMEOUT_MS = 20_000;
+export const PROVIDER_COMMAND_TIMEOUT_DETAIL = "Timed out while running command.";
 export const CODEX_PROVIDER = "codex" as const;
 export const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 export const CURSOR_PROVIDER = "cursor" as const;

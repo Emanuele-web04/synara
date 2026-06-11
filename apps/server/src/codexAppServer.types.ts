@@ -221,4 +221,5 @@ export interface CodexAppServerManagerOptions {
    * scripted in-memory transport, and reserved for the remote runtime path.
    */
   readonly createTransport?: CodexTransportFactory;
+  readonly synaraSkillsDir?: string;
 }

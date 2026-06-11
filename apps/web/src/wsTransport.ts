@@ -9,6 +9,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
+  type ProjectDevServerEvent,
   type ReviewUpdatedPayload,
   type ServerConfigStreamEvent,
   type ServerLifecycleStreamEvent,
@@ -107,6 +108,7 @@ export class WsTransport {
   private readonly explicitUrl: string | null;
   private readonly listeners = new Map<string, Set<(message: WsPush) => void>>();
   private readonly latestPushByChannel = new Map<string, WsPush>();
+  private readonly stateListeners = new Set<(state: TransportState) => void>();
   private sequence = 0;
   private state: TransportState = "connecting";
   private disposed = false;
@@ -216,9 +218,22 @@ export class WsTransport {
     return this.state;
   }
 
+  onStateChange(
+    listener: (state: TransportState) => void,
+    options?: { readonly replayCurrent?: boolean },
+  ): () => void {
+    this.stateListeners.add(listener);
+    if (options?.replayCurrent) {
+      listener(this.state);
+    }
+    return () => {
+      this.stateListeners.delete(listener);
+    };
+  }
+
   dispose() {
     this.disposed = true;
-    this.state = "disposed";
+    this.setState("disposed");
     for (const cleanup of this.streamCleanups.values()) cleanup();
     this.streamCleanups.clear();
     void this.runtime
@@ -238,11 +253,11 @@ export class WsTransport {
     const clientPromise = runtime
       .runPromise(Scope.provide(clientScope)(makeRpcClient))
       .then((client) => {
-        this.state = "open";
+        this.setState("open");
         return client;
       })
       .catch((error) => {
-        this.state = "closed";
+        this.setState("closed");
         throw error;
       });
     return { runtime, clientScope, clientPromise };
@@ -266,7 +281,7 @@ export class WsTransport {
     this.streamCleanups.clear();
     this.stoppingStreams.clear();
 
-    this.state = "connecting";
+    this.setState("connecting");
 
     void oldRuntime
       .runPromise(Scope.close(oldClientScope, Exit.void))
@@ -281,6 +296,20 @@ export class WsTransport {
       this.reconnectPromise = null;
     });
     return this.reconnectPromise;
+  }
+
+  private setState(state: TransportState): void {
+    if (this.state === state) {
+      return;
+    }
+    this.state = state;
+    for (const listener of this.stateListeners) {
+      try {
+        listener(state);
+      } catch {
+        // State listeners must not break the transport.
+      }
+    }
   }
 
   private async openReconnectSession(): Promise<RpcClientInstance> {
@@ -380,6 +409,13 @@ export class WsTransport {
             (event: TerminalEvent) => this.emit(WS_CHANNELS.terminalEvent, event),
             restartChannel,
           );
+        } else if (channel === WS_CHANNELS.projectDevServerEvent) {
+          this.startStream(
+            "projects.dev-servers",
+            client[WS_METHODS.subscribeProjectDevServerEvents]({}),
+            (event: ProjectDevServerEvent) => this.emit(WS_CHANNELS.projectDevServerEvent, event),
+            restartChannel,
+          );
         } else if (channel === WS_CHANNELS.reviewUpdated) {
           this.startStream(
             "review.updated",
@@ -412,6 +448,8 @@ export class WsTransport {
       this.stopStream("server.providers");
     else if (channel === WS_CHANNELS.serverSettingsUpdated) this.stopStream("server.settings");
     else if (channel === WS_CHANNELS.terminalEvent) this.stopStream("terminal.events");
+    else if (channel === WS_CHANNELS.projectDevServerEvent)
+      this.stopStream("projects.dev-servers");
     else if (channel === WS_CHANNELS.reviewUpdated) this.stopStream("review.updated");
     else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent)
       this.stopStream("orchestration.domain");

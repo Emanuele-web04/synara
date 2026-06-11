@@ -78,6 +78,8 @@ import {
   MENU_ACTION_CHANNEL,
   SYNARA_BROWSER_LABEL,
   UPDATE_STATE_CHANNEL,
+  WINDOW_STATE_CHANNEL,
+  ZOOM_FACTOR_CHANGED_CHANNEL,
 } from "./main.constants";
 import { formatErrorMessage, getSafeExternalUrl, normalizeCommitHash } from "./main.inputGuards";
 import {
@@ -635,17 +637,39 @@ function resolveMenuTargetWindow(): BrowserWindow | null {
 }
 
 function resetWindowZoomFromMenu(): void {
-  resolveMenuTargetWindow()?.webContents.setZoomFactor(1);
+  const window = resolveMenuTargetWindow();
+  window?.webContents.setZoomFactor(1);
+  emitZoomFactorChanged(window);
 }
 
 function adjustWindowZoomFromMenu(multiplier: number): void {
-  const webContents = resolveMenuTargetWindow()?.webContents;
+  const window = resolveMenuTargetWindow();
+  const webContents = window?.webContents;
   if (!webContents) return;
   const nextZoomFactor = Math.min(
     DESKTOP_MENU_MAX_ZOOM_FACTOR,
     Math.max(DESKTOP_MENU_MIN_ZOOM_FACTOR, webContents.getZoomFactor() * multiplier),
   );
   webContents.setZoomFactor(nextZoomFactor);
+  emitZoomFactorChanged(window);
+}
+
+function getDesktopWindowState(window: BrowserWindow | null) {
+  return {
+    isMaximized: window?.isMaximized() ?? false,
+    isFullscreen: window?.isFullScreen() ?? false,
+  };
+}
+
+function emitDesktopWindowState(window: BrowserWindow | null): void {
+  window?.webContents.send(WINDOW_STATE_CHANNEL, getDesktopWindowState(window));
+}
+
+function emitZoomFactorChanged(window: BrowserWindow | null): void {
+  if (!window) {
+    return;
+  }
+  window.webContents.send(ZOOM_FACTOR_CHANGED_CHANNEL, window.webContents.getZoomFactor());
 }
 
 // A configured app-update.yml (or the mock-updates flag) is the prerequisite for any
@@ -1147,8 +1171,22 @@ function createWindow(): BrowserWindow {
     event.preventDefault();
     window.setTitle(APP_DISPLAY_NAME);
   });
+  for (const eventName of [
+    "maximize",
+    "unmaximize",
+    "minimize",
+    "restore",
+    "enter-full-screen",
+    "leave-full-screen",
+    "focus",
+    "blur",
+  ] as const) {
+    window.on(eventName, () => emitDesktopWindowState(window));
+  }
   window.webContents.on("did-finish-load", () => {
     window.setTitle(APP_DISPLAY_NAME);
+    emitDesktopWindowState(window);
+    emitZoomFactorChanged(window);
     emitUpdateState();
   });
   window.once("ready-to-show", () => {

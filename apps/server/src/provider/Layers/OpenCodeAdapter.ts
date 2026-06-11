@@ -190,6 +190,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const binaryPath = providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
           const serverUrl = providerOptions?.serverUrl?.trim();
           const serverPassword = providerOptions?.serverPassword?.trim();
+          const experimentalWebSockets =
+            adapterConfig.providerOptionsKey === "opencode" &&
+            providerOptions &&
+            "experimentalWebSockets" in providerOptions
+              ? providerOptions.experimentalWebSockets === true
+              : undefined;
           const directory = input.cwd ?? serverConfig.cwd;
           const initialParsedModel =
             input.modelSelection?.provider === adapterConfig.provider
@@ -219,6 +225,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   binaryPath,
                   cliSpec: adapterConfig.cliSpec,
                   ...(serverUrl ? { serverUrl } : {}),
+                  ...(experimentalWebSockets !== undefined ? { experimentalWebSockets } : {}),
                 });
                 const client = openCodeRuntime.createOpenCodeSdkClient({
                   baseUrl: server.url,
@@ -703,6 +710,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const binaryPath = providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
           const serverUrl = providerOptions?.serverUrl?.trim();
           const serverPassword = providerOptions?.serverPassword?.trim();
+          const experimentalWebSockets =
+            adapterConfig.providerOptionsKey === "opencode" &&
+            providerOptions &&
+            "experimentalWebSockets" in providerOptions
+              ? providerOptions.experimentalWebSockets === true
+              : undefined;
           const directory = input.cwd ?? sourceContext?.directory ?? serverConfig.cwd;
 
           let client: OpencodeClient;
@@ -716,6 +729,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                     binaryPath,
                     cliSpec: adapterConfig.cliSpec,
                     ...(serverUrl ? { serverUrl } : {}),
+                    ...(experimentalWebSockets !== undefined ? { experimentalWebSockets } : {}),
                   })
                   .pipe(Effect.mapError(toAdapterRequestError));
                 return openCodeRuntime.createOpenCodeSdkClient({

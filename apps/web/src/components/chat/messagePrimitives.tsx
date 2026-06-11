@@ -3,6 +3,7 @@
 // Layer: Web chat presentation primitives
 // Exports: AssistantMarkdownBody, UserMessageBubbleFrame
 
+import type { ThreadMarker } from "@t3tools/contracts";
 import type { CSSProperties, ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
@@ -20,6 +21,7 @@ export function AssistantMarkdownBody(props: {
   className?: string | undefined;
   style?: CSSProperties | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
+  markers?: readonly ThreadMarker[] | undefined;
 }): ReactNode {
   return (
     <ChatMarkdown
@@ -29,6 +31,7 @@ export function AssistantMarkdownBody(props: {
       className={props.className}
       style={props.style}
       onImageExpand={props.onImageExpand}
+      markers={props.markers}
     />
   );
 }

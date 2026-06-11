@@ -7,13 +7,35 @@ import { Effect, Option } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { ProviderAdapterRequestError } from "../Errors.ts";
-import { parseCursorCliModelList } from "../acp/CursorAcpSupport.ts";
+import {
+  fetchCursorAcpModelDescriptors,
+  makeCursorAcpRuntime,
+  parseCursorCliModelList,
+  type CursorAcpRuntimeCursorSettings,
+} from "../acp/CursorAcpSupport.ts";
 
 import {
   CURSOR_MODEL_DISCOVERY_TIMEOUT_MS,
   PROVIDER,
   collectStreamAsString,
 } from "./CursorAdapter.types.ts";
+
+function mergeCursorModelDescriptors(
+  preferredModels: ReadonlyArray<ProviderListModelsResult["models"][number]>,
+  additionalModels: ReadonlyArray<ProviderListModelsResult["models"][number]>,
+): ProviderListModelsResult["models"] {
+  const seen = new Set<string>();
+  const merged: Array<ProviderListModelsResult["models"][number]> = [];
+  for (const model of [...preferredModels, ...additionalModels]) {
+    const key = model.slug.trim().toLowerCase();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(model);
+  }
+  return merged;
+}
 
 export function discoverCursorModels(input: {
   readonly binaryPath: string;
@@ -76,14 +98,73 @@ export function discoverCursorModels(input: {
     ),
   );
 
-  const discovery = Effect.gen(function* () {
-    const cliModels = yield* runCursorModelListCommand;
-    return {
-      models: cliModels,
-      source: "cursor.cli",
-      cached: false,
-    } satisfies ProviderListModelsResult;
-  });
+  const effectiveAcpSettings: CursorAcpRuntimeCursorSettings = {
+    binaryPath,
+    ...(apiEndpoint ? { apiEndpoint } : {}),
+  };
+  const runCursorAcpModelDiscovery = Effect.gen(function* () {
+    const runtime = yield* makeCursorAcpRuntime({
+      cursorSettings: effectiveAcpSettings,
+      childProcessSpawner,
+      cwd: process.cwd(),
+      clientInfo: { name: "Synara", version: "0.0.0" },
+    });
+    const started = yield* runtime.start();
+    const models = yield* fetchCursorAcpModelDescriptors(runtime, started.sessionId);
+    if (models.length === 0) {
+      return yield* new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "model/list",
+        detail: "Cursor ACP model discovery returned no models.",
+      });
+    }
+    return models;
+  }).pipe(
+    Effect.scoped,
+    Effect.timeoutOption(CURSOR_MODEL_DISCOVERY_TIMEOUT_MS),
+    Effect.flatMap(
+      Option.match({
+        onNone: () =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "model/list",
+              detail: "Timed out while discovering Cursor models via ACP.",
+            }),
+          ),
+        onSome: (models) => Effect.succeed(models),
+      }),
+    ),
+  );
+
+  const discovery = runCursorAcpModelDiscovery.pipe(
+    Effect.flatMap((acpModels) =>
+      runCursorModelListCommand.pipe(
+        Effect.map((cliModels) => mergeCursorModelDescriptors(acpModels, cliModels)),
+        Effect.catch(() => Effect.succeed(acpModels)),
+      ),
+    ),
+    Effect.map(
+      (models) =>
+        ({
+          models,
+          source: "cursor.acp",
+          cached: false,
+        }) satisfies ProviderListModelsResult,
+    ),
+    Effect.catch(() =>
+      runCursorModelListCommand.pipe(
+        Effect.map(
+          (cliModels) =>
+            ({
+              models: cliModels,
+              source: "cursor.cli",
+              cached: false,
+            }) satisfies ProviderListModelsResult,
+        ),
+      ),
+    ),
+  );
 
   return discovery.pipe(
     Effect.mapError((cause) =>
@@ -92,7 +173,7 @@ export function discoverCursorModels(input: {
         : new ProviderAdapterRequestError({
             provider: PROVIDER,
             method: "model/list",
-            detail: "Failed to discover Cursor models via CLI.",
+            detail: "Failed to discover Cursor models.",
             cause,
           }),
     ),

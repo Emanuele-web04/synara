@@ -3,7 +3,7 @@
 // Layer: Web chat presentation component
 // Exports: AssistantMessageRow, LiveMessageMeta, formatMessageMeta, formatInlineWorkSummary, MAX_VISIBLE_INLINE_TOOL_ENTRIES
 
-import { type MessageId, type ThreadId, type TurnId } from "@t3tools/contracts";
+import { type MessageId, type ThreadId, type ThreadMarker, type TurnId } from "@t3tools/contracts";
 import { type CSSProperties, type ReactNode, useEffect, useRef } from "react";
 import { formatElapsed } from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
@@ -122,6 +122,7 @@ export interface AssistantMessageRowProps {
   handleToggleWorkGroup: (groupId: string) => void;
   tailContentRowId: string | null;
   scrollTailExpansionToEnd: () => void;
+  markers?: readonly ThreadMarker[] | undefined;
 }
 
 export function AssistantMessageRow({
@@ -149,6 +150,7 @@ export function AssistantMessageRow({
   handleToggleWorkGroup,
   tailContentRowId,
   scrollTailExpansionToEnd,
+  markers,
 }: AssistantMessageRowProps): ReactNode {
   const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
   const inlineWorkEntries = row.inlineWorkEntries ?? [];
@@ -298,6 +300,7 @@ export function AssistantMessageRow({
                         isStreaming={false}
                         style={chatTypographyStyle}
                         onImageExpand={onImageExpand}
+                        markers={markers?.filter((marker) => marker.messageId === item.message.id)}
                       />
                     </div>
                   ),
@@ -316,6 +319,7 @@ export function AssistantMessageRow({
             isStreaming={Boolean(row.message.streaming)}
             style={chatTypographyStyle}
             onImageExpand={onImageExpand}
+            markers={markers}
           />
         </div>
         {!hasCollapsedWork && visibleRenderableInlineToolEntries.length > 0 && (

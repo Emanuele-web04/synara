@@ -41,6 +41,7 @@ export interface CodexDiscoverySessionDeps {
   ): Promise<TResponse>;
   writeMessage(context: CodexSessionContext, message: unknown): void;
   updateSession(context: CodexSessionContext, updates: Partial<ProviderSession>): void;
+  registerSynaraSkillsRoot(context: CodexSessionContext): Promise<void>;
   closeTransport(context: CodexSessionContext): void;
   // Re-entrant collaborators routed through the manager's instance seams so the
   // protocol tests' instance-level spies stay in the call path.
@@ -181,6 +182,7 @@ export async function getOrCreateDiscoverySession(
   try {
     await deps.sendRequest(context, "initialize", buildCodexInitializeParams());
     deps.writeMessage(context, { method: "initialized" });
+    await deps.registerSynaraSkillsRoot(context);
     try {
       const accountReadResponse = await deps.sendRequest(context, "account/read", {});
       context.account = readCodexAccountSnapshot(accountReadResponse);
