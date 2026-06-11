@@ -304,9 +304,7 @@ describe("EditorWorkspaceView", () => {
     queryClient.setQueryData(
       projectQueryKeys.searchEntries("/Users/tester/project", "editor", 80, "file"),
       {
-        entries: [
-          { path: "apps/web/src/components/EditorWorkspaceView.tsx", kind: "file" },
-        ],
+        entries: [{ path: "apps/web/src/components/EditorWorkspaceView.tsx", kind: "file" }],
         truncated: false,
       },
     );
