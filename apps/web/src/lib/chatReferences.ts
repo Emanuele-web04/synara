@@ -13,6 +13,11 @@ export interface ChatFileReference {
   path: string;
   startLine?: number;
   endLine?: number;
+  // 1-based column of the first/last selected character. When present the
+  // reference narrows to the exact span (e.g. `line 21:5-12`) so highlighting a
+  // single word references just those characters, not the whole line.
+  startColumn?: number;
+  endColumn?: number;
 }
 
 // DataTransfer type used when dragging a file row toward the composer. The
@@ -23,15 +28,49 @@ export function formatLineRangeLabel(startLine: number, endLine: number): string
   return endLine !== startLine ? `lines ${startLine}-${endLine}` : `line ${startLine}`;
 }
 
-// `@path` mention token plus a plain-text line suffix. The line range stays out
-// of the mention token itself so provider-side file resolution keeps working.
-export function formatChatFileReference(reference: ChatFileReference): string {
-  const token = formatComposerMentionToken(reference.path);
+// Wrap a snippet in a fenced block whose fence is longer than any backtick run
+// inside it (so selected code that itself contains ``` survives Markdown), after
+// normalizing newlines, trimming blank edges, and capping the length.
+export function fenceCodeSnippet(snippet: string): string {
+  const normalized = snippet.replace(/\r\n/g, "\n").replace(/^\n+|\n+$/g, "");
+  const truncated =
+    normalized.length > CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS
+      ? normalized.slice(0, CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS)
+      : normalized;
+  const longestBacktickRun = truncated
+    .match(/`+/g)
+    ?.reduce((max, run) => Math.max(max, run.length), 0);
+  const fence = "`".repeat(Math.max(3, (longestBacktickRun ?? 0) + 1));
+  return `${fence}\n${truncated}\n${fence}`;
+}
+
+// Editor-style location label for a reference: `line 21`, `line 21:5-12`,
+// `lines 3-9`, or `lines 21:5-23:8`. Columns are appended only when both ends
+// are known, so a single highlighted word reads as `line 21:5-12` instead of
+// referencing the whole line. Returns null when there is no line info.
+export function formatSelectionLabel(reference: ChatFileReference): string | null {
   if (typeof reference.startLine !== "number") {
-    return token;
+    return null;
   }
   const endLine = reference.endLine ?? reference.startLine;
-  return `${token} (${formatLineRangeLabel(reference.startLine, endLine)})`;
+  const { startColumn, endColumn } = reference;
+  if (typeof startColumn !== "number" || typeof endColumn !== "number") {
+    return formatLineRangeLabel(reference.startLine, endLine);
+  }
+  if (reference.startLine === endLine) {
+    const columns = startColumn === endColumn ? `${startColumn}` : `${startColumn}-${endColumn}`;
+    return `line ${reference.startLine}:${columns}`;
+  }
+  return `lines ${reference.startLine}:${startColumn}-${endLine}:${endColumn}`;
+}
+
+// `@path` mention token plus a parenthetical location suffix (e.g.
+// `@file (line 21:5-12)`). The range/columns live outside the mention token
+// itself so provider-side file resolution keeps working.
+export function formatChatFileReference(reference: ChatFileReference): string {
+  const token = formatComposerMentionToken(reference.path);
+  const label = formatSelectionLabel(reference);
+  return label ? `${token} (${label})` : token;
 }
 
 export function buildWhyChangedPrompt(path: string): string {
@@ -53,18 +92,7 @@ export function buildWhyLinesPrompt(reference: ChatFileReference): string {
 // have no stable file line numbers (split/unified views renumber), so the
 // quoted code itself is the precise reference.
 export function buildDiffSelectionReference(path: string, snippet: string): string {
-  const normalized = snippet.replace(/\r\n/g, "\n").replace(/^\n+|\n+$/g, "");
-  const truncated =
-    normalized.length > CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS
-      ? normalized.slice(0, CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS)
-      : normalized;
-  // Selected code can itself contain ``` fences; the wrapper fence must be
-  // longer than any backtick run in the snippet to survive Markdown parsing.
-  const longestBacktickRun = truncated
-    .match(/`+/g)
-    ?.reduce((max, run) => Math.max(max, run.length), 0);
-  const fence = "`".repeat(Math.max(3, (longestBacktickRun ?? 0) + 1));
-  return `${formatComposerMentionToken(path)}\n${fence}\n${truncated}\n${fence}`;
+  return `${formatComposerMentionToken(path)}\n${fenceCodeSnippet(snippet)}`;
 }
 
 export function appendComposerPromptText(threadId: ThreadId, text: string): void {
@@ -90,6 +118,12 @@ function countNewlines(text: string): number {
   return count;
 }
 
+// Number of characters on the current line of `text` (everything after the last
+// newline), i.e. the 0-based column count at the end of `text`.
+function columnsOnLastLine(text: string): number {
+  return text.length - (text.lastIndexOf("\n") + 1);
+}
+
 // Pure line-range math, separated from the DOM selection plumbing for testability.
 export function computeSelectionLineRange(
   prefixText: string,
@@ -100,12 +134,31 @@ export function computeSelectionLineRange(
   return { startLine, endLine };
 }
 
-// Resolve the 1-based line range of the current text selection inside `container`.
-// Works for both plain <pre> contents and Shiki-highlighted markup because both
-// keep one "\n" of text content per rendered line.
-export function getSelectionLineRangeWithin(
-  container: HTMLElement,
-): { startLine: number; endLine: number } | null {
+// Pure 1-based column math. `startColumn` is the column of the first selected
+// character; `endColumn` is the column of the last selected character (trailing
+// newlines are ignored so a line-spanning selection ends on real content).
+export function computeSelectionColumns(
+  prefixText: string,
+  selectedText: string,
+): { startColumn: number; endColumn: number } {
+  const startColumn = columnsOnLastLine(prefixText) + 1;
+  const trimmedSelection = selectedText.replace(/\n+$/, "");
+  const endColumn = columnsOnLastLine(prefixText + trimmedSelection);
+  return { startColumn, endColumn };
+}
+
+export interface SelectionWithin {
+  startLine: number;
+  endLine: number;
+  startColumn: number;
+  endColumn: number;
+}
+
+// Resolve the 1-based line+column span of the current selection inside
+// `container`. Works for both plain <pre> contents and Shiki-highlighted markup
+// because both keep one "\n" of text content per rendered line. Returns null
+// when there is no actionable selection.
+export function getSelectionWithin(container: HTMLElement): SelectionWithin | null {
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
     return null;
@@ -114,8 +167,25 @@ export function getSelectionLineRangeWithin(
   if (!container.contains(range.startContainer) || !container.contains(range.endContainer)) {
     return null;
   }
+  const selectedText = range.toString();
+  if (selectedText.trim().length === 0) {
+    return null;
+  }
   const prefixRange = document.createRange();
   prefixRange.selectNodeContents(container);
   prefixRange.setEnd(range.startContainer, range.startOffset);
-  return computeSelectionLineRange(prefixRange.toString(), range.toString());
+  const prefixText = prefixRange.toString();
+  return {
+    ...computeSelectionLineRange(prefixText, selectedText),
+    ...computeSelectionColumns(prefixText, selectedText),
+  };
+}
+
+// Line-range-only view of {@link getSelectionWithin} for callers that don't need
+// columns (kept so existing call sites stay terse).
+export function getSelectionLineRangeWithin(
+  container: HTMLElement,
+): { startLine: number; endLine: number } | null {
+  const selection = getSelectionWithin(container);
+  return selection ? { startLine: selection.startLine, endLine: selection.endLine } : null;
 }

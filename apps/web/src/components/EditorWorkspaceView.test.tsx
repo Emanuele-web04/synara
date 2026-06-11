@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { EditorWorkspaceView } from "./EditorWorkspaceView";
+import { SidebarProvider } from "./ui/sidebar";
 
 vi.mock("../hooks/useTheme", () => ({
   useTheme: () => ({ resolvedTheme: "dark" }),
@@ -31,27 +32,29 @@ function createFileDiff(path: string, additions: number, deletions: number): Fil
 describe("EditorWorkspaceView", () => {
   it("renders diff options beside the changed-file line totals", () => {
     const markup = renderToStaticMarkup(
-      <EditorWorkspaceView
-        workspaceRoot="/Users/tester/project"
-        projectName="project"
-        selectedFilePath={null}
-        expandedDirectories={new Set()}
-        centerMode="diff"
-        diffFiles={[createFileDiff("apps/web/src/components/EditorWorkspaceView.tsx", 3, 1)]}
-        selectedDiffFilePath={null}
-        diffOptionsControl={
-          <button type="button" aria-label="Diff options">
-            Options
-          </button>
-        }
-        diffPanel={<div>Diff panel</div>}
-        chatPanel={<div>Chat panel</div>}
-        onSelectFile={vi.fn()}
-        onSelectDiffFile={vi.fn()}
-        onToggleDirectory={vi.fn()}
-        onCenterModeChange={vi.fn()}
-        onExitEditorView={vi.fn()}
-      />,
+      <SidebarProvider>
+        <EditorWorkspaceView
+          workspaceRoot="/Users/tester/project"
+          projectName="project"
+          selectedFilePath={null}
+          expandedDirectories={new Set()}
+          centerMode="diff"
+          diffFiles={[createFileDiff("apps/web/src/components/EditorWorkspaceView.tsx", 3, 1)]}
+          selectedDiffFilePath={null}
+          diffOptionsControl={
+            <button type="button" aria-label="Diff options">
+              Options
+            </button>
+          }
+          diffPanel={<div>Diff panel</div>}
+          chatPanel={<div>Chat panel</div>}
+          onSelectFile={vi.fn()}
+          onSelectDiffFile={vi.fn()}
+          onToggleDirectory={vi.fn()}
+          onCenterModeChange={vi.fn()}
+          onExitEditorView={vi.fn()}
+        />
+      </SidebarProvider>,
     );
 
     expect(markup).toContain("Changed files");
@@ -73,23 +76,25 @@ describe("EditorWorkspaceView", () => {
 
   it("shows skeleton rows instead of the empty message while the diff loads", () => {
     const markup = renderToStaticMarkup(
-      <EditorWorkspaceView
-        workspaceRoot="/Users/tester/project"
-        projectName="project"
-        selectedFilePath={null}
-        expandedDirectories={new Set()}
-        centerMode="diff"
-        diffFiles={[]}
-        diffFilesLoading={true}
-        selectedDiffFilePath={null}
-        diffPanel={<div>Diff panel</div>}
-        chatPanel={<div>Chat panel</div>}
-        onSelectFile={vi.fn()}
-        onSelectDiffFile={vi.fn()}
-        onToggleDirectory={vi.fn()}
-        onCenterModeChange={vi.fn()}
-        onExitEditorView={vi.fn()}
-      />,
+      <SidebarProvider>
+        <EditorWorkspaceView
+          workspaceRoot="/Users/tester/project"
+          projectName="project"
+          selectedFilePath={null}
+          expandedDirectories={new Set()}
+          centerMode="diff"
+          diffFiles={[]}
+          diffFilesLoading={true}
+          selectedDiffFilePath={null}
+          diffPanel={<div>Diff panel</div>}
+          chatPanel={<div>Chat panel</div>}
+          onSelectFile={vi.fn()}
+          onSelectDiffFile={vi.fn()}
+          onToggleDirectory={vi.fn()}
+          onCenterModeChange={vi.fn()}
+          onExitEditorView={vi.fn()}
+        />
+      </SidebarProvider>,
     );
 
     expect(markup).toContain('aria-label="Loading changed files..."');
@@ -100,22 +105,24 @@ describe("EditorWorkspaceView", () => {
     const queryClient = new QueryClient();
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
-        <EditorWorkspaceView
-          workspaceRoot={null}
-          projectName="project"
-          selectedFilePath={null}
-          expandedDirectories={new Set()}
-          centerMode="file"
-          diffFiles={[]}
-          selectedDiffFilePath={null}
-          diffPanel={<div>Diff panel body</div>}
-          chatPanel={<div>Chat panel</div>}
-          onSelectFile={vi.fn()}
-          onSelectDiffFile={vi.fn()}
-          onToggleDirectory={vi.fn()}
-          onCenterModeChange={vi.fn()}
-          onExitEditorView={vi.fn()}
-        />
+        <SidebarProvider>
+          <EditorWorkspaceView
+            workspaceRoot={null}
+            projectName="project"
+            selectedFilePath={null}
+            expandedDirectories={new Set()}
+            centerMode="file"
+            diffFiles={[]}
+            selectedDiffFilePath={null}
+            diffPanel={<div>Diff panel body</div>}
+            chatPanel={<div>Chat panel</div>}
+            onSelectFile={vi.fn()}
+            onSelectDiffFile={vi.fn()}
+            onToggleDirectory={vi.fn()}
+            onCenterModeChange={vi.fn()}
+            onExitEditorView={vi.fn()}
+          />
+        </SidebarProvider>
       </QueryClientProvider>,
     );
 
@@ -129,22 +136,24 @@ describe("EditorWorkspaceView", () => {
     const queryClient = new QueryClient();
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
-        <EditorWorkspaceView
-          workspaceRoot="/Users/tester/project"
-          projectName="project"
-          selectedFilePath={null}
-          expandedDirectories={new Set()}
-          centerMode="file"
-          diffFiles={[]}
-          selectedDiffFilePath={null}
-          diffPanel={<div>Diff panel</div>}
-          chatPanel={<div>Chat panel</div>}
-          onSelectFile={vi.fn()}
-          onSelectDiffFile={vi.fn()}
-          onToggleDirectory={vi.fn()}
-          onCenterModeChange={vi.fn()}
-          onExitEditorView={vi.fn()}
-        />
+        <SidebarProvider>
+          <EditorWorkspaceView
+            workspaceRoot="/Users/tester/project"
+            projectName="project"
+            selectedFilePath={null}
+            expandedDirectories={new Set()}
+            centerMode="file"
+            diffFiles={[]}
+            selectedDiffFilePath={null}
+            diffPanel={<div>Diff panel</div>}
+            chatPanel={<div>Chat panel</div>}
+            onSelectFile={vi.fn()}
+            onSelectDiffFile={vi.fn()}
+            onToggleDirectory={vi.fn()}
+            onCenterModeChange={vi.fn()}
+            onExitEditorView={vi.fn()}
+          />
+        </SidebarProvider>
       </QueryClientProvider>,
     );
 

@@ -35,7 +35,7 @@ const FILE_ICON_COLOR_CLASS_BY_ICON_NAME: Record<string, string> = {
   vue: "text-[#42b883]",
 };
 
-const FOLDER_ICON_COLOR_CLASS_NAME = "text-[#dcb85c]";
+const FOLDER_ICON_COLOR_CLASS_NAME = "text-muted-foreground";
 
 export const FileEntryIcon = memo(function FileEntryIcon(props: {
   pathValue: string;

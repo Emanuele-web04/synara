@@ -1037,19 +1037,28 @@ label:has(> select#reasoning-effort) select {
   counter-reset: editor-file-line;
 }
 
+/* The line itself owns the gutter inset; the number is painted into that inset
+   out of the text flow (absolute) so it never becomes part of a text selection.
+   The previous in-flow `position: sticky` inline-block sat at the start of each
+   line's inline box, which made the browser snap a single-character drag to the
+   whole line. */
+.editor-file-viewer__plain .line,
+.editor-file-viewer__highlight .shiki .line {
+  position: relative;
+  padding-left: 6.25ch;
+}
+
 .editor-file-viewer__plain .line::before,
 .editor-file-viewer__highlight .shiki .line::before {
   counter-increment: editor-file-line;
   content: counter(editor-file-line);
-  position: sticky;
+  position: absolute;
   left: 0;
-  display: inline-block;
-  min-width: 4ch;
-  margin-right: 1.5ch;
-  padding-right: 0.75ch;
+  width: 4ch;
   text-align: right;
   color: color-mix(in srgb, var(--foreground) 30%, transparent);
-  background: var(--color-background-surface);
+  pointer-events: none;
+  -webkit-user-select: none;
   user-select: none;
 }
 
