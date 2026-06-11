@@ -16,6 +16,7 @@ export {
   SidebarInput,
   SidebarInset,
   SidebarSeparator,
+  SIDEBAR_OFFCANVAS_MOTION_CLASS,
 } from "~/components/ui/sidebar.layout";
 export { SidebarHeaderTrigger, SidebarTrigger } from "~/components/ui/sidebar.trigger";
 export { SidebarRail } from "~/components/ui/sidebar.rail";

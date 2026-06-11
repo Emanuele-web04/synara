@@ -12,6 +12,16 @@ export interface HistoryLimits {
   maxBytes: number;
 }
 
+export function countCharacter(value: string, target: string): number {
+  let count = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === target) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 /** Trim to the last `maxLines` lines, preserving a trailing newline if present. */
 export function capHistoryLines(history: string, maxLines: number): string {
   if (history.length === 0) return history;

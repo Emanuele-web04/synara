@@ -66,7 +66,7 @@ describe("BackendProcessController", () => {
     vi.useRealTimers();
   });
 
-  it("spawns with ELECTRON_RUN_AS_NODE and inherited stdio, and writes session boundary", () => {
+  it("spawns with ELECTRON_RUN_AS_NODE and inherited stdio when output is not captured", () => {
     const { controller, deps, spawn, detector } = createController();
     controller.start();
 
@@ -88,6 +88,20 @@ describe("BackendProcessController", () => {
       expect.stringContaining("pid="),
     );
     expect(controller.getListeningPromise()).toBe(detector.promise);
+  });
+
+  it("pipes backend stdio when output is captured", () => {
+    const { controller, spawn } = createController({
+      captureBackendLogs: vi.fn(() => true),
+    });
+    controller.start();
+
+    const call = spawn.mock.calls[0] as unknown as [
+      string,
+      string[],
+      { env: Record<string, string>; stdio: Array<string> },
+    ];
+    expect(call[2].stdio).toEqual(["ignore", "pipe", "pipe"]);
   });
 
   it("does not spawn while quitting or when already running", () => {

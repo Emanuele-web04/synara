@@ -25,6 +25,9 @@ import {
   useSidebar,
 } from "~/components/ui/sidebar.context";
 
+export const SIDEBAR_OFFCANVAS_MOTION_CLASS =
+  "transition-[left,right,width,transform,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none";
+
 export function Sidebar({
   side = "left",
   variant = "sidebar",

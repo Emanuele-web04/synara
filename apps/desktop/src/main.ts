@@ -96,6 +96,57 @@ import { DesktopUpdateController } from "./main.updateController";
 
 syncShellEnvironment();
 
+function isBrokenStdIoError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "EIO"
+  );
+}
+
+function installBrokenStdIoGuard(): void {
+  const patchWrite = (stream: NodeJS.WriteStream): void => {
+    const originalWrite = stream.write.bind(stream);
+    stream.write = ((
+      chunk: string | Uint8Array,
+      encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
+      callback?: (error?: Error | null) => void,
+    ): boolean => {
+      try {
+        if (typeof encodingOrCallback === "function") {
+          return originalWrite(chunk, encodingOrCallback);
+        }
+        if (callback !== undefined) {
+          return originalWrite(chunk, encodingOrCallback, callback);
+        }
+        if (encodingOrCallback !== undefined) {
+          return originalWrite(chunk, encodingOrCallback);
+        }
+        return originalWrite(chunk);
+      } catch (error) {
+        if (!isBrokenStdIoError(error)) {
+          throw error;
+        }
+        if (typeof encodingOrCallback === "function") {
+          encodingOrCallback(null);
+        }
+        callback?.(null);
+        return false;
+      }
+    }) as typeof stream.write;
+    stream.on("error", (error) => {
+      if (!isBrokenStdIoError(error)) {
+        throw error;
+      }
+    });
+  };
+
+  patchWrite(process.stdout);
+  patchWrite(process.stderr);
+}
+
+installBrokenStdIoGuard();
+
 const BASE_DIR =
   process.env.SYNARA_HOME?.trim() ||
   process.env.DPCODE_HOME?.trim() ||
@@ -960,7 +1011,7 @@ const backendProcessController = new BackendProcessController({
   buildEnv: backendEnv,
   getBackendPort: () => backendPort,
   createListeningDetector: () => new ServerListeningDetector(),
-  captureBackendLogs: () => app.isPackaged && backendLogSink !== null,
+  captureBackendLogs: () => true,
   writeBackendLog: (buffer) => {
     backendLogSink?.write(buffer);
   },
