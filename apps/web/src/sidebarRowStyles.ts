@@ -9,8 +9,7 @@ export const SIDEBAR_ROW_HEIGHT_CLASS_NAME =
 
 export const SIDEBAR_ROW_RADIUS_CLASS_NAME = "rounded-md";
 
-export const SIDEBAR_ROW_PADDING_CLASS_NAME =
-  "px-2 py-[var(--app-density-row-padding-y,0.125rem)]";
+export const SIDEBAR_ROW_PADDING_CLASS_NAME = "px-2 py-[var(--app-density-row-padding-y,0.125rem)]";
 
 export const SIDEBAR_ROW_GAP_CLASS_NAME = "gap-[var(--app-density-row-gap,0.5rem)]";
 

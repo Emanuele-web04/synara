@@ -1,6 +1,10 @@
 import { useEffect } from "react";
 
-import { normalizeUiDensity, getDensityCssVariables, type DensityCssVariable } from "../lib/appDensity";
+import {
+  normalizeUiDensity,
+  getDensityCssVariables,
+  type DensityCssVariable,
+} from "../lib/appDensity";
 import { useAppSettings } from "../appSettings";
 
 const DENSITY_CSS_VARIABLES = Object.keys(

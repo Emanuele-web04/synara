@@ -244,12 +244,12 @@ export const COMPOSER_EDITOR_PADDING_CLASS_NAME = [
 export const COMPOSER_FOOTER_ROW_CLASS_NAME = [
   "flex items-center justify-between",
   "pl-[var(--app-density-composer-footer-padding,0.375rem)]",
-  "pr-[var(--app-density-composer-editor-padding-x-end,0.875rem)]",
+  "pr-[var(--app-density-composer-footer-padding-end,0.5rem)]",
   "pb-[var(--app-density-composer-footer-padding,0.375rem)]",
 ].join(" ");
 export const COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME = [
   "flex items-center justify-end gap-2",
   "pl-[var(--app-density-composer-footer-padding,0.375rem)]",
-  "pr-[var(--app-density-composer-editor-padding-x-end,0.875rem)]",
+  "pr-[var(--app-density-composer-footer-padding-end,0.5rem)]",
   "pb-[var(--app-density-composer-footer-padding,0.375rem)]",
 ].join(" ");

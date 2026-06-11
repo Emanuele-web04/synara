@@ -35,6 +35,7 @@ import { providerDiscoveryQueryKeys } from "./lib/providerDiscoveryReactQuery";
 import { serverQueryKeys, serverSettingsQueryOptions } from "./lib/serverReactQuery";
 import {
   DEFAULT_UI_DENSITY,
+  UI_DENSITY_MODES,
   normalizeUiDensity as normalizeUiDensityValue,
 } from "./lib/appDensity";
 
@@ -79,7 +80,7 @@ export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 
-export const UiDensity = Schema.Literals(["compact", "comfortable", "spacious"]);
+export const UiDensity = Schema.Literals(UI_DENSITY_MODES);
 export type UiDensity = typeof UiDensity.Type;
 export { DEFAULT_UI_DENSITY };
 

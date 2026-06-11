@@ -103,6 +103,7 @@ import { SidebarInset } from "../components/ui/sidebar";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
+import { isUiDensity } from "../lib/appDensity";
 import { CentralIcon } from "../lib/central-icons";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
 import {
@@ -1740,7 +1741,7 @@ function SettingsRouteView() {
               <SettingsSegmentedControl
                 value={settings.uiDensity}
                 onValueChange={(value) => {
-                  if (value !== "compact" && value !== "comfortable" && value !== "spacious") {
+                  if (!isUiDensity(value)) {
                     return;
                   }
                   updateSettings({ uiDensity: value });

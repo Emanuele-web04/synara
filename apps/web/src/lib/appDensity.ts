@@ -20,6 +20,7 @@ const BASE_COMPOSER_EDITOR_PADDING_BOTTOM_REM = 0.5;
 const BASE_COMPOSER_EDITOR_PADDING_X_REM = 0.75;
 const BASE_COMPOSER_EDITOR_PADDING_X_END_REM = 0.875;
 const BASE_COMPOSER_FOOTER_PADDING_REM = 0.375;
+const BASE_COMPOSER_FOOTER_PADDING_END_REM = 0.5;
 
 function scaleRem(baseRem: number, scale: number): string {
   return `${baseRem * scale}rem`;
@@ -49,7 +50,10 @@ export function getDensityCssVariables(mode: UiDensity = DEFAULT_UI_DENSITY) {
     "--app-density-chat-gutter-x": scaleRem(BASE_CHAT_GUTTER_X_REM, scale),
     "--app-density-chat-gutter-x-lg": scaleRem(BASE_CHAT_GUTTER_X_LG_REM, scale),
     "--app-density-composer-editor-min-height": `calc(2lh * ${scale})`,
-    "--app-density-composer-editor-padding-top": scaleRem(BASE_COMPOSER_EDITOR_PADDING_TOP_REM, scale),
+    "--app-density-composer-editor-padding-top": scaleRem(
+      BASE_COMPOSER_EDITOR_PADDING_TOP_REM,
+      scale,
+    ),
     "--app-density-composer-editor-padding-bottom": scaleRem(
       BASE_COMPOSER_EDITOR_PADDING_BOTTOM_REM,
       scale,
@@ -60,6 +64,10 @@ export function getDensityCssVariables(mode: UiDensity = DEFAULT_UI_DENSITY) {
       scale,
     ),
     "--app-density-composer-footer-padding": scaleRem(BASE_COMPOSER_FOOTER_PADDING_REM, scale),
+    "--app-density-composer-footer-padding-end": scaleRem(
+      BASE_COMPOSER_FOOTER_PADDING_END_REM,
+      scale,
+    ),
   } as const;
 }
 
