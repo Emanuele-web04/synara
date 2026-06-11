@@ -35,14 +35,15 @@ import {
 
 const ACP_AUTH_REQUIRED_CODE = -32000;
 
-function isAcpAuthRequiredError(error: EffectAcpErrors.AcpError): boolean {
+export function isAcpAuthRequiredError(error: EffectAcpErrors.AcpError): boolean {
   return (
     error._tag === "AcpRequestError" &&
-    (error.code === ACP_AUTH_REQUIRED_CODE || /auth/i.test(error.errorMessage ?? ""))
+    (error.code === ACP_AUTH_REQUIRED_CODE ||
+      /\bauth(entication|orization)?\b/i.test(error.errorMessage ?? ""))
   );
 }
 
-function causeIndicatesAuthRequired(cause: Cause.Cause<EffectAcpErrors.AcpError>): boolean {
+export function causeIndicatesAuthRequired(cause: Cause.Cause<EffectAcpErrors.AcpError>): boolean {
   // Check for Fail reasons with auth-required errors
   const failReason = Cause.findFail(cause);
   if (failReason._tag === "Success" && isAcpAuthRequiredError(failReason.success.error)) {
@@ -54,14 +55,9 @@ function causeIndicatesAuthRequired(cause: Cause.Cause<EffectAcpErrors.AcpError>
     const defect = dieReason.success.defect;
     const message =
       defect instanceof Error ? defect.message : typeof defect === "string" ? defect : "";
-    if (/auth/i.test(message)) {
+    if (/\bauth(entication|orization)?\s+(required|failed|expired)\b/i.test(message)) {
       return true;
     }
-  }
-  // Also check the pretty-printed cause for auth-related text
-  const causeMessage = Cause.pretty(cause);
-  if (/auth/i.test(causeMessage)) {
-    return true;
   }
   return false;
 }
