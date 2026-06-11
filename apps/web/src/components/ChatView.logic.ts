@@ -24,7 +24,7 @@ import {
   type Thread,
   type ThreadPrimarySurface,
 } from "../types";
-import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
+import { type DraftThreadState } from "../composerDraftStore";
 import { Schema } from "effect";
 import {
   filterTerminalContextsWithText,
@@ -62,6 +62,47 @@ export function resolveRuntimeModeAfterApprovalDecision(
     return ALWAYS_ALLOW_RUNTIME_MODE;
   }
   return null;
+}
+
+export function shouldRenderProviderHealthBanner(input: {
+  threadEntryPoint: ThreadPrimarySurface;
+  terminalWorkspaceTerminalTabActive: boolean;
+}): boolean {
+  return input.threadEntryPoint === "chat" && !input.terminalWorkspaceTerminalTabActive;
+}
+
+export function buildComposerMenuSelectionKey(input: {
+  menuOpen: boolean;
+  picker: string | null;
+  triggerKind: string | null;
+  triggerQuery: string;
+  items: readonly { id: string }[];
+}): string | null {
+  if (!input.menuOpen) {
+    return null;
+  }
+  const sourceKey = input.picker
+    ? `picker:${input.picker}`
+    : `trigger:${input.triggerKind ?? "none"}:${input.triggerQuery}`;
+  return `${sourceKey}\u001f${input.items.map((item) => item.id).join("\u001e")}`;
+}
+
+// Default-open policy for the Environment panel; render-time visibility is resolved separately.
+export function resolveDefaultEnvironmentPanelOpen(input: {
+  environmentEnabled: boolean;
+  isCenteredEmptyLanding: boolean;
+  isTerminalPrimarySurface: boolean;
+}): boolean {
+  return (
+    input.environmentEnabled && !input.isCenteredEmptyLanding && !input.isTerminalPrimarySurface
+  );
+}
+
+export function resolveEnvironmentPanelVisible(input: {
+  environmentEnabled: boolean;
+  environmentPanelOpen: boolean;
+}): boolean {
+  return input.environmentEnabled && input.environmentPanelOpen;
 }
 
 export function buildLocalDraftThread(
@@ -545,44 +586,11 @@ export function shouldStartActiveTurnLayoutGrace(options: {
   );
 }
 
-export function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-        return;
-      }
-      reject(new Error("Could not read image data."));
-    });
-    reader.addEventListener("error", () => {
-      reject(reader.error ?? new Error("Failed to read image."));
-    });
-    reader.readAsDataURL(file);
-  });
-}
-
 export function buildSuggestedWorktreeName(input: {
   associatedWorktreeBranch?: string | null;
   title?: string | null;
 }): string {
   return buildSynaraBranchName(input.associatedWorktreeBranch ?? input.title);
-}
-
-export function cloneComposerImageForRetry(
-  image: ComposerImageAttachment,
-): ComposerImageAttachment {
-  if (typeof URL === "undefined" || !image.previewUrl.startsWith("blob:")) {
-    return image;
-  }
-  try {
-    return {
-      ...image,
-      previewUrl: URL.createObjectURL(image.file),
-    };
-  } catch {
-    return image;
-  }
 }
 
 export function deriveComposerSendState(options: {
@@ -643,13 +651,30 @@ export function buildExpiredTerminalContextToastCopy(
 }
 
 export function shouldRenderTerminalWorkspace(options: {
-  activeProjectExists: boolean;
   presentationMode: "drawer" | "workspace";
   terminalOpen: boolean;
 }): boolean {
-  return (
-    options.terminalOpen && options.presentationMode === "workspace" && options.activeProjectExists
-  );
+  // The workspace shell should paint immediately; the terminal viewport gates the
+  // backend attach until a valid cwd is available.
+  return options.terminalOpen && options.presentationMode === "workspace";
+}
+
+export function resolveProjectScriptTerminalTarget(options: {
+  baseTerminalId: string;
+  createTerminalId: () => string;
+  hasRunningTerminal: boolean;
+  preferNewTerminal?: boolean | undefined;
+  terminalOpen: boolean;
+}): { shouldCreateNewTerminal: boolean; terminalId: string } {
+  // Project scripts require their requested cwd/env before the command write;
+  // live PTYs keep their launch context, so visible or running terminals get a new tab.
+  const shouldCreateNewTerminal =
+    Boolean(options.preferNewTerminal) || options.terminalOpen || options.hasRunningTerminal;
+
+  return {
+    shouldCreateNewTerminal,
+    terminalId: shouldCreateNewTerminal ? options.createTerminalId() : options.baseTerminalId,
+  };
 }
 
 export function shouldAutoDeleteTerminalThreadOnLastClose(options: {

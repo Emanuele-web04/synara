@@ -10,9 +10,11 @@ export const MAC_INHERITED_ENTITLEMENTS_PATH =
   "apps/desktop/resources/entitlements.mac.inherit.plist";
 const MAC_AFTER_PACK_HOOK_PATH = "./electron-builder-after-pack.cjs";
 const MAC_DMG_ICON_PATH = "icon.icns";
+export const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 
 export interface DesktopPlatformBuildConfig {
   readonly afterPack?: string;
+  readonly asarUnpack?: ReadonlyArray<string>;
   readonly dmg?: {
     readonly icon: string;
   };
@@ -28,9 +30,32 @@ export interface CreateDesktopPlatformBuildConfigInput {
   readonly windowsAzureSignOptions?: Record<string, string>;
 }
 
+export interface DesktopNativeBuildHostInput {
+  readonly arch: "arm64" | "x64" | "universal";
+  readonly hostArch: string;
+  readonly hostPlatform: NodeJS.Platform;
+  readonly platform: "linux" | "mac" | "win";
+}
+
+export function validateDesktopNativeBuildHost(input: DesktopNativeBuildHostInput): string | null {
+  if (input.platform !== "linux") return null;
+  if (input.arch === "universal") {
+    return "Linux desktop artifacts support x64 or arm64 builds, not universal builds.";
+  }
+  if (input.hostPlatform === "linux" && input.hostArch === input.arch) return null;
+
+  return [
+    "Linux desktop artifacts include the native node-pty terminal dependency.",
+    `Build linux/${input.arch} on a matching Linux host so pty.node and spawn-helper are compiled for Linux.`,
+    `Current host is ${input.hostPlatform}/${input.hostArch}.`,
+  ].join(" ");
+}
+
 export function createDesktopPlatformBuildConfig(
   input: CreateDesktopPlatformBuildConfigInput,
 ): DesktopPlatformBuildConfig {
+  const nativePackaging = { asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS] };
+
   if (input.platform === "mac") {
     const mac = {
       target: input.target === "dmg" ? [input.target, "zip"] : [input.target],
@@ -46,10 +71,11 @@ export function createDesktopPlatformBuildConfig(
     } satisfies Record<string, unknown>;
 
     if (!input.hasMacIconComposer) {
-      return { mac };
+      return { ...nativePackaging, mac };
     }
 
     return {
+      ...nativePackaging,
       mac,
       afterPack: MAC_AFTER_PACK_HOOK_PATH,
       dmg: {
@@ -60,6 +86,7 @@ export function createDesktopPlatformBuildConfig(
 
   if (input.platform === "linux") {
     return {
+      ...nativePackaging,
       linux: {
         target: [input.target],
         executableName: "synara",
@@ -75,6 +102,7 @@ export function createDesktopPlatformBuildConfig(
   }
 
   return {
+    ...nativePackaging,
     win: {
       target: [input.target],
       icon: "icon.ico",

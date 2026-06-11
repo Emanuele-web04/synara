@@ -17,7 +17,7 @@ import {
   type PtyProcess,
   type PtySpawnInput,
 } from "../Services/PTY";
-import { TerminalManagerRuntime } from "./Manager";
+import { TerminalManagerRuntime, type TerminalSubprocessActivity } from "./Manager";
 import { Effect, Encoding } from "effect";
 
 class FakePtyProcess implements PtyProcess {
@@ -191,7 +191,7 @@ describe("TerminalManager", () => {
     historyLineLimit = 5,
     options: {
       shellResolver?: () => string;
-      subprocessChecker?: (terminalPid: number) => Promise<boolean>;
+      subprocessChecker?: (terminalPid: number) => Promise<boolean | TerminalSubprocessActivity>;
       subprocessPollIntervalMs?: number;
       processKillGraceMs?: number;
       maxRetainedInactiveSessions?: number;
@@ -273,6 +273,28 @@ describe("TerminalManager", () => {
     await manager.open(openInput({ cols: 140, rows: 40 }));
 
     expect(process.resizeCalls).toEqual([{ cols: 140, rows: 40 }]);
+
+    manager.dispose();
+  });
+
+  it("keeps a running terminal alive when open reattaches with different cwd or env", async () => {
+    const { manager, ptyAdapter, logsDir } = makeManager();
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    const snapshot = await manager.open(
+      openInput({ cwd: logsDir, env: { SYNARA_TERMINAL_TEST: "changed" } }),
+    );
+
+    expect(snapshot.cwd).toBe(globalThis.process.cwd());
+    expect(snapshot.status).toBe("running");
+    expect(process.killSignals).toEqual([]);
+    expect(ptyAdapter.spawnInputs).toHaveLength(1);
+
+    await manager.write({ threadId: "thread-1", data: "echo alive\n" });
+    expect(process.writes).toContain("echo alive\n");
 
     manager.dispose();
   });
@@ -372,6 +394,105 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
+  it("keeps pty reads paused until renderer output ACKs drain", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    await manager.ackOutput({ threadId: "thread-1", terminalId: "default", bytes: 1 });
+    const output = "x".repeat(120_000);
+    process.emitData(output);
+
+    await waitFor(() => process.paused);
+    expect(
+      events.some((event) => event.type === "output" && event.byteLength === output.length),
+    ).toBe(true);
+
+    await manager.ackOutput({ threadId: "thread-1", terminalId: "default", bytes: 116_000 });
+
+    expect(process.paused).toBe(false);
+    manager.dispose();
+  });
+
+  it("drains output into history without emitting output events when streamOutput is false", async () => {
+    const { manager, ptyAdapter, logsDir } = makeManager();
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+    await manager.open(openInput({ streamOutput: false }));
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    process.emitData("dev server listening\n");
+    // History is still drained and persisted even though nothing is broadcast.
+    await waitFor(() => fs.existsSync(historyLogPath(logsDir)));
+    await waitFor(() =>
+      fs.readFileSync(historyLogPath(logsDir), "utf8").includes("dev server listening"),
+    );
+
+    // No live output event ever reaches the WebSocket fanout for a headless session.
+    expect(events.some((event) => event.type === "output")).toBe(false);
+
+    // Re-opening with streamOutput:true flips the session back to live mode (e.g. a
+    // log viewer attaching later); omitting the flag would preserve headless mode.
+    await manager.open(openInput({ streamOutput: true }));
+    process.emitData("after attach\n");
+    await waitFor(() => events.some((event) => event.type === "output"));
+
+    manager.dispose();
+  });
+
+  it("resumes ack-paused reads when a renderer reattaches", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    // Renderer proves ACK support, then a burst pauses reads without draining.
+    await manager.ackOutput({ threadId: "thread-1", terminalId: "default", bytes: 1 });
+    process.emitData("x".repeat(120_000));
+    await waitFor(() => process.paused);
+
+    // Renderer disconnects while paused and reattaches (open on a running session).
+    // Without resetting the previous client's ACK accounting the PTY would stay
+    // paused forever, since the fresh renderer never ACKs output it never received.
+    await manager.open(openInput());
+
+    expect(process.paused).toBe(false);
+    manager.dispose();
+  });
+
+  it("includes live terminal mode replay preamble in reattach snapshots", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    process.emitData("\u001b[?2004h\u001b[>7u");
+    const snapshot = await manager.open(openInput());
+
+    expect(snapshot.replayPreamble).toContain("\u001b[?2004h");
+    expect(snapshot.replayPreamble).toContain("\u001b[=7;1u");
+
+    process.emitData("\u001b[?2004l\u001b[=0;1u");
+    const resetSnapshot = await manager.open(openInput());
+
+    expect(resetSnapshot.replayPreamble ?? "").not.toContain("?2004");
+    expect(resetSnapshot.replayPreamble ?? "").not.toContain("=7;1u");
+
+    manager.dispose();
+  });
+
   it("restarts terminal with empty transcript and respawns pty", async () => {
     const { manager, ptyAdapter, logsDir } = makeManager();
     await manager.open(openInput());
@@ -455,6 +576,137 @@ describe("TerminalManager", () => {
     await waitFor(
       () =>
         events.some((event) => event.type === "activity" && event.hasRunningSubprocess === false),
+      1_200,
+    );
+
+    manager.dispose();
+  });
+
+  it("does not brand generic terminals from provider descendants", async () => {
+    const { manager } = makeManager(5, {
+      subprocessChecker: async () => ({
+        cliKind: "codex",
+        hasNonProviderSubprocess: true,
+        hasProviderDescendant: true,
+        hasRunningSubprocess: true,
+      }),
+      subprocessPollIntervalMs: 20,
+    });
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.open(openInput());
+    await waitFor(
+      () =>
+        events.some(
+          (event) =>
+            event.type === "activity" &&
+            event.hasRunningSubprocess === true &&
+            event.cliKind === null,
+        ),
+      1_200,
+    );
+
+    expect(events.some((event) => event.type === "activity" && event.cliKind === "codex")).toBe(
+      false,
+    );
+    manager.dispose();
+  });
+
+  it("does not brand generic terminals from provider-looking output", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    process.emitData("Claude Code v1.2.3 is available in this dev-server log\n");
+    await waitFor(() => events.some((event) => event.type === "output"));
+
+    expect(events.some((event) => event.type === "activity" && event.cliKind === "claude")).toBe(
+      false,
+    );
+    manager.dispose();
+  });
+
+  it("clears provider identity when a generic command is submitted", async () => {
+    const { manager } = makeManager();
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.open(openInput());
+    await manager.write({ threadId: "thread-1", data: "codex\r" });
+    expect(events.some((event) => event.type === "activity" && event.cliKind === "codex")).toBe(
+      true,
+    );
+
+    await manager.write({ threadId: "thread-1", data: "bun run dev\r" });
+    expect(events.at(-1)).toMatchObject({
+      type: "activity",
+      cliKind: null,
+    });
+    manager.dispose();
+  });
+
+  it("clears unmanaged provider identity as soon as an observed provider process disappears", async () => {
+    let subprocessActivity: TerminalSubprocessActivity = {
+      cliKind: null,
+      hasNonProviderSubprocess: false,
+      hasProviderDescendant: false,
+      hasRunningSubprocess: false,
+    };
+    let providerDescendantPolls = 0;
+    const { manager } = makeManager(5, {
+      subprocessChecker: async () => {
+        if (subprocessActivity.hasProviderDescendant) {
+          providerDescendantPolls += 1;
+        }
+        return subprocessActivity;
+      },
+      subprocessPollIntervalMs: 20,
+    });
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.open(openInput());
+    await manager.write({ threadId: "thread-1", data: "codex\r" });
+    expect(events.some((event) => event.type === "activity" && event.cliKind === "codex")).toBe(
+      true,
+    );
+
+    subprocessActivity = {
+      cliKind: "codex",
+      hasNonProviderSubprocess: false,
+      hasProviderDescendant: true,
+      hasRunningSubprocess: true,
+    };
+    await waitFor(() => providerDescendantPolls > 0, 1_200);
+
+    subprocessActivity = {
+      cliKind: null,
+      hasNonProviderSubprocess: false,
+      hasProviderDescendant: false,
+      hasRunningSubprocess: false,
+    };
+    await waitFor(
+      () =>
+        events.some(
+          (event) =>
+            event.type === "activity" &&
+            event.cliKind === null &&
+            event.hasRunningSubprocess === false,
+        ),
       1_200,
     );
 
@@ -745,6 +997,28 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
+  it("emits nested PTY spawn failure details", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+    ptyAdapter.spawnFailures.push(new Error("native binding missing"));
+
+    const snapshot = await manager.open(openInput());
+
+    expect(snapshot.status).toBe("error");
+    expect(
+      events.some(
+        (event) =>
+          event.type === "error" &&
+          event.message === "Failed to spawn PTY process: native binding missing",
+      ),
+    ).toBe(true);
+
+    manager.dispose();
+  });
+
   it("filters app runtime env variables from terminal sessions", async () => {
     const originalValues = new Map<string, string | undefined>();
     const setEnv = (key: string, value: string | undefined) => {
@@ -790,6 +1064,49 @@ describe("TerminalManager", () => {
     }
   });
 
+  it("pins TERM to the embedded renderer and drops host-terminal identity env", async () => {
+    const originalValues = new Map<string, string | undefined>();
+    const setEnv = (key: string, value: string) => {
+      if (!originalValues.has(key)) {
+        originalValues.set(key, process.env[key]);
+      }
+      process.env[key] = value;
+    };
+    const restoreEnv = () => {
+      for (const [key, value] of originalValues) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    };
+
+    setEnv("TERM", "xterm-ghostty");
+    setEnv("TERM_PROGRAM", "ghostty");
+    setEnv("TERMINFO", "/Applications/Ghostty.app/Contents/Resources/terminfo");
+    setEnv("GHOSTTY_RESOURCES_DIR", "/Applications/Ghostty.app/Contents/Resources");
+
+    try {
+      const { manager, ptyAdapter } = makeManager();
+      await manager.open(openInput());
+      const spawnInput = ptyAdapter.spawnInputs[0];
+      expect(spawnInput).toBeDefined();
+      if (!spawnInput) return;
+
+      expect(spawnInput.env.TERM).toBe(
+        process.platform === "win32" ? "xterm-color" : "xterm-256color",
+      );
+      expect(spawnInput.env.TERM_PROGRAM).toBeUndefined();
+      expect(spawnInput.env.TERMINFO).toBeUndefined();
+      expect(spawnInput.env.GHOSTTY_RESOURCES_DIR).toBeUndefined();
+
+      manager.dispose();
+    } finally {
+      restoreEnv();
+    }
+  });
+
   it("injects runtime env overrides into spawned terminals", async () => {
     const { manager, ptyAdapter } = makeManager();
     await manager.open(
@@ -812,7 +1129,7 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
-  it("starts zsh with prompt spacer disabled to avoid `%` end markers", async () => {
+  it("starts zsh as a login shell with prompt spacer disabled", async () => {
     if (process.platform === "win32") return;
     const { manager, ptyAdapter } = makeManager(5, {
       shellResolver: () => "/bin/zsh",
@@ -823,7 +1140,7 @@ describe("TerminalManager", () => {
     if (!spawnInput) return;
 
     expect(spawnInput.shell).toBe("/bin/zsh");
-    expect(spawnInput.args).toEqual(["-o", "nopromptsp"]);
+    expect(spawnInput.args).toEqual(["-l", "-o", "nopromptsp"]);
 
     manager.dispose();
   });

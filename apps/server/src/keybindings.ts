@@ -84,6 +84,9 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+2", command: "terminal.workspace.chat", when: "terminalWorkspaceOpen" },
   { key: "mod+shift+b", command: "browser.toggle", when: "!terminalFocus" },
   { key: "mod+d", command: "diff.toggle", when: "!terminalFocus" },
+  { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
+  { key: "mod+shift+e", command: "traitsPicker.toggle", when: "!terminalFocus" },
+  { key: "mod+shift+u", command: "settings.usage", when: "!terminalFocus" },
   { key: "mod+n", command: "chat.new", when: "!terminalFocus" },
   { key: "mod+shift+n", command: "chat.newLatestProject", when: "!terminalFocus" },
   { key: "mod+alt+n", command: "chat.newChat", when: "!terminalFocus" },
@@ -93,6 +96,11 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+alt+r", command: "chat.newCursor", when: "!terminalFocus" },
   { key: "mod+alt+g", command: "chat.newGemini", when: "!terminalFocus" },
   { key: "mod+\\", command: "chat.split", when: "!terminalFocus" },
+  // Recent-view switcher (Ctrl+Tab) is an installed-app feature only: Electron and
+  // standalone PWA windows have no tab strip, so the chord reaches the page. It remains
+  // app-level even with terminal focus; the web route captures it before xterm input.
+  { key: "ctrl+tab", command: "view.recent.next" },
+  { key: "ctrl+shift+tab", command: "view.recent.previous" },
   { key: "mod+1", command: "thread.jump.1", when: "!terminalFocus && !terminalWorkspaceOpen" },
   { key: "mod+2", command: "thread.jump.2", when: "!terminalFocus && !terminalWorkspaceOpen" },
   { key: "mod+3", command: "thread.jump.3", when: "!terminalFocus && !terminalWorkspaceOpen" },
@@ -483,30 +491,79 @@ function invalidEntryIssue(index: number, detail: string): ServerConfigIssue {
 
 const LEGACY_KEYBINDING_COMMAND_ALIASES = {
   "commandPalette.toggle": "sidebar.search",
+  "composer.effortPicker.toggle": "traitsPicker.toggle",
+  "composer.modelPicker.toggle": "modelPicker.toggle",
+  "effortPicker.toggle": "traitsPicker.toggle",
+  "reasoningPicker.toggle": "traitsPicker.toggle",
   "thread.previous": "chat.visible.previous",
   "thread.next": "chat.visible.next",
 } as const satisfies Record<string, KeybindingRule["command"]>;
 
+// Retired picker jump commands have no current equivalent; dropping them avoids
+// rebinding old number-key shortcuts to a different action.
+const RETIRED_LEGACY_KEYBINDING_COMMAND_PATTERN = /^(?:composer\.)?modelPicker\.jump\.[1-9]$/;
+const OUTDATED_RECENT_VIEW_TERMINAL_GUARD = "!terminalFocus";
+const RECENT_VIEW_SHORTCUT_BY_COMMAND: Partial<Record<KeybindingRule["command"], string>> = {
+  "view.recent.next": "ctrl+tab",
+  "view.recent.previous": "ctrl+shift+tab",
+};
+
+function readKeybindingEntryCommand(entry: unknown): string | null {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    return null;
+  }
+
+  const command = (entry as { command?: unknown }).command;
+  return typeof command === "string" ? command : null;
+}
+
+function isRetiredLegacyKeybindingCommand(command: string): boolean {
+  return RETIRED_LEGACY_KEYBINDING_COMMAND_PATTERN.test(command);
+}
+
+// Cross-device configs can lag behind command renames; normalize known aliases
+// before schema validation so stale synced files do not become warning toasts.
 function normalizeLegacyKeybindingEntry(entry: unknown): {
   readonly entry: unknown;
   readonly migrated: boolean;
 } {
-  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-    return { entry, migrated: false };
-  }
-
-  const command = (entry as { command?: unknown }).command;
+  const command = readKeybindingEntryCommand(entry);
   if (typeof command !== "string" || !(command in LEGACY_KEYBINDING_COMMAND_ALIASES)) {
     return { entry, migrated: false };
   }
 
+  // `readKeybindingEntryCommand` only yields a string command for non-null object
+  // entries, so the spread target is guaranteed to be an object here.
   return {
     entry: {
-      ...entry,
+      ...(entry as Record<string, unknown>),
       command:
         LEGACY_KEYBINDING_COMMAND_ALIASES[
           command as keyof typeof LEGACY_KEYBINDING_COMMAND_ALIASES
         ],
+    },
+    migrated: true,
+  };
+}
+
+// Update exact old recent-view defaults so existing configs gain terminal-focus support.
+function migrateOutdatedDefaultKeybindingRule(rule: KeybindingRule): {
+  readonly rule: KeybindingRule;
+  readonly migrated: boolean;
+} {
+  const expectedShortcut = RECENT_VIEW_SHORTCUT_BY_COMMAND[rule.command];
+  if (expectedShortcut === undefined) {
+    return { rule, migrated: false };
+  }
+
+  if (rule.key !== expectedShortcut || rule.when !== OUTDATED_RECENT_VIEW_TERMINAL_GUARD) {
+    return { rule, migrated: false };
+  }
+
+  return {
+    rule: {
+      key: rule.key,
+      command: rule.command,
     },
     migrated: true,
   };
@@ -648,6 +705,11 @@ const makeKeybindings = Effect.gen(function* () {
 
     return yield* Effect.forEach(rawConfig, (entry) =>
       Effect.gen(function* () {
+        const command = readKeybindingEntryCommand(entry);
+        if (command !== null && isRetiredLegacyKeybindingCommand(command)) {
+          return null;
+        }
+
         const normalized = normalizeLegacyKeybindingEntry(entry);
         const decodedRule = Schema.decodeUnknownExit(KeybindingRule)(normalized.entry);
         if (decodedRule._tag === "Failure") {
@@ -677,11 +739,17 @@ const makeKeybindings = Effect.gen(function* () {
       readonly keybindings: readonly KeybindingRule[];
       readonly issues: readonly ServerConfigIssue[];
       readonly migratedLegacyCommandCount: number;
+      readonly migratedDefaultRuleCount: number;
     },
     KeybindingsConfigError
   > {
     if (!(yield* readConfigExists)) {
-      return { keybindings: [], issues: [], migratedLegacyCommandCount: 0 };
+      return {
+        keybindings: [],
+        issues: [],
+        migratedLegacyCommandCount: 0,
+        migratedDefaultRuleCount: 0,
+      };
     }
 
     const rawConfig = yield* readRawConfig;
@@ -692,13 +760,21 @@ const makeKeybindings = Effect.gen(function* () {
         keybindings: [],
         issues: [malformedConfigIssue(detail)],
         migratedLegacyCommandCount: 0,
+        migratedDefaultRuleCount: 0,
       };
     }
 
     const keybindings: KeybindingRule[] = [];
     const issues: ServerConfigIssue[] = [];
     let migratedLegacyCommandCount = 0;
+    let migratedDefaultRuleCount = 0;
     for (const [index, entry] of decodedEntries.value.entries()) {
+      const command = readKeybindingEntryCommand(entry);
+      if (command !== null && isRetiredLegacyKeybindingCommand(command)) {
+        migratedLegacyCommandCount += 1;
+        continue;
+      }
+
       const normalized = normalizeLegacyKeybindingEntry(entry);
       if (normalized.migrated) {
         migratedLegacyCommandCount += 1;
@@ -728,10 +804,14 @@ const makeKeybindings = Effect.gen(function* () {
         });
         continue;
       }
-      keybindings.push(decodedRule.value);
+      const migratedDefaultRule = migrateOutdatedDefaultKeybindingRule(decodedRule.value);
+      if (migratedDefaultRule.migrated) {
+        migratedDefaultRuleCount += 1;
+      }
+      keybindings.push(migratedDefaultRule.rule);
     }
 
-    return { keybindings, issues, migratedLegacyCommandCount };
+    return { keybindings, issues, migratedLegacyCommandCount, migratedDefaultRuleCount };
   });
 
   const writeConfigAtomically = (rules: readonly KeybindingRule[]) => {
@@ -838,7 +918,10 @@ const makeKeybindings = Effect.gen(function* () {
         });
       }
       if (missingDefaults.length === 0) {
-        if (runtimeConfig.migratedLegacyCommandCount > 0) {
+        if (
+          runtimeConfig.migratedLegacyCommandCount > 0 ||
+          runtimeConfig.migratedDefaultRuleCount > 0
+        ) {
           yield* writeConfigAtomically(customConfig);
         }
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
@@ -867,10 +950,12 @@ const makeKeybindings = Effect.gen(function* () {
         });
       }
 
-      if (runtimeConfig.migratedLegacyCommandCount > 0) {
-        yield* Effect.logInfo("migrated legacy keybinding command ids", {
+      const migratedKeybindingCount =
+        runtimeConfig.migratedLegacyCommandCount + runtimeConfig.migratedDefaultRuleCount;
+      if (migratedKeybindingCount > 0) {
+        yield* Effect.logInfo("migrated keybinding config entries", {
           path: keybindingsConfigPath,
-          count: runtimeConfig.migratedLegacyCommandCount,
+          count: migratedKeybindingCount,
         });
       }
       yield* writeConfigAtomically(cappedConfig);

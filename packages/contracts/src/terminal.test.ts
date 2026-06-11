@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_TERMINAL_ID,
+  TerminalAckOutputInput,
   TerminalClearInput,
   TerminalCloseInput,
   TerminalEvent,
@@ -45,6 +46,30 @@ describe("TerminalOpenInput", () => {
         cwd: "/tmp/project",
         cols: 10,
         rows: 2,
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts ultrawide column counts", () => {
+    // Regression: a fit on a wide viewport at a small font legitimately exceeds
+    // the old 400-column cap (e.g. 436), which must not fail the terminal open.
+    expect(
+      decodes(TerminalOpenInput, {
+        threadId: "thread-1",
+        cwd: "/tmp/project",
+        cols: 436,
+        rows: 40,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects dimensions beyond the PTY ceiling", () => {
+    expect(
+      decodes(TerminalOpenInput, {
+        threadId: "thread-1",
+        cwd: "/tmp/project",
+        cols: 2001,
+        rows: 40,
       }),
     ).toBe(false);
   });
@@ -111,6 +136,26 @@ describe("TerminalWriteInput", () => {
   });
 });
 
+describe("TerminalAckOutputInput", () => {
+  it("accepts positive parsed byte counts", () => {
+    expect(
+      decodes(TerminalAckOutputInput, {
+        threadId: "thread-1",
+        bytes: 4096,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects empty ACKs", () => {
+    expect(
+      decodes(TerminalAckOutputInput, {
+        threadId: "thread-1",
+        bytes: 0,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("TerminalThreadInput", () => {
   it("trims thread ids", () => {
     const parsed = decodeSync(TerminalThreadInput, { threadId: " thread-1 " });
@@ -160,6 +205,7 @@ describe("TerminalSessionSnapshot", () => {
         status: "running",
         pid: 1234,
         history: "hello\n",
+        replayPreamble: "\u001b[?2004h\u001b[=7;1u",
         exitCode: null,
         exitSignal: null,
         updatedAt: new Date().toISOString(),
@@ -177,6 +223,19 @@ describe("TerminalEvent", () => {
         terminalId: DEFAULT_TERMINAL_ID,
         createdAt: new Date().toISOString(),
         data: "line\n",
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts output events with byte length", () => {
+    expect(
+      decodes(TerminalEvent, {
+        type: "output",
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        createdAt: new Date().toISOString(),
+        data: "line\n",
+        byteLength: 5,
       }),
     ).toBe(true);
   });

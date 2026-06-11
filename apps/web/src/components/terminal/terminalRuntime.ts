@@ -12,8 +12,15 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import {
   defaultTerminalTitleForCliKind,
   consumeTerminalIdentityInput,
-  deriveTerminalOutputIdentity,
 } from "@t3tools/shared/terminalThreads";
+import { describeErrorMessage } from "@t3tools/shared/errorMessages";
+import {
+  TERMINAL_MAX_COLS,
+  TERMINAL_MAX_ROWS,
+  TERMINAL_MIN_COLS,
+  TERMINAL_MIN_ROWS,
+} from "@t3tools/contracts";
+import type { TerminalSessionSnapshot } from "@t3tools/contracts";
 import { Terminal } from "@xterm/xterm";
 
 import { readNativeApi } from "~/nativeApi";
@@ -29,8 +36,12 @@ import {
   resolveWrappedTerminalLinkRange,
   wrappedTerminalLinkRangeIntersectsBufferLine,
 } from "../../terminal-links";
+import { addWsTransportStateListener } from "../../wsTransportEvents";
 import {
+  getTerminalBoldFontWeight,
   getTerminalFontFamily,
+  getTerminalFontSizePx,
+  getTerminalFontWeight,
   terminalThemeFromApp,
   writeSystemMessage,
 } from "./terminalRuntimeAppearance";
@@ -40,29 +51,156 @@ import type {
   TerminalRuntimeEntry,
   TerminalRuntimeViewState,
 } from "./terminalRuntimeTypes";
+import { waitForTerminalFontReady } from "./terminalFontSettle";
+import { observeTerminalWriteParsed } from "./terminalPerformance";
 
 const ENABLE_TERMINAL_WEBGL = true;
 const VISUAL_RESIZE_MIN_INTERVAL_MS = 64;
 const BACKEND_RESIZE_DEBOUNCE_MS = 120;
 const WRITE_BATCH_SIZE_LIMIT = 262_144;
 const WRITE_BATCH_MAX_LATENCY_MS = 50;
+const LINK_MATCH_CACHE_LIMIT = 512;
 const OPEN_SNAPSHOT_RECONCILE_DELAY_MS = 250;
+const TERMINAL_TEXT_ENCODER = new TextEncoder();
+const TERMINAL_PARKING_CONTAINER_ID = "synara-terminal-parking";
+
+type SynaraTerminalOptions = NonNullable<ConstructorParameters<typeof Terminal>[0]> & {
+  fontWeight?: string | number;
+  fontWeightBold?: string | number;
+  scrollbar?: { showScrollbar?: boolean };
+  vtExtensions?: { kittyKeyboard?: boolean };
+};
+
+const TERMINAL_CURSOR_STYLE: NonNullable<SynaraTerminalOptions["cursorStyle"]> = "bar";
+const TERMINAL_INACTIVE_CURSOR_STYLE: NonNullable<SynaraTerminalOptions["cursorInactiveStyle"]> =
+  "bar";
+const TERMINAL_CURSOR_WIDTH = 1;
 
 // Once WebGL fails, skip it for subsequent terminals in this renderer process.
 let suggestedRendererType: "webgl" | "dom" | undefined;
 
+function terminalByteLength(data: string): number {
+  return TERMINAL_TEXT_ENCODER.encode(data).byteLength;
+}
+
+function acknowledgeParsedOutput(entry: TerminalRuntimeEntry, bytes: number): void {
+  if (bytes <= 0) return;
+  const api = readNativeApi();
+  if (!api) return;
+  const ackOutput = api.terminal.ackOutput;
+  if (typeof ackOutput !== "function") return;
+
+  void ackOutput({
+    threadId: entry.threadId,
+    terminalId: entry.terminalId,
+    bytes,
+  }).catch(() => {
+    // Flow control is best-effort; reconnect/replay will recover from a missed ACK.
+  });
+}
+
+function setRuntimeStatus(
+  entry: TerminalRuntimeEntry,
+  status: TerminalRuntimeEntry["runtimeStatus"],
+) {
+  if (entry.runtimeStatus === status) return;
+  entry.runtimeStatus = status;
+  entry.callbacks.onTerminalRuntimeStatusChange?.(entry.terminalId, status);
+}
+
+function readCachedTerminalLinks(entry: TerminalRuntimeEntry, line: string) {
+  const cached = entry.linkMatchCache.get(line);
+  if (cached) return cached;
+
+  const matches = extractTerminalLinks(line);
+  if (entry.linkMatchCache.size >= LINK_MATCH_CACHE_LIMIT) {
+    entry.linkMatchCache.clear();
+  }
+  entry.linkMatchCache.set(line, matches);
+  return matches;
+}
+
+function getTerminalParkingContainer(): HTMLDivElement {
+  let container = document.getElementById(TERMINAL_PARKING_CONTAINER_ID) as HTMLDivElement | null;
+  if (container) return container;
+
+  container = document.createElement("div");
+  container.id = TERMINAL_PARKING_CONTAINER_ID;
+  container.setAttribute("aria-hidden", "true");
+  container.style.cssText =
+    "position:fixed;width:0;height:0;overflow:hidden;contain:strict;left:-10000px;top:-10000px;";
+  document.body.append(container);
+  return container;
+}
+
+function scheduleFontSettleRefit(entry: TerminalRuntimeEntry): void {
+  const fontFamily = String(entry.terminal.options.fontFamily ?? "").trim();
+  if (!fontFamily) return;
+  const fontSize = Number(entry.terminal.options.fontSize ?? 12);
+  void waitForTerminalFontReady({ fontFamily, fontSize }).then(() => {
+    if (entry.disposed) return;
+    runTerminalResize(entry, { refresh: true });
+  });
+}
+
 function resetForSnapshotReplay(entry: TerminalRuntimeEntry): void {
   entry.titleInputBuffer = "";
-  entry.outputIdentityBuffer = "";
+  entry.linkMatchCache.clear();
   clearPendingWrites(entry);
-  clearDeferredWrites(entry);
   entry.terminal.write("\u001bc");
 }
 
-function replaySnapshotHistory(entry: TerminalRuntimeEntry, history: string): void {
+function snapshotReplayPayload(snapshot: TerminalSessionSnapshot): string {
+  return `${snapshot.replayPreamble ?? ""}${snapshot.history}`;
+}
+
+function snapshotHasReplayPayload(snapshot: TerminalSessionSnapshot): boolean {
+  return snapshot.history.length > 0 || (snapshot.replayPreamble?.length ?? 0) > 0;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+// Fit xterm to its container, then clamp the result into the PTY contract bounds.
+// An ultrawide viewport at a small font can legitimately propose more than the
+// old 400-column cap, and a fit before fonts settle can momentarily report a
+// glitched (tiny char width -> huge column count) size. Forcing xterm back into
+// range keeps the open/resize payloads valid — so the terminal always opens —
+// and keeps the rendered grid consistent with what the backend PTY believes.
+function fitTerminal(entry: TerminalRuntimeEntry): void {
+  entry.fitAddon.fit();
+  const cols = clamp(entry.terminal.cols, TERMINAL_MIN_COLS, TERMINAL_MAX_COLS);
+  const rows = clamp(entry.terminal.rows, TERMINAL_MIN_ROWS, TERMINAL_MAX_ROWS);
+  if (cols !== entry.terminal.cols || rows !== entry.terminal.rows) {
+    entry.terminal.resize(cols, rows);
+  }
+}
+
+function buildOpenInput(entry: TerminalRuntimeEntry) {
+  return {
+    threadId: entry.threadId,
+    terminalId: entry.terminalId,
+    cwd: entry.cwd,
+    cols: entry.terminal.cols,
+    rows: entry.terminal.rows,
+    ...(entry.runtimeEnv ? { env: entry.runtimeEnv } : {}),
+  };
+}
+
+function replaySnapshot(
+  entry: TerminalRuntimeEntry,
+  snapshot: TerminalSessionSnapshot,
+  onParsed?: () => void,
+): void {
   resetForSnapshotReplay(entry);
-  maybePromoteTerminalIdentityFromOutput(entry, history);
-  entry.terminal.write(history);
+  const payload = snapshotReplayPayload(snapshot);
+  if (payload.length > 0) {
+    setRuntimeStatus(entry, "replaying");
+    entry.terminal.write(payload, onParsed);
+    return;
+  }
+  onParsed?.();
 }
 
 function clearBackendResizeTimer(entry: TerminalRuntimeEntry): void {
@@ -81,13 +219,12 @@ function clearPendingWrites(entry: TerminalRuntimeEntry): void {
     window.clearTimeout(entry.writeFlushTimeout);
     entry.writeFlushTimeout = null;
   }
+  if (entry.pendingWriteBytes > 0) {
+    acknowledgeParsedOutput(entry, entry.pendingWriteBytes);
+  }
   entry.pendingWrites.length = 0;
   entry.pendingWriteLength = 0;
-}
-
-function clearDeferredWrites(entry: TerminalRuntimeEntry): void {
-  entry.deferredWrites.length = 0;
-  entry.deferredWriteLength = 0;
+  entry.pendingWriteBytes = 0;
 }
 
 function flushPendingWrites(entry: TerminalRuntimeEntry): void {
@@ -101,30 +238,35 @@ function flushPendingWrites(entry: TerminalRuntimeEntry): void {
   }
   if (entry.pendingWrites.length === 0) {
     entry.pendingWriteLength = 0;
+    entry.pendingWriteBytes = 0;
     return;
   }
-  const combined = entry.pendingWrites.join("");
+  const combined = entry.pendingWrites.map((write) => write.data).join("");
+  const byteLength = entry.pendingWriteBytes;
+  const queuedAt = entry.pendingWrites[0]?.queuedAt ?? performance.now();
   entry.pendingWrites.length = 0;
   entry.pendingWriteLength = 0;
-  entry.terminal.write(combined);
+  entry.pendingWriteBytes = 0;
+  entry.terminal.write(combined, () => {
+    acknowledgeParsedOutput(entry, byteLength);
+    observeTerminalWriteParsed({
+      runtimeKey: entry.runtimeKey,
+      bytes: byteLength,
+      queuedAt,
+    });
+  });
 }
 
-function flushDeferredWrites(entry: TerminalRuntimeEntry): void {
-  if (entry.deferredWrites.length === 0) {
-    entry.deferredWriteLength = 0;
-    return;
-  }
-
-  const combined = entry.deferredWrites.join("");
-  clearDeferredWrites(entry);
-  scheduleWrite(entry, combined);
-}
-
-function scheduleWrite(entry: TerminalRuntimeEntry, data: string): void {
-  entry.pendingWrites.push(data);
+function scheduleWrite(entry: TerminalRuntimeEntry, data: string, byteLength: number): void {
+  entry.pendingWrites.push({
+    data,
+    byteLength,
+    queuedAt: performance.now(),
+  });
   entry.pendingWriteLength += data.length;
+  entry.pendingWriteBytes += byteLength;
 
-  if (entry.pendingWriteLength >= WRITE_BATCH_SIZE_LIMIT) {
+  if (entry.pendingWriteBytes >= WRITE_BATCH_SIZE_LIMIT) {
     flushPendingWrites(entry);
     return;
   }
@@ -189,7 +331,11 @@ function runTerminalResize(
   if (!entry.container || !entry.viewState.isVisible) return;
 
   const { clearTextureAtlas = false, refresh = false, dispatchBackend = true } = options ?? {};
-  const wasAtBottom = entry.terminal.buffer.active.viewportY >= entry.terminal.buffer.active.baseY;
+  const buffer = entry.terminal.buffer.active;
+  const wasAtBottom = buffer.viewportY >= buffer.baseY;
+  const savedViewportY = buffer.viewportY;
+  const previousCols = entry.terminal.cols;
+  const previousRows = entry.terminal.rows;
 
   if (clearTextureAtlas) {
     (
@@ -199,11 +345,18 @@ function runTerminalResize(
     )?.clearTextureAtlas?.();
   }
 
-  entry.fitAddon.fit();
+  fitTerminal(entry);
   if (wasAtBottom) {
     entry.terminal.scrollToBottom();
+  } else {
+    const targetViewportY = Math.min(savedViewportY, entry.terminal.buffer.active.baseY);
+    if (entry.terminal.buffer.active.viewportY !== targetViewportY) {
+      entry.terminal.scrollToLine(targetViewportY);
+    }
   }
-  if (dispatchBackend) {
+  const dimensionsChanged =
+    entry.terminal.cols !== previousCols || entry.terminal.rows !== previousRows;
+  if (dispatchBackend && dimensionsChanged) {
     queueBackendResize(entry, entry.terminal.cols, entry.terminal.rows);
   }
   if (refresh) {
@@ -334,16 +487,47 @@ function stopVisibilityRecovery(entry: TerminalRuntimeEntry): void {
 
 function syncTheme(entry: TerminalRuntimeEntry): void {
   const nextTheme = terminalThemeFromApp();
-  const nextThemeKey = JSON.stringify(nextTheme);
-  const previousThemeKey = (entry.wrapper.dataset.themeKey ?? "") as string;
-  if (nextThemeKey === previousThemeKey) {
+  const nextFontFamily = getTerminalFontFamily();
+  const nextFontSize = getTerminalFontSizePx();
+  const nextFontWeight = getTerminalFontWeight();
+  const nextBoldFontWeight = getTerminalBoldFontWeight();
+  const nextFontKey = JSON.stringify({
+    fontFamily: nextFontFamily,
+    fontSize: nextFontSize,
+    fontWeight: nextFontWeight,
+    fontWeightBold: nextBoldFontWeight,
+  });
+  const nextAppearanceKey = JSON.stringify({
+    fontFamily: nextFontFamily,
+    fontSize: nextFontSize,
+    fontWeight: nextFontWeight,
+    fontWeightBold: nextBoldFontWeight,
+    cursorStyle: TERMINAL_CURSOR_STYLE,
+    cursorInactiveStyle: TERMINAL_INACTIVE_CURSOR_STYLE,
+    cursorWidth: TERMINAL_CURSOR_WIDTH,
+    theme: nextTheme,
+  });
+  const previousAppearanceKey = (entry.wrapper.dataset.themeKey ?? "") as string;
+  if (nextAppearanceKey === previousAppearanceKey) {
     return;
   }
-  entry.wrapper.dataset.themeKey = nextThemeKey;
-  entry.terminal.options.theme = nextTheme;
-  entry.terminal.options.fontFamily = getTerminalFontFamily();
+  const shouldClearTextureAtlas = nextFontKey !== (entry.wrapper.dataset.fontKey ?? "");
+  entry.wrapper.dataset.themeKey = nextAppearanceKey;
+  entry.wrapper.dataset.fontKey = nextFontKey;
+  const terminalOptions = entry.terminal.options as SynaraTerminalOptions;
+  terminalOptions.theme = nextTheme;
+  terminalOptions.fontFamily = nextFontFamily;
+  terminalOptions.fontSize = nextFontSize;
+  terminalOptions.fontWeight = nextFontWeight;
+  terminalOptions.fontWeightBold = nextBoldFontWeight;
+  terminalOptions.cursorStyle = TERMINAL_CURSOR_STYLE;
+  terminalOptions.cursorInactiveStyle = TERMINAL_INACTIVE_CURSOR_STYLE;
+  terminalOptions.cursorWidth = TERMINAL_CURSOR_WIDTH;
+  if (shouldClearTextureAtlas) {
+    scheduleFontSettleRefit(entry);
+  }
   if (entry.viewState.isVisible) {
-    runTerminalResize(entry, { refresh: true });
+    runTerminalResize(entry, { clearTextureAtlas: shouldClearTextureAtlas, refresh: true });
   } else {
     entry.terminal.refresh(0, Math.max(0, entry.terminal.rows - 1));
   }
@@ -389,6 +573,7 @@ function maybeLoadWebglAddon(entry: TerminalRuntimeEntry): void {
     try {
       const nextWebglAddon = new WebglAddon();
       nextWebglAddon.onContextLoss(() => {
+        suggestedRendererType = "dom";
         nextWebglAddon.dispose();
         if (entry.webglAddon === nextWebglAddon) {
           entry.webglAddon = null;
@@ -401,24 +586,6 @@ function maybeLoadWebglAddon(entry: TerminalRuntimeEntry): void {
       suggestedRendererType = "dom";
       entry.webglAddon = null;
     }
-  });
-}
-
-function maybePromoteTerminalIdentityFromOutput(entry: TerminalRuntimeEntry, output: string): void {
-  if (entry.terminalCliKind !== null) {
-    return;
-  }
-  const nextOutputBuffer = `${entry.outputIdentityBuffer}${output}`;
-  const outputIdentity =
-    deriveTerminalOutputIdentity(output) ?? deriveTerminalOutputIdentity(nextOutputBuffer);
-  entry.outputIdentityBuffer = nextOutputBuffer.slice(-8192);
-  if (!outputIdentity?.cliKind) {
-    return;
-  }
-  entry.terminalCliKind = outputIdentity.cliKind;
-  entry.callbacks.onTerminalMetadataChange(entry.terminalId, {
-    cliKind: outputIdentity.cliKind,
-    label: outputIdentity.title,
   });
 }
 
@@ -458,7 +625,15 @@ function ensureResizeObserver(entry: TerminalRuntimeEntry): void {
   }
 
   let frame = 0;
-  const observer = new ResizeObserver(() => {
+  const observer = new ResizeObserver((entries) => {
+    if (
+      entries.some(
+        (resizeEntry) => resizeEntry.contentRect.width <= 0 || resizeEntry.contentRect.height <= 0,
+      )
+    ) {
+      cancelScheduledVisualResize(entry);
+      return;
+    }
     if (frame !== 0) {
       window.cancelAnimationFrame(frame);
     }
@@ -500,8 +675,56 @@ async function sendTerminalInput(
   try {
     await api.terminal.write({ threadId: entry.threadId, terminalId: entry.terminalId, data });
   } catch (error) {
-    writeSystemMessage(entry.terminal, error instanceof Error ? error.message : fallbackError);
+    writeSystemMessage(entry.terminal, describeErrorMessage(error, fallbackError));
   }
+}
+
+function reconcileTerminalSnapshot(entry: TerminalRuntimeEntry): void {
+  if (entry.disposed || !entry.opened || entry.hasHandledExit) return;
+  const api = readNativeApi();
+  if (!api) return;
+
+  const outputEventVersionAtRequest = entry.outputEventVersion;
+  const requestId = ++entry.snapshotReconcileRequestId;
+  setRuntimeStatus(entry, "connecting");
+
+  void api.terminal
+    .open(buildOpenInput(entry))
+    .then((snapshot) => {
+      if (
+        entry.disposed ||
+        !entry.opened ||
+        entry.hasHandledExit ||
+        entry.snapshotReconcileRequestId !== requestId
+      ) {
+        return;
+      }
+
+      if (entry.outputEventVersion !== outputEventVersionAtRequest) {
+        return;
+      }
+
+      if (snapshotHasReplayPayload(snapshot)) {
+        replaySnapshot(entry, snapshot, () => {
+          if (!entry.disposed && entry.snapshotReconcileRequestId === requestId) {
+            setRuntimeStatus(entry, "ready");
+          }
+        });
+        return;
+      }
+
+      setRuntimeStatus(entry, "ready");
+    })
+    .catch((error) => {
+      if (entry.disposed || !entry.opened || entry.snapshotReconcileRequestId !== requestId) {
+        return;
+      }
+      setRuntimeStatus(entry, "error");
+      writeSystemMessage(
+        entry.terminal,
+        error instanceof Error ? error.message : "Failed to reconnect terminal",
+      );
+    });
 }
 
 export function syncRuntimeConfig(
@@ -531,19 +754,26 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
   const imageAddon = new ImageAddon();
   const searchAddon = new SearchAddon();
   const unicode11Addon = new Unicode11Addon();
-  const terminal = new Terminal({
+  const terminalOptions: SynaraTerminalOptions = {
     cursorBlink: true,
-    fontSize: 12,
+    fontSize: getTerminalFontSizePx(),
+    fontWeight: getTerminalFontWeight(),
+    fontWeightBold: getTerminalBoldFontWeight(),
     scrollback: 5_000,
     fontFamily: getTerminalFontFamily(),
     theme: terminalThemeFromApp(),
     allowProposedApi: true,
     customGlyphs: true,
     macOptionIsMeta: false,
-    cursorStyle: "block",
-    cursorInactiveStyle: "outline",
+    cursorStyle: TERMINAL_CURSOR_STYLE,
+    cursorInactiveStyle: TERMINAL_INACTIVE_CURSOR_STYLE,
+    cursorWidth: TERMINAL_CURSOR_WIDTH,
     screenReaderMode: false,
-  });
+    allowTransparency: false,
+    vtExtensions: { kittyKeyboard: true },
+    scrollbar: { showScrollbar: false },
+  };
+  const terminal = new Terminal(terminalOptions);
   terminal.loadAddon(fitAddon);
   terminal.loadAddon(clipboardAddon);
   terminal.loadAddon(imageAddon);
@@ -571,9 +801,9 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     fitAddon,
     searchAddon,
     webglAddon: null,
-    outputIdentityBuffer: "",
     titleInputBuffer: "",
     hasHandledExit: false,
+    runtimeStatus: "connecting",
     opened: false,
     disposed: false,
     resizeObserver: null,
@@ -587,9 +817,10 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     writeFlushTimeout: null,
     pendingWrites: [],
     pendingWriteLength: 0,
-    deferredWrites: [],
-    deferredWriteLength: 0,
+    pendingWriteBytes: 0,
+    linkMatchCache: new Map(),
     outputEventVersion: 0,
+    snapshotReconcileRequestId: 0,
     webglLoadFrame: null,
     themeRefreshFrame: 0,
     themeObserver: null,
@@ -608,6 +839,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     entry.runtimeEnv = config.runtimeEnv;
   }
 
+  scheduleFontSettleRefit(entry);
   entry.querySuppressionDispose = suppressQueryResponses(terminal);
 
   const handleCopy = (event: ClipboardEvent) => {
@@ -628,6 +860,18 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
   entry.persistentDisposables.push(() => {
     wrapper.removeEventListener("copy", handleCopy);
   });
+
+  const unsubscribeTransportState = addWsTransportStateListener((state) => {
+    if (entry.disposed || !entry.opened || entry.hasHandledExit) return;
+    if (state === "open") {
+      reconcileTerminalSnapshot(entry);
+      return;
+    }
+    if (state === "connecting" || state === "closed") {
+      setRuntimeStatus(entry, "connecting");
+    }
+  });
+  entry.persistentDisposables.push(unsubscribeTransportState);
 
   terminal.attachCustomKeyEventHandler((event) => {
     if (
@@ -680,7 +924,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
           return;
         }
 
-        const links = extractTerminalLinks(wrappedLine.text)
+        const links = readCachedTerminalLinks(entry, wrappedLine.text)
           .map((match) => ({
             match,
             range: resolveWrappedTerminalLinkRange(wrappedLine, match),
@@ -704,20 +948,14 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
 
               if (match.kind === "url") {
                 void api.shell.openExternal(match.text).catch((error) => {
-                  writeSystemMessage(
-                    terminal,
-                    error instanceof Error ? error.message : "Unable to open link",
-                  );
+                  writeSystemMessage(terminal, describeErrorMessage(error, "Unable to open link"));
                 });
                 return;
               }
 
               const target = resolvePathLinkTarget(match.text, entry.cwd);
               void openInPreferredEditor(api, target).catch((error) => {
-                writeSystemMessage(
-                  terminal,
-                  error instanceof Error ? error.message : "Unable to open path",
-                );
+                writeSystemMessage(terminal, describeErrorMessage(error, "Unable to open path"));
               });
             },
           })),
@@ -730,11 +968,12 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     terminal.onData((data) => {
       const nextIdentityState = consumeTerminalIdentityInput(entry.titleInputBuffer, data);
       entry.titleInputBuffer = nextIdentityState.buffer;
-      if (nextIdentityState.identity?.cliKind && entry.terminalCliKind === null) {
-        entry.terminalCliKind = nextIdentityState.identity.cliKind;
+      const submittedIdentity = nextIdentityState.identity;
+      if (submittedIdentity && (submittedIdentity.cliKind || entry.terminalCliKind !== null)) {
+        entry.terminalCliKind = submittedIdentity.cliKind;
         entry.callbacks.onTerminalMetadataChange(entry.terminalId, {
-          cliKind: nextIdentityState.identity.cliKind,
-          label: nextIdentityState.identity.title,
+          cliKind: submittedIdentity.cliKind,
+          label: submittedIdentity.title,
         });
       }
       const api = readNativeApi();
@@ -742,10 +981,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
       void api.terminal
         .write({ threadId: entry.threadId, terminalId: entry.terminalId, data })
         .catch((error) =>
-          writeSystemMessage(
-            terminal,
-            error instanceof Error ? error.message : "Terminal write failed",
-          ),
+          writeSystemMessage(terminal, describeErrorMessage(error, "Terminal write failed")),
         );
     }),
   );
@@ -767,43 +1003,39 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     entry.terminalId,
     (event) => {
       if (event.type === "output") {
+        setRuntimeStatus(entry, "ready");
         entry.outputEventVersion += 1;
-        maybePromoteTerminalIdentityFromOutput(entry, event.data);
-        flushDeferredWrites(entry);
-        scheduleWrite(entry, event.data);
+        scheduleWrite(entry, event.data, event.byteLength ?? terminalByteLength(event.data));
         return;
       }
 
       if (event.type === "started" || event.type === "restarted") {
         entry.hasHandledExit = false;
         const shouldReplaySnapshot =
-          event.type === "restarted" || event.snapshot.history.length > 0;
+          event.type === "restarted" || snapshotHasReplayPayload(event.snapshot);
         if (shouldReplaySnapshot) {
-          resetForSnapshotReplay(entry);
-        }
-        if (event.snapshot.history.length > 0) {
-          maybePromoteTerminalIdentityFromOutput(entry, event.snapshot.history);
-          terminal.write(event.snapshot.history);
+          replaySnapshot(entry, event.snapshot, () => setRuntimeStatus(entry, "ready"));
+        } else {
+          setRuntimeStatus(entry, "ready");
         }
         return;
       }
 
       if (event.type === "cleared") {
         entry.titleInputBuffer = "";
-        entry.outputIdentityBuffer = "";
+        entry.linkMatchCache.clear();
         clearPendingWrites(entry);
-        clearDeferredWrites(entry);
         terminal.clear();
         terminal.write("\u001bc");
         return;
       }
 
       if (event.type === "activity") {
-        if (event.cliKind && entry.terminalCliKind !== event.cliKind) {
+        if (entry.terminalCliKind !== event.cliKind) {
           entry.terminalCliKind = event.cliKind;
           entry.callbacks.onTerminalMetadataChange(entry.terminalId, {
             cliKind: event.cliKind,
-            label: defaultTerminalTitleForCliKind(event.cliKind),
+            label: event.cliKind ? defaultTerminalTitleForCliKind(event.cliKind) : "Terminal",
           });
         }
         entry.callbacks.onTerminalActivityChange(entry.terminalId, {
@@ -814,6 +1046,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
       }
 
       if (event.type === "error") {
+        setRuntimeStatus(entry, "error");
         writeSystemMessage(terminal, event.message);
         return;
       }
@@ -851,26 +1084,24 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
   const api = readNativeApi();
   if (!api || entry.opened) return;
 
-  entry.fitAddon.fit();
+  fitTerminal(entry);
   entry.lastSentResize = null;
   entry.opened = true;
+  setRuntimeStatus(entry, "connecting");
   const outputEventVersionAtOpen = entry.outputEventVersion;
-  const openInput = {
-    threadId: entry.threadId,
-    terminalId: entry.terminalId,
-    cwd: entry.cwd,
-    cols: entry.terminal.cols,
-    rows: entry.terminal.rows,
-    ...(entry.runtimeEnv ? { env: entry.runtimeEnv } : {}),
-  };
+  const openInput = buildOpenInput(entry);
 
   void api.terminal
     .open(openInput)
     .then((snapshot) => {
       if (entry.disposed) return;
-      if (snapshot.history.length > 0 && entry.outputEventVersion === outputEventVersionAtOpen) {
-        replaySnapshotHistory(entry, snapshot.history);
+      if (
+        snapshotHasReplayPayload(snapshot) &&
+        entry.outputEventVersion === outputEventVersionAtOpen
+      ) {
+        replaySnapshot(entry, snapshot, () => setRuntimeStatus(entry, "ready"));
       } else if (entry.outputEventVersion === outputEventVersionAtOpen) {
+        setRuntimeStatus(entry, "ready");
         window.setTimeout(() => {
           if (
             entry.disposed ||
@@ -885,11 +1116,11 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
               if (
                 entry.disposed ||
                 entry.outputEventVersion !== outputEventVersionAtOpen ||
-                nextSnapshot.history.length === 0
+                !snapshotHasReplayPayload(nextSnapshot)
               ) {
                 return;
               }
-              replaySnapshotHistory(entry, nextSnapshot.history);
+              replaySnapshot(entry, nextSnapshot, () => setRuntimeStatus(entry, "ready"));
             })
             .catch(() => {
               // Best-effort recovery only; the original open already succeeded.
@@ -905,10 +1136,8 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
     .catch((error) => {
       if (entry.disposed) return;
       entry.opened = false;
-      writeSystemMessage(
-        entry.terminal,
-        error instanceof Error ? error.message : "Failed to open terminal",
-      );
+      setRuntimeStatus(entry, "error");
+      writeSystemMessage(entry.terminal, describeErrorMessage(error, "Failed to open terminal"));
     });
 }
 
@@ -940,7 +1169,6 @@ export function updateRuntimeViewState(
   if (entry.container) {
     if (nextViewState.isVisible && !wasVisible) {
       maybeLoadWebglAddon(entry);
-      flushDeferredWrites(entry);
       applyInitialVisualResize(entry);
       ensureResizeObserver(entry);
       startVisibilityRecovery(entry);
@@ -968,15 +1196,16 @@ export function detachRuntimeFromContainer(entry: TerminalRuntimeEntry): void {
   entry.pendingResize = null;
   entry.lastSentResize = null;
   entry.lastVisualResizeAt = 0;
-  entry.wrapper.remove();
+  getTerminalParkingContainer().append(entry.wrapper);
   entry.container = null;
 }
 
 export function disposeRuntimeEntry(entry: TerminalRuntimeEntry): void {
   detachRuntimeFromContainer(entry);
   entry.disposed = true;
-  flushPendingWrites(entry);
-  clearDeferredWrites(entry);
+  // Closing a terminal should not synchronously paint queued output into a buffer
+  // that is about to be destroyed; acknowledge and drop it to keep close latency low.
+  clearPendingWrites(entry);
   entry.unsubscribeTerminalEvents?.();
   entry.unsubscribeTerminalEvents = null;
   entry.querySuppressionDispose?.();
@@ -997,4 +1226,5 @@ export function disposeRuntimeEntry(entry: TerminalRuntimeEntry): void {
   entry.persistentDisposables.length = 0;
   disposeWebglAddon(entry);
   entry.terminal.dispose();
+  entry.wrapper.remove();
 }

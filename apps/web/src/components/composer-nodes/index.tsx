@@ -30,14 +30,17 @@ import { formatComposerMentionToken } from "~/lib/composerMentions";
 import { basenameOfPath } from "~/file-icons";
 import { createCentralIconElement } from "~/lib/central-icons";
 import {
+  COMPOSER_INLINE_DECORATOR_HOST_CLASS_NAME,
   COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
   COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
-  COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+  COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
   formatComposerSkillChipLabel,
+  resolveAgentChipColor,
 } from "../composerInlineChip";
+import { InlineLinkChip } from "../InlineLinkChip";
 import { ComposerPendingTerminalContextChip } from "../chat/ComposerPendingTerminalContexts";
 import { createMentionChipIconElement, type MentionChipKind } from "../chat/MentionChipIcon";
 
@@ -72,6 +75,15 @@ export type SerializedComposerAgentMentionNode = Spread<
   SerializedTextNode
 >;
 
+export type SerializedComposerLinkNode = Spread<
+  {
+    url: string;
+    type: "composer-link";
+    version: 1;
+  },
+  SerializedLexicalNode
+>;
+
 export type SerializedComposerTerminalContextNode = Spread<
   {
     context: TerminalContextDraft;
@@ -83,19 +95,25 @@ export type SerializedComposerTerminalContextNode = Spread<
 
 // ── Helper Functions ──────────────────────────────────────────────────
 
+// Shared boilerplate for the imperative Lexical chip hosts: clear prior content
+// and make the token unselectable so the caret skips over it as one unit.
+function resetInlineChipContainer(container: HTMLElement): void {
+  container.textContent = "";
+  container.style.setProperty("user-select", "none");
+  container.style.setProperty("-webkit-user-select", "none");
+}
+
 function renderMentionChipDom(
   container: HTMLElement,
   pathValue: string,
   kind: MentionChipKind,
 ): void {
-  container.textContent = "";
-  container.style.setProperty("user-select", "none");
-  container.style.setProperty("-webkit-user-select", "none");
+  resetInlineChipContainer(container);
 
   const icon = createMentionChipIconElement(
     pathValue,
     kind,
-    COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+    COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   );
 
   const label = document.createElement("span");
@@ -106,13 +124,11 @@ function renderMentionChipDom(
 }
 
 function renderSkillChipDom(container: HTMLElement, name: string): void {
-  container.textContent = "";
-  container.style.setProperty("user-select", "none");
-  container.style.setProperty("-webkit-user-select", "none");
+  resetInlineChipContainer(container);
 
   const icon = createCentralIconElement(
     COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
-    COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+    COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   );
 
   const label = document.createElement("span");
@@ -130,24 +146,10 @@ const AGENT_ROBOT_ICON_SVG = renderToStaticMarkup(
   <RiRobot3Line aria-hidden="true" className={COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME} />,
 );
 
-// Color mapping for agent aliases (Tailwind color classes)
-const DEFAULT_AGENT_COLOR = { bg: "rgb(245 158 11 / 0.15)", text: "rgb(245 158 11)" };
-const AGENT_COLOR_STYLES: Record<string, { bg: string; text: string }> = {
-  violet: { bg: "rgb(139 92 246 / 0.15)", text: "rgb(139 92 246)" },
-  fuchsia: { bg: "rgb(217 70 239 / 0.15)", text: "rgb(217 70 239)" },
-  teal: { bg: "rgb(20 184 166 / 0.15)", text: "rgb(20 184 166)" },
-  cyan: { bg: "rgb(6 182 212 / 0.15)", text: "rgb(6 182 212)" },
-  amber: DEFAULT_AGENT_COLOR,
-  orange: { bg: "rgb(249 115 22 / 0.15)", text: "rgb(249 115 22)" },
-};
-
 function renderAgentMentionChipDom(container: HTMLElement, alias: string, color: string): void {
-  container.textContent = "";
-  container.style.setProperty("user-select", "none");
-  container.style.setProperty("-webkit-user-select", "none");
+  resetInlineChipContainer(container);
 
-  // Apply color-specific styles
-  const colorStyles = AGENT_COLOR_STYLES[color] ?? DEFAULT_AGENT_COLOR;
+  const colorStyles = resolveAgentChipColor(color);
   container.style.backgroundColor = colorStyles.bg;
   container.style.color = colorStyles.text;
 
@@ -161,6 +163,10 @@ function renderAgentMentionChipDom(container: HTMLElement, alias: string, color:
   label.textContent = `@${alias}`;
 
   container.append(icon, label);
+}
+
+function ComposerLinkDecorator(props: { url: string }) {
+  return <InlineLinkChip url={props.url} />;
 }
 
 // ── ComposerMentionNode ───────────────────────────────────────────────
@@ -305,8 +311,8 @@ export class ComposerSkillNode extends TextNode {
     return false;
   }
 
-  override canInsertTextAfter(): false {
-    return false;
+  override canInsertTextAfter(): true {
+    return true;
   }
 
   override isTextEntity(): true {
@@ -404,6 +410,63 @@ export function $createComposerAgentMentionNode(
   return $applyNodeReplacement(new ComposerAgentMentionNode(alias, color));
 }
 
+// ── ComposerLinkNode ──────────────────────────────────────────────────
+
+export class ComposerLinkNode extends DecoratorNode<ReactElement> {
+  __url: string;
+
+  static override getType(): string {
+    return "composer-link";
+  }
+
+  static override clone(node: ComposerLinkNode): ComposerLinkNode {
+    return new ComposerLinkNode(node.__url, node.__key);
+  }
+
+  static override importJSON(serializedNode: SerializedComposerLinkNode): ComposerLinkNode {
+    return $createComposerLinkNode(serializedNode.url);
+  }
+
+  constructor(url: string, key?: NodeKey) {
+    super(key);
+    this.__url = url;
+  }
+
+  override exportJSON(): SerializedComposerLinkNode {
+    return {
+      url: this.__url,
+      type: "composer-link",
+      version: 1,
+    };
+  }
+
+  override createDOM(): HTMLElement {
+    const dom = document.createElement("span");
+    dom.className = COMPOSER_INLINE_DECORATOR_HOST_CLASS_NAME;
+    return dom;
+  }
+
+  override updateDOM(): false {
+    return false;
+  }
+
+  override decorate(): ReactElement {
+    return <ComposerLinkDecorator url={this.__url} />;
+  }
+
+  override getTextContent(): string {
+    return this.__url;
+  }
+
+  override isInline(): true {
+    return true;
+  }
+}
+
+export function $createComposerLinkNode(url: string): ComposerLinkNode {
+  return $applyNodeReplacement(new ComposerLinkNode(url));
+}
+
 // ── ComposerTerminalContextNode ───────────────────────────────────────
 
 function ComposerTerminalContextDecorator(props: { context: TerminalContextDraft }) {
@@ -443,7 +506,7 @@ export class ComposerTerminalContextNode extends DecoratorNode<ReactElement> {
 
   override createDOM(): HTMLElement {
     const dom = document.createElement("span");
-    dom.className = "inline-flex align-middle leading-none";
+    dom.className = COMPOSER_INLINE_DECORATOR_HOST_CLASS_NAME;
     return dom;
   }
 
@@ -476,7 +539,8 @@ export type ComposerInlineTokenNode =
   | ComposerMentionNode
   | ComposerSkillNode
   | ComposerTerminalContextNode
-  | ComposerAgentMentionNode;
+  | ComposerAgentMentionNode
+  | ComposerLinkNode;
 
 export function isComposerInlineTokenNode(
   candidate: unknown,
@@ -485,7 +549,8 @@ export function isComposerInlineTokenNode(
     candidate instanceof ComposerMentionNode ||
     candidate instanceof ComposerSkillNode ||
     candidate instanceof ComposerTerminalContextNode ||
-    candidate instanceof ComposerAgentMentionNode
+    candidate instanceof ComposerAgentMentionNode ||
+    candidate instanceof ComposerLinkNode
   );
 }
 
@@ -495,4 +560,5 @@ export const COMPOSER_NODE_CLASSES = [
   ComposerSkillNode,
   ComposerTerminalContextNode,
   ComposerAgentMentionNode,
+  ComposerLinkNode,
 ] as const;

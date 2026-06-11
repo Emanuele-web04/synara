@@ -20,6 +20,9 @@ const baseStatus: GitStatusResult = {
 };
 
 const baseDetails: GitStatusDetails = {
+  isRepo: true,
+  hasOriginRemote: true,
+  isDefaultBranch: false,
   branch: baseStatus.branch,
   upstreamRef: "origin/feature/status-broadcast",
   upstreamBranch: baseStatus.upstreamBranch,

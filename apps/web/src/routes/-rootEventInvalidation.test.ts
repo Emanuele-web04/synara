@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   getGitInvalidationThreadIdForEvent,
+  getProjectFileInvalidationThreadIdForEvent,
   resolveGitInvalidationCwdForThreadId,
   shouldInvalidateGitQueriesForEvent,
   shouldInvalidateProviderQueriesForEvent,
@@ -44,6 +45,35 @@ describe("root event invalidation", () => {
   it("leaves unrelated events alone", () => {
     expect(shouldInvalidateGitQueriesForEvent(event("thread.message-sent"))).toBe(false);
     expect(shouldInvalidateProviderQueriesForEvent(event("thread.message-sent"))).toBe(false);
+  });
+
+  it("extracts thread ids from mid-turn file-change activities", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const fileChangeActivity = (payload: unknown) =>
+      event("thread.activity-appended", {
+        threadId,
+        activity: { payload },
+      });
+
+    expect(
+      getProjectFileInvalidationThreadIdForEvent(
+        fileChangeActivity({ requestKind: "file-change" }),
+      ),
+    ).toBe(threadId);
+    expect(
+      getProjectFileInvalidationThreadIdForEvent(fileChangeActivity({ itemType: "file_change" })),
+    ).toBe(threadId);
+    expect(
+      getProjectFileInvalidationThreadIdForEvent(
+        fileChangeActivity({ data: { item: { type: "file_change" } } }),
+      ),
+    ).toBe(threadId);
+    expect(
+      getProjectFileInvalidationThreadIdForEvent(fileChangeActivity({ requestKind: "command" })),
+    ).toBe(null);
+    expect(
+      getProjectFileInvalidationThreadIdForEvent(event("thread.message-sent", { threadId })),
+    ).toBe(null);
   });
 
   it("extracts affected thread ids for scoped git invalidation", () => {

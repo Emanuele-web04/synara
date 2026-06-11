@@ -47,7 +47,7 @@ export function SidebarMetaChipStack({
             {chips.map((chip, index) => (
               <span
                 key={chip.id}
-                className="absolute top-1/2 inline-flex size-3.5 -translate-y-1/2 items-center justify-center rounded-full bg-background shadow-xs"
+                className="sidebar-icon-chip absolute top-1/2 inline-flex size-3.5 -translate-y-1/2 items-center justify-center rounded-full"
                 style={{ left: `${index * step}px`, zIndex: index + 1 }}
               >
                 {chip.icon}

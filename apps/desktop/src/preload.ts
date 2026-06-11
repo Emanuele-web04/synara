@@ -15,6 +15,11 @@ const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 const SHOW_IN_FOLDER_CHANNEL = "desktop:show-in-folder";
+const WINDOW_MINIMIZE_CHANNEL = "desktop:window-minimize";
+const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = "desktop:window-toggle-maximize";
+const WINDOW_CLOSE_CHANNEL = "desktop:window-close";
+const WINDOW_GET_STATE_CHANNEL = "desktop:window-get-state";
+const WINDOW_STATE_CHANNEL = "desktop:window-state";
 const MENU_ACTION_CHANNEL = "desktop:menu-action";
 const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
@@ -23,6 +28,8 @@ const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
 const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
 const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
+const ZOOM_FACTOR_CHANNEL = "desktop:zoom-factor";
+const ZOOM_FACTOR_CHANGED_CHANNEL = "desktop:zoom-factor-changed";
 
 function getDesktopWsUrl(): string | null {
   try {
@@ -45,6 +52,23 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   shell: {
     showInFolder: (path: string) => ipcRenderer.invoke(SHOW_IN_FOLDER_CHANNEL, path),
   },
+  windowControls: {
+    minimize: () => ipcRenderer.invoke(WINDOW_MINIMIZE_CHANNEL),
+    toggleMaximize: () => ipcRenderer.invoke(WINDOW_TOGGLE_MAXIMIZE_CHANNEL),
+    close: () => ipcRenderer.invoke(WINDOW_CLOSE_CHANNEL),
+    getState: () => ipcRenderer.invoke(WINDOW_GET_STATE_CHANNEL),
+    onState: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
+        if (typeof state !== "object" || state === null) return;
+        listener(state as Parameters<typeof listener>[0]);
+      };
+
+      ipcRenderer.on(WINDOW_STATE_CHANNEL, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(WINDOW_STATE_CHANNEL, wrappedListener);
+      };
+    },
+  },
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
       if (typeof action !== "string") return;
@@ -54,6 +78,21 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.on(MENU_ACTION_CHANNEL, wrappedListener);
     return () => {
       ipcRenderer.removeListener(MENU_ACTION_CHANNEL, wrappedListener);
+    };
+  },
+  getZoomFactor: () => {
+    const factor = ipcRenderer.sendSync(ZOOM_FACTOR_CHANNEL);
+    return typeof factor === "number" && Number.isFinite(factor) && factor > 0 ? factor : 1;
+  },
+  onZoomFactorChange: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, factor: unknown) => {
+      if (typeof factor !== "number" || !Number.isFinite(factor) || factor <= 0) return;
+      listener(factor);
+    };
+
+    ipcRenderer.on(ZOOM_FACTOR_CHANGED_CHANNEL, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(ZOOM_FACTOR_CHANGED_CHANNEL, wrappedListener);
     };
   },
   getUpdateState: () => ipcRenderer.invoke(UPDATE_GET_STATE_CHANNEL),

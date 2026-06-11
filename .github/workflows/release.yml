@@ -125,7 +125,12 @@ jobs:
           node-version-file: package.json
 
       - name: Install dependencies
+        if: ${{ matrix.platform != 'win' }}
         run: bun install --frozen-lockfile
+
+      - name: Install dependencies
+        if: ${{ matrix.platform == 'win' }}
+        run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"

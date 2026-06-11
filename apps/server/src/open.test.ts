@@ -15,7 +15,8 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
     Effect.gen(function* () {
       const antigravityLaunch = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace", editor: "antigravity" },
-        "darwin",
+        "linux",
+        { PATH: "" },
       );
       assert.deepEqual(antigravityLaunch, {
         command: "agy",
@@ -24,7 +25,8 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
 
       const cursorLaunch = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace", editor: "cursor" },
-        "darwin",
+        "linux",
+        { PATH: "" },
       );
       assert.deepEqual(cursorLaunch, {
         command: "cursor",
@@ -33,7 +35,8 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
 
       const vscodeLaunch = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace", editor: "vscode" },
-        "darwin",
+        "linux",
+        { PATH: "" },
       );
       assert.deepEqual(vscodeLaunch, {
         command: "code",
@@ -42,7 +45,8 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
 
       const traeLaunch = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace", editor: "trae" },
-        "darwin",
+        "linux",
+        { PATH: "" },
       );
       assert.deepEqual(traeLaunch, {
         command: "trae",
@@ -51,16 +55,38 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
 
       const zedLaunch = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace", editor: "zed" },
-        "darwin",
+        "linux",
+        { PATH: "" },
       );
       assert.deepEqual(zedLaunch, {
         command: "zed",
         args: ["/tmp/workspace"],
       });
 
+      const windsurfLaunch = yield* resolveEditorLaunch(
+        { cwd: "/tmp/workspace", editor: "windsurf" },
+        "linux",
+        { PATH: "" },
+      );
+      assert.deepEqual(windsurfLaunch, {
+        command: "windsurf",
+        args: ["/tmp/workspace"],
+      });
+
+      const sublimeLaunch = yield* resolveEditorLaunch(
+        { cwd: "/tmp/workspace", editor: "sublime" },
+        "linux",
+        { PATH: "" },
+      );
+      assert.deepEqual(sublimeLaunch, {
+        command: "subl",
+        args: ["/tmp/workspace"],
+      });
+
       const ideaLaunch = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace", editor: "idea" },
-        "darwin",
+        "linux",
+        { PATH: "" },
       );
       assert.deepEqual(ideaLaunch, {
         command: "idea",
@@ -73,7 +99,8 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
     Effect.gen(function* () {
       const lineOnly = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace/AGENTS.md:48", editor: "cursor" },
-        "darwin",
+        "linux",
+        { PATH: "" },
       );
       assert.deepEqual(lineOnly, {
         command: "cursor",
@@ -82,7 +109,8 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
 
       const lineAndColumn = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace/src/open.ts:71:5", editor: "cursor" },
-        "darwin",
+        "linux",
+        { PATH: "" },
       );
       assert.deepEqual(lineAndColumn, {
         command: "cursor",
@@ -91,7 +119,8 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
 
       const vscodeLineAndColumn = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace/src/open.ts:71:5", editor: "vscode" },
-        "darwin",
+        "linux",
+        { PATH: "" },
       );
       assert.deepEqual(vscodeLineAndColumn, {
         command: "code",
@@ -100,7 +129,8 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
 
       const ideaLineAndColumn = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace/src/open.ts:71:5", editor: "idea" },
-        "darwin",
+        "linux",
+        { PATH: "" },
       );
       assert.deepEqual(ideaLineAndColumn, {
         command: "idea",
@@ -109,11 +139,156 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
 
       const zedLineAndColumn = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace/src/open.ts:71:5", editor: "zed" },
-        "darwin",
+        "linux",
+        { PATH: "" },
       );
       assert.deepEqual(zedLineAndColumn, {
         command: "zed",
         args: ["/tmp/workspace/src/open.ts:71:5"],
+      });
+    }),
+  );
+
+  it.effect("opens terminal-style editors in the target working directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-open-terminal-" });
+      const filePath = path.join(dir, "src", "open.ts");
+      yield* fs.makeDirectory(path.dirname(filePath), { recursive: true });
+      yield* fs.writeFileString(filePath, "export const value = 1;\n");
+
+      const ghosttyLaunch = yield* resolveEditorLaunch(
+        { cwd: `${filePath}:71:5`, editor: "ghostty" },
+        "linux",
+        { PATH: "" },
+      );
+      assert.deepEqual(ghosttyLaunch, {
+        command: "ghostty",
+        args: [`--working-directory=${path.dirname(filePath)}`],
+      });
+
+      const binDir = path.join(dir, "bin");
+      yield* fs.makeDirectory(binDir, { recursive: true });
+      yield* fs.writeFileString(path.join(binDir, "konsole"), "#!/bin/sh\n");
+      yield* fs.chmod(path.join(binDir, "konsole"), 0o755);
+
+      const linuxTerminalLaunch = yield* resolveEditorLaunch(
+        { cwd: `${filePath}:71:5`, editor: "terminal" },
+        "linux",
+        { PATH: binDir },
+      );
+      assert.deepEqual(linuxTerminalLaunch, {
+        command: "konsole",
+        args: ["--workdir", path.dirname(filePath)],
+      });
+
+      const linuxTerminalFallbackLaunch = yield* resolveEditorLaunch(
+        { cwd: `${filePath}:71:5`, editor: "terminal" },
+        "linux",
+        { PATH: "" },
+      );
+      assert.deepEqual(linuxTerminalFallbackLaunch, {
+        command: "x-terminal-emulator",
+        args: [`--working-directory=${path.dirname(filePath)}`],
+      });
+
+      yield* fs.writeFileString(path.join(binDir, "wt.CMD"), "@echo off\r\n");
+      const windowsTerminalLaunch = yield* resolveEditorLaunch(
+        { cwd: "C:\\workspace", editor: "terminal" },
+        "win32",
+        { PATH: binDir, PATHEXT: ".CMD" },
+      );
+      assert.deepEqual(windowsTerminalLaunch, {
+        command: "wt",
+        args: ["-d", "C:\\workspace"],
+      });
+    }),
+  );
+
+  it.effect("falls back to installed macOS app bundles when launchers are absent", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-open-apps-" });
+      yield* fs.makeDirectory(path.join(home, "Applications", "Ghostty.app"), {
+        recursive: true,
+      });
+      yield* fs.makeDirectory(path.join(home, "Applications", "WebStorm.app"), {
+        recursive: true,
+      });
+      yield* fs.makeDirectory(path.join(home, "Applications", "JetBrains Toolbox", "PyCharm.app"), {
+        recursive: true,
+      });
+
+      const ghosttyLaunch = yield* resolveEditorLaunch(
+        { cwd: "/tmp/workspace", editor: "ghostty" },
+        "darwin",
+        { HOME: home, PATH: "" },
+      );
+      assert.deepEqual(ghosttyLaunch, {
+        command: "open",
+        args: ["-a", "Ghostty", "/tmp/workspace"],
+      });
+
+      const terminalLaunch = yield* resolveEditorLaunch(
+        { cwd: "/tmp/workspace", editor: "terminal" },
+        "darwin",
+        { HOME: home, PATH: "" },
+      );
+      assert.deepEqual(terminalLaunch, {
+        command: "open",
+        args: ["-a", "Terminal", "/tmp/workspace"],
+      });
+
+      const webstormLaunch = yield* resolveEditorLaunch(
+        { cwd: "/tmp/workspace/src/open.ts:71:5", editor: "webstorm" },
+        "darwin",
+        { HOME: home, PATH: "" },
+      );
+      assert.deepEqual(webstormLaunch, {
+        command: "open",
+        args: [
+          "-a",
+          "WebStorm",
+          "--args",
+          "--line",
+          "71",
+          "--column",
+          "5",
+          "/tmp/workspace/src/open.ts",
+        ],
+      });
+
+      const availableEditors = resolveAvailableEditors("darwin", { HOME: home, PATH: "" });
+      assert.equal(availableEditors.includes("ghostty"), true);
+      assert.equal(availableEditors.includes("webstorm"), true);
+      assert.equal(availableEditors.includes("pycharm"), true);
+    }),
+  );
+
+  it.effect("prefers the macOS Ghostty app launch even when a ghostty command is on PATH", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-open-ghostty-" });
+      const binDir = path.join(home, "bin");
+      yield* fs.makeDirectory(binDir, { recursive: true });
+      yield* fs.writeFileString(path.join(binDir, "ghostty"), "#!/bin/sh\n");
+      yield* fs.chmod(path.join(binDir, "ghostty"), 0o755);
+      yield* fs.makeDirectory(path.join(home, "Applications", "Ghostty.app"), {
+        recursive: true,
+      });
+
+      const launch = yield* resolveEditorLaunch(
+        { cwd: "/tmp/with space/workspace", editor: "ghostty" },
+        "darwin",
+        { HOME: home, PATH: binDir },
+      );
+
+      assert.deepEqual(launch, {
+        command: "open",
+        args: ["-a", "Ghostty", "/tmp/with space/workspace"],
       });
     }),
   );

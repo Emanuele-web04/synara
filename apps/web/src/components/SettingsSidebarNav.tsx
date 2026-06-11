@@ -13,11 +13,13 @@ import {
 } from "../settingsNavigation";
 import {
   SETTINGS_SIDEBAR_ICON_CLASS_NAME,
+  SETTINGS_SIDEBAR_ICON_HOVER_TONE_CLASS_NAME,
   SETTINGS_SIDEBAR_ITEM_CLASS_NAME,
   SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME,
   SETTINGS_SIDEBAR_LIST_GAP_CLASS_NAME,
   SETTINGS_SIDEBAR_ROW_FILL_ACTIVE_CLASS_NAME,
   SETTINGS_SIDEBAR_ROW_FILL_HOVER_CLASS_NAME,
+  SETTINGS_SIDEBAR_ROW_GROUP_CLASS_NAME,
   SETTINGS_SIDEBAR_SECTION_CLASS_NAME,
   SETTINGS_SIDEBAR_SECTION_LABEL_CLASS_NAME,
 } from "../settingsSidebarNavStyles";
@@ -29,20 +31,24 @@ export function SettingsSidebarNav(props: {
 }) {
   return (
     <div className="px-1.5 py-1.5">
-      <button
-        type="button"
-        className={cn(SETTINGS_SIDEBAR_ITEM_CLASS_NAME, SETTINGS_SIDEBAR_ROW_FILL_HOVER_CLASS_NAME)}
-        onClick={props.onBack}
-      >
-        <SidebarLeadingIcon size="sm">
-          <CentralIcon name="arrow-left" className={SETTINGS_SIDEBAR_ICON_CLASS_NAME} />
-        </SidebarLeadingIcon>
-        <span className={SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME}>Back to app</span>
-      </button>
+      <div className="mb-4">
+        <button
+          type="button"
+          className={cn(
+            SETTINGS_SIDEBAR_ITEM_CLASS_NAME,
+            SETTINGS_SIDEBAR_ROW_GROUP_CLASS_NAME,
+            SETTINGS_SIDEBAR_ROW_FILL_HOVER_CLASS_NAME,
+          )}
+          onClick={props.onBack}
+        >
+          <SidebarLeadingIcon size="sm" className={SETTINGS_SIDEBAR_ICON_HOVER_TONE_CLASS_NAME}>
+            <CentralIcon name="arrow-left" className={SETTINGS_SIDEBAR_ICON_CLASS_NAME} />
+          </SidebarLeadingIcon>
+          <span className={SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME}>Back to app</span>
+        </button>
+      </div>
 
-      <div className="-mx-1.5 my-1.5 h-px bg-border/70" />
-
-      <nav aria-label="Settings sections" className="flex flex-col pt-1">
+      <nav aria-label="Settings sections" className="flex flex-col">
         {SETTINGS_NAV_GROUPS.map((group) => {
           const items = SETTINGS_NAV_ITEMS.filter((item) => item.group === group.id);
           if (items.length === 0) {
@@ -71,13 +77,18 @@ export function SettingsSidebarNav(props: {
                         aria-current={isActive ? "page" : undefined}
                         className={cn(
                           SETTINGS_SIDEBAR_ITEM_CLASS_NAME,
+                          SETTINGS_SIDEBAR_ROW_GROUP_CLASS_NAME,
                           isActive
                             ? SETTINGS_SIDEBAR_ROW_FILL_ACTIVE_CLASS_NAME
                             : SETTINGS_SIDEBAR_ROW_FILL_HOVER_CLASS_NAME,
                         )}
                         onClick={() => props.onSelectSection(item.id)}
                       >
-                        <SidebarLeadingIcon size="sm">
+                        <SidebarLeadingIcon
+                          size="sm"
+                          className={SETTINGS_SIDEBAR_ICON_HOVER_TONE_CLASS_NAME}
+                          {...(isActive ? { tone: "text-inherit" } : {})}
+                        >
                           <CentralIcon
                             name={item.icon}
                             className={SETTINGS_SIDEBAR_ICON_CLASS_NAME}

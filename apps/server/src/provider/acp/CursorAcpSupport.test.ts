@@ -5,9 +5,11 @@ import { describe, expect, it } from "vitest";
 import {
   applyCursorAcpModelSelection,
   buildCursorAcpModelDescriptors,
+  buildCursorAcpModelDescriptorsFromAvailableModels,
   buildCursorAcpSpawnInput,
   flattenCursorAcpModelChoices,
   parseCursorCliModelList,
+  type CursorAcpAvailableModel,
 } from "./CursorAcpSupport.ts";
 
 const parameterizedGpt54ConfigOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> = [
@@ -194,6 +196,8 @@ auto - Auto
 composer-2-fast - Composer 2 Fast (default)
 gpt-5.3-codex-high-fast - Codex 5.3 High Fast
 claude-4.6-opus-max-thinking-fast - Opus 4.6 1M Max Thinking Fast
+claude-fable-5-max - Fable 5 1M Max
+claude-opus-4-8-xhigh-fast - Opus 4.8 1M Extra High Fast
 
 Tip: use --model <id> (or /model <id> in interactive mode) to switch.
 `),
@@ -227,6 +231,29 @@ Tip: use --model <id> (or /model <id> in interactive mode) to switch.
         upstreamProviderName: "Anthropic",
         supportsFastMode: true,
         supportsThinkingToggle: true,
+        supportedReasoningEfforts: [{ value: "max", label: "Max" }],
+        defaultReasoningEffort: "max",
+        contextWindowOptions: [{ value: "1m", label: "1M", isDefault: true }],
+        defaultContextWindow: "1m",
+      },
+      {
+        slug: "claude-fable-5-max",
+        name: "Fable 5 1M Max",
+        upstreamProviderId: "anthropic",
+        upstreamProviderName: "Anthropic",
+        supportedReasoningEfforts: [{ value: "max", label: "Max" }],
+        defaultReasoningEffort: "max",
+        contextWindowOptions: [{ value: "1m", label: "1M", isDefault: true }],
+        defaultContextWindow: "1m",
+      },
+      {
+        slug: "claude-opus-4-8-xhigh-fast",
+        name: "Opus 4.8 1M Extra High Fast",
+        upstreamProviderId: "anthropic",
+        upstreamProviderName: "Anthropic",
+        supportsFastMode: true,
+        supportedReasoningEfforts: [{ value: "xhigh", label: "Extra High" }],
+        defaultReasoningEffort: "xhigh",
         contextWindowOptions: [{ value: "1m", label: "1M", isDefault: true }],
         defaultContextWindow: "1m",
       },
@@ -653,7 +680,7 @@ describe("applyCursorAcpModelSelection", () => {
     expect(calls).toEqual([
       {
         type: "model",
-        value: "claude-opus-4-6[thinking=true,context=1m,effort=high,fast=true]",
+        value: "claude-opus-4-6[thinking=true,context=1m,effort=max,fast=true]",
       },
       { type: "config", configId: "context", value: "1m" },
       { type: "config", configId: "fast", value: "true" },
@@ -918,5 +945,165 @@ describe("applyCursorAcpModelSelection", () => {
         value: "claude-opus-4-7[thinking=true,context=300k,effort=xhigh]",
       },
     ]);
+  });
+});
+
+describe("buildCursorAcpModelDescriptorsFromAvailableModels", () => {
+  const availableModels: ReadonlyArray<CursorAcpAvailableModel> = [
+    { value: "default", name: "Auto" },
+    {
+      value: "composer-2.5",
+      name: "Composer 2.5",
+      configOptions: [
+        {
+          id: "fast",
+          name: "Fast",
+          category: "model_config",
+          type: "select",
+          currentValue: "true",
+          options: [
+            { value: "false", name: "Off" },
+            { value: "true", name: "Fast" },
+          ],
+        },
+      ],
+    },
+    {
+      value: "claude-fable-5",
+      name: "Fable 5",
+      configOptions: [
+        {
+          id: "thinking",
+          name: "Thinking",
+          category: "thought_level",
+          type: "select",
+          currentValue: "true",
+          options: [
+            { value: "false", name: "Off" },
+            { value: "true", name: "On" },
+          ],
+        },
+        {
+          id: "context",
+          name: "Context",
+          category: "model_config",
+          type: "select",
+          currentValue: "300k",
+          options: [
+            { value: "300k", name: "300K" },
+            { value: "1m", name: "1M" },
+          ],
+        },
+        {
+          id: "effort",
+          name: "Effort",
+          category: "thought_level",
+          type: "select",
+          currentValue: "high",
+          options: [
+            { value: "low", name: "Low" },
+            { value: "medium", name: "Medium" },
+            { value: "high", name: "High" },
+            { value: "xhigh", name: "Extra High" },
+            { value: "max", name: "Max" },
+          ],
+        },
+      ],
+    },
+    {
+      value: "gpt-5.5",
+      name: "GPT-5.5",
+      configOptions: [
+        {
+          id: "context",
+          name: "Context",
+          category: "model_config",
+          type: "select",
+          currentValue: "272k",
+          options: [
+            { value: "272k", name: "272K" },
+            { value: "1m", name: "1M" },
+          ],
+        },
+        {
+          id: "reasoning",
+          name: "Reasoning",
+          category: "thought_level",
+          type: "select",
+          currentValue: "medium",
+          options: [
+            { value: "low", name: "Low" },
+            { value: "medium", name: "Medium" },
+            { value: "high", name: "High" },
+            { value: "extra-high", name: "Extra High" },
+          ],
+        },
+        {
+          id: "fast",
+          name: "Fast",
+          category: "model_config",
+          type: "select",
+          currentValue: "false",
+          options: [
+            { value: "false", name: "Off" },
+            { value: "true", name: "Fast" },
+          ],
+        },
+      ],
+    },
+  ];
+
+  it("projects per-model context, effort, thinking, and fast options into descriptors", () => {
+    const descriptors = buildCursorAcpModelDescriptorsFromAvailableModels(availableModels);
+    const bySlug = new Map(descriptors.map((descriptor) => [descriptor.slug, descriptor]));
+
+    const fable = bySlug.get("claude-fable-5");
+    expect(fable).toMatchObject({
+      slug: "claude-fable-5",
+      name: "Fable 5",
+      upstreamProviderId: "anthropic",
+      supportsThinkingToggle: true,
+      defaultContextWindow: "300k",
+      defaultReasoningEffort: "high",
+    });
+    expect(fable?.supportsFastMode).toBeUndefined();
+    expect(fable?.contextWindowOptions).toEqual([
+      { value: "300k", label: "300K", isDefault: true },
+      { value: "1m", label: "1M" },
+    ]);
+    expect(fable?.supportedReasoningEfforts?.map((effort) => effort.value)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+
+    const gpt = bySlug.get("gpt-5.5");
+    expect(gpt).toMatchObject({
+      supportsFastMode: true,
+      defaultContextWindow: "272k",
+      defaultReasoningEffort: "medium",
+    });
+    expect(gpt?.supportsThinkingToggle).toBeUndefined();
+    // Cursor's "extra-high" reasoning value normalizes to Synara's "xhigh".
+    expect(gpt?.supportedReasoningEfforts?.map((effort) => effort.value)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+  });
+
+  it("maps the ACP 'default' model id to Synara's 'auto' slug and skips empty option sets", () => {
+    const descriptors = buildCursorAcpModelDescriptorsFromAvailableModels(availableModels);
+    const auto = descriptors.find((descriptor) => descriptor.slug === "auto");
+    expect(auto?.name).toBe("Auto");
+    expect(auto?.contextWindowOptions).toBeUndefined();
+    expect(auto?.supportedReasoningEfforts).toBeUndefined();
+
+    const composer = descriptors.find((descriptor) => descriptor.slug === "composer-2.5");
+    expect(composer?.supportsFastMode).toBe(true);
+    expect(composer?.contextWindowOptions).toBeUndefined();
   });
 });

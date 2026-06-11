@@ -4,12 +4,10 @@
 // Exports: useThreadHandoff
 
 import { useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { type ProviderKind } from "@t3tools/contracts";
-import { getCustomBinaryPathForProvider, useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
-import { serverConfigQueryOptions } from "../lib/serverReactQuery";
+import { useProviderStatusesForLocalConfig } from "./useProviderStatusesForLocalConfig";
 import {
   buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
@@ -18,10 +16,7 @@ import {
   resolveThreadHandoffModelSelection,
   resolveThreadHandoffTitle,
 } from "../lib/threadHandoff";
-import {
-  isProviderUsable,
-  normalizeProviderStatusForLocalConfig,
-} from "../lib/providerAvailability";
+import { resolveProviderSendAvailability } from "../lib/providerAvailability";
 import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
@@ -29,10 +24,9 @@ import { type Thread } from "../types";
 
 export function useThreadHandoff() {
   const navigate = useNavigate();
-  const { settings } = useAppSettings();
   const projects = useStore((store) => store.projects);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
-  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const providerStatuses = useProviderStatusesForLocalConfig();
 
   const createThreadHandoff = useCallback(
     async (thread: Thread, targetProvider: ProviderKind): Promise<Thread["id"]> => {
@@ -56,15 +50,12 @@ export function useThreadHandoff() {
       ) {
         throw new Error("This handoff target is not available for the current thread.");
       }
-      const targetStatus = normalizeProviderStatusForLocalConfig({
+      const targetAvailability = resolveProviderSendAvailability({
         provider: targetProvider,
-        status:
-          serverConfigQuery.data?.providers.find((entry) => entry.provider === targetProvider) ??
-          null,
-        customBinaryPath: getCustomBinaryPathForProvider(settings, targetProvider),
+        statuses: providerStatuses,
       });
-      if (!isProviderUsable(targetStatus)) {
-        throw new Error("This provider is not available yet.");
+      if (!targetAvailability.usable) {
+        throw new Error(targetAvailability.unavailableReason);
       }
 
       const nextThreadId = newThreadId();
@@ -122,7 +113,7 @@ export function useThreadHandoff() {
 
       return nextThreadId;
     },
-    [navigate, projects, serverConfigQuery.data?.providers, settings, syncServerShellSnapshot],
+    [navigate, projects, providerStatuses, syncServerShellSnapshot],
   );
 
   return {

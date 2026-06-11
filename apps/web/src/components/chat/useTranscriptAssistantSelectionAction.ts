@@ -165,18 +165,6 @@ export function useTranscriptAssistantSelectionAction(
           return;
         }
 
-        if (
-          composerImagesRef.current.length + composerAssistantSelectionsRef.current.length >=
-          PROVIDER_SEND_TURN_MAX_ATTACHMENTS
-        ) {
-          setPendingTranscriptSelectionAction(null);
-          toastManager.add({
-            type: "warning",
-            title: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
-          });
-          return;
-        }
-
         const layout = resolveTranscriptSelectionActionLayout({
           selectionRect: selectionState.selectionRect,
           pointer: { x: clientX, y: clientY },
@@ -189,7 +177,7 @@ export function useTranscriptAssistantSelectionAction(
         });
       });
     },
-    [enabled, composerImagesRef, composerAssistantSelectionsRef],
+    [enabled],
   );
 
   const commitTranscriptAssistantSelection = useCallback(() => {
@@ -278,6 +266,7 @@ export function useTranscriptAssistantSelectionAction(
   return {
     pendingTranscriptSelectionAction,
     commitTranscriptAssistantSelection,
+    dismissTranscriptSelectionAction,
     onMessagesClickCapture,
     onMessagesMouseUp,
     onMessagesPointerCancel,

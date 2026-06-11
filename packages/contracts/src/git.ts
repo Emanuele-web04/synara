@@ -83,6 +83,11 @@ export const GitStatusInput = Schema.Struct({
 });
 export type GitStatusInput = typeof GitStatusInput.Type;
 
+export const GitHubRepositoryInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+});
+export type GitHubRepositoryInput = typeof GitHubRepositoryInput.Type;
+
 export const GitReadWorkingTreeDiffInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   scope: Schema.optional(Schema.Literals(["workingTree", "unstaged", "staged", "branch"])).pipe(
@@ -278,6 +283,16 @@ export const GitStatusRemoteResult = Schema.Struct({
   pr: Schema.NullOr(GitStatusPr),
 });
 export type GitStatusRemoteResult = typeof GitStatusRemoteResult.Type;
+
+export const GitHubRepositoryResult = Schema.Struct({
+  repository: Schema.NullOr(
+    Schema.Struct({
+      nameWithOwner: TrimmedNonEmptyStringSchema,
+      url: TrimmedNonEmptyStringSchema,
+    }),
+  ),
+});
+export type GitHubRepositoryResult = typeof GitHubRepositoryResult.Type;
 
 export const GitStatusStreamEvent = Schema.Union([
   Schema.TaggedStruct("snapshot", {

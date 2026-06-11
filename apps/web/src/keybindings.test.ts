@@ -54,6 +54,21 @@ function modShortcut(
   };
 }
 
+function ctrlShortcut(
+  key: string,
+  overrides: Partial<Omit<KeybindingShortcut, "key">> = {},
+): KeybindingShortcut {
+  return {
+    key,
+    metaKey: false,
+    ctrlKey: true,
+    shiftKey: false,
+    altKey: false,
+    modKey: false,
+    ...overrides,
+  };
+}
+
 function whenIdentifier(name: string): KeybindingWhenNode {
   return { type: "identifier", name };
 }
@@ -134,6 +149,21 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
+    shortcut: modShortcut("m", { shiftKey: true }),
+    command: "modelPicker.toggle",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("e", { shiftKey: true }),
+    command: "traitsPicker.toggle",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("u", { shiftKey: true }),
+    command: "settings.usage",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
     shortcut: modShortcut("o", { shiftKey: true }),
     command: "sidebar.addProject",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
@@ -182,6 +212,14 @@ const DEFAULT_BINDINGS = compile([
     shortcut: modShortcut("g", { altKey: true }),
     command: "chat.newGemini",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: ctrlShortcut("tab"),
+    command: "view.recent.next",
+  },
+  {
+    shortcut: ctrlShortcut("tab", { shiftKey: true }),
+    command: "view.recent.previous",
   },
   {
     shortcut: modShortcut("1"),
@@ -425,6 +463,68 @@ describe("split/new/close terminal shortcuts", () => {
   });
 });
 
+describe("settings shortcuts", () => {
+  it("opens usage settings with Cmd+Shift+U outside terminal focus", () => {
+    assert.equal(
+      resolveShortcutCommand(event({ key: "u", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "settings.usage",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "u", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+    );
+  });
+});
+
+describe("recent view shortcuts", () => {
+  it("resolves Ctrl+Tab outside terminal focus", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "Tab", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "view.recent.next",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "Tab", ctrlKey: true, shiftKey: true }),
+        DEFAULT_BINDINGS,
+        {
+          platform: "MacIntel",
+          context: { terminalFocus: false },
+        },
+      ),
+      "view.recent.previous",
+    );
+  });
+
+  it("resolves Ctrl+Tab while a terminal has focus", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "Tab", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+      "view.recent.next",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "Tab", ctrlKey: true, shiftKey: true }),
+        DEFAULT_BINDINGS,
+        {
+          platform: "MacIntel",
+          context: { terminalFocus: true },
+        },
+      ),
+      "view.recent.previous",
+    );
+  });
+});
+
 describe("thread jump shortcuts", () => {
   it("maps thread jump indices to commands and back", () => {
     assert.strictEqual(threadJumpCommandForIndex(0), "thread.jump.1");
@@ -635,6 +735,14 @@ describe("shortcutLabelForCommand", () => {
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "browser.toggle", "MacIntel"),
       "⇧⌘B",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "modelPicker.toggle", "MacIntel"),
+      "⇧⌘M",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "traitsPicker.toggle", "MacIntel"),
+      "⇧⌘E",
     );
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "terminal.workspace.terminal", "MacIntel"),
@@ -1007,6 +1115,65 @@ describe("resolveShortcutCommand", () => {
         platform: "Linux",
       }),
       "script.setup.run",
+    );
+  });
+
+  it("resolves configurable composer picker commands", () => {
+    const keybindings = compile([
+      {
+        shortcut: modShortcut("m", { altKey: true }),
+        command: "modelPicker.toggle",
+        whenAst: whenNot(whenIdentifier("terminalFocus")),
+      },
+      {
+        shortcut: modShortcut("e", { altKey: true }),
+        command: "traitsPicker.toggle",
+        whenAst: whenNot(whenIdentifier("terminalFocus")),
+      },
+    ]);
+
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "m", metaKey: true, altKey: true }), keybindings, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "modelPicker.toggle",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "e", metaKey: true, altKey: true }), keybindings, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "traitsPicker.toggle",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "m", metaKey: true, altKey: true }), keybindings, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+      null,
+    );
+  });
+
+  it("falls back to composer picker defaults when runtime config is missing them", () => {
+    const legacyBindings = DEFAULT_BINDINGS.filter(
+      (binding) =>
+        binding.command !== "modelPicker.toggle" && binding.command !== "traitsPicker.toggle",
+    );
+
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "m", metaKey: true, shiftKey: true }), legacyBindings, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "modelPicker.toggle",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "e", metaKey: true, shiftKey: true }), legacyBindings, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "traitsPicker.toggle",
     );
   });
 

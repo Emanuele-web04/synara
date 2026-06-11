@@ -16,7 +16,11 @@ import {
   type GitHubPullRequestSummary,
   GitHubCli,
 } from "../Services/GitHubCli.ts";
-import { type TextGenerationShape, TextGeneration } from "../Services/TextGeneration.ts";
+import {
+  type TextGenerationShape,
+  TextGeneration,
+  type ThreadRecapGenerationInput,
+} from "../Services/TextGeneration.ts";
 import { GitCoreLive } from "./GitCore.ts";
 import { GitCore } from "../Services/GitCore.ts";
 import { makeGitManager } from "./GitManager.ts";
@@ -105,6 +109,9 @@ interface FakeGitTextGeneration {
     model?: string;
     modelSelection?: ModelSelection;
   }) => Effect.Effect<{ title: string }, TextGenerationError>;
+  generateThreadRecap: (
+    input: ThreadRecapGenerationInput,
+  ) => Effect.Effect<{ recap: string }, TextGenerationError>;
 }
 
 type FakePullRequest = NonNullable<FakeGhScenario["pullRequest"]>;
@@ -221,6 +228,10 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
       Effect.succeed({
         title: "Update workflow",
       }),
+    generateThreadRecap: () =>
+      Effect.succeed({
+        recap: "Update workflow recap",
+      }),
     ...overrides,
   };
 
@@ -286,6 +297,17 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
           (cause) =>
             new TextGenerationError({
               operation: "generateThreadTitle",
+              detail: "fake text generation failed",
+              ...(cause !== undefined ? { cause } : {}),
+            }),
+        ),
+      ),
+    generateThreadRecap: (input) =>
+      implementation.generateThreadRecap(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation: "generateThreadRecap",
               detail: "fake text generation failed",
               ...(cause !== undefined ? { cause } : {}),
             }),

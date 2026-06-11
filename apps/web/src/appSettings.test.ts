@@ -1,3 +1,8 @@
+// FILE: appSettings.test.ts
+// Purpose: Verifies app settings normalization, model options, and provider dispatch options.
+// Layer: Web settings tests
+// Exports: Vitest suites for appSettings.ts
+
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -5,9 +10,11 @@ import {
   AppSettingsSchema,
   DEFAULT_CHAT_FONT_SIZE_PX,
   DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
+  DEFAULT_TERMINAL_FONT_SIZE_PX,
   DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
   DEFAULT_TIMESTAMP_FORMAT,
   getAppModelOptions,
+  getCustomBinaryPathForProvider,
   getDefaultNativeFontSmoothing,
   getCustomModelOptionsByProvider,
   getCustomModelsByProvider,
@@ -19,8 +26,11 @@ import {
   normalizeChatFontSizePx,
   normalizeCustomModelSlugs,
   normalizeStoredAppSettings,
+  normalizeTerminalFontFamily,
+  normalizeTerminalFontSizePx,
   patchCustomModels,
   resolveAppModelSelection,
+  resolveTerminalFontFamilyStack,
 } from "./appSettings";
 
 describe("normalizeCustomModelSlugs", () => {
@@ -257,6 +267,44 @@ describe("chat font size defaults", () => {
   });
 });
 
+describe("terminal font size defaults", () => {
+  it("defaults terminal font size to 12px", () => {
+    expect(DEFAULT_TERMINAL_FONT_SIZE_PX).toBe(12);
+  });
+
+  it("clamps terminal font size updates into the supported range", () => {
+    expect(normalizeTerminalFontSizePx(8)).toBe(10);
+    expect(normalizeTerminalFontSizePx(20.4)).toBe(20);
+    expect(normalizeTerminalFontSizePx(99)).toBe(22);
+    expect(normalizeTerminalFontSizePx(Number.NaN)).toBe(DEFAULT_TERMINAL_FONT_SIZE_PX);
+  });
+});
+
+describe("terminal font family settings", () => {
+  it("leaves the bundled terminal font stack active for empty values", () => {
+    expect(resolveTerminalFontFamilyStack("")).toBeNull();
+    expect(resolveTerminalFontFamilyStack("   ")).toBeNull();
+  });
+
+  it("quotes a single multi-word font and appends a monospace fallback", () => {
+    expect(resolveTerminalFontFamilyStack("Fira Code")).toBe('"Fira Code", monospace');
+    expect(resolveTerminalFontFamilyStack("Menlo")).toBe("Menlo, monospace");
+  });
+
+  it("preserves explicit font stacks while adding a generic fallback when missing", () => {
+    expect(resolveTerminalFontFamilyStack('"Fira Code", Menlo')).toBe(
+      '"Fira Code", Menlo, monospace',
+    );
+    expect(resolveTerminalFontFamilyStack('"Fira Code", ui-monospace')).toBe(
+      '"Fira Code", ui-monospace',
+    );
+  });
+
+  it("strips characters that could break the terminal font CSS variable", () => {
+    expect(normalizeTerminalFontFamily("Fira; Code{}\n<>")).toBe("Fira Code");
+  });
+});
+
 describe("sidebar sort defaults", () => {
   it("defaults project sorting to manual", () => {
     expect(DEFAULT_SIDEBAR_PROJECT_SORT_ORDER).toBe("manual");
@@ -285,6 +333,7 @@ describe("normalizeStoredAppSettings", () => {
       JSON.stringify({
         sidebarProjectSortOrder: "updated_at",
         chatFontSizePx: 99,
+        terminalFontSizePx: 3,
         customCodexModels: [" custom/internal-model ", "gpt-5.4", "custom/internal-model"],
       }),
     );
@@ -292,8 +341,37 @@ describe("normalizeStoredAppSettings", () => {
     expect(normalizeStoredAppSettings(decodedSettings)).toMatchObject({
       sidebarProjectSortOrder: "updated_at",
       chatFontSizePx: 18,
+      terminalFontSizePx: 10,
       customCodexModels: ["custom/internal-model"],
     });
+  });
+
+  it("drops default provider command names so they do not look like custom paths", () => {
+    const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
+      JSON.stringify({
+        claudeBinaryPath: "claude",
+        codexBinaryPath: "codex",
+        cursorBinaryPath: "cursor-agent",
+        geminiBinaryPath: "gemini",
+        grokBinaryPath: "grok",
+        kiloBinaryPath: "kilo",
+        openCodeBinaryPath: "opencode",
+        piBinaryPath: "pi",
+      }),
+    );
+    const normalized = normalizeStoredAppSettings(decodedSettings);
+
+    expect(normalized).toMatchObject({
+      claudeBinaryPath: "",
+      codexBinaryPath: "",
+      cursorBinaryPath: "",
+      geminiBinaryPath: "",
+      grokBinaryPath: "",
+      kiloBinaryPath: "",
+      openCodeBinaryPath: "",
+      piBinaryPath: "",
+    });
+    expect(getCustomBinaryPathForProvider(normalized, "opencode")).toBe("");
   });
 });
 
@@ -320,6 +398,7 @@ describe("getProviderStartOptions", () => {
         kiloServerPassword: "",
         kiloServerUrl: "",
         openCodeBinaryPath: "",
+        openCodeExperimentalWebSockets: false,
         openCodeServerPassword: "",
         openCodeServerUrl: "",
         piAgentDir: "",
@@ -359,10 +438,34 @@ describe("getProviderStartOptions", () => {
         kiloServerPassword: "",
         kiloServerUrl: "",
         openCodeBinaryPath: "",
+        openCodeExperimentalWebSockets: false,
         openCodeServerPassword: "",
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("ignores default provider command names as custom binary overrides", () => {
+    expect(
+      getProviderStartOptions({
+        claudeBinaryPath: "claude",
+        codexBinaryPath: "codex",
+        codexHomePath: "",
+        cursorApiEndpoint: "",
+        cursorBinaryPath: "cursor-agent",
+        geminiBinaryPath: "gemini",
+        grokBinaryPath: "grok",
+        kiloBinaryPath: "kilo",
+        kiloServerPassword: "",
+        kiloServerUrl: "",
+        openCodeBinaryPath: "opencode",
+        openCodeExperimentalWebSockets: false,
+        openCodeServerPassword: "",
+        openCodeServerUrl: "",
+        piAgentDir: "",
+        piBinaryPath: "pi",
       }),
     ).toBeUndefined();
   });

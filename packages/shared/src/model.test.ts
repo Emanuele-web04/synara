@@ -187,6 +187,17 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     ]);
   });
 
+  it("returns claude effort options for Fable 5", () => {
+    expect(values("claudeAgent", "claude-fable-5")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultracode",
+    ]);
+  });
+
   it("returns claude effort options for Opus 4.7", () => {
     expect(values("claudeAgent", "claude-opus-4-7")).toEqual([
       "low",
@@ -604,6 +615,7 @@ describe("getModelCapabilities Claude capability flags", () => {
   it("only enables ultrathink keyword handling for Opus 4.6 and Sonnet 4.6", () => {
     const has = (m: string | undefined) =>
       getModelCapabilities("claudeAgent", m).promptInjectedEffortLevels.includes("ultrathink");
+    expect(has("claude-fable-5")).toBe(false);
     expect(has("claude-opus-4-8")).toBe(true);
     expect(has("claude-opus-4-7")).toBe(true);
     expect(has("claude-opus-4-6")).toBe(true);

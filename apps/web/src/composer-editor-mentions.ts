@@ -6,7 +6,14 @@ import {
 import {
   createComposerMentionTokenRegex,
   extractComposerMentionPath,
+  isPluginProviderMentionReference,
+  providerMentionMatchesToken,
 } from "./lib/composerMentions";
+import {
+  LINK_TOKEN_SOURCE,
+  normalizeComposerLinkUrl,
+  trimTrailingLinkPunctuation,
+} from "./lib/linkChips";
 import { resolveAgentAlias } from "@t3tools/contracts";
 import type { ProviderMentionReference } from "@t3tools/contracts";
 
@@ -34,14 +41,64 @@ export type ComposerPromptSegment =
       type: "agent-mention";
       alias: string;
       color: string;
+    }
+  | {
+      /** URL/domain rendered as a tappable link chip. */
+      type: "link";
+      url: string;
     };
 
 const SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s)/g;
 const DISPLAY_SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s|$)/g;
 
+// While typing (composer) a URL only becomes a chip once a delimiter follows it,
+// mirroring how skills/mentions wait for a trailing boundary. For read-only
+// display we also accept a URL that sits at the very end of the text.
+const LINK_TOKEN_TYPING_PATTERN = `${LINK_TOKEN_SOURCE}(?=\\s)`;
+const LINK_TOKEN_DISPLAY_PATTERN = `${LINK_TOKEN_SOURCE}(?=\\s|$)`;
+// Global variants drive `matchAll` in the segment split (collect every token in the text).
+const LINK_TOKEN_REGEX = new RegExp(LINK_TOKEN_TYPING_PATTERN, "g");
+const DISPLAY_LINK_TOKEN_REGEX = new RegExp(LINK_TOKEN_DISPLAY_PATTERN, "g");
+// Non-global twins for the single first-match lookup on the per-keystroke transform path. Reused
+// (no per-call RegExp allocation) and stateless — a non-global `exec` ignores and never advances
+// `lastIndex`, so these can't pollute the global variants the split helpers feed to `matchAll`.
+const LINK_TOKEN_FIRST_REGEX = new RegExp(LINK_TOKEN_TYPING_PATTERN);
+const DISPLAY_LINK_TOKEN_FIRST_REGEX = new RegExp(LINK_TOKEN_DISPLAY_PATTERN);
+
 // Agent mention chip: @alias(
 // Keep plain @alias text editable while typing so the picker can stay open.
 const AGENT_MENTION_TOKEN_REGEX = /(^|\s)@([a-zA-Z0-9._-]+)(?=\()/g;
+
+/**
+ * Finds the first bare-URL token in `text` using the same rules as the segment split: while
+ * editing, a URL only counts once a delimiter follows it (`includeTrailingTokenAtEnd: false`);
+ * read-only display also accepts a URL sitting at the very end. Shared by the composer's live
+ * link-chip transform so it stays in lockstep with how prompts are tokenized for display.
+ */
+export function matchComposerLinkToken(
+  text: string,
+  options: { includeTrailingTokenAtEnd: boolean },
+): { url: string; start: number; end: number } | null {
+  // Fast reject: links either have a scheme or a dotted host, so ordinary prose/typing skips the
+  // regex entirely and keeps the live transform as light as plain text.
+  if (!text.includes("http") && !text.includes(".")) {
+    return null;
+  }
+  const regex = options.includeTrailingTokenAtEnd
+    ? DISPLAY_LINK_TOKEN_FIRST_REGEX
+    : LINK_TOKEN_FIRST_REGEX;
+  const match = regex.exec(text);
+  if (!match) {
+    return null;
+  }
+  const rawUrl = trimTrailingLinkPunctuation(match[0]);
+  const url = normalizeComposerLinkUrl(rawUrl);
+  if (!url) {
+    return null;
+  }
+  const start = match.index ?? 0;
+  return { url, start, end: start + rawUrl.length };
+}
 
 function pushTextSegment(segments: ComposerPromptSegment[], text: string): void {
   if (!text) return;
@@ -67,6 +124,12 @@ type InlineTokenMatch =
       color: string;
       start: number;
       end: number;
+    }
+  | {
+      kind: "link";
+      url: string;
+      start: number;
+      end: number;
     };
 
 function collectInlineTokenMatches(
@@ -82,6 +145,24 @@ function collectInlineTokenMatches(
   const skillRegex = options.includeTrailingTokenAtEnd
     ? DISPLAY_SKILL_TOKEN_REGEX
     : SKILL_TOKEN_REGEX;
+  const linkRegex = options.includeTrailingTokenAtEnd ? DISPLAY_LINK_TOKEN_REGEX : LINK_TOKEN_REGEX;
+
+  // Ranges covered by higher-priority tokens, so mentions/skills do not match
+  // inside a URL (e.g. an `@` host) and links do not match inside an agent token.
+  const reservedRanges: Array<{ start: number; end: number }> = [];
+  const isReserved = (pos: number): boolean =>
+    reservedRanges.some((range) => pos >= range.start && pos < range.end);
+
+  // Links win first: a URL is an opaque span that other token kinds must skip.
+  for (const match of text.matchAll(linkRegex)) {
+    const start = match.index ?? 0;
+    const rawUrl = trimTrailingLinkPunctuation(match[0]);
+    const url = normalizeComposerLinkUrl(rawUrl);
+    if (!url) continue;
+    const end = start + rawUrl.length;
+    reservedRanges.push({ start, end });
+    matches.push({ kind: "link", url, start, end });
+  }
 
   // Track positions covered by agent mentions to avoid double-matching
   const agentMentionRanges: Array<{ start: number; end: number }> = [];
@@ -93,6 +174,9 @@ function collectInlineTokenMatches(
     const matchIndex = match.index ?? 0;
     const start = matchIndex + whitespace.length;
     const end = start + 1 + alias.length; // @alias
+
+    // Skip if this falls inside a URL token
+    if (isReserved(start)) continue;
 
     // Try to resolve the alias
     const resolved = resolveAgentAlias(alias);
@@ -124,8 +208,8 @@ function collectInlineTokenMatches(
     const start = matchIndex + prefix.length;
     const end = start + fullMatch.length - prefix.length;
 
-    // Skip if this overlaps with an agent mention
-    if (isInsideAgentMention(start)) continue;
+    // Skip if this overlaps with an agent mention or sits inside a URL
+    if (isInsideAgentMention(start) || isReserved(start)) continue;
 
     if (path.length > 0) {
       matches.push({ kind: "mention", value: path, start, end });
@@ -141,8 +225,8 @@ function collectInlineTokenMatches(
     const start = matchIndex + whitespace.length;
     const end = start + fullMatch.length - whitespace.length;
 
-    // Skip if this overlaps with an agent mention
-    if (isInsideAgentMention(start)) continue;
+    // Skip if this overlaps with an agent mention or sits inside a URL
+    if (isInsideAgentMention(start) || isReserved(start)) continue;
 
     // Skip built-in slash commands so `/clear`, `/plan` etc. stay as plain text.
     if (name.length > 0 && !(skillPrefix === "/" && isBuiltInComposerSlashCommand(name))) {
@@ -176,7 +260,9 @@ function splitTextIntoPromptSegments(
       pushTextSegment(segments, text.slice(cursor, match.start));
     }
 
-    if (match.kind === "agent-mention") {
+    if (match.kind === "link") {
+      segments.push({ type: "link", url: match.url });
+    } else if (match.kind === "agent-mention") {
       segments.push({
         type: "agent-mention",
         alias: match.alias,
@@ -186,8 +272,8 @@ function splitTextIntoPromptSegments(
       const isPluginMention =
         options.mentionReferences?.some(
           (mention) =>
-            mention.name.toLowerCase() === match.value.toLowerCase() ||
-            mention.path.toLowerCase() === match.value.toLowerCase(),
+            isPluginProviderMentionReference(mention) &&
+            providerMentionMatchesToken(mention, match.value),
         ) ?? false;
       segments.push(
         isPluginMention
@@ -211,9 +297,13 @@ function splitTextIntoPromptSegments(
   return segments;
 }
 
-export function splitPromptIntoDisplaySegments(prompt: string): ComposerPromptSegment[] {
+export function splitPromptIntoDisplaySegments(
+  prompt: string,
+  mentionReferences: ReadonlyArray<ProviderMentionReference> = [],
+): ComposerPromptSegment[] {
   return splitTextIntoPromptSegments(prompt, {
     includeTrailingTokenAtEnd: true,
+    mentionReferences,
   });
 }
 

@@ -22,16 +22,7 @@ export default function TerminalIdentityIcon({ iconKey, className }: TerminalIde
 
   return (
     <span className={cn("inline-flex shrink-0 items-center justify-center", className)}>
-      <IconComponent
-        className={cn(
-          "size-full",
-          iconKey === "claude"
-            ? "text-foreground"
-            : iconKey === "openai"
-              ? "text-foreground/80"
-              : "",
-        )}
-      />
+      <IconComponent className={cn("size-full text-[var(--color-text-foreground)]")} />
     </span>
   );
 }

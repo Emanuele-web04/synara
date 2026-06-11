@@ -9,6 +9,7 @@ import {
   buildTerminalCloseConfirmationMessage,
   confirmTerminalTabClose,
   resolveTerminalCloseTitle,
+  shouldPromptForTerminalClose,
 } from "./terminalCloseConfirmation";
 
 describe("resolveTerminalCloseTitle", () => {
@@ -94,5 +95,62 @@ describe("confirmTerminalTabClose", () => {
         "This permanently clears the terminal history for this tab and deletes the empty terminal thread.",
       ].join("\n"),
     );
+  });
+});
+
+describe("shouldPromptForTerminalClose", () => {
+  it("skips confirmation for idle terminals", () => {
+    expect(
+      shouldPromptForTerminalClose({
+        confirmationEnabled: true,
+        runningTerminalIds: [],
+        terminalAttentionStatesById: {},
+        terminalId: "terminal-1",
+      }),
+    ).toBe(false);
+  });
+
+  it("requires confirmation for terminals with active subprocesses", () => {
+    expect(
+      shouldPromptForTerminalClose({
+        confirmationEnabled: true,
+        runningTerminalIds: ["terminal-1"],
+        terminalAttentionStatesById: {},
+        terminalId: "terminal-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("requires confirmation for terminals waiting for agent attention", () => {
+    expect(
+      shouldPromptForTerminalClose({
+        confirmationEnabled: true,
+        runningTerminalIds: [],
+        terminalAttentionStatesById: { "terminal-1": "review" },
+        terminalId: "terminal-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not prompt just because an idle placeholder terminal thread will be deleted", () => {
+    expect(
+      shouldPromptForTerminalClose({
+        confirmationEnabled: true,
+        runningTerminalIds: [],
+        terminalAttentionStatesById: {},
+        terminalId: "terminal-1",
+      }),
+    ).toBe(false);
+  });
+
+  it("respects the global confirmation preference", () => {
+    expect(
+      shouldPromptForTerminalClose({
+        confirmationEnabled: false,
+        runningTerminalIds: ["terminal-1"],
+        terminalAttentionStatesById: { "terminal-1": "review" },
+        terminalId: "terminal-1",
+      }),
+    ).toBe(false);
   });
 });

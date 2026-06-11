@@ -12,7 +12,7 @@ import {
   resolveFileDiffPath,
   sortFileDiffsByPath,
   splitRepoRelativePath,
-  summarizePatchStats,
+  summarizePatchTotals,
 } from "./diffRendering";
 
 describe("buildPatchCacheKey", () => {
@@ -157,8 +157,8 @@ describe("sortFileDiffsByPath", () => {
   });
 });
 
-describe("summarizePatchStats", () => {
-  it("summarizes additions and deletions from a unified patch", () => {
+describe("summarizePatchTotals", () => {
+  it("summarizes additions and deletions from a single-file unified patch", () => {
     const patch = [
       "diff --git a/src/example.ts b/src/example.ts",
       "index 1111111..2222222 100644",
@@ -173,6 +173,33 @@ describe("summarizePatchStats", () => {
       "",
     ].join("\n");
 
-    expect(summarizePatchStats(patch)).toEqual({ additions: 2, deletions: 1 });
+    expect(summarizePatchTotals(patch)).toEqual({ additions: 2, deletions: 1, fileCount: 1 });
+  });
+
+  it("includes the changed file count alongside additions and deletions", () => {
+    const patch = [
+      "diff --git a/src/one.ts b/src/one.ts",
+      "index 1111111..2222222 100644",
+      "--- a/src/one.ts",
+      "+++ b/src/one.ts",
+      "@@ -1,2 +1,2 @@",
+      " const a = 1;",
+      "-const b = 1;",
+      "+const b = 2;",
+      "diff --git a/src/two.ts b/src/two.ts",
+      "index 3333333..4444444 100644",
+      "--- a/src/two.ts",
+      "+++ b/src/two.ts",
+      "@@ -0,0 +1,2 @@",
+      "+const c = 3;",
+      "+const d = 4;",
+      "",
+    ].join("\n");
+
+    expect(summarizePatchTotals(patch)).toEqual({ additions: 3, deletions: 1, fileCount: 2 });
+  });
+
+  it("returns null when the patch has no file diffs", () => {
+    expect(summarizePatchTotals(undefined)).toBeNull();
   });
 });

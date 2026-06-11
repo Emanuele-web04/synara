@@ -142,7 +142,10 @@ export function basenameOfPath(pathValue: string): string {
   return pathValue.slice(slashIndex + 1);
 }
 
-function pathLooksLikeKnownFile(pathValue: string): boolean {
+// True when the basename matches a known filename or a known file extension.
+// Used both for icon selection and to decide whether an inline token (e.g. an
+// assistant's `path/to/file.ts`) should render as a file mention chip.
+export function pathLooksLikeKnownFile(pathValue: string): boolean {
   const basename = basenameOfPath(pathValue).toLowerCase();
   if (FILE_ICON_BY_BASENAME[basename]) {
     return true;

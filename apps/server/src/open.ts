@@ -8,10 +8,15 @@
  */
 import { spawn } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
-import { extname, join } from "node:path";
+import { dirname, extname, join } from "node:path";
 
 import { EDITORS, type EditorId } from "@t3tools/contracts";
 import { ServiceMap, Schema, Effect, Layer } from "effect";
+import {
+  getEditorMacApplications,
+  resolveAvailableMacApplication,
+  type EditorDefinition,
+} from "./editorAppDiscovery";
 
 // ==============================
 // Definitions
@@ -57,8 +62,9 @@ function parseTargetPathAndPosition(target: string): {
 }
 
 function resolveCommandEditorArgs(
-  editor: (typeof EDITORS)[number],
+  editor: EditorDefinition,
   target: string,
+  command?: string,
 ): ReadonlyArray<string> {
   const parsedTarget = parseTargetPathAndPosition(target);
 
@@ -75,7 +81,40 @@ function resolveCommandEditorArgs(
       const { path, line, column } = parsedTarget;
       return [...(line ? ["--line", line] : []), ...(column ? ["--column", column] : []), path];
     }
+    case "terminal-working-directory":
+      return resolveTerminalCommandArgs(command ?? editor.commands?.[0] ?? editor.id, target);
   }
+}
+
+// Converts the shared launch metadata into `open -a` arguments for macOS-only apps.
+function resolveMacApplicationArgs(
+  editor: EditorDefinition,
+  target: string,
+): ReadonlyArray<string> {
+  switch (editor.launchStyle) {
+    case "terminal-working-directory":
+      if (editor.id === "ghostty") {
+        return ["--args", `--working-directory=${resolveTerminalWorkingDirectory(target)}`];
+      }
+      return [resolveTerminalWorkingDirectory(target)];
+    case "line-column":
+      return ["--args", ...resolveCommandEditorArgs(editor, target)];
+    case "direct-path":
+    case "goto":
+      return [target];
+  }
+}
+
+function resolveMacOpenArgs(
+  editor: EditorDefinition,
+  appName: string,
+  target: string,
+): ReadonlyArray<string> {
+  if (editor.id === "ghostty") {
+    return ["-a", appName, resolveTerminalWorkingDirectory(target)];
+  }
+
+  return ["-a", appName, ...resolveMacApplicationArgs(editor, target)];
 }
 
 function resolveAvailableCommand(
@@ -100,6 +139,82 @@ function fileManagerCommandForPlatform(platform: NodeJS.Platform): string {
     default:
       return "xdg-open";
   }
+}
+
+// Terminal integrations should receive a directory even when the source target is file:line:column.
+function resolveTerminalWorkingDirectory(target: string): string {
+  const targetPath = parseTargetPathAndPosition(target)?.path ?? target;
+
+  try {
+    const stat = statSync(targetPath);
+    return stat.isDirectory() ? targetPath : dirname(targetPath);
+  } catch {
+    return extname(targetPath).length > 0 ? dirname(targetPath) : targetPath;
+  }
+}
+
+function normalizeCommandName(command: string): string {
+  const executableName = command.split(/[\\/]/).pop() ?? command;
+  return executableName.toLowerCase().replace(/\.(?:bat|cmd|com|exe)$/i, "");
+}
+
+function quotePowerShellLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+type TerminalArgsBuilder = (workingDirectory: string) => ReadonlyArray<string>;
+
+const DEFAULT_TERMINAL_ARGS: TerminalArgsBuilder = (workingDirectory) => [
+  `--working-directory=${workingDirectory}`,
+];
+
+const TERMINAL_ARGS_BY_COMMAND: Readonly<Record<string, TerminalArgsBuilder>> = {
+  wt: (workingDirectory) => ["-d", workingDirectory],
+  cmd: (workingDirectory) => ["/K", "cd", "/d", workingDirectory],
+  powershell: (workingDirectory) => [
+    "-NoExit",
+    "-Command",
+    `Set-Location -LiteralPath ${quotePowerShellLiteral(workingDirectory)}`,
+  ],
+  pwsh: (workingDirectory) => [
+    "-NoExit",
+    "-Command",
+    `Set-Location -LiteralPath ${quotePowerShellLiteral(workingDirectory)}`,
+  ],
+  konsole: (workingDirectory) => ["--workdir", workingDirectory],
+  kitty: (workingDirectory) => ["--directory", workingDirectory],
+  wezterm: (workingDirectory) => ["start", "--cwd", workingDirectory],
+  ghostty: DEFAULT_TERMINAL_ARGS,
+  warp: DEFAULT_TERMINAL_ARGS,
+};
+
+function resolveTerminalCommandArgs(command: string, target: string): ReadonlyArray<string> {
+  const workingDirectory = resolveTerminalWorkingDirectory(target);
+  const buildArgs =
+    TERMINAL_ARGS_BY_COMMAND[normalizeCommandName(command)] ?? DEFAULT_TERMINAL_ARGS;
+  return buildArgs(workingDirectory);
+}
+
+function shouldPreferMacApplicationLaunch(
+  editor: EditorDefinition,
+  platform: NodeJS.Platform,
+): boolean {
+  return platform === "darwin" && editor.launchStyle === "terminal-working-directory";
+}
+
+function shouldUseImplicitMacApplicationFallback(editor: EditorDefinition): boolean {
+  return editor.id === "ghostty" || editor.id === "terminal";
+}
+
+function resolveFallbackEditorCommand(
+  editor: EditorDefinition,
+  platform: NodeJS.Platform,
+): string | null {
+  if (editor.id === "terminal") {
+    return platform === "win32" ? "cmd" : "x-terminal-emulator";
+  }
+
+  return editor.commands?.[0] ?? null;
 }
 
 function stripWrappingQuotes(value: string): string {
@@ -214,16 +329,23 @@ export function resolveAvailableEditors(
   const available: EditorId[] = [];
 
   for (const editor of EDITORS) {
-    if (editor.commands === null) {
+    if (editor.commands !== null) {
+      if (resolveAvailableCommand(editor.commands, { platform, env }) !== null) {
+        available.push(editor.id);
+        continue;
+      }
+    }
+
+    if (resolveAvailableMacApplication(getEditorMacApplications(editor), platform, env) !== null) {
+      available.push(editor.id);
+      continue;
+    }
+
+    if (editor.id === "file-manager") {
       const command = fileManagerCommandForPlatform(platform);
       if (isCommandAvailable(command, { platform, env })) {
         available.push(editor.id);
       }
-      continue;
-    }
-
-    if (resolveAvailableCommand(editor.commands, { platform, env }) !== null) {
-      available.push(editor.id);
     }
   }
 
@@ -266,12 +388,47 @@ export const resolveEditorLaunch = Effect.fnUntraced(function* (
     return yield* new OpenError({ message: `Unknown editor: ${input.editor}` });
   }
 
-  if (editorDef.commands) {
-    const command =
-      resolveAvailableCommand(editorDef.commands, { platform, env }) ?? editorDef.commands[0];
+  const preferredMacApplication = shouldPreferMacApplicationLaunch(editorDef, platform)
+    ? (resolveAvailableMacApplication(getEditorMacApplications(editorDef), platform, env) ??
+      (shouldUseImplicitMacApplicationFallback(editorDef)
+        ? (getEditorMacApplications(editorDef)?.[0] ?? null)
+        : null))
+    : null;
+  if (preferredMacApplication) {
     return {
-      command,
-      args: resolveCommandEditorArgs(editorDef, input.cwd),
+      command: "open",
+      args: resolveMacOpenArgs(editorDef, preferredMacApplication, input.cwd),
+    };
+  }
+
+  if (editorDef.commands) {
+    const command = resolveAvailableCommand(editorDef.commands, { platform, env });
+    if (command) {
+      return {
+        command,
+        args: resolveCommandEditorArgs(editorDef, input.cwd, command),
+      };
+    }
+  }
+
+  const macApplication =
+    resolveAvailableMacApplication(getEditorMacApplications(editorDef), platform, env) ??
+    (platform === "darwin" ? (getEditorMacApplications(editorDef)?.[0] ?? null) : null);
+  if (macApplication) {
+    return {
+      command: "open",
+      args: resolveMacOpenArgs(editorDef, macApplication, input.cwd),
+    };
+  }
+
+  if (editorDef.commands) {
+    const fallbackCommand = resolveFallbackEditorCommand(editorDef, platform);
+    if (!fallbackCommand) {
+      return yield* new OpenError({ message: `Unsupported editor: ${input.editor}` });
+    }
+    return {
+      command: fallbackCommand,
+      args: resolveCommandEditorArgs(editorDef, input.cwd, fallbackCommand),
     };
   }
 

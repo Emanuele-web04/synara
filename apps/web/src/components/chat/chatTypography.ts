@@ -16,18 +16,18 @@ export const USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME = [
 
 const CHAT_TRANSCRIPT_USER_CHAR_WIDTH_RATIO = 0.48;
 const CHAT_TRANSCRIPT_ASSISTANT_CHAR_WIDTH_RATIO = 0.52;
-const CHAT_TRANSCRIPT_USER_MESSAGE_LINE_HEIGHT_OFFSET_PX = 4;
+// Matches Tailwind `leading-normal` (1.5). Shared by the assistant transcript text,
+// user message bubbles, and the composer input so every chat surface reads at one leading.
+const CHAT_TRANSCRIPT_LINE_HEIGHT_RATIO = 1.5;
 
 export function getChatTranscriptLineHeightPx(chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX): number {
-  return normalizeChatFontSizePx(chatFontSizePx) + 8;
+  return normalizeChatFontSizePx(chatFontSizePx) * CHAT_TRANSCRIPT_LINE_HEIGHT_RATIO;
 }
 
 export function getChatTranscriptUserMessageLineHeightPx(
   chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX,
 ): number {
-  return (
-    normalizeChatFontSizePx(chatFontSizePx) + CHAT_TRANSCRIPT_USER_MESSAGE_LINE_HEIGHT_OFFSET_PX
-  );
+  return getChatTranscriptLineHeightPx(chatFontSizePx);
 }
 
 export function getChatTranscriptUserCharWidthPx(
@@ -42,24 +42,31 @@ export function getChatTranscriptAssistantCharWidthPx(
   return normalizeChatFontSizePx(chatFontSizePx) * CHAT_TRANSCRIPT_ASSISTANT_CHAR_WIDTH_RATIO;
 }
 
+function buildChatTextStyle(fontSizePx: number, lineHeightPx: number): CSSProperties {
+  return {
+    fontSize: `${fontSizePx}px`,
+    lineHeight: `${lineHeightPx}px`,
+  };
+}
+
 export function getChatTranscriptTextStyle(
   chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX,
 ): CSSProperties {
   const normalizedChatFontSizePx = normalizeChatFontSizePx(chatFontSizePx);
-  return {
-    fontSize: `${normalizedChatFontSizePx}px`,
-    lineHeight: `${getChatTranscriptLineHeightPx(normalizedChatFontSizePx)}px`,
-  };
+  return buildChatTextStyle(
+    normalizedChatFontSizePx,
+    getChatTranscriptLineHeightPx(normalizedChatFontSizePx),
+  );
 }
 
 export function getChatTranscriptUserMessageTextStyle(
   chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX,
 ): CSSProperties {
   const normalizedChatFontSizePx = normalizeChatFontSizePx(chatFontSizePx);
-  return {
-    fontSize: `${normalizedChatFontSizePx}px`,
-    lineHeight: `${getChatTranscriptUserMessageLineHeightPx(normalizedChatFontSizePx)}px`,
-  };
+  return buildChatTextStyle(
+    normalizedChatFontSizePx,
+    getChatTranscriptUserMessageLineHeightPx(normalizedChatFontSizePx),
+  );
 }
 
 export function getChatMessageFooterTextStyle(
@@ -67,8 +74,5 @@ export function getChatMessageFooterTextStyle(
 ): CSSProperties {
   const normalizedChatFontSizePx = normalizeChatFontSizePx(chatFontSizePx);
   const footerFontSizePx = Math.max(8, normalizedChatFontSizePx - 2);
-  return {
-    fontSize: `${footerFontSizePx}px`,
-    lineHeight: `${getChatTranscriptLineHeightPx(footerFontSizePx)}px`,
-  };
+  return buildChatTextStyle(footerFontSizePx, getChatTranscriptLineHeightPx(footerFontSizePx));
 }

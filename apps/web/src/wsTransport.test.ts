@@ -126,4 +126,24 @@ describe("WsTransport", () => {
 
     transport.dispose();
   });
+
+  it("notifies state listeners and replays the current state on demand", () => {
+    const transport = new WsTransport();
+    const listener = vi.fn();
+
+    const unsubscribe = transport.onStateChange(listener, { replayCurrent: true });
+
+    expect(listener).toHaveBeenCalledWith("connecting");
+
+    listener.mockClear();
+    transport.dispose();
+
+    expect(listener).toHaveBeenCalledWith("disposed");
+
+    listener.mockClear();
+    unsubscribe();
+    transport.dispose();
+
+    expect(listener).not.toHaveBeenCalled();
+  });
 });

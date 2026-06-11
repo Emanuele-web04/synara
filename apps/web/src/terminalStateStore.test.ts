@@ -266,6 +266,26 @@ describe("terminalStateStore actions", () => {
     expect(terminalState.terminalCliKindsById).toEqual({});
   });
 
+  it("clears terminal provider identity when metadata cliKind is null", () => {
+    const store = useTerminalStateStore.getState();
+    store.newTerminal(THREAD_ID, "terminal-2");
+    store.setTerminalMetadata(THREAD_ID, "terminal-2", {
+      cliKind: "codex",
+      label: "Codex CLI",
+    });
+    store.setTerminalMetadata(THREAD_ID, "terminal-2", {
+      cliKind: null,
+      label: "bun dev",
+    });
+
+    const terminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+    expect(terminalState.terminalLabelsById["terminal-2"]).toBe("bun dev");
+    expect(terminalState.terminalCliKindsById).toEqual({});
+  });
+
   it("allows unlimited groups while keeping each group capped at four terminals", () => {
     const store = useTerminalStateStore.getState();
     store.splitTerminal(THREAD_ID, "terminal-2");

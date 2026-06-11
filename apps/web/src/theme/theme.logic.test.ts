@@ -20,6 +20,7 @@ import {
   setThemeCodeThemeId,
   updateThemePackFromShareString,
 } from "./theme.logic";
+import { DEFAULT_MONOSPACE_FONT_FAMILY_STACK } from "../lib/fontFamily";
 
 const PROVIDED_THEME_STRING =
   'codex-theme-v1:{"codeThemeId":"linear","theme":{"accent":"#606acc","contrast":30,"fonts":{"code":"\\"Jetbrains Mono\\"","ui":"Inter"},"ink":"#e3e4e6","opaqueWindows":true,"semanticColors":{"diffAdded":"#69c967","diffRemoved":"#ff7e78","skill":"#c2a1ff"},"surface":"#0f0f11"},"variant":"dark"}';
@@ -298,7 +299,18 @@ describe("buildThemeCssVariables", () => {
     expect(cssVariables.variables["--sidebar-accent"]).toBe("rgba(227, 228, 230, 0.058)");
     expect(cssVariables.variables["--sidebar-accent-active"]).toBe("rgba(227, 228, 230, 0.058)");
     expect(cssVariables.variables["--theme-font-ui-family"]).toBe("Inter");
-    expect(cssVariables.variables["--theme-font-code-family"]).toBe('"Jetbrains Mono"');
+    expect(cssVariables.variables["--theme-font-code-family"]).toBe(
+      `"Jetbrains Mono", ${DEFAULT_MONOSPACE_FONT_FAMILY_STACK}`,
+    );
+    expect(cssVariables.variables["--vscode-terminal-ansiBlue"]).toBe("#606acc");
+    expect(cssVariables.variables["--vscode-terminal-ansiGreen"]).toBe("#56a554");
+    expect(cssVariables.variables["--vscode-terminal-ansiMagenta"]).toBe("#c2a1ff");
+    expect(cssVariables.variables["--vscode-terminal-ansiRed"]).toBe("#ff7e78");
+    expect(cssVariables.variables["--vscode-terminal-foreground"]).toBe("#e3e4e6");
+    expect(cssVariables.variables["--color-token-terminal-ansi-blue"]).toBe("#606acc");
+    expect(cssVariables.variables["--color-token-terminal-ansi-green"]).toBe("#56a554");
+    expect(cssVariables.variables["--color-token-terminal-ansi-magenta"]).toBe("#c2a1ff");
+    expect(cssVariables.variables["--color-token-terminal-ansi-red"]).toBe("#ff7e78");
   });
 
   it("exposes a structured derived-token surface for retrieving non-stored colors", () => {
@@ -319,7 +331,9 @@ describe("buildThemeCssVariables", () => {
     // Dark primary button label is the surface color (dark) on the white (ink) button.
     expect(tokens.derived.textButtonPrimary).toBe("#0f0f11");
     expect(tokens.derived.buttonPrimaryBackground).toBe("#e3e4e6");
-    expect(tokens.aliases["--color-token-side-bar-background"]).toBe("#0d0d0f");
+    // Codex maps the sidebar token to the PRIMARY surface (same as main-surface-primary),
+    // not the darker under-surface; mirror that so the sidebar color matches Codex.
+    expect(tokens.aliases["--color-token-side-bar-background"]).toBe("#0f0f11");
     expect(tokens.aliases["--color-token-list-hover-background"]).toBe(
       tokens.derived.buttonSecondaryBackgroundHover,
     );
@@ -328,6 +342,15 @@ describe("buildThemeCssVariables", () => {
     );
     expect(tokens.aliases["--color-token-main-surface-primary"]).toBe("#0f0f11");
     expect(tokens.aliases["--color-token-input-background"]).toBe("rgba(27, 27, 29, 0.96)");
+    expect(tokens.aliases["--color-token-terminal-background"]).toBe("#0f0f11");
+    expect(tokens.aliases["--color-token-terminal-foreground"]).toBe("#e3e4e6");
+    expect(tokens.aliases["--color-token-terminal-ansi-black"]).toBe(
+      tokens.derived.textForegroundTertiary,
+    );
+    expect(tokens.aliases["--color-token-terminal-ansi-bright-black"]).toBe(
+      tokens.derived.textForegroundSecondary,
+    );
+    expect(tokens.aliases["--color-token-terminal-ansi-yellow"]).toBe("#f5b44a");
   });
 
   it("matches Codex's default dark chrome composer/dropdown control color", () => {

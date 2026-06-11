@@ -1,29 +1,37 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildSettingsBackAvailableThreadIds,
   buildProjectThreadTree,
+  derivePinnedProjectIdsForSidebar,
+  derivePinnedThreadIdsForSidebar,
   deriveSidebarProjectData,
   describeAddProjectError,
   extractDuplicateProjectCreateProjectId,
+  findDeepestWorkspaceRootMatch,
   findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
   getVisibleSidebarEntriesForPreview,
+  orderPinnedProjectsForSidebar,
   getPinnedThreadsForSidebar,
   getNextVisibleSidebarThreadId,
   getSidebarThreadIdForJumpCommand,
   getSidebarThreadIdsToPrewarm,
   getRenderedThreadsForSidebarProject,
   groupSidebarThreadsByProjectId,
+  isLatestPinnedProjectMutation,
   getUnpinnedThreadsForSidebar,
   getVisibleSidebarThreadIds,
   getVisibleThreadsForProject,
   getProjectSortTimestamp,
   hasUnseenCompletion,
+  isLatestPinnedThreadMutation,
   isLoopbackHostname,
   isDuplicateProjectCreateError,
   pruneExpandedProjectThreadListsForCollapsedProjects,
   recoverExistingAddProjectTarget,
   resolveProjectEmptyState,
+  resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
@@ -159,6 +167,75 @@ describe("resolveSidebarNewThreadEnvMode", () => {
   });
 });
 
+describe("resolveSettingsBackTarget", () => {
+  it("keeps fresh draft chats available as settings back targets", () => {
+    const availableThreadIds = buildSettingsBackAvailableThreadIds({
+      sidebarThreadSummaryById: {
+        "thread-latest": {},
+      },
+      draftThreadsByThreadId: {
+        "thread-draft": {},
+      },
+    });
+
+    expect(
+      resolveSettingsBackTarget({
+        lastThreadRoute: {
+          threadId: "thread-draft",
+        },
+        availableThreadIds,
+        latestThreadId: "thread-latest",
+      }),
+    ).toEqual({
+      kind: "thread",
+      threadId: "thread-draft",
+    });
+  });
+
+  it("returns the remembered live thread route", () => {
+    expect(
+      resolveSettingsBackTarget({
+        lastThreadRoute: {
+          threadId: "thread-remembered",
+          splitViewId: "split-live",
+        },
+        availableThreadIds: new Set(["thread-remembered", "thread-latest"]),
+        availableSplitViewIds: new Set(["split-live"]),
+        latestThreadId: "thread-latest",
+      }),
+    ).toEqual({
+      kind: "thread",
+      threadId: "thread-remembered",
+      splitViewId: "split-live",
+    });
+  });
+
+  it("falls back to the latest sidebar thread when the remembered route is stale", () => {
+    expect(
+      resolveSettingsBackTarget({
+        lastThreadRoute: {
+          threadId: "thread-missing",
+        },
+        availableThreadIds: new Set(["thread-latest"]),
+        latestThreadId: "thread-latest",
+      }),
+    ).toEqual({
+      kind: "thread",
+      threadId: "thread-latest",
+    });
+  });
+
+  it("falls back to home when no thread target is available", () => {
+    expect(
+      resolveSettingsBackTarget({
+        lastThreadRoute: null,
+        availableThreadIds: new Set(),
+        latestThreadId: null,
+      }),
+    ).toEqual({ kind: "home" });
+  });
+});
+
 describe("pruneExpandedProjectThreadListsForCollapsedProjects", () => {
   it("clears remembered show-more state when a project is collapsed", () => {
     const current = new Set(["/Users/tester/Code/one", "/Users/tester/Code/two"]);
@@ -200,6 +277,36 @@ describe("add-project error helpers", () => {
         (project) => project.cwd,
       )?.id,
     ).toBe("project-2");
+  });
+
+  it("attributes a nested server cwd to the deepest matching project", () => {
+    const projects = [
+      { id: "repo", cwd: "/Users/tester/Code/repo" },
+      { id: "web", cwd: "/Users/tester/Code/repo/apps/web" },
+      { id: "other", cwd: "/Users/tester/Code/other" },
+    ];
+
+    expect(
+      findDeepestWorkspaceRootMatch(
+        projects,
+        "/Users/tester/Code/repo/apps/web/src",
+        (project) => project.cwd,
+      )?.id,
+    ).toBe("web");
+    expect(
+      findDeepestWorkspaceRootMatch(
+        projects,
+        "/Users/tester/Code/repo/apps/server",
+        (project) => project.cwd,
+      )?.id,
+    ).toBe("repo");
+    expect(
+      findDeepestWorkspaceRootMatch(
+        projects,
+        "/Users/tester/Code/unrelated",
+        (project) => project.cwd,
+      ),
+    ).toBeUndefined();
   });
 
   it("falls through to project.create when a local project shell is stale on the server", async () => {
@@ -287,6 +394,22 @@ describe("add-project error helpers", () => {
 });
 
 describe("pin helpers", () => {
+  const makeProject = (id: string): Project =>
+    ({
+      id: id as ProjectId,
+      kind: "project",
+      name: id,
+      remoteName: id,
+      folderName: id,
+      localName: null,
+      cwd: `/tmp/${id}`,
+      defaultModelSelection: null,
+      expanded: true,
+      createdAt: "2026-03-09T10:00:00.000Z",
+      updatedAt: "2026-03-09T10:00:00.000Z",
+      scripts: [],
+    }) satisfies Project;
+
   const makeThread = (id: string): Thread =>
     ({
       id: id as ThreadId,
@@ -325,6 +448,96 @@ describe("pin helpers", () => {
     expect(
       getUnpinnedThreadsForSidebar(threads, ["thread-2" as ThreadId, "thread-3" as ThreadId]),
     ).toEqual([threads[0]]);
+  });
+
+  it("lets an optimistic unpin override server and persisted pinned state", () => {
+    const threads = [
+      {
+        ...makeThread("thread-1"),
+        isPinned: true,
+      },
+    ];
+
+    expect(
+      derivePinnedThreadIdsForSidebar({
+        threads,
+        persistedPinnedThreadIds: ["thread-1" as ThreadId],
+        optimisticPinnedStateByThreadId: new Map([["thread-1" as ThreadId, false]]),
+      }),
+    ).toEqual([]);
+  });
+
+  it("shows an optimistic pin before the server snapshot confirms it", () => {
+    const threads = [makeThread("thread-1")];
+
+    expect(
+      derivePinnedThreadIdsForSidebar({
+        threads,
+        persistedPinnedThreadIds: [],
+        optimisticPinnedStateByThreadId: new Map([["thread-1" as ThreadId, true]]),
+      }),
+    ).toEqual(["thread-1"]);
+  });
+
+  it("derives at most three pinned projects and keeps persisted order first", () => {
+    const projects = [
+      { ...makeProject("project-1"), isPinned: true },
+      { ...makeProject("project-2"), isPinned: true },
+      { ...makeProject("project-3"), isPinned: true },
+      { ...makeProject("project-4"), isPinned: true },
+    ];
+
+    expect(
+      derivePinnedProjectIdsForSidebar({
+        projects,
+        persistedPinnedProjectIds: ["project-3" as ProjectId, "project-1" as ProjectId],
+        optimisticPinnedStateByProjectId: new Map([["project-1" as ProjectId, false]]),
+      }),
+    ).toEqual(["project-3", "project-2", "project-4"]);
+  });
+
+  it("moves pinned projects to the top while preserving unpinned order", () => {
+    const projects = [makeProject("project-1"), makeProject("project-2"), makeProject("project-3")];
+
+    expect(
+      orderPinnedProjectsForSidebar(projects, ["project-3" as ProjectId, "project-1" as ProjectId]),
+    ).toEqual([projects[2], projects[0], projects[1]]);
+  });
+
+  it("rejects stale pin mutation versions so old failures cannot roll back newer clicks", () => {
+    const threadId = "thread-1" as ThreadId;
+    const latestMutationVersionByThreadId = new Map<ThreadId, number>([[threadId, 2]]);
+    const projectId = "project-1" as ProjectId;
+    const latestMutationVersionByProjectId = new Map<ProjectId, number>([[projectId, 2]]);
+
+    expect(
+      isLatestPinnedThreadMutation({
+        threadId,
+        requestVersion: 1,
+        latestMutationVersionByThreadId,
+      }),
+    ).toBe(false);
+    expect(
+      isLatestPinnedThreadMutation({
+        threadId,
+        requestVersion: 2,
+        latestMutationVersionByThreadId,
+      }),
+    ).toBe(true);
+    expect(
+      isLatestPinnedProjectMutation({
+        projectId,
+        requestVersion: 1,
+        latestMutationVersionByProjectId,
+      }),
+    ).toBe(false);
+    expect(
+      isLatestPinnedProjectMutation({
+        projectId,
+        requestVersion: 2,
+        latestMutationVersionByProjectId,
+      }),
+    ).toBe(true);
   });
 
   it("waits for thread hydration before pruning persisted pins", () => {
@@ -732,8 +945,8 @@ describe("buildProjectThreadTree", () => {
 });
 
 describe("getVisibleSidebarEntriesForPreview", () => {
-  it("caps project preview by root rows, not flattened child rows", () => {
-    const visibleEntries = getVisibleSidebarEntriesForPreview({
+  it("caps preview by rendered rows, not root-thread count", () => {
+    const result = getVisibleSidebarEntriesForPreview({
       entries: [
         {
           rowId: ThreadId.makeUnsafe("thread-parent"),
@@ -755,12 +968,47 @@ describe("getVisibleSidebarEntriesForPreview", () => {
       activeEntryId: undefined,
       isExpanded: false,
       previewLimit: 2,
-    }).visibleEntries;
+    });
 
-    expect(visibleEntries.map((entry) => entry.rowId)).toEqual([
+    expect(result.hasHiddenEntries).toBe(true);
+    expect(result.visibleEntries.map((entry) => entry.rowId)).toEqual([
       ThreadId.makeUnsafe("thread-parent"),
       ThreadId.makeUnsafe("thread-child"),
-      ThreadId.makeUnsafe("thread-second-root"),
+    ]);
+  });
+
+  it("reveals the active row and its ancestor chain when it falls below the preview", () => {
+    const entries = [
+      {
+        rowId: ThreadId.makeUnsafe("thread-parent"),
+        rootRowId: ThreadId.makeUnsafe("thread-parent"),
+      },
+      {
+        rowId: ThreadId.makeUnsafe("thread-child"),
+        rootRowId: ThreadId.makeUnsafe("thread-parent"),
+      },
+      {
+        rowId: ThreadId.makeUnsafe("thread-second-root"),
+        rootRowId: ThreadId.makeUnsafe("thread-second-root"),
+      },
+      {
+        rowId: ThreadId.makeUnsafe("thread-third-root"),
+        rootRowId: ThreadId.makeUnsafe("thread-third-root"),
+      },
+    ];
+
+    const result = getVisibleSidebarEntriesForPreview({
+      entries,
+      activeEntryId: ThreadId.makeUnsafe("thread-third-root"),
+      isExpanded: false,
+      previewLimit: 2,
+    });
+
+    expect(result.hasHiddenEntries).toBe(true);
+    expect(result.visibleEntries.map((entry) => entry.rowId)).toEqual([
+      ThreadId.makeUnsafe("thread-parent"),
+      ThreadId.makeUnsafe("thread-child"),
+      ThreadId.makeUnsafe("thread-third-root"),
     ]);
   });
 });

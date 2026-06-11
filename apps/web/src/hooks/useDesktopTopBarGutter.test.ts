@@ -13,17 +13,7 @@ describe("shouldReserveDesktopTopBarTrafficLightGutter", () => {
       shouldReserveDesktopTopBarTrafficLightGutter({
         isElectron: false,
         isMacDesktop: true,
-        sidebarSide: "left",
         sidebarOpen: false,
-        isMobile: false,
-      }),
-    ).toBe(false);
-    expect(
-      shouldReserveDesktopTopBarTrafficLightGutter({
-        isElectron: false,
-        isMacDesktop: true,
-        sidebarSide: "right",
-        sidebarOpen: true,
         isMobile: false,
       }),
     ).toBe(false);
@@ -34,45 +24,28 @@ describe("shouldReserveDesktopTopBarTrafficLightGutter", () => {
       shouldReserveDesktopTopBarTrafficLightGutter({
         isElectron: true,
         isMacDesktop: false,
-        sidebarSide: "right",
+        sidebarOpen: false,
+        isMobile: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("lets the sidebar provide the gutter when it is open on desktop", () => {
+    expect(
+      shouldReserveDesktopTopBarTrafficLightGutter({
+        isElectron: true,
+        isMacDesktop: true,
         sidebarOpen: true,
         isMobile: false,
       }),
     ).toBe(false);
   });
 
-  it("reserves a gutter whenever the sidebar is on the right", () => {
-    for (const sidebarOpen of [true, false]) {
-      expect(
-        shouldReserveDesktopTopBarTrafficLightGutter({
-          isElectron: true,
-          isMacDesktop: true,
-          sidebarSide: "right",
-          sidebarOpen,
-          isMobile: false,
-        }),
-      ).toBe(true);
-    }
-  });
-
-  it("lets the left sidebar provide the gutter when it is open on desktop", () => {
+  it("reserves a gutter when the sidebar is collapsed on desktop", () => {
     expect(
       shouldReserveDesktopTopBarTrafficLightGutter({
         isElectron: true,
         isMacDesktop: true,
-        sidebarSide: "left",
-        sidebarOpen: true,
-        isMobile: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("reserves a gutter when the left sidebar is collapsed on desktop", () => {
-    expect(
-      shouldReserveDesktopTopBarTrafficLightGutter({
-        isElectron: true,
-        isMacDesktop: true,
-        sidebarSide: "left",
         sidebarOpen: false,
         isMobile: false,
       }),
@@ -85,7 +58,6 @@ describe("shouldReserveDesktopTopBarTrafficLightGutter", () => {
         shouldReserveDesktopTopBarTrafficLightGutter({
           isElectron: true,
           isMacDesktop: true,
-          sidebarSide: "left",
           sidebarOpen,
           isMobile: true,
         }),

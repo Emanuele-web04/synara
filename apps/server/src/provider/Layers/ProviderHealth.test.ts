@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import type { ServerProviderStatus } from "@t3tools/contracts";
 import { describe, it, assert } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import * as PlatformError from "effect/PlatformError";
@@ -20,7 +21,9 @@ import {
   makeCheckOpenCodeProviderStatus,
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
+  providerStatusesEqual,
   readCodexConfigModelProvider,
+  stabilizeProviderStatusesAgainstTransientTimeouts,
 } from "./ProviderHealth";
 
 // ── Test helpers ────────────────────────────────────────────────────
@@ -95,25 +98,32 @@ function withTempCodexHome(configContent?: string) {
 
     yield* Effect.acquireRelease(
       Effect.sync(() => {
-        const originalCodexHome = process.env.CODEX_HOME;
-        const originalDpCodeHome = process.env.DPCODE_HOME;
+        // Override every runtime-home var the overlay resolver consults (SYNARA_HOME wins over
+        // DPCODE_HOME/T3CODE_HOME) plus CODEX_HOME, so an ambient SYNARA_HOME can't shadow the
+        // temp dir and skew the resolved CODEX_HOME during this test.
+        const overrides: Record<string, string> = {
+          CODEX_HOME: tmpDir,
+          SYNARA_HOME: runtimeDir,
+          DPCODE_HOME: runtimeDir,
+          T3CODE_HOME: runtimeDir,
+        };
+        const restore: Record<string, string | undefined> = {};
+        for (const [key, value] of Object.entries(overrides)) {
+          restore[key] = process.env[key];
+          process.env[key] = value;
+        }
         const originalPortkeyApiKey = process.env.PORTKEY_API_KEY;
-        process.env.CODEX_HOME = tmpDir;
-        process.env.DPCODE_HOME = runtimeDir;
         process.env.PORTKEY_API_KEY ??= "test-portkey-key";
-        return { originalCodexHome, originalDpCodeHome, originalPortkeyApiKey };
+        return { restore, originalPortkeyApiKey };
       }),
-      ({ originalCodexHome, originalDpCodeHome, originalPortkeyApiKey }) =>
+      ({ restore, originalPortkeyApiKey }) =>
         Effect.sync(() => {
-          if (originalCodexHome !== undefined) {
-            process.env.CODEX_HOME = originalCodexHome;
-          } else {
-            delete process.env.CODEX_HOME;
-          }
-          if (originalDpCodeHome !== undefined) {
-            process.env.DPCODE_HOME = originalDpCodeHome;
-          } else {
-            delete process.env.DPCODE_HOME;
+          for (const [key, value] of Object.entries(restore)) {
+            if (value !== undefined) {
+              process.env[key] = value;
+            } else {
+              delete process.env[key];
+            }
           }
           if (originalPortkeyApiKey !== undefined) {
             process.env.PORTKEY_API_KEY = originalPortkeyApiKey;
@@ -132,6 +142,185 @@ function withTempCodexHome(configContent?: string) {
 }
 
 it.layer(NodeServices.layer)("ProviderHealth", (it) => {
+  describe("stabilizeProviderStatusesAgainstTransientTimeouts", () => {
+    const previousReadyOpenCode = {
+      provider: "opencode",
+      status: "ready",
+      available: true,
+      authStatus: "unknown",
+      version: "1.15.13",
+      checkedAt: "2026-06-04T17:00:00.000Z",
+      message:
+        "OpenCode CLI is installed. Configure provider credentials inside OpenCode as needed.",
+    } satisfies ServerProviderStatus;
+
+    it("keeps an already usable provider available after a transient command timeout", () => {
+      const result = stabilizeProviderStatusesAgainstTransientTimeouts(
+        [previousReadyOpenCode],
+        [
+          {
+            provider: "opencode",
+            status: "error",
+            available: false,
+            authStatus: "unknown",
+            checkedAt: "2026-06-04T17:01:00.000Z",
+            message:
+              "OpenCode CLI is installed but failed to run. Timed out while running command.",
+          },
+        ],
+      );
+
+      assert.deepStrictEqual(result, [
+        {
+          ...previousReadyOpenCode,
+          checkedAt: "2026-06-04T17:01:00.000Z",
+        },
+      ]);
+    });
+
+    it("does not hide non-timeout provider failures", () => {
+      const unavailableStatus = {
+        provider: "opencode",
+        status: "error",
+        available: false,
+        authStatus: "unknown",
+        checkedAt: "2026-06-04T17:01:00.000Z",
+        message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
+      } satisfies ServerProviderStatus;
+
+      assert.deepStrictEqual(
+        stabilizeProviderStatusesAgainstTransientTimeouts(
+          [previousReadyOpenCode],
+          [unavailableStatus],
+        ),
+        [unavailableStatus],
+      );
+    });
+
+    it("keeps an already usable provider ready after a transient auth timeout warning", () => {
+      const previousReadyClaude = {
+        provider: "claudeAgent",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+        version: "2.1.162",
+        checkedAt: "2026-06-04T17:00:00.000Z",
+      } satisfies ServerProviderStatus;
+
+      const result = stabilizeProviderStatusesAgainstTransientTimeouts(
+        [previousReadyClaude],
+        [
+          {
+            provider: "claudeAgent",
+            status: "warning",
+            available: true,
+            authStatus: "unknown",
+            version: "2.1.162",
+            checkedAt: "2026-06-04T17:01:00.000Z",
+            message:
+              "Could not verify Claude authentication status. Timed out while running command.",
+          },
+        ],
+      );
+
+      assert.deepStrictEqual(result, [
+        {
+          ...previousReadyClaude,
+          checkedAt: "2026-06-04T17:01:00.000Z",
+        },
+      ]);
+    });
+
+    it("does not keep a stale Claude auth error after a transient auth timeout", () => {
+      const previousUnauthenticatedClaude = {
+        provider: "claudeAgent",
+        status: "error",
+        available: true,
+        authStatus: "unauthenticated",
+        version: "2.1.162",
+        checkedAt: "2026-06-04T17:00:00.000Z",
+        message: "Claude is not authenticated. Run `claude auth login` and try again.",
+      } satisfies ServerProviderStatus;
+      const authTimeoutWarning = {
+        provider: "claudeAgent",
+        status: "warning",
+        available: true,
+        authStatus: "unknown",
+        version: "2.1.162",
+        checkedAt: "2026-06-04T17:01:00.000Z",
+        message: "Could not verify Claude authentication status. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+
+      assert.deepStrictEqual(
+        stabilizeProviderStatusesAgainstTransientTimeouts(
+          [previousUnauthenticatedClaude],
+          [authTimeoutWarning],
+        ),
+        [authTimeoutWarning],
+      );
+    });
+  });
+
+  describe("providerStatusesEqual", () => {
+    const readyCursor = {
+      provider: "cursor",
+      status: "ready",
+      available: true,
+      authStatus: "unknown",
+      version: "2026.06.04-8f81907",
+      checkedAt: "2026-06-04T17:00:00.000Z",
+      message:
+        "Cursor Agent CLI is installed. Sign in with Cursor if a session prompts for authentication.",
+      versionAdvisory: {
+        status: "current",
+        currentVersion: "2026.06.04-8f81907",
+        latestVersion: "2026.06.04-8f81907",
+        updateCommand: null,
+        canUpdate: true,
+        checkedAt: "2026-06-04T17:00:00.000Z",
+        message: null,
+      },
+    } satisfies ServerProviderStatus;
+
+    it("ignores top-level and version-advisory checkedAt churn", () => {
+      assert.strictEqual(
+        providerStatusesEqual(
+          [readyCursor],
+          [
+            {
+              ...readyCursor,
+              checkedAt: "2026-06-04T17:01:00.000Z",
+              versionAdvisory: {
+                ...readyCursor.versionAdvisory,
+                checkedAt: "2026-06-04T17:01:00.000Z",
+              },
+            },
+          ],
+        ),
+        true,
+      );
+    });
+
+    it("detects meaningful version-advisory changes", () => {
+      assert.strictEqual(
+        providerStatusesEqual(
+          [readyCursor],
+          [
+            {
+              ...readyCursor,
+              versionAdvisory: {
+                ...readyCursor.versionAdvisory,
+                status: "behind_latest",
+                latestVersion: "2026.06.05-a1b2c3d",
+              },
+            },
+          ],
+        ),
+        false,
+      );
+    });
+  });
+
   // ── checkCodexProviderStatus tests ────────────────────────────────
   //
   // These tests control CODEX_HOME to ensure the custom-provider detection

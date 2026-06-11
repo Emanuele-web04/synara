@@ -925,6 +925,47 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("refreshes persisted resume cursor from the active session on runtime events", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+
+      const session = yield* provider.startSession(asThreadId("thread-runtime-resume-refresh"), {
+        provider: "claudeAgent",
+        threadId: asThreadId("thread-runtime-resume-refresh"),
+        runtimeMode: "full-access",
+      });
+      const updatedResumeCursor = {
+        threadId: session.threadId,
+        resume: "550e8400-e29b-41d4-a716-446655440000",
+        resumeSessionAt: "assistant-message-refresh",
+        turnCount: 2,
+      };
+
+      routing.claude.updateSession(session.threadId, (existing) => ({
+        ...existing,
+        resumeCursor: updatedResumeCursor,
+      }));
+      routing.claude.emit({
+        type: "thread.started",
+        eventId: asEventId("runtime-thread-started-refresh"),
+        provider: "claudeAgent",
+        createdAt: "2026-02-27T00:04:00.000Z",
+        threadId: session.threadId,
+        payload: { providerThreadId: updatedResumeCursor.resume },
+      });
+      yield* sleep(50);
+
+      const runtime = yield* runtimeRepository.getByThreadId({
+        threadId: session.threadId,
+      });
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.deepEqual(runtime.value.resumeCursor, updatedResumeCursor);
+      }
+    }),
+  );
+
   it.effect("marks persisted runtime bindings errored on runtime errors", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

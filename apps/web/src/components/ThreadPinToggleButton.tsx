@@ -14,15 +14,17 @@ import { IconButton } from "./ui/icon-button";
 export function ThreadPinToggleButton({
   pinned,
   presentation,
+  targetLabel = "thread",
   toneClassName,
   onToggle,
 }: {
   pinned: boolean;
-  presentation: "overlay" | "inline";
+  presentation: "overlay" | "inline" | "leading";
+  targetLabel?: string;
   toneClassName?: string;
   onToggle: (event: React.MouseEvent<HTMLButtonElement> | React.MouseEvent) => void;
 }) {
-  const label = pinned ? "Unpin thread" : "Pin thread";
+  const label = `${pinned ? "Unpin" : "Pin"} ${targetLabel}`;
 
   return (
     <IconButton
@@ -41,7 +43,9 @@ export function ThreadPinToggleButton({
               // instead, and the pin only surfaces when the row is hovered/focused.
               "opacity-0 group-hover/thread-row:opacity-100 focus-visible:opacity-100",
             )
-          : "relative z-10 shrink-0",
+          : presentation === "leading"
+            ? "relative z-10 shrink-0 text-muted-foreground/50"
+            : "relative z-10 shrink-0",
       )}
       onMouseDown={(event) => {
         event.preventDefault();

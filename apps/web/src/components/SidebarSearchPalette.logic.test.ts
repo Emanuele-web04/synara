@@ -24,6 +24,13 @@ const actions: SidebarSearchAction[] = [
     description: "Browse installed plugins",
     keywords: ["extensions"],
   },
+  {
+    id: "usage-settings",
+    label: "Usage settings",
+    description: "Open provider usage and remaining credits.",
+    keywords: ["usage", "limits", "credits", "quota", "providers"],
+    shortcutLabel: "⇧⌘U",
+  },
 ];
 
 const projects: SidebarSearchProject[] = [
@@ -145,8 +152,18 @@ describe("SidebarSearchPalette.logic", () => {
 
     assert.deepEqual(
       result.map((action) => action.id),
-      ["new-thread", "plugins"],
+      ["new-thread", "plugins", "usage-settings"],
     );
+  });
+
+  it("matches usage settings by keyword", () => {
+    const result = matchSidebarSearchActions(actions, "quota");
+
+    assert.deepEqual(
+      result.map((action) => action.id),
+      ["usage-settings"],
+    );
+    assert.equal(result[0]?.shortcutLabel, "⇧⌘U");
   });
 
   it("keeps theme entries in source order for an empty query", () => {

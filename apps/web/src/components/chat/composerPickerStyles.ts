@@ -59,7 +59,10 @@ export const CHAT_BACKGROUND_CLASS_NAME = "bg-[var(--color-background-surface)]"
 
 /** Turns the main content column into a distinct, opaque card that floats over the
  *  (optionally translucent) sidebar instead of sharing one continuous surface with it.
- *  - `rounded-l-*` gives the rounded left edge against the sidebar.
+ *  - The rounded seam edge, the 1px inset ring divider, and the depth shadow all live in
+ *    `index.css` and are applied per `data-sidebar-side` ONLY while the sidebar is expanded
+ *    — when it collapses (offcanvas) the card fills the window edge-to-edge and stays square
+ *    so its corner doesn't double up with the macOS window's own rounded corner.
  *  - The single seam divider is a 1px inset ring on the card (see `index.css`), so it
  *    follows the rounded corner. The `SidebarRail`
  *    (`placement="content-seam"`, z-[25]) is just the resize hit-area and intensifies
@@ -74,8 +77,7 @@ export const CHAT_BACKGROUND_CLASS_NAME = "bg-[var(--color-background-surface)]"
  *  Apply this to the OPAQUE content surface (e.g. the chat wrapper, or a
  *  SidebarInset `surfaceClassName`) — never to a transparent, full-width
  *  `SidebarInset` shell, or its raised z-index would cover and block the sidebar. */
-export const CHAT_CONTENT_CARD_CLASS_NAME =
-  "chat-content-card relative z-[15] overflow-hidden rounded-l-[var(--app-content-card-radius,0.75rem)]";
+export const CHAT_CONTENT_CARD_CLASS_NAME = "chat-content-card relative z-[15] overflow-hidden";
 
 /** Opaque chat surface that floats as a card over the sidebar: column background + card chrome.
  *  Apply to the element that should read as the raised card (the chat content wrapper, or a
@@ -103,6 +105,16 @@ export const CHAT_COLUMN_FRAME_CLASS_NAME = `mx-auto w-full min-w-0 ${COMPOSER_M
 /** Max width for the composer shell only; outer wrappers stay full width for shadow bleed. */
 export const COMPOSER_COLUMN_FRAME_CLASS_NAME = CHAT_COLUMN_FRAME_CLASS_NAME;
 
+/**
+ * Frame for rows stacked above the composer (queued steer/queue rows, active task
+ * list). Keeps stacked activity on the same 11/12-width rail as queued rows so
+ * the composer input can remain a distinct, fully rounded surface underneath.
+ *
+ * Prefer ComposerStackedPanel inside ComposerColumnFrame instead of using this
+ * token directly so chrome and attached-radius behavior stay centralized.
+ */
+export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-11/12 min-w-0";
+
 /** Opaque base behind the composer shell: the composer overlaps the scrolling
  *  transcript (`-mt-5`), so without a solid backing the frosted surface would let
  *  transcript text bleed through its top edge. Match the chat surface to stay seamless. */
@@ -113,12 +125,18 @@ export const COMPOSER_INPUT_SHELL_CLASS_NAME =
 export const COMPOSER_SURFACE_BORDER_CLASS_NAME =
   "border-[color:color-mix(in_srgb,var(--color-border-heavy)_95%,var(--foreground)_5%)]";
 
-/** Border + shadow chrome for the composer surface: a real border follows
- *  squircle/corner-shape geometry more evenly than an outer ring (box-shadow).
- *  Dark mode drops the border and leans on the shadow for separation. */
-export const COMPOSER_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:border-0`;
+/** Shared border for panels stacked above the composer; dark mode matches the live changes strip. */
+export const COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME = [
+  COMPOSER_SURFACE_BORDER_CLASS_NAME,
+  "dark:border-[color:color-mix(in_srgb,var(--color-border-heavy)_50%,transparent)]",
+].join(" ");
 
-export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface ${COMPOSER_SURFACE_CHROME_CLASS_NAME} transition-colors duration-200`;
+/** Border + shadow chrome for raised opaque surfaces (composer shell, kanban cards):
+ *  a real border follows squircle/corner-shape geometry more evenly than an outer
+ *  ring (box-shadow). Dark mode drops the border and leans on the shadow for separation. */
+export const RAISED_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:border-0`;
+
+export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface ${RAISED_SURFACE_CHROME_CLASS_NAME} transition-colors duration-200`;
 
 /** Active segment fill in the sidebar Threads/Workspace picker. */
 export const SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME =
@@ -162,36 +180,60 @@ export const COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME = `${COMPOSER_PICKER_MEN
 /** Opaque floating panel for the slash/mention command menu and @local browser.
  *  Picker border/radius/shadow, but a solid fill: the menu floats over the
  *  transcript, so frosted bg-popover/70 would let chat content bleed through. */
-export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME = `relative overflow-hidden bg-popover text-popover-foreground ${COMPOSER_PICKER_MENU_SURFACE_CHROME_CLASS_NAME}`;
+export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME =
+  "relative overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground";
+
+/** Opaque Environment panel card — same rationale as the command menu (overlays transcript). */
+export const ENVIRONMENT_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
+
+/** Slide + inset timing matched to `SIDEBAR_OFFCANVAS_MOTION_CLASS` (right dock / thread sidebar). */
+export const ENVIRONMENT_PANEL_MOTION_CLASS =
+  "transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none";
+
+/** Transcript/composer right inset when the docked Environment card opens. */
+export const ENVIRONMENT_CONTENT_INSET_MOTION_CLASS =
+  "transition-[padding-right] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none";
 
 /** Anchors the command menu above the composer editor without shifting layout. */
 export const COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME =
   "pointer-events-auto absolute inset-x-0 bottom-full z-20 mb-2 overflow-visible px-1 pt-2";
 
-/** Default command menu row — transparent until hover or keyboard highlight. */
+/** Inline command menu slot for compact composers rendered near the top of a scrollable dialog. */
+export const COMPOSER_COMMAND_MENU_INLINE_WRAPPER_CLASS_NAME =
+  "pointer-events-auto relative z-20 mb-2 overflow-visible px-1";
+
+/** Default command menu row — transparent until hover or keyboard highlight.
+ *  Highlight tints the surface darker (button-secondary), matching every other
+ *  composer picker. The `elevated-secondary-opaque` token lightens toward white,
+ *  which is invisible on the near-white popover surface, so it is not used here. */
 export const COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME =
-  "flex cursor-pointer select-none items-center gap-2 rounded-full px-2.5 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary-opaque)] data-highlighted:bg-[var(--color-background-elevated-secondary-opaque)]";
+  "flex cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] data-highlighted:bg-[var(--color-background-button-secondary-hover)]";
 
 /** Active command menu row — keyboard-selected pill fill. */
 export const COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME =
-  "bg-[var(--color-background-elevated-secondary-opaque)] text-[var(--color-text-foreground)]";
+  "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]";
 
 export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME = `chat-composer-surface-banner border-b ${COMPOSER_SURFACE_BORDER_CLASS_NAME} bg-[var(--color-background-elevated-secondary)]`;
 
 export const RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME =
   "text-[var(--runtime-full-access-accent)] hover:opacity-85";
 
-/** Minimum composer editor height — two lines at the element's line-height. */
-export const COMPOSER_EDITOR_LINE_HEIGHT_CLASS_NAME = "leading-tight";
+/** Minimum composer editor height — two lines at the element's line-height.
+ *  `leading-normal` (1.5) keeps the input in step with the transcript/bubble leading. */
+export const COMPOSER_EDITOR_LINE_HEIGHT_CLASS_NAME = "leading-normal";
 export const COMPOSER_EDITOR_TEXT_CLASS_NAME = "text-[length:var(--app-font-size-chat,12px)]";
+/** Font, size, and leading shared by the composer editor and its placeholder so the
+ *  placeholder always aligns with typed text. Keep both surfaces on this one token. */
+export const COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME = `font-system-ui ${COMPOSER_EDITOR_TEXT_CLASS_NAME} ${COMPOSER_EDITOR_LINE_HEIGHT_CLASS_NAME}`;
+/** Muted empty-state copy for the composer prompt editor. */
+export const COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME = "text-muted-foreground/40";
 export const COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME = "min-h-[2lh]";
 /** Lexical wraps lines in `<p>` nodes; reset default margins so text sits flush above the footer. */
 export const COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME = "[&_p]:m-0";
-/** Horizontal inset shared by the composer editor and bottom bar. */
-export const COMPOSER_HORIZONTAL_INSET_CLASS_NAME = "px-3";
 /** Shared padding around the composer prompt editor. */
-export const COMPOSER_EDITOR_PADDING_CLASS_NAME = `relative ${COMPOSER_HORIZONTAL_INSET_CLASS_NAME} pt-3 pb-4`;
+export const COMPOSER_EDITOR_PADDING_CLASS_NAME = "relative pl-3 pr-3.5 pt-3 pb-2";
 /** Bottom bar row — flush to the composer shell edges. */
-export const COMPOSER_FOOTER_ROW_CLASS_NAME = "flex items-center justify-between px-2 pb-1.5";
+export const COMPOSER_FOOTER_ROW_CLASS_NAME =
+  "flex items-center justify-between pl-1.5 pr-2 pb-1.5";
 export const COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME =
-  "flex items-center justify-end gap-2 px-2 pb-1.5";
+  "flex items-center justify-end gap-2 pl-1.5 pr-2 pb-1.5";

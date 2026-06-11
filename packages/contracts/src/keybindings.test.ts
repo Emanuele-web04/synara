@@ -89,6 +89,18 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedBrowserToggle.command, "browser.toggle");
 
+    const parsedModelPickerToggle = yield* decode(KeybindingRule, {
+      key: "mod+shift+m",
+      command: "modelPicker.toggle",
+    });
+    assert.strictEqual(parsedModelPickerToggle.command, "modelPicker.toggle");
+
+    const parsedTraitsPickerToggle = yield* decode(KeybindingRule, {
+      key: "mod+shift+e",
+      command: "traitsPicker.toggle",
+    });
+    assert.strictEqual(parsedTraitsPickerToggle.command, "traitsPicker.toggle");
+
     const parsedNewChat = yield* decode(KeybindingRule, {
       key: "mod+alt+n",
       command: "chat.newChat",
@@ -136,6 +148,18 @@ it.effect("parses keybinding rules", () =>
       command: "chat.visible.previous",
     });
     assert.strictEqual(parsedVisiblePrevious.command, "chat.visible.previous");
+
+    const parsedRecentNext = yield* decode(KeybindingRule, {
+      key: "ctrl+tab",
+      command: "view.recent.next",
+    });
+    assert.strictEqual(parsedRecentNext.command, "view.recent.next");
+
+    const parsedRecentPrevious = yield* decode(KeybindingRule, {
+      key: "ctrl+shift+tab",
+      command: "view.recent.previous",
+    });
+    assert.strictEqual(parsedRecentPrevious.command, "view.recent.previous");
   }),
 );
 

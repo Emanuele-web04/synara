@@ -1,0 +1,54 @@
+// FILE: composerStackedPanelStyles.ts
+// Purpose: Shared layout, typography, and chrome tokens for panels stacked above the
+// composer (plan activity, queued follow-ups, live file changes).
+// Layer: Chat composer styling
+// Exports: stacked panel row/header tokens and divider class name
+
+import { COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME } from "./composerPickerStyles";
+
+/** Frame, border, radius, and surface chrome for a stacked composer panel. */
+export const COMPOSER_STACKED_PANEL_CHROME_CLASS_NAME = [
+  "chat-composer-surface chat-composer-stacked-top relative z-[1] overflow-hidden border border-b-0",
+  COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME,
+].join(" ");
+
+/** Divider between rows inside the same stacked panel. */
+export const COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME = `border-t ${COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME}`;
+
+/** Standard single-line row inside a stacked panel header strip. */
+export const COMPOSER_STACKED_PANEL_ROW_CLASS_NAME =
+  "flex items-center gap-2 px-3 py-2.5 text-[12px]";
+
+/** Tighter row for multi-line panels such as queued follow-ups. */
+export const COMPOSER_STACKED_PANEL_ROW_COMPACT_CLASS_NAME =
+  "flex items-center gap-2 px-3 py-1.5 text-[12px]";
+
+/** Header row with trailing actions (plan activity controls). */
+export const COMPOSER_STACKED_PANEL_HEADER_ROW_CLASS_NAME =
+  "flex items-center justify-between gap-2 px-3 py-2.5";
+
+/** Primary content cluster: leading icon + label. */
+export const COMPOSER_STACKED_PANEL_ROW_MAIN_CLASS_NAME =
+  "flex min-w-0 flex-1 items-center gap-1.5";
+
+/** Leading icon treatment shared by queue, file-change, and plan rows. */
+export const COMPOSER_STACKED_PANEL_ICON_CLASS_NAME =
+  "size-3.5 shrink-0 text-[var(--color-text-foreground-secondary)]";
+
+/** Primary stacked-panel label (queue preview, file-change summary). */
+export const COMPOSER_STACKED_PANEL_LABEL_CLASS_NAME = "truncate font-medium text-foreground/85";
+
+/** Muted summary label (plan task progress header). */
+export const COMPOSER_STACKED_PANEL_META_CLASS_NAME =
+  "truncate text-[12px] text-muted-foreground/80";
+
+/** Horizontal padding for multi-line stacked panel bodies. */
+export const COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME = "px-3 pb-2.5";
+
+/** Footer/meta row below stacked panel content (background agents). */
+export const COMPOSER_STACKED_PANEL_FOOTER_ROW_CLASS_NAME =
+  "flex items-center justify-between gap-2 px-3 py-2 text-[11px] text-muted-foreground/70";
+
+/** Ghost icon button used in stacked panel header actions. */
+export const COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME =
+  "size-5 rounded-md text-[var(--color-text-foreground-tertiary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]";

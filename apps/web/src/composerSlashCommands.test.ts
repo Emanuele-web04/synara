@@ -29,6 +29,14 @@ describe("composerSlashCommands", () => {
     expect(filterComposerSlashCommands("fast").map((entry) => entry.command)).toEqual(["fast"]);
   });
 
+  it("ranks slash command name matches before description-only matches", () => {
+    expect(
+      filterComposerSlashCommands("mode", ["fast", "default", "model"]).map(
+        (entry) => entry.command,
+      ),
+    ).toEqual(["model", "fast", "default"]);
+  });
+
   it("parses slash invocations with optional arguments", () => {
     expect(parseComposerSlashInvocation("/review current diff")).toEqual({
       command: "review",

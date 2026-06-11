@@ -24,7 +24,9 @@ import {
   formatWorkLogEntryDetail,
   formatWorkLogEntryLabel,
   hasActionableProposedPlan,
+  isFileChangeWorkLogEntry,
   isLatestTurnSettled,
+  isProviderFileEditWorkLogEntry,
 } from "./session-logic";
 
 function makeActivity(overrides: {
@@ -1632,6 +1634,28 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
+  it("identifies file-change work by lifecycle metadata, not any changedFiles array", () => {
+    const readEntryWithFileMetadata = {
+      itemType: "dynamic_tool_call" as const,
+      changedFiles: ["apps/web/src/session-logic.ts"],
+    };
+
+    expect(isFileChangeWorkLogEntry({ itemType: "file_change" })).toBe(true);
+    expect(isFileChangeWorkLogEntry({ requestKind: "file-change" })).toBe(true);
+    expect(isFileChangeWorkLogEntry(readEntryWithFileMetadata)).toBe(false);
+  });
+
+  it("identifies provider file edits without counting bare file-change approvals", () => {
+    expect(isProviderFileEditWorkLogEntry({ itemType: "file_change" })).toBe(true);
+    expect(
+      isProviderFileEditWorkLogEntry({
+        requestKind: "file-change",
+        changedFiles: ["apps/web/src/session-logic.ts"],
+      }),
+    ).toBe(true);
+    expect(isProviderFileEditWorkLogEntry({ requestKind: "file-change" })).toBe(false);
+  });
+
   it("extracts Cursor read targets from rawInput and ACP locations", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -2027,7 +2051,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries[0]?.id).toBe("a-complete-same-timestamp");
   });
 
-  it("omits collab subagent tool lifecycle rows from the chat work log", () => {
+  it("omits routed collab subagent tool lifecycle rows from the chat work log", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "collab-update",
@@ -2073,6 +2097,287 @@ describe("deriveWorkLogEntries", () => {
     ];
 
     expect(deriveWorkLogEntries(activities, undefined)).toEqual([]);
+  });
+
+  it("keeps generic OpenCode task tool rows when no subagent route is available", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "opencode-task-update",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.updated",
+        summary: "Find changelog implementation",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Find changelog implementation",
+          detail: "Find changelog implementation",
+          data: {
+            tool: "task",
+            toolName: "task",
+            toolCallId: "toolu_017R8ZQcmmYKgXqNpXxC3tXa",
+            callID: "toolu_017R8ZQcmmYKgXqNpXxC3tXa",
+            input: {
+              description: "Find changelog implementation",
+              prompt: "Explore this codebase to find the changelog feature.",
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toEqual([
+      expect.objectContaining({
+        id: "opencode-task-update",
+        itemType: "collab_agent_tool_call",
+        label: "Find changelog implementation",
+        toolCallId: "toolu_017R8ZQcmmYKgXqNpXxC3tXa",
+        toolTitle: "Find changelog implementation",
+        subagentAction: expect.objectContaining({
+          prompt: "Explore this codebase to find the changelog feature.",
+        }),
+      }),
+    ]);
+    expect(deriveWorkLogEntries(activities, undefined)[0]?.detail).toBeUndefined();
+  });
+
+  it("uses completed generic agent task output instead of truncated task wrapper text", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "opencode-task-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "Task",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "completed",
+          title: "task",
+          detail: '<task id="task-call" state="completed">...',
+          data: {
+            tool: "task",
+            toolName: "task",
+            toolCallId: "task-call",
+            callID: "task-call",
+            input: {
+              prompt: "Explore the changelog implementation.",
+            },
+            state: {
+              status: "completed",
+              output:
+                '<task id="task-call" state="completed">\n<task_result>\nFull changelog report\nwith file references.\n</task_result>\n</task>',
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)[0]).toEqual(
+      expect.objectContaining({
+        id: "opencode-task-complete",
+        itemType: "collab_agent_tool_call",
+        detail: "Full changelog report\nwith file references.",
+        subagentAction: expect.objectContaining({
+          prompt: "Explore the changelog implementation.",
+        }),
+      }),
+    );
+  });
+
+  it("preserves the OpenCode task description when the generic completion row collapses", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "opencode-task-started",
+        createdAt: "2026-02-23T00:00:00.000Z",
+        kind: "tool.started",
+        summary: "task started",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "task",
+          data: {
+            tool: "task",
+            toolName: "task",
+            toolCallId: "task-call",
+            callID: "task-call",
+            input: {},
+          },
+        },
+      }),
+      makeActivity({
+        id: "opencode-task-update",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.updated",
+        summary: "Find changelog implementation",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Find changelog implementation",
+          detail: "Find changelog implementation",
+          data: {
+            tool: "task",
+            toolName: "task",
+            toolCallId: "task-call",
+            callID: "task-call",
+            input: {
+              description: "Find changelog implementation",
+              prompt: "Explore the changelog implementation.",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "opencode-task-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "task",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "completed",
+          title: "task",
+          detail: '<task id="task-call" state="completed">...',
+          data: {
+            tool: "task",
+            toolName: "task",
+            toolCallId: "task-call",
+            callID: "task-call",
+            input: {
+              description: "Find changelog implementation",
+              prompt: "Explore the changelog implementation.",
+            },
+            state: {
+              status: "completed",
+              output:
+                '<task id="task-call" state="completed">\n<task_result>\nFull changelog report\nwith file references.\n</task_result>\n</task>',
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toEqual(
+      expect.objectContaining({
+        id: "opencode-task-complete",
+        itemType: "collab_agent_tool_call",
+        toolTitle: "Find changelog implementation",
+        detail: "Full changelog report\nwith file references.",
+        subagentAction: expect.objectContaining({
+          prompt: "Explore the changelog implementation.",
+        }),
+      }),
+    );
+  });
+
+  it("uses the OpenCode task description for generic completion rows that cannot collapse", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "opencode-task-update",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.updated",
+        summary: "Find changelog implementation",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Find changelog implementation",
+          data: {
+            tool: "task",
+            toolName: "task",
+            toolCallId: "task-call",
+            input: {
+              description: "Find changelog implementation",
+              prompt: "Explore the changelog implementation.",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "runtime-error",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "runtime.error",
+        summary: "Provider runtime error",
+        tone: "error",
+      }),
+      makeActivity({
+        id: "opencode-task-complete",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "task",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "failed",
+          title: "task",
+          detail: "Tool execution aborted",
+          data: {
+            tool: "task",
+            toolName: "task",
+            toolCallId: "task-call",
+            input: {
+              description: "Find changelog implementation",
+              prompt: "Explore the changelog implementation.",
+            },
+            state: {
+              title: "Find changelog implementation",
+              status: "error",
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined).at(-1)).toEqual(
+      expect.objectContaining({
+        id: "opencode-task-complete",
+        itemType: "collab_agent_tool_call",
+        toolTitle: "Find changelog implementation",
+        detail: "Tool execution aborted",
+      }),
+    );
+  });
+
+  it("uses completed Claude task result content for generic agent task rows", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "claude-task-complete",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "Subagent task",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "completed",
+          title: "Subagent task",
+          detail: 'Task: {"description":"Review the database layer"}',
+          data: {
+            toolName: "Task",
+            input: {
+              description: "Review the database layer",
+              prompt: "Audit the SQL changes",
+              subagent_type: "code-reviewer",
+            },
+            result: {
+              type: "tool_result",
+              content: [
+                {
+                  type: "text",
+                  text: "Claude subagent found two issues.",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)[0]).toEqual(
+      expect.objectContaining({
+        id: "claude-task-complete",
+        itemType: "collab_agent_tool_call",
+        detail: "Claude subagent found two issues.",
+        subagentAction: expect.objectContaining({
+          prompt: "Audit the SQL changes",
+        }),
+      }),
+    );
   });
 });
 

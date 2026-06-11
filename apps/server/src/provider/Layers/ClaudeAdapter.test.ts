@@ -1458,6 +1458,70 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("treats an external SIGTERM (exit code 143) as a benign suspend", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+
+      const runtimeEventsFiber = Effect.runFork(
+        Stream.runForEach(adapter.streamEvents, (event) =>
+          Effect.sync(() => {
+            runtimeEvents.push(event);
+          }),
+        ),
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      const turn = yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "hello",
+        attachments: [],
+      });
+
+      // The Claude SDK surfaces an external SIGTERM as this error string.
+      harness.query.fail(new Error("Claude Code process exited with code 143"));
+
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      runtimeEventsFiber.interruptUnsafe();
+
+      // A graceful termination must not surface a runtime.error toast.
+      assert.equal(
+        runtimeEvents.some((event) => event.type === "runtime.error"),
+        false,
+      );
+
+      const turnCompleted = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.equal(turnCompleted?.type, "turn.completed");
+      if (turnCompleted?.type === "turn.completed") {
+        assert.equal(String(turnCompleted.turnId), String(turn.turnId));
+        assert.equal(turnCompleted.payload.state, "interrupted");
+        assert.equal(
+          turnCompleted.payload.errorMessage,
+          "Claude runtime stopped and will resume on your next message.",
+        );
+      }
+
+      // The session is torn down so the next message resumes from the cursor.
+      assert.equal(
+        runtimeEvents.some((event) => event.type === "session.exited"),
+        true,
+      );
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+      assert.equal(harness.query.closeCalls, 1);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("stopSession does not throw into the SDK prompt consumer", () => {
     // The SDK consumes user messages via `for await (... of prompt)`.
     // Stopping a session must end that loop cleanly — not throw an error.
@@ -3125,6 +3189,97 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(createInput?.options.resume, "550e8400-e29b-41d4-a716-446655440000");
       assert.equal(createInput?.options.sessionId, undefined);
       assert.equal(createInput?.options.resumeSessionAt, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("preserves durable resume ids across Claude resume hooks", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const durableSessionId = "550e8400-e29b-41d4-a716-446655440000";
+      const transientHookSessionId = "7368d0c7-40a3-4d8a-bcc1-ac80c49f2719";
+
+      const threadStartedFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "thread.started",
+      ).pipe(Stream.runHead, Effect.forkChild);
+
+      const session = yield* adapter.startSession({
+        threadId: RESUME_THREAD_ID,
+        provider: "claudeAgent",
+        resumeCursor: {
+          threadId: RESUME_THREAD_ID,
+          resume: durableSessionId,
+          resumeSessionAt: "assistant-99",
+          turnCount: 3,
+        },
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "continue",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "system",
+        subtype: "hook_started",
+        hook_id: "resume-hook-1",
+        hook_name: "SessionStart:resume",
+        hook_event: "SessionStart",
+        session_id: transientHookSessionId,
+        uuid: "resume-hook-started",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "hook_response",
+        hook_id: "resume-hook-1",
+        hook_name: "SessionStart:resume",
+        hook_event: "SessionStart",
+        output: "",
+        stdout: "",
+        stderr: "",
+        outcome: "success",
+        session_id: transientHookSessionId,
+        uuid: "resume-hook-response",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: durableSessionId,
+        uuid: "resume-stream-durable",
+        parent_tool_use_id: null,
+        event: {
+          type: "message_start",
+          message: {
+            id: "msg-resume-durable",
+          },
+        },
+      } as unknown as SDKMessage);
+
+      const threadStarted = yield* Fiber.join(threadStartedFiber);
+      assert.equal(threadStarted._tag, "Some");
+      if (threadStarted._tag === "Some" && threadStarted.value.type === "thread.started") {
+        const rawPayload =
+          threadStarted.value.raw?.payload &&
+          typeof threadStarted.value.raw.payload === "object" &&
+          "session_id" in threadStarted.value.raw.payload
+            ? threadStarted.value.raw.payload.session_id
+            : undefined;
+        assert.equal(threadStarted.value.payload?.providerThreadId ?? rawPayload, durableSessionId);
+      }
+
+      const activeSessions = yield* adapter.listSessions();
+      const resumeCursor = activeSessions[0]?.resumeCursor as
+        | {
+            readonly resume?: string;
+          }
+        | undefined;
+      assert.equal(resumeCursor?.resume, durableSessionId);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

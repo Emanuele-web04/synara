@@ -1,9 +1,15 @@
+// FILE: diffRouteSearch.ts
+// Purpose: Normalizes URL search state for chat side panels and diff-file deep links.
+// Layer: Route state utility
+
 import { TurnId } from "@t3tools/contracts";
 
 export type ChatRightPanel = "browser" | "diff";
 
 export interface DiffRouteSearch {
   splitViewId?: string | undefined;
+  view?: "editor" | undefined;
+  editorFilePath?: string | undefined;
   panel?: ChatRightPanel | undefined;
   diff?: "1" | undefined;
   diffTurnId?: TurnId | undefined;
@@ -37,6 +43,9 @@ export function stripDiffSearchParams<T extends Record<string, unknown>>(
 
 export function parseDiffRouteSearch(search: Record<string, unknown>): DiffRouteSearch {
   const splitViewId = normalizeSearchString(search.splitViewId);
+  const viewRaw = normalizeSearchString(search.view);
+  const view = viewRaw === "editor" ? "editor" : undefined;
+  const editorFilePath = view ? normalizeSearchString(search.editorFilePath) : undefined;
   const panelRaw = normalizeSearchString(search.panel);
   const panel: ChatRightPanel | undefined =
     panelRaw === "browser" ? "browser" : panelRaw === "diff" ? "diff" : undefined;
@@ -44,10 +53,12 @@ export function parseDiffRouteSearch(search: Record<string, unknown>): DiffRoute
   const resolvedPanel = panel ?? (diff ? "diff" : undefined);
   const diffTurnIdRaw = diff ? normalizeSearchString(search.diffTurnId) : undefined;
   const diffTurnId = diffTurnIdRaw ? TurnId.makeUnsafe(diffTurnIdRaw) : undefined;
-  const diffFilePath = diff && diffTurnId ? normalizeSearchString(search.diffFilePath) : undefined;
+  const diffFilePath = diff ? normalizeSearchString(search.diffFilePath) : undefined;
 
   return {
     ...(splitViewId ? { splitViewId } : {}),
+    ...(view ? { view } : {}),
+    ...(editorFilePath ? { editorFilePath } : {}),
     ...(resolvedPanel ? { panel: resolvedPanel } : {}),
     ...(diff ? { diff } : {}),
     ...(diffTurnId ? { diffTurnId } : {}),

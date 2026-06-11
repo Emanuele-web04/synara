@@ -12,6 +12,8 @@ import {
   GitCreateDetachedWorktreeResult,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
+  GitHubRepositoryInput,
+  GitHubRepositoryResult,
   GitHandoffThreadInput,
   GitHandoffThreadResult,
   GitInitInput,
@@ -99,16 +101,28 @@ import {
   ProviderListPluginsResult,
   ProviderListSkillsInput,
   ProviderListSkillsResult,
+  ProviderSkillsCatalogInput,
+  ProviderSkillsCatalogResult,
   ProviderReadPluginInput,
   ProviderReadPluginResult,
 } from "./providerDiscovery";
 import {
+  ProjectDevServerEvent,
+  ProjectDiscoverScriptsInput,
+  ProjectDiscoverScriptsResult,
+  ProjectListDevServersResult,
   ProjectListDirectoriesInput,
   ProjectListDirectoriesResult,
+  ProjectReadFileInput,
+  ProjectReadFileResult,
+  ProjectRunDevServerInput,
+  ProjectRunDevServerResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesInput,
   ProjectSearchLocalEntriesResult,
+  ProjectStopDevServerInput,
+  ProjectStopDevServerResult,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project";
@@ -116,16 +130,23 @@ import {
   ServerConfig,
   ServerConfigStreamEvent,
   ServerDiagnosticsResult,
+  ServerGenerateThreadRecapInput,
+  ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
   ServerGetProviderUsageSnapshotInput,
   ServerGetProviderUsageSnapshotResult,
+  ServerListProviderUsageInput,
+  ServerListProviderUsageResult,
   ServerLifecycleStreamEvent,
   ServerGetSettingsResult,
+  ServerListLocalServersResult,
   ServerListWorktreesResult,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
   ServerProviderUpdateResult,
   ServerRefreshProvidersResult,
+  ServerStopLocalServerInput,
+  ServerStopLocalServerResult,
   ServerUpdateSettingsInput,
   ServerUpdateSettingsResult,
   ServerUpsertKeybindingResult,
@@ -133,6 +154,7 @@ import {
   ServerVoiceTranscriptionResult,
 } from "./server";
 import {
+  TerminalAckOutputInput,
   TerminalClearInput,
   TerminalCloseInput,
   TerminalEvent,
@@ -257,6 +279,12 @@ export const WsProjectsListDirectoriesRpc = Rpc.make(WS_METHODS.projectsListDire
   error: WsRpcError,
 });
 
+export const WsProjectsDiscoverScriptsRpc = Rpc.make(WS_METHODS.projectsDiscoverScripts, {
+  payload: ProjectDiscoverScriptsInput,
+  success: ProjectDiscoverScriptsResult,
+  error: WsRpcError,
+});
+
 export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntries, {
   payload: ProjectSearchEntriesInput,
   success: ProjectSearchEntriesResult,
@@ -269,11 +297,45 @@ export const WsProjectsSearchLocalEntriesRpc = Rpc.make(WS_METHODS.projectsSearc
   error: WsRpcError,
 });
 
+export const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
+  payload: ProjectReadFileInput,
+  success: ProjectReadFileResult,
+  error: WsRpcError,
+});
+
 export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   payload: ProjectWriteFileInput,
   success: ProjectWriteFileResult,
   error: WsRpcError,
 });
+
+export const WsProjectsRunDevServerRpc = Rpc.make(WS_METHODS.projectsRunDevServer, {
+  payload: ProjectRunDevServerInput,
+  success: ProjectRunDevServerResult,
+  error: WsRpcError,
+});
+
+export const WsProjectsStopDevServerRpc = Rpc.make(WS_METHODS.projectsStopDevServer, {
+  payload: ProjectStopDevServerInput,
+  success: ProjectStopDevServerResult,
+  error: WsRpcError,
+});
+
+export const WsProjectsListDevServersRpc = Rpc.make(WS_METHODS.projectsListDevServers, {
+  payload: Schema.Struct({}),
+  success: ProjectListDevServersResult,
+  error: WsRpcError,
+});
+
+export const WsSubscribeProjectDevServerEventsRpc = Rpc.make(
+  WS_METHODS.subscribeProjectDevServerEvents,
+  {
+    payload: Schema.Struct({}),
+    success: ProjectDevServerEvent,
+    error: WsRpcError,
+    stream: true,
+  },
+);
 
 export const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   payload: FilesystemBrowseInput,
@@ -290,6 +352,12 @@ export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
 export const WsGitStatusRpc = Rpc.make(WS_METHODS.gitStatus, {
   payload: GitStatusInput,
   success: GitStatusResult,
+  error: WsRpcError,
+});
+
+export const WsGitGithubRepositoryRpc = Rpc.make(WS_METHODS.gitGithubRepository, {
+  payload: GitHubRepositoryInput,
+  success: GitHubRepositoryResult,
   error: WsRpcError,
 });
 
@@ -529,6 +597,12 @@ export const WsTerminalWriteRpc = Rpc.make(WS_METHODS.terminalWrite, {
   error: WsRpcError,
 });
 
+export const WsTerminalAckOutputRpc = Rpc.make(WS_METHODS.terminalAckOutput, {
+  payload: TerminalAckOutputInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
 export const WsTerminalResizeRpc = Rpc.make(WS_METHODS.terminalResize, {
   payload: TerminalResizeInput,
   success: Schema.Void,
@@ -602,6 +676,18 @@ export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees,
   error: WsRpcError,
 });
 
+export const WsServerListLocalServersRpc = Rpc.make(WS_METHODS.serverListLocalServers, {
+  payload: Schema.Struct({}),
+  success: ServerListLocalServersResult,
+  error: WsRpcError,
+});
+
+export const WsServerStopLocalServerRpc = Rpc.make(WS_METHODS.serverStopLocalServer, {
+  payload: ServerStopLocalServerInput,
+  success: ServerStopLocalServerResult,
+  error: WsRpcError,
+});
+
 export const WsServerGetProviderUsageSnapshotRpc = Rpc.make(
   WS_METHODS.serverGetProviderUsageSnapshot,
   {
@@ -610,6 +696,12 @@ export const WsServerGetProviderUsageSnapshotRpc = Rpc.make(
     error: WsRpcError,
   },
 );
+
+export const WsServerListProviderUsageRpc = Rpc.make(WS_METHODS.serverListProviderUsage, {
+  payload: ServerListProviderUsageInput,
+  success: ServerListProviderUsageResult,
+  error: WsRpcError,
+});
 
 export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostics, {
   payload: Schema.Struct({}),
@@ -620,6 +712,12 @@ export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostic
 export const WsServerTranscribeVoiceRpc = Rpc.make(WS_METHODS.serverTranscribeVoice, {
   payload: ServerVoiceTranscriptionInput,
   success: ServerVoiceTranscriptionResult,
+  error: WsRpcError,
+});
+
+export const WsServerGenerateThreadRecapRpc = Rpc.make(WS_METHODS.serverGenerateThreadRecap, {
+  payload: ServerGenerateThreadRecapInput,
+  success: ServerGenerateThreadRecapResult,
   error: WsRpcError,
 });
 
@@ -687,6 +785,12 @@ export const WsProviderListSkillsRpc = Rpc.make(WS_METHODS.providerListSkills, {
   error: WsRpcError,
 });
 
+export const WsProviderListSkillsCatalogRpc = Rpc.make(WS_METHODS.providerListSkillsCatalog, {
+  payload: ProviderSkillsCatalogInput,
+  success: ProviderSkillsCatalogResult,
+  error: WsRpcError,
+});
+
 export const WsProviderListPluginsRpc = Rpc.make(WS_METHODS.providerListPlugins, {
   payload: ProviderListPluginsInput,
   success: ProviderListPluginsResult,
@@ -725,12 +829,19 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationSubscribeThreadRpc,
   WsOrchestrationUnsubscribeThreadRpc,
   WsOrchestrationSubscribeDomainEventsRpc,
+  WsProjectsDiscoverScriptsRpc,
   WsProjectsListDirectoriesRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsSearchLocalEntriesRpc,
+  WsProjectsReadFileRpc,
   WsProjectsWriteFileRpc,
+  WsProjectsRunDevServerRpc,
+  WsProjectsStopDevServerRpc,
+  WsProjectsListDevServersRpc,
+  WsSubscribeProjectDevServerEventsRpc,
   WsFilesystemBrowseRpc,
   WsShellOpenInEditorRpc,
+  WsGitGithubRepositoryRpc,
   WsGitStatusRpc,
   WsGitReadWorkingTreeDiffRpc,
   WsGitSummarizeDiffRpc,
@@ -771,6 +882,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsReviewSubscribeUpdatesRpc,
   WsTerminalOpenRpc,
   WsTerminalWriteRpc,
+  WsTerminalAckOutputRpc,
   WsTerminalResizeRpc,
   WsTerminalClearRpc,
   WsTerminalRestartRpc,
@@ -783,9 +895,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
   WsServerListWorktreesRpc,
+  WsServerListLocalServersRpc,
+  WsServerStopLocalServerRpc,
   WsServerGetProviderUsageSnapshotRpc,
+  WsServerListProviderUsageRpc,
   WsServerGetDiagnosticsRpc,
   WsServerTranscribeVoiceRpc,
+  WsServerGenerateThreadRecapRpc,
   WsServerUpsertKeybindingRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeServerConfigRpc,
@@ -795,6 +911,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderCompactThreadRpc,
   WsProviderListCommandsRpc,
   WsProviderListSkillsRpc,
+  WsProviderListSkillsCatalogRpc,
   WsProviderListPluginsRpc,
   WsProviderReadPluginRpc,
   WsProviderListModelsRpc,

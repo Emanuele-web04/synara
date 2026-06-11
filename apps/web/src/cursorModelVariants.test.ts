@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   collapseCursorModelVariants,
+  mergeCursorModelVariantsWithBaseControls,
   normalizeCursorModelVariantBaseId,
 } from "./cursorModelVariants";
 
@@ -14,6 +15,45 @@ describe("normalizeCursorModelVariantBaseId", () => {
     expect(normalizeCursorModelVariantBaseId("claude-4.6-opus-max-thinking-fast")).toBe(
       "claude-opus-4-6",
     );
+  });
+});
+
+describe("mergeCursorModelVariantsWithBaseControls", () => {
+  it("keeps raw Cursor CLI variants while adding a rich base model first", () => {
+    const models = [
+      {
+        slug: "claude-fable-5-high",
+        name: "Fable 5 1M",
+        upstreamProviderId: "anthropic",
+        upstreamProviderName: "Anthropic",
+        supportedReasoningEfforts: [{ value: "high", label: "High" }],
+        defaultReasoningEffort: "high",
+      },
+      {
+        slug: "claude-fable-5-max",
+        name: "Fable 5 1M Max",
+        upstreamProviderId: "anthropic",
+        upstreamProviderName: "Anthropic",
+        supportedReasoningEfforts: [{ value: "max", label: "Max" }],
+        defaultReasoningEffort: "max",
+      },
+    ];
+
+    const merged = mergeCursorModelVariantsWithBaseControls(models);
+
+    expect(merged.map((model) => model.slug)).toEqual([
+      "claude-fable-5",
+      "claude-fable-5-high",
+      "claude-fable-5-max",
+    ]);
+    expect(merged[0]).toMatchObject({
+      slug: "claude-fable-5",
+      contextWindowOptions: [
+        { value: "300k", label: "300K", isDefault: true },
+        { value: "1m", label: "1M" },
+      ],
+      defaultContextWindow: "300k",
+    });
   });
 });
 
@@ -53,8 +93,51 @@ describe("collapseCursorModelVariants", () => {
           { value: "xhigh", label: "Extra High" },
         ],
         defaultReasoningEffort: "medium",
-        contextWindowOptions: [{ value: "1m", label: "1M", isDefault: true }],
-        defaultContextWindow: "1m",
+        contextWindowOptions: [
+          { value: "272k", label: "272K", isDefault: true },
+          { value: "1m", label: "1M" },
+        ],
+        defaultContextWindow: "272k",
+      },
+    ]);
+  });
+
+  it("restores Cursor CLI fallback context choices for Fable 5 variants", () => {
+    expect(
+      collapseCursorModelVariants([
+        {
+          slug: "claude-fable-5-high",
+          name: "Fable 5 1M",
+          upstreamProviderId: "anthropic",
+          upstreamProviderName: "Anthropic",
+          supportedReasoningEfforts: [{ value: "high", label: "High" }],
+          defaultReasoningEffort: "high",
+        },
+        {
+          slug: "claude-fable-5-max",
+          name: "Fable 5 1M Max",
+          upstreamProviderId: "anthropic",
+          upstreamProviderName: "Anthropic",
+          supportedReasoningEfforts: [{ value: "max", label: "Max" }],
+          defaultReasoningEffort: "max",
+        },
+      ]),
+    ).toEqual([
+      {
+        slug: "claude-fable-5",
+        name: "Fable 5",
+        upstreamProviderId: "anthropic",
+        upstreamProviderName: "Anthropic",
+        supportedReasoningEfforts: [
+          { value: "high", label: "High", isDefault: true },
+          { value: "max", label: "Max" },
+        ],
+        defaultReasoningEffort: "high",
+        contextWindowOptions: [
+          { value: "300k", label: "300K", isDefault: true },
+          { value: "1m", label: "1M" },
+        ],
+        defaultContextWindow: "300k",
       },
     ]);
   });

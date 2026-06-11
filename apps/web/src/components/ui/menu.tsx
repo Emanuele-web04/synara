@@ -201,10 +201,9 @@ function MenuRadioItem({
       className={cn(
         cn(
           COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
-          "grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)]",
           preserveChildLayout
-            ? "grid-cols-[minmax(0,1fr)_2.5rem] gap-x-1.5 gap-y-0 px-2"
-            : "grid-cols-[1fr_auto] gap-3 px-2.5",
+            ? "grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] grid-cols-[minmax(0,1fr)_2.5rem] gap-x-1.5 gap-y-0 px-2"
+            : "w-full min-w-0 px-2.5",
         ),
         className,
       )}
@@ -235,9 +234,9 @@ function MenuRadioItem({
           </div>
         </>
       ) : (
-        <>
-          <span className="col-start-1 min-w-0">{children}</span>
-          <MenuPrimitive.RadioItemIndicator className="col-start-2 justify-self-end">
+        <span className="flex w-full min-w-0 items-center gap-2">
+          {children}
+          <MenuPrimitive.RadioItemIndicator className="ml-auto shrink-0">
             <svg
               className="size-3"
               fill="none"
@@ -253,7 +252,7 @@ function MenuRadioItem({
               <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
             </svg>
           </MenuPrimitive.RadioItemIndicator>
-        </>
+        </span>
       )}
     </MenuPrimitive.RadioItem>
   );

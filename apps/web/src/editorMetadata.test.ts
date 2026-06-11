@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { resolveAvailableEditorOptions, resolveEditorLabel } from "./editorMetadata";
+import { EDITOR_ICON_ROUTE_PATH } from "@t3tools/shared/editorIcons";
+import {
+  resolveAvailableEditorOptions,
+  resolveEditorIcon,
+  resolveEditorLabel,
+  resolveEditorNativeIconUrl,
+} from "./editorMetadata";
 
 describe("resolveEditorLabel", () => {
   it("uses platform-specific labels for the file manager option", () => {
@@ -17,9 +23,61 @@ describe("resolveAvailableEditorOptions", () => {
         "trae",
         "vscode-insiders",
         "vscodium",
+        "zed",
         "idea",
+        "ghostty",
+        "terminal",
+        "warp",
+        "xcode",
+        "webstorm",
+        "pycharm",
+        "phpstorm",
+        "goland",
+        "clion",
+        "rider",
+        "rubymine",
+        "datagrip",
+        "rustrover",
+        "android-studio",
+        "windsurf",
+        "sublime",
         "file-manager",
       ]).map((option) => option.value),
-    ).toEqual(["cursor", "trae", "vscode-insiders", "vscodium", "idea", "file-manager"]);
+    ).toEqual([
+      "cursor",
+      "trae",
+      "vscode-insiders",
+      "vscodium",
+      "zed",
+      "windsurf",
+      "sublime",
+      "ghostty",
+      "terminal",
+      "warp",
+      "xcode",
+      "idea",
+      "webstorm",
+      "pycharm",
+      "phpstorm",
+      "goland",
+      "clion",
+      "rider",
+      "rubymine",
+      "datagrip",
+      "rustrover",
+      "android-studio",
+      "file-manager",
+    ]);
+  });
+
+  it("provides dedicated icons for newly supported editor rows", () => {
+    expect(resolveEditorIcon("ghostty").name).toBe("GhosttyIcon");
+    expect(resolveEditorIcon("terminal").name).toBe("TerminalAppIcon");
+    expect(resolveEditorIcon("xcode").name).toBe("SimpleIcon");
+    expect(resolveEditorIcon("webstorm").name).toBe("SimpleIcon");
+  });
+
+  it("builds authenticated editor icon route urls", () => {
+    expect(resolveEditorNativeIconUrl("ghostty")).toContain(`${EDITOR_ICON_ROUTE_PATH}?id=ghostty`);
   });
 });

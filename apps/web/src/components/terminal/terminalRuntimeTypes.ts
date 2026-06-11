@@ -7,6 +7,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { type TerminalActivityState, type TerminalCliKind } from "@t3tools/shared/terminalThreads";
 import { Terminal, type IDisposable } from "@xterm/xterm";
+import type { TerminalLinkMatch } from "../../terminal-links";
 
 export interface TerminalRuntimeCallbacks {
   onSessionExited: () => void;
@@ -18,6 +19,7 @@ export interface TerminalRuntimeCallbacks {
     terminalId: string,
     activity: { hasRunningSubprocess: boolean; agentState: TerminalActivityState | null },
   ) => void;
+  onTerminalRuntimeStatusChange?: (terminalId: string, status: TerminalRuntimeStatus) => void;
 }
 
 export function buildTerminalRuntimeKey(threadId: string, terminalId: string): string {
@@ -40,6 +42,14 @@ export interface TerminalRuntimeViewState {
   isVisible: boolean;
 }
 
+export interface TerminalPendingWrite {
+  data: string;
+  byteLength: number;
+  queuedAt: number;
+}
+
+export type TerminalRuntimeStatus = "connecting" | "replaying" | "ready" | "error";
+
 export interface TerminalRuntimeEntry {
   runtimeKey: string;
   threadId: string;
@@ -55,9 +65,9 @@ export interface TerminalRuntimeEntry {
   fitAddon: FitAddon;
   searchAddon: SearchAddon;
   webglAddon: WebglAddon | null;
-  outputIdentityBuffer: string;
   titleInputBuffer: string;
   hasHandledExit: boolean;
+  runtimeStatus: TerminalRuntimeStatus;
   opened: boolean;
   disposed: boolean;
   resizeObserver: ResizeObserver | null;
@@ -69,11 +79,12 @@ export interface TerminalRuntimeEntry {
   pendingResize: { cols: number; rows: number } | null;
   writeRafHandle: number | null;
   writeFlushTimeout: number | null;
-  pendingWrites: string[];
+  pendingWrites: TerminalPendingWrite[];
   pendingWriteLength: number;
-  deferredWrites: string[];
-  deferredWriteLength: number;
+  pendingWriteBytes: number;
+  linkMatchCache: Map<string, TerminalLinkMatch[]>;
   outputEventVersion: number;
+  snapshotReconcileRequestId: number;
   webglLoadFrame: number | null;
   themeRefreshFrame: number;
   themeObserver: MutationObserver | null;

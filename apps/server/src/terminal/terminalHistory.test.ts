@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { capHistoryByLimits, capHistoryBytes, capHistoryLines } from "./terminalHistory";
+import {
+  capHistoryByLimits,
+  capHistoryBytes,
+  capHistoryLines,
+  TerminalHistoryBuffer,
+  type HistoryLimits,
+} from "./terminalHistory";
 
 const HUGE_LINES = 1_000_000;
 
@@ -64,5 +70,119 @@ describe("capHistoryByLimits", () => {
 
     expect(Buffer.byteLength(capped, "utf8")).toBeLessThanOrEqual(64_000);
     expect(capped.split("\n").filter((line) => line.length > 0).length).toBeLessThanOrEqual(10);
+  });
+});
+
+describe("TerminalHistoryBuffer", () => {
+  const ESC = String.fromCharCode(0x1b);
+
+  /** Reference: eager per-chunk capping, the behavior the buffer must reproduce. */
+  function eagerCap(chunks: string[], limits: HistoryLimits): string {
+    let history = "";
+    for (const chunk of chunks) {
+      history = capHistoryByLimits(`${history}${chunk}`, limits);
+    }
+    return history;
+  }
+
+  it("returns content unchanged while under both caps", () => {
+    const buffer = new TerminalHistoryBuffer({ maxLines: 1_000, maxBytes: 1_000 });
+    buffer.append("hello ");
+    buffer.append("world\n");
+    expect(buffer.toString()).toBe("hello world\n");
+    expect(buffer.isEmpty).toBe(false);
+  });
+
+  it("starts empty and reports isEmpty", () => {
+    const buffer = new TerminalHistoryBuffer({ maxLines: 10, maxBytes: 10 });
+    expect(buffer.isEmpty).toBe(true);
+    expect(buffer.toString()).toBe("");
+  });
+
+  it("fromString round-trips content under the caps", () => {
+    const buffer = TerminalHistoryBuffer.fromString("seed\ntext\n", {
+      maxLines: 10,
+      maxBytes: 100,
+    });
+    expect(buffer.toString()).toBe("seed\ntext\n");
+  });
+
+  it("reset() clears all content", () => {
+    const buffer = TerminalHistoryBuffer.fromString("data", { maxLines: 10, maxBytes: 100 });
+    buffer.reset();
+    expect(buffer.isEmpty).toBe(true);
+    expect(buffer.toString()).toBe("");
+  });
+
+  it("matches eager per-chunk capping for a newline-heavy stream over the line cap", () => {
+    const limits: HistoryLimits = { maxLines: 50, maxBytes: 1_048_576 };
+    const chunks = Array.from({ length: 400 }, (_, index) => `line-${index}\n`);
+
+    const buffer = new TerminalHistoryBuffer(limits);
+    for (const chunk of chunks) buffer.append(chunk);
+
+    expect(buffer.toString()).toBe(eagerCap(chunks, limits));
+  });
+
+  it("matches eager per-chunk capping for a byte-bound ANSI redraw stream", () => {
+    const limits: HistoryLimits = { maxLines: 5_000, maxBytes: 16_384 };
+    // Cursor-move redraws with almost no newlines: byte cap dominates.
+    const chunks = Array.from({ length: 500 }, () => `${ESC}[H${ESC}[2K${"x".repeat(200)}`);
+
+    const buffer = new TerminalHistoryBuffer(limits);
+    for (const chunk of chunks) buffer.append(chunk);
+
+    const result = buffer.toString();
+    expect(result).toBe(eagerCap(chunks, limits));
+    expect(Buffer.byteLength(result, "utf8")).toBeLessThanOrEqual(limits.maxBytes);
+  });
+
+  it("matches eager capping when both caps bind and chunk sizes vary", () => {
+    const limits: HistoryLimits = { maxLines: 30, maxBytes: 4_096 };
+    const chunks: string[] = [];
+    for (let index = 0; index < 300; index += 1) {
+      const width = 10 + (index % 7) * 40;
+      chunks.push(`${"=".repeat(width)}${index % 3 === 0 ? "\n" : ""}`);
+    }
+
+    const buffer = new TerminalHistoryBuffer(limits);
+    for (const chunk of chunks) buffer.append(chunk);
+
+    expect(buffer.toString()).toBe(eagerCap(chunks, limits));
+  });
+
+  it("keeps the retained byte footprint bounded regardless of total output", () => {
+    const limits: HistoryLimits = { maxLines: 5_000, maxBytes: 65_536 };
+    const buffer = new TerminalHistoryBuffer(limits);
+    for (let index = 0; index < 2_000; index += 1) {
+      buffer.append(`${"y".repeat(1_000)}\n`); // ~2 MB streamed total
+    }
+    expect(Buffer.byteLength(buffer.toString(), "utf8")).toBeLessThanOrEqual(limits.maxBytes);
+  });
+
+  it("never splits a multi-byte code point across the cap boundary", () => {
+    const limits: HistoryLimits = { maxLines: 5_000, maxBytes: 401 };
+    const buffer = new TerminalHistoryBuffer(limits);
+    for (let index = 0; index < 1_000; index += 1) buffer.append("🙂");
+    const result = buffer.toString();
+    expect(result).not.toContain("�");
+    expect(Buffer.from(result, "utf8").toString("utf8")).toBe(result);
+  });
+
+  it("interleaves appends and reads without changing the result", () => {
+    const limits: HistoryLimits = { maxLines: 40, maxBytes: 8_192 };
+    const chunks = Array.from({ length: 200 }, (_, index) => `row ${index} ${"#".repeat(60)}\n`);
+
+    const interleaved = new TerminalHistoryBuffer(limits);
+    const readOnce = new TerminalHistoryBuffer(limits);
+    for (const chunk of chunks) {
+      interleaved.append(chunk);
+      // Force a materialize+compact between appends.
+      interleaved.toString();
+      readOnce.append(chunk);
+    }
+
+    expect(interleaved.toString()).toBe(readOnce.toString());
+    expect(readOnce.toString()).toBe(eagerCap(chunks, limits));
   });
 });

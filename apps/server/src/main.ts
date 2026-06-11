@@ -23,6 +23,7 @@ import { fixPath, resolveBaseDir } from "./os-jank";
 import { Open } from "./open";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
 import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
+import { startServerMemoryDiagnostics } from "./memoryDiagnostics";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
@@ -284,6 +285,7 @@ const makeServerProgram = (input: CliInput) =>
     yield* cliConfig.fixPath;
 
     const config = yield* ServerConfig;
+    yield* Effect.sync(() => startServerMemoryDiagnostics({ mode: config.mode }));
 
     if (!config.devUrl && !config.staticDir) {
       yield* Effect.logWarning(

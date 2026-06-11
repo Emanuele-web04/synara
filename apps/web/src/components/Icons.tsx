@@ -1,7 +1,32 @@
 import { type SVGProps, useId } from "react";
-import { SiAnthropic, SiOpenai } from "react-icons/si";
+import type { IconType } from "react-icons";
+import {
+  SiAndroidstudio,
+  SiClion,
+  SiDatagrip,
+  SiGoland,
+  SiIntellijidea,
+  SiOpenai,
+  SiPhpstorm,
+  SiPycharm,
+  SiRider,
+  SiRubymine,
+  SiSublimetext,
+  SiWarp,
+  SiWebstorm,
+  SiWindsurf,
+  SiXcode,
+} from "react-icons/si";
 
 export type Icon = React.FC<SVGProps<SVGSVGElement>>;
+
+// Adapts Simple Icons components to the app's SVG icon shape without changing call sites.
+function adaptSimpleIcon(Component: IconType): Icon {
+  return function SimpleIcon({ color, ...props }) {
+    const iconProps = props as Omit<SVGProps<SVGElement>, "color">;
+    return <Component {...iconProps} {...(typeof color === "string" ? { color } : {})} />;
+  };
+}
 
 export const GitHubIcon: Icon = (props) => (
   <svg {...props} viewBox="0 0 1024 1024" fill="none">
@@ -144,11 +169,85 @@ export const OpenAI: Icon = ({ color, ...props }) => {
   return <SiOpenai {...iconProps} {...(typeof color === "string" ? { color } : {})} />;
 };
 
-export const ClaudeAI: Icon = ({ color, ...props }) => {
-  const iconProps = props as Omit<SVGProps<SVGElement>, "color">;
+export const ClaudeAI: Icon = ({ color, ...props }) => (
+  <svg
+    {...props}
+    viewBox="0 0 256 257"
+    fill="none"
+    preserveAspectRatio="xMidYMid"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      fill={typeof color === "string" ? color : "#D97757"}
+      d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z"
+    />
+  </svg>
+);
 
-  return <SiAnthropic {...iconProps} {...(typeof color === "string" ? { color } : {})} />;
-};
+export const GhosttyIcon: Icon = (props) => (
+  <svg {...props} fill="none" viewBox="0 0 27 32" xmlns="http://www.w3.org/2000/svg">
+    <path
+      fill="#3551F3"
+      d="M20.395 32a6.35 6.35 0 0 1-3.516-1.067A6.355 6.355 0 0 1 13.362 32c-1.249 0-2.48-.375-3.516-1.067A6.265 6.265 0 0 1 6.372 32h-.038a6.255 6.255 0 0 1-4.5-1.906 6.377 6.377 0 0 1-1.836-4.482v-12.25C0 5.995 5.994 0 13.362 0c7.369 0 13.363 5.994 13.363 13.363v12.253c0 3.393-2.626 6.192-5.978 6.375-.117.007-.234.009-.352.009Z"
+    />
+    <path
+      fill="#000"
+      d="M20.395 30.593a4.932 4.932 0 0 1-3.08-1.083.656.656 0 0 0-.42-.145.784.784 0 0 0-.487.176 4.939 4.939 0 0 1-3.046 1.055 4.939 4.939 0 0 1-3.045-1.055.751.751 0 0 0-.942 0 4.883 4.883 0 0 1-3.01 1.055h-.033a4.852 4.852 0 0 1-3.49-1.482 4.982 4.982 0 0 1-1.436-3.498V13.367c0-6.597 5.364-11.96 11.957-11.96 6.592 0 11.956 5.363 11.956 11.956v12.253c0 2.645-2.042 4.827-4.65 4.97a5.342 5.342 0 0 1-.274.007Z"
+    />
+    <path
+      fill="#fff"
+      d="M23.912 13.363v12.253c0 1.876-1.447 3.463-3.32 3.566a3.503 3.503 0 0 1-2.398-.769c-.778-.626-1.873-.598-2.658.021a3.5 3.5 0 0 1-2.176.753 3.494 3.494 0 0 1-2.173-.753 2.153 2.153 0 0 0-2.684 0 3.498 3.498 0 0 1-2.15.753c-1.948.014-3.54-1.627-3.54-3.575v-12.25c0-5.825 4.724-10.549 10.55-10.549 5.825 0 10.549 4.724 10.549 10.55Z"
+    />
+    <path
+      fill="#000"
+      d="m11.28 12.437-3.93-2.27a1.072 1.072 0 0 0-1.463.392 1.072 1.072 0 0 0 .391 1.463l2.326 1.343-2.326 1.343a1.072 1.072 0 0 0 1.071 1.855l3.932-2.27a1.071 1.071 0 0 0 0-1.854v-.002ZM20.182 12.291h-5.164a1.071 1.071 0 1 0 0 2.143h5.164a1.071 1.071 0 1 0 0-2.143Z"
+    />
+  </svg>
+);
+
+export const TerminalAppIcon: Icon = (props) => (
+  <svg {...props} viewBox="0 0 64 64" fill="none">
+    <rect width="54" height="44" x="5" y="10" fill="#111827" rx="10" />
+    <rect width="54" height="44" x="5" y="10" stroke="#6B7280" strokeWidth="3" rx="10" />
+    <path
+      stroke="#A7F3D0"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="5"
+      d="m19 27 8 7-8 7"
+    />
+    <path stroke="#E5E7EB" strokeLinecap="round" strokeWidth="5" d="M34 41h11" />
+  </svg>
+);
+
+export const WarpIcon = adaptSimpleIcon(SiWarp);
+export const AndroidStudioIcon = adaptSimpleIcon(SiAndroidstudio);
+export const CLionIcon = adaptSimpleIcon(SiClion);
+export const DataGripIcon = adaptSimpleIcon(SiDatagrip);
+export const GoLandIcon = adaptSimpleIcon(SiGoland);
+export const IntelliJIdeaIcon = adaptSimpleIcon(SiIntellijidea);
+export const JetBrainsIcon: Icon = (props) => (
+  <svg
+    {...props}
+    preserveAspectRatio="xMidYMid"
+    viewBox="0 0 256 256"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path d="M0 0h256v256H0z" />
+    <path
+      d="M28 208h96v16H28v-16ZM24 66l7-7c1 2 4 4 6 4 3 0 5-2 5-6V32h11v25c0 5-1 9-4 12-3 2-6 4-10 4h-1c-5 0-10-2-14-6v-1Zm34-34h32v9H69v7h19v8H69v6h21v10H58V32Zm48 10H94V32h35v10h-12v30h-11V42ZM28 88h19c4-1 8 1 11 3 2 2 3 4 3 7 0 4-3 7-7 9 5 1 8 5 8 10 0 7-5 11-15 11H28V88Zm22 12c0-2-2-3-5-3h-6v7h5c4 0 6-1 6-4Zm-4 11h-7v8h7c3 0 5-1 5-4 0-2-1-3-4-3l-1-1Zm43 17-8-12h-4v12H66V88h18c4-1 9 1 13 4 2 2 3 5 3 9 0 6-3 11-8 13l8 11 16-37h10l17 40h-12l-2-7h-16l-3 7H89Zm32-27-5 11h9l-4-11Zm-38-4h-6v10h6c4 0 6-2 6-5s-2-5-6-5Zm62-9h11v40h-11V88Zm15 0h11l14 21V88h11v40h-10l-15-22v22h-11V88Zm38 34 6-8c4 3 8 5 13 5 3 0 4-1 4-3 0-1 0-2-3-3h-3l-1-1h-2l-2-1c-6-1-10-4-10-11s5-13 15-13c6 0 12 2 16 6l-5 7c-3-2-7-4-11-4-3 0-4 1-4 3l3 3h2l2 1c9 2 15 5 15 12 0 8-6 13-15 13h-1c-7 0-13-2-18-5l-1-1Z"
+      fill="#FFF"
+    />
+  </svg>
+);
+export const PhpStormIcon = adaptSimpleIcon(SiPhpstorm);
+export const PyCharmIcon = adaptSimpleIcon(SiPycharm);
+export const RiderIcon = adaptSimpleIcon(SiRider);
+export const RubyMineIcon = adaptSimpleIcon(SiRubymine);
+export const SublimeTextIcon = adaptSimpleIcon(SiSublimetext);
+export const WebStormIcon = adaptSimpleIcon(SiWebstorm);
+export const WindsurfIcon = adaptSimpleIcon(SiWindsurf);
+export const XcodeIcon = adaptSimpleIcon(SiXcode);
 
 export const Gemini: Icon = (props) => (
   <svg {...props} viewBox="0 0 296 298" fill="none">

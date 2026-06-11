@@ -3,8 +3,15 @@
 // Layer: Chat terminal workspace UI
 // Depends on: xterm addons, native terminal APIs, and terminal workspace state from ChatView.
 
+import "@xterm/xterm/css/xterm.css";
 import { SearchAddon } from "@xterm/addon-search";
-import { Plus, SquareSplitHorizontal, SquareSplitVertical, Trash2 } from "~/lib/icons";
+import {
+  Plus,
+  SquareSplitHorizontal,
+  SquareSplitVertical,
+  Trash2,
+  TriangleAlertIcon,
+} from "~/lib/icons";
 import { type ThreadId } from "@t3tools/contracts";
 import { type TerminalActivityState, type TerminalCliKind } from "@t3tools/shared/terminalThreads";
 import { Terminal } from "@xterm/xterm";
@@ -34,6 +41,7 @@ import {
 } from "./terminal/terminalRuntimeRegistry";
 import type {
   TerminalRuntimeConfig,
+  TerminalRuntimeStatus,
   TerminalRuntimeViewState,
 } from "./terminal/terminalRuntimeTypes";
 import TerminalViewportPane from "./terminal/TerminalViewportPane";
@@ -80,6 +88,22 @@ function getTerminalSelectionRect(mountElement: HTMLElement): DOMRect | null {
 
   const boundingRect = range.getBoundingClientRect();
   return boundingRect.width > 0 || boundingRect.height > 0 ? boundingRect : null;
+}
+
+function TerminalRuntimeStatusOverlay({ status }: { status: TerminalRuntimeStatus }) {
+  if (status !== "error") return null;
+
+  return (
+    <div
+      className={cn(
+        "pointer-events-none absolute left-1 top-1 z-10 inline-flex h-6 max-w-[calc(100%-0.5rem)] items-center gap-1.5 rounded border px-2 text-[11px] leading-none shadow-sm backdrop-blur",
+        "border-destructive/30 bg-destructive/10 text-destructive",
+      )}
+    >
+      <TriangleAlertIcon className="size-3" />
+      <span className="truncate">Error</span>
+    </div>
+  );
 }
 
 interface TerminalViewportProps {
@@ -131,6 +155,10 @@ function TerminalViewport({
   const [searchOpen, setSearchOpen] = useState(false);
   const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null);
   const [searchAddonInstance, setSearchAddonInstance] = useState<SearchAddon | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<TerminalRuntimeStatus>("connecting");
+  const runtimeStatusMountedRef = useRef(false);
+  const trimmedCwd = useMemo(() => cwd.trim(), [cwd]);
+  const runtimeCwdReady = trimmedCwd.length > 0;
   const runtimeKey = useMemo(
     () => buildTerminalRuntimeKey(threadId, terminalId),
     [terminalId, threadId],
@@ -153,6 +181,11 @@ function TerminalViewport({
         onSessionExited,
         onTerminalMetadataChange,
         onTerminalActivityChange,
+        onTerminalRuntimeStatusChange: (changedTerminalId, status) => {
+          if (changedTerminalId === terminalId && runtimeStatusMountedRef.current) {
+            setRuntimeStatus(status);
+          }
+        },
       },
     }),
     [
@@ -180,6 +213,13 @@ function TerminalViewport({
   }, [onAddTerminalContext]);
 
   useEffect(() => {
+    runtimeStatusMountedRef.current = true;
+    return () => {
+      runtimeStatusMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
     runtimeConfigRef.current = runtimeConfig;
   }, [runtimeConfig]);
 
@@ -193,7 +233,13 @@ function TerminalViewport({
 
   useEffect(() => {
     const mount = containerRef.current;
-    if (!mount) return;
+    if (!mount || !runtimeCwdReady) {
+      terminalRef.current = null;
+      setTerminalInstance(null);
+      setSearchAddonInstance(null);
+      setRuntimeStatus("connecting");
+      return;
+    }
     const attachedRuntime = terminalRuntimeRegistry.attach(
       runtimeConfigRef.current,
       runtimeViewStateRef.current,
@@ -203,6 +249,7 @@ function TerminalViewport({
     terminalRef.current = attachedRuntime.terminal;
     setTerminalInstance(attachedRuntime.terminal);
     setSearchAddonInstance(attachedRuntime.searchAddon);
+    setRuntimeStatus(attachedRuntime.runtimeStatus);
 
     return () => {
       if (selectionActionTimerRef.current !== null) {
@@ -215,20 +262,22 @@ function TerminalViewport({
       setTerminalInstance(null);
       setSearchAddonInstance(null);
     };
-  }, [runtimeKey]);
+  }, [runtimeCwdReady, runtimeKey]);
 
   useEffect(() => {
+    if (!runtimeCwdReady) return;
     terminalRuntimeRegistry.syncConfig(runtimeKey, runtimeConfig);
-  }, [runtimeConfig, runtimeKey]);
+  }, [runtimeConfig, runtimeCwdReady, runtimeKey]);
 
   useEffect(() => {
+    if (!runtimeCwdReady) return;
     terminalRuntimeRegistry.setViewState(runtimeKey, runtimeViewState);
-  }, [runtimeKey, runtimeViewState]);
+  }, [runtimeCwdReady, runtimeKey, runtimeViewState]);
 
   useEffect(() => {
-    if (!autoFocus) return;
+    if (!autoFocus || !runtimeCwdReady) return;
     terminalRuntimeRegistry.focus(runtimeKey);
-  }, [autoFocus, focusRequestId, runtimeKey]);
+  }, [autoFocus, focusRequestId, runtimeCwdReady, runtimeKey]);
 
   useEffect(() => {
     const mount = containerRef.current;
@@ -388,6 +437,7 @@ function TerminalViewport({
             terminalRuntimeRegistry.focus(runtimeKey);
           }}
         />
+        <TerminalRuntimeStatusOverlay status={runtimeStatus} />
         <TerminalScrollToBottom terminal={terminalInstance} />
         <div ref={containerRef} className="h-full w-full" />
       </div>
@@ -437,6 +487,8 @@ interface ThreadTerminalDrawerProps {
   ) => void;
   onAddTerminalContext: (selection: TerminalContextSelection) => void;
   onTogglePresentationMode?: (() => void) | undefined;
+  onTogglePanel?: (() => void) | undefined;
+  isPanelOpen?: boolean | undefined;
 }
 
 export default function ThreadTerminalDrawer({
@@ -475,6 +527,8 @@ export default function ThreadTerminalDrawer({
   onTerminalActivityChange,
   onAddTerminalContext,
   onTogglePresentationMode,
+  onTogglePanel,
+  isPanelOpen,
 }: ThreadTerminalDrawerProps) {
   const isWorkspaceMode = presentationMode === "workspace";
   const previousRuntimeKeysRef = useRef<Set<string>>(new Set());
@@ -667,6 +721,8 @@ export default function ThreadTerminalDrawer({
               onCloseTerminal={onCloseTerminal}
               presentationMode={presentationMode}
               onTogglePresentationMode={onTogglePresentationMode}
+              onTogglePanel={onTogglePanel}
+              isPanelOpen={isPanelOpen}
               renderViewport={(terminalId, options) => (
                 <TerminalViewport
                   key={terminalId}
