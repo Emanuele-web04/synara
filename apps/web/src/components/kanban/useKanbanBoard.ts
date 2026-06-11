@@ -39,6 +39,7 @@ export function useKanbanBoard(): KanbanBoard {
   const allProjects = useStore((state) => state.projects);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
   const homeDir = useWorkspaceStore((state) => state.homeDir);
+  const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
   const { settings } = useAppSettings();
   const projectSortOrder = settings.sidebarProjectSortOrder;
 
@@ -48,10 +49,10 @@ export function useKanbanBoard(): KanbanBoard {
   // findCanonicalHomeProject — so they never surface as extra empty boards.
   const { projects, projectIdAliases } = useMemo(() => {
     const chatContainers = allProjects.filter((project) =>
-      isHomeChatContainerProject(project, homeDir),
+      isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }),
     );
     const otherProjects = allProjects.filter(
-      (project) => !isHomeChatContainerProject(project, homeDir),
+      (project) => !isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }),
     );
     const canonicalContainer =
       chatContainers.find((project) => project.kind === "chat") ?? chatContainers[0] ?? null;
@@ -70,7 +71,7 @@ export function useKanbanBoard(): KanbanBoard {
       ],
       projectIdAliases: aliases,
     };
-  }, [allProjects, homeDir, projectSortOrder, threads]);
+  }, [allProjects, chatWorkspaceRoot, homeDir, projectSortOrder, threads]);
   const draftsByThreadId = useComposerDraftStore((state) => state.draftsByThreadId);
   const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
   const draftOrderByProjectId = useKanbanUiStore((state) => state.draftOrderByProjectId);

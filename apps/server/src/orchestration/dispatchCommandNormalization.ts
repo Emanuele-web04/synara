@@ -37,7 +37,13 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
     if (input.command.type === "project.meta.update" && input.command.workspaceRoot !== undefined) {
       return {
         ...input.command,
-        workspaceRoot: yield* options.canonicalizeProjectWorkspaceRoot(input.command.workspaceRoot),
+        workspaceRoot: yield* options.canonicalizeProjectWorkspaceRoot(
+          input.command.workspaceRoot,
+          {
+            createIfMissing: input.command.createWorkspaceRootIfMissing === true,
+          },
+        ),
+        createWorkspaceRootIfMissing: input.command.createWorkspaceRootIfMissing === true,
       } satisfies OrchestrationCommand;
     }
 

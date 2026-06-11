@@ -49,7 +49,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   const ensureWorkspacePage = useWorkspaceStore((state) => state.ensureWorkspacePage);
   const renameWorkspace = useWorkspaceStore((state) => state.renameWorkspace);
   const setWorkspaceLayoutPreset = useWorkspaceStore((state) => state.setWorkspaceLayoutPreset);
-  const setWorkspaceHomeDir = useWorkspaceStore((state) => state.setHomeDir);
+  const setServerWorkspacePaths = useWorkspaceStore((state) => state.setServerWorkspacePaths);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const threadId = useMemo(() => workspaceThreadId(workspaceId), [workspaceId]);
   const terminal = useTerminalSurfaceController(threadId);
@@ -84,16 +84,29 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   }, [ensureWorkspacePage, workspaceId]);
 
   useEffect(
-    () => onServerWelcome((payload) => setWorkspaceHomeDir(payload.homeDir)),
-    [setWorkspaceHomeDir],
+    () =>
+      onServerWelcome((payload) =>
+        setServerWorkspacePaths({
+          homeDir: payload.homeDir,
+          chatWorkspaceRoot: payload.chatWorkspaceRoot,
+        }),
+      ),
+    [setServerWorkspacePaths],
   );
 
   useEffect(() => {
     if (!serverConfigQuery.data?.homeDir) {
       return;
     }
-    setWorkspaceHomeDir(serverConfigQuery.data.homeDir);
-  }, [serverConfigQuery.data?.homeDir, setWorkspaceHomeDir]);
+    setServerWorkspacePaths({
+      homeDir: serverConfigQuery.data.homeDir,
+      chatWorkspaceRoot: serverConfigQuery.data.chatWorkspaceRoot,
+    });
+  }, [
+    serverConfigQuery.data?.chatWorkspaceRoot,
+    serverConfigQuery.data?.homeDir,
+    setServerWorkspacePaths,
+  ]);
 
   useEffect(() => {
     if (!workspace) {
