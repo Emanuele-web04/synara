@@ -1734,13 +1734,34 @@ export default function ChatView({
   );
   const phase = derivePhase(activeThread?.session ?? null);
   const isConnecting = isLocalConnecting || phase === "connecting";
+  // User messages intentionally have no turn id; assistant messages are the stable
+  // bridge for deciding which historical work can fold into visible replies.
+  const workLogVisibleTurnIds = useMemo(() => {
+    const turnIds = new Set<TurnId>();
+    for (const message of activeThread?.messages ?? []) {
+      if (message.turnId) {
+        turnIds.add(message.turnId);
+      }
+    }
+    if (activeLatestTurn?.turnId) {
+      turnIds.add(activeLatestTurn.turnId);
+    }
+    return turnIds;
+  }, [activeLatestTurn?.turnId, activeThread?.messages]);
   const rawWorkLogEntries = useMemo(
-    () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, threadActivities],
+    () =>
+      deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined, {
+        visibleTurnIds: workLogVisibleTurnIds,
+      }),
+    [activeLatestTurn?.turnId, threadActivities, workLogVisibleTurnIds],
   );
   const activeTurnHasFileChangeWork = useMemo(
-    () => rawWorkLogEntries.some(isProviderFileEditWorkLogEntry),
-    [rawWorkLogEntries],
+    () =>
+      rawWorkLogEntries.some(
+        (entry) =>
+          entry.turnId === activeLatestTurn?.turnId && isProviderFileEditWorkLogEntry(entry),
+      ),
+    [activeLatestTurn?.turnId, rawWorkLogEntries],
   );
   const hasWorkLogSubagents = useMemo(
     () => rawWorkLogEntries.some((entry) => (entry.subagents?.length ?? 0) > 0),
@@ -4160,7 +4181,7 @@ export default function ChatView({
   const onMessagesWheelBase = useCallback(() => {
     clearTranscriptAutoFollow();
   }, [clearTranscriptAutoFollow]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const shouldFollowPendingTurn =
       activeThread?.id !== undefined && autoFollowThreadIdRef.current === activeThread.id;
     if (!isAtEndRef.current && !shouldFollowPendingTurn) {
@@ -4174,7 +4195,13 @@ export default function ChatView({
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [activeThread?.id, scrollToEnd, transcriptMessageCount, transcriptTailKey]);
+  }, [
+    activeThread?.id,
+    activeTurnInProgress,
+    scrollToEnd,
+    transcriptMessageCount,
+    transcriptTailKey,
+  ]);
   const {
     pendingTranscriptSelectionAction,
     commitTranscriptAssistantSelection,
