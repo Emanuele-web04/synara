@@ -99,7 +99,7 @@ export function resolveCodexSessionPrewarmKey(input: {
   readonly isServerThread: boolean;
   readonly thread: Pick<Thread, "id" | "modelSelection" | "session"> | undefined;
   readonly modelSelection: ModelSelection;
-  readonly providerOptions: ProviderStartOptions;
+  readonly providerOptions: ProviderStartOptions | undefined;
   readonly runtimeMode: RuntimeMode;
 }): string | null {
   if (!input.isServerThread || !input.thread) {

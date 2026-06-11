@@ -7,6 +7,7 @@ import {
   ApprovalRequestId,
   EventId,
   type ProviderComposerCapabilities,
+  type ProviderApprovalDecision,
   type ProviderListSkillsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,

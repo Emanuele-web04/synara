@@ -813,6 +813,46 @@ describe("startSession", () => {
 });
 
 describe("sendTurn", () => {
+  it("injects model-visible thread items without starting a turn", async () => {
+    const { manager, context, requireSession, sendRequest, updateSession } =
+      createSendTurnHarness();
+    sendRequest.mockResolvedValueOnce({});
+
+    await manager.injectThreadItems({
+      threadId: asThreadId("thread_1"),
+      items: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: "Previously loaded PR context.",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(requireSession).toHaveBeenCalledWith("thread_1");
+    expect(sendRequest).toHaveBeenCalledWith(context, "thread/inject_items", {
+      threadId: "thread_1",
+      items: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: "Previously loaded PR context.",
+            },
+          ],
+        },
+      ],
+    });
+    expect(updateSession).not.toHaveBeenCalled();
+  });
+
   it("sends text and image user input items to turn/start", async () => {
     const { manager, context, requireSession, sendRequest, updateSession } =
       createSendTurnHarness();
@@ -2889,6 +2929,58 @@ describe("Codex protocol over an in-memory transport", () => {
         approvalPolicy: "never",
         sandbox: "danger-full-access",
       });
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("uses review-only Codex thread/start params for review chat sessions", async () => {
+    const harness = createInMemoryCodexHarness();
+    try {
+      await harness.manager.startSession({
+        threadId: asThreadId("thread_mem_review_profile"),
+        provider: "codex",
+        cwd: "/tmp/mem-workspace",
+        reviewProfile: "review-chat",
+        approvalPolicy: "never",
+        sandboxMode: "read-only",
+        runtimeMode: "approval-required",
+      });
+
+      const threadStartFrame = harness.outboundFrames.find(
+        (frame) => frame.method === "thread/start",
+      );
+      expect(threadStartFrame?.params).toMatchObject({
+        cwd: "/tmp/mem-workspace",
+        approvalPolicy: "never",
+        sandbox: "read-only",
+        ephemeral: true,
+        serviceName: "synara_review_chat",
+      });
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("reuses a repo-scoped discovery app-server for a later session in the same cwd", async () => {
+    const harness = createInMemoryCodexHarness({
+      responders: {
+        "skills/list": () => ({ skills: [] }),
+      },
+    });
+    try {
+      await harness.manager.listSkills({ cwd: "/tmp/mem-workspace" });
+      await harness.manager.startSession({
+        threadId: asThreadId("thread_mem_pooled"),
+        provider: "codex",
+        cwd: "/tmp/mem-workspace",
+        runtimeMode: "full-access",
+      });
+
+      const methods = harness.outboundFrames.map((frame) => frame.method);
+      expect(methods.filter((method) => method === "initialize")).toHaveLength(1);
+      expect(methods).toContain("skills/list");
+      expect(methods).toContain("thread/start");
     } finally {
       await harness.stop();
     }

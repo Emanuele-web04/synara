@@ -195,9 +195,8 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
 
     expect(markup).toContain("flex w-full justify-end");
     expect(markup).toContain("group flex flex-col items-end gap-px max-w-[80%]");
-    expect(markup).toContain(
-      "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
-    );
+    expect(markup).toContain("min-w-0 bg-[var(--app-user-message-background)]");
+    expect(markup).toContain("w-max max-w-full self-end");
     expect(markup).toContain("rounded-[var(--radius-user-message)]");
     expect(markup).toContain("py-[8px]");
     expect(markup).toContain("group-hover:opacity-100");

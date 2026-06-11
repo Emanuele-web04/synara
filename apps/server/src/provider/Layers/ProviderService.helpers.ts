@@ -69,15 +69,16 @@ export const decodeInputOrValidationError = <S extends Schema.Top>(input: {
 
 export function toRuntimeStatus(
   session: ProviderSession,
-): "starting" | "running" | "stopped" | "error" {
+): "starting" | "ready" | "running" | "stopped" | "error" {
   switch (session.status) {
     case "connecting":
       return "starting";
+    case "ready":
+      return "ready";
     case "error":
       return "error";
     case "closed":
       return "stopped";
-    case "ready":
     case "running":
     default:
       return "running";
@@ -147,10 +148,12 @@ export function runtimePayloadRecord(value: unknown): Record<string, unknown> {
 
 export function runtimeStatusForEvent(
   event: ProviderRuntimeEvent,
-): "running" | "stopped" | "error" {
+): "ready" | "running" | "stopped" | "error" {
   switch (event.type) {
     case "session.state.changed":
       switch (event.payload.state) {
+        case "ready":
+          return "ready";
         case "stopped":
           return "stopped";
         case "error":

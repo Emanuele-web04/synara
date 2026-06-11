@@ -17,6 +17,7 @@
 import {
   ProviderCompactThreadInput,
   ProviderForkThreadInput,
+  ProviderInjectThreadItemsInput,
   ThreadId,
   ProviderInterruptTurnInput,
   ProviderRespondToRequestInput,
@@ -29,7 +30,7 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@t3tools/contracts";
-import { Effect, Layer, Option, PubSub, Stream } from "effect";
+import { Effect, Equal, Layer, Option, PubSub, Stream } from "effect";
 
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
@@ -253,11 +254,25 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         };
         clearRuntimeIdleTimer(threadId);
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        const persistedModelSelection =
+          persistedBinding?.provider === input.provider
+            ? readPersistedModelSelection(persistedBinding.runtimePayload)
+            : undefined;
+        const persistedCwd =
+          persistedBinding?.provider === input.provider
+            ? readPersistedCwd(persistedBinding.runtimePayload)
+            : undefined;
+        const persistedBindingMatchesStart =
+          persistedBinding?.provider === input.provider &&
+          (persistedBinding.runtimeMode === undefined ||
+            persistedBinding.runtimeMode === input.runtimeMode) &&
+          (input.cwd === undefined || persistedCwd === undefined || persistedCwd === input.cwd) &&
+          (input.modelSelection === undefined ||
+            persistedModelSelection === undefined ||
+            Equal.equals(persistedModelSelection, input.modelSelection));
         const effectiveResumeCursor =
           input.resumeCursor ??
-          (persistedBinding?.provider === input.provider
-            ? persistedBinding.resumeCursor
-            : undefined);
+          (persistedBindingMatchesStart ? persistedBinding.resumeCursor : undefined);
         const effectiveProviderOptions =
           input.providerOptions ??
           (persistedBinding?.provider === input.provider
@@ -541,6 +556,45 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           target: input.target.type,
         });
         return turn;
+      });
+
+    const injectThreadItems: NonNullable<ProviderServiceShape["injectThreadItems"]> = (rawInput) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.injectThreadItems",
+          schema: ProviderInjectThreadItemsInput,
+          payload: rawInput,
+        });
+
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.injectThreadItems",
+          allowRecovery: true,
+        });
+        if (!routed.adapter.injectThreadItems) {
+          return yield* toValidationError(
+            "ProviderService.injectThreadItems",
+            `Provider '${routed.adapter.provider}' does not support thread item injection.`,
+          );
+        }
+
+        yield* routed.adapter.injectThreadItems({
+          threadId: routed.threadId,
+          items: input.items,
+        });
+        yield* directory.upsert({
+          threadId: input.threadId,
+          provider: routed.adapter.provider,
+          status: "ready",
+          runtimePayload: {
+            lastRuntimeEvent: "provider.injectThreadItems",
+            lastRuntimeEventAt: new Date().toISOString(),
+          },
+        });
+        yield* analytics.record("provider.thread.items_injected", {
+          provider: routed.adapter.provider,
+          itemCount: input.items.length,
+        });
       });
 
     const interruptTurn: ProviderServiceShape["interruptTurn"] = (rawInput) =>
@@ -861,6 +915,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       sendTurn,
       steerTurn,
       startReview,
+      injectThreadItems,
       interruptTurn,
       respondToRequest,
       respondToUserInput,

@@ -79,23 +79,54 @@ export function coalesceOrchestrationUiEvents(
 
 export function shouldFlushDomainEventImmediately(
   event: OrchestrationEvent,
-  immediatelyFlushedAssistantMessageIds: Set<string>,
+  immediatelyFlushedStreamKeys: Set<string>,
 ): boolean {
+  if (event.type === "thread.message-sent" && event.payload.role === "user") {
+    clearReasoningFlushKeysForThread(immediatelyFlushedStreamKeys, event.payload.threadId);
+    return false;
+  }
+
+  if (
+    event.type === "thread.activity-appended" &&
+    event.payload.activity.kind === "reasoning.delta"
+  ) {
+    const streamKey = [
+      "reasoning",
+      event.payload.threadId,
+      event.payload.activity.turnId ?? "turnless",
+    ].join(":");
+    if (immediatelyFlushedStreamKeys.has(streamKey)) {
+      return false;
+    }
+    immediatelyFlushedStreamKeys.add(streamKey);
+    return true;
+  }
+
   if (event.type !== "thread.message-sent" || event.payload.role !== "assistant") {
     return false;
   }
 
   if (!event.payload.streaming) {
-    immediatelyFlushedAssistantMessageIds.delete(event.payload.messageId);
+    immediatelyFlushedStreamKeys.delete(`assistant:${event.payload.messageId}`);
     return false;
   }
 
-  if (immediatelyFlushedAssistantMessageIds.has(event.payload.messageId)) {
+  const streamKey = `assistant:${event.payload.messageId}`;
+  if (immediatelyFlushedStreamKeys.has(streamKey)) {
     return false;
   }
 
-  immediatelyFlushedAssistantMessageIds.add(event.payload.messageId);
+  immediatelyFlushedStreamKeys.add(streamKey);
   return true;
+}
+
+function clearReasoningFlushKeysForThread(keys: Set<string>, threadId: ThreadId): void {
+  const prefix = `reasoning:${threadId}:`;
+  for (const key of keys) {
+    if (key.startsWith(prefix)) {
+      keys.delete(key);
+    }
+  }
 }
 
 export function isThreadDetailEventForThread(

@@ -17,7 +17,7 @@ export const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${thread
 export const providerCommandId = (event: ProviderRuntimeEvent, tag: string): CommandId =>
   CommandId.makeUnsafe(`provider:${event.eventId}:${tag}:${crypto.randomUUID()}`);
 
-export const DEFAULT_ASSISTANT_DELIVERY_MODE: AssistantDeliveryMode = "buffered";
+export const DEFAULT_ASSISTANT_DELIVERY_MODE: AssistantDeliveryMode = "streaming";
 export const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 10_000;
 export const TURN_MESSAGE_IDS_BY_TURN_TTL = Duration.minutes(120);
 export const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY = 20_000;

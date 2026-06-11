@@ -253,6 +253,31 @@ describe("ProviderRuntimeIngestion", () => {
     };
   }
 
+  async function requestBufferedAssistantDelivery(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    suffix: string,
+    now: string,
+  ): Promise<void> {
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe(`cmd-turn-start-${suffix}`),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId(`message-${suffix}`),
+          role: "user",
+          text: "buffer assistant response",
+          attachments: [],
+        },
+        assistantDeliveryMode: "buffered",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+  }
+
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -1730,9 +1755,10 @@ describe("ProviderRuntimeIngestion", () => {
     expect(proposedPlan?.planMarkdown).toBe("## Buffered plan\n\n- first\n- second");
   });
 
-  it("buffers assistant deltas by default until completion", async () => {
+  it("buffers assistant deltas when buffered delivery is requested until completion", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
+    await requestBufferedAssistantDelivery(harness, "buffered", now);
 
     harness.emit({
       type: "turn.started",
@@ -1803,6 +1829,7 @@ describe("ProviderRuntimeIngestion", () => {
   it("ignores whitespace-only buffered assistant deltas on completion", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
+    await requestBufferedAssistantDelivery(harness, "buffered-whitespace", now);
 
     harness.emit({
       type: "turn.started",
@@ -1965,9 +1992,121 @@ describe("ProviderRuntimeIngestion", () => {
     expect(finalMessage?.streaming).toBe(false);
   });
 
+  it("keeps streaming delivery scoped to the active turn when another thread requests buffering", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const streamingThreadId = asThreadId("thread-streaming-scope");
+    const streamingTurnId = asTurnId("turn-streaming-scope");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-thread-create-streaming-scope"),
+        threadId: streamingThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Streaming Thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-seed-streaming-scope"),
+        threadId: streamingThreadId,
+        session: {
+          threadId: streamingThreadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          updatedAt: now,
+          lastError: null,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-streaming-scope"),
+        threadId: streamingThreadId,
+        message: {
+          messageId: asMessageId("message-streaming-scope"),
+          role: "user",
+          text: "stream this response",
+          attachments: [],
+        },
+        assistantDeliveryMode: "streaming",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-streaming-scope"),
+      provider: "codex",
+      createdAt: now,
+      threadId: streamingThreadId,
+      turnId: streamingTurnId,
+    });
+    await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.session?.status === "running" && thread.session?.activeTurnId === streamingTurnId,
+      2000,
+      streamingThreadId,
+    );
+
+    await requestBufferedAssistantDelivery(harness, "buffered-other-thread", now);
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-message-delta-streaming-scope"),
+      provider: "codex",
+      createdAt: now,
+      threadId: streamingThreadId,
+      turnId: streamingTurnId,
+      itemId: asItemId("item-streaming-scope"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "visible immediately",
+      },
+    });
+
+    const liveThread = await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-streaming-scope" &&
+            message.streaming &&
+            message.text === "visible immediately",
+        ),
+      2000,
+      streamingThreadId,
+    );
+    const liveMessage = liveThread.messages.find(
+      (message: ProviderRuntimeTestMessage) => message.id === "assistant:item-streaming-scope",
+    );
+    expect(liveMessage?.streaming).toBe(true);
+  });
+
   it("flushes buffered assistant text when streaming mode is requested after an early delta", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
+    await requestBufferedAssistantDelivery(harness, "late-streaming-mode", now);
 
     harness.emit({
       type: "turn.started",
@@ -2042,6 +2181,7 @@ describe("ProviderRuntimeIngestion", () => {
   it("flushes buffered assistant text before session exit clears turn state", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
+    await requestBufferedAssistantDelivery(harness, "buffered-session-exit", now);
 
     harness.emit({
       type: "turn.started",
@@ -2099,6 +2239,7 @@ describe("ProviderRuntimeIngestion", () => {
   it("flushes buffered assistant text before runtime.error marks the session errored", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
+    await requestBufferedAssistantDelivery(harness, "buffered-runtime-error", now);
 
     harness.emit({
       type: "turn.started",
@@ -2164,6 +2305,7 @@ describe("ProviderRuntimeIngestion", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
     const oversizedText = "x".repeat(40_000);
+    await requestBufferedAssistantDelivery(harness, "buffer-spill", now);
 
     harness.emit({
       type: "turn.started",

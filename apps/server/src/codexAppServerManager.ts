@@ -74,6 +74,7 @@ import {
 } from "./codexAppServer.session.ts";
 import type {
   CodexAccountSnapshot,
+  CodexAppServerInjectThreadItemsInput,
   CodexAppServerSendTurnInput,
   CodexAppServerStartSessionInput,
   CodexPluginListInput,
@@ -94,6 +95,7 @@ import type {
 } from "./codexAppServer.types.ts";
 import {
   type CodexTurnDeps,
+  injectThreadItems as injectThreadItemsFn,
   sendTurn as sendTurnFn,
   startReview as startReviewFn,
   steerTurn as steerTurnFn,
@@ -125,6 +127,7 @@ export {
   resolveCodexModelForAccount,
 } from "./codexAppServer.session.ts";
 export type {
+  CodexAppServerInjectThreadItemsInput,
   CodexAppServerManagerEvents,
   CodexAppServerManagerOptions,
   CodexAppServerSendTurnInput,
@@ -187,9 +190,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     };
     this.sessionOpenDeps = {
       sessions: this.sessions,
+      discoverySessions: this.discoverySessions,
+      discoverySessionIdleTimers: this.discoverySessionIdleTimers,
       localStartupDiscoveryCache: this.localStartupDiscoveryCache,
       runPromise: (effect) => this.runPromise(effect),
       stopSession: (...args) => this.stopSession(...args),
+      isContextAlive: (...args) => this.isContextAlive(...args),
       assertSupportedCodexCliVersion: (...args) => this.assertSupportedCodexCliVersion(...args),
       createTransport: (...args) => this.createTransport(...args),
       attachProcessListeners: (...args) => this.attachProcessListeners(...args),
@@ -329,6 +335,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   async sendTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
     return sendTurnFn(this.turnDeps, input);
+  }
+
+  async injectThreadItems(input: CodexAppServerInjectThreadItemsInput): Promise<void> {
+    return injectThreadItemsFn(this.turnDeps, input);
   }
 
   async steerTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {

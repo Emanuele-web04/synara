@@ -4,7 +4,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
-  type PointerEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 
 import { createPanelResizeOverlay, removePanelResizeOverlay } from "~/lib/panelResize";
@@ -71,13 +71,13 @@ export function useResizableReviewSidebar(input: {
   );
 
   const handleResizeStart = useCallback(
-    (event: PointerEvent<HTMLElement>) => {
+    (event: ReactPointerEvent<HTMLElement>) => {
       event.preventDefault();
       dragCleanup.current?.();
       dragOrigin.current = { x: event.clientX, width };
       const overlay = createPanelResizeOverlay();
 
-      const onMove = (moveEvent: PointerEvent) => {
+      const onMove = (moveEvent: globalThis.PointerEvent) => {
         const origin = dragOrigin.current;
         if (!origin) {
           return;

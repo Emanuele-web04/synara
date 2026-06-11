@@ -36,6 +36,7 @@ type TurnCommand = Extract<
       | "thread.message.edit-and-resend"
       | "thread.session.stop"
       | "thread.session.ensure"
+      | "thread.context.inject"
       | "thread.runtime.action"
       | "thread.session.set"
       | "thread.messages.import"
@@ -422,6 +423,35 @@ export const decideTurnCommand = Effect.fn("decideTurnCommand")(function* ({
         type: "thread.session-ensure-requested",
         payload: {
           threadId: command.threadId,
+          ...(command.modelSelection !== undefined
+            ? { modelSelection: command.modelSelection }
+            : {}),
+          ...(command.providerOptions !== undefined
+            ? { providerOptions: command.providerOptions }
+            : {}),
+          runtimeMode: command.runtimeMode,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.context.inject": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.context-inject-requested",
+        payload: {
+          threadId: command.threadId,
+          items: command.items,
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
             : {}),

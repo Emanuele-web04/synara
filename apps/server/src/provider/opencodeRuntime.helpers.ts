@@ -18,7 +18,7 @@ import type {
   QuestionAnswer,
   QuestionRequest,
 } from "@opencode-ai/sdk/v2";
-import { Data, Effect, Predicate as P, Stream } from "effect";
+import { Data, Effect, Predicate as P, Scope, Stream } from "effect";
 
 export const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 5_000;
 export const DEFAULT_HOSTNAME = "127.0.0.1";

@@ -99,6 +99,11 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+        ...(input.approvalPolicy !== undefined ? { approvalPolicy: input.approvalPolicy } : {}),
+        ...(input.sandboxMode !== undefined ? { sandboxMode: input.sandboxMode } : {}),
+        ...(input.approvalPolicy === "never" && input.sandboxMode === "read-only"
+          ? { reviewProfile: "review-chat" as const }
+          : {}),
         ...(remoteTransport
           ? {
               createTransport: (codexInput: CodexTransportFactoryInput) =>
@@ -288,6 +293,12 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           threadId: input.threadId,
         })),
       );
+
+    const injectThreadItems: NonNullable<CodexAdapterShape["injectThreadItems"]> = (input) =>
+      Effect.tryPromise({
+        try: () => manager.injectThreadItems(input),
+        catch: (cause) => toRequestError(input.threadId, "thread/inject_items", cause),
+      });
 
     const interruptTurn: CodexAdapterShape["interruptTurn"] = (
       threadId,
@@ -535,6 +546,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       sendTurn,
       steerTurn,
       startReview,
+      injectThreadItems,
       interruptTurn,
       readThread,
       readExternalThread,

@@ -51,6 +51,7 @@ vi.mock("~/lib/reviewChatThread", async (importActual) => {
 const prewarmReviewChatThreadMock = vi.mocked(prewarmReviewChatThread);
 const sendReviewChatQuestionMock = vi.mocked(sendReviewChatQuestion);
 const initialStoreState = useStore.getState();
+type SendReviewChatResult = Awaited<ReturnType<typeof sendReviewChatQuestion>>;
 
 const DETAIL = {
   number: 7866,
@@ -230,6 +231,15 @@ describe("ReviewPrSidebar", () => {
       });
       const expandedWidth = sidebar?.getBoundingClientRect().width ?? 0;
 
+      await vi.waitFor(() => {
+        expect(Number(resizeElement.getAttribute("aria-valuemax"))).toBeGreaterThanOrEqual(700);
+      });
+      resizeElement.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "End" }));
+      await vi.waitFor(() => {
+        expect(sidebar?.getBoundingClientRect().width ?? 0).toBeGreaterThanOrEqual(700);
+      });
+      expect(sidebar?.getBoundingClientRect().width ?? 0).toBeLessThanOrEqual(720);
+
       resizeElement.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Home" }));
       await vi.waitFor(() => {
         expect(sidebar?.getBoundingClientRect().width ?? 0).toBeLessThan(expandedWidth);
@@ -243,12 +253,11 @@ describe("ReviewPrSidebar", () => {
   });
 
   it("shows the outgoing question before the hidden review thread round-trip finishes", async () => {
-    let resolveSend: ((result: Awaited<ReturnType<typeof sendReviewChatQuestion>>) => void) | null =
-      null;
+    const sendDeferred: { resolve?: (result: SendReviewChatResult) => void } = {};
     sendReviewChatQuestionMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          resolveSend = resolve;
+          sendDeferred.resolve = resolve;
         }),
     );
     const mounted = await mountSidebar();
@@ -258,12 +267,66 @@ describe("ReviewPrSidebar", () => {
       await page.getByRole("button", { name: "Send PR chat question" }).click();
 
       await expect.element(page.getByText("What changed?")).toBeVisible();
-      resolveSend?.({
+      await expect.element(page.getByText("Starting review agent...")).toBeVisible();
+      sendDeferred.resolve?.({
         status: "sent",
         threadId: ThreadId.makeUnsafe("thread-review-chat-optimistic"),
         created: true,
       });
-      await expect.element(page.getByText(/Working/)).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("renders first model reasoning in review chat within the app-side first-output budget", async () => {
+    const sendDeferred: { resolve?: (result: SendReviewChatResult) => void } = {};
+    sendReviewChatQuestionMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          sendDeferred.resolve = resolve;
+        }),
+    );
+    const mounted = await mountSidebarWithReviewThread({ liveActivity: false });
+
+    try {
+      await page.getByTestId("composer-editor").fill("What changed?");
+      await page.getByRole("button", { name: "Send PR chat question" }).click();
+      await expect.element(page.getByText("What changed?")).toBeVisible();
+
+      const outputLandedAt = performance.now();
+      useStore.setState((state) => ({
+        ...state,
+        threads: state.threads.map((thread) =>
+          thread.id === ThreadId.makeUnsafe("thread-review-chat")
+            ? {
+                ...thread,
+                activities: [
+                  ...thread.activities,
+                  {
+                    id: EventId.makeUnsafe("activity-review-chat-first-reasoning"),
+                    createdAt: new Date(Date.now() + 1_000).toISOString(),
+                    kind: "reasoning.delta",
+                    summary: "Thinking",
+                    tone: "info",
+                    turnId: null,
+                    payload: {
+                      streamKind: "reasoning_text",
+                      detail: "checking changed files",
+                    },
+                  },
+                ],
+              }
+            : thread,
+        ),
+      }));
+
+      await expect.element(page.getByText("Thinking")).toBeVisible();
+      expect(performance.now() - outputLandedAt).toBeLessThan(1_000);
+      sendDeferred.resolve?.({
+        status: "sent",
+        threadId: ThreadId.makeUnsafe("thread-review-chat"),
+        created: false,
+      });
     } finally {
       await mounted.cleanup();
     }
@@ -314,11 +377,69 @@ describe("ReviewPrSidebar", () => {
     }
   });
 
+  it("hides a late bootstrap ready reply after an interleaved visible question", async () => {
+    const mounted = await mountSidebarWithReviewThread({ liveActivity: false });
+    try {
+      useStore.setState((state) => ({
+        ...state,
+        threads: state.threads.map((thread) =>
+          thread.id === ThreadId.makeUnsafe("thread-review-chat")
+            ? {
+                ...thread,
+                messages: [
+                  {
+                    id: MessageId.makeUnsafe("message-review-bootstrap"),
+                    role: "user",
+                    text: "Hidden bootstrap\n\nUser question:\nReply exactly: ready",
+                    createdAt: "2026-06-07T12:00:00.500Z",
+                    streaming: false,
+                    turnId: null,
+                    source: "review-context-bootstrap",
+                  },
+                  {
+                    id: MessageId.makeUnsafe("message-review-visible-question"),
+                    role: "user",
+                    text: "What changed?",
+                    createdAt: "2026-06-07T12:00:01.000Z",
+                    streaming: false,
+                    turnId: null,
+                  },
+                  {
+                    id: MessageId.makeUnsafe("message-review-bootstrap-ready"),
+                    role: "assistant",
+                    text: "ready",
+                    createdAt: "2026-06-07T12:00:01.200Z",
+                    streaming: false,
+                    turnId: TurnId.makeUnsafe("turn-review-bootstrap"),
+                  },
+                  {
+                    id: MessageId.makeUnsafe("message-review-visible-answer"),
+                    role: "assistant",
+                    text: "The visible answer stays visible.",
+                    createdAt: "2026-06-07T12:00:02.000Z",
+                    streaming: false,
+                    turnId: TurnId.makeUnsafe("turn-review-visible"),
+                  },
+                ],
+              }
+            : thread,
+        ),
+      }));
+
+      await expect.element(page.getByText("What changed?")).toBeVisible();
+      await expect.element(page.getByText("The visible answer stays visible.")).toBeVisible();
+      expect(document.body.textContent ?? "").not.toContain("Reply exactly: ready");
+      expect(document.body.textContent ?? "").not.toMatch(/\bready\b/i);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("shows live provider activity in the review chat timeline before assistant text arrives", async () => {
     const mounted = await mountSidebarWithReviewThread({ liveActivity: true });
     try {
       await expect.element(page.getByText("Reading changed files")).toBeVisible();
-      await expect.element(page.getByText(/Working/)).toBeVisible();
+      await expect.element(page.getByText("Reading PR context...")).toBeVisible();
       await expect
         .element(page.getByRole("button", { name: "Start new PR chat thread" }))
         .toBeEnabled();

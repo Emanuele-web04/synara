@@ -706,6 +706,47 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("does not reuse a persisted resume cursor when model selection changes", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+
+      const initial = yield* provider.startSession(asThreadId("thread-model-change"), {
+        provider: "codex",
+        threadId: asThreadId("thread-model-change"),
+        cwd: "/tmp/project-model-change",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "full-access",
+      });
+
+      yield* routing.codex.stopAll();
+      routing.codex.startSession.mockClear();
+
+      yield* provider.startSession(initial.threadId, {
+        provider: "codex",
+        threadId: initial.threadId,
+        cwd: "/tmp/project-model-change",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.1-codex",
+        },
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(routing.codex.startSession.mock.calls.length, 1);
+      const startInput = routing.codex.startSession.mock.calls[0]?.[0];
+      assert.equal(typeof startInput === "object" && startInput !== null, true);
+      if (startInput && typeof startInput === "object") {
+        const startPayload = startInput as {
+          resumeCursor?: unknown;
+        };
+        assert.equal(startPayload.resumeCursor, undefined);
+      }
+    }),
+  );
+
   it.effect("recovers stale claudeAgent sessions for sendTurn using persisted cwd", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

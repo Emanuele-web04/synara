@@ -300,7 +300,7 @@ function EventRouter() {
     let needsBroadGitInvalidation = false;
     let pendingGitInvalidationThreadIds = new Set<ThreadId>();
     let pendingDomainEvents: OrchestrationEvent[] = [];
-    const immediatelyFlushedAssistantMessageIds = new Set<string>();
+    const immediatelyFlushedStreamKeys = new Set<string>();
     let shellSnapshotSequence = -1;
     let pendingShellEvents: OrchestrationShellStreamEvent[] = [];
     const subscribedThreadIds = new Set<ThreadId>();
@@ -518,7 +518,7 @@ function EventRouter() {
           needsBroadGitInvalidation = true;
         }
       }
-      if (shouldFlushDomainEventImmediately(event, immediatelyFlushedAssistantMessageIds)) {
+      if (shouldFlushDomainEventImmediately(event, immediatelyFlushedStreamKeys)) {
         domainEventFlushThrottler.cancel();
         flushPendingDomainEvents();
         return;

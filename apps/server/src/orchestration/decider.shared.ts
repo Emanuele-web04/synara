@@ -25,7 +25,7 @@ export type DeciderResult =
 export type DeciderReturn = Effect.fn.Return<DeciderResult, OrchestrationCommandInvariantError>;
 
 export const nowIso = () => new Date().toISOString();
-export const DEFAULT_ASSISTANT_DELIVERY_MODE = "buffered" as const;
+export const DEFAULT_ASSISTANT_DELIVERY_MODE = "streaming" as const;
 
 const defaultMetadata: Omit<OrchestrationEvent, "sequence" | "type" | "payload"> = {
   eventId: crypto.randomUUID() as OrchestrationEvent["eventId"],

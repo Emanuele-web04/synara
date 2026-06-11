@@ -26,7 +26,12 @@ type ThreadSessionEnsureCommand = Extract<
   { type: "thread.session.ensure" }
 >;
 type ThreadTurnStartCommand = Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }>;
-type ReviewChatApi = Pick<NativeApi, "orchestration">;
+type ReviewChatApi = {
+  readonly orchestration: Pick<
+    NativeApi["orchestration"],
+    "dispatchCommand" | "getShellSnapshot" | "subscribeThread"
+  >;
+};
 export type ReviewChatThreadResult =
   | { status: "ready"; threadId: ThreadId; created: boolean }
   | { status: "unavailable"; reason: string };
@@ -40,7 +45,13 @@ export type ReviewChatPrewarmResult = ReviewChatThreadResult;
 export type ReviewChatThreadReadyHandler = (threadId: ThreadId, created: boolean) => void;
 
 const inFlightCreateByTargetKey = new Map<string, Promise<ThreadId | null>>();
-const createdThreadIdByTargetKey = new Map<string, ThreadId>();
+const createdThreadByTargetKey = new Map<
+  string,
+  {
+    readonly threadId: ThreadId;
+    readonly target: OrchestrationReviewChatTarget;
+  }
+>();
 const inFlightPrewarmByKey = new Map<
   string,
   {
@@ -110,6 +121,7 @@ export function buildReviewChatTarget(
     repositoryId: payload.repositoryId,
     reference: payload.reference,
     number: payload.number,
+    headSha: payload.headSha,
     url: payload.url,
   };
 }
@@ -123,16 +135,26 @@ export function reviewChatTargetsEqual(
   }
   const repositoriesMatch =
     !left.repositoryId || !right.repositoryId || left.repositoryId === right.repositoryId;
+  const headShaMatches = !left.headSha || !right.headSha || left.headSha === right.headSha;
   return (
     left.projectId === right.projectId &&
     left.cwd === right.cwd &&
     left.number === right.number &&
+    headShaMatches &&
     repositoriesMatch
   );
 }
 
 export function reviewChatTargetKey(target: OrchestrationReviewChatTarget): string {
   return [target.projectId, target.cwd, String(target.number)].join("\u001f");
+}
+
+function findCachedCreatedReviewThreadId(target: OrchestrationReviewChatTarget): ThreadId | null {
+  const cachedThread = createdThreadByTargetKey.get(reviewChatTargetKey(target));
+  if (!cachedThread || !reviewChatTargetsEqual(cachedThread.target, target)) {
+    return null;
+  }
+  return cachedThread.threadId;
 }
 
 function reviewChatModelKey(modelSelection: ModelSelection): string {
@@ -209,7 +231,7 @@ export function findReviewChatThread(
 
 export function clearReviewChatThreadCacheForTests(): void {
   inFlightCreateByTargetKey.clear();
-  createdThreadIdByTargetKey.clear();
+  createdThreadByTargetKey.clear();
   inFlightPrewarmByKey.clear();
   reviewContextBootstrappedKeys.clear();
 }
@@ -365,6 +387,10 @@ function isReviewContextBootstrapRunning(thread: Thread | undefined): boolean {
   );
 }
 
+function canInjectReviewContext(modelSelection: ModelSelection): boolean {
+  return modelSelection.provider === "codex";
+}
+
 async function resolveProjectWithRefresh(
   api: ReviewChatApi,
   payload: ReviewSidechatContextPayload,
@@ -414,7 +440,7 @@ async function createReviewChatThreadOnce(input: {
     if (createResult === "unavailable") {
       return null;
     }
-    createdThreadIdByTargetKey.set(targetKey, threadId);
+    createdThreadByTargetKey.set(targetKey, { threadId, target: input.target });
     return threadId;
   })().finally(() => {
     inFlightCreateByTargetKey.delete(targetKey);
@@ -447,7 +473,10 @@ async function createReviewChatThread(input: {
   if (createResult === "unavailable") {
     return null;
   }
-  createdThreadIdByTargetKey.set(reviewChatTargetKey(input.target), threadId);
+  createdThreadByTargetKey.set(reviewChatTargetKey(input.target), {
+    threadId,
+    target: input.target,
+  });
   return threadId;
 }
 
@@ -471,12 +500,14 @@ export async function resolveOrCreateReviewChatThread(input: {
 
   const existing = findReviewChatThreadInState(useStore.getState(), target);
   if (existing) {
-    createdThreadIdByTargetKey.set(reviewChatTargetKey(target), existing.id);
+    createdThreadByTargetKey.set(reviewChatTargetKey(target), {
+      threadId: existing.id,
+      target,
+    });
     return { status: "ready", threadId: existing.id, created: false };
   }
 
-  const targetKey = reviewChatTargetKey(target);
-  const cachedThreadId = createdThreadIdByTargetKey.get(targetKey);
+  const cachedThreadId = findCachedCreatedReviewThreadId(target);
   if (cachedThreadId) {
     return { status: "ready", threadId: cachedThreadId, created: false };
   }
@@ -590,18 +621,28 @@ export async function prewarmReviewChatThread(input: {
     if (hasCompleteReviewBootstrapContext(input.payload)) {
       const threadBootstrapKey = `${bootstrapKey}\u001f${resolution.threadId}`;
       if (!reviewContextBootstrappedKeys.has(threadBootstrapKey)) {
-        await api.orchestration.dispatchCommand(
-          buildTurnStartCommand({
-            payload: input.payload,
-            question: REVIEW_CONTEXT_BOOTSTRAP_QUESTION,
-            threadId: resolution.threadId,
-            modelSelection,
-            includeReviewContext: true,
-            source: "review-context-bootstrap",
-            createdAt: new Date().toISOString(),
-          }),
-        );
-        reviewContextBootstrappedKeys.add(threadBootstrapKey);
+        if (canInjectReviewContext(modelSelection)) {
+          // Skip thread.context.inject for Codex review chats.
+          // Injecting context via thread/inject_items blocks the serial
+          // DrainableWorker, causing head-of-line blocking for visible
+          // user turns. Instead, the first visible send includes PR
+          // context directly in the user message text.
+          // Do NOT mark the bootstrap key here; sendReviewChatQuestion
+          // will mark it when it includes context in the first turn.
+        } else {
+          await api.orchestration.dispatchCommand(
+            buildTurnStartCommand({
+              payload: input.payload,
+              question: REVIEW_CONTEXT_BOOTSTRAP_QUESTION,
+              threadId: resolution.threadId,
+              modelSelection,
+              includeReviewContext: true,
+              source: "review-context-bootstrap",
+              createdAt: new Date().toISOString(),
+            }),
+          );
+          reviewContextBootstrappedKeys.add(threadBootstrapKey);
+        }
       }
     }
     void refreshShellSnapshot(api).catch(() => undefined);
@@ -613,7 +654,7 @@ export async function prewarmReviewChatThread(input: {
   inFlightPrewarmByKey.set(prewarmKey, {
     targetKey,
     modelKey,
-    threadId: createdThreadIdByTargetKey.get(targetKey) ?? null,
+    threadId: findCachedCreatedReviewThreadId(target),
     promise,
   });
   return promise;
@@ -659,10 +700,13 @@ async function awaitInFlightPrewarmForVisibleSend(input: {
   const modelKey = reviewChatModelKey(input.modelSelection);
   for (const prewarm of inFlightPrewarmByKey.values()) {
     if (prewarm.targetKey === targetKey && prewarm.modelKey === modelKey) {
-      if (prewarm.threadId) {
-        return { status: "ready", threadId: prewarm.threadId, created: false };
+      const settledPrewarm = await waitForPrewarmVisibleSendBudget(prewarm.promise);
+      if (settledPrewarm) {
+        return settledPrewarm;
       }
-      return waitForPrewarmVisibleSendBudget(prewarm.promise);
+      return prewarm.threadId
+        ? { status: "ready", threadId: prewarm.threadId, created: false }
+        : null;
     }
   }
   return null;

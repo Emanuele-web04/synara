@@ -16,7 +16,7 @@ import {
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
-import { Effect, Equal, Option, Schema } from "effect";
+import { Deferred, Effect, Equal, Option, Schema } from "effect";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { ProviderAdapterRequestError, type ProviderServiceError } from "../../provider/Errors.ts";
@@ -55,6 +55,17 @@ export interface ReactorCoreDeps {
     }
   >;
   readonly sidechatContextBootstrapThreadIds: Set<string>;
+  readonly inFlightSessionEnsures: Map<string, Deferred.Deferred<void>>;
+  readonly providerResumeCursorsByThreadId: Map<
+    string,
+    {
+      readonly resumeCursor: unknown;
+      readonly provider: ProviderKind;
+      readonly runtimeMode: RuntimeMode;
+      readonly modelSelection: ModelSelection;
+      readonly cwd?: string;
+    }
+  >;
 }
 
 export type ReactorSession = ReturnType<typeof makeReactorSession>;
@@ -69,6 +80,8 @@ export function makeReactorSession(deps: ReactorCoreDeps) {
     threadModelSelections,
     recentlyEnsuredSessionThreads,
     sidechatContextBootstrapThreadIds,
+    inFlightSessionEnsures,
+    providerResumeCursorsByThreadId,
   } = deps;
 
   const resolveThread = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -156,6 +169,7 @@ export function makeReactorSession(deps: ReactorCoreDeps) {
       | "provider.turn.interrupt.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
+      | "provider.context.inject.failed"
       | "provider.session.stop.failed";
     readonly summary: string;
     readonly detail: string;
@@ -220,15 +234,24 @@ export function makeReactorSession(deps: ReactorCoreDeps) {
     });
   });
 
-  const joinPendingSessionEnsure = Effect.fnUntraced(function* (threadId: ThreadId) {
-    const recentEnsure = recentlyEnsuredSessionThreads.get(threadId);
-    if (recentEnsure === undefined) {
-      return null;
+  const joinPendingSessionEnsure = (threadId: ThreadId) =>
+    Effect.sync(() => {
+      const recentEnsure = recentlyEnsuredSessionThreads.get(threadId);
+      if (recentEnsure === undefined) {
+        return null;
+      }
+      recentlyEnsuredSessionThreads.delete(threadId);
+      return Date.now() - recentEnsure.ensuredAt <= RECENT_SESSION_ENSURE_REUSE_WINDOW_MS
+        ? recentEnsure
+        : null;
+    });
+
+  const joinInFlightSessionEnsure = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const deferred = inFlightSessionEnsures.get(threadId);
+    if (deferred === undefined) {
+      return;
     }
-    recentlyEnsuredSessionThreads.delete(threadId);
-    return Date.now() - recentEnsure.ensuredAt <= RECENT_SESSION_ENSURE_REUSE_WINDOW_MS
-      ? recentEnsure
-      : null;
+    yield* Deferred.await(deferred);
   });
 
   // Recovers the parent thread when older/local-only subagent rows are missing parentThreadId metadata.
@@ -261,6 +284,7 @@ export function makeReactorSession(deps: ReactorCoreDeps) {
     readonly threadId: ThreadId;
     readonly cause: ProviderServiceError;
   }) {
+    providerResumeCursorsByThreadId.delete(input.threadId);
     if (providerService.clearSessionResumeCursor) {
       yield* providerService
         .clearSessionResumeCursor({ threadId: input.threadId })
@@ -402,6 +426,9 @@ export function makeReactorSession(deps: ReactorCoreDeps) {
           ...(options?.providerOptions !== undefined
             ? { providerOptions: options.providerOptions }
             : {}),
+          ...(thread.reviewChatTarget
+            ? { approvalPolicy: "never" as const, sandboxMode: "read-only" as const }
+            : {}),
           ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
           runtimeMode: desiredRuntimeMode,
         },
@@ -433,19 +460,30 @@ export function makeReactorSession(deps: ReactorCoreDeps) {
       );
 
     const bindSessionToThread = (session: ProviderSession) =>
-      setThreadSession({
-        threadId,
-        session: {
+      Effect.gen(function* () {
+        if (session.resumeCursor !== undefined) {
+          providerResumeCursorsByThreadId.set(threadId, {
+            resumeCursor: session.resumeCursor,
+            provider: session.provider,
+            runtimeMode: desiredRuntimeMode,
+            modelSelection: desiredModelSelection,
+            ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
+          });
+        }
+        yield* setThreadSession({
           threadId,
-          status: mapProviderSessionStatusToOrchestrationStatus(session.status),
-          providerName: session.provider,
-          runtimeMode: desiredRuntimeMode,
-          // Provider turn ids are not orchestration turn ids.
-          activeTurnId: null,
-          lastError: session.lastError ?? null,
-          updatedAt: session.updatedAt,
-        },
-        createdAt,
+          session: {
+            threadId,
+            status: mapProviderSessionStatusToOrchestrationStatus(session.status),
+            providerName: session.provider,
+            runtimeMode: desiredRuntimeMode,
+            // Provider turn ids are not orchestration turn ids.
+            activeTurnId: null,
+            lastError: session.lastError ?? null,
+            updatedAt: session.updatedAt,
+          },
+          createdAt,
+        });
       });
 
     // Only reuse projected session state when the runtime still has a live session to attach to.
@@ -572,7 +610,16 @@ export function makeReactorSession(deps: ReactorCoreDeps) {
       sidechatContextBootstrapThreadIds.add(threadId);
     }
 
-    const startedSession = yield* startProviderSessionWithStaleResumeRetry(undefined);
+    const cachedResumeCursor = providerResumeCursorsByThreadId.get(threadId);
+    const cachedResumeCursorMatches =
+      cachedResumeCursor !== undefined &&
+      cachedResumeCursor.provider === preferredProvider &&
+      cachedResumeCursor.runtimeMode === desiredRuntimeMode &&
+      Equal.equals(cachedResumeCursor.modelSelection, desiredModelSelection) &&
+      cachedResumeCursor.cwd === effectiveCwd;
+    const startedSession = yield* startProviderSessionWithStaleResumeRetry(
+      cachedResumeCursorMatches ? { resumeCursor: cachedResumeCursor.resumeCursor } : undefined,
+    );
     yield* bindSessionToThread(startedSession);
     return startedSession.threadId;
   });
@@ -589,5 +636,6 @@ export function makeReactorSession(deps: ReactorCoreDeps) {
     clearStaleProviderResumeState,
     ensureSessionForThread,
     joinPendingSessionEnsure,
+    joinInFlightSessionEnsure,
   };
 }

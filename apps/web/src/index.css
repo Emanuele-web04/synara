@@ -903,6 +903,56 @@ label:has(> select#reasoning-effort) select {
   font-family: inherit !important;
 }
 
+.chat-markdown .chat-markdown-mermaid {
+  margin: 0.65rem 0;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid color-mix(in srgb, var(--border) 52%, transparent);
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--card) 82%, var(--background));
+  padding: 0.85rem;
+}
+
+.chat-markdown .chat-markdown-mermaid__svg {
+  min-width: min-content;
+}
+
+.chat-markdown .chat-markdown-mermaid__svg svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.chat-markdown .chat-markdown-mermaid__loading {
+  min-height: 7rem;
+  border-radius: 0.65rem;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--muted) 45%, transparent),
+    color-mix(in srgb, var(--muted) 72%, transparent),
+    color-mix(in srgb, var(--muted) 45%, transparent)
+  );
+  background-size: 200% 100%;
+  animation: chat-markdown-mermaid-loading 1.2s ease-in-out infinite;
+}
+
+@keyframes chat-markdown-mermaid-loading {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-markdown .chat-markdown-mermaid__loading {
+    animation: none;
+  }
+}
+
 /* Generated image preview/download card rendered inline from markdown ![alt](file.png) */
 .chat-generated-image {
   position: relative;

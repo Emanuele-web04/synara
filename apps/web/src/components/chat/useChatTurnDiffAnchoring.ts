@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { type MessageId, type TurnId } from "@t3tools/contracts";
 import { type useTurnDiffSummaries } from "../../hooks/useTurnDiffSummaries";
 import { type TimelineEntry } from "../../session-logic.timeline";
-import { type ChatMessage } from "../../types";
+import { type ChatMessage, type TurnDiffSummary } from "../../types";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./MessagesTimeline.logic";
 
 type TurnDiffSummariesState = ReturnType<typeof useTurnDiffSummaries>;
@@ -14,6 +14,9 @@ interface UseChatTurnDiffAnchoringParams {
   inferredCheckpointTurnCountByTurnId: TurnDiffSummariesState["inferredCheckpointTurnCountByTurnId"];
 }
 
+const EMPTY_TURN_DIFF_SUMMARY_BY_ASSISTANT_MESSAGE_ID = new Map<MessageId, TurnDiffSummary>();
+const EMPTY_REVERT_TURN_COUNT_BY_USER_MESSAGE_ID = new Map<MessageId, number>();
+
 export function useChatTurnDiffAnchoring({
   timelineMessages,
   timelineEntries,
@@ -21,6 +24,9 @@ export function useChatTurnDiffAnchoring({
   inferredCheckpointTurnCountByTurnId,
 }: UseChatTurnDiffAnchoringParams) {
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
+    if (turnDiffSummaries.length === 0) {
+      return EMPTY_TURN_DIFF_SUMMARY_BY_ASSISTANT_MESSAGE_ID;
+    }
     const messagesForDiffAnchoring: {
       id: MessageId;
       role: "user" | "assistant" | "system";
@@ -40,6 +46,9 @@ export function useChatTurnDiffAnchoring({
   }, [turnDiffSummaries, timelineMessages]);
 
   const revertTurnCountByUserMessageId = useMemo(() => {
+    if (turnDiffSummaryByAssistantMessageId.size === 0) {
+      return EMPTY_REVERT_TURN_COUNT_BY_USER_MESSAGE_ID;
+    }
     const byUserMessageId = new Map<MessageId, number>();
     for (let index = 0; index < timelineEntries.length; index += 1) {
       const entry = timelineEntries[index];
@@ -62,7 +71,7 @@ export function useChatTurnDiffAnchoring({
         const turnCount =
           summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId];
         if (typeof turnCount !== "number") {
-          break;
+          continue;
         }
         byUserMessageId.set(entry.message.id, Math.max(0, turnCount - 1));
         break;

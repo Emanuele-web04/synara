@@ -108,6 +108,15 @@ describe("ChatMarkdown", () => {
     expect(markup).not.toContain('class="katex"');
   });
 
+  it("routes mermaid fences through the diagram renderer", async () => {
+    const markup = await renderMarkdown(
+      ["```mermaid", "flowchart LR", "  A --> B", "```"].join("\n"),
+    );
+
+    expect(markup).toContain('data-chat-mermaid="pending"');
+    expect(markup).not.toContain("chat-markdown-codeblock");
+  });
+
   it("keeps plan and diff surfaces routed through the shared renderer", () => {
     const planSidebarSource = readFileSync(new URL("./PlanSidebar.tsx", import.meta.url), "utf8");
     const proposedPlanCardSource = readFileSync(

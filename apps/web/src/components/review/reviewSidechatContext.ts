@@ -163,10 +163,7 @@ export function buildReviewSidechatContextPayload(
   };
 }
 
-export function buildReviewSidechatInitialPrompt(
-  payload: ReviewSidechatContextPayload,
-  question: string,
-): string {
+export function buildReviewSidechatContextPrompt(payload: ReviewSidechatContextPayload): string {
   const selectedFile = payload.selectedFilePath;
   const files = payload.files
     .toSorted((left, right) => {
@@ -214,10 +211,14 @@ export function buildReviewSidechatInitialPrompt(
     "",
     "Pull request description:",
     payload.body.trim().length > 0 ? payload.body.trim().slice(0, 1_500) : "(empty)",
-    "",
-    "User question:",
-    question,
   ]
     .filter((line): line is string => line !== null)
     .join("\n");
+}
+
+export function buildReviewSidechatInitialPrompt(
+  payload: ReviewSidechatContextPayload,
+  question: string,
+): string {
+  return [buildReviewSidechatContextPrompt(payload), "", "User question:", question].join("\n");
 }

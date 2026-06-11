@@ -10,7 +10,7 @@ import { Effect, type Path } from "effect";
 import { resolveWorktreeHandoffIntent } from "@t3tools/shared/worktreeHandoff";
 
 import { GitManagerError } from "../Errors.ts";
-import type { GitCore } from "../Services/GitCore.ts";
+import type { GitCoreShape } from "../Services/GitCore.ts";
 import type { GitManagerShape } from "../Services/GitManager.ts";
 import {
   buildFailedLocalHandoffRecoveryDetail,
@@ -22,7 +22,7 @@ import {
 } from "./GitManager.commits.ts";
 
 export interface HandoffDeps {
-  readonly gitCore: GitCore;
+  readonly gitCore: GitCoreShape;
   readonly path: Path.Path;
   readonly worktreesDir: string;
 }
@@ -651,10 +651,7 @@ The local stash entry was kept for recovery.`,
     let foregroundBranchAfterHandoff = currentLocalStatus.branch;
 
     if (sourceBranch && sourceBranch === targetAssociatedWorktreeBranch) {
-      const fallbackLocalBranch = yield* resolveForegroundFallbackBranch(
-        input.cwd,
-        targetAssociatedWorktreeBranch,
-      );
+      const fallbackLocalBranch = yield* resolveForegroundFallbackBranch(input.cwd, sourceBranch);
       if (!fallbackLocalBranch) {
         if (!sourceHeadRef) {
           yield* restoreSourceStash(input.cwd, sourceStash.stashRef);

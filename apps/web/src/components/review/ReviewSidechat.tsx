@@ -37,15 +37,13 @@ import {
 import {
   getChatTranscriptTextStyle,
   getChatTranscriptUserMessageTextStyle,
-  USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
-  USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
 } from "../chat/chatTypography";
 import { SimpleWorkEntryRow } from "../chat/workEntryRow";
 import { UserMessageBody } from "../chat/userMessageBody";
 import { useTheme } from "~/hooks/useTheme";
-import ChatMarkdown from "../ChatMarkdown";
 import { PanelStateMessage } from "../chat/PanelStateMessage";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
+import { AssistantMarkdownBody, UserMessageBubbleFrame } from "../chat/messagePrimitives";
 import { ComposerSendArrowIcon, Loader2Icon, PlusIcon } from "~/lib/icons";
 import { newMessageId, cn } from "~/lib/utils";
 import { providerSkillsQueryOptions } from "~/lib/providerDiscoveryReactQuery";
@@ -248,15 +246,12 @@ function deriveVisibleReviewMessages(messages: readonly ChatMessage[]): {
       hideNextReadyAssistant = true;
       continue;
     }
-    if (
-      hideNextReadyAssistant &&
-      message.role === "assistant" &&
-      message.text.trim().toLowerCase() === "ready"
-    ) {
+    if (hideNextReadyAssistant && message.role === "assistant") {
       hideNextReadyAssistant = false;
-      continue;
+      if (message.text.trim().toLowerCase() === "ready") {
+        continue;
+      }
     }
-    hideNextReadyAssistant = false;
     visibleMessages.push(
       message.role === "user" && message.text.includes("\nUser question:\n")
         ? { ...message, text: displayReviewUserQuestion(message.text) }
@@ -266,11 +261,25 @@ function deriveVisibleReviewMessages(messages: readonly ChatMessage[]): {
   return { messages: visibleMessages, hasHiddenBootstrapMessage };
 }
 
+type PendingAgentStatus = "starting" | "reading" | "thinking";
+
+function formatPendingAgentStatus(status: PendingAgentStatus): string {
+  switch (status) {
+    case "starting":
+      return "Starting review agent...";
+    case "reading":
+      return "Reading PR context...";
+    case "thinking":
+      return "Thinking...";
+  }
+}
+
 type ReviewSidechatTimelineProps = {
   entries: readonly CompactChatTimelineEntry[];
   workEntries: readonly WorkLogEntry[];
   isWorking: boolean;
   activeTurnInProgress: boolean;
+  pendingAgentStatus: PendingAgentStatus | null;
   markdownCwd: string | undefined;
 };
 
@@ -290,6 +299,7 @@ const ReviewSidechatTimeline = memo(function ReviewSidechatTimeline({
   workEntries,
   isWorking,
   activeTurnInProgress,
+  pendingAgentStatus,
   markdownCwd,
 }: ReviewSidechatTimelineProps) {
   const { resolvedTheme } = useTheme();
@@ -303,7 +313,7 @@ const ReviewSidechatTimeline = memo(function ReviewSidechatTimeline({
       return;
     }
     element.scrollTop = element.scrollHeight;
-  }, [activeTurnInProgress, isWorking, lastEntryId, lastWorkEntryId]);
+  }, [activeTurnInProgress, isWorking, lastEntryId, lastWorkEntryId, pendingAgentStatus]);
 
   if (entries.length === 0 && !isWorking) {
     return (
@@ -339,27 +349,21 @@ const ReviewSidechatTimeline = memo(function ReviewSidechatTimeline({
         if (message.role === "user") {
           return (
             <div key={message.id} className="flex w-full justify-end">
-              <div
-                className={cn(
-                  "max-w-[88%] min-w-0 bg-[var(--app-user-message-background)]",
-                  USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
-                  USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
-                )}
-              >
+              <UserMessageBubbleFrame className="max-w-[88%]">
                 <UserMessageBody
                   text={message.text}
                   terminalContexts={[]}
                   chatTypographyStyle={reviewSidechatUserMessageTextStyle}
                   resolvedTheme={resolvedTheme}
                 />
-              </div>
+              </UserMessageBubbleFrame>
             </div>
           );
         }
 
         return (
           <div key={message.id} className="min-w-0">
-            <ChatMarkdown
+            <AssistantMarkdownBody
               text={message.text}
               cwd={markdownCwd}
               isStreaming={message.streaming}
@@ -369,16 +373,13 @@ const ReviewSidechatTimeline = memo(function ReviewSidechatTimeline({
           </div>
         );
       })}
-      {isWorking ? (
+      {pendingAgentStatus !== null ? (
         <div
           className="flex items-center gap-2 px-1 py-1 text-muted-foreground"
           style={reviewSidechatAssistantTextStyle}
         >
-          <Loader2Icon
-            className={cn("size-3.5", activeTurnInProgress && "animate-spin")}
-            aria-hidden="true"
-          />
-          <span>Working</span>
+          <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+          <span>{formatPendingAgentStatus(pendingAgentStatus)}</span>
         </div>
       ) : null}
     </div>
@@ -571,11 +572,6 @@ export function ReviewSidechat(props: {
     visibleMessages.some(
       (message) => message.role === "assistant" && message.createdAt >= pendingReviewTurn.startedAt,
     );
-  const isPendingReviewTurn =
-    pendingReviewTurn !== null &&
-    !hasAssistantResponseAfterPendingTurn &&
-    (!activeTurnBelongsToPendingReviewTurn ||
-      (activeTurnState !== "error" && activeTurnState !== "interrupted"));
   const providerSkillsQuery = useQuery(
     providerSkillsQueryOptions({
       provider: selectedModelSelection.provider,
@@ -603,20 +599,36 @@ export function ReviewSidechat(props: {
     return [...visibleMessages, ...optimisticMessages];
   }, [optimisticMessage, visibleMessages]);
   const activeTurnActivities = useMemo(() => {
-    if (!activeTurnId) {
-      return activeActivities;
+    const scopedActivities = activeTurnId
+      ? activeActivities.filter(
+          (activity) =>
+            activity.turnId === activeTurnId ||
+            (activity.kind === "reasoning.delta" && activity.turnId === null) ||
+            (activity.kind === "context-compaction" && activity.turnId === null),
+        )
+      : activeActivities;
+    if (pendingReviewTurn === null || activeTurnBelongsToPendingReviewTurn) {
+      return scopedActivities;
     }
-    return activeActivities.filter(
+    return scopedActivities.filter(
       (activity) =>
-        activity.turnId === activeTurnId ||
-        (activity.kind === "reasoning.delta" && activity.turnId === null) ||
-        (activity.kind === "context-compaction" && activity.turnId === null),
+        activity.createdAt >= pendingReviewTurn.startedAt || activity.kind === "context-compaction",
     );
-  }, [activeActivities, activeTurnId]);
+  }, [activeActivities, activeTurnBelongsToPendingReviewTurn, activeTurnId, pendingReviewTurn]);
   const reviewWorkLogEntries = useMemo(
     () => deriveWorkLogEntries(activeTurnActivities, activeTurnId),
     [activeTurnActivities, activeTurnId],
   );
+  const hasRuntimeOutputAfterPendingTurn =
+    pendingReviewTurn !== null &&
+    reviewWorkLogEntries.some((entry) => entry.createdAt >= pendingReviewTurn.startedAt);
+  const hasVisibleProgressAfterPendingTurn =
+    hasAssistantResponseAfterPendingTurn || hasRuntimeOutputAfterPendingTurn;
+  const isPendingReviewTurn =
+    pendingReviewTurn !== null &&
+    !hasVisibleProgressAfterPendingTurn &&
+    (!activeTurnBelongsToPendingReviewTurn ||
+      (activeTurnState !== "error" && activeTurnState !== "interrupted"));
   const timelineEntries = useMemo(
     () => deriveCompactChatTimelineEntries(displayMessages, reviewWorkLogEntries),
     [displayMessages, reviewWorkLogEntries],
@@ -631,6 +643,43 @@ export function ReviewSidechat(props: {
     isStartingNewThread ||
     (activeTurnState === "running" && !hasHiddenBootstrapTurnInProgress) ||
     isPendingReviewTurn;
+  const pendingAgentStatus = useMemo((): PendingAgentStatus | null => {
+    if (!isReviewChatWorking || hasAssistantResponseAfterPendingTurn) {
+      return null;
+    }
+    const hasReasoningActivity = activeTurnActivities.some(
+      (activity) =>
+        activity.kind === "reasoning.delta" &&
+        (pendingReviewTurn === null || activity.createdAt >= pendingReviewTurn.startedAt),
+    );
+    if (hasReasoningActivity) {
+      return null;
+    }
+    if (hasRuntimeOutputAfterPendingTurn || reviewWorkLogEntries.length > 0) {
+      return "reading";
+    }
+    if (isStartingNewThread || isStartingSidechat) {
+      return "starting";
+    }
+    if (pendingReviewTurn !== null) {
+      return "starting";
+    }
+    if (activeTurnState === "running" && !hasHiddenBootstrapTurnInProgress) {
+      return "thinking";
+    }
+    return null;
+  }, [
+    activeTurnActivities,
+    activeTurnState,
+    hasAssistantResponseAfterPendingTurn,
+    hasHiddenBootstrapTurnInProgress,
+    hasRuntimeOutputAfterPendingTurn,
+    isReviewChatWorking,
+    isStartingNewThread,
+    isStartingSidechat,
+    pendingReviewTurn,
+    reviewWorkLogEntries.length,
+  ]);
 
   const modelOptionsByProvider = useMemo(
     () => buildReviewModelOptionsByProvider(selectedModelSelection),
@@ -691,7 +740,7 @@ export function ReviewSidechat(props: {
       return;
     }
     setSelectedModelSelection(activeThread.modelSelection);
-  }, [activeThread?.id, activeThread?.modelSelection]);
+  }, [activeThread?.modelSelection, activeThreadId]);
 
   useEffect(() => {
     if (!optimisticMessage) {
@@ -716,14 +765,14 @@ export function ReviewSidechat(props: {
         (activeTurnState === "completed" ||
           activeTurnState === "error" ||
           activeTurnState === "interrupted")) ||
-      hasAssistantResponseAfterPendingTurn
+      hasVisibleProgressAfterPendingTurn
     ) {
       setPendingReviewTurn(null);
     }
   }, [
     activeTurnBelongsToPendingReviewTurn,
     activeTurnState,
-    hasAssistantResponseAfterPendingTurn,
+    hasVisibleProgressAfterPendingTurn,
     pendingReviewTurn,
   ]);
 
@@ -731,7 +780,7 @@ export function ReviewSidechat(props: {
     if (
       !pendingReviewTurn ||
       activeTurnBelongsToPendingReviewTurn ||
-      hasAssistantResponseAfterPendingTurn
+      hasVisibleProgressAfterPendingTurn
     ) {
       return;
     }
@@ -751,11 +800,7 @@ export function ReviewSidechat(props: {
       });
     }, REVIEW_TURN_START_TIMEOUT_MS);
     return () => window.clearTimeout(timeout);
-  }, [
-    activeTurnBelongsToPendingReviewTurn,
-    hasAssistantResponseAfterPendingTurn,
-    pendingReviewTurn,
-  ]);
+  }, [activeTurnBelongsToPendingReviewTurn, hasVisibleProgressAfterPendingTurn, pendingReviewTurn]);
 
   const sendQuestion = useCallback(
     async (
@@ -883,6 +928,7 @@ export function ReviewSidechat(props: {
             activeTurnInProgress={
               activeTurnState === "running" && !hasHiddenBootstrapTurnInProgress
             }
+            pendingAgentStatus={pendingAgentStatus}
             markdownCwd={props.context.cwd ?? undefined}
           />
         ) : (

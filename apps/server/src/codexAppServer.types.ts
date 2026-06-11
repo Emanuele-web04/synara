@@ -6,6 +6,7 @@
 // Exports: see individual `export` declarations below.
 import type {
   ApprovalRequestId,
+  ProviderApprovalPolicy,
   ProviderEvent,
   ProviderItemId,
   ProviderListPluginsInput,
@@ -14,8 +15,10 @@ import type {
   ProviderRequestKind,
   ProviderSession,
   ProviderSessionStartInput,
+  ProviderSandboxMode,
   ProviderSkillReference,
   ProviderStartReviewInput,
+  ProviderThreadInjectTextItem,
   RuntimeMode,
   ProviderInteractionMode,
   ThreadId,
@@ -157,6 +160,11 @@ export interface CodexAppServerSendTurnInput {
   readonly interactionMode?: ProviderInteractionMode;
 }
 
+export interface CodexAppServerInjectThreadItemsInput {
+  readonly threadId: ThreadId;
+  readonly items: ReadonlyArray<ProviderThreadInjectTextItem>;
+}
+
 export type CodexAppServerReviewTarget = ProviderStartReviewInput["target"];
 
 export interface CodexAppServerStartSessionInput {
@@ -167,7 +175,11 @@ export interface CodexAppServerStartSessionInput {
   readonly serviceTier?: string;
   readonly resumeCursor?: unknown;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
+  readonly approvalPolicy?: ProviderApprovalPolicy;
+  readonly sandboxMode?: ProviderSandboxMode;
+  readonly reviewProfile?: "review-chat";
   readonly runtimeMode: RuntimeMode;
+  readonly effort?: string;
   /**
    * Per-session transport override for a sandbox-backed thread: starts
    * `codex app-server` inside the provisioned remote instance and returns its

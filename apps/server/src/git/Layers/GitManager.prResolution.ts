@@ -5,8 +5,8 @@
 
 import { Effect } from "effect";
 
-import type { GitCore } from "../Services/GitCore.ts";
-import type { GitHubCli } from "../Services/GitHubCli.ts";
+import type { GitCoreShape } from "../Services/GitCore.ts";
+import type { GitHubCliShape } from "../Services/GitHubCli.ts";
 import {
   OPEN_PR_LOOKUP_LIMIT,
   type BranchHeadContext,
@@ -29,8 +29,8 @@ import {
 } from "./GitManager.pullRequests.ts";
 
 export interface PrResolutionDeps {
-  readonly gitCore: GitCore;
-  readonly gitHubCli: GitHubCli;
+  readonly gitCore: GitCoreShape;
+  readonly gitHubCli: GitHubCliShape;
 }
 
 export interface PrResolution {

@@ -422,6 +422,18 @@ export const OrchestrationThreadActivity = Schema.Struct({
 });
 export type OrchestrationThreadActivity = typeof OrchestrationThreadActivity.Type;
 
+export const ProviderThreadInjectTextItem = Schema.Struct({
+  type: Schema.Literal("message"),
+  role: Schema.Literal("assistant"),
+  content: Schema.Array(
+    Schema.Struct({
+      type: Schema.Literal("output_text"),
+      text: Schema.String,
+    }),
+  ).check(Schema.isMinLength(1)),
+});
+export type ProviderThreadInjectTextItem = typeof ProviderThreadInjectTextItem.Type;
+
 const OrchestrationLatestTurnState = Schema.Literals([
   "running",
   "interrupted",
@@ -459,6 +471,9 @@ export const OrchestrationReviewChatTarget = Schema.Struct({
   ),
   reference: TrimmedNonEmptyString,
   number: PositiveInt,
+  headSha: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   url: Schema.optional(Schema.NullOr(Schema.String)).pipe(Schema.withDecodingDefault(() => null)),
 });
 export type OrchestrationReviewChatTarget = typeof OrchestrationReviewChatTarget.Type;

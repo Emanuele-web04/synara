@@ -154,7 +154,9 @@ export function settlePendingUserInputsAsEmptyAnswers(
 
 export function mergeCursorAcpSettings(
   base: CursorAcpRuntimeCursorSettings,
-  override: { readonly binaryPath?: string; readonly apiEndpoint?: string } | undefined,
+  override:
+    | { readonly binaryPath?: string | undefined; readonly apiEndpoint?: string | undefined }
+    | undefined,
 ): CursorAcpRuntimeCursorSettings {
   return {
     ...(base.binaryPath !== undefined ? { binaryPath: base.binaryPath } : {}),

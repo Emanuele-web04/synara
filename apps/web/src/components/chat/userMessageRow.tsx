@@ -31,6 +31,7 @@ import {
 } from "./chatTypography";
 import { deriveUserMessagePreviewState } from "./userMessagePreview";
 import { UserMessageBody, hasOnlyInlineSkillChips } from "./userMessageBody";
+import { UserMessageBubbleFrame } from "./messagePrimitives";
 
 type UserMessageTimelineRow = Extract<MessagesTimelineRow, { kind: "message" }>;
 type TimelineMessage = UserMessageTimelineRow["message"];
@@ -348,12 +349,9 @@ export function UserMessageRow({
             onSubmit={(text) => void submitUserMessageEdit(row.message.id, text)}
           />
         ) : showUserText ? (
-          <div
-            className={cn(
-              "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
-              USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
-              bubbleIsChipOnly ? "py-1 px-3.5" : USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
-            )}
+          <UserMessageBubbleFrame
+            className="w-max max-w-full self-end"
+            paddingClassName={bubbleIsChipOnly ? "py-1 px-3.5" : undefined}
           >
             <UserMessageBody
               text={userMessagePreview.text}
@@ -377,7 +375,7 @@ export function UserMessageRow({
                 {userMessageExpanded ? "Show less" : "Show more"}
               </button>
             )}
-          </div>
+          </UserMessageBubbleFrame>
         ) : null}
         {!isEditingThisMessage && (
           <div

@@ -5,7 +5,7 @@
 // Exports: ReactorHandlersDeps, ReactorHandlers, makeReactorHandlers.
 
 import { ThreadId, TurnId } from "@t3tools/contracts";
-import { Cache, Cause, Effect, Option } from "effect";
+import { Cache, Cause, Deferred, Effect, Option } from "effect";
 import { resolveTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
 
 import { ExecutionRuntimeService } from "../../executionRuntime/Services/ExecutionRuntimeService.ts";
@@ -49,6 +49,7 @@ export function makeReactorHandlers(deps: ReactorHandlersDeps) {
     threadProviderOptions,
     threadModelSelections,
     recentlyEnsuredSessionThreads,
+    inFlightSessionEnsures,
     queuedTurnStartsByThread,
     editResendTurnStartKeys,
     drainingQueuedTurns,
@@ -241,11 +242,24 @@ export function makeReactorHandlers(deps: ReactorHandlersDeps) {
   const processSessionEnsureRequested = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.session-ensure-requested" }>,
   ) {
+    const existingEnsure = inFlightSessionEnsures.get(event.payload.threadId);
+    if (existingEnsure !== undefined) {
+      yield* Deferred.await(existingEnsure);
+      return;
+    }
+
+    const deferred = yield* Deferred.make<void>();
+    inFlightSessionEnsures.set(event.payload.threadId, deferred);
+
     const thread = yield* resolveThread(event.payload.threadId);
     if (!thread) {
+      yield* Deferred.succeed(deferred, undefined);
+      inFlightSessionEnsures.delete(event.payload.threadId);
       return;
     }
     if (thread.session?.status === "running" && thread.session.activeTurnId !== null) {
+      yield* Deferred.succeed(deferred, undefined);
+      inFlightSessionEnsures.delete(event.payload.threadId);
       return;
     }
 
@@ -283,7 +297,68 @@ export function makeReactorHandlers(deps: ReactorHandlersDeps) {
         }),
       ),
     );
-    yield* ensureSession;
+    yield* ensureSession.pipe(
+      Effect.ensuring(
+        Deferred.succeed(deferred, undefined).pipe(
+          Effect.flatMap(() =>
+            Effect.sync(() => inFlightSessionEnsures.delete(event.payload.threadId)),
+          ),
+          Effect.ignore,
+        ),
+      ),
+    );
+    if (event.payload.modelSelection !== undefined) {
+      threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+    }
+    if (event.payload.providerOptions !== undefined) {
+      threadProviderOptions.set(event.payload.threadId, event.payload.providerOptions);
+    }
+  });
+
+  const processContextInjectRequested = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.context-inject-requested" }>,
+  ) {
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread) {
+      return;
+    }
+    if (thread.session?.status === "running" && thread.session.activeTurnId !== null) {
+      return yield* appendProviderFailureActivity({
+        threadId: event.payload.threadId,
+        kind: "provider.context.inject.failed",
+        summary: "Review context injection skipped",
+        detail: "Cannot inject review context while a provider turn is already running.",
+        turnId: thread.session.activeTurnId,
+        createdAt: event.payload.createdAt,
+      });
+    }
+    if (!providerService.injectThreadItems) {
+      return yield* appendProviderFailureActivity({
+        threadId: event.payload.threadId,
+        kind: "provider.context.inject.failed",
+        summary: "Review context injection failed",
+        detail: "The active provider does not support thread context injection.",
+        turnId: null,
+        createdAt: event.payload.createdAt,
+      });
+    }
+
+    const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
+    yield* ensureSessionForThread(event.payload.threadId, event.payload.createdAt, {
+      ...(event.payload.modelSelection !== undefined
+        ? { modelSelection: event.payload.modelSelection }
+        : {}),
+      ...(event.payload.providerOptions !== undefined
+        ? { providerOptions: event.payload.providerOptions }
+        : cachedProviderOptions !== undefined
+          ? { providerOptions: cachedProviderOptions }
+          : {}),
+      runtimeMode: event.payload.runtimeMode,
+    });
+    yield* providerService.injectThreadItems({
+      threadId: event.payload.threadId,
+      items: event.payload.items,
+    });
     if (event.payload.modelSelection !== undefined) {
       threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
     }
@@ -839,6 +914,29 @@ export function makeReactorHandlers(deps: ReactorHandlersDeps) {
           return;
         case "thread.session-ensure-requested":
           yield* processSessionEnsureRequested(event);
+          return;
+        case "thread.context-inject-requested":
+          yield* processContextInjectRequested(event).pipe(
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                const detail = Cause.pretty(cause);
+                yield* appendProviderFailureActivity({
+                  threadId: event.payload.threadId,
+                  kind: "provider.context.inject.failed",
+                  summary: "Review context injection failed",
+                  detail,
+                  turnId: null,
+                  createdAt: event.payload.createdAt,
+                });
+                yield* setThreadSessionError({
+                  threadId: event.payload.threadId,
+                  runtimeMode: event.payload.runtimeMode,
+                  detail,
+                  createdAt: event.payload.createdAt,
+                });
+              }),
+            ),
+          );
           return;
         case "thread.runtime-action-requested":
           yield* processRuntimeActionRequested(event);

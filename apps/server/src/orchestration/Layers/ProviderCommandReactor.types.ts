@@ -21,6 +21,7 @@ export type ProviderIntentEvent = Extract<
       | "thread.message-edit-resend-requested"
       | "thread.session-stop-requested"
       | "thread.session-ensure-requested"
+      | "thread.context-inject-requested"
       | "thread.runtime-action-requested";
   }
 >;

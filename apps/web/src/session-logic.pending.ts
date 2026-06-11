@@ -122,10 +122,8 @@ function parseUserInputQuestions(
         header: question.header,
         question: question.question,
         options,
+        ...(question.multiSelect === true ? { multiSelect: true } : {}),
       };
-      if (question.multiSelect === true) {
-        parsedQuestion.multiSelect = true;
-      }
       return parsedQuestion;
     })
     .filter((question): question is UserInputQuestion => question !== null);

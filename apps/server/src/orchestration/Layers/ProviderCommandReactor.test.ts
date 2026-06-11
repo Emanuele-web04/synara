@@ -121,7 +121,7 @@ describe("ProviderCommandReactor", () => {
       provider: "codex",
       model: "gpt-5-codex",
     };
-    const startSession = vi.fn((_: unknown, input: unknown) => {
+    const startSession = vi.fn<ProviderServiceShape["startSession"]>((_: ThreadId, input) => {
       const sessionIndex = nextSessionIndex++;
       const sessionModelSelection =
         typeof input === "object" && input !== null && "modelSelection" in input
@@ -170,6 +170,9 @@ describe("ProviderCommandReactor", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
         turnId: asTurnId("turn-steer-1"),
       }),
+    );
+    const injectThreadItems = vi.fn<NonNullable<ProviderServiceShape["injectThreadItems"]>>(
+      () => Effect.void,
     );
     const forkThread = vi.fn<NonNullable<ProviderServiceShape["forkThread"]>>(() =>
       Effect.succeed(null),
@@ -279,6 +282,7 @@ describe("ProviderCommandReactor", () => {
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       steerTurn: steerTurn as ProviderServiceShape["steerTurn"],
       startReview: unsupported as ProviderServiceShape["startReview"],
+      injectThreadItems,
       forkThread,
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
@@ -384,6 +388,7 @@ describe("ProviderCommandReactor", () => {
       startSession,
       sendTurn,
       steerTurn,
+      injectThreadItems,
       forkThread,
       interruptTurn,
       respondToRequest,
@@ -1334,7 +1339,87 @@ describe("ProviderCommandReactor", () => {
         provider: "codex",
         model: "gpt-5-codex",
       },
+      approvalPolicy: "never",
+      sandboxMode: "read-only",
       runtimeMode: "approval-required",
+    });
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it("injects review chat context into a warmed provider session without sending a turn", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const reviewThreadId = ThreadId.makeUnsafe("thread-review-chat-inject");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-review-chat-inject-thread-create"),
+        threadId: reviewThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Review #42",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: "main",
+        worktreePath: null,
+        reviewChatTarget: {
+          projectId: asProjectId("project-1"),
+          cwd: "/tmp/provider-project",
+          repositoryId: "owner/repo",
+          reference: "owner/repo#42",
+          number: 42,
+          url: "https://github.com/owner/repo/pull/42",
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.context.inject",
+        commandId: CommandId.makeUnsafe("cmd-review-chat-context-inject"),
+        threadId: reviewThreadId,
+        items: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [
+              {
+                type: "output_text",
+                text: "Loaded PR #42 review context.",
+              },
+            ],
+          },
+        ],
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.injectThreadItems.mock.calls.length === 1);
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.injectThreadItems.mock.calls[0]?.[0]).toEqual({
+      threadId: reviewThreadId,
+      items: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: "Loaded PR #42 review context.",
+            },
+          ],
+        },
+      ],
     });
     expect(harness.sendTurn).not.toHaveBeenCalled();
   });
@@ -1430,25 +1515,12 @@ describe("ProviderCommandReactor", () => {
           return;
       }
     };
-    harness.startSession.mockImplementation((_: unknown, input: unknown) => {
+    const defaultStartSession = harness.startSession.getMockImplementation();
+    harness.startSession.mockImplementation((threadId, input, serverOptions) => {
       charge(200);
-      const threadId =
-        typeof input === "object" &&
-        input !== null &&
-        "threadId" in input &&
-        typeof input.threadId === "string"
-          ? ThreadId.makeUnsafe(input.threadId)
-          : ThreadId.makeUnsafe("thread-cost");
-      return Effect.succeed({
-        provider: "codex",
-        status: "ready",
-        runtimeMode: "approval-required",
-        model: "gpt-5-codex",
-        threadId,
-        resumeCursor: { opaque: "resume-cost" },
-        createdAt: now,
-        updatedAt: now,
-      } satisfies ProviderSession);
+      return defaultStartSession
+        ? defaultStartSession(threadId, input, serverOptions)
+        : Effect.die(new Error("default startSession implementation missing"));
     });
     harness.sendTurn.mockImplementation((_: unknown) => {
       charge(1);
@@ -3881,5 +3953,500 @@ describe("ProviderCommandReactor", () => {
     );
     expect(thread?.session?.status).toBe("interrupted");
     expect(thread?.session?.activeTurnId).toBe("turn-child-stop");
+  });
+
+  it("benchmarks review chat head-of-line blocking: visible turn waits behind slow context injection", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const reviewThreadId = ThreadId.makeUnsafe("thread-bench-review-hl");
+
+    // Create a review chat thread.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-bench-review-create"),
+        threadId: reviewThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Review #bench",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: "main",
+        worktreePath: null,
+        reviewChatTarget: {
+          projectId: asProjectId("project-1"),
+          cwd: "/tmp/provider-project",
+          repositoryId: "owner/repo",
+          reference: "owner/repo#bench",
+          number: 999,
+          url: "https://github.com/owner/repo/pull/999",
+        },
+        createdAt: now,
+      }),
+    );
+
+    // Prewarm: session ensure.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.ensure",
+        commandId: CommandId.makeUnsafe("cmd-bench-session-ensure"),
+        threadId: reviewThreadId,
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+
+    const injectionDelayMs = 500;
+    let injectionResolvedAt = 0;
+    let turnStartEnqueuedAt = 0;
+    let turnStartExecutedAt = 0;
+
+    // Make injectThreadItems slow (simulates real Codex app-server latency).
+    harness.injectThreadItems.mockImplementationOnce(() =>
+      Effect.gen(function* () {
+        yield* Effect.sleep(injectionDelayMs);
+        injectionResolvedAt = performance.now();
+      }),
+    );
+
+    // Record when sendTurn actually executes (after the serial worker unblocks).
+    harness.sendTurn.mockImplementationOnce(() =>
+      Effect.sync(() => {
+        turnStartExecutedAt = performance.now();
+        return { threadId: reviewThreadId, turnId: asTurnId("turn-bench") };
+      }),
+    );
+
+    // Dispatch context injection (this occupies the serial worker).
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.context.inject",
+        commandId: CommandId.makeUnsafe("cmd-bench-context-inject"),
+        threadId: reviewThreadId,
+        items: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Loaded PR #999 review context." }],
+          },
+        ],
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    // Immediately dispatch the visible user turn.
+    turnStartEnqueuedAt = performance.now();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-bench-turn-start"),
+        threadId: reviewThreadId,
+        message: {
+          messageId: asMessageId("user-bench-question"),
+          role: "user",
+          text: "What should I review first?",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    // Wait for the turn to actually execute.
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1, 5000);
+
+    const blockingTimeMs = turnStartExecutedAt - turnStartEnqueuedAt;
+
+    // The visible turn should be delayed by roughly the injection duration
+    // because the serial DrainableWorker processes one event at a time.
+    expect(injectionResolvedAt).toBeGreaterThan(0);
+    expect(turnStartExecutedAt).toBeGreaterThan(0);
+    expect(blockingTimeMs).toBeGreaterThanOrEqual(injectionDelayMs * 0.8);
+
+    // Log the benchmark result for visibility.
+    console.log(
+      `[benchmark] review chat head-of-line blocking: ` +
+        `injection delay=${injectionDelayMs}ms, ` +
+        `visible turn blocked for=${Math.round(blockingTimeMs)}ms ` +
+        `(overhead=${Math.round(blockingTimeMs - injectionDelayMs)}ms)`,
+    );
+  });
+
+  it("benchmarks review chat without context injection: visible turn latency with warmed session", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const reviewThreadId = ThreadId.makeUnsafe("thread-bench-no-inject");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-bench-no-inject-create"),
+        threadId: reviewThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Review #no-inject",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: "main",
+        worktreePath: null,
+        reviewChatTarget: {
+          projectId: asProjectId("project-1"),
+          cwd: "/tmp/provider-project",
+          repositoryId: "owner/repo",
+          reference: "owner/repo#no-inject",
+          number: 998,
+          url: "https://github.com/owner/repo/pull/998",
+        },
+        createdAt: now,
+      }),
+    );
+
+    // Prewarm: session ensure only (no context injection).
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.ensure",
+        commandId: CommandId.makeUnsafe("cmd-bench-no-inject-session-ensure"),
+        threadId: reviewThreadId,
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+
+    // Record when sendTurn actually executes.
+    let turnStartExecutedAt = 0;
+    harness.sendTurn.mockImplementationOnce(() =>
+      Effect.sync(() => {
+        turnStartExecutedAt = performance.now();
+        return { threadId: reviewThreadId, turnId: asTurnId("turn-bench-no-inject") };
+      }),
+    );
+
+    // Dispatch visible user turn directly (no injection ahead of it).
+    const turnStartEnqueuedAt = performance.now();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-bench-no-inject-turn-start"),
+        threadId: reviewThreadId,
+        message: {
+          messageId: asMessageId("user-bench-no-inject-question"),
+          role: "user",
+          text: "What should I review first?",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1, 5000);
+
+    const turnLatencyMs = turnStartExecutedAt - turnStartEnqueuedAt;
+
+    // With a warmed session and no blocking injection, this should be very fast.
+    expect(turnStartExecutedAt).toBeGreaterThan(0);
+    expect(turnLatencyMs).toBeLessThan(200);
+
+    console.log(
+      `[benchmark] review chat without injection: ` +
+        `visible turn latency=${Math.round(turnLatencyMs)}ms`,
+    );
+  });
+
+  it("sends a visible review chat turn immediately after session ensure without context injection", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const reviewThreadId = ThreadId.makeUnsafe("thread-review-no-inject-turn");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-review-no-inject-create"),
+        threadId: reviewThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Review #no-inject-turn",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: "main",
+        worktreePath: null,
+        reviewChatTarget: {
+          projectId: asProjectId("project-1"),
+          cwd: "/tmp/provider-project",
+          repositoryId: "owner/repo",
+          reference: "owner/repo#no-inject-turn",
+          number: 997,
+          url: "https://github.com/owner/repo/pull/997",
+        },
+        createdAt: now,
+      }),
+    );
+
+    // Prewarm: session ensure only (no context injection, matching the new client flow).
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.ensure",
+        commandId: CommandId.makeUnsafe("cmd-review-no-inject-session-ensure"),
+        threadId: reviewThreadId,
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.injectThreadItems).not.toHaveBeenCalled();
+
+    // Visible turn starts immediately without waiting for injection.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-review-no-inject-turn-start"),
+        threadId: reviewThreadId,
+        message: {
+          messageId: asMessageId("user-review-no-inject-question"),
+          role: "user",
+          text: "What should I review first?",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: reviewThreadId,
+      input: "What should I review first?",
+    });
+    expect(harness.injectThreadItems).not.toHaveBeenCalled();
+  });
+
+  it("lets a visible review chat turn join an in-flight prewarm session ensure", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const reviewThreadId = ThreadId.makeUnsafe("thread-review-join-prewarm");
+    let releaseSessionStart: () => void = () => {
+      throw new Error("session start was not requested");
+    };
+    const defaultStartSession = harness.startSession.getMockImplementation();
+    harness.startSession.mockImplementationOnce((threadId, input, serverOptions) =>
+      Effect.promise(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseSessionStart = () => {
+              resolve();
+            };
+          }),
+      ).pipe(
+        Effect.flatMap(() =>
+          defaultStartSession
+            ? defaultStartSession(threadId, input, serverOptions)
+            : Effect.die(new Error("default startSession implementation missing")),
+        ),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-review-join-prewarm-create"),
+        threadId: reviewThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Review #join-prewarm",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: "main",
+        worktreePath: null,
+        reviewChatTarget: {
+          projectId: asProjectId("project-1"),
+          cwd: "/tmp/provider-project",
+          repositoryId: "owner/repo",
+          reference: "owner/repo#join-prewarm",
+          number: 996,
+          url: "https://github.com/owner/repo/pull/996",
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.ensure",
+        commandId: CommandId.makeUnsafe("cmd-review-join-prewarm-session-ensure"),
+        threadId: reviewThreadId,
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-review-join-prewarm-turn-start"),
+        threadId: reviewThreadId,
+        message: {
+          messageId: asMessageId("user-review-join-prewarm-question"),
+          role: "user",
+          text: "What should I review first?",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    releaseSessionStart();
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: reviewThreadId,
+      input: "What should I review first?",
+    });
+  });
+
+  it("uses a cached resume cursor when a warmed review chat runtime session has disappeared", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const reviewThreadId = ThreadId.makeUnsafe("thread-review-cached-resume");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-review-cached-resume-create"),
+        threadId: reviewThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Review #cached-resume",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: "main",
+        worktreePath: null,
+        reviewChatTarget: {
+          projectId: asProjectId("project-1"),
+          cwd: "/tmp/provider-project",
+          repositoryId: "owner/repo",
+          reference: "owner/repo#cached-resume",
+          number: 995,
+          url: "https://github.com/owner/repo/pull/995",
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.ensure",
+        commandId: CommandId.makeUnsafe("cmd-review-cached-resume-session-ensure"),
+        threadId: reviewThreadId,
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).not.toHaveProperty("resumeCursor");
+
+    await Effect.runPromise(harness.stopSession({ threadId: reviewThreadId }));
+    harness.sendTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-review-cached-resume-turn-start"),
+        threadId: reviewThreadId,
+        message: {
+          messageId: asMessageId("user-review-cached-resume-question"),
+          role: "user",
+          text: "What should I review first?",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      resumeCursor: { opaque: "resume-1" },
+    });
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: reviewThreadId,
+      input: "What should I review first?",
+    });
+  });
+
+  it("updates the cached resume cursor from provider turn start results", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.sendTurn.mockImplementationOnce((input) =>
+      Effect.succeed({
+        threadId: input.threadId,
+        turnId: asTurnId("turn-updated-resume"),
+        resumeCursor: { opaque: "resume-from-turn" },
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-updated-resume-first-turn"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("message-updated-resume-first-turn"),
+          role: "user",
+          text: "remember the new resume cursor",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(harness.stopSession({ threadId: ThreadId.makeUnsafe("thread-1") }));
+    harness.sendTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-updated-resume-second-turn"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("message-updated-resume-second-turn"),
+          role: "user",
+          text: "use the new resume cursor",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      resumeCursor: { opaque: "resume-from-turn" },
+    });
   });
 });

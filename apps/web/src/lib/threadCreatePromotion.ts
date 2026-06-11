@@ -10,7 +10,9 @@ import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 
 type ThreadCreateCommand = Extract<ClientOrchestrationCommand, { type: "thread.create" }>;
-type ThreadCreatePromotionApi = Pick<NativeApi, "orchestration">;
+type ThreadCreatePromotionApi = {
+  readonly orchestration: Pick<NativeApi["orchestration"], "dispatchCommand" | "getShellSnapshot">;
+};
 
 type PromoteThreadCreateResult = "created" | "exists" | "unavailable";
 

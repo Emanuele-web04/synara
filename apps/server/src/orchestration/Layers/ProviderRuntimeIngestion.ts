@@ -8,7 +8,7 @@ import {
   type OrchestrationThread,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
-import { Cause, Effect, Layer, Option, Ref, Stream } from "effect";
+import { Cause, Effect, Layer, Option, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import {
   buildSubagentIdentityDirectory,
@@ -73,9 +73,8 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
 
-  const assistantDeliveryModeRef = yield* Ref.make<AssistantDeliveryMode>(
-    DEFAULT_ASSISTANT_DELIVERY_MODE,
-  );
+  const pendingAssistantDeliveryModesByThread = new Map<string, AssistantDeliveryMode>();
+  const assistantDeliveryModesByTurn = new Map<string, AssistantDeliveryMode>();
 
   const state = yield* makeIngestionState();
   const {
@@ -97,6 +96,23 @@ const make = Effect.gen(function* () {
         .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
     );
   });
+  const deliveryModeKey = (threadId: ThreadId, turnId: TurnId | string) => `${threadId}:${turnId}`;
+  const resolveAssistantDeliveryMode = (threadId: ThreadId, turnId: TurnId | string | undefined) =>
+    turnId !== undefined
+      ? (assistantDeliveryModesByTurn.get(deliveryModeKey(threadId, turnId)) ??
+        pendingAssistantDeliveryModesByThread.get(String(threadId)) ??
+        DEFAULT_ASSISTANT_DELIVERY_MODE)
+      : (pendingAssistantDeliveryModesByThread.get(String(threadId)) ??
+        DEFAULT_ASSISTANT_DELIVERY_MODE);
+  const clearAssistantDeliveryModesForThread = (threadId: ThreadId) => {
+    pendingAssistantDeliveryModesByThread.delete(String(threadId));
+    const prefix = `${threadId}:`;
+    for (const key of assistantDeliveryModesByTurn.keys()) {
+      if (key.startsWith(prefix)) {
+        assistantDeliveryModesByTurn.delete(key);
+      }
+    }
+  };
 
   const getProjectShell = Effect.fnUntraced(function* (
     thread: Pick<OrchestrationThread, "projectId">,
@@ -304,6 +320,13 @@ const make = Effect.gen(function* () {
       const activeTurnId = thread.session?.activeTurnId ?? null;
       const eventTurnId = resolveTerminalTurnId(event, activeTurnId);
       const isTerminalTurnEvent = event.type === "turn.completed" || event.type === "turn.aborted";
+      if (event.type === "turn.started" && eventTurnId !== undefined) {
+        const pendingMode =
+          pendingAssistantDeliveryModesByThread.get(String(thread.id)) ??
+          DEFAULT_ASSISTANT_DELIVERY_MODE;
+        assistantDeliveryModesByTurn.set(deliveryModeKey(thread.id, eventTurnId), pendingMode);
+        pendingAssistantDeliveryModesByThread.delete(String(thread.id));
+      }
 
       const conflictsWithActiveTurn =
         activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
@@ -457,7 +480,7 @@ const make = Effect.gen(function* () {
           yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
         }
 
-        const assistantDeliveryMode = yield* Ref.get(assistantDeliveryModeRef);
+        const assistantDeliveryMode = resolveAssistantDeliveryMode(thread.id, turnId);
         if (assistantDeliveryMode === "buffered") {
           const spillChunk = yield* appendBufferedAssistantText(assistantMessageId, assistantDelta);
           if (spillChunk.length > 0) {
@@ -584,6 +607,7 @@ const make = Effect.gen(function* () {
             { concurrency: 1 },
           ).pipe(Effect.asVoid);
           yield* clearAssistantMessageIdsForTurn(thread.id, finalizedTurnId);
+          assistantDeliveryModesByTurn.delete(deliveryModeKey(thread.id, finalizedTurnId));
 
           yield* finalizeBufferedProposedPlan({
             event,
@@ -609,6 +633,7 @@ const make = Effect.gen(function* () {
           });
         }
         yield* clearTurnStateForSession(thread.id);
+        clearAssistantDeliveryModesForThread(thread.id);
       }
 
       if (event.type === "runtime.error") {
@@ -624,6 +649,7 @@ const make = Effect.gen(function* () {
             commandTag: "assistant-complete-runtime-error",
             finalDeltaCommandTag: "assistant-delta-runtime-error",
           });
+          assistantDeliveryModesByTurn.delete(deliveryModeKey(thread.id, erroredTurnId));
         }
 
         const shouldApplyRuntimeError = !STRICT_PROVIDER_LIFECYCLE_GUARD
@@ -710,7 +736,10 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const nextAssistantDeliveryMode =
         event.payload.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE;
-      yield* Ref.set(assistantDeliveryModeRef, nextAssistantDeliveryMode);
+      pendingAssistantDeliveryModesByThread.set(
+        String(event.payload.threadId),
+        nextAssistantDeliveryMode,
+      );
       if (nextAssistantDeliveryMode !== "streaming") {
         return;
       }
@@ -719,14 +748,18 @@ const make = Effect.gen(function* () {
         yield* projectionSnapshotQuery.getThreadShellById(event.payload.threadId),
       );
       const activeTurnId = thread?.session?.activeTurnId ?? undefined;
-      if (!activeTurnId) {
+      if (!thread || !activeTurnId) {
         return;
       }
+      assistantDeliveryModesByTurn.set(
+        deliveryModeKey(event.payload.threadId, activeTurnId),
+        nextAssistantDeliveryMode,
+      );
 
       const flushEvent: ProviderRuntimeEvent = {
         type: "turn.started",
         eventId: event.eventId,
-        provider: thread?.session?.providerName === "claudeAgent" ? "claudeAgent" : "codex",
+        provider: thread.modelSelection.provider,
         createdAt: event.payload.createdAt,
         threadId: event.payload.threadId,
         turnId: activeTurnId,

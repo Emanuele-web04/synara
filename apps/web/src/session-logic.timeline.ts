@@ -41,26 +41,35 @@ export type CompactChatTimelineEntry =
     };
 
 export function deriveTimelineEntries(
-  messages: ChatMessage[],
-  proposedPlans: ProposedPlan[],
-  workEntries: WorkLogEntry[],
+  messages: readonly ChatMessage[],
+  proposedPlans: readonly ProposedPlan[],
+  workEntries: readonly WorkLogEntry[],
 ): TimelineEntry[] {
-  const proposedPlanTurnIds = new Set(
-    proposedPlans.flatMap((proposedPlan) => (proposedPlan.turnId ? [proposedPlan.turnId] : [])),
-  );
+  let proposedPlanTurnIds: Set<NonNullable<ProposedPlan["turnId"]>> | null = null;
+  for (const proposedPlan of proposedPlans) {
+    if (proposedPlan.turnId) {
+      proposedPlanTurnIds ??= new Set();
+      proposedPlanTurnIds.add(proposedPlan.turnId);
+    }
+  }
+  const hasProposedPlanForTurn = (turnId: ChatMessage["turnId"] | undefined): boolean =>
+    turnId !== null && turnId !== undefined && proposedPlanTurnIds?.has(turnId) === true;
   const messageRows: TimelineEntry[] = [];
   let messageRowsSorted = true;
   let previousMessageCreatedAt: string | null = null;
   for (const message of messages) {
+    const strippedMessageText =
+      message.role === "assistant" && hasProposedPlanForTurn(message.turnId)
+        ? stripProposedPlanBlocksFromText(message.text)
+        : null;
     const displayMessage =
-      message.role === "assistant" && message.turnId && proposedPlanTurnIds.has(message.turnId)
-        ? { ...message, text: stripProposedPlanBlocksFromText(message.text) }
+      strippedMessageText !== null && strippedMessageText !== message.text
+        ? { ...message, text: strippedMessageText }
         : message;
     if (
       displayMessage.role === "assistant" &&
       displayMessage.text.length === 0 &&
-      displayMessage.turnId &&
-      proposedPlanTurnIds.has(displayMessage.turnId)
+      hasProposedPlanForTurn(displayMessage.turnId)
     ) {
       continue;
     }
@@ -176,7 +185,13 @@ function mergeCompactTimelineRows(
   while (messageIndex < messageRows.length || workIndex < workRows.length) {
     const messageRow = messageRows[messageIndex];
     const workRow = workRows[workIndex];
-    if (!messageRow || (workRow && workRow.createdAt < messageRow.createdAt)) {
+    if (!messageRow) {
+      if (!workRow) {
+        break;
+      }
+      result.push(workRow);
+      workIndex += 1;
+    } else if (workRow && workRow.createdAt < messageRow.createdAt) {
       result.push(workRow);
       workIndex += 1;
     } else {

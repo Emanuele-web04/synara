@@ -7,7 +7,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   BotIcon,
@@ -38,6 +38,17 @@ const REVIEW_AGENT_SIDEBAR_WIDTH_BY_MODE = {
 
 function agentSidebarWidthStorageKey(mode: "conversation" | "files"): string {
   return `review:agent-sidebar-width:${mode}`;
+}
+
+function sidebarMidpointMaxWidth(
+  containerWidth: number | null,
+  fallbackMax: number,
+  min: number,
+): number {
+  if (containerWidth === null || containerWidth <= 0) {
+    return fallbackMax;
+  }
+  return Math.max(min, Math.floor(containerWidth / 2));
 }
 
 function defaultSidebarTab(mode: "conversation" | "files"): ReviewSidebarTab {
@@ -569,11 +580,47 @@ export function ReviewPrSidebar(props: {
   const mode = props.mode ?? "conversation";
   const collapsed = props.collapsed ?? false;
   const [activeTab, setActiveTab] = useState<ReviewSidebarTab>(() => defaultSidebarTab(mode));
+  const sidebarRef = useRef<HTMLElement | null>(null);
+  const [containerWidth, setContainerWidth] = useState<number | null>(null);
+  const baseBounds = REVIEW_AGENT_SIDEBAR_WIDTH_BY_MODE[mode];
+  const sidebarBounds = useMemo(
+    () => ({
+      ...baseBounds,
+      max: sidebarMidpointMaxWidth(containerWidth, baseBounds.max, baseBounds.min),
+    }),
+    [baseBounds, containerWidth],
+  );
   const resize = useResizableReviewSidebar({
-    bounds: REVIEW_AGENT_SIDEBAR_WIDTH_BY_MODE[mode],
+    bounds: sidebarBounds,
     edge: "left",
     storageKey: agentSidebarWidthStorageKey(mode),
   });
+
+  useEffect(() => {
+    if (collapsed) {
+      return;
+    }
+    const sidebar = sidebarRef.current;
+    const container = sidebar?.parentElement ?? null;
+    if (!container) {
+      return;
+    }
+
+    const updateContainerWidth = () => {
+      setContainerWidth(container.getBoundingClientRect().width);
+    };
+
+    updateContainerWidth();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateContainerWidth);
+      return () => window.removeEventListener("resize", updateContainerWidth);
+    }
+
+    const observer = new ResizeObserver(updateContainerWidth);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [collapsed]);
 
   if (collapsed) {
     return <CollapsedSidebarRail mode={mode} onCollapsedChange={props.onCollapsedChange} />;
@@ -598,6 +645,7 @@ export function ReviewPrSidebar(props: {
         )}
       />
       <aside
+        ref={sidebarRef}
         className="hidden h-full min-h-0 shrink-0 flex-col border-l border-border/30 bg-background xl:flex"
         style={{ width: resize.width }}
       >

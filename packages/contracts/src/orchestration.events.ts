@@ -60,6 +60,7 @@ import {
   ProviderInteractionMode,
   ProviderReviewTarget,
   ProviderStartOptions,
+  ProviderThreadInjectTextItem,
   ProviderUserInputAnswers,
   RuntimeMode,
   SidechatSourceThreadId,
@@ -95,6 +96,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.message-edit-resend-requested",
   "thread.session-stop-requested",
   "thread.session-ensure-requested",
+  "thread.context-inject-requested",
   "thread.runtime-action-requested",
   "thread.session-set",
   "thread.proposed-plan-upserted",
@@ -359,6 +361,15 @@ export const ThreadSessionStopRequestedPayload = Schema.Struct({
 
 export const ThreadSessionEnsureRequestedPayload = Schema.Struct({
   threadId: ThreadId,
+  modelSelection: Schema.optional(ModelSelection),
+  providerOptions: Schema.optional(ProviderStartOptions),
+  runtimeMode: RuntimeMode,
+  createdAt: IsoDateTime,
+});
+
+export const ThreadContextInjectRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  items: Schema.Array(ProviderThreadInjectTextItem).check(Schema.isMinLength(1)),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   runtimeMode: RuntimeMode,
@@ -654,6 +665,11 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("thread.context-inject-requested"),
+    payload: ThreadContextInjectRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("thread.runtime-action-requested"),
     payload: ThreadRuntimeActionRequestedPayload,
   }),
@@ -780,6 +796,7 @@ export const ThreadTurnDiff = TurnCountRange.mapFields(
 
 export const ProviderSessionRuntimeStatus = Schema.Literals([
   "starting",
+  "ready",
   "running",
   "stopped",
   "error",

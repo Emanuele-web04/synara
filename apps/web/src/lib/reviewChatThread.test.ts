@@ -36,6 +36,10 @@ type ThreadSessionEnsureCommand = Extract<
   ClientOrchestrationCommand,
   { type: "thread.session.ensure" }
 >;
+type ThreadContextInjectCommand = Extract<
+  ClientOrchestrationCommand,
+  { type: "thread.context.inject" }
+>;
 type ThreadTurnStartCommand = Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }>;
 
 const initialStoreState = useStore.getState();
@@ -124,6 +128,12 @@ function isThreadSessionEnsureCommand(
   command: ClientOrchestrationCommand,
 ): command is ThreadSessionEnsureCommand {
   return command.type === "thread.session.ensure";
+}
+
+function isThreadContextInjectCommand(
+  command: ClientOrchestrationCommand,
+): command is ThreadContextInjectCommand {
+  return command.type === "thread.context.inject";
 }
 
 function makeShellSnapshot(input: {
@@ -244,6 +254,7 @@ describe("reviewChatThread", () => {
     const turnCommand = commands.find(isThreadTurnStartCommand);
     expect(createCommand?.worktreePath).toBeNull();
     expect(createCommand?.reviewChatTarget?.number).toBe(7884);
+    expect(createCommand?.reviewChatTarget?.headSha).toBe("abc123");
     expect(createCommand?.runtimeMode).toBe("approval-required");
     expect(turnCommand?.threadId).toBe(createCommand?.threadId);
     expect(turnCommand?.message.text).toContain("Do not create a new worktree");
@@ -439,6 +450,43 @@ describe("reviewChatThread", () => {
     expect(commands.find(isThreadTurnStartCommand)?.threadId).toBe(existingThreadId);
   });
 
+  it("starts a new review thread when the PR head changes", async () => {
+    const payload = makePayload();
+    const existingThreadId = ThreadId.makeUnsafe("thread-existing-review-chat-old-head");
+    useStore.getState().syncServerShellSnapshot(
+      makeShellSnapshot({
+        existingThreadId,
+        reviewChatTarget: buildReviewChatTarget(payload, projectId),
+      }),
+    );
+    const commands: ClientOrchestrationCommand[] = [];
+    const api: ReviewChatTestApi = {
+      orchestration: {
+        dispatchCommand: vi.fn(async (command) => {
+          commands.push(command);
+          return { sequence: commands.length };
+        }),
+        getShellSnapshot: vi.fn(async () =>
+          makeShellSnapshot({
+            createCommand: commands.find(isThreadCreateCommand),
+          }),
+        ),
+        subscribeThread: vi.fn(async () => undefined),
+      },
+    };
+
+    const result = await sendReviewChatQuestion({
+      payload: { ...payload, headSha: "def456" },
+      question: "What changed after the force push?",
+      api,
+    });
+
+    const createCommand = commands.find(isThreadCreateCommand);
+    expect(result.status).toBe("sent");
+    expect(createCommand?.threadId).not.toBe(existingThreadId);
+    expect(createCommand?.reviewChatTarget?.headSha).toBe("def456");
+  });
+
   it("reuses a just-created review thread before the shell snapshot catches up", async () => {
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
     const commands: ClientOrchestrationCommand[] = [];
@@ -556,7 +604,7 @@ describe("reviewChatThread", () => {
     expect(turnCommands[1]?.threadId).toBe(createCommands[0]?.threadId);
   });
 
-  it("prewarms a review thread and sends the first visible question on the same thread", async () => {
+  it("prewarms a review thread by injecting context and sends the first visible question on the same thread", async () => {
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
     const commands: ClientOrchestrationCommand[] = [];
     const api: ReviewChatTestApi = {
@@ -582,22 +630,23 @@ describe("reviewChatThread", () => {
 
     const createCommands = commands.filter(isThreadCreateCommand);
     const ensureCommands = commands.filter(isThreadSessionEnsureCommand);
+    const injectCommands = commands.filter(isThreadContextInjectCommand);
     const turnCommands = commands.filter(isThreadTurnStartCommand);
     expect(prewarm.status).toBe("ready");
     expect(send.status).toBe("sent");
     expect(createCommands).toHaveLength(1);
     expect(ensureCommands).toHaveLength(1);
-    expect(turnCommands).toHaveLength(2);
+    // Codex review chats no longer use thread.context.inject during prewarm
+    // to avoid head-of-line blocking. Context is included in the first turn.
+    expect(injectCommands).toHaveLength(0);
+    expect(turnCommands).toHaveLength(1);
     expect(ensureCommands[0]?.threadId).toBe(createCommands[0]?.threadId);
     expect(turnCommands[0]?.threadId).toBe(createCommands[0]?.threadId);
-    expect(turnCommands[0]?.message.source).toBe("review-context-bootstrap");
     expect(turnCommands[0]?.message.text).toContain("Changed files:");
-    expect(turnCommands[0]?.message.text).toContain("Reply exactly: ready");
-    expect(turnCommands[1]?.threadId).toBe(createCommands[0]?.threadId);
-    expect(turnCommands[1]?.message.text).toBe("Summarize this PR");
+    expect(turnCommands[0]?.message.text).toContain("Summarize this PR");
   });
 
-  it("starts a hidden review context turn only after complete context is available", async () => {
+  it("injects review context only after complete context is available", async () => {
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
     const commands: ClientOrchestrationCommand[] = [];
     const api: ReviewChatTestApi = {
@@ -624,17 +673,19 @@ describe("reviewChatThread", () => {
     expect(complete.status).toBe("ready");
     expect(commands.filter(isThreadCreateCommand)).toHaveLength(1);
     expect(commands.filter(isThreadSessionEnsureCommand)).toHaveLength(2);
-    const turnCommands = commands.filter(isThreadTurnStartCommand);
-    expect(turnCommands).toHaveLength(1);
-    expect(turnCommands[0]?.message.source).toBe("review-context-bootstrap");
-    expect(turnCommands[0]?.message.text).toContain("Changed files:");
+    // Codex review chats no longer inject context during prewarm.
+    // Context is deferred to the first visible user message.
+    expect(commands.filter(isThreadContextInjectCommand)).toHaveLength(0);
+    expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(0);
   });
 
   it("does not wait indefinitely for an in-flight prewarm before sending the visible review question", async () => {
     vi.useFakeTimers();
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
     const commands: ClientOrchestrationCommand[] = [];
-    let resolveSessionEnsure: (() => void) | null = null;
+    let resolveSessionEnsure: () => void = () => {
+      throw new Error("session ensure was not requested");
+    };
     const api: ReviewChatTestApi = {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
@@ -669,7 +720,7 @@ describe("reviewChatThread", () => {
       expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
     });
 
-    resolveSessionEnsure?.();
+    resolveSessionEnsure();
     await expect(prewarm).resolves.toMatchObject({ status: "ready" });
     await expect(send).resolves.toMatchObject({ status: "sent" });
 
@@ -821,5 +872,39 @@ describe("reviewChatThread", () => {
     const selectSidebarDisplayThreads = createSidebarDisplayThreadsSelector();
 
     expect(selectSidebarDisplayThreads(useStore.getState())).toEqual([]);
+  });
+
+  it("uses a bootstrap turn instead of context inject for non-Codex review chat prewarm", async () => {
+    useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
+    const commands: ClientOrchestrationCommand[] = [];
+    const api: ReviewChatTestApi = {
+      orchestration: {
+        dispatchCommand: vi.fn(async (command) => {
+          commands.push(command);
+          return { sequence: commands.length };
+        }),
+        getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
+        subscribeThread: vi.fn(async () => undefined),
+      },
+    };
+    const claudeModelSelection = {
+      provider: "claudeAgent",
+      model: "claude-sonnet-4-6",
+    } as const;
+
+    const prewarm = await prewarmReviewChatThread({
+      payload: makePayload(),
+      modelSelection: claudeModelSelection,
+      api,
+    });
+
+    expect(prewarm.status).toBe("ready");
+    const injectCommands = commands.filter(isThreadContextInjectCommand);
+    const turnCommands = commands.filter(isThreadTurnStartCommand);
+    // Non-Codex providers use a bootstrap turn, not context injection.
+    expect(injectCommands).toHaveLength(0);
+    expect(turnCommands).toHaveLength(1);
+    expect(turnCommands[0]?.message.text).toContain("Changed files:");
+    expect(turnCommands[0]?.message.source).toBe("review-context-bootstrap");
   });
 });

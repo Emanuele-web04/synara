@@ -11,7 +11,7 @@ import {
   type ProviderStartOptions,
   type RuntimeMode,
 } from "@t3tools/contracts";
-import { Cache, Cause, Effect, Layer, Stream } from "effect";
+import { Cache, Cause, Deferred, Effect, Layer, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
@@ -72,6 +72,9 @@ const make = Effect.gen(function* () {
   const editResendTurnStartKeys = new Set<string>();
   const drainingQueuedTurns = new Set<string>();
   const sidechatContextBootstrapThreadIds = new Set<string>();
+  const inFlightSessionEnsures = new Map<string, Deferred.Deferred<void>>();
+  const providerResumeCursorsByThreadId: ReactorCoreDeps["providerResumeCursorsByThreadId"] =
+    new Map();
 
   const coreDeps: ReactorCoreDeps = {
     orchestrationEngine,
@@ -83,6 +86,8 @@ const make = Effect.gen(function* () {
     threadModelSelections,
     recentlyEnsuredSessionThreads,
     sidechatContextBootstrapThreadIds,
+    inFlightSessionEnsures,
+    providerResumeCursorsByThreadId,
   };
 
   const session = makeReactorSession(coreDeps);
@@ -133,6 +138,7 @@ const make = Effect.gen(function* () {
     );
 
   const worker = yield* makeDrainableWorker(processDomainEventSafely);
+  const sessionEnsureWorker = yield* makeDrainableWorker(processDomainEventSafely);
 
   const start: ProviderCommandReactorShape["start"] = Effect.all([
     Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
@@ -149,9 +155,14 @@ const make = Effect.gen(function* () {
         event.type !== "thread.message-edit-resend-requested" &&
         event.type !== "thread.session-stop-requested" &&
         event.type !== "thread.session-ensure-requested" &&
+        event.type !== "thread.context-inject-requested" &&
         event.type !== "thread.runtime-action-requested"
       ) {
         return Effect.void;
+      }
+
+      if (event.type === "thread.session-ensure-requested") {
+        return sessionEnsureWorker.enqueue(event);
       }
 
       return worker.enqueue(event);
@@ -166,7 +177,7 @@ const make = Effect.gen(function* () {
 
   return {
     start,
-    drain: worker.drain,
+    drain: Effect.all([worker.drain, sessionEnsureWorker.drain]).pipe(Effect.asVoid),
   } satisfies ProviderCommandReactorShape;
 });
 

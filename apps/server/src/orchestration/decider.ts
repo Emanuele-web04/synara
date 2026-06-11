@@ -47,6 +47,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     case "thread.message.edit-and-resend":
     case "thread.session.stop":
     case "thread.session.ensure":
+    case "thread.context.inject":
     case "thread.runtime.action":
     case "thread.session.set":
     case "thread.messages.import":

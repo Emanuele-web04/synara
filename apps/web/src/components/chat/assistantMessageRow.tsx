@@ -10,7 +10,6 @@ import { type TurnDiffSummary } from "../../types";
 import { type TimestampFormat } from "../../appSettings";
 import { formatShortTimestamp } from "../../timestampFormat";
 import { type getAppTypographyScale } from "../../lib/appTypography";
-import ChatMarkdown from "../ChatMarkdown";
 import { ChangesIcon, Undo2Icon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ChangedFilesTree } from "./ChangedFilesTree";
@@ -32,6 +31,7 @@ import {
   isFileChangeWorkEntry,
   prefersCompactWorkEntryRow,
 } from "./workEntryRow";
+import { AssistantMarkdownBody } from "./messagePrimitives";
 
 export const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
 
@@ -292,7 +292,7 @@ export function AssistantMessageRow({
                       key={`collapsed-narration:${row.message.id}:${item.id}`}
                       className="text-muted-foreground/80"
                     >
-                      <ChatMarkdown
+                      <AssistantMarkdownBody
                         text={item.message.text}
                         cwd={markdownCwd}
                         isStreaming={false}
@@ -310,7 +310,7 @@ export function AssistantMessageRow({
       )}
       <div className="group min-w-0 py-0.5">
         <div data-assistant-message-id={row.message.id}>
-          <ChatMarkdown
+          <AssistantMarkdownBody
             text={messageText}
             cwd={markdownCwd}
             isStreaming={Boolean(row.message.streaming)}

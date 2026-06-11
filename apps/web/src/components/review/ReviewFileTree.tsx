@@ -133,22 +133,23 @@ function buildReviewFileTree(
 
 function buildHeadlessTreeData(nodes: ReadonlyArray<ReviewFileTreeNode>): ReviewTreeData {
   const rootId = "__review_tree_root__";
-  const items: Record<string, ReviewTreeItem> = {
-    [rootId]: {
-      id: rootId,
+  const rootItem: ReviewTreeItem = {
+    id: rootId,
+    name: "Files",
+    children: [],
+    node: {
+      type: "directory",
+      path: rootId,
       name: "Files",
       children: [],
-      node: {
-        type: "directory",
-        path: rootId,
-        name: "Files",
-        children: [],
-        fileCount: 0,
-        viewedCount: 0,
-        additions: 0,
-        deletions: 0,
-      },
+      fileCount: 0,
+      viewedCount: 0,
+      additions: 0,
+      deletions: 0,
     },
+  };
+  const items: Record<string, ReviewTreeItem> = {
+    [rootId]: rootItem,
   };
   const expandedItems: string[] = [];
 
@@ -175,7 +176,7 @@ function buildHeadlessTreeData(nodes: ReadonlyArray<ReviewFileTreeNode>): Review
     return id;
   };
 
-  items[rootId].children = nodes.map(visit);
+  rootItem.children = nodes.map(visit);
   return { items, expandedItems };
 }
 
@@ -273,7 +274,13 @@ function ReviewHeadlessFileTree(props: {
     getItemName: (item) => item.getItemData().name,
     isItemFolder: (item) => (item.getItemData().children?.length ?? 0) > 0,
     dataLoader: {
-      getItem: (itemId) => treeData.items[itemId],
+      getItem: (itemId) => {
+        const item = treeData.items[itemId];
+        if (!item) {
+          throw new Error(`Unknown review file tree item: ${itemId}`);
+        }
+        return item;
+      },
       getChildren: (itemId) => treeData.items[itemId]?.children ?? [],
     },
     features: [syncDataLoaderFeature, hotkeysCoreFeature],

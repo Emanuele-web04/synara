@@ -29,7 +29,7 @@ import {
   WorkspaceRootLookupInput,
 } from "./ProjectionSnapshotQuery.schemas.ts";
 
-export const makeSnapshotQueries = (sql: SqlClient.SqlClient["Service"]) => {
+export const makeSnapshotQueries = (sql: SqlClient.SqlClient) => {
   const listProjectRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionProjectDbRowSchema,

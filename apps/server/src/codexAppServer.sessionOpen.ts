@@ -46,9 +46,12 @@ import type { JsonRpcLineTransport } from "./provider/process/JsonRpcLineTranspo
 
 export interface CodexSessionOpenDeps {
   readonly sessions: Map<ThreadId, CodexSessionContext>;
+  readonly discoverySessions: Map<string, CodexSessionContext>;
+  readonly discoverySessionIdleTimers: Map<string, ReturnType<typeof setTimeout>>;
   readonly localStartupDiscoveryCache: Map<string, CodexStartupDiscovery>;
   runPromise(effect: Effect.Effect<unknown, never>): Promise<unknown>;
   stopSession(threadId: ThreadId): void;
+  isContextAlive(context: CodexSessionContext): Promise<boolean>;
   assertSupportedCodexCliVersion(input: {
     readonly binaryPath: string;
     readonly cwd: string;
@@ -140,27 +143,62 @@ export async function startSession(
       ...(codexHomePath ? { homePath: codexHomePath } : {}),
       hasSuppliedTransport: input.createTransport !== undefined,
     });
-    const transport = await deps.createTransport(
-      {
-        binaryPath: codexBinaryPath,
-        cwd: resolvedCwd,
-        ...(codexHomePath ? { homePath: codexHomePath } : {}),
-      },
-      input.createTransport,
-    );
+    let reusedPooledAppServer = false;
+    let appServerProcessAgeMs = 0;
+    const pooledContext =
+      input.createTransport === undefined &&
+      codexHomePath === undefined &&
+      codexBinaryPath === "codex"
+        ? deps.discoverySessions.get(resolvedCwd)
+        : undefined;
+    if (
+      pooledContext &&
+      !pooledContext.stopping &&
+      pooledContext.pending.size === 0 &&
+      pooledContext.pendingApprovals.size === 0 &&
+      pooledContext.pendingUserInputs.size === 0 &&
+      (await deps.isContextAlive(pooledContext))
+    ) {
+      const pooledStartedAtMs = Date.parse(pooledContext.session.createdAt);
+      appServerProcessAgeMs = Number.isNaN(pooledStartedAtMs) ? 0 : Date.now() - pooledStartedAtMs;
+      const idleTimer = deps.discoverySessionIdleTimers.get(resolvedCwd);
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        deps.discoverySessionIdleTimers.delete(resolvedCwd);
+      }
+      deps.discoverySessions.delete(resolvedCwd);
+      pooledContext.session = session;
+      pooledContext.discovery = false;
+      context = pooledContext;
+      deps.sessions.set(threadId, context);
+      reusedPooledAppServer = true;
+    } else {
+      const transport = await deps.createTransport(
+        {
+          binaryPath: codexBinaryPath,
+          cwd: resolvedCwd,
+          ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        },
+        input.createTransport,
+      );
 
-    context = freshSessionContext(session, transport);
+      context = freshSessionContext(session, transport);
 
-    deps.sessions.set(threadId, context);
-    deps.attachProcessListeners(context);
+      deps.sessions.set(threadId, context);
+      deps.attachProcessListeners(context);
+    }
 
     deps.emitLifecycleEvent(context, "session/connecting", "Starting codex app-server");
 
     const startupStartedAt = Date.now();
-    await deps.sendRequest(context, "initialize", buildCodexInitializeParams());
+    if (!reusedPooledAppServer) {
+      await deps.sendRequest(context, "initialize", buildCodexInitializeParams());
+    }
     const initializeResolvedAt = Date.now();
 
-    deps.writeMessage(context, { method: "initialized" });
+    if (!reusedPooledAppServer) {
+      deps.writeMessage(context, { method: "initialized" });
+    }
     const discoveryCacheKey =
       input.createTransport === undefined ? `${codexBinaryPath}${codexHomePath ?? ""}` : undefined;
     const usedDiscoveryCache =
@@ -186,11 +224,26 @@ export async function startSession(
             threadId,
           })
         : (normalizedModel ?? null);
+    const runtimeSessionOverrides = mapCodexRuntimeMode(input.runtimeMode ?? "full-access");
+    const usesReviewProfile = input.reviewProfile === "review-chat";
+    const effectiveApprovalPolicy =
+      input.approvalPolicy ??
+      (usesReviewProfile ? "never" : runtimeSessionOverrides.approvalPolicy);
+    const effectiveSandboxMode =
+      input.sandboxMode ?? (usesReviewProfile ? "read-only" : runtimeSessionOverrides.sandbox);
+    const reviewSessionOptions = usesReviewProfile
+      ? {
+          ephemeral: true,
+          serviceName: "synara_review_chat",
+        }
+      : {};
     const sessionOverrides = {
       model: effectiveModel,
       ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
       cwd: resolvedCwd,
-      ...mapCodexRuntimeMode(input.runtimeMode ?? "full-access"),
+      approvalPolicy: effectiveApprovalPolicy,
+      sandbox: effectiveSandboxMode,
+      ...reviewSessionOptions,
     };
 
     const threadStartParams = {
@@ -211,6 +264,10 @@ export async function startSession(
       requestedModel: normalizedModel ?? null,
       requestedCwd: resolvedCwd,
       resumeThreadId: resumeThreadId ?? null,
+      reviewProfile: input.reviewProfile ?? null,
+      approvalPolicy: effectiveApprovalPolicy,
+      sandboxMode: effectiveSandboxMode,
+      ephemeral: usesReviewProfile,
     }).pipe(deps.runPromise);
 
     let threadOpenMethod: "thread/start" | "thread/resume" = "thread/start";
@@ -287,11 +344,28 @@ export async function startSession(
     deps.emitLifecycleEvent(context, "session/ready", `Connected to thread ${providerThreadId}`);
     await Effect.logInfo("codex app-server startup timings", {
       threadId,
+      appServerProcessAgeMs,
       initializeMs: initializeResolvedAt - startupStartedAt,
       discoveryMs: discoveryResolvedAt - discoveryStartedAt,
+      threadStartMs: threadOpenMethod === "thread/start" ? Date.now() - discoveryResolvedAt : null,
+      threadResumeMs:
+        threadOpenMethod === "thread/resume" ? Date.now() - discoveryResolvedAt : null,
       threadOpenMs: Date.now() - discoveryResolvedAt,
       totalMs: Date.now() - startupStartedAt,
       usedDiscoveryCache,
+      reusedPooledAppServer,
+      usedThreadStart: threadOpenMethod === "thread/start",
+      usedThreadResume: threadOpenMethod === "thread/resume",
+      threadWasAlreadyLoaded: null,
+      ephemeral: usesReviewProfile,
+      sandboxMode: effectiveSandboxMode,
+      approvalPolicy: effectiveApprovalPolicy,
+      model: effectiveModel ?? null,
+      effort: input.effort ?? null,
+      mcpServerCount: null,
+      requiredMcpServerCount: null,
+      pluginCount: null,
+      skillCount: null,
     }).pipe(deps.runPromise);
     return { ...context.session };
   } catch (error) {

@@ -23,6 +23,7 @@ import {
   resolveCodexTurnOverrides,
 } from "./codexAppServer.session.ts";
 import type {
+  CodexAppServerInjectThreadItemsInput,
   CodexApprovalPolicy,
   CodexAppServerSendTurnInput,
   CodexSessionContext,
@@ -173,6 +174,29 @@ export async function sendTurn(
       ? { resumeCursor: context.session.resumeCursor }
       : {}),
   };
+}
+
+export async function injectThreadItems(
+  deps: CodexTurnDeps,
+  input: CodexAppServerInjectThreadItemsInput,
+): Promise<void> {
+  if (input.items.length === 0) {
+    throw new Error("thread/inject_items requires at least one item.");
+  }
+  const context = deps.requireSession(input.threadId);
+  const providerThreadId = readResumeThreadId({
+    threadId: context.session.threadId,
+    runtimeMode: context.session.runtimeMode,
+    resumeCursor: context.session.resumeCursor,
+  });
+  if (!providerThreadId) {
+    throw new Error("Session is missing provider resume thread id.");
+  }
+
+  await deps.sendRequest(context, "thread/inject_items", {
+    threadId: providerThreadId,
+    items: input.items,
+  });
 }
 
 export async function steerTurn(

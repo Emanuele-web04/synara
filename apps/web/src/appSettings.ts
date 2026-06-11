@@ -129,7 +129,7 @@ export const AppSettingsSchema = Schema.Struct({
   // Local-only UI preference: show prompt suggestions under the composer on the
   // empty new-thread landing. Off hides the suggestion list entirely.
   enableComposerSuggestions: Schema.Boolean.pipe(withDefaults(() => true)),
-  enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => false)),
+  enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),

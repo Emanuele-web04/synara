@@ -54,6 +54,7 @@ import {
   ProviderInteractionMode,
   ProviderReviewTarget,
   ProviderStartOptions,
+  ProviderThreadInjectTextItem,
   ProviderUserInputAnswers,
   RuntimeMode,
   SidechatSourceThreadId,
@@ -412,6 +413,17 @@ const ThreadSessionEnsureCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadContextInjectCommand = Schema.Struct({
+  type: Schema.Literal("thread.context.inject"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  items: Schema.Array(ProviderThreadInjectTextItem).check(Schema.isMinLength(1)),
+  modelSelection: Schema.optional(ModelSelection),
+  providerOptions: Schema.optional(ProviderStartOptions),
+  runtimeMode: RuntimeMode,
+  createdAt: IsoDateTime,
+});
+
 const ThreadRuntimeActionRequestCommand = Schema.Struct({
   type: Schema.Literal("thread.runtime.action"),
   commandId: CommandId,
@@ -451,6 +463,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadSessionStopCommand,
   ThreadSessionEnsureCommand,
+  ThreadContextInjectCommand,
   ThreadRuntimeActionRequestCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
@@ -478,6 +491,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadSessionStopCommand,
   ThreadSessionEnsureCommand,
+  ThreadContextInjectCommand,
   ThreadRuntimeActionRequestCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;

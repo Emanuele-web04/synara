@@ -83,10 +83,12 @@ export function TreeItem<T>(
   const isSelected = typeof item.isSelected === "function" && item.isSelected();
   return (
     <TreeContext.Provider
-      value={{
-        ...parentContext,
-        currentItem: item,
-      }}
+      value={
+        {
+          ...parentContext,
+          currentItem: item as unknown as ItemInstance<unknown>,
+        } as unknown as TreeContextValue<unknown>
+      }
     >
       <button
         {...itemProps}

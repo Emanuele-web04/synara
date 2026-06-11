@@ -95,6 +95,7 @@ export function makeReactorDispatch(deps: ReactorDispatchDeps) {
     sidechatContextBootstrapThreadIds,
     threadProviderOptions,
     threadModelSelections,
+    providerResumeCursorsByThreadId,
     session,
   } = deps;
   const {
@@ -104,6 +105,7 @@ export function makeReactorDispatch(deps: ReactorDispatchDeps) {
     ensureSessionForThread,
     clearStaleProviderResumeState,
     joinPendingSessionEnsure,
+    joinInFlightSessionEnsure,
   } = session;
 
   const enqueueQueuedTurnStart = (
@@ -343,6 +345,7 @@ export function makeReactorDispatch(deps: ReactorDispatchDeps) {
         ? yield* captureMessageStartCheckpoint.pipe(Effect.forkChild)
         : null;
 
+    yield* joinInFlightSessionEnsure(input.threadId);
     const joinedPendingSessionEnsure = yield* joinPendingSessionEnsure(input.threadId);
     const activeSessionBeforeEnsure = yield* providerService
       .listSessions()
@@ -350,6 +353,7 @@ export function makeReactorDispatch(deps: ReactorDispatchDeps) {
         Effect.map((sessions) => sessions.find((session) => session.threadId === input.threadId)),
       );
     const hasJoinedReusableSession =
+      activeSessionBeforeEnsure !== undefined &&
       joinedPendingSessionEnsure !== null &&
       (input.runtimeMode === undefined ||
         joinedPendingSessionEnsure.runtimeMode === input.runtimeMode) &&
@@ -455,7 +459,7 @@ export function makeReactorDispatch(deps: ReactorDispatchDeps) {
         target: input.reviewTarget,
       });
     } else if (input.dispatchMode === "steer") {
-      yield* providerService.steerTurn({
+      const result = yield* providerService.steerTurn({
         threadId: input.threadId,
         ...(normalizedInput ? { input: normalizedInput } : {}),
         ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
@@ -466,11 +470,22 @@ export function makeReactorDispatch(deps: ReactorDispatchDeps) {
           ? { interactionMode: providerInteractionMode }
           : {}),
       });
+      if (result.resumeCursor !== undefined && activeSession !== undefined) {
+        const resumeCursorCwd =
+          activeSession.cwd ?? (yield* resolveProjectedThreadWorkspaceCwd(thread));
+        providerResumeCursorsByThreadId.set(input.threadId, {
+          resumeCursor: result.resumeCursor,
+          provider: activeSession.provider,
+          runtimeMode: input.runtimeMode ?? activeSession.runtimeMode,
+          modelSelection: requestedModelSelection,
+          ...(resumeCursorCwd !== undefined ? { cwd: resumeCursorCwd } : {}),
+        });
+      }
     } else {
       if (messageStartCheckpointFiber) {
         yield* Fiber.join(messageStartCheckpointFiber);
       }
-      yield* providerService.sendTurn({
+      const result = yield* providerService.sendTurn({
         threadId: input.threadId,
         ...(normalizedInput ? { input: normalizedInput } : {}),
         ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
@@ -481,6 +496,17 @@ export function makeReactorDispatch(deps: ReactorDispatchDeps) {
           ? { interactionMode: providerInteractionMode }
           : {}),
       });
+      if (result.resumeCursor !== undefined && activeSession !== undefined) {
+        const resumeCursorCwd =
+          activeSession.cwd ?? (yield* resolveProjectedThreadWorkspaceCwd(thread));
+        providerResumeCursorsByThreadId.set(input.threadId, {
+          resumeCursor: result.resumeCursor,
+          provider: activeSession.provider,
+          runtimeMode: input.runtimeMode ?? activeSession.runtimeMode,
+          modelSelection: requestedModelSelection,
+          ...(resumeCursorCwd !== undefined ? { cwd: resumeCursorCwd } : {}),
+        });
+      }
     }
     if (handoffBootstrapText && thread.handoff !== null) {
       yield* orchestrationEngine.dispatch({

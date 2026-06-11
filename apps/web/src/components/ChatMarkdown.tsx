@@ -40,6 +40,7 @@ import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../ma
 import { readNativeApi } from "../nativeApi";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
+import { isMermaidFence, MarkdownMermaidDiagram } from "./chat/MarkdownMermaidDiagram";
 import { IconButton } from "./ui/icon-button";
 
 class CodeHighlightErrorBoundary extends React.Component<
@@ -66,7 +67,7 @@ class CodeHighlightErrorBoundary extends React.Component<
 interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
-  isStreaming?: boolean;
+  isStreaming?: boolean | undefined;
   className?: string | undefined;
   style?: CSSProperties | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
@@ -723,8 +724,7 @@ function ChatMarkdown({
 
         const fence = parseCodeFenceInfo(extractRawFenceInfo(codeBlock.className));
         const code = dedentCode(codeBlock.code);
-
-        return (
+        const highlightedCodeBlock = (
           <MarkdownCodeBlock code={code} fence={fence}>
             <CodeHighlightErrorBoundary fallback={<pre {...props}>{children}</pre>}>
               <Suspense fallback={<pre {...props}>{children}</pre>}>
@@ -738,6 +738,18 @@ function ChatMarkdown({
             </CodeHighlightErrorBoundary>
           </MarkdownCodeBlock>
         );
+
+        if (isMermaidFence(fence)) {
+          return (
+            <MarkdownMermaidDiagram
+              code={code}
+              themeName={diffThemeName}
+              fallback={highlightedCodeBlock}
+            />
+          );
+        }
+
+        return highlightedCodeBlock;
       },
       img({ node: _node, src, alt = "", ...props }) {
         const restoredSrc = src ? restoreLiteralDollarPlaceholders(src) : "";
