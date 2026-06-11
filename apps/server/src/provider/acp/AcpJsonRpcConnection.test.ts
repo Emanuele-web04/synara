@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Effect, Stream } from "effect";
+import { Effect, Exit, Stream } from "effect";
 import { describe, expect } from "vitest";
 
 import { AcpSessionRuntime, type AcpSessionRequestLogEvent } from "./AcpSessionRuntime.ts";
@@ -678,11 +678,68 @@ process.stdin.on("data", (chunk) => {
     });
 
     it.effect("on-demand authenticates and retries on auth-required error", () => {
-      // Note: This test is skipped because raw NDJSON scripts cannot properly
-      // simulate ACP error responses due to client library limitations.
-      // The implementation logic is correct per the spec and can be verified
-      // through integration testing with proper ACP agents.
-      return Effect.succeed(undefined);
+      const requestEvents: AcpSessionRequestLogEvent[] = [];
+      const authRequiredAgentScript = `
+let buffer = "";
+let sessionNewCount = 0;
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  for (let index = buffer.indexOf("\\n"); index >= 0; index = buffer.indexOf("\\n")) {
+    const line = buffer.slice(0, index).trim();
+    buffer = buffer.slice(index + 1);
+    if (!line) continue;
+    const message = JSON.parse(line);
+    if (message.method === "initialize") {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [{ id: "test", name: "Test" }] },
+      });
+    } else if (message.method === "session/new") {
+      sessionNewCount++;
+      // First session/new fails with auth-required error
+      if (sessionNewCount === 1) {
+        send({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "Authentication required" } });
+      } else {
+        // Second session/new after authenticate succeeds
+        send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "mock-session-1" } });
+      }
+    } else if (message.method === "authenticate") {
+      send({ jsonrpc: "2.0", id: message.id, result: {} });
+    } else if (message.id !== undefined) {
+      send({ jsonrpc: "2.0", id: message.id, result: {} });
+    }
+  }
+});
+`;
+      return Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+
+        const methods = requestEvents.filter((e) => e.status === "started").map((e) => e.method);
+        expect(methods).toEqual(["initialize", "session/new", "authenticate", "session/new"]);
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            authMethodId: "test",
+            authPolicy: "on-demand",
+            spawn: {
+              command: bunExe,
+              args: ["-e", authRequiredAgentScript],
+            },
+            cwd: process.cwd(),
+            clientInfo: { name: "t3-test", version: "0.0.0" },
+            requestLogger: (event) =>
+              Effect.sync(() => {
+                requestEvents.push(event);
+              }),
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      );
     });
 
     it.effect(
@@ -754,21 +811,131 @@ process.stdin.on("data", (chunk) => {
     );
 
     it.effect("on-demand does not authenticate on non-auth session/new failure", () => {
-      // Note: This test is skipped because raw NDJSON scripts cannot properly
-      // simulate ACP error responses due to client library limitations.
-      // The implementation logic is correct per the spec and can be verified
-      // through integration testing with proper ACP agents.
-      return Effect.succeed(undefined);
+      const requestEvents: AcpSessionRequestLogEvent[] = [];
+      const nonAuthFailureAgentScript = `
+let buffer = "";
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  for (let index = buffer.indexOf("\\n"); index >= 0; index = buffer.indexOf("\\n")) {
+    const line = buffer.slice(0, index).trim();
+    buffer = buffer.slice(index + 1);
+    if (!line) continue;
+    const message = JSON.parse(line);
+    if (message.method === "initialize") {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [{ id: "test", name: "Test" }] },
+      });
+    } else if (message.method === "session/new") {
+      // Always fail with non-auth error
+      send({ jsonrpc: "2.0", id: message.id, error: { code: -32602, message: "Invalid params" } });
+    } else if (message.id !== undefined) {
+      send({ jsonrpc: "2.0", id: message.id, result: {} });
+    }
+  }
+});
+`;
+      return Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        const startExit = yield* runtime.start().pipe(Effect.exit);
+
+        // Should fail without authenticating
+        expect(Exit.isFailure(startExit)).toBe(true);
+
+        const methods = requestEvents.filter((e) => e.status === "started").map((e) => e.method);
+        expect(methods).toContain("initialize");
+        expect(methods).toContain("session/new");
+        expect(methods).not.toContain("authenticate");
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            authMethodId: "test",
+            authPolicy: "on-demand",
+            spawn: {
+              command: bunExe,
+              args: ["-e", nonAuthFailureAgentScript],
+            },
+            cwd: process.cwd(),
+            clientInfo: { name: "t3-test", version: "0.0.0" },
+            requestLogger: (event) =>
+              Effect.sync(() => {
+                requestEvents.push(event);
+              }),
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      );
     });
 
     it.effect(
       "on-demand falls back to session/new when session/load fails without auth error",
       () => {
-        // Note: This test is skipped because raw NDJSON scripts cannot properly
-        // simulate ACP error responses due to client library limitations.
-        // The implementation logic is correct per the spec and can be verified
-        // through integration testing with proper ACP agents.
-        return Effect.succeed(undefined);
+        const requestEvents: AcpSessionRequestLogEvent[] = [];
+        const resumeFallbackAgentScript = `
+let buffer = "";
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  for (let index = buffer.indexOf("\\n"); index >= 0; index = buffer.indexOf("\\n")) {
+    const line = buffer.slice(0, index).trim();
+    buffer = buffer.slice(index + 1);
+    if (!line) continue;
+    const message = JSON.parse(line);
+    if (message.method === "initialize") {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [{ id: "test", name: "Test" }] },
+      });
+    } else if (message.method === "session/load") {
+      // Fail session/load with non-auth error
+      send({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: "session not found" } });
+    } else if (message.method === "session/new") {
+      send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "mock-session-1" } });
+    } else if (message.id !== undefined) {
+      send({ jsonrpc: "2.0", id: message.id, result: {} });
+    }
+  }
+});
+`;
+        return Effect.gen(function* () {
+          const runtime = yield* AcpSessionRuntime;
+          const started = yield* runtime.start();
+
+          // Should succeed by falling back to session/new
+          expect(started.sessionId).toBe("mock-session-1");
+
+          const methods = requestEvents.filter((e) => e.status === "started").map((e) => e.method);
+          expect(methods).toContain("initialize");
+          expect(methods).toContain("session/load");
+          expect(methods).toContain("session/new");
+          expect(methods).not.toContain("authenticate");
+        }).pipe(
+          Effect.provide(
+            AcpSessionRuntime.layer({
+              authMethodId: "test",
+              authPolicy: "on-demand",
+              resumeSessionId: "stale-session",
+              spawn: {
+                command: bunExe,
+                args: ["-e", resumeFallbackAgentScript],
+              },
+              cwd: process.cwd(),
+              clientInfo: { name: "t3-test", version: "0.0.0" },
+              requestLogger: (event) =>
+                Effect.sync(() => {
+                  requestEvents.push(event);
+                }),
+            }),
+          ),
+          Effect.scoped,
+          Effect.provide(NodeServices.layer),
+        );
       },
     );
   });

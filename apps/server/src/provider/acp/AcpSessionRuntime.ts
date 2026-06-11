@@ -42,6 +42,30 @@ function isAcpAuthRequiredError(error: EffectAcpErrors.AcpError): boolean {
   );
 }
 
+function causeIndicatesAuthRequired(cause: Cause.Cause<EffectAcpErrors.AcpError>): boolean {
+  // Check for Fail reasons with auth-required errors
+  const failReason = Cause.findFail(cause);
+  if (failReason._tag === "Success" && isAcpAuthRequiredError(failReason.success.error)) {
+    return true;
+  }
+  // Check for Die reasons with auth-related messages
+  const dieReason = Cause.findDie(cause);
+  if (dieReason._tag === "Success") {
+    const defect = dieReason.success.defect;
+    const message =
+      defect instanceof Error ? defect.message : typeof defect === "string" ? defect : "";
+    if (/auth/i.test(message)) {
+      return true;
+    }
+  }
+  // Also check the pretty-printed cause for auth-related text
+  const causeMessage = Cause.pretty(cause);
+  if (/auth/i.test(causeMessage)) {
+    return true;
+  }
+  return false;
+}
+
 export interface AcpSpawnInput {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
@@ -475,13 +499,7 @@ const makeAcpSessionRuntime = (
             sessionSetupResult = resumed.value;
             resumeFailed = false;
           } else {
-            // Extract the expected AcpError from the cause
-            const failReason = Cause.findFail(resumed.cause);
-            if (
-              options.authPolicy === "on-demand" &&
-              failReason._tag === "Success" &&
-              isAcpAuthRequiredError(failReason.success.error)
-            ) {
+            if (options.authPolicy === "on-demand" && causeIndicatesAuthRequired(resumed.cause)) {
               // Under on-demand auth with auth error, re-fail the original cause
               // so the outer on-demand logic can authenticate and retry the whole setup
               return yield* Effect.failCause(resumed.cause);
@@ -537,14 +555,7 @@ const makeAcpSessionRuntime = (
         // On-demand auth: try session setup first; authenticate and retry on auth error only.
         const setupResult = yield* runSessionSetup.pipe(Effect.exit);
         if (Exit.isFailure(setupResult)) {
-          // Extract the expected AcpError from the cause
-          const failReason = Cause.findFail(setupResult.cause);
-          if (failReason._tag === "Failure") {
-            // No expected failure (defects/interrupts) - re-fail the original cause
-            return yield* Effect.failCause(setupResult.cause);
-          }
-          // Check if the error is an auth-required error
-          if (isAcpAuthRequiredError(failReason.success.error)) {
+          if (causeIndicatesAuthRequired(setupResult.cause)) {
             yield* runAuthenticate;
             const setup = yield* runSessionSetup;
             sessionId = setup.sessionId;
