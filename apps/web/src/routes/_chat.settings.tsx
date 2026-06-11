@@ -81,6 +81,7 @@ import { Select, SelectItem, SelectTrigger, SelectValue } from "../components/ui
 import { Switch } from "../components/ui/switch";
 import { toastManager } from "../components/ui/toast";
 import { ThemePackEditor } from "../components/ThemePackEditor";
+import { DebouncedSettingTextInput } from "../components/settings/DebouncedSettingTextInput";
 import {
   SettingsCard,
   SettingsRow,
@@ -804,46 +805,85 @@ function SettingsRouteView() {
     activeSection === "general" && settingsTarget === SETTINGS_TARGETS.environmentPanel,
     environmentPanelRef,
   );
-  const managedWorktrees = serverWorktreesQuery.data?.worktrees;
-  const worktreesByWorkspaceRoot = useMemo(
-    () =>
-      (managedWorktrees ?? []).reduce<
-        Array<{
-          workspaceRoot: string;
-          worktrees: Array<{
-            path: string;
-            linkedThreads: typeof threadShells;
-          }>;
-        }>
-      >((groups, worktree) => {
-        const linkedThreads = threadShells.filter((thread) => {
-          const candidatePaths = [
-            normalizeManagedWorktreePath(thread.worktreePath),
-            normalizeManagedWorktreePath(thread.associatedWorktreePath),
-          ];
-          return candidatePaths.includes(worktree.path);
-        });
-        const existingGroup = groups.find(
-          (group) => group.workspaceRoot === worktree.workspaceRoot,
-        );
-        const nextWorktree = {
-          path: worktree.path,
-          linkedThreads,
-        };
-        if (existingGroup) {
-          existingGroup.worktrees.push(nextWorktree);
-        } else {
-          groups.push({
-            workspaceRoot: worktree.workspaceRoot,
-            worktrees: [nextWorktree],
-          });
-        }
-        return groups;
-      }, []),
-    [managedWorktrees, threadShells],
-  );
 
-  const gitTextGenerationModelOptions = getGitTextGenerationModelOptions(settings);
+  // Sidebar search deep-links to an individual row via its `settingRowAnchorId`. The active
+  // panel renders synchronously with this section change, so scroll once the row has mounted.
+  useEffect(() => {
+    if (!settingsTarget || !settingsTarget.startsWith("setting-")) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      document
+        .getElementById(settingsTarget)
+        ?.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeSection, settingsTarget]);
+  const managedWorktrees = serverWorktreesQuery.data?.worktrees;
+  const worktreesByWorkspaceRoot = useMemo(() => {
+    type WorktreeGroup = {
+      workspaceRoot: string;
+      worktrees: Array<{
+        path: string;
+        linkedThreads: typeof threadShells;
+      }>;
+    };
+    // Map keeps grouping O(worktrees) instead of the previous O(worktrees²) `groups.find`,
+    // while `groups` preserves the original first-seen workspace-root order.
+    const groups: WorktreeGroup[] = [];
+    const groupByRoot = new Map<string, WorktreeGroup>();
+    for (const worktree of managedWorktrees ?? []) {
+      const linkedThreads = threadShells.filter((thread) => {
+        const candidatePaths = [
+          normalizeManagedWorktreePath(thread.worktreePath),
+          normalizeManagedWorktreePath(thread.associatedWorktreePath),
+        ];
+        return candidatePaths.includes(worktree.path);
+      });
+      const nextWorktree = { path: worktree.path, linkedThreads };
+      const existingGroup = groupByRoot.get(worktree.workspaceRoot);
+      if (existingGroup) {
+        existingGroup.worktrees.push(nextWorktree);
+      } else {
+        const group: WorktreeGroup = {
+          workspaceRoot: worktree.workspaceRoot,
+          worktrees: [nextWorktree],
+        };
+        groups.push(group);
+        groupByRoot.set(worktree.workspaceRoot, group);
+      }
+    }
+    return groups;
+  }, [managedWorktrees, threadShells]);
+
+  // Builds provider model-option arrays; only the Models panel reads it. Memoize on the
+  // narrow inputs the helper actually uses (destructured so exhaustive-deps stays exact) so
+  // typing in any other settings field — every keystroke re-renders this monolithic route —
+  // doesn't rebuild these lists.
+  const {
+    customCodexModels,
+    customKiloModels,
+    customOpenCodeModels,
+    textGenerationModel,
+    textGenerationProvider,
+  } = settings;
+  const gitTextGenerationModelOptions = useMemo(
+    () =>
+      getGitTextGenerationModelOptions({
+        customCodexModels,
+        customKiloModels,
+        customOpenCodeModels,
+        textGenerationModel,
+        textGenerationProvider,
+      }),
+    [
+      customCodexModels,
+      customKiloModels,
+      customOpenCodeModels,
+      textGenerationModel,
+      textGenerationProvider,
+    ],
+  );
   const currentGitTextGenerationProvider = settings.textGenerationProvider ?? "codex";
   const currentGitTextGenerationModel =
     settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
@@ -2893,33 +2933,33 @@ function SettingsRouteView() {
                               <span className="block text-xs font-medium text-foreground">
                                 {providerSettings.title} binary path
                               </span>
-                              <Input
+                              <DebouncedSettingTextInput
                                 id={`provider-install-${providerSettings.binaryPathKey}`}
                                 size="sm"
                                 variant="soft"
                                 className="mt-1"
                                 value={binaryPathValue}
-                                onChange={(event) =>
+                                onCommit={(nextValue) =>
                                   updateSettings(
                                     providerSettings.binaryPathKey === "claudeBinaryPath"
-                                      ? { claudeBinaryPath: event.target.value }
+                                      ? { claudeBinaryPath: nextValue }
                                       : providerSettings.binaryPathKey === "cursorBinaryPath"
-                                        ? { cursorBinaryPath: event.target.value }
+                                        ? { cursorBinaryPath: nextValue }
                                         : providerSettings.binaryPathKey === "devinBinaryPath"
-                                          ? { devinBinaryPath: event.target.value }
+                                          ? { devinBinaryPath: nextValue }
                                           : providerSettings.binaryPathKey === "geminiBinaryPath"
-                                            ? { geminiBinaryPath: event.target.value }
+                                            ? { geminiBinaryPath: nextValue }
                                             : providerSettings.binaryPathKey === "grokBinaryPath"
-                                              ? { grokBinaryPath: event.target.value }
+                                              ? { grokBinaryPath: nextValue }
                                               : providerSettings.binaryPathKey === "kiloBinaryPath"
-                                                ? { kiloBinaryPath: event.target.value }
+                                                ? { kiloBinaryPath: nextValue }
                                                 : providerSettings.binaryPathKey ===
                                                     "openCodeBinaryPath"
-                                                  ? { openCodeBinaryPath: event.target.value }
+                                                  ? { openCodeBinaryPath: nextValue }
                                                   : providerSettings.binaryPathKey ===
                                                       "piBinaryPath"
-                                                    ? { piBinaryPath: event.target.value }
-                                                    : { codexBinaryPath: event.target.value },
+                                                    ? { piBinaryPath: nextValue }
+                                                    : { codexBinaryPath: nextValue },
                                   )
                                 }
                                 placeholder={providerSettings.binaryPlaceholder}
@@ -2938,15 +2978,15 @@ function SettingsRouteView() {
                                 <span className="block text-xs font-medium text-foreground">
                                   CODEX_HOME path
                                 </span>
-                                <Input
+                                <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.homePathKey}`}
                                   size="sm"
                                   variant="soft"
                                   className="mt-1"
                                   value={codexHomePath}
-                                  onChange={(event) =>
+                                  onCommit={(nextValue) =>
                                     updateSettings({
-                                      codexHomePath: event.target.value,
+                                      codexHomePath: nextValue,
                                     })
                                   }
                                   placeholder={providerSettings.homePlaceholder}
@@ -2968,15 +3008,15 @@ function SettingsRouteView() {
                                 <span className="block text-xs font-medium text-foreground">
                                   Pi agent directory
                                 </span>
-                                <Input
+                                <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.agentDirKey}`}
                                   size="sm"
                                   variant="soft"
                                   className="mt-1"
                                   value={piAgentDir}
-                                  onChange={(event) =>
+                                  onCommit={(nextValue) =>
                                     updateSettings({
-                                      piAgentDir: event.target.value,
+                                      piAgentDir: nextValue,
                                     })
                                   }
                                   placeholder={providerSettings.agentDirPlaceholder}
@@ -2998,15 +3038,15 @@ function SettingsRouteView() {
                                 <span className="block text-xs font-medium text-foreground">
                                   Cursor API endpoint
                                 </span>
-                                <Input
+                                <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.apiEndpointKey}`}
                                   size="sm"
                                   variant="soft"
                                   className="mt-1"
                                   value={cursorApiEndpoint}
-                                  onChange={(event) =>
+                                  onCommit={(nextValue) =>
                                     updateSettings({
-                                      cursorApiEndpoint: event.target.value,
+                                      cursorApiEndpoint: nextValue,
                                     })
                                   }
                                   placeholder={providerSettings.apiEndpointPlaceholder}
@@ -3028,7 +3068,7 @@ function SettingsRouteView() {
                                 <span className="block text-xs font-medium text-foreground">
                                   {providerSettings.title} server URL
                                 </span>
-                                <Input
+                                <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.serverUrlKey}`}
                                   size="sm"
                                   variant="soft"
@@ -3038,11 +3078,11 @@ function SettingsRouteView() {
                                       ? kiloServerUrl
                                       : openCodeServerUrl
                                   }
-                                  onChange={(event) =>
+                                  onCommit={(nextValue) =>
                                     updateSettings(
                                       providerSettings.serverUrlKey === "kiloServerUrl"
-                                        ? { kiloServerUrl: event.target.value }
-                                        : { openCodeServerUrl: event.target.value },
+                                        ? { kiloServerUrl: nextValue }
+                                        : { openCodeServerUrl: nextValue },
                                     )
                                   }
                                   placeholder={providerSettings.serverUrlPlaceholder}
@@ -3064,7 +3104,7 @@ function SettingsRouteView() {
                                 <span className="block text-xs font-medium text-foreground">
                                   {providerSettings.title} server password
                                 </span>
-                                <Input
+                                <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.serverPasswordKey}`}
                                   size="sm"
                                   variant="soft"
@@ -3074,11 +3114,11 @@ function SettingsRouteView() {
                                       ? kiloServerPassword
                                       : openCodeServerPassword
                                   }
-                                  onChange={(event) =>
+                                  onCommit={(nextValue) =>
                                     updateSettings(
                                       providerSettings.serverPasswordKey === "kiloServerPassword"
-                                        ? { kiloServerPassword: event.target.value }
-                                        : { openCodeServerPassword: event.target.value },
+                                        ? { kiloServerPassword: nextValue }
+                                        : { openCodeServerPassword: nextValue },
                                     )
                                   }
                                   placeholder={providerSettings.serverPasswordPlaceholder}

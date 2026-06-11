@@ -398,12 +398,28 @@ export const makeWsRpcLayer = () =>
           return normalizedWorkspaceRoot;
         }
       });
+      const prepareChatWorkspaceRoot = Effect.fnUntraced(function* (workspaceRoot: string) {
+        for (const dirname of ["work", "outputs"]) {
+          const childPath = path.join(workspaceRoot, dirname);
+          yield* fileSystem.makeDirectory(childPath, { recursive: true }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new WsRpcError({
+                  message: `Failed to create chat workspace directory: ${childPath}`,
+                  cause,
+                }),
+            ),
+          );
+        }
+      });
 
       const normalizeDispatchCommand = makeDispatchCommandNormalizer<WsRpcError>({
         attachmentsDir: config.attachmentsDir,
+        chatWorkspaceRoot: config.chatWorkspaceRoot,
         fileSystem,
         path,
         canonicalizeProjectWorkspaceRoot,
+        prepareChatWorkspaceRoot,
       });
 
       const importThread = makeImportThreadHandler({
@@ -481,6 +497,7 @@ export const makeWsRpcLayer = () =>
         return {
           cwd: config.cwd,
           homeDir: config.homeDir,
+          chatWorkspaceRoot: config.chatWorkspaceRoot,
           worktreesDir: config.worktreesDir,
           keybindingsConfigPath: config.keybindingsConfigPath,
           keybindings: keybindingsConfig.keybindings,

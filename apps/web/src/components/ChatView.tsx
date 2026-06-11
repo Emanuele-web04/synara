@@ -1164,8 +1164,12 @@ export default function ChatView({
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
   const homeDir = useWorkspaceStore((state) => state.homeDir);
+  const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
-  const isHomeChatContainer = isHomeChatContainerProject(activeProject, homeDir);
+  const isHomeChatContainer = isHomeChatContainerProject(activeProject, {
+    homeDir,
+    chatWorkspaceRoot,
+  });
   const activeProjectDisplayName = isHomeChatContainer
     ? activeProject?.folderName
     : activeProject?.name;
@@ -2335,7 +2339,9 @@ export default function ChatView({
   const isCenteredEmptyLanding =
     timelineEntries.length === 0 && !activeThread?.parentThreadId && !isEditorRail;
   const isEmptyChatLanding =
-    isCenteredEmptyLanding && Boolean(homeDir) && activeProject?.cwd === homeDir;
+    isCenteredEmptyLanding &&
+    Boolean(homeDir) &&
+    isHomeChatContainerProject(activeProject, { homeDir, chatWorkspaceRoot });
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
@@ -5679,12 +5685,35 @@ export default function ChatView({
     }
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || !hasNativeUserMessages;
+    const firstSendCreatedAt = new Date();
+    let firstComposerImageNameForTitle: string | null = null;
+    if (composerImagesForSend.length > 0) {
+      firstComposerImageNameForTitle = composerImagesForSend[0]?.name ?? null;
+    }
+    let titleSeed = trimmed;
+    if (!titleSeed) {
+      if (firstComposerImageNameForTitle) {
+        titleSeed = `Image: ${firstComposerImageNameForTitle}`;
+      } else if (composerAssistantSelectionsForSend.length > 0) {
+        titleSeed = formatAssistantSelectionTitleSeed(composerAssistantSelectionsForSend.length);
+      } else if (sendableComposerTerminalContexts.length > 0) {
+        titleSeed = formatTerminalContextLabel(sendableComposerTerminalContexts[0]!);
+      } else {
+        titleSeed = GENERIC_CHAT_THREAD_TITLE;
+      }
+    }
+    // Keep the optimistic label short while the server asks Codex for a better summary.
+    const title = buildPromptThreadTitleFallback(titleSeed);
     const firstSendTarget = resolveFirstSendTarget({
       activeProject,
+      chatWorkspaceRoot,
+      createdAt: firstSendCreatedAt,
       isFirstMessage,
       isHomeChatContainer,
       projects: useStore.getState().projects,
       selectedWorkspaceRoot: isHomeChatContainer ? (resolvedThreadWorktreePath ?? null) : null,
+      title,
+      titleSeed,
     });
     let {
       targetProjectId: targetProjectIdForSend,
@@ -5709,20 +5738,22 @@ export default function ChatView({
     if (isFirstMessage && isHomeChatContainer && firstSendTarget.kind !== "current") {
       if (firstSendTarget.kind === "create-project") {
         const projectId = newProjectId();
-        const createdAt = new Date().toISOString();
+        const createdAt = firstSendCreatedAt.toISOString();
         try {
           await api.orchestration.dispatchCommand({
             type: "project.create",
             commandId: newCommandId(),
             projectId,
-            kind: "project",
+            kind: firstSendTarget.creation.kind,
             title: firstSendTarget.creation.title,
             workspaceRoot: firstSendTarget.creation.workspaceRoot,
+            createWorkspaceRootIfMissing:
+              firstSendTarget.creation.createWorkspaceRootIfMissing,
             defaultModelSelection: firstSendTarget.creation.defaultModelSelection,
             createdAt,
           });
           targetProjectIdForSend = projectId;
-          targetProjectKindForSend = "project";
+          targetProjectKindForSend = firstSendTarget.creation.kind;
           targetProjectCwdForSend = firstSendTarget.creation.workspaceRoot;
           targetProjectScriptsForSend = [];
           targetProjectDefaultModelSelectionForSend =
@@ -5747,9 +5778,12 @@ export default function ChatView({
 
           syncServerShellSnapshot(snapshot);
           targetProjectIdForSend = recoveredProject.id;
-          targetProjectKindForSend = "project";
+          targetProjectKindForSend = recoveredProject.kind ?? firstSendTarget.creation.kind;
           targetProjectCwdForSend = recoveredProject.workspaceRoot;
-          targetProjectScriptsForSend = [...recoveredProject.scripts];
+          targetProjectScriptsForSend =
+            (recoveredProject.kind ?? firstSendTarget.creation.kind) === "project"
+              ? [...recoveredProject.scripts]
+              : [];
           targetProjectDefaultModelSelectionForSend =
             recoveredProject.defaultModelSelection ??
             firstSendTarget.creation.defaultModelSelection;
@@ -5907,27 +5941,6 @@ export default function ChatView({
         }
       }
 
-      let firstComposerImageName: string | null = null;
-      if (composerImagesSnapshot.length > 0) {
-        const firstComposerImage = composerImagesSnapshot[0];
-        if (firstComposerImage) {
-          firstComposerImageName = firstComposerImage.name;
-        }
-      }
-      let titleSeed = trimmed;
-      if (!titleSeed) {
-        if (firstComposerImageName) {
-          titleSeed = `Image: ${firstComposerImageName}`;
-        } else if (composerAssistantSelectionsSnapshot.length > 0) {
-          titleSeed = formatAssistantSelectionTitleSeed(composerAssistantSelectionsSnapshot.length);
-        } else if (composerTerminalContextsSnapshot.length > 0) {
-          titleSeed = formatTerminalContextLabel(composerTerminalContextsSnapshot[0]!);
-        } else {
-          titleSeed = GENERIC_CHAT_THREAD_TITLE;
-        }
-      }
-      // Keep the optimistic label short while the server asks Codex for a better summary.
-      const title = buildPromptThreadTitleFallback(titleSeed);
       const threadCreateModelSelection: ModelSelection = buildModelSelection(
         selectedProviderForSend,
         selectedModelSelectionForSend.provider === selectedProviderForSend

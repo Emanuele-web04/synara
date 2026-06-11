@@ -5,6 +5,7 @@ import type { ProjectId, ThreadId } from "@t3tools/contracts";
 export interface ServerLifecycleWelcomePayload {
   readonly cwd: string;
   readonly homeDir: string;
+  readonly chatWorkspaceRoot?: string;
   readonly projectName: string;
   readonly bootstrapProjectId?: ProjectId;
   readonly bootstrapThreadId?: ThreadId;

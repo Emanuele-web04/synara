@@ -5,6 +5,7 @@
 
 import { type ComponentProps, type ReactNode } from "react";
 import { cn } from "~/lib/utils";
+import { settingRowAnchorId } from "~/settingsNavigation";
 import {
   SETTINGS_CARD_CLASS_NAME,
   SETTINGS_CARD_ROW_CLASS_NAME,
@@ -69,8 +70,15 @@ export function SettingsRow({
   children?: ReactNode;
   onClick?: () => void;
 }) {
+  // String-titled rows expose a stable anchor so the sidebar search can deep-link to them
+  // via `?target=…`; scroll-margin keeps the row clear of the sticky settings header.
+  const anchorId = typeof title === "string" ? settingRowAnchorId(title) : undefined;
   return (
-    <div className={SETTINGS_CARD_ROW_CLASS_NAME} data-slot="settings-row">
+    <div
+      id={anchorId}
+      className={cn(SETTINGS_CARD_ROW_CLASS_NAME, anchorId && "scroll-mt-24")}
+      data-slot="settings-row"
+    >
       <div
         className={cn(
           "flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between",

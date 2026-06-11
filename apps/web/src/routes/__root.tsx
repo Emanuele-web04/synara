@@ -761,7 +761,7 @@ function EventRouter() {
   const removeOrphanedTerminalStates = useTerminalStateStore(
     (store) => store.removeOrphanedTerminalStates,
   );
-  const setWorkspaceHomeDir = useWorkspaceStore((store) => store.setHomeDir);
+  const setServerWorkspacePaths = useWorkspaceStore((store) => store.setServerWorkspacePaths);
   const workspacePages = useWorkspaceStore((store) => store.workspacePages);
   const serverThreads = useStore((store) => store.threads);
   const queryClient = useQueryClient();
@@ -1235,7 +1235,10 @@ function EventRouter() {
       .catch(() => undefined);
     const unsubWelcome = onServerWelcome((payload) => {
       void (async () => {
-        setWorkspaceHomeDir(payload.homeDir);
+        setServerWorkspacePaths({
+          homeDir: payload.homeDir,
+          chatWorkspaceRoot: payload.chatWorkspaceRoot,
+        });
         await ensureScopedSubscriptions();
         if (disposed) {
           return;
@@ -1402,7 +1405,7 @@ function EventRouter() {
     queryClient,
     removeOrphanedTerminalStates,
     setProjectExpanded,
-    setWorkspaceHomeDir,
+    setServerWorkspacePaths,
     syncServerShellSnapshot,
     syncServerThreadDetailHotPath,
   ]);
