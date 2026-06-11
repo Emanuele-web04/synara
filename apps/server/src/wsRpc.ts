@@ -481,6 +481,7 @@ export const makeWsRpcLayer = () =>
         return {
           cwd: config.cwd,
           homeDir: config.homeDir,
+          chatWorkspaceRoot: config.chatWorkspaceRoot,
           worktreesDir: config.worktreesDir,
           keybindingsConfigPath: config.keybindingsConfigPath,
           keybindings: keybindingsConfig.keybindings,

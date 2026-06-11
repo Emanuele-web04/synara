@@ -13,6 +13,7 @@ import { NetService } from "@t3tools/shared/Net";
 import {
   DEFAULT_PORT,
   deriveServerPaths,
+  resolveDefaultChatWorkspaceRoot,
   resolveStaticDir,
   ServerConfig,
   type RuntimeMode,
@@ -168,11 +169,12 @@ const ServerConfigLive = (input: CliInput) =>
       const devUrl = Option.getOrElse(input.devUrl, () => env.devUrl);
       const configuredHome =
         Option.getOrUndefined(input.t3Home) ?? env.synaraHome ?? env.t3Home ?? env.dpcodeHome;
+      const userHomeDir = OS.homedir();
       const baseDir = yield* resolveBaseDir(configuredHome);
       // Import legacy state before runtime paths are derived under ~/.synara.
       yield* migrateLegacyHomeIfNeeded({
         baseDir,
-        homeDir: OS.homedir(),
+        homeDir: userHomeDir,
         devUrl,
       }).pipe(
         Effect.mapError(
@@ -212,7 +214,8 @@ const ServerConfigLive = (input: CliInput) =>
         mode,
         port,
         cwd: cliConfig.cwd,
-        homeDir: OS.homedir(),
+        homeDir: userHomeDir,
+        chatWorkspaceRoot: resolveDefaultChatWorkspaceRoot({ homeDir: userHomeDir }),
         host,
         baseDir,
         ...derivedPaths,

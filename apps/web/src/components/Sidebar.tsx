@@ -1212,6 +1212,7 @@ export default function Sidebar() {
   const deleteWorkspace = useWorkspaceStore((store) => store.deleteWorkspace);
   const reorderWorkspace = useWorkspaceStore((store) => store.reorderWorkspace);
   const homeDir = useWorkspaceStore((store) => store.homeDir);
+  const chatWorkspaceRoot = useWorkspaceStore((store) => store.chatWorkspaceRoot);
   const navigate = useNavigate();
   const pathname = useLocation({ select: (loc) => loc.pathname });
   const isOnSettings = useLocation({
@@ -2156,8 +2157,8 @@ export default function Sidebar() {
     if (!homeDir) {
       return;
     }
-    prewarmHomeChatProject(homeDir);
-  }, [homeDir]);
+    prewarmHomeChatProject({ homeDir, chatWorkspaceRoot });
+  }, [chatWorkspaceRoot, homeDir]);
 
   // Opens a fresh home-chat draft directly on the draft thread route so the first send
   // does not need a second route swap from "/" to "/$threadId".
@@ -3775,8 +3776,11 @@ export default function Sidebar() {
     [appSettings.sidebarProjectSortOrder, projects, sidebarThreads],
   );
   const chatProjects = useMemo(
-    () => sortedProjects.filter((project) => isHomeChatContainerProject(project, homeDir)),
-    [homeDir, sortedProjects],
+    () =>
+      sortedProjects.filter((project) =>
+        isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }),
+      ),
+    [chatWorkspaceRoot, homeDir, sortedProjects],
   );
   const visibleChatThreadRows = useMemo(() => {
     if (!chatSectionExpanded) {
@@ -3826,9 +3830,11 @@ export default function Sidebar() {
   const standardProjectsBase = useMemo(
     () =>
       sortedProjects.filter(
-        (project) => project.kind === "project" && !isHomeChatContainerProject(project, homeDir),
+        (project) =>
+          project.kind === "project" &&
+          !isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }),
       ),
-    [homeDir, sortedProjects],
+    [chatWorkspaceRoot, homeDir, sortedProjects],
   );
   const pinnedProjectIds = useMemo(
     () =>
