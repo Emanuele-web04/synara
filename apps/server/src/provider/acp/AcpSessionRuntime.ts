@@ -475,15 +475,18 @@ const makeAcpSessionRuntime = (
             sessionSetupResult = resumed.value;
             resumeFailed = false;
           } else {
-            // Under on-demand auth, re-fail all session/load errors so we can authenticate and retry.
-            // Under always-auth, fall back to session/new for all errors.
-            if (options.authPolicy === "on-demand") {
-              // Fail with a generic error - the outer on-demand logic will handle auth retry
-              return yield* new EffectAcpErrors.AcpRequestError({
-                code: -32000,
-                errorMessage: "session/load failed - authentication may be required",
-              });
+            // Extract the expected AcpError from the cause
+            const failReason = Cause.findFail(resumed.cause);
+            if (
+              options.authPolicy === "on-demand" &&
+              failReason._tag === "Success" &&
+              isAcpAuthRequiredError(failReason.success.error)
+            ) {
+              // Under on-demand auth with auth error, re-fail the original cause
+              // so the outer on-demand logic can authenticate and retry the whole setup
+              return yield* Effect.failCause(resumed.cause);
             }
+            // Under always-auth, or non-auth load failure under on-demand: fall back to session/new
             resumeFailed = true;
             yield* Effect.logWarning(
               `ACP session/load failed for ${options.resumeSessionId}, falling back to session/new`,
@@ -531,16 +534,26 @@ const makeAcpSessionRuntime = (
         sessionSetupResult = setup.sessionSetupResult;
         resumeFailed = setup.resumeFailed;
       } else {
-        // On-demand auth: try session setup first; authenticate and retry on auth error.
+        // On-demand auth: try session setup first; authenticate and retry on auth error only.
         const setupResult = yield* runSessionSetup.pipe(Effect.exit);
         if (Exit.isFailure(setupResult)) {
-          // For on-demand auth, authenticate and retry on any error (conservative approach).
-          // If it's not an auth error, the authenticate will fail and we'll surface the real error.
-          yield* runAuthenticate;
-          const setup = yield* runSessionSetup;
-          sessionId = setup.sessionId;
-          sessionSetupResult = setup.sessionSetupResult;
-          resumeFailed = setup.resumeFailed;
+          // Extract the expected AcpError from the cause
+          const failReason = Cause.findFail(setupResult.cause);
+          if (failReason._tag === "Failure") {
+            // No expected failure (defects/interrupts) - re-fail the original cause
+            return yield* Effect.failCause(setupResult.cause);
+          }
+          // Check if the error is an auth-required error
+          if (isAcpAuthRequiredError(failReason.success.error)) {
+            yield* runAuthenticate;
+            const setup = yield* runSessionSetup;
+            sessionId = setup.sessionId;
+            sessionSetupResult = setup.sessionSetupResult;
+            resumeFailed = setup.resumeFailed;
+          } else {
+            // Non-auth failure - re-fail the original cause without authenticating
+            return yield* Effect.failCause(setupResult.cause);
+          }
         } else {
           sessionId = setupResult.value.sessionId;
           sessionSetupResult = setupResult.value.sessionSetupResult;
