@@ -75,6 +75,23 @@ describe("searchWorkspaceEntries", () => {
     assert.isTrue(result.entries.every((entry) => entry.path.toLowerCase().includes("compo")));
   });
 
+  it("can restrict search results to files before ranking", async () => {
+    const cwd = makeTempDir("t3code-workspace-kind-filter-");
+    writeFile(cwd, "src/components/Composer.tsx");
+    writeFile(cwd, "src/components/composePrompt.ts");
+    writeFile(cwd, "docs/components/guide.md");
+
+    const result = await searchWorkspaceEntries({ cwd, query: "compo", kind: "file", limit: 10 });
+
+    assert.isAbove(result.entries.length, 0);
+    assert.isTrue(result.entries.every((entry) => entry.kind === "file"));
+    assert.isFalse(result.entries.some((entry) => entry.path === "src/components"));
+    assert.include(
+      result.entries.map((entry) => entry.path),
+      "src/components/Composer.tsx",
+    );
+  });
+
   it("supports fuzzy subsequence queries for composer path search", async () => {
     const cwd = makeTempDir("t3code-workspace-fuzzy-query-");
     writeFile(cwd, "src/components/Composer.tsx");

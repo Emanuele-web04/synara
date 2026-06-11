@@ -810,6 +810,10 @@ export async function searchWorkspaceEntries(
   let matchedEntryCount = 0;
 
   for (const entry of index.entries) {
+    if (input.kind && entry.kind !== input.kind) {
+      continue;
+    }
+
     const score = scoreEntry(entry, normalizedQuery);
     if (score === null) {
       continue;

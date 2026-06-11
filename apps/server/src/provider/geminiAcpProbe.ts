@@ -23,6 +23,13 @@ const GEMINI_ACP_PROBE_TIMEOUT_MS = 30_000;
 const GEMINI_ACP_AUTH_REQUIRED_CODE = -32_000;
 const MAX_CAPTURED_LOG_LINES = 5;
 const MAX_CAPTURED_LOG_LENGTH = 240;
+const GEMINI_BROWSER_BLOCKLIST_VALUE = "www-browser";
+
+const GEMINI_OAUTH_BROWSER_PROMPT_PATTERNS = [
+  /opening your browser for oauth sign-in/i,
+  /attempting to open authentication page in your browser/i,
+  /accounts\.google\.com\/(?:v3\/signin|signin\/oauth)/i,
+];
 
 export {
   DEFAULT_GEMINI_MODEL_CAPABILITIES,
@@ -104,6 +111,21 @@ export function parseGeminiAcpProbeError(
   };
 }
 
+// Runs Gemini probes as status checks only; they must never launch an OAuth browser.
+export function buildGeminiProbeEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    NO_BROWSER: "true",
+    BROWSER: GEMINI_BROWSER_BLOCKLIST_VALUE,
+    CI: "true",
+    DEBIAN_FRONTEND: "noninteractive",
+  };
+}
+
+export function isGeminiOAuthBrowserPrompt(line: string): boolean {
+  return GEMINI_OAUTH_BROWSER_PROMPT_PATTERNS.some((pattern) => pattern.test(line));
+}
+
 export function normalizeGeminiCapabilityProbeResult(
   result: GeminiCapabilityProbeResult,
 ): GeminiCapabilityProbeResult {
@@ -157,6 +179,7 @@ export const probeGeminiCapabilities = (input: {
       new Promise<GeminiCapabilityProbeResult>((resolve) => {
         const child = spawn(input.binaryPath, ["--acp"], {
           cwd: input.cwd,
+          env: buildGeminiProbeEnv(),
           shell: process.platform === "win32",
           stdio: ["pipe", "pipe", "pipe"],
         });
@@ -259,6 +282,17 @@ export const probeGeminiCapabilities = (input: {
           );
         };
 
+        const finalizeOAuthBrowserPrompt = () => {
+          finalize({
+            status: "error",
+            auth: { status: "unauthenticated" },
+            models: [],
+            message: formatGeminiAuthMessage(
+              "Gemini attempted to start an OAuth browser flow during a Synara status check. Run `gemini` in a terminal to sign in.",
+            ),
+          });
+        };
+
         timeout = setTimeout(() => {
           const detail = detailFromProbeLogs(stdoutLines, stderrLines);
           finalize({
@@ -275,6 +309,10 @@ export const probeGeminiCapabilities = (input: {
 
         stdoutReader.on("line", (line) => {
           pushLogLine(stdoutLines, line);
+          if (isGeminiOAuthBrowserPrompt(line)) {
+            finalizeOAuthBrowserPrompt();
+            return;
+          }
 
           const trimmed = line.trim();
           if (!trimmed.startsWith("{")) {
@@ -350,6 +388,9 @@ export const probeGeminiCapabilities = (input: {
 
         stderrReader.on("line", (line) => {
           pushLogLine(stderrLines, line);
+          if (isGeminiOAuthBrowserPrompt(line)) {
+            finalizeOAuthBrowserPrompt();
+          }
         });
 
         child.once("error", (error) => {

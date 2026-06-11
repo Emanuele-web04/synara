@@ -9,7 +9,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { EditorWorkspaceView } from "./EditorWorkspaceView";
+import { EditorWorkspaceView, WorkspaceSearchSidebar } from "./EditorWorkspaceView";
+import { projectQueryKeys } from "../lib/projectReactQuery";
 import { SidebarProvider } from "./ui/sidebar";
 
 vi.mock("../hooks/useTheme", () => ({
@@ -244,6 +245,87 @@ describe("EditorWorkspaceView", () => {
 
     expect(markup).toContain('aria-label="Show Markdown preview"');
     expect(markup).toContain('aria-pressed="false"');
+  });
+
+  it("renders a search item in the activity bar below files and diff", () => {
+    const queryClient = new QueryClient();
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <SidebarProvider>
+          <EditorWorkspaceView
+            workspaceRoot="/Users/tester/project"
+            projectName="project"
+            selectedFilePath={null}
+            expandedDirectories={new Set()}
+            centerMode="file"
+            diffFiles={[]}
+            selectedDiffFilePath={null}
+            diffPanel={<div>Diff panel</div>}
+            chatPanel={<div>Chat panel</div>}
+            onSelectFile={vi.fn()}
+            onSelectDiffFile={vi.fn()}
+            onToggleDirectory={vi.fn()}
+            onCenterModeChange={vi.fn()}
+            onExitEditorView={vi.fn()}
+          />
+        </SidebarProvider>
+      </QueryClientProvider>,
+    );
+
+    const filesIndex = markup.indexOf('aria-label="Hide files sidebar"');
+    const diffIndex = markup.indexOf('aria-label="Diff"');
+    const searchIndex = markup.indexOf('aria-label="Search files"');
+    expect(filesIndex).toBeGreaterThan(-1);
+    expect(diffIndex).toBeGreaterThan(filesIndex);
+    expect(searchIndex).toBeGreaterThan(diffIndex);
+  });
+
+  it("prompts for a query in the search sidebar before searching", () => {
+    const queryClient = new QueryClient();
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <WorkspaceSearchSidebar
+          workspaceRoot="/Users/tester/project"
+          query=""
+          onQueryChange={vi.fn()}
+          selectedFilePath={null}
+          onSelectFile={vi.fn()}
+          onReferenceInChat={undefined}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain('placeholder="Search files..."');
+    expect(markup).toContain("Search files by name or path.");
+  });
+
+  it("lists only matching files from the workspace search results", () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(
+      projectQueryKeys.searchEntries("/Users/tester/project", "editor", 80, "file"),
+      {
+        entries: [
+          { path: "apps/web/src/components/EditorWorkspaceView.tsx", kind: "file" },
+        ],
+        truncated: false,
+      },
+    );
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <WorkspaceSearchSidebar
+          workspaceRoot="/Users/tester/project"
+          query="editor"
+          onQueryChange={vi.fn()}
+          selectedFilePath="apps/web/src/components/EditorWorkspaceView.tsx"
+          onSelectFile={vi.fn()}
+          onReferenceInChat={undefined}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain('title="apps/web/src/components/EditorWorkspaceView.tsx"');
+    expect(markup).toContain("EditorWorkspaceView.tsx");
+    expect(markup).not.toContain("No matching files.");
   });
 
   it("shows pointer cursor on activity buttons that switch files and diff", () => {

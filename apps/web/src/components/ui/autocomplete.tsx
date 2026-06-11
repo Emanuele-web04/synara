@@ -15,12 +15,14 @@ function AutocompleteInput({
   showClear = false,
   startAddon,
   size,
+  variant = "default",
   ...props
 }: Omit<AutocompletePrimitive.Input.Props, "size"> & {
   showTrigger?: boolean;
   showClear?: boolean;
   startAddon?: React.ReactNode;
   size?: "sm" | "default" | "lg" | number;
+  variant?: "default" | "soft";
   ref?: React.Ref<HTMLInputElement>;
 }) {
   const sizeValue = (size ?? "default") as "sm" | "default" | "lg" | number;
@@ -46,7 +48,7 @@ function AutocompleteInput({
           className,
         )}
         data-slot="autocomplete-input"
-        render={<Input nativeInput size={sizeValue} />}
+        render={<Input nativeInput size={sizeValue} variant={variant} />}
         {...props}
       />
       {showTrigger && (

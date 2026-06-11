@@ -299,8 +299,8 @@ export function useComposerSlashCommands(input: {
       if (!api || !activeProject || !activeThread || !isServerThread || !canOfferSideCommand) {
         toastManager.add({
           type: "warning",
-          title: "Sidechat is unavailable",
-          description: "Open a server-backed main thread before starting a sidechat.",
+          title: "Side is unavailable",
+          description: "Open a server-backed main thread before starting Side.",
         });
         return true;
       }
@@ -683,11 +683,9 @@ export function useComposerSlashCommands(input: {
         } catch (error) {
           toastManager.add({
             type: "error",
-            title: "Could not start sidechat",
+            title: "Could not start Side",
             description:
-              error instanceof Error
-                ? error.message
-                : "An error occurred while creating the sidechat.",
+              error instanceof Error ? error.message : "An error occurred while creating Side.",
           });
         }
         return true;
@@ -866,11 +864,9 @@ export function useComposerSlashCommands(input: {
         void createSidechatFromSlashCommand().catch((error) => {
           toastManager.add({
             type: "error",
-            title: "Could not start sidechat",
+            title: "Could not start Side",
             description:
-              error instanceof Error
-                ? error.message
-                : "An error occurred while creating the sidechat.",
+              error instanceof Error ? error.message : "An error occurred while creating Side.",
           });
         });
       }

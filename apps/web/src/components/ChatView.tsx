@@ -8454,8 +8454,12 @@ export default function ChatView({
           "flex items-center",
           isEditorRail ? "h-10" : CHAT_SURFACE_HEADER_HEIGHT_CLASS,
           isElectron && "drag-region",
-          desktopTopBarTrafficLightGutterClassName,
-          desktopTopBarWindowControlsGutterClassName,
+          // The editor-rail chat header sits in the editor's second row (inside the
+          // right-side chat pane), not flush against the window edges — the editor's
+          // own top bar already reserves both desktop window-control gutters. Applying
+          // them here just leaves redundant empty space on the sides.
+          !isEditorRail && desktopTopBarTrafficLightGutterClassName,
+          !isEditorRail && desktopTopBarWindowControlsGutterClassName,
         )}
       >
         <ChatHeader

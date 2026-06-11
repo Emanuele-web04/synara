@@ -1788,10 +1788,12 @@ function SettingsRouteView() {
               <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
                 <Input
                   type="number"
+                  size="sm"
                   min={MIN_CHAT_FONT_SIZE_PX}
                   max={MAX_CHAT_FONT_SIZE_PX}
                   step={1}
                   inputMode="numeric"
+                  variant="soft"
                   className="w-full text-right sm:w-20"
                   value={String(settings.chatFontSizePx)}
                   onChange={(event) => {
@@ -1827,10 +1829,12 @@ function SettingsRouteView() {
               <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
                 <Input
                   type="number"
+                  size="sm"
                   min={MIN_TERMINAL_FONT_SIZE_PX}
                   max={MAX_TERMINAL_FONT_SIZE_PX}
                   step={1}
                   inputMode="numeric"
+                  variant="soft"
                   className="w-full text-right sm:w-20"
                   value={String(settings.terminalFontSizePx)}
                   onChange={(event) => {
@@ -1876,6 +1880,8 @@ function SettingsRouteView() {
                   }}
                 >
                   <AutocompleteInput
+                    size="sm"
+                    variant="soft"
                     showTrigger
                     showClear={settings.terminalFontFamily.length > 0}
                     spellCheck={false}
@@ -2405,6 +2411,8 @@ function SettingsRouteView() {
               </Select>
               <Input
                 id="custom-model-slug"
+                size="sm"
+                variant="soft"
                 value={selectedCustomModelInput}
                 onChange={(event) => {
                   const value = event.target.value;
@@ -2853,6 +2861,8 @@ function SettingsRouteView() {
                               </span>
                               <Input
                                 id={`provider-install-${providerSettings.binaryPathKey}`}
+                                size="sm"
+                                variant="soft"
                                 className="mt-1"
                                 value={binaryPathValue}
                                 onChange={(event) =>
@@ -2893,6 +2903,8 @@ function SettingsRouteView() {
                                 </span>
                                 <Input
                                   id={`provider-install-${providerSettings.homePathKey}`}
+                                  size="sm"
+                                  variant="soft"
                                   className="mt-1"
                                   value={codexHomePath}
                                   onChange={(event) =>
@@ -2921,6 +2933,8 @@ function SettingsRouteView() {
                                 </span>
                                 <Input
                                   id={`provider-install-${providerSettings.agentDirKey}`}
+                                  size="sm"
+                                  variant="soft"
                                   className="mt-1"
                                   value={piAgentDir}
                                   onChange={(event) =>
@@ -2949,6 +2963,8 @@ function SettingsRouteView() {
                                 </span>
                                 <Input
                                   id={`provider-install-${providerSettings.apiEndpointKey}`}
+                                  size="sm"
+                                  variant="soft"
                                   className="mt-1"
                                   value={cursorApiEndpoint}
                                   onChange={(event) =>
@@ -2977,6 +2993,8 @@ function SettingsRouteView() {
                                 </span>
                                 <Input
                                   id={`provider-install-${providerSettings.serverUrlKey}`}
+                                  size="sm"
+                                  variant="soft"
                                   className="mt-1"
                                   value={
                                     providerSettings.serverUrlKey === "kiloServerUrl"
@@ -3011,6 +3029,8 @@ function SettingsRouteView() {
                                 </span>
                                 <Input
                                   id={`provider-install-${providerSettings.serverPasswordKey}`}
+                                  size="sm"
+                                  variant="soft"
                                   className="mt-1"
                                   value={
                                     providerSettings.serverPasswordKey === "kiloServerPassword"

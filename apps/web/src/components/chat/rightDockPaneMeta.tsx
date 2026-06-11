@@ -27,7 +27,7 @@ export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> 
   browser: { label: "Browser", Icon: GlobeIcon },
   diff: { label: "Diff", Icon: DiffIcon },
   terminal: { label: "Terminal", Icon: TerminalIcon },
-  sidechat: { label: "Side chat", Icon: MessageCircleIcon },
+  sidechat: { label: "Side", Icon: MessageCircleIcon },
   git: { label: "Git", Icon: GitCommitIcon },
 };
 

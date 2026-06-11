@@ -1,10 +1,12 @@
 // FILE: EditorWorkspaceView.tsx
-// Purpose: Read-only editor-style thread surface with file explorer, file/diff preview, and chat.
+// Purpose: Read-only editor-style thread surface with file explorer, workspace
+//          file search, file/diff preview, and chat.
 // Layer: Chat route presentation
 
-import type { ProjectFileSystemEntry, ProjectId } from "@t3tools/contracts";
+import type { ProjectEntry, ProjectFileSystemEntry, ProjectId } from "@t3tools/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { isSupportedLocalImagePath } from "@t3tools/shared/localImage";
+import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Component,
@@ -34,6 +36,7 @@ import {
   EyeIcon,
   FileIcon,
   PanelRightCloseIcon,
+  SearchIcon,
 } from "~/lib/icons";
 import { basenameOfPath } from "~/file-icons";
 import {
@@ -51,6 +54,7 @@ import {
 import {
   projectListDirectoriesQueryOptions,
   projectReadFileQueryOptions,
+  projectSearchEntriesQueryOptions,
 } from "~/lib/projectReactQuery";
 import {
   CHAT_FILE_REFERENCE_DRAG_TYPE,
@@ -89,9 +93,11 @@ import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
 import { useCodeSelectionAction } from "./chat/useCodeSelectionAction";
 import { LocalImagePreview } from "./LocalImagePreview";
 import { ProjectMenuPicker, type ProjectMenuPickerOption } from "./ProjectMenuPicker";
+import { SearchInput } from "./ui/search-input";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 type EditorCenterMode = "file" | "diff";
+type EditorActivityBarItem = EditorCenterMode | "search";
 
 const EDITOR_EXPLORER_HIDDEN_DIRECTORY_NAMES = new Set([
   ".cache",
@@ -119,6 +125,11 @@ const EDITOR_CHAT_PANE_MIN_WIDTH = 320;
 const EDITOR_CHAT_PANE_MAX_WIDTH = 600;
 const EDITOR_CHAT_PANE_KEYBOARD_STEP = 24;
 const EDITOR_MARKDOWN_PREVIEW_EXTENSIONS = new Set([".markdown", ".md", ".mdx"]);
+// Mirrors the composer mention search: debounce keystrokes so they don't fan
+// out into fuzzy-search RPCs, and cap results to keep the sidebar light.
+const EDITOR_SEARCH_QUERY_DEBOUNCE_MS = 120;
+const EDITOR_SEARCH_RESULTS_LIMIT = 80;
+const EMPTY_WORKSPACE_SEARCH_FILE_MATCHES: ReadonlyArray<ProjectEntry> = [];
 
 interface EditorWorkspaceViewProps {
   workspaceRoot: string | null;
@@ -324,7 +335,7 @@ function shouldShowExplorerEntry(entry: ProjectFileSystemEntry): boolean {
 function useExplorerEntryPrefetch(cwd: string | null) {
   const queryClient = useQueryClient();
   return useCallback(
-    (entry: ProjectFileSystemEntry) => {
+    (entry: Pick<ProjectFileSystemEntry, "path" | "kind">) => {
       if (!cwd) {
         return;
       }
@@ -740,6 +751,176 @@ function WorkspaceFilesSidebar(props: {
           </PanelStateMessage>
         )}
       </div>
+    </aside>
+  );
+}
+
+function WorkspaceSearchResultRow(props: {
+  entry: ProjectEntry;
+  selected: boolean;
+  onSelectFile: (path: string) => void;
+  onPrefetchEntry: (entry: Pick<ProjectFileSystemEntry, "path" | "kind">) => void;
+  onEntryContextMenu: (path: string, position: { x: number; y: number }) => void;
+}) {
+  const { entry, onEntryContextMenu, onPrefetchEntry, onSelectFile } = props;
+  const { dir, name } = splitRepoRelativePath(entry.path);
+  const handlePrefetch = useCallback(() => {
+    onPrefetchEntry(entry);
+  }, [entry, onPrefetchEntry]);
+
+  return (
+    <button
+      type="button"
+      className={cn(
+        "flex h-8 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-left text-[12px] transition-colors",
+        props.selected
+          ? "bg-[var(--color-background-button-secondary)] text-foreground"
+          : "text-foreground/78 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
+      )}
+      title={entry.path}
+      draggable
+      onDragStart={(event) => {
+        setFileReferenceDragData(event.dataTransfer, entry.path);
+      }}
+      onClick={() => onSelectFile(entry.path)}
+      onPointerEnter={handlePrefetch}
+      onFocus={handlePrefetch}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onEntryContextMenu(entry.path, { x: event.clientX, y: event.clientY });
+      }}
+    >
+      <FileEntryIcon pathValue={entry.path} kind="file" className="size-3.5 shrink-0 opacity-75" />
+      <div className="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden">
+        <span className="shrink-0 truncate font-medium">{name}</span>
+        {dir ? (
+          <span className="min-w-0 truncate text-[11px] text-muted-foreground/55">{dir}</span>
+        ) : null}
+      </div>
+    </button>
+  );
+}
+
+export function WorkspaceSearchSidebar(props: {
+  workspaceRoot: string | null;
+  query: string;
+  onQueryChange: (query: string) => void;
+  selectedFilePath: string | null;
+  onSelectFile: (path: string) => void;
+  onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
+}) {
+  const prefetchEntry = useExplorerEntryPrefetch(props.workspaceRoot);
+  const { onQueryChange, onReferenceInChat, onSelectFile } = props;
+  const handleEntryContextMenu = useCallback(
+    (path: string, position: { x: number; y: number }) => {
+      void showFileReferenceContextMenu({ path, position, onReferenceInChat });
+    },
+    [onReferenceInChat],
+  );
+  const [debouncedQuery] = useDebouncedValue(props.query, {
+    wait: EDITOR_SEARCH_QUERY_DEBOUNCE_MS,
+  });
+  const inputQuery = props.query.trim();
+  const trimmedQuery = debouncedQuery.trim();
+  const entriesQuery = useQuery(
+    projectSearchEntriesQueryOptions({
+      cwd: props.workspaceRoot,
+      query: trimmedQuery,
+      kind: "file",
+      limit: EDITOR_SEARCH_RESULTS_LIMIT,
+    }),
+  );
+  // Results are tied to the debounced query. While the user is ahead of that
+  // query, keep old results non-selectable so Enter cannot open a stale match.
+  const searchResultsPending = inputQuery !== trimmedQuery || entriesQuery.isPlaceholderData;
+  const searchResultsCurrent = !searchResultsPending;
+  const fileMatches = searchResultsCurrent
+    ? (entriesQuery.data?.entries ?? EMPTY_WORKSPACE_SEARCH_FILE_MATCHES)
+    : EMPTY_WORKSPACE_SEARCH_FILE_MATCHES;
+  const handleInputKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (!searchResultsCurrent) {
+          return;
+        }
+        const topMatch = fileMatches[0];
+        if (topMatch) {
+          onSelectFile(topMatch.path);
+        }
+        return;
+      }
+      if (event.key === "Escape" && props.query.length > 0) {
+        event.stopPropagation();
+        onQueryChange("");
+      }
+    },
+    [fileMatches, onQueryChange, onSelectFile, props.query.length, searchResultsCurrent],
+  );
+
+  return (
+    <aside className="flex min-h-[11rem] w-full shrink-0 flex-col border-b border-border/65 bg-[var(--color-background-surface)] lg:h-full lg:w-56 lg:border-b-0 lg:border-r">
+      <div className="shrink-0 border-b border-border/65 p-2">
+        <SearchInput
+          value={props.query}
+          autoFocus
+          spellCheck={false}
+          autoCorrect="off"
+          autoCapitalize="off"
+          placeholder="Search files..."
+          aria-label="Search files"
+          onChange={(event) => onQueryChange(event.target.value)}
+          onKeyDown={handleInputKeyDown}
+        />
+      </div>
+      <div
+        className={cn(
+          "min-h-0 flex-1 overflow-auto px-1 py-1",
+          fileMatches.length === 0 && "flex flex-col",
+        )}
+      >
+        {!props.workspaceRoot ? (
+          <PanelStateMessage density="compact" fill="flex">
+            <p>No workspace.</p>
+          </PanelStateMessage>
+        ) : inputQuery.length === 0 ? (
+          <PanelStateMessage density="compact" fill="flex">
+            <p>Search files by name or path.</p>
+          </PanelStateMessage>
+        ) : searchResultsCurrent && entriesQuery.error ? (
+          <PanelStateMessage density="compact" fill="flex">
+            <p className="text-destructive/85">
+              {entriesQuery.error instanceof Error
+                ? entriesQuery.error.message
+                : "Could not search files."}
+            </p>
+          </PanelStateMessage>
+        ) : fileMatches.length === 0 ? (
+          searchResultsPending || entriesQuery.isFetching ? (
+            <ExplorerLoadingRows depth={0} />
+          ) : (
+            <PanelStateMessage density="compact" fill="flex">
+              <p>No matching files.</p>
+            </PanelStateMessage>
+          )
+        ) : (
+          fileMatches.map((entry) => (
+            <WorkspaceSearchResultRow
+              key={entry.path}
+              entry={entry}
+              selected={entry.path === props.selectedFilePath}
+              onSelectFile={onSelectFile}
+              onPrefetchEntry={prefetchEntry}
+              onEntryContextMenu={handleEntryContextMenu}
+            />
+          ))
+        )}
+      </div>
+      {fileMatches.length > 0 && entriesQuery.data?.truncated ? (
+        <p className="shrink-0 border-t border-border/45 px-3 py-1.5 text-[10px] text-muted-foreground/70">
+          Showing the top matches. Refine the search to narrow them down.
+        </p>
+      ) : null}
     </aside>
   );
 }
@@ -1184,22 +1365,22 @@ function EditorActivityBarButton(props: {
 
 function EditorActivityBar(props: {
   centerMode: EditorCenterMode;
+  searchActive: boolean;
   sidebarVisible: boolean;
-  onSelectMode: (mode: EditorCenterMode) => void;
+  onSelectItem: (item: EditorActivityBarItem) => void;
 }) {
-  const modeLabel = (mode: EditorCenterMode, label: string) =>
-    props.centerMode === mode && props.sidebarVisible
-      ? `Hide ${label.toLowerCase()} sidebar`
-      : label;
+  const filesActive = props.sidebarVisible && !props.searchActive && props.centerMode === "file";
+  const diffActive = props.sidebarVisible && !props.searchActive && props.centerMode === "diff";
+  const searchActive = props.sidebarVisible && props.searchActive;
   return (
     <nav
       className="flex w-12 shrink-0 flex-col items-center border-r border-border/65 bg-[var(--color-background-surface)]"
       aria-label="Editor activity bar"
     >
       <EditorActivityBarButton
-        label={modeLabel("file", "Files")}
-        active={props.centerMode === "file" && props.sidebarVisible}
-        onClick={() => props.onSelectMode("file")}
+        label={filesActive ? "Hide files sidebar" : "Files"}
+        active={filesActive}
+        onClick={() => props.onSelectItem("file")}
       >
         <FileEntryIcon
           pathValue="Files"
@@ -1209,11 +1390,18 @@ function EditorActivityBar(props: {
         />
       </EditorActivityBarButton>
       <EditorActivityBarButton
-        label={modeLabel("diff", "Diff")}
-        active={props.centerMode === "diff" && props.sidebarVisible}
-        onClick={() => props.onSelectMode("diff")}
+        label={diffActive ? "Hide diff sidebar" : "Diff"}
+        active={diffActive}
+        onClick={() => props.onSelectItem("diff")}
       >
         <ChangesIcon className="size-5" />
+      </EditorActivityBarButton>
+      <EditorActivityBarButton
+        label={searchActive ? "Hide search sidebar" : "Search files"}
+        active={searchActive}
+        onClick={() => props.onSelectItem("search")}
+      >
+        <SearchIcon className="size-5" />
       </EditorActivityBarButton>
     </nav>
   );
@@ -1236,12 +1424,20 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   const [chatPaneVisible, setChatPaneVisible] = useState(() =>
     readStoredEditorVisibility(EDITOR_CHAT_PANE_VISIBLE_STORAGE_KEY),
   );
+  // The search pane replaces the explorer/diff sidebar without touching the
+  // center mode, so picking a result simply opens it in the file preview. The
+  // query lives here so it survives toggling between sidebar panes.
+  const [searchPaneActive, setSearchPaneActive] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
   const { centerMode, onCenterModeChange } = props;
-  const handleActivityBarSelectMode = useCallback(
-    (mode: EditorCenterMode) => {
-      if (mode === centerMode && sidebarVisible) {
+  const handleActivityBarSelectItem = useCallback(
+    (item: EditorActivityBarItem) => {
+      const itemActive =
+        sidebarVisible &&
+        (item === "search" ? searchPaneActive : !searchPaneActive && centerMode === item);
+      if (itemActive) {
         setSidebarVisible(false);
         storeEditorVisibility(EDITOR_SIDEBAR_VISIBLE_STORAGE_KEY, false);
         return;
@@ -1250,9 +1446,14 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
         setSidebarVisible(true);
         storeEditorVisibility(EDITOR_SIDEBAR_VISIBLE_STORAGE_KEY, true);
       }
-      onCenterModeChange(mode);
+      if (item === "search") {
+        setSearchPaneActive(true);
+        return;
+      }
+      setSearchPaneActive(false);
+      onCenterModeChange(item);
     },
-    [centerMode, onCenterModeChange, sidebarVisible],
+    [centerMode, onCenterModeChange, searchPaneActive, sidebarVisible],
   );
   const toggleChatPaneVisible = useCallback(() => {
     setChatPaneVisible((previous) => {
@@ -1440,11 +1641,21 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <EditorActivityBar
           centerMode={props.centerMode}
+          searchActive={searchPaneActive}
           sidebarVisible={sidebarVisible}
-          onSelectMode={handleActivityBarSelectMode}
+          onSelectItem={handleActivityBarSelectItem}
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:flex-row">
-          {!sidebarVisible ? null : props.centerMode === "diff" ? (
+          {!sidebarVisible ? null : searchPaneActive ? (
+            <WorkspaceSearchSidebar
+              workspaceRoot={props.workspaceRoot}
+              query={searchQuery}
+              onQueryChange={setSearchQuery}
+              selectedFilePath={props.selectedFilePath}
+              onSelectFile={props.onSelectFile}
+              onReferenceInChat={props.onReferenceInChat}
+            />
+          ) : props.centerMode === "diff" ? (
             <DiffFilesSidebar
               files={props.diffFiles}
               isLoading={props.diffFilesLoading ?? false}

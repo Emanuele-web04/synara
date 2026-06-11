@@ -1794,7 +1794,7 @@ function SingleChatSurface(props: {
     const overrides: Record<string, string | undefined> = {};
     for (const pane of dockState.panes) {
       if (pane.kind === "sidechat" && pane.threadId) {
-        overrides[pane.id] = titleByThreadId.get(pane.threadId) || "Side chat";
+        overrides[pane.id] = titleByThreadId.get(pane.threadId) || "Side";
       }
     }
     return overrides;
@@ -1830,19 +1830,17 @@ function SingleChatSurface(props: {
         if (!createSidechat) {
           toastManager.add({
             type: "warning",
-            title: "Sidechat is unavailable",
-            description: "Open a server-backed main thread before starting a sidechat.",
+            title: "Side is unavailable",
+            description: "Open a server-backed main thread before starting Side.",
           });
           return;
         }
         void createSidechat().catch((error) => {
           toastManager.add({
             type: "error",
-            title: "Could not start sidechat",
+            title: "Could not start Side",
             description:
-              error instanceof Error
-                ? error.message
-                : "An error occurred while creating the sidechat.",
+              error instanceof Error ? error.message : "An error occurred while creating Side.",
           });
         });
         return;

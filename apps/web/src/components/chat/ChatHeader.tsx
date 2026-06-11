@@ -379,7 +379,7 @@ function EditorRailTabs(props: {
   };
 
   return (
-    <div className="flex min-w-0 shrink items-center gap-2 [-webkit-app-region:no-drag]">
+    <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
       <div className="flex shrink-0 items-center gap-0.5">
         <Menu modal={false}>
           <MenuTrigger
@@ -419,8 +419,9 @@ function EditorRailTabs(props: {
       </div>
       {shouldShowTabs ? (
         // Same chip tabs as the right dock's pane strip so every tab row in the
-        // app reads identically — centered in the header, no detached borders.
-        <div className="flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        // app reads identically. Pushed to the header's right edge (ml-auto) so the
+        // title and new/history controls stay grouped on the left.
+        <div className="ml-auto flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {chatTabs.map((thread, index) => (
             <SurfaceTabChip
               key={thread.id}
@@ -688,8 +689,8 @@ export const ChatHeader = memo(function ChatHeader({
                   <IconButton
                     variant="chrome"
                     size="icon-xs"
-                    label="Close selected sidechat"
-                    tooltip="Close selected sidechat"
+                    label="Close selected Side"
+                    tooltip="Close selected Side"
                     tooltipSide="bottom"
                     className="size-5 rounded-lg [-webkit-app-region:no-drag] [&_svg]:size-3"
                     onClick={(event) => {
