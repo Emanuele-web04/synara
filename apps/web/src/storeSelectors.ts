@@ -5,8 +5,10 @@
 import type { ProjectId, ThreadId } from "@t3tools/contracts";
 
 import type { AppState } from "./store";
-import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
-import type { Project, SidebarThreadSummary, Thread } from "./types";
+import { collectByIds, getThreadFromState, getThreadsFromState } from "./threadDerivation";
+import type { Project, SidebarThreadSummary, Thread, ThreadShell } from "./types";
+
+const EMPTY_THREAD_SHELLS: ThreadShell[] = [];
 
 function createStableEntitySelector<T extends { id: string }>(
   selectItems: (state: AppState) => readonly T[],
@@ -94,6 +96,38 @@ export function createAllThreadsSelector(): (state: AppState) => readonly Thread
     previousTurnDiffSummaryByThreadId = state.turnDiffSummaryByThreadId;
     previousThreads = getThreadsFromState(state);
     return previousThreads;
+  };
+}
+
+/** Shell-only projection of all threads, in `threadIds` order. Unlike
+ *  `createAllThreadsSelector`, this stays reference-stable across message/activity
+ *  streaming updates, so subscribers only re-render on thread-level changes
+ *  (create/delete/archive/title/workspace). Use it when message content is not needed. */
+export function createThreadShellsSelector(): (state: AppState) => readonly ThreadShell[] {
+  return (state) => collectByIds(state.threadIds, state.threadShellById, EMPTY_THREAD_SHELLS);
+}
+
+/** True when no known thread has any messages (vacuously true with zero threads).
+ *  Reads message id lists only, so streaming content updates do not invalidate it. */
+export function createAllThreadsMessagelessSelector(): (state: AppState) => boolean {
+  let previousThreadIds: readonly ThreadId[] | undefined;
+  let previousMessageIdsByThreadId: AppState["messageIdsByThreadId"] | undefined;
+  let previousResult = true;
+
+  return (state) => {
+    if (
+      previousThreadIds === state.threadIds &&
+      previousMessageIdsByThreadId === state.messageIdsByThreadId
+    ) {
+      return previousResult;
+    }
+
+    previousThreadIds = state.threadIds;
+    previousMessageIdsByThreadId = state.messageIdsByThreadId;
+    previousResult = (state.threadIds ?? []).every(
+      (threadId) => (state.messageIdsByThreadId?.[threadId]?.length ?? 0) === 0,
+    );
+    return previousResult;
   };
 }
 

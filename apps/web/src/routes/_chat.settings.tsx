@@ -153,7 +153,7 @@ import {
 } from "../settingsPanelStyles";
 import { useStore } from "../store";
 import ReleaseHistoryDialog from "../components/ReleaseHistoryDialog";
-import { createAllThreadsSelector } from "../storeSelectors";
+import { createAllThreadsMessagelessSelector, createThreadShellsSelector } from "../storeSelectors";
 import { formatRelativeTime } from "../lib/relativeTime";
 import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 import { sameProviderOrder } from "../providerOrdering";
@@ -635,16 +635,23 @@ function SettingsRouteView() {
   );
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
-  const threads = useStore(useMemo(() => createAllThreadsSelector(), []));
+  // Shell-level subscription on purpose: the full-thread selector invalidates on every
+  // streaming message/activity tick, which would re-render this whole route while a
+  // turn is running. Settings only needs thread metadata (and message emptiness below).
+  const threadShells = useStore(useMemo(() => createThreadShellsSelector(), []));
+  const allThreadsMessageless = useStore(useMemo(() => createAllThreadsMessagelessSelector(), []));
   const projects = useStore((store) => store.projects);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
-  const archivedThreads = threads.filter((thread) => thread.archivedAt != null);
+  const archivedThreads = useMemo(
+    () => threadShells.filter((thread) => thread.archivedAt != null),
+    [threadShells],
+  );
   const shouldOfferRecoveryTools = useMemo(() => {
     if (!threadsHydrated || projects.length === 0) {
       return false;
     }
-    return threads.length === 0 || threads.every((thread) => thread.messages.length === 0);
-  }, [projects.length, threads, threadsHydrated]);
+    return threadShells.length === 0 || allThreadsMessageless;
+  }, [allThreadsMessageless, projects.length, threadShells.length, threadsHydrated]);
 
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [isRepairingLocalState, setIsRepairingLocalState] = useState(false);
@@ -773,38 +780,44 @@ function SettingsRouteView() {
     activeSection === "general" && settingsTarget === SETTINGS_TARGETS.environmentPanel,
     environmentPanelRef,
   );
-  const managedWorktrees = serverWorktreesQuery.data?.worktrees ?? [];
-  const worktreesByWorkspaceRoot = managedWorktrees.reduce<
-    Array<{
-      workspaceRoot: string;
-      worktrees: Array<{
-        path: string;
-        linkedThreads: typeof threads;
-      }>;
-    }>
-  >((groups, worktree) => {
-    const linkedThreads = threads.filter((thread) => {
-      const candidatePaths = [
-        normalizeManagedWorktreePath(thread.worktreePath),
-        normalizeManagedWorktreePath(thread.associatedWorktreePath),
-      ];
-      return candidatePaths.includes(worktree.path);
-    });
-    const existingGroup = groups.find((group) => group.workspaceRoot === worktree.workspaceRoot);
-    const nextWorktree = {
-      path: worktree.path,
-      linkedThreads,
-    };
-    if (existingGroup) {
-      existingGroup.worktrees.push(nextWorktree);
-    } else {
-      groups.push({
-        workspaceRoot: worktree.workspaceRoot,
-        worktrees: [nextWorktree],
-      });
-    }
-    return groups;
-  }, []);
+  const managedWorktrees = serverWorktreesQuery.data?.worktrees;
+  const worktreesByWorkspaceRoot = useMemo(
+    () =>
+      (managedWorktrees ?? []).reduce<
+        Array<{
+          workspaceRoot: string;
+          worktrees: Array<{
+            path: string;
+            linkedThreads: typeof threadShells;
+          }>;
+        }>
+      >((groups, worktree) => {
+        const linkedThreads = threadShells.filter((thread) => {
+          const candidatePaths = [
+            normalizeManagedWorktreePath(thread.worktreePath),
+            normalizeManagedWorktreePath(thread.associatedWorktreePath),
+          ];
+          return candidatePaths.includes(worktree.path);
+        });
+        const existingGroup = groups.find(
+          (group) => group.workspaceRoot === worktree.workspaceRoot,
+        );
+        const nextWorktree = {
+          path: worktree.path,
+          linkedThreads,
+        };
+        if (existingGroup) {
+          existingGroup.worktrees.push(nextWorktree);
+        } else {
+          groups.push({
+            workspaceRoot: worktree.workspaceRoot,
+            worktrees: [nextWorktree],
+          });
+        }
+        return groups;
+      }, []),
+    [managedWorktrees, threadShells],
+  );
 
   const gitTextGenerationModelOptions = getGitTextGenerationModelOptions(settings);
   const currentGitTextGenerationProvider = settings.textGenerationProvider ?? "codex";
@@ -837,13 +850,17 @@ function SettingsRouteView() {
     settings.customKiloModels.length +
     settings.customOpenCodeModels.length +
     settings.customPiModels.length;
-  const savedCustomModelRows = MODEL_PROVIDER_SETTINGS.flatMap((providerSettings) =>
-    getCustomModelsForProvider(settings, providerSettings.provider).map((slug) => ({
-      key: `${providerSettings.provider}:${slug}`,
-      provider: providerSettings.provider,
-      providerTitle: providerSettings.title,
-      slug,
-    })),
+  const savedCustomModelRows = useMemo(
+    () =>
+      MODEL_PROVIDER_SETTINGS.flatMap((providerSettings) =>
+        getCustomModelsForProvider(settings, providerSettings.provider).map((slug) => ({
+          key: `${providerSettings.provider}:${slug}`,
+          provider: providerSettings.provider,
+          providerTitle: providerSettings.title,
+          slug,
+        })),
+      ),
+    [settings],
   );
   const visibleCustomModelRows = showAllCustomModels
     ? savedCustomModelRows
