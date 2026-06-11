@@ -86,6 +86,7 @@ const ServerProviderStatuses = Schema.Array(ServerProviderStatus);
 export const ServerConfig = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   homeDir: Schema.optional(TrimmedNonEmptyString),
+  chatWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
   worktreesDir: TrimmedNonEmptyString,
   keybindingsConfigPath: TrimmedNonEmptyString,
   keybindings: ResolvedKeybindingsConfig,
@@ -309,6 +310,7 @@ export type ServerSettingsUpdatedPayload = typeof ServerSettingsUpdatedPayload.T
 export const ServerLifecycleWelcomePayload = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   homeDir: Schema.optional(TrimmedNonEmptyString),
+  chatWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
   projectName: TrimmedNonEmptyString,
   bootstrapProjectId: Schema.optional(ProjectId),
   bootstrapThreadId: Schema.optional(ThreadId),

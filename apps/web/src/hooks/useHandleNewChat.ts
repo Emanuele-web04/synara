@@ -7,6 +7,7 @@ import { useHandleNewThread } from "./useHandleNewThread";
 
 export function useHandleNewChat() {
   const homeDir = useWorkspaceStore((state) => state.homeDir);
+  const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
   const { handleNewThread } = useHandleNewThread();
 
   const handleNewChat = useCallback(
@@ -18,7 +19,7 @@ export function useHandleNewChat() {
         };
       }
 
-      const projectId = await ensureHomeChatProject(homeDir);
+      const projectId = await ensureHomeChatProject({ homeDir, chatWorkspaceRoot });
       if (!projectId) {
         return {
           ok: false,
@@ -44,7 +45,7 @@ export function useHandleNewChat() {
         };
       }
     },
-    [handleNewThread, homeDir],
+    [chatWorkspaceRoot, handleNewThread, homeDir],
   );
 
   return { handleNewChat };

@@ -10,6 +10,10 @@ import {
   getWorkspaceLayoutPreset,
   type WorkspaceLayoutPresetId,
 } from "./workspaceTerminalLayoutPresets";
+import {
+  normalizeServerWorkspacePaths,
+  type ServerWorkspacePaths,
+} from "./lib/serverWorkspacePaths";
 
 interface WorkspacePage {
   id: string;
@@ -21,8 +25,11 @@ interface WorkspacePage {
 
 interface WorkspaceStoreState {
   homeDir: string | null;
+  chatWorkspaceRoot: string | null;
   workspacePages: WorkspacePage[];
   setHomeDir: (homeDir: string | null | undefined) => void;
+  setChatWorkspaceRoot: (chatWorkspaceRoot: string | null | undefined) => void;
+  setServerWorkspacePaths: (paths: ServerWorkspacePaths) => void;
   ensureWorkspacePage: (workspaceId: string) => void;
   createWorkspace: () => string;
   renameWorkspace: (workspaceId: string, title: string) => void;
@@ -134,6 +141,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>()(
   persist(
     (set) => ({
       homeDir: null,
+      chatWorkspaceRoot: null,
       workspacePages: [createWorkspacePage([])],
       setHomeDir: (homeDir) =>
         set((state) => {
@@ -146,6 +154,36 @@ export const useWorkspaceStore = create<WorkspaceStoreState>()(
             return state;
           }
           return { homeDir: normalizedHomeDir };
+        }),
+      setChatWorkspaceRoot: (chatWorkspaceRoot) =>
+        set((state) => {
+          // `undefined` means server config has not arrived yet; keep the last known value.
+          if (chatWorkspaceRoot === undefined) {
+            return state;
+          }
+          const normalizedChatWorkspaceRoot = chatWorkspaceRoot?.trim() ?? null;
+          if (state.chatWorkspaceRoot === normalizedChatWorkspaceRoot) {
+            return state;
+          }
+          return { chatWorkspaceRoot: normalizedChatWorkspaceRoot };
+        }),
+      setServerWorkspacePaths: (paths) =>
+        set((state) => {
+          const normalizedPaths = normalizeServerWorkspacePaths(paths);
+          const next: Partial<WorkspaceStoreState> = {};
+          if (paths.homeDir !== undefined) {
+            const normalizedHomeDir = normalizedPaths.homeDir;
+            if (state.homeDir !== normalizedHomeDir) {
+              next.homeDir = normalizedHomeDir;
+            }
+          }
+          if (paths.chatWorkspaceRoot !== undefined) {
+            const normalizedChatWorkspaceRoot = normalizedPaths.chatWorkspaceRoot;
+            if (state.chatWorkspaceRoot !== normalizedChatWorkspaceRoot) {
+              next.chatWorkspaceRoot = normalizedChatWorkspaceRoot;
+            }
+          }
+          return Object.keys(next).length > 0 ? next : state;
         }),
       ensureWorkspacePage: (workspaceId) =>
         set((state) => {
@@ -241,6 +279,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>()(
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         homeDir: state.homeDir,
+        chatWorkspaceRoot: state.chatWorkspaceRoot,
         workspacePages: state.workspacePages,
       }),
       merge: (persistedState, currentState) => {
@@ -249,6 +288,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>()(
         return {
           ...currentState,
           homeDir: candidate.homeDir?.trim() ?? null,
+          chatWorkspaceRoot: candidate.chatWorkspaceRoot?.trim() ?? null,
           workspacePages,
         };
       },

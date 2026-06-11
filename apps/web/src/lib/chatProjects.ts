@@ -3,79 +3,136 @@
 // Layer: Web orchestration helper
 
 import { type ProjectId } from "@t3tools/contracts";
+import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 import type { Project } from "../types";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
+import {
+  resolveServerChatWorkspaceRoot,
+  type ServerWorkspacePaths,
+} from "./serverWorkspacePaths";
 import { newCommandId, newProjectId } from "./utils";
 
-const pendingHomeChatCreationByHomeDir = new Map<string, Promise<ProjectId | null>>();
-const pendingHomeChatFixupByHomeDir = new Map<string, Promise<void>>();
+const pendingHomeChatCreationByWorkspaceRoot = new Map<string, Promise<ProjectId | null>>();
+const pendingHomeChatFixupByWorkspaceRoot = new Map<string, Promise<void>>();
+
+function matchesHomeChatWorkspaceRoot(
+  project: Pick<Project, "cwd">,
+  input: ServerWorkspacePaths,
+): boolean {
+  const workspaceRoot = resolveServerChatWorkspaceRoot(input);
+  const homeDir = input.homeDir?.trim() ?? "";
+  if (!workspaceRoot || !homeDir) {
+    return false;
+  }
+  return (
+    workspaceRootsEqual(project.cwd, workspaceRoot) ||
+    workspaceRootsEqual(project.cwd, homeDir)
+  );
+}
+
+function hasThreadsForProject(projectId: ProjectId): boolean {
+  const state = useStore.getState();
+  return (state.threadIds ?? [])
+    .map((threadId) => getThreadFromState(state, threadId))
+    .some((thread) => thread?.projectId === projectId);
+}
+
+function scoreHomeChatProject(project: Project, input: ServerWorkspacePaths): number {
+  const workspaceRoot = resolveServerChatWorkspaceRoot(input);
+  let score = 0;
+  if (hasThreadsForProject(project.id)) score += 8;
+  if (project.kind === "chat") score += 4;
+  if (workspaceRoot && workspaceRootsEqual(project.cwd, workspaceRoot)) score += 2;
+  if (project.remoteName === "Home" || project.name === "Home") score += 1;
+  return score;
+}
 
 export function findHomeChatContainerProject<
   T extends Pick<Project, "cwd" | "kind" | "name" | "remoteName">,
->(projects: readonly T[], homeDir: string | null | undefined): T | null {
-  if (!homeDir) {
+>(projects: readonly T[], paths: ServerWorkspacePaths): T | null {
+  if (!paths.homeDir) {
     return null;
   }
-  return projects.find((project) => isHomeChatContainerProject(project, homeDir)) ?? null;
+  return projects.find((project) => isHomeChatContainerProject(project, paths)) ?? null;
 }
 
-function findCanonicalHomeProject(homeDir: string): {
+function findCanonicalHomeProject(input: ServerWorkspacePaths): {
   canonicalProjectId: ProjectId | null;
   duplicateProjectIds: ProjectId[];
   needsKindFixup: boolean;
+  needsWorkspaceRootFixup: boolean;
 } {
   const state = useStore.getState();
   const homeProjects = state.projects.filter((project) =>
-    isHomeChatContainerProject(project, homeDir),
+    isHomeChatContainerProject(project, input),
   );
+  const workspaceRoot = resolveServerChatWorkspaceRoot(input);
   const canonicalProject =
-    homeProjects.find((project) => project.kind === "chat") ?? homeProjects[0];
+    [...homeProjects].sort(
+      (left, right) =>
+        scoreHomeChatProject(right, input) - scoreHomeChatProject(left, input),
+    )[0] ?? null;
   if (!canonicalProject) {
     return {
       canonicalProjectId: null,
       duplicateProjectIds: [],
       needsKindFixup: false,
+      needsWorkspaceRootFixup: false,
     };
   }
 
   const duplicateProjectIds = homeProjects
     .filter((project) => project.id !== canonicalProject.id)
     .flatMap((project) => {
-      const hasThreads = (state.threadIds ?? [])
-        .map((threadId) => getThreadFromState(state, threadId))
-        .some((thread) => thread?.projectId === project.id);
-      return hasThreads ? [] : [project.id];
+      return hasThreadsForProject(project.id) ? [] : [project.id];
     });
 
   return {
     canonicalProjectId: canonicalProject.id,
     duplicateProjectIds,
     needsKindFixup: canonicalProject.kind !== "chat",
+    needsWorkspaceRootFixup: Boolean(
+      workspaceRoot && !workspaceRootsEqual(canonicalProject.cwd, workspaceRoot),
+    ),
   };
 }
 
-async function fixupHomeChatProject(homeDir: string): Promise<void> {
+async function fixupHomeChatProject(input: ServerWorkspacePaths): Promise<void> {
   const api = readNativeApi();
   if (!api) {
     return;
   }
 
-  const { canonicalProjectId, duplicateProjectIds, needsKindFixup } =
-    findCanonicalHomeProject(homeDir);
+  const { canonicalProjectId, duplicateProjectIds, needsKindFixup, needsWorkspaceRootFixup } =
+    findCanonicalHomeProject(input);
   if (!canonicalProjectId) {
     return;
   }
 
-  if (needsKindFixup) {
+  const targetWorkspaceRoot = needsWorkspaceRootFixup ? resolveServerChatWorkspaceRoot(input) : null;
+  if (needsWorkspaceRootFixup && !targetWorkspaceRoot) {
+    return;
+  }
+
+  if (needsKindFixup || needsWorkspaceRootFixup) {
+    const workspaceRootPatch:
+      | { readonly workspaceRoot: string; readonly createWorkspaceRootIfMissing: true }
+      | Record<string, never> =
+      needsWorkspaceRootFixup && targetWorkspaceRoot
+        ? {
+            workspaceRoot: targetWorkspaceRoot,
+            createWorkspaceRootIfMissing: true,
+          }
+        : {};
     await api.orchestration.dispatchCommand({
       type: "project.meta.update",
       commandId: newCommandId(),
       projectId: canonicalProjectId,
       kind: "chat",
-      title: "Home",
-      workspaceRoot: homeDir,
+      ...(needsKindFixup ? { title: "Home" } : {}),
+      ...workspaceRootPatch,
     });
   }
 
@@ -88,29 +145,38 @@ async function fixupHomeChatProject(homeDir: string): Promise<void> {
   }
 }
 
-function scheduleHomeChatFixup(homeDir: string): void {
-  if (pendingHomeChatFixupByHomeDir.has(homeDir)) {
+function scheduleHomeChatFixup(input: ServerWorkspacePaths): void {
+  const workspaceRoot = resolveServerChatWorkspaceRoot(input);
+  if (!workspaceRoot) {
     return;
   }
-  const promise = fixupHomeChatProject(homeDir).finally(() => {
-    pendingHomeChatFixupByHomeDir.delete(homeDir);
+  if (pendingHomeChatFixupByWorkspaceRoot.has(workspaceRoot)) {
+    return;
+  }
+  const promise = fixupHomeChatProject(input).finally(() => {
+    pendingHomeChatFixupByWorkspaceRoot.delete(workspaceRoot);
   });
-  pendingHomeChatFixupByHomeDir.set(homeDir, promise);
+  pendingHomeChatFixupByWorkspaceRoot.set(workspaceRoot, promise);
 }
 
-export async function ensureHomeChatProject(homeDir: string): Promise<ProjectId | null> {
+export async function ensureHomeChatProject(paths: ServerWorkspacePaths): Promise<ProjectId | null> {
   const api = readNativeApi();
   if (!api) {
     return null;
   }
 
-  const { canonicalProjectId } = findCanonicalHomeProject(homeDir);
+  const workspaceRoot = resolveServerChatWorkspaceRoot(paths);
+  if (!workspaceRoot || !paths.homeDir) {
+    return null;
+  }
+
+  const { canonicalProjectId } = findCanonicalHomeProject(paths);
   if (canonicalProjectId) {
-    scheduleHomeChatFixup(homeDir);
+    scheduleHomeChatFixup(paths);
     return canonicalProjectId;
   }
 
-  const pendingCreation = pendingHomeChatCreationByHomeDir.get(homeDir);
+  const pendingCreation = pendingHomeChatCreationByWorkspaceRoot.get(workspaceRoot);
   if (pendingCreation) {
     return pendingCreation;
   }
@@ -123,31 +189,32 @@ export async function ensureHomeChatProject(homeDir: string): Promise<ProjectId 
       projectId,
       kind: "chat",
       title: "Home",
-      workspaceRoot: homeDir,
+      workspaceRoot,
+      createWorkspaceRootIfMissing: true,
       createdAt: new Date().toISOString(),
     });
     return projectId;
   })().finally(() => {
-    pendingHomeChatCreationByHomeDir.delete(homeDir);
+    pendingHomeChatCreationByWorkspaceRoot.delete(workspaceRoot);
   });
 
-  pendingHomeChatCreationByHomeDir.set(homeDir, creationPromise);
+  pendingHomeChatCreationByWorkspaceRoot.set(workspaceRoot, creationPromise);
   return creationPromise;
 }
 
-export function prewarmHomeChatProject(homeDir: string): void {
-  void ensureHomeChatProject(homeDir);
+export function prewarmHomeChatProject(paths: ServerWorkspacePaths): void {
+  void ensureHomeChatProject(paths);
 }
 
 export function isHomeChatContainerProject(
   project: Pick<Project, "cwd" | "kind" | "name" | "remoteName"> | null | undefined,
-  homeDir: string | null | undefined,
+  paths: ServerWorkspacePaths,
 ): boolean {
-  if (!project || !homeDir) {
+  if (!project || !paths.homeDir) {
     return false;
   }
   return (
-    project.cwd === homeDir &&
+    matchesHomeChatWorkspaceRoot(project, paths) &&
     (project.kind === "chat" || project.remoteName === "Home" || project.name === "Home")
   );
 }

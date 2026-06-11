@@ -18,7 +18,12 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { deriveServerPaths, ServerConfig, type ServerConfigShape } from "../../config.ts";
+import {
+  deriveServerPaths,
+  resolveDefaultChatWorkspaceRoot,
+  ServerConfig,
+  type ServerConfigShape,
+} from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import type { ProviderAdapterError } from "../Errors.ts";
 import { ProviderAdapterRequestError } from "../Errors.ts";
@@ -52,6 +57,7 @@ const makeConfigLayer = () =>
         host: undefined,
         cwd,
         homeDir,
+        chatWorkspaceRoot: resolveDefaultChatWorkspaceRoot({ homeDir }),
         baseDir,
         ...derived,
         staticDir: undefined,

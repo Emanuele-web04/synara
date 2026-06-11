@@ -8,6 +8,8 @@
  */
 import { Effect, FileSystem, Layer, Path, ServiceMap } from "effect";
 import OS from "node:os";
+import pathPosix from "node:path/posix";
+import pathWin32 from "node:path/win32";
 
 export const DEFAULT_PORT = 3773;
 
@@ -43,6 +45,7 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly host: string | undefined;
   readonly cwd: string;
   readonly homeDir: string;
+  readonly chatWorkspaceRoot: string;
   readonly baseDir: string;
   readonly staticDir: string | undefined;
   readonly devUrl: URL | undefined;
@@ -83,6 +86,16 @@ export const deriveServerPaths = Effect.fn(function* (
   };
 });
 
+export function resolveDefaultChatWorkspaceRoot(input: {
+  readonly homeDir: string;
+  readonly platform?: NodeJS.Platform;
+}): string {
+  const homeDir = input.homeDir.trim();
+  const platform = input.platform ?? process.platform;
+  const pathApi = platform === "win32" ? pathWin32 : pathPosix;
+  return pathApi.join(homeDir, "Documents", "Synara");
+}
+
 /**
  * ServerConfig - Service tag for server runtime configuration.
  */
@@ -109,6 +122,7 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
         return {
           cwd,
           homeDir: OS.homedir(),
+          chatWorkspaceRoot: resolveDefaultChatWorkspaceRoot({ homeDir: OS.homedir() }),
           baseDir,
           ...derivedPaths,
           mode: "web",
