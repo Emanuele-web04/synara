@@ -264,6 +264,10 @@ export interface BrowserAttachWebviewInput extends BrowserTabInput {
   webContentsId: number;
 }
 
+export interface BrowserDetachWebviewInput extends BrowserTabInput {
+  webContentsId: number;
+}
+
 export interface BrowserCaptureScreenshotResult {
   name: string;
   mimeType: "image/png";
@@ -274,6 +278,13 @@ export interface BrowserCaptureScreenshotResult {
 export interface BrowserExecuteCdpInput extends BrowserTabInput {
   method: string;
   params?: Record<string, unknown>;
+}
+
+// Pushed from the desktop main process when the in-app browser copy-link chord fires
+// while the native page (not the React chrome) holds keyboard focus.
+export interface BrowserCopyLinkEvent {
+  threadId: ThreadId;
+  url: string;
 }
 
 export interface DesktopNotificationInput {
@@ -339,6 +350,8 @@ export interface DesktopBridge {
     getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
     setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<void>;
     attachWebview: (input: BrowserAttachWebviewInput) => Promise<ThreadBrowserState>;
+    detachWebview: (input: BrowserDetachWebviewInput) => Promise<void>;
+    copyLink: (input: BrowserTabInput) => Promise<void>;
     copyScreenshotToClipboard: (input: BrowserTabInput) => Promise<void>;
     captureScreenshot: (input: BrowserTabInput) => Promise<BrowserCaptureScreenshotResult>;
     executeCdp: (input: BrowserExecuteCdpInput) => Promise<unknown>;
@@ -352,6 +365,7 @@ export interface DesktopBridge {
     openDevTools: (input: BrowserTabInput) => Promise<void>;
     onState: (listener: (state: ThreadBrowserState) => void) => () => void;
     onBrowserUseOpenPanelRequest: (listener: () => void) => () => void;
+    onBrowserCopyLink: (listener: (event: BrowserCopyLinkEvent) => void) => () => void;
   };
 }
 
@@ -514,6 +528,8 @@ export interface NativeApi {
     getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
     setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<void>;
     attachWebview: (input: BrowserAttachWebviewInput) => Promise<ThreadBrowserState>;
+    detachWebview: (input: BrowserDetachWebviewInput) => Promise<void>;
+    copyLink: (input: BrowserTabInput) => Promise<void>;
     copyScreenshotToClipboard: (input: BrowserTabInput) => Promise<void>;
     captureScreenshot: (input: BrowserTabInput) => Promise<BrowserCaptureScreenshotResult>;
     executeCdp: (input: BrowserExecuteCdpInput) => Promise<unknown>;
@@ -526,5 +542,6 @@ export interface NativeApi {
     selectTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
     openDevTools: (input: BrowserTabInput) => Promise<void>;
     onState: (callback: (state: ThreadBrowserState) => void) => () => void;
+    onCopyLink: (callback: (event: BrowserCopyLinkEvent) => void) => () => void;
   };
 }

@@ -63,9 +63,7 @@ describe("workspaceStore", () => {
     useWorkspaceStore.getState().setChatWorkspaceRoot("/Users/tester/Documents/Synara");
     useWorkspaceStore.getState().setChatWorkspaceRoot(undefined);
 
-    expect(useWorkspaceStore.getState().chatWorkspaceRoot).toBe(
-      "/Users/tester/Documents/Synara",
-    );
+    expect(useWorkspaceStore.getState().chatWorkspaceRoot).toBe("/Users/tester/Documents/Synara");
   });
 
   it("updates home and chat workspace roots together from server paths", async () => {
@@ -80,9 +78,7 @@ describe("workspaceStore", () => {
     });
 
     expect(useWorkspaceStore.getState().homeDir).toBe("/Users/tester");
-    expect(useWorkspaceStore.getState().chatWorkspaceRoot).toBe(
-      "/Users/tester/Documents/Synara",
-    );
+    expect(useWorkspaceStore.getState().chatWorkspaceRoot).toBe("/Users/tester/Documents/Synara");
   });
 
   it("persists the chat workspace root with the home directory", async () => {

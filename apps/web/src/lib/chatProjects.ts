@@ -8,10 +8,7 @@ import type { Project } from "../types";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
-import {
-  resolveServerChatWorkspaceRoot,
-  type ServerWorkspacePaths,
-} from "./serverWorkspacePaths";
+import { resolveServerChatWorkspaceRoot, type ServerWorkspacePaths } from "./serverWorkspacePaths";
 import { newCommandId, newProjectId } from "./utils";
 
 const pendingHomeChatCreationByWorkspaceRoot = new Map<string, Promise<ProjectId | null>>();
@@ -27,8 +24,7 @@ function matchesLegacyHomeChatWorkspaceRoot(
     return false;
   }
   return (
-    workspaceRootsEqual(project.cwd, workspaceRoot) ||
-    workspaceRootsEqual(project.cwd, homeDir)
+    workspaceRootsEqual(project.cwd, workspaceRoot) || workspaceRootsEqual(project.cwd, homeDir)
   );
 }
 
@@ -96,8 +92,7 @@ function findCanonicalHomeProject(input: ServerWorkspacePaths): {
   );
   const canonicalProject =
     [...homeProjects].sort(
-      (left, right) =>
-        scoreHomeChatProject(right, input) - scoreHomeChatProject(left, input),
+      (left, right) => scoreHomeChatProject(right, input) - scoreHomeChatProject(left, input),
     )[0] ?? null;
   if (!canonicalProject) {
     return {
@@ -165,7 +160,9 @@ function scheduleHomeChatFixup(input: ServerWorkspacePaths): void {
   pendingHomeChatFixupByWorkspaceRoot.set(workspaceRoot, promise);
 }
 
-export async function ensureHomeChatProject(paths: ServerWorkspacePaths): Promise<ProjectId | null> {
+export async function ensureHomeChatProject(
+  paths: ServerWorkspacePaths,
+): Promise<ProjectId | null> {
   const api = readNativeApi();
   if (!api) {
     return null;

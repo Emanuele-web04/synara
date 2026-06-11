@@ -24,7 +24,10 @@ export interface DispatchCommandNormalizerOptions<E> {
 
 export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormalizerOptions<E>) {
   const maybePrepareChatWorkspaceRoot = (
-    command: Extract<ClientOrchestrationCommand, { type: "project.create" | "project.meta.update" }>,
+    command: Extract<
+      ClientOrchestrationCommand,
+      { type: "project.create" | "project.meta.update" }
+    >,
     workspaceRoot: string,
   ) => {
     if (

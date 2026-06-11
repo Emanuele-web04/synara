@@ -48,6 +48,14 @@
       "types": "./src/localServers.ts",
       "import": "./src/localServers.ts"
     },
+    "./browserShortcuts": {
+      "types": "./src/browserShortcuts.ts",
+      "import": "./src/browserShortcuts.ts"
+    },
+    "./browserSession": {
+      "types": "./src/browserSession.ts",
+      "import": "./src/browserSession.ts"
+    },
     "./conversationEdit": {
       "types": "./src/conversationEdit.ts",
       "import": "./src/conversationEdit.ts"

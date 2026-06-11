@@ -1,11 +1,7 @@
 // FILE: dispatchCommandNormalization.test.ts
 // Purpose: Verifies client command normalization for managed chat workspace setup.
 
-import {
-  CommandId,
-  type ClientOrchestrationCommand,
-  ProjectId,
-} from "@t3tools/contracts";
+import { CommandId, type ClientOrchestrationCommand, ProjectId } from "@t3tools/contracts";
 import type { FileSystem, Path } from "effect";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";

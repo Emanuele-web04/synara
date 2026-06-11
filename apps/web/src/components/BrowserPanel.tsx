@@ -19,10 +19,10 @@ import {
   ArrowLeftIcon,
   ArrowRightIcon,
   CameraIcon,
-  CopyIcon,
   EllipsisIcon,
   ExternalLinkIcon,
   GlobeIcon,
+  LinkIcon,
   LoaderCircleIcon,
   type LucideIcon,
   PlusIcon,
@@ -31,13 +31,23 @@ import {
 } from "~/lib/icons";
 
 import { localServerPrimaryLabel } from "@t3tools/shared/localServers";
+import {
+  BROWSER_BLANK_URL,
+  isBlankBrowserTabUrl,
+  resolveCopyableBrowserTabUrl,
+} from "@t3tools/shared/browserSession";
+import {
+  BROWSER_COPY_LINK_TOAST_TITLE,
+  isBrowserCopyLinkChord,
+} from "@t3tools/shared/browserShortcuts";
 
+import { isElectron } from "~/env";
 import { readNativeApi } from "~/nativeApi";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
 import { IMAGE_SIZE_LIMIT_LABEL } from "~/lib/composerSend";
 import { PANEL_RESIZE_OVERLAY_SYNC_EVENT } from "~/lib/panelResize";
 import { serverLocalServersQueryOptions } from "~/lib/serverReactQuery";
-import { cn } from "~/lib/utils";
+import { cn, isMacPlatform } from "~/lib/utils";
 
 import {
   useBrowserStateStore,
@@ -78,9 +88,14 @@ interface BrowserPanelProps {
 const BROWSER_BOUNDS_SYNC_BURST_FRAMES = 30;
 const BROWSER_BOUNDS_SYNC_STABLE_FRAME_TARGET = 2;
 const BROWSER_WEBVIEW_PARTITION = "persist:synara-browser";
-const BROWSER_BLANK_URL = "about:blank";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const SYNARA_BROWSER_LABEL = "Synara browser";
+// The address field and tab pills share one chrome-control surface so the whole row reads
+// as a single cohesive control: matching height, radius, border width, and type scale.
+const BROWSER_CHROME_CONTROL_CLASS_NAME = "h-8 rounded-lg border text-xs";
+// The address field's filled look, reused by the active tab so the selected tab visually
+// matches the search input (same border tone + faint fill).
+const BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME = "border-border bg-background/70";
 const BROWSER_ACTION_MENU_PANEL_CLASS_NAME = "w-52 min-w-52";
 const BROWSER_ACTION_MENU_ITEM_CLASS_NAME =
   "text-[var(--color-text-foreground)] data-highlighted:text-[var(--color-text-foreground)]";
@@ -182,6 +197,10 @@ function ignoreBrowserBoundsSyncError(): void {
   // Bounds sync is best-effort plumbing between the React shell and the native
   // browser surface. Avoid surfacing transient geometry-sync failures as user-facing
   // browser errors because they do not reflect page navigation health.
+}
+
+function ignoreBrowserWebviewDetachError(): void {
+  // Renderer webview detach is best-effort cleanup; a stale/destroyed guest is already gone.
 }
 
 function setBrowserWebviewOverlayOcclusion(
@@ -542,18 +561,14 @@ export function BrowserPanel({
     threadBrowserState?.tabs[0] ??
     null;
   const loading = activeTab?.isLoading ?? false;
-  const activeTabCurrentUrl = activeTab?.url?.trim() ?? "";
-  const activeTabCommittedUrl = activeTab?.lastCommittedUrl?.trim() ?? "";
-  const activeTabIsBlank =
-    (!activeTabCurrentUrl || activeTabCurrentUrl === BROWSER_BLANK_URL) &&
-    (!activeTabCommittedUrl || activeTabCommittedUrl === BROWSER_BLANK_URL);
+  const activeTabIsBlank = isBlankBrowserTabUrl(activeTab);
   const showLocalServersHome = isLiveRuntime && workspaceReady && (!activeTab || activeTabIsBlank);
   const localServersQuery = useQuery(serverLocalServersQueryOptions(showLocalServersHome));
   const activeTabStatus = activeTab?.status ?? "suspended";
   const browserChromeStatus = resolveBrowserChromeStatus({
     localError,
     threadLastError: threadBrowserState?.lastError,
-    activeTabStatus,
+    activeTabStatus: showLocalServersHome ? "live" : activeTabStatus,
     hasActiveTab: activeTab !== null,
     workspaceReady: runtimeReady,
   });
@@ -588,6 +603,32 @@ export function BrowserPanel({
       return null;
     }
   }, []);
+
+  // Renderer-owned <webview>s are adopted by the desktop manager. Always detach before
+  // removing the DOM node so main never keeps a stale webContents runtime.
+  const detachRendererBrowserWebview = useCallback(() => {
+    const webview = browserWebviewRef.current;
+    const tabId = browserWebviewTabIdRef.current;
+
+    if (webview && api && isLiveRuntime && tabId) {
+      let webContentsId: number | undefined;
+      try {
+        webContentsId = webview.getWebContentsId?.();
+      } catch {
+        webContentsId = undefined;
+      }
+      if (webContentsId && webContentsId > 0) {
+        void api.browser
+          .detachWebview({ threadId, tabId, webContentsId })
+          .catch(ignoreBrowserWebviewDetachError);
+      }
+    }
+
+    webview?.remove();
+    browserWebviewRef.current = null;
+    browserWebviewTabIdRef.current = null;
+    browserWebviewAttachKeyRef.current = null;
+  }, [api, isLiveRuntime, threadId]);
 
   useEffect(() => {
     if (!api || !isLiveRuntime) {
@@ -658,6 +699,11 @@ export function BrowserPanel({
       return;
     }
 
+    if (showLocalServersHome) {
+      detachRendererBrowserWebview();
+      return;
+    }
+
     const host = browserViewportRef.current;
     if (!host) {
       return;
@@ -673,6 +719,15 @@ export function BrowserPanel({
       webview.style.backgroundColor = "#0d0d0d";
       webview.setAttribute("partition", BROWSER_WEBVIEW_PARTITION);
       webview.setAttribute("webpreferences", "contextIsolation=yes,nodeIntegration=no,sandbox=yes");
+      // A <webview> blocks window.open() unless `allowpopups` is set. Without it, clicking
+      // "Continue with Google" (and any OAuth/popup flow) is silently dropped before the main
+      // process's window-open handler ever runs. Enabling it lets the popup classifier in
+      // browserManager decide popup-vs-tab and keep the OAuth `window.opener` handshake alive.
+      webview.setAttribute("allowpopups", "true");
+      // No `useragent` attribute on purpose: the desktop main process spoofs a desktop Chrome
+      // UA on the shared persistent partition, so this webview (and OAuth popups) inherit the
+      // same identity. This keeps in-app Google/OAuth sign-in working without duplicating the
+      // UA string into the renderer.
       browserWebviewRef.current = webview;
       host.append(webview);
     } else if (webview.parentElement !== host) {
@@ -726,8 +781,10 @@ export function BrowserPanel({
   }, [
     activeTab,
     api,
+    detachRendererBrowserWebview,
     isLiveRuntime,
     runBrowserAction,
+    showLocalServersHome,
     threadId,
     upsertThreadState,
     workspaceReady,
@@ -735,12 +792,9 @@ export function BrowserPanel({
 
   useEffect(() => {
     return () => {
-      browserWebviewRef.current?.remove();
-      browserWebviewRef.current = null;
-      browserWebviewTabIdRef.current = null;
-      browserWebviewAttachKeyRef.current = null;
+      detachRendererBrowserWebview();
     };
-  }, []);
+  }, [detachRendererBrowserWebview]);
 
   useEffect(() => {
     const liveTabIds = new Set(threadBrowserState?.tabs.map((tab) => tab.id) ?? []);
@@ -1128,6 +1182,81 @@ export function BrowserPanel({
     });
   }, [activeTab, api, ensureLiveRuntime, runBrowserAction, threadId]);
 
+  const copyActiveTabLink = useCallback(() => {
+    if (!activeTab) {
+      return;
+    }
+    // Desktop: copy through the native Electron clipboard. navigator.clipboard can reject
+    // with "Document is not focused" while the native browser view holds focus, so this
+    // mirrors the keyboard chord — main writes the URL and emits onCopyLink, which surfaces
+    // the toast in the listener below.
+    if (isElectron && api) {
+      void runBrowserAction(() => api.browser.copyLink({ threadId, tabId: activeTab.id }));
+      return;
+    }
+    const url = resolveCopyableBrowserTabUrl(activeTab);
+    if (!url) {
+      return;
+    }
+    const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : undefined;
+    if (!clipboard) {
+      return;
+    }
+    void clipboard.writeText(url).then(
+      () => {
+        toastManager.add({ type: "success", title: BROWSER_COPY_LINK_TOAST_TITLE });
+      },
+      () => {
+        // Clipboard writes can reject without user gesture; nothing actionable to surface.
+      },
+    );
+  }, [activeTab, api, runBrowserAction, threadId]);
+
+  // React chrome focus path: the native page handles the chord through the desktop main
+  // process, so this only fires when the address bar/tab strip (not the page) is focused.
+  useEffect(() => {
+    if (!isLiveRuntime) {
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+      const matches = isBrowserCopyLinkChord(
+        {
+          meta: event.metaKey,
+          ctrl: event.ctrlKey,
+          shift: event.shiftKey,
+          alt: event.altKey,
+          key: event.key,
+        },
+        isMacPlatform(navigator.platform),
+      );
+      if (!matches) {
+        return;
+      }
+      event.preventDefault();
+      copyActiveTabLink();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [copyActiveTabLink, isLiveRuntime]);
+
+  // Native page focus path: main already wrote the URL to the clipboard, so just toast.
+  useEffect(() => {
+    if (!api || !isLiveRuntime) {
+      return;
+    }
+    return api.browser.onCopyLink((event) => {
+      if (event.threadId !== threadId) {
+        return;
+      }
+      toastManager.add({ type: "success", title: BROWSER_COPY_LINK_TOAST_TITLE });
+    });
+  }, [api, isLiveRuntime, threadId]);
+
   const onCloseTab = useCallback(
     (tabId: string) => {
       if (!ensureLiveRuntime()) {
@@ -1255,7 +1384,11 @@ export function BrowserPanel({
               setIsAddressFocused(false);
             }}
             placeholder="Search or enter a URL"
-            className="font-mono h-8 min-w-0 bg-background/70 text-xs [-webkit-app-region:no-drag]"
+            className={cn(
+              "font-mono min-w-0 [-webkit-app-region:no-drag]",
+              BROWSER_CHROME_CONTROL_CLASS_NAME,
+              BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME,
+            )}
           />
         </form>
         {showBrowserAddressSuggestions ? (
@@ -1293,11 +1426,37 @@ export function BrowserPanel({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+        <Button
+          ref={copyScreenshotButtonRef}
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="size-7"
+          disabled={!activeTab}
+          aria-label="Copy screenshot"
+          title="Copy screenshot"
+          onClick={onCopyScreenshotToClipboard}
+        >
+          <CameraIcon className="size-3.5" />
+          <span className="sr-only">Copy screenshot</span>
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="size-7"
+          disabled={!activeTab}
+          aria-label="Copy link"
+          title="Copy link"
+          onClick={copyActiveTabLink}
+        >
+          <LinkIcon className="size-3.5" />
+          <span className="sr-only">Copy link</span>
+        </Button>
         <Menu modal={false}>
           <MenuTrigger
             render={
               <Button
-                ref={copyScreenshotButtonRef}
                 type="button"
                 variant="ghost"
                 size="icon-sm"
@@ -1324,14 +1483,6 @@ export function BrowserPanel({
             >
               <BrowserActionMenuIcon icon={CameraIcon} />
               <span>Capture screenshot</span>
-            </MenuItem>
-            <MenuItem
-              className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
-              disabled={!activeTab}
-              onClick={onCopyScreenshotToClipboard}
-            >
-              <BrowserActionMenuIcon icon={CopyIcon} />
-              <span>Copy screenshot</span>
             </MenuItem>
             <MenuItem
               className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
@@ -1369,20 +1520,27 @@ export function BrowserPanel({
       <div className="flex min-h-0 flex-1 flex-col">
         <div
           ref={browserTabsBarRef}
-          className="flex items-center gap-2 border-b border-border px-2 py-1.5"
+          className={cn(
+            "flex items-center gap-2 border-b border-border px-2 py-1.5",
+            // Extend the frameless window drag region across the tab strip's empty space so
+            // the panel is easy to grab; interactive children stay no-drag via global CSS.
+            isElectron && mode !== "sheet" && "drag-region",
+          )}
         >
-          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
             {threadBrowserState?.tabs.map((tab) => {
               const isActive = tab.id === activeTab?.id;
+              const tabIsBlank = isBlankBrowserTabUrl(tab);
               return (
                 <div
                   key={tab.id}
                   className={cn(
-                    "group flex h-8 min-w-0 max-w-[14rem] items-center rounded-md border px-2 text-left text-xs transition-colors",
+                    "group flex min-w-0 max-w-[14rem] items-center px-2.5 text-left transition-colors",
+                    BROWSER_CHROME_CONTROL_CLASS_NAME,
                     isActive
-                      ? "border-border/70 text-foreground"
-                      : "border-transparent text-muted-foreground hover:border-border/50 hover:text-foreground",
-                    tab.status === "suspended" ? "opacity-75" : "",
+                      ? cn(BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME, "text-foreground")
+                      : "border-transparent text-muted-foreground hover:border-border/60 hover:bg-background/40 hover:text-foreground",
+                    tab.status === "suspended" && !tabIsBlank ? "opacity-75" : "",
                   )}
                 >
                   <span className="mr-2 flex size-4 shrink-0 items-center justify-center rounded-sm">

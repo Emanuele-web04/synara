@@ -621,6 +621,47 @@ describe("wsNativeApi", () => {
     });
   });
 
+  it("forwards browser webview detach requests to the desktop bridge", async () => {
+    const detachWebview = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(getWindowForTest(), "desktopBridge", {
+      configurable: true,
+      writable: true,
+      value: {
+        browser: {
+          detachWebview,
+        },
+      },
+    });
+
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const input = {
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      tabId: "tab-1",
+      webContentsId: 42,
+    };
+    await api.browser.detachWebview(input);
+
+    expect(detachWebview).toHaveBeenCalledWith(input);
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a blank fallback browser tab after closing the last tab", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const opened = await api.browser.open({ threadId });
+    const tabId = opened.activeTabId;
+
+    expect(tabId).toBeTruthy();
+    const nextState = await api.browser.closeTab({ threadId, tabId: tabId ?? "" });
+
+    expect(nextState.open).toBe(true);
+    expect(nextState.tabs).toHaveLength(1);
+    expect(nextState.activeTabId).toBe(nextState.tabs[0]?.id);
+    expect(nextState.tabs[0]?.url).toBe("about:blank");
+  });
+
   it("forwards context menu metadata to desktop bridge", async () => {
     const showContextMenu = vi.fn().mockResolvedValue("delete");
     Object.defineProperty(getWindowForTest(), "desktopBridge", {

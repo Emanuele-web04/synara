@@ -2,14 +2,17 @@
 // Purpose: Holds the address-bar sync rules and suggestions for the in-app browser panel.
 // Layer: Component logic helper
 // Exports: browserAddressDisplayValue, normalizeBrowserAddressInput, buildBrowserAddressSuggestions
-// Depends on: browser tab metadata and thread-local browser history
+// Depends on: shared browser URL rules, browser tab metadata, and thread-local browser history
 
+import {
+  BROWSER_BLANK_URL,
+  BROWSER_SEARCH_URL_PREFIX,
+  normalizeBrowserUrlInput,
+} from "@t3tools/shared/browserSession";
 import type { BrowserTabState } from "@t3tools/contracts";
 import type { BrowserHistoryEntry } from "../browserStateStore";
 
-const ABOUT_BLANK_URL = "about:blank";
 const BROWSER_SUGGESTION_LIMIT = 6;
-const SEARCH_URL_PREFIX = "https://www.google.com/search?q=";
 
 interface ResolveBrowserAddressSyncInput {
   activeTabId: string | null;
@@ -57,58 +60,11 @@ export function browserAddressDisplayValue(
   tab: Pick<BrowserTabState, "url"> | null | undefined,
 ): string {
   const nextUrl = tab?.url?.trim() ?? "";
-  return nextUrl === ABOUT_BLANK_URL ? "" : nextUrl;
+  return nextUrl === BROWSER_BLANK_URL ? "" : nextUrl;
 }
 
-function looksLikeUrlInput(value: string): boolean {
-  return (
-    value.includes(".") ||
-    value.startsWith("localhost") ||
-    value.startsWith("127.0.0.1") ||
-    value.startsWith("0.0.0.0") ||
-    value.startsWith("[::1]")
-  );
-}
-
-// Normalizes typed text into the url or search target we should submit.
-export function normalizeBrowserAddressInput(input: string): string {
-  const trimmed = input.trim();
-  if (trimmed.length === 0) {
-    return ABOUT_BLANK_URL;
-  }
-
-  try {
-    const withScheme = new URL(trimmed);
-    if (withScheme.protocol === "http:" || withScheme.protocol === "https:") {
-      return withScheme.toString();
-    }
-    if (withScheme.protocol === "about:") {
-      return withScheme.toString();
-    }
-  } catch {
-    // Fall through to browser-style heuristics below.
-  }
-
-  if (trimmed.includes(" ")) {
-    return `${SEARCH_URL_PREFIX}${encodeURIComponent(trimmed)}`;
-  }
-
-  if (looksLikeUrlInput(trimmed)) {
-    const prefersHttp =
-      trimmed.startsWith("localhost") ||
-      trimmed.startsWith("127.0.0.1") ||
-      trimmed.startsWith("0.0.0.0") ||
-      trimmed.startsWith("[::1]");
-    const scheme = prefersHttp ? "http" : "https";
-    try {
-      return new URL(`${scheme}://${trimmed}`).toString();
-    } catch {
-      return `${SEARCH_URL_PREFIX}${encodeURIComponent(trimmed)}`;
-    }
-  }
-
-  return `${SEARCH_URL_PREFIX}${encodeURIComponent(trimmed)}`;
-}
+// Component-facing alias for the shared desktop/web browser URL normalizer.
+export const normalizeBrowserAddressInput = normalizeBrowserUrlInput;
 
 function normalizeQuery(value: string): string {
   return value.trim().toLowerCase();
@@ -148,7 +104,7 @@ export function buildBrowserAddressSuggestions(
   const directTarget = normalizeBrowserAddressInput(input.query);
 
   if (query.length > 0) {
-    const directTitle = directTarget.startsWith(SEARCH_URL_PREFIX)
+    const directTitle = directTarget.startsWith(BROWSER_SEARCH_URL_PREFIX)
       ? `Search the web for "${input.query.trim()}"`
       : `Open ${directTarget}`;
     pushSuggestion(suggestions, seenUrls, {

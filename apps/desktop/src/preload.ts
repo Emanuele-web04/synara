@@ -126,6 +126,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.send(BROWSER_IPC_CHANNELS.setBounds, input);
     },
     attachWebview: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.attachWebview, input),
+    detachWebview: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.detachWebview, input),
+    copyLink: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.requestCopyLink, input),
     copyScreenshotToClipboard: (input) =>
       ipcRenderer.invoke(BROWSER_IPC_CHANNELS.copyScreenshotToClipboard, input),
     captureScreenshot: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.captureScreenshot, input),
@@ -154,6 +156,16 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.on(BROWSER_IPC_CHANNELS.requestOpenPanel, wrappedListener);
       return () => {
         ipcRenderer.removeListener(BROWSER_IPC_CHANNELS.requestOpenPanel, wrappedListener);
+      };
+    },
+    onBrowserCopyLink: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+        if (typeof payload !== "object" || payload === null) return;
+        listener(payload as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(BROWSER_IPC_CHANNELS.copyLink, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(BROWSER_IPC_CHANNELS.copyLink, wrappedListener);
       };
     },
   },

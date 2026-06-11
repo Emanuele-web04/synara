@@ -5726,8 +5726,7 @@ export default function ChatView({
             kind: firstSendTarget.creation.kind,
             title: firstSendTarget.creation.title,
             workspaceRoot: firstSendTarget.creation.workspaceRoot,
-            createWorkspaceRootIfMissing:
-              firstSendTarget.creation.createWorkspaceRootIfMissing,
+            createWorkspaceRootIfMissing: firstSendTarget.creation.createWorkspaceRootIfMissing,
             defaultModelSelection: firstSendTarget.creation.defaultModelSelection,
             createdAt,
           });
