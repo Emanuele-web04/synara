@@ -3,6 +3,7 @@
 // Layer: Chat terminal workspace UI
 // Depends on: xterm addons, native terminal APIs, and terminal workspace state from ChatView.
 
+import "@xterm/xterm/css/xterm.css";
 import { SearchAddon } from "@xterm/addon-search";
 import {
   Plus,

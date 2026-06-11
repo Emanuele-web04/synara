@@ -34,6 +34,7 @@ import { localServerPrimaryLabel } from "@t3tools/shared/localServers";
 
 import { readNativeApi } from "~/nativeApi";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
+import { IMAGE_SIZE_LIMIT_LABEL } from "~/lib/composerSend";
 import { PANEL_RESIZE_OVERLAY_SYNC_EVENT } from "~/lib/panelResize";
 import { serverLocalServersQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
@@ -80,7 +81,6 @@ const BROWSER_WEBVIEW_PARTITION = "persist:synara-browser";
 const BROWSER_BLANK_URL = "about:blank";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const SYNARA_BROWSER_LABEL = "Synara browser";
-const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 const BROWSER_ACTION_MENU_PANEL_CLASS_NAME = "w-52 min-w-52";
 const BROWSER_ACTION_MENU_ITEM_CLASS_NAME =
   "text-[var(--color-text-foreground)] data-highlighted:text-[var(--color-text-foreground)]";

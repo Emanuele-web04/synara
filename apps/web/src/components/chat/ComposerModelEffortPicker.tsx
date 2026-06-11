@@ -35,6 +35,7 @@ import { Tooltip, TooltipTrigger } from "../ui/tooltip";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import {
   COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
+  COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
 } from "./composerPickerStyles";
 import {
@@ -269,24 +270,6 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
         <MenuTrigger render={triggerButton}>{triggerContent}</MenuTrigger>
       )}
       <ComposerPickerMenuPopup align="end" side="top" fixedWidth>
-        <ProviderModelMenuItems
-          provider={props.provider}
-          model={props.model}
-          lockedProvider={props.lockedProvider}
-          {...(props.providers ? { providers: props.providers } : {})}
-          modelOptionsByProvider={props.modelOptionsByProvider}
-          {...(props.loadingModelProviders
-            ? { loadingModelProviders: props.loadingModelProviders }
-            : {})}
-          {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
-          {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
-          {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
-          onProviderModelChange={props.onProviderModelChange}
-          onAfterSelection={handleAfterModelSelection}
-        />
-
-        {hasTraitsTopSection || supportsFastModeControl ? <MenuSeparator /> : null}
-
         {hasTraitsTopSection ? (
           <TraitsMenuContent
             provider={props.provider}
@@ -302,6 +285,38 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
             onSelectionComplete={handleAfterTraitsSelection}
           />
         ) : null}
+
+        {hasTraitsTopSection ? <MenuSeparator /> : null}
+
+        <MenuSub>
+          <MenuSubTrigger>
+            <ProviderIcon
+              aria-hidden="true"
+              className={cn("size-3 shrink-0", getProviderIconClassName(activeProvider))}
+            />
+            <span className="truncate">{modelLabel}</span>
+          </MenuSubTrigger>
+          <ComposerPickerMenuSubPopup
+            fixedWidth
+            className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
+          >
+            <ProviderModelMenuItems
+              provider={props.provider}
+              model={props.model}
+              lockedProvider={props.lockedProvider}
+              {...(props.providers ? { providers: props.providers } : {})}
+              modelOptionsByProvider={props.modelOptionsByProvider}
+              {...(props.loadingModelProviders
+                ? { loadingModelProviders: props.loadingModelProviders }
+                : {})}
+              {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
+              {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
+              {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
+              onProviderModelChange={props.onProviderModelChange}
+              onAfterSelection={handleAfterModelSelection}
+            />
+          </ComposerPickerMenuSubPopup>
+        </MenuSub>
 
         {supportsFastModeControl ? (
           <MenuSub>

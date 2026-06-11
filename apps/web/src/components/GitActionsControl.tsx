@@ -41,6 +41,7 @@ import {
   summarizeGitResult,
 } from "./GitActionsControl.logic";
 import { getProviderStartOptions, useAppSettings } from "~/appSettings";
+import { formatClockDuration } from "~/session-logic";
 import { Button } from "~/components/ui/button";
 import {
   ChatHeaderSplitDivider,
@@ -155,13 +156,7 @@ function formatElapsedDescription(startedAtMs: number | null): string | undefine
   if (startedAtMs === null) {
     return undefined;
   }
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000));
-  if (elapsedSeconds < 60) {
-    return `Running for ${elapsedSeconds}s`;
-  }
-  const minutes = Math.floor(elapsedSeconds / 60);
-  const seconds = elapsedSeconds % 60;
-  return `Running for ${minutes}m ${seconds}s`;
+  return `Running for ${formatClockDuration(Date.now() - startedAtMs)}`;
 }
 
 function resolveProgressDescription(progress: ActiveGitActionProgress): string | undefined {

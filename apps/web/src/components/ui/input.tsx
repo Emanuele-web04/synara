@@ -32,7 +32,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       className={
         cn(
           !unstyled &&
-            "relative inline-flex w-full min-h-9 items-center rounded-md border border-border bg-background text-[length:var(--app-font-size-ui,12px)] text-foreground ring-ring/16 has-focus-visible:has-aria-invalid:border-destructive/50 has-focus-visible:has-aria-invalid:ring-destructive/12 has-aria-invalid:border-destructive/30 has-focus-visible:border-ring/70 has-autofill:bg-foreground/4 has-disabled:opacity-64 has-focus-visible:ring-2 sm:min-h-8 sm:text-[length:var(--app-font-size-ui,12px)] dark:bg-input/32 dark:has-autofill:bg-foreground/8 dark:has-aria-invalid:ring-destructive/24",
+            "relative inline-flex w-full min-h-9 items-center rounded-lg border border-border bg-background text-[length:var(--app-font-size-ui,12px)] text-foreground has-aria-invalid:border-destructive/30 has-focus-visible:has-aria-invalid:border-destructive/50 has-focus-visible:border-foreground/30 has-autofill:bg-foreground/4 has-disabled:opacity-64 sm:min-h-8 sm:text-[length:var(--app-font-size-ui,12px)] dark:bg-input/32 dark:has-autofill:bg-foreground/8",
           size === "sm" && "min-h-8 sm:min-h-7",
           size === "lg" && "min-h-10 sm:min-h-9",
           className,

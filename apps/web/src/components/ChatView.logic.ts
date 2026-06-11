@@ -20,7 +20,7 @@ import {
   type Thread,
   type ThreadPrimarySurface,
 } from "../types";
-import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
+import { type DraftThreadState } from "../composerDraftStore";
 import { Schema } from "effect";
 import {
   filterTerminalContextsWithText,
@@ -435,44 +435,11 @@ export function shouldStartActiveTurnLayoutGrace(options: {
   );
 }
 
-export function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-        return;
-      }
-      reject(new Error("Could not read image data."));
-    });
-    reader.addEventListener("error", () => {
-      reject(reader.error ?? new Error("Failed to read image."));
-    });
-    reader.readAsDataURL(file);
-  });
-}
-
 export function buildSuggestedWorktreeName(input: {
   associatedWorktreeBranch?: string | null;
   title?: string | null;
 }): string {
   return buildSynaraBranchName(input.associatedWorktreeBranch ?? input.title);
-}
-
-export function cloneComposerImageForRetry(
-  image: ComposerImageAttachment,
-): ComposerImageAttachment {
-  if (typeof URL === "undefined" || !image.previewUrl.startsWith("blob:")) {
-    return image;
-  }
-  try {
-    return {
-      ...image,
-      previewUrl: URL.createObjectURL(image.file),
-    };
-  } catch {
-    return image;
-  }
 }
 
 export function deriveComposerSendState(options: {

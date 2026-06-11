@@ -5,6 +5,10 @@
 
 import type { ProviderMentionReference, ProviderSkillReference } from "@t3tools/contracts";
 
+export function skillMentionPrefix(provider: string): string {
+  return provider === "pi" ? "/skill:" : "/";
+}
+
 export function createComposerMentionTokenRegex(options: {
   includeTrailingTokenAtEnd: boolean;
   global?: boolean;
@@ -35,7 +39,8 @@ export function promptIncludesSkillMention(
   provider: string,
 ): boolean {
   const escapedSkillName = escapeRegExp(skillName);
-  const prefixes = provider === "pi" ? ["/skill:"] : ["/", "$"];
+  const prefixes =
+    provider === "pi" ? [skillMentionPrefix(provider)] : [skillMentionPrefix(provider), "$"];
   return prefixes.some((prefix) => {
     const pattern = new RegExp(`(^|\\s)${escapeRegExp(prefix)}${escapedSkillName}(?=\\s|$)`, "i");
     return pattern.test(prompt);
@@ -48,6 +53,18 @@ export function filterPromptSkillReferences(
   provider: string,
 ): ProviderSkillReference[] {
   return skills.filter((skill) => promptIncludesSkillMention(prompt, skill.name, provider));
+}
+
+export function providerSkillReferencesEqual(
+  left: ReadonlyArray<ProviderSkillReference>,
+  right: ReadonlyArray<ProviderSkillReference>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (skill, index) => skill.name === right[index]?.name && skill.path === right[index]?.path,
+    )
+  );
 }
 
 function normalizeMentionNameKey(name: string): string {
@@ -155,4 +172,17 @@ export function filterPromptProviderMentionReferences(
     matchedMentions.push(mention);
   }
   return matchedMentions;
+}
+
+export function providerMentionReferencesEqual(
+  left: ReadonlyArray<ProviderMentionReference>,
+  right: ReadonlyArray<ProviderMentionReference>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (mention, index) =>
+        mention.path === right[index]?.path && mention.name === right[index]?.name,
+    )
+  );
 }

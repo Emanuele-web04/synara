@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Option, Schema } from "effect";
 import {
+  type AssistantDeliveryMode,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_SERVER_SETTINGS,
   TrimmedNonEmptyString,
@@ -158,10 +159,10 @@ export const AppSettingsSchema = Schema.Struct({
   // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
   // (rootless chats not tied to a project). `showWorkspaceSection` controls the
   // "Workspace" tab in the section switcher. The "Threads"/Projects tab is always
-  // shown, so the switcher simply collapses to a static Threads view when Workspace
-  // is hidden (see the sidebar segmented picker).
+  // shown, so the switcher is hidden by default and only appears when Workspace is
+  // enabled in Settings (see the sidebar segmented picker).
   showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
-  showWorkspaceSection: Schema.Boolean.pipe(withDefaults(() => true)),
+  showWorkspaceSection: Schema.Boolean.pipe(withDefaults(() => false)),
   // Local-only UI preferences: which optional sections of the chat Environment panel are
   // shown. The git block (Changes/Worktree/branch/Commit and Push) is always visible; these
   // toggle the sections beneath it via the panel header's gear menu.
@@ -939,6 +940,16 @@ export function getProviderStartOptions(
   };
 
   return Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
+}
+
+/**
+ * Single source of truth for mapping the streaming preference onto the orchestration
+ * delivery mode used when dispatching turns (composer, chat, and kanban share this).
+ */
+export function resolveAssistantDeliveryMode(
+  settings: Pick<AppSettings, "enableAssistantStreaming">,
+): AssistantDeliveryMode {
+  return settings.enableAssistantStreaming ? "streaming" : "buffered";
 }
 
 export function getCustomBinaryPathForProvider(

@@ -1,3 +1,8 @@
+// FILE: FileEntryIcon.tsx
+// Purpose: Shared file/folder glyph primitive for composer, diff, editor, and timeline rows.
+// Layer: Chat/shared UI
+// Exports: FileEntryIcon
+
 import { memo } from "react";
 import { getFileIconName } from "../../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
@@ -45,6 +50,9 @@ export const FileEntryIcon = memo(function FileEntryIcon(props: {
   // file links, code-block headers) can reuse this same primitive.
   theme?: "light" | "dark" | undefined;
   className?: string;
+  // Timeline changed-file rows pass their own muted color and should not pick
+  // up extension-specific colors.
+  colorMode?: "file" | "inherit" | undefined;
   expanded?: boolean | undefined;
 }) {
   // Match the look of the local filepath picker: directories always render the
@@ -59,15 +67,16 @@ export const FileEntryIcon = memo(function FileEntryIcon(props: {
   }
 
   const iconName = getFileIconName(props.pathValue);
+  const colorClassName =
+    props.colorMode === "inherit"
+      ? undefined
+      : (FILE_ICON_COLOR_CLASS_BY_ICON_NAME[iconName] ??
+        FILE_ICON_COLOR_CLASS_BY_ICON_NAME["code-brackets"]);
+
   return (
     <CentralIcon
       name={iconName}
-      className={cn(
-        "size-4 shrink-0",
-        props.className,
-        FILE_ICON_COLOR_CLASS_BY_ICON_NAME[iconName] ??
-          FILE_ICON_COLOR_CLASS_BY_ICON_NAME["code-brackets"],
-      )}
+      className={cn("size-4 shrink-0", props.className, colorClassName)}
     />
   );
 });

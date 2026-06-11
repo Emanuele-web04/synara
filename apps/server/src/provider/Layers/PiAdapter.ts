@@ -49,6 +49,7 @@ import {
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
 import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
+import { clampUsagePercent, nonNegativeFiniteNumber, positiveFiniteNumber } from "../tokenUsage.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "pi" as const;
@@ -253,27 +254,17 @@ function normalizeTokenUsage(
   const outputTokens = stats.tokens.output;
   const totalProcessedTokens = stats.tokens.total;
   const contextUsage = stats.contextUsage;
+  const contextUsageWindowValue = positiveFiniteNumber(contextUsage?.contextWindow);
   const contextUsageWindow =
-    typeof contextUsage?.contextWindow === "number" &&
-    Number.isFinite(contextUsage.contextWindow) &&
-    contextUsage.contextWindow > 0
-      ? Math.floor(contextUsage.contextWindow)
-      : undefined;
+    contextUsageWindowValue !== undefined ? Math.floor(contextUsageWindowValue) : undefined;
+  const fallbackWindowValue = positiveFiniteNumber(contextWindow);
   const fallbackWindow =
-    typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0
-      ? Math.floor(contextWindow)
-      : undefined;
+    fallbackWindowValue !== undefined ? Math.floor(fallbackWindowValue) : undefined;
   const maxTokens = contextUsageWindow ?? fallbackWindow;
+  const contextUsageTokenValue = nonNegativeFiniteNumber(contextUsage?.tokens);
   const contextUsageTokens =
-    typeof contextUsage?.tokens === "number" &&
-    Number.isFinite(contextUsage.tokens) &&
-    contextUsage.tokens >= 0
-      ? Math.round(contextUsage.tokens)
-      : undefined;
-  const usedPercent =
-    typeof contextUsage?.percent === "number" && Number.isFinite(contextUsage.percent)
-      ? Math.max(0, Math.min(100, contextUsage.percent))
-      : undefined;
+    contextUsageTokenValue !== undefined ? Math.round(contextUsageTokenValue) : undefined;
+  const usedPercent = clampUsagePercent(contextUsage?.percent);
   const usedTokensFromPercent =
     contextUsageTokens === undefined && usedPercent !== undefined && maxTokens !== undefined
       ? Math.round((usedPercent / 100) * maxTokens)

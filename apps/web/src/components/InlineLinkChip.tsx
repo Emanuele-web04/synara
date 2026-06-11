@@ -8,10 +8,10 @@ import { memo, type MouseEvent } from "react";
 
 import { describeLinkChip, openExternalLink } from "~/lib/linkChips";
 import {
-  COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
   COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   COMPOSER_INLINE_LINK_CHIP_CLASS_NAME,
 } from "./composerInlineChip";
+import { InlineChipContent } from "./InlineChip";
 import { LinkChipIcon } from "./LinkChipIcon";
 
 export interface InlineLinkChipProps {
@@ -37,10 +37,10 @@ export const InlineLinkChip = memo(function InlineLinkChip({
   };
 
   const content = (
-    <>
-      <LinkChipIcon url={url} className={COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME} />
-      <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>{label}</span>
-    </>
+    <InlineChipContent
+      icon={<LinkChipIcon url={url} className={COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME} />}
+      label={label}
+    />
   );
 
   if (interactive) {

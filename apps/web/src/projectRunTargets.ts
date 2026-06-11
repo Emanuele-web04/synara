@@ -5,7 +5,9 @@
 
 import type { ProjectDiscoveredScriptTarget, ProjectScript } from "@t3tools/contracts";
 
-import { primaryProjectScript } from "./projectScripts";
+import { nextProjectScriptId, primaryProjectScript } from "./projectScripts";
+
+const DEFAULT_RUN_SCRIPT_NAME = "dev";
 
 export type ProjectRunCommandTarget =
   | {
@@ -67,4 +69,40 @@ export function selectPrimaryProjectRunCommand(input: {
   }
 
   return null;
+}
+
+// Persists the command typed in the run dialog as the project's primary run
+// script, so the next launch defaults to the same command. Returns the updated
+// scripts array, or null when nothing needs to change (empty or identical
+// command). Mirrors `selectPrimaryProjectRunCommand`: a non-setup script is the
+// canonical holder of the run command.
+export function upsertProjectRunCommandScripts(input: {
+  scripts: ProjectScript[];
+  command: string;
+}): ProjectScript[] | null {
+  const command = input.command.trim();
+  if (command.length === 0) {
+    return null;
+  }
+  const existing = primaryProjectScript(input.scripts);
+  if (existing && !existing.runOnWorktreeCreate) {
+    if (existing.command === command) {
+      return null;
+    }
+    return input.scripts.map((script) =>
+      script.id === existing.id ? { ...script, command } : script,
+    );
+  }
+  const id = nextProjectScriptId(
+    DEFAULT_RUN_SCRIPT_NAME,
+    input.scripts.map((script) => script.id),
+  );
+  const runScript: ProjectScript = {
+    id,
+    name: DEFAULT_RUN_SCRIPT_NAME,
+    command,
+    icon: "play",
+    runOnWorktreeCreate: false,
+  };
+  return [...input.scripts, runScript];
 }

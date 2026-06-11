@@ -170,6 +170,7 @@ export const PluginIcon: LucideIcon = centralIconWrapper("puzzle");
 export const HammerIcon = adaptIcon(IconTool);
 export const HistoryIcon = adaptIcon(IconHistory);
 export const InfoIcon = adaptIcon(IconInfoCircle);
+export const KanbanIcon = centralIconWrapper("columns-3-wide");
 export const ListChecksIcon = adaptIcon(IconListCheck);
 export const ListTodoIcon = adaptIcon(IconListDetails);
 export const Loader2Icon = adaptIcon(IconLoader2);

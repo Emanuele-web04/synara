@@ -27,6 +27,7 @@ import {
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 import {
+  canSessionAnswerPendingRequests,
   hasLiveLatestTurn,
   findLatestProposedPlan,
   hasActionableProposedPlan,
@@ -334,7 +335,13 @@ export function resolveThreadStatusPill(input: {
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
 }): ThreadStatusPill | null {
-  const { hasPendingApprovals, hasPendingUserInput, thread } = input;
+  const { thread } = input;
+  // A dead session can't receive approval/input answers anymore — drop the
+  // actionable pills instead of advertising a request nobody can fulfill.
+  // Mirrored by the kanban board's deriveKanbanColumn.
+  const canAnswerPendingRequests = canSessionAnswerPendingRequests(thread.session);
+  const hasPendingApprovals = input.hasPendingApprovals && canAnswerPendingRequests;
+  const hasPendingUserInput = input.hasPendingUserInput && canAnswerPendingRequests;
 
   if (hasPendingApprovals) {
     const dismissalKey = createThreadStatusDismissalKey("Pending Approval", thread);
@@ -1268,4 +1275,36 @@ export function deriveSidebarProjectData(input: {
   }
 
   return byProjectId;
+}
+
+/** Shared PR-state presentation so sidebar badges and kanban cards color PRs identically. */
+export interface PrStatePresentation {
+  label: "PR open" | "PR closed" | "PR merged";
+  colorClass: string;
+  iconKind: "pull-request" | "merged-simple";
+}
+
+export function resolvePrStatePresentation(
+  state: "open" | "closed" | "merged",
+): PrStatePresentation {
+  if (state === "open") {
+    return {
+      label: "PR open",
+      // Match the diff "+" green so an opened PR reads as the same positive signal.
+      colorClass: "text-[var(--color-decoration-added)]",
+      iconKind: "pull-request",
+    };
+  }
+  if (state === "closed") {
+    return {
+      label: "PR closed",
+      colorClass: "text-zinc-500 dark:text-zinc-400/80",
+      iconKind: "pull-request",
+    };
+  }
+  return {
+    label: "PR merged",
+    colorClass: "text-violet-500 dark:text-violet-400",
+    iconKind: "merged-simple",
+  };
 }

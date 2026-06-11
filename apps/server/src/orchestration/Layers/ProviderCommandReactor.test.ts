@@ -1060,6 +1060,57 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.runtimeMode).toBe("approval-required");
   });
 
+  it("publishes a starting session status before the provider session is ready", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    // Gate provider init so the early status is observable while it is pending.
+    let releaseStartSession: (() => void) | undefined;
+    const startSessionGate = new Promise<void>((resolve) => {
+      releaseStartSession = resolve;
+    });
+    const defaultStartSession = harness.startSession.getMockImplementation();
+    if (!defaultStartSession) {
+      throw new Error("Harness startSession mock has no implementation.");
+    }
+    harness.startSession.mockImplementationOnce((threadId: unknown, input: unknown) =>
+      Effect.promise(() => startSessionGate).pipe(
+        Effect.flatMap(() => defaultStartSession(threadId, input)),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-early-status"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-early-status"),
+          role: "user",
+          text: "hello reactor",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    // The slow-provider window: status is already "starting" while init blocks.
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return readModel.threads[0]?.session?.status === "starting";
+    });
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
+
+    releaseStartSession?.();
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const status = readModel.threads[0]?.session?.status;
+      return status !== undefined && status !== "starting";
+    });
+  });
+
   it("clears stale Claude resume state and retries the turn with transcript context", async () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },

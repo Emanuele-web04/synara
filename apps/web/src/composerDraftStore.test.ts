@@ -354,6 +354,43 @@ describe("composerDraftStore copyTransferableComposerState", () => {
     });
   });
 
+  it("copies image attachments with fresh preview URLs", () => {
+    const originalCreateObjectUrl = URL.createObjectURL;
+    URL.createObjectURL = vi.fn(() => "blob:target-copy");
+    try {
+      const sourceImage = makeImage({
+        id: "img-source",
+        previewUrl: "blob:source-preview",
+      });
+
+      useComposerDraftStore.getState().addImages(sourceThreadId, [sourceImage]);
+      useComposerDraftStore.setState((state) => ({
+        draftsByThreadId: {
+          ...state.draftsByThreadId,
+          [sourceThreadId]: {
+            ...state.draftsByThreadId[sourceThreadId]!,
+            nonPersistedImageIds: ["img-source"],
+          },
+        },
+      }));
+      useComposerDraftStore
+        .getState()
+        .copyTransferableComposerState(sourceThreadId, targetThreadId);
+
+      const targetDraft = useComposerDraftStore.getState().draftsByThreadId[targetThreadId];
+      expect(targetDraft?.images).toEqual([
+        expect.objectContaining({
+          id: "img-source",
+          file: sourceImage.file,
+          previewUrl: "blob:target-copy",
+        }),
+      ]);
+      expect(targetDraft?.nonPersistedImageIds).toEqual(["img-source"]);
+    } finally {
+      URL.createObjectURL = originalCreateObjectUrl;
+    }
+  });
+
   it("preserves unrelated target draft state while replacing transferred composer content", () => {
     useComposerDraftStore.getState().setPrompt(sourceThreadId, "follow-up for the other provider");
     useComposerDraftStore.getState().setModelSelection(

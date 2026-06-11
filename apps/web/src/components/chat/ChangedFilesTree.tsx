@@ -107,6 +107,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
             pathValue={node.path}
             kind="file"
             theme={resolvedTheme}
+            colorMode="inherit"
             className="size-3.5 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80"
           />
           <span

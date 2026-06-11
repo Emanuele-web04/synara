@@ -5,6 +5,7 @@
 
 import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
 import type { ThreadMarker } from "@t3tools/contracts";
+import "katex/dist/katex.min.css";
 import React, {
   Children,
   type CSSProperties,
@@ -30,14 +31,7 @@ import { openInPreferredEditor } from "../editorPreferences";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeFence";
-import {
-  cacheSyntaxHighlightedHtml,
-  createSyntaxHighlightCacheKey,
-  getCachedSyntaxHighlightedHtml,
-  getSyntaxHighlighterPromise,
-  highlightCodeToHtmlWithFallback,
-} from "../lib/syntaxHighlighting";
-import { getFileIconName } from "../file-icons";
+import { getFileIconName, pathLooksLikeKnownFile } from "../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
 import { useTheme } from "../hooks/useTheme";
@@ -50,9 +44,13 @@ import {
   COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
 } from "./composerInlineChip";
 import { LinkChipIcon } from "./LinkChipIcon";
+import { InlineMentionChip } from "./chat/InlineMentionChip";
 import { IconButton } from "./ui/icon-button";
 
 const EXTERNAL_HTTP_HREF_PATTERN = /^https?:\/\//i;
+// Trailing `:line` / `:line:col` position suffix on a resolved file link. Kept on
+// the href (so opening jumps to the line) but stripped for icon/title resolution.
+const MARKDOWN_LINK_POSITION_SUFFIX_PATTERN = /:\d+(?::\d+)?$/;
 const MARKDOWN_EXTERNAL_LINK_CLASS_NAME =
   "inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline";
 const MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME = `${COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} ${COMPOSER_INLINE_CHIP_ICON_LABEL_GAP_CLASS_NAME}`;
@@ -656,11 +654,12 @@ function extractCodeBlock(
     return null;
   }
 
+  // The single child is the fenced code element. Its rendered `type` is the
+  // custom `code` component (not the string "code") once we override `code`
+  // below, so detect by shape (a valid element carrying the code text) rather
+  // than by tag identity. `pre` only ever wraps a code element in markdown.
   const onlyChild = childNodes[0];
-  if (
-    !isValidElement<{ className?: string; children?: ReactNode }>(onlyChild) ||
-    onlyChild.type !== "code"
-  ) {
+  if (!isValidElement<{ className?: string; children?: ReactNode }>(onlyChild)) {
     return null;
   }
 
@@ -668,6 +667,59 @@ function extractCodeBlock(
     className: onlyChild.props.className,
     code: nodeToPlainText(onlyChild.props.children),
   };
+}
+
+const INLINE_CODE_FILE_PATH_MAX_LENGTH = 120;
+
+// Decides whether an inline code span names a file/path that should render as a
+// mention chip (icon + medium label), matching how a file reads in the composer.
+// Conservative on purpose: requires a recognized filename/extension and rejects
+// whitespace and URLs so ordinary prose tokens stay plain inline code.
+function inlineCodeFilePath(raw: string): string | null {
+  // Strip a pair of surrounding quotes/backticks the author may have wrapped the
+  // path in (e.g. `'src/data/social-metrics.ts'`).
+  const value = raw.trim().replace(/^['"`]+|['"`]+$/g, "");
+  if (
+    value.length === 0 ||
+    value.length > INLINE_CODE_FILE_PATH_MAX_LENGTH ||
+    /\s/.test(value) ||
+    value.includes("://")
+  ) {
+    return null;
+  }
+  return pathLooksLikeKnownFile(value) ? value : null;
+}
+
+// Shared openable file chip: the same mention-chip UI (file icon + medium label)
+// used for both assistant markdown file links and inline code that names a file.
+// Keeps the file openable in the preferred editor while looking like a composer
+// mention. `targetPath` may carry a `:line` suffix (used to open); the chip icon
+// and title use the position-free path.
+function OpenableFileChip(props: {
+  targetPath: string;
+  theme: "light" | "dark";
+  label?: ReactNode;
+  href?: string;
+}) {
+  const chipPath = props.targetPath.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
+  return (
+    <InlineMentionChip
+      path={chipPath}
+      theme={props.theme}
+      href={props.href ?? props.targetPath}
+      onActivate={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const api = readNativeApi();
+        if (api) {
+          void openInPreferredEditor(api, props.targetPath);
+        } else {
+          console.warn("Native API not found. Unable to open file in editor.");
+        }
+      }}
+      {...(props.label !== undefined ? { label: props.label } : {})}
+    />
+  );
 }
 
 function CodeBlockHeaderTitle({ fence }: { fence: CodeFenceInfo }) {
@@ -771,14 +823,43 @@ interface SuspenseShikiCodeBlockProps {
   isStreaming: boolean;
 }
 
+type SyntaxHighlightingModule = typeof import("../lib/syntaxHighlighting");
+let syntaxHighlightingModulePromise: Promise<SyntaxHighlightingModule> | null = null;
+
+function getSyntaxHighlightingModulePromise(): Promise<SyntaxHighlightingModule> {
+  syntaxHighlightingModulePromise ??= import("../lib/syntaxHighlighting");
+  return syntaxHighlightingModulePromise;
+}
+
 function SuspenseShikiCodeBlock({
   language,
   code,
   themeName,
   isStreaming,
 }: SuspenseShikiCodeBlockProps) {
-  const cacheKey = createSyntaxHighlightCacheKey(code, language, themeName);
-  const cachedHighlightedHtml = !isStreaming ? getCachedSyntaxHighlightedHtml(cacheKey) : null;
+  const syntaxHighlighting = use(getSyntaxHighlightingModulePromise());
+  return (
+    <LoadedShikiCodeBlock
+      syntaxHighlighting={syntaxHighlighting}
+      language={language}
+      code={code}
+      themeName={themeName}
+      isStreaming={isStreaming}
+    />
+  );
+}
+
+function LoadedShikiCodeBlock({
+  syntaxHighlighting,
+  language,
+  code,
+  themeName,
+  isStreaming,
+}: SuspenseShikiCodeBlockProps & { syntaxHighlighting: SyntaxHighlightingModule }) {
+  const cacheKey = syntaxHighlighting.createSyntaxHighlightCacheKey(code, language, themeName);
+  const cachedHighlightedHtml = !isStreaming
+    ? syntaxHighlighting.getCachedSyntaxHighlightedHtml(cacheKey)
+    : null;
 
   if (cachedHighlightedHtml != null) {
     return (
@@ -793,6 +874,7 @@ function SuspenseShikiCodeBlock({
   // not change this component's hook order once the cache fills.
   return (
     <UncachedShikiCodeBlock
+      syntaxHighlighting={syntaxHighlighting}
       cacheKey={cacheKey}
       language={language}
       code={code}
@@ -803,22 +885,31 @@ function SuspenseShikiCodeBlock({
 }
 
 function UncachedShikiCodeBlock({
+  syntaxHighlighting,
   cacheKey,
   language,
   code,
   themeName,
   isStreaming,
-}: SuspenseShikiCodeBlockProps & { cacheKey: string }) {
-  const highlighter = use(getSyntaxHighlighterPromise(language));
+}: SuspenseShikiCodeBlockProps & {
+  syntaxHighlighting: SyntaxHighlightingModule;
+  cacheKey: string;
+}) {
+  const highlighter = use(syntaxHighlighting.getSyntaxHighlighterPromise(language));
   const highlightedHtml = useMemo(() => {
-    return highlightCodeToHtmlWithFallback(highlighter, code, language, themeName);
-  }, [code, highlighter, language, themeName]);
+    return syntaxHighlighting.highlightCodeToHtmlWithFallback(
+      highlighter,
+      code,
+      language,
+      themeName,
+    );
+  }, [code, highlighter, language, syntaxHighlighting, themeName]);
 
   useEffect(() => {
     if (!isStreaming) {
-      cacheSyntaxHighlightedHtml(cacheKey, highlightedHtml, code);
+      syntaxHighlighting.cacheSyntaxHighlightedHtml(cacheKey, highlightedHtml, code);
     }
-  }, [cacheKey, code, highlightedHtml, isStreaming]);
+  }, [cacheKey, code, highlightedHtml, isStreaming, syntaxHighlighting]);
 
   return (
     <div className="chat-markdown-shiki" dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
@@ -885,23 +976,16 @@ function ChatMarkdown({
           );
         }
 
+        // Local file links keep their openable behavior but adopt the shared
+        // mention-chip UI (file icon + medium label). The link text is preserved
+        // as the label.
         return (
-          <a
-            {...props}
-            href={restoredHref}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              const api = readNativeApi();
-              if (api) {
-                void openInPreferredEditor(api, targetPath);
-              } else {
-                console.warn("Native API not found. Unable to open file in editor.");
-              }
-            }}
-          >
-            {children}
-          </a>
+          <OpenableFileChip
+            targetPath={targetPath}
+            theme={resolvedTheme}
+            label={nodeToPlainText(children)}
+            {...(restoredHref ? { href: restoredHref } : {})}
+          />
         );
       },
       pre({ node: _node, children, ...props }) {
@@ -928,6 +1012,24 @@ function ChatMarkdown({
           </MarkdownCodeBlock>
         );
       },
+      code({ node: _node, className, children, ...props }) {
+        // Fenced blocks carry a `language-*` class and are rendered by `pre`;
+        // only inline code (no class) that names a file becomes an openable
+        // mention chip. The target is resolved against cwd so it opens like a
+        // markdown file link; an unresolvable path still chips on its raw value.
+        if (!className) {
+          const filePath = inlineCodeFilePath(nodeToPlainText(children));
+          if (filePath) {
+            const targetPath = resolveMarkdownFileLinkTarget(filePath, cwd) ?? filePath;
+            return <OpenableFileChip targetPath={targetPath} theme={resolvedTheme} />;
+          }
+        }
+        return (
+          <code className={className} {...props}>
+            {children}
+          </code>
+        );
+      },
       img({ node: _node, src, alt = "", ...props }) {
         const restoredSrc = src ? restoreLiteralDollarPlaceholders(src) : "";
         if (isLocalImageMarkdownSrc(restoredSrc)) {
@@ -943,7 +1045,7 @@ function ChatMarkdown({
         return <img {...props} src={restoredSrc} alt={alt} loading="lazy" />;
       },
     }),
-    [cwd, diffThemeName, isStreaming, onImageExpand],
+    [cwd, diffThemeName, isStreaming, onImageExpand, resolvedTheme],
   );
 
   return (

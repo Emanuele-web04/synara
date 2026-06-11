@@ -131,12 +131,12 @@ export const COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME = [
   "dark:border-[color:color-mix(in_srgb,var(--color-border-heavy)_50%,transparent)]",
 ].join(" ");
 
-/** Border + shadow chrome for the composer surface: a real border follows
- *  squircle/corner-shape geometry more evenly than an outer ring (box-shadow).
- *  Dark mode drops the border and leans on the shadow for separation. */
-export const COMPOSER_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:border-0`;
+/** Border + shadow chrome for raised opaque surfaces (composer shell, kanban cards):
+ *  a real border follows squircle/corner-shape geometry more evenly than an outer
+ *  ring (box-shadow). Dark mode drops the border and leans on the shadow for separation. */
+export const RAISED_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:border-0`;
 
-export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface ${COMPOSER_SURFACE_CHROME_CLASS_NAME} transition-colors duration-200`;
+export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface ${RAISED_SURFACE_CHROME_CLASS_NAME} transition-colors duration-200`;
 
 /** Active segment fill in the sidebar Threads/Workspace picker. */
 export const SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME =
@@ -197,6 +197,10 @@ export const ENVIRONMENT_CONTENT_INSET_MOTION_CLASS =
 /** Anchors the command menu above the composer editor without shifting layout. */
 export const COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME =
   "pointer-events-auto absolute inset-x-0 bottom-full z-20 mb-2 overflow-visible px-1 pt-2";
+
+/** Inline command menu slot for compact composers rendered near the top of a scrollable dialog. */
+export const COMPOSER_COMMAND_MENU_INLINE_WRAPPER_CLASS_NAME =
+  "pointer-events-auto relative z-20 mb-2 overflow-visible px-1";
 
 /** Default command menu row — transparent until hover or keyboard highlight.
  *  Highlight tints the surface darker (button-secondary), matching every other

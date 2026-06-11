@@ -81,6 +81,7 @@ import {
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { positiveFiniteNumber } from "../tokenUsage.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -398,10 +399,6 @@ function asRuntimeItemId(value: string): RuntimeItemId {
   return RuntimeItemId.makeUnsafe(value);
 }
 
-function asPositiveFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
 function maxClaudeContextWindowFromModelUsage(
   modelUsage: Record<string, ModelUsage> | undefined,
 ): number | undefined {
@@ -409,7 +406,7 @@ function maxClaudeContextWindowFromModelUsage(
 
   let maxContextWindow: number | undefined;
   for (const value of Object.values(modelUsage)) {
-    const contextWindow = asPositiveFiniteNumber(value.contextWindow);
+    const contextWindow = positiveFiniteNumber(value.contextWindow);
     if (contextWindow === undefined) {
       continue;
     }
@@ -481,7 +478,7 @@ function mergeClaudeTokenUsageSnapshot(
   accumulated: ThreadTokenUsageSnapshot | undefined,
   contextWindow?: number,
 ): ThreadTokenUsageSnapshot {
-  const maxTokens = asPositiveFiniteNumber(contextWindow);
+  const maxTokens = positiveFiniteNumber(contextWindow);
   const usedTokens =
     maxTokens !== undefined ? Math.min(previous.usedTokens, maxTokens) : previous.usedTokens;
   const lastUsedTokens =

@@ -38,6 +38,7 @@ import {
   COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
   formatComposerSkillChipLabel,
+  resolveAgentChipColor,
 } from "../composerInlineChip";
 import { InlineLinkChip } from "../InlineLinkChip";
 import { ComposerPendingTerminalContextChip } from "../chat/ComposerPendingTerminalContexts";
@@ -94,14 +95,20 @@ export type SerializedComposerTerminalContextNode = Spread<
 
 // ── Helper Functions ──────────────────────────────────────────────────
 
+// Shared boilerplate for the imperative Lexical chip hosts: clear prior content
+// and make the token unselectable so the caret skips over it as one unit.
+function resetInlineChipContainer(container: HTMLElement): void {
+  container.textContent = "";
+  container.style.setProperty("user-select", "none");
+  container.style.setProperty("-webkit-user-select", "none");
+}
+
 function renderMentionChipDom(
   container: HTMLElement,
   pathValue: string,
   kind: MentionChipKind,
 ): void {
-  container.textContent = "";
-  container.style.setProperty("user-select", "none");
-  container.style.setProperty("-webkit-user-select", "none");
+  resetInlineChipContainer(container);
 
   const icon = createMentionChipIconElement(
     pathValue,
@@ -117,9 +124,7 @@ function renderMentionChipDom(
 }
 
 function renderSkillChipDom(container: HTMLElement, name: string): void {
-  container.textContent = "";
-  container.style.setProperty("user-select", "none");
-  container.style.setProperty("-webkit-user-select", "none");
+  resetInlineChipContainer(container);
 
   const icon = createCentralIconElement(
     COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
@@ -141,24 +146,10 @@ const AGENT_ROBOT_ICON_SVG = renderToStaticMarkup(
   <RiRobot3Line aria-hidden="true" className={COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME} />,
 );
 
-// Color mapping for agent aliases (Tailwind color classes)
-const DEFAULT_AGENT_COLOR = { bg: "rgb(245 158 11 / 0.15)", text: "rgb(245 158 11)" };
-const AGENT_COLOR_STYLES: Record<string, { bg: string; text: string }> = {
-  violet: { bg: "rgb(139 92 246 / 0.15)", text: "rgb(139 92 246)" },
-  fuchsia: { bg: "rgb(217 70 239 / 0.15)", text: "rgb(217 70 239)" },
-  teal: { bg: "rgb(20 184 166 / 0.15)", text: "rgb(20 184 166)" },
-  cyan: { bg: "rgb(6 182 212 / 0.15)", text: "rgb(6 182 212)" },
-  amber: DEFAULT_AGENT_COLOR,
-  orange: { bg: "rgb(249 115 22 / 0.15)", text: "rgb(249 115 22)" },
-};
-
 function renderAgentMentionChipDom(container: HTMLElement, alias: string, color: string): void {
-  container.textContent = "";
-  container.style.setProperty("user-select", "none");
-  container.style.setProperty("-webkit-user-select", "none");
+  resetInlineChipContainer(container);
 
-  // Apply color-specific styles
-  const colorStyles = AGENT_COLOR_STYLES[color] ?? DEFAULT_AGENT_COLOR;
+  const colorStyles = resolveAgentChipColor(color);
   container.style.backgroundColor = colorStyles.bg;
   container.style.color = colorStyles.text;
 

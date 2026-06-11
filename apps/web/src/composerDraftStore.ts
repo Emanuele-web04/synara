@@ -50,6 +50,7 @@ import {
   normalizeTerminalContextText,
 } from "./lib/terminalContext";
 import { normalizeAssistantSelectionAttachment } from "./lib/assistantSelections";
+import { cloneComposerImageAttachment } from "./lib/composerSend";
 import { buildModelSelection } from "./providerModelOptions";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -373,6 +374,25 @@ export interface ComposerDraftStoreState {
       isTemporary?: boolean;
     },
   ) => void;
+  /**
+   * Registers a standalone chat draft thread without claiming the project's
+   * composer-draft mapping. Unlike setProjectDraftThreadId this never replaces
+   * (and therefore never deletes) the mapped draft, so any number of standalone
+   * drafts — e.g. kanban tasks — can coexist per project. Create-only: an
+   * existing draft thread is left untouched.
+   */
+  registerDraftThread: (
+    threadId: ThreadId,
+    options: {
+      projectId: ProjectId;
+      createdAt?: string;
+      branch?: string | null;
+      worktreePath?: string | null;
+      envMode?: DraftThreadEnvMode;
+      runtimeMode?: RuntimeMode;
+      interactionMode?: ProviderInteractionMode;
+    },
+  ) => void;
   setDraftThreadContext: (
     threadId: ThreadId,
     options: {
@@ -490,9 +510,9 @@ function deriveEffectiveComposerModelOptions(input: {
     return baseOptions;
   }
 
-  const result: Partial<Record<ProviderKind, ProviderModelOptions[ProviderKind]>> = {
-    ...(baseOptions ?? {}),
-  };
+  const result: Partial<Record<ProviderKind, ProviderModelOptions[ProviderKind]>> = baseOptions
+    ? { ...baseOptions }
+    : {};
   for (const [provider, selection] of Object.entries(draftSelections) as Array<
     [ProviderKind, ModelSelection | undefined]
   >) {
@@ -699,6 +719,9 @@ function buildTransferredComposerDraft(input: {
   return {
     ...base,
     prompt: sourceDraft.prompt,
+    images: sourceDraft.images.map(cloneComposerImageAttachment),
+    nonPersistedImageIds: [...sourceDraft.nonPersistedImageIds],
+    persistedAttachments: [...sourceDraft.persistedAttachments],
     assistantSelections: normalizeAssistantSelections(sourceDraft.assistantSelections),
     terminalContexts: normalizeTerminalContextsForThread(
       targetThreadId,
@@ -2365,6 +2388,34 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             draftsByThreadId: nextDraftsByThreadId,
             draftThreadsByThreadId: nextDraftThreadsByThreadId,
             projectDraftThreadIdByProjectId: nextProjectDraftThreadIdByProjectId,
+          };
+        });
+      },
+      registerDraftThread: (threadId, options) => {
+        if (threadId.length === 0 || options.projectId.length === 0) {
+          return;
+        }
+        set((state) => {
+          if (state.draftThreadsByThreadId[threadId]) {
+            return state;
+          }
+          const worktreePath = options.worktreePath ?? null;
+          const nextDraftThread: DraftThreadState = {
+            projectId: options.projectId,
+            createdAt: options.createdAt ?? new Date().toISOString(),
+            runtimeMode: options.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+            interactionMode: options.interactionMode ?? DEFAULT_INTERACTION_MODE,
+            entryPoint: "chat",
+            branch: options.branch ?? null,
+            worktreePath,
+            lastKnownPr: null,
+            envMode: options.envMode ?? (worktreePath ? "worktree" : "local"),
+          };
+          return {
+            draftThreadsByThreadId: {
+              ...state.draftThreadsByThreadId,
+              [threadId]: nextDraftThread,
+            },
           };
         });
       },

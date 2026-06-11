@@ -8,11 +8,10 @@
 import { memo } from "react";
 import { getFileIconName, inferEntryKindFromPath } from "~/file-icons";
 import { resolveMentionChipKind, type MentionChipKind } from "~/lib/composerMentions";
-import { createCentralIconElement } from "~/lib/central-icons";
+import { CentralIcon, createCentralIconElement } from "~/lib/central-icons";
 import { PluginIcon } from "~/lib/icons";
 import { COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME } from "../composerInlineChip";
 import { FolderClosed } from "../FolderClosed";
-import { FileEntryIcon } from "./FileEntryIcon";
 import type { ProviderMentionReference } from "@t3tools/contracts";
 
 export type { MentionChipKind };
@@ -50,11 +49,10 @@ export const MentionChipIcon = memo(function MentionChipIcon(props: {
   if (kind === "directory") {
     return <FolderClosed className={className} />;
   }
-  // Delegate file rendering to FileEntryIcon so both surfaces resolve the same
-  // Central icon (with the shared bracket fallback for unknown file types).
-  return (
-    <FileEntryIcon pathValue={props.path} kind={kind} theme={props.theme} className={className} />
-  );
+  // Masked Central glyph painted with `bg-current`, so the file icon inherits the
+  // chip's text color (it shares the filename's color) instead of a per-filetype
+  // tint. `getFileIconName` already falls back to the bracket glyph when unknown.
+  return <CentralIcon name={getFileIconName(props.path)} className={className} />;
 });
 
 // Lexical composer only — use a single masked Central icon (same as skill chips)

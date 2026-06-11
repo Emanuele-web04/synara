@@ -1,13 +1,42 @@
 // FILE: useProviderStatusRefresh.ts
-// Purpose: Shared provider-status refresh hook for focus and periodic version checks.
+// Purpose: Shared provider-status refresh hooks — focus/periodic version checks plus an
+//          imperative refresh callback for UI affordances (voice auth retry, banners).
 // Layer: Web hooks
-// Exports: useProviderStatusRefresh
+// Exports: useProviderStatusRefresh, useRefreshProviderStatusesNow
 
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ServerConfig } from "@t3tools/contracts";
+import { toastManager } from "../components/ui/toast";
 import { readNativeApi } from "../nativeApi";
 import { serverQueryKeys } from "../lib/serverReactQuery";
+
+/**
+ * Imperative one-shot provider-status refresh: re-checks providers on the server
+ * and folds the result into the cached server config. Surfaces failures as a toast.
+ */
+export function useRefreshProviderStatusesNow(): () => void {
+  const queryClient = useQueryClient();
+  return useCallback(() => {
+    const api = readNativeApi();
+    if (!api) return;
+    void api.server
+      .refreshProviders()
+      .then((result) => {
+        queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) =>
+          current ? { ...current, providers: result.providers } : current,
+        );
+      })
+      .catch((error) => {
+        toastManager.add({
+          type: "error",
+          title: "Unable to refresh provider status",
+          description:
+            error instanceof Error ? error.message : "Unknown error refreshing provider status.",
+        });
+      });
+  }, [queryClient]);
+}
 
 type ProviderStatusRefreshOptions = {
   readonly enabled?: boolean;

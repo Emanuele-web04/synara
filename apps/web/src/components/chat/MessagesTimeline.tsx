@@ -26,7 +26,11 @@ import {
   type RefObject,
   type ReactNode,
 } from "react";
-import { deriveTimelineEntries, isFileChangeWorkLogEntry } from "../../session-logic";
+import {
+  deriveTimelineEntries,
+  formatClockElapsed,
+  isFileChangeWorkLogEntry,
+} from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import { InlineLinkChip } from "../InlineLinkChip";
@@ -57,7 +61,9 @@ import { ChangedFilesTree } from "./ChangedFilesTree";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { ReviewChangesButton } from "./ReviewChangesButton";
 import { FileEntryIcon } from "./FileEntryIcon";
-import { MentionChipIcon } from "./MentionChipIcon";
+import { InlineMentionChip } from "./InlineMentionChip";
+import { InlineSkillChip } from "./InlineSkillChip";
+import { InlineAgentChip } from "./InlineAgentChip";
 import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
@@ -96,18 +102,6 @@ import {
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
 import { splitPromptIntoDisplaySegments } from "~/composer-editor-mentions";
-import {
-  COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
-  COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
-  COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
-  COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
-  COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME,
-  COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME,
-  COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
-  formatComposerSkillChipLabel,
-} from "../composerInlineChip";
-import { basenameOfPath } from "../../file-icons";
-import { CentralIcon } from "../../lib/central-icons";
 import {
   getChatMessageFooterTextStyle,
   getChatTranscriptTextStyle,
@@ -160,16 +154,6 @@ export interface MessagesTimelineController {
 const AgentTaskIcon: LucideIcon = (props) => (
   <RiRobot3Line className={props.className} style={props.style} />
 );
-
-const DEFAULT_AGENT_COLOR = { bg: "rgb(245 158 11 / 0.15)", text: "rgb(245 158 11)" };
-const AGENT_COLOR_STYLES: Record<string, { bg: string; text: string }> = {
-  violet: { bg: "rgb(139 92 246 / 0.15)", text: "rgb(139 92 246)" },
-  fuchsia: { bg: "rgb(217 70 239 / 0.15)", text: "rgb(217 70 239)" },
-  teal: { bg: "rgb(20 184 166 / 0.15)", text: "rgb(20 184 166)" },
-  cyan: { bg: "rgb(6 182 212 / 0.15)", text: "rgb(6 182 212)" },
-  amber: DEFAULT_AGENT_COLOR,
-  orange: { bg: "rgb(249 115 22 / 0.15)", text: "rgb(249 115 22)" },
-};
 
 // Keeps the steer marker visually attached to the whole sent-message stack.
 function UserDispatchModeChip({
@@ -1291,6 +1275,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         pathValue={file.path}
                         kind="file"
                         theme={resolvedTheme}
+                        colorMode="inherit"
                         className="size-4 shrink-0 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80"
                       />
                       <span
@@ -1563,26 +1548,7 @@ function WorkingTimer({ createdAt }: { createdAt: string }) {
 }
 
 function formatWorkingTimer(startIso: string, endIso: string): string | null {
-  const startedAtMs = Date.parse(startIso);
-  const endedAtMs = Date.parse(endIso);
-  if (!Number.isFinite(startedAtMs) || !Number.isFinite(endedAtMs)) {
-    return null;
-  }
-
-  const elapsedSeconds = Math.max(0, Math.floor((endedAtMs - startedAtMs) / 1000));
-  if (elapsedSeconds < 60) {
-    return `${elapsedSeconds}s`;
-  }
-
-  const hours = Math.floor(elapsedSeconds / 3600);
-  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
-  const seconds = elapsedSeconds % 60;
-
-  if (hours > 0) {
-    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
-  }
-
-  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  return formatClockElapsed(startIso, endIso);
 }
 
 function formatWorkingTimerNow(startIso: string): string {
@@ -1603,22 +1569,6 @@ const UserMessageTerminalContextInlineLabel = memo(
     return <TerminalContextInlineChip label={props.context.header} tooltipText={tooltipText} />;
   },
 );
-
-const UserMessageInlineSkillChip = memo(function UserMessageInlineSkillChip(props: {
-  skillName: string;
-}) {
-  return (
-    <span className={COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME}>
-      <CentralIcon
-        name={COMPOSER_INLINE_SKILL_CHIP_ICON_NAME}
-        className={COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME}
-      />
-      <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>
-        {formatComposerSkillChipLabel(props.skillName)}
-      </span>
-    </span>
-  );
-});
 
 const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(props: {
   image: Extract<NonNullable<TimelineMessage["attachments"]>[number], { type: "image" }>;
@@ -1676,58 +1626,28 @@ function renderUserMessageInlineText(
       return segment.text.length > 0 ? [<span key={`${key}:text`}>{segment.text}</span>] : [];
     }
     if (segment.type === "skill") {
-      return [<UserMessageInlineSkillChip key={`${key}:skill`} skillName={segment.name} />];
+      return [<InlineSkillChip key={`${key}:skill`} skillName={segment.name} />];
     }
     if (segment.type === "mention") {
       return [
-        <UserMessageInlineMentionChip
+        <InlineMentionChip
           key={`${key}:mention`}
           path={segment.path}
-          resolvedTheme={resolvedTheme}
+          theme={resolvedTheme}
           mentionReferences={mentionReferences}
           {...(segment.kind ? { kind: segment.kind } : {})}
         />,
       ];
     }
     if (segment.type === "agent-mention") {
-      return [
-        <UserMessageInlineAgentChip
-          key={`${key}:agent`}
-          alias={segment.alias}
-          color={segment.color}
-        />,
-      ];
+      return [<InlineAgentChip key={`${key}:agent`} alias={segment.alias} color={segment.color} />];
     }
     if (segment.type === "link") {
-      return [<UserMessageInlineLinkChip key={`${key}:link`} url={segment.url} />];
+      return [<InlineLinkChip key={`${key}:link`} url={segment.url} interactive />];
     }
     return [];
   });
 }
-
-const UserMessageInlineLinkChip = memo(function UserMessageInlineLinkChip(props: { url: string }) {
-  return <InlineLinkChip url={props.url} interactive />;
-});
-
-const UserMessageInlineMentionChip = memo(function UserMessageInlineMentionChip(props: {
-  path: string;
-  kind?: "path" | "plugin";
-  mentionReferences?: ReadonlyArray<ProviderMentionReference>;
-  resolvedTheme: "light" | "dark";
-}) {
-  const label = basenameOfPath(props.path);
-  return (
-    <span className={COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME} title={props.path}>
-      <MentionChipIcon
-        path={props.path}
-        theme={props.resolvedTheme}
-        {...(props.kind ? { kind: props.kind } : {})}
-        {...(props.mentionReferences ? { mentionReferences: props.mentionReferences } : {})}
-      />
-      <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>{label}</span>
-    </span>
-  );
-});
 
 function hasOnlyInlineSkillChips(
   text: string,
@@ -1984,26 +1904,6 @@ const UserMessageBody = memo(function UserMessageBody(props: {
         props.mentionReferences,
       )}
     </div>
-  );
-});
-
-const UserMessageInlineAgentChip = memo(function UserMessageInlineAgentChip(props: {
-  alias: string;
-  color: string;
-}) {
-  const colors = AGENT_COLOR_STYLES[props.color] ?? DEFAULT_AGENT_COLOR;
-
-  return (
-    <span
-      className={COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME}
-      style={{
-        backgroundColor: colors.bg,
-        color: colors.text,
-      }}
-    >
-      <RiRobot3Line className={COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME} />
-      <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>{`@${props.alias}`}</span>
-    </span>
   );
 });
 

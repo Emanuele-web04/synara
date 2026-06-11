@@ -1394,6 +1394,31 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // Surface the upcoming work immediately: provider session init can take
+    // seconds (e.g. Cursor), and without an early status the thread reads as
+    // idle until the runtime's first event. Mirrors the message-edit-resend
+    // path. Never touches a live session — a steer turn on a running Codex
+    // session must keep its running state and activeTurnId. Keeps the existing
+    // session's runtimeMode: ensureSessionForThread detects mode changes by
+    // comparing against it, and adopting the requested mode here would mask
+    // the restart.
+    if (thread.session?.status !== "running" && thread.session?.status !== "starting") {
+      yield* setThreadSession({
+        threadId: event.payload.threadId,
+        session: {
+          threadId: event.payload.threadId,
+          status: "starting",
+          providerName: thread.session?.providerName ?? thread.modelSelection.provider,
+          runtimeMode:
+            thread.session?.runtimeMode ?? event.payload.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: event.payload.createdAt,
+        },
+        createdAt: event.payload.createdAt,
+      });
+    }
+
     yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
       threadId: event.payload.threadId,
       branch: thread.branch,

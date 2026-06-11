@@ -30,12 +30,8 @@ import { useStore } from "../store";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { onServerMaintenanceUpdated } from "../wsNativeApi";
-import { useAppSettings } from "~/appSettings";
-import {
-  isProviderUsable,
-  normalizeProviderStatusForLocalConfig,
-  providerUnavailableReason,
-} from "~/lib/providerAvailability";
+import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
+import { resolveProviderSendAvailability } from "~/lib/providerAvailability";
 import { toastManager } from "~/components/ui/toast";
 import {
   Sidebar,
@@ -222,7 +218,6 @@ function isRecentViewSwitcherCommitKey(event: KeyboardEvent): boolean {
 function ChatRouteGlobalShortcuts() {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
-  const { settings: appSettings } = useAppSettings();
   const { toggleSidebar } = useSidebar();
   const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false);
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -256,7 +251,7 @@ function ChatRouteGlobalShortcuts() {
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
-  const providerStatuses = serverConfigQuery.data?.providers ?? [];
+  const providerStatuses = useProviderStatusesForLocalConfig();
   const activeThreadTerminalState = activeContextThreadId
     ? selectThreadTerminalState(terminalStateByThreadId, activeContextThreadId)
     : null;
@@ -412,24 +407,16 @@ function ChatRouteGlobalShortcuts() {
               : command === "chat.newCursor"
                 ? "cursor"
                 : "gemini";
-        const normalizedStatus = normalizeProviderStatusForLocalConfig({
+        const providerAvailability = resolveProviderSendAvailability({
           provider,
-          status: providerStatuses.find((entry) => entry.provider === provider) ?? null,
-          customBinaryPath:
-            provider === "codex"
-              ? appSettings.codexBinaryPath
-              : provider === "claudeAgent"
-                ? appSettings.claudeBinaryPath
-                : provider === "cursor"
-                  ? appSettings.cursorBinaryPath
-                  : appSettings.geminiBinaryPath,
+          statuses: providerStatuses,
         });
-        if (!isProviderUsable(normalizedStatus)) {
+        if (!providerAvailability.usable) {
           event.preventDefault();
           event.stopPropagation();
           toastManager.add({
             type: "error",
-            title: providerUnavailableReason(normalizedStatus),
+            title: providerAvailability.unavailableReason,
           });
           return;
         }
@@ -484,10 +471,6 @@ function ChatRouteGlobalShortcuts() {
     handleNewThread,
     keybindings,
     latestUsableProjectId,
-    appSettings.claudeBinaryPath,
-    appSettings.codexBinaryPath,
-    appSettings.cursorBinaryPath,
-    appSettings.geminiBinaryPath,
     openOrAdvanceRecentSwitcher,
     providerStatuses,
     projects,
