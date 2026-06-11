@@ -29,12 +29,10 @@ import {
 import {
   ChangesIcon,
   ChatBubbleIcon,
-  CheckIcon,
   ChevronDownIcon,
   DiffIcon,
   EyeIcon,
   FileIcon,
-  FolderIcon,
   PanelRightCloseIcon,
 } from "~/lib/icons";
 import { basenameOfPath } from "~/file-icons";
@@ -90,8 +88,8 @@ import { PanelStateMessage } from "./chat/PanelStateMessage";
 import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
 import { useCodeSelectionAction } from "./chat/useCodeSelectionAction";
 import { LocalImagePreview } from "./LocalImagePreview";
+import { ProjectMenuPicker, type ProjectMenuPickerOption } from "./ProjectMenuPicker";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 
 type EditorCenterMode = "file" | "diff";
 
@@ -126,7 +124,7 @@ interface EditorWorkspaceViewProps {
   workspaceRoot: string | null;
   projectName: string | null;
   currentProjectId?: ProjectId | null;
-  projectOptions?: readonly EditorProjectOption[];
+  projectOptions?: ReadonlyArray<ProjectMenuPickerOption>;
   selectedFilePath: string | null;
   expandedDirectories: ReadonlySet<string>;
   centerMode: EditorCenterMode;
@@ -144,16 +142,6 @@ interface EditorWorkspaceViewProps {
   onReferenceInChat?: (reference: ChatFileReference) => void;
   onAskWhyInChat?: (reference: ChatFileReference) => void;
   onSelectProject?: (projectId: ProjectId) => void;
-}
-
-interface EditorProjectOption {
-  id: ProjectId;
-  name: string;
-  folderName: string;
-  localName: string | null;
-  cwd: string;
-  createdAt?: string | undefined;
-  updatedAt?: string | undefined;
 }
 
 // Marks the drag payload so the chat composer can accept it as a reference.
@@ -317,106 +305,6 @@ function markdownPreviewCwd(workspaceRoot: string | null, filePath: string): str
     return workspaceRoot;
   }
   return joinWorkspaceRelativeDirectory(workspaceRoot, parentDirectory);
-}
-
-function editorProjectLabel(project: EditorProjectOption): {
-  primary: string;
-  secondary: string | null;
-} {
-  const folderName = basenameOfPath(project.cwd) ?? project.folderName ?? project.name;
-  const primary = project.localName?.trim() || folderName || project.name;
-  const secondary =
-    project.localName?.trim() && project.localName.trim() !== folderName ? folderName : null;
-  return { primary, secondary };
-}
-
-function compareEditorProjects(left: EditorProjectOption, right: EditorProjectOption): number {
-  const leftTime = Date.parse(left.updatedAt ?? left.createdAt ?? "") || 0;
-  const rightTime = Date.parse(right.updatedAt ?? right.createdAt ?? "") || 0;
-  if (leftTime !== rightTime) {
-    return rightTime - leftTime;
-  }
-  return editorProjectLabel(left).primary.localeCompare(editorProjectLabel(right).primary);
-}
-
-function EditorProjectSwitcher(props: {
-  workspaceRoot: string | null;
-  projectName: string | null;
-  currentProjectId: ProjectId | null | undefined;
-  projectOptions: readonly EditorProjectOption[];
-  onSelectProject: ((projectId: ProjectId) => void) | undefined;
-}) {
-  const {
-    currentProjectId,
-    onSelectProject,
-    projectName,
-    projectOptions,
-    workspaceRoot,
-  } = props;
-  const [open, setOpen] = useState(false);
-  const sortedProjects = useMemo(
-    () =>
-      projectOptions
-        .filter((project) => project.cwd.trim().length > 0)
-        .slice()
-        .sort(compareEditorProjects),
-    [projectOptions],
-  );
-
-  return (
-    <div className="flex min-w-0 flex-1 items-center gap-1.5">
-      <div className="flex min-w-0 items-baseline gap-2">
-        <span className="truncate text-[13px] font-medium text-foreground">
-          {projectName ?? "Workspace"}
-        </span>
-        <span className="hidden truncate text-[11px] text-muted-foreground/70 sm:inline">
-          {workspaceRoot ?? "No workspace"}
-        </span>
-      </div>
-      <Menu open={open} onOpenChange={setOpen}>
-        <MenuTrigger
-          render={
-            <ChatHeaderIconButton
-              type="button"
-              tone="plain"
-              label="Switch project"
-              title="Switch project"
-              className="size-6"
-            >
-              <ChevronDownIcon className="size-3.5" />
-            </ChatHeaderIconButton>
-          }
-        />
-        <MenuPopup align="start" side="bottom" sideOffset={8} className="w-64 min-w-64">
-          <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
-            Recent projects
-          </div>
-          {sortedProjects.length === 0 ? (
-            <div className="px-2 py-1.5 text-muted-foreground text-sm">No recent projects</div>
-          ) : (
-            sortedProjects.map((project) => {
-              const label = editorProjectLabel(project);
-              const isSelected = project.id === currentProjectId;
-              return (
-                <MenuItem
-                  key={project.id}
-                  className="h-9 cursor-pointer gap-2 px-2 text-sm transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
-                  onClick={() => {
-                    onSelectProject?.(project.id);
-                    setOpen(false);
-                  }}
-                >
-                  <FolderIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
-                  <span className="min-w-0 flex-1 truncate">{label.primary}</span>
-                  {isSelected ? <CheckIcon className="size-3.5 shrink-0" /> : null}
-                </MenuItem>
-              );
-            })
-          )}
-        </MenuPopup>
-      </Menu>
-    </div>
-  );
 }
 
 function shouldShowExplorerEntry(entry: ProjectFileSystemEntry): boolean {
@@ -1083,9 +971,7 @@ function FilePreview(props: {
       cwd: props.workspaceRoot,
       relativePath: props.selectedFilePath,
       enabled:
-        props.workspaceRoot !== null &&
-        props.selectedFilePath !== null &&
-        !selectedFileIsImage,
+        props.workspaceRoot !== null && props.selectedFilePath !== null && !selectedFileIsImage,
     }),
   );
   useEffect(() => {
@@ -1224,9 +1110,7 @@ function FilePreview(props: {
             showMarkdownPreview && "editor-file-viewer--markdown-preview",
           )}
           onContextMenu={handleContentsContextMenu}
-          onMouseUp={
-            showMarkdownPreview ? undefined : previewSelectionAction.onContainerMouseUp
-          }
+          onMouseUp={showMarkdownPreview ? undefined : previewSelectionAction.onContainerMouseUp}
         >
           {showMarkdownPreview ? (
             <div className="editor-markdown-preview">
@@ -1500,14 +1384,35 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           desktopTopBarWindowControlsGutterClassName,
         )}
       >
-        <div className={cn("flex min-w-0 flex-1 items-center gap-2", trafficLightGutterClassName)}>
-          <EditorProjectSwitcher
-            workspaceRoot={props.workspaceRoot}
-            projectName={props.projectName}
-            currentProjectId={props.currentProjectId}
-            projectOptions={props.projectOptions ?? []}
-            onSelectProject={props.onSelectProject}
-          />
+        <div
+          className={cn("flex min-w-0 flex-1 items-center gap-1.5", trafficLightGutterClassName)}
+        >
+          <div className="flex min-w-0 items-baseline gap-2">
+            <span className="truncate text-[13px] font-medium text-foreground">
+              {props.projectName ?? "Workspace"}
+            </span>
+            <span className="hidden truncate text-[11px] text-muted-foreground/70 sm:inline">
+              {props.workspaceRoot ?? "No workspace"}
+            </span>
+          </div>
+          {props.onSelectProject && (props.projectOptions?.length ?? 0) > 0 ? (
+            <ProjectMenuPicker
+              projectOptions={props.projectOptions ?? []}
+              selectedProjectId={props.currentProjectId ?? null}
+              onProjectIdChange={props.onSelectProject}
+              trigger={
+                <ChatHeaderIconButton
+                  type="button"
+                  tone="plain"
+                  label="Switch project"
+                  title="Switch project"
+                  className="size-6"
+                >
+                  <ChevronDownIcon className="size-3.5" />
+                </ChatHeaderIconButton>
+              }
+            />
+          ) : null}
         </div>
         <ChatHeaderButton
           type="button"

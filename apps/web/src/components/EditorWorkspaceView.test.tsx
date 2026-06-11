@@ -42,15 +42,7 @@ describe("EditorWorkspaceView", () => {
         workspaceRoot="/Users/tester/project"
         projectName="project"
         currentProjectId={ProjectId.makeUnsafe("project-current")}
-        projectOptions={[
-          {
-            id: ProjectId.makeUnsafe("project-current"),
-            name: "project",
-            folderName: "project",
-            localName: null,
-            cwd: "/Users/tester/project",
-          },
-        ]}
+        projectOptions={[{ id: ProjectId.makeUnsafe("project-current"), name: "project" }]}
         selectedFilePath={null}
         expandedDirectories={new Set()}
         centerMode="diff"

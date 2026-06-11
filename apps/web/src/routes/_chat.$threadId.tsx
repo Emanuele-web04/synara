@@ -1727,7 +1727,10 @@ function SingleChatSurface(props: {
   // otherwise re-render the entire chat surface + right dock + active pane.
   const threadSummaries = useStore(useMemo(() => createSidebarThreadSummariesSelector(), []));
   const editorProjectOptions = useMemo(
-    () => projects.filter((project) => project.kind === "project"),
+    () =>
+      projects.flatMap((project) =>
+        project.kind === "project" ? [{ id: project.id, name: project.name }] : [],
+      ),
     [projects],
   );
   const openEditorProject = useCallback(
