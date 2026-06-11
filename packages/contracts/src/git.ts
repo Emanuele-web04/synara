@@ -66,7 +66,7 @@ const GitDetachedWorktree = Schema.Struct({
   ref: TrimmedNonEmptyStringSchema,
   branch: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
 });
-const GitResolvedPullRequest = Schema.Struct({
+export const GitResolvedPullRequest = Schema.Struct({
   number: PositiveInt,
   title: TrimmedNonEmptyStringSchema,
   url: Schema.String,

@@ -222,7 +222,7 @@ type ComposerCommandGroupModel = {
 };
 
 const COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME =
-  "px-2 pt-1.5 pb-1 text-[11px] font-normal text-muted-foreground/60";
+  "px-2 pt-1.5 pb-1 text-[11px] font-normal text-muted-foreground/75";
 
 export function groupCommandItems(
   items: ComposerCommandItem[],
@@ -365,7 +365,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
                 >
                   Files
                 </p>
-                <p className="px-2 pt-0.5 text-[11px] text-muted-foreground/55">
+                <p className="px-2 pt-0.5 text-[11px] text-muted-foreground/70">
                   Type to search for files
                 </p>
               </div>
@@ -373,7 +373,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
           ) : null}
         </CommandList>
         {props.items.length === 0 && (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
+          <p className="px-2 py-1.5 text-muted-foreground/70 text-[11px]">
             {props.isLoading
               ? props.triggerKind === "mention"
                 ? "Searching mentions..."
@@ -397,7 +397,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
 // its color, and the name — slot geometry stays constant so files, folders,
 // skills, plugins, commands, and agents line up identically.
 const COMPOSER_COMMAND_ITEM_ICON_SLOT_CLASSNAME =
-  "flex size-4 shrink-0 items-center justify-center text-muted-foreground/60";
+  "flex size-4 shrink-0 items-center justify-center text-muted-foreground/75";
 
 // Files mirror the recap / diff changed-files treatment (FileEntryIcon at
 // size-3.5 with the same dimmed foreground) so a file reads identically whether
@@ -532,11 +532,11 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
               : props.item.label}
           </span>
           {secondaryText ? (
-            <span className="truncate text-[11px] text-muted-foreground/55">{secondaryText}</span>
+            <span className="truncate text-[11px] text-muted-foreground/70">{secondaryText}</span>
           ) : null}
         </div>
         {trailingMeta ? (
-          <span className="shrink-0 pl-2 text-right text-[10.5px] text-muted-foreground/42">
+          <span className="shrink-0 pl-2 text-right text-[10.5px] text-muted-foreground/70">
             {trailingMeta}
           </span>
         ) : null}

@@ -10,7 +10,14 @@
 
 import type { ThreadId } from "@t3tools/contracts";
 
-export type SidechatCreator = (options?: { initialPrompt?: string }) => Promise<unknown>;
+export interface SidechatCreationResult {
+  threadId: ThreadId;
+}
+
+export type SidechatCreator = (options?: {
+  initialPrompt?: string;
+  openDock?: boolean;
+}) => Promise<SidechatCreationResult | null>;
 
 const creatorsByThreadId = new Map<ThreadId, SidechatCreator>();
 

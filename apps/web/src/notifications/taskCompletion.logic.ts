@@ -108,6 +108,10 @@ function isCompletionNotificationSettled(thread: Thread | undefined): boolean {
   return thread.session.orchestrationStatus !== "running";
 }
 
+function isReviewChatThread(thread: Thread): boolean {
+  return thread.reviewChatTarget != null;
+}
+
 // Compare consecutive snapshots and emit fresh settled completions, even if the
 // session snapshot skips directly to ready before the toast logic observes it.
 export function collectCompletedThreadCandidates(
@@ -118,6 +122,10 @@ export function collectCompletedThreadCandidates(
   const candidates: CompletedThreadCandidate[] = [];
 
   for (const thread of nextThreads) {
+    if (isReviewChatThread(thread)) {
+      continue;
+    }
+
     const previousThread = previousById.get(thread.id);
     if (!previousThread) {
       continue;
@@ -239,6 +247,10 @@ export function collectThreadAttentionCandidates(
   const candidates: ThreadAttentionCandidate[] = [];
 
   for (const thread of nextThreads) {
+    if (isReviewChatThread(thread)) {
+      continue;
+    }
+
     const previousThread = previousById.get(thread.id);
     if (!previousThread) {
       continue;

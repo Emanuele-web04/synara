@@ -33,7 +33,7 @@ import { buildNextProviderOptions } from "../providerModelOptions";
 import { resolveForkThreadEnvironment } from "../lib/threadEnvironment";
 import { type SplitViewId } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
-import { registerSidechatCreator } from "../lib/sidechatCreatorRegistry";
+import { registerSidechatCreator, type SidechatCreator } from "../lib/sidechatCreatorRegistry";
 
 type ComposerSnapshot = {
   value: string;
@@ -294,7 +294,7 @@ export function useComposerSlashCommands(input: {
   );
 
   const createSidechatFromSlashCommand = useCallback(
-    async (inputOptions?: { initialPrompt?: string }) => {
+    async (inputOptions?: Parameters<SidechatCreator>[0]) => {
       const api = readNativeApi();
       if (!api || !activeProject || !activeThread || !isServerThread || !canOfferSideCommand) {
         toastManager.add({
@@ -302,7 +302,7 @@ export function useComposerSlashCommands(input: {
           title: "Sidechat is unavailable",
           description: "Open a server-backed main thread before starting a sidechat.",
         });
-        return true;
+        return null;
       }
 
       const importedMessages = buildThreadHandoffImportedMessages(activeThread);
@@ -357,11 +357,13 @@ export function useComposerSlashCommands(input: {
       syncServerShellSnapshot(snapshot);
       // Side chats now live as a tab in the host thread's right dock instead of a
       // split-view pane, so the user stays on the main conversation.
-      useRightDockStore.getState().openPane(activeThread.id, {
-        kind: "sidechat",
-        threadId: nextThreadId,
-      });
-      return true;
+      if (inputOptions?.openDock !== false) {
+        useRightDockStore.getState().openPane(activeThread.id, {
+          kind: "sidechat",
+          threadId: nextThreadId,
+        });
+      }
+      return { threadId: nextThreadId };
     },
     [
       activeProject,

@@ -21,6 +21,7 @@ import {
   ProviderReviewTarget,
   ProviderSandboxMode,
   ProviderStartOptions,
+  ProviderThreadInjectTextItem,
   ProviderUserInputAnswers,
   RuntimeMode,
 } from "./orchestration";
@@ -78,6 +79,12 @@ export const ProviderSendTurnInput = Schema.Struct({
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 export const ProviderSteerTurnInput = ProviderSendTurnInput;
 export type ProviderSteerTurnInput = typeof ProviderSteerTurnInput.Type;
+
+export const ProviderInjectThreadItemsInput = Schema.Struct({
+  threadId: ThreadId,
+  items: Schema.Array(ProviderThreadInjectTextItem).check(Schema.isMinLength(1)),
+});
+export type ProviderInjectThreadItemsInput = typeof ProviderInjectThreadItemsInput.Type;
 
 export const ProviderForkThreadInput = Schema.Struct({
   sourceThreadId: ThreadId,

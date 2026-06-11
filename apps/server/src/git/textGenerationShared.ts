@@ -20,6 +20,15 @@ export function limitSection(value: string, maxChars: number): string {
   return `${truncated}\n\n[truncated]`;
 }
 
+export const REVIEW_CONTEXT_BUDGET_CHARS = 50_000;
+
+export function limitContext(
+  value: string,
+  maxChars: number = REVIEW_CONTEXT_BUDGET_CHARS,
+): string {
+  return limitSection(value, maxChars);
+}
+
 export function extractJsonObject(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed.length === 0) {
@@ -305,6 +314,36 @@ export function buildDiffSummaryPrompt(input: { readonly patch: string }) {
     }),
     rawTextFallback: { key: "summary" } satisfies RawTextFallback,
   };
+}
+
+export function buildReviewFindingsPrompt(input: {
+  readonly patch: string;
+  readonly prTitle?: string;
+  readonly prBody?: string;
+}) {
+  const sections = [
+    "You are a senior code reviewer.",
+    "Given a unified diff, return a JSON object with keys: summary, findings.",
+    "Respond with only the JSON object, no prose and no code fences.",
+    "Rules:",
+    "- summary is a short plain-text overview of the change and its risks",
+    "- findings is an array; each finding cites a line PRESENT in the diff",
+    "- side must be RIGHT for an added/new-side line or LEFT for a removed/old-side line",
+    "- severity must be one of blocker, major, minor, nit",
+    "- title is a short phrase; message explains the issue and a suggested fix",
+    "- do NOT invent files or lines that are not in the diff",
+    "- use the PR title and description only as context; anchor findings to the diff",
+    "- prefer few high-signal findings over many low-value ones",
+    "- return an empty findings array if nothing is actionable",
+  ];
+  if (input.prTitle && input.prTitle.trim().length > 0) {
+    sections.push("", "PR title:", limitSection(input.prTitle.trim(), 2_000));
+  }
+  if (input.prBody && input.prBody.trim().length > 0) {
+    sections.push("", "PR description:", limitContext(input.prBody.trim(), 8_000));
+  }
+  sections.push("", "Diff patch:", limitContext(input.patch, 50_000));
+  return { prompt: sections.join("\n") };
 }
 
 export function buildBranchNamePrompt(input: {

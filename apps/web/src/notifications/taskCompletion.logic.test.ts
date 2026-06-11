@@ -55,6 +55,20 @@ function makeThread(overrides: Partial<Thread>): Thread {
   };
 }
 
+function makeReviewChatThread(overrides: Partial<Thread>): Thread {
+  return makeThread({
+    reviewChatTarget: {
+      projectId: ProjectId.makeUnsafe("project-1"),
+      cwd: "/repo/bonaparte",
+      repositoryId: "owner/repo",
+      reference: "owner/repo#42",
+      number: 42,
+      url: "https://github.com/owner/repo/pull/42",
+    },
+    ...overrides,
+  });
+}
+
 describe("collectCompletedThreadCandidates", () => {
   it("returns threads that moved from working to completed", () => {
     const previous = [
@@ -321,6 +335,52 @@ describe("collectCompletedThreadCandidates", () => {
 
     expect(collectCompletedThreadCandidates(previous, next)).toEqual([]);
   });
+
+  it("does not notify when a review chat helper thread completes", () => {
+    const previous = [
+      makeReviewChatThread({
+        session: {
+          provider: "codex",
+          status: "running",
+          orchestrationStatus: "running",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: "2026-04-05T10:00:01.000Z",
+        },
+      }),
+    ];
+    const next = [
+      makeReviewChatThread({
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: "2026-04-05T10:00:05.000Z",
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:00:00.000Z",
+          startedAt: "2026-04-05T10:00:00.000Z",
+          completedAt: "2026-04-05T10:00:05.000Z",
+          assistantMessageId: MessageId.makeUnsafe("msg-1"),
+          sourceProposedPlan: undefined,
+        },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("msg-1"),
+            role: "assistant",
+            text: "Review answer.",
+            createdAt: "2026-04-05T10:00:01.000Z",
+            completedAt: "2026-04-05T10:00:05.000Z",
+            streaming: false,
+          },
+        ],
+      }),
+    ];
+
+    expect(collectCompletedThreadCandidates(previous, next)).toEqual([]);
+  });
 });
 
 describe("shouldShowThreadNotificationToast", () => {
@@ -460,6 +520,30 @@ describe("collectInputNeededThreadCandidates", () => {
         [makeThread({ activities })],
       ),
     ).toEqual([]);
+  });
+
+  it("does not notify when a review chat helper thread needs input", () => {
+    const previous = [makeReviewChatThread({ activities: [] })];
+    const next = [
+      makeReviewChatThread({
+        activities: [
+          {
+            id: EventId.makeUnsafe("activity-approval-1"),
+            tone: "approval",
+            kind: "approval.requested",
+            summary: "Command approval requested",
+            payload: {
+              requestId: "approval-request-1",
+              requestKind: "command",
+            },
+            turnId: TurnId.makeUnsafe("turn-1"),
+            createdAt: "2026-04-05T10:00:04.000Z",
+          },
+        ],
+      }),
+    ];
+
+    expect(collectInputNeededThreadCandidates(previous, next)).toEqual([]);
   });
 });
 

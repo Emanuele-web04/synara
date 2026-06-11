@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
+import { DEFAULT_GIT_TEXT_GENERATION_MODEL, ReviewFinding } from "@t3tools/contracts";
 import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
 import { resolveCodexHome } from "@t3tools/shared/codexConfig";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
@@ -19,6 +19,7 @@ import {
   type CommitMessageGenerationResult,
   type DiffSummaryGenerationResult,
   type PrContentGenerationResult,
+  type ReviewFindingsGenerationResult,
   type ThreadTitleGenerationResult,
   type TextGenerationShape,
   TextGeneration,
@@ -28,12 +29,18 @@ import {
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
+  buildReviewFindingsPrompt,
   buildThreadTitlePrompt,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
   sanitizePrTitle,
   toJsonSchemaObject,
 } from "../textGenerationShared.ts";
+
+const ReviewFindingsOutputSchema = Schema.Struct({
+  summary: Schema.String,
+  findings: Schema.Array(ReviewFinding),
+});
 
 const CODEX_REASONING_EFFORT = "low";
 const CODEX_TIMEOUT_MS = 180_000;
@@ -168,6 +175,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateDiffSummary"
+      | "generateReviewFindings"
       | "generateBranchName"
       | "generateThreadTitle",
     sourceHomePath?: string,
@@ -237,6 +245,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateDiffSummary"
+      | "generateReviewFindings"
       | "generateBranchName"
       | "generateThreadTitle",
     attachments: BranchNameGenerationInput["attachments"],
@@ -286,6 +295,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateDiffSummary"
+      | "generateReviewFindings"
       | "generateBranchName"
       | "generateThreadTitle";
     cwd: string;
@@ -522,6 +532,33 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     );
   };
 
+  const generateReviewFindings: TextGenerationShape["generateReviewFindings"] = (input) => {
+    const { prompt } = buildReviewFindingsPrompt({
+      patch: input.patch,
+      ...(input.prTitle ? { prTitle: input.prTitle } : {}),
+      ...(input.prBody ? { prBody: input.prBody } : {}),
+    });
+
+    return runCodexJson({
+      operation: "generateReviewFindings",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson: ReviewFindingsOutputSchema,
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    }).pipe(
+      Effect.map(
+        (generated) =>
+          ({
+            summary: generated.summary,
+            findings: generated.findings,
+          }) satisfies ReviewFindingsGenerationResult,
+      ),
+    );
+  };
+
   const generateBranchName: TextGenerationShape["generateBranchName"] = (input) => {
     return Effect.gen(function* () {
       const { imagePaths } = yield* materializeImageAttachments(
@@ -582,6 +619,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     generateCommitMessage,
     generatePrContent,
     generateDiffSummary,
+    generateReviewFindings,
     generateBranchName,
     generateThreadTitle,
   } satisfies TextGenerationShape;

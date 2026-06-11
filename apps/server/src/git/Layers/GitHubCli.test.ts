@@ -106,6 +106,92 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  it.effect("enriches review conversation authors with GitHub avatars", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify({
+            comments: [
+              {
+                author: { login: "vercel" },
+                body: "Deploy preview is ready.",
+                createdAt: "2026-06-07T12:00:00Z",
+                url: "https://github.com/octocat/demo/pull/42#issuecomment-1",
+              },
+            ],
+            reviews: [
+              {
+                author: { login: "copilot-pull-request-reviewer" },
+                body: "Potential issue found.",
+                state: "COMMENTED",
+                submittedAt: "2026-06-07T12:01:00Z",
+                url: "https://github.com/octocat/demo/pull/42#pullrequestreview-1",
+              },
+            ],
+            commits: [],
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "https://avatars.githubusercontent.com/u/14985020?v=4\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "https://avatars.githubusercontent.com/u/213165537?v=4\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.getReviewConversation({
+          cwd: "/repo",
+          reference: "42",
+        });
+      });
+
+      assert.deepStrictEqual(result, [
+        {
+          kind: "comment",
+          id: "comment-0",
+          author: "vercel",
+          authorAvatarUrl: "https://avatars.githubusercontent.com/u/14985020?v=4",
+          body: "Deploy preview is ready.",
+          createdAt: "2026-06-07T12:00:00Z",
+          url: "https://github.com/octocat/demo/pull/42#issuecomment-1",
+        },
+        {
+          kind: "review",
+          id: "review-0",
+          author: "copilot-pull-request-reviewer",
+          authorAvatarUrl: "https://avatars.githubusercontent.com/u/213165537?v=4",
+          state: "COMMENTED",
+          body: "Potential issue found.",
+          createdAt: "2026-06-07T12:01:00Z",
+          url: "https://github.com/octocat/demo/pull/42#pullrequestreview-1",
+        },
+      ]);
+      expect(mockedRunProcess).toHaveBeenCalledWith(
+        "gh",
+        ["api", "users/vercel", "--jq", ".avatar_url"],
+        expect.objectContaining({ cwd: "/repo" }),
+      );
+      expect(mockedRunProcess).toHaveBeenCalledWith(
+        "gh",
+        ["api", "users/copilot-pull-request-reviewer", "--jq", ".avatar_url"],
+        expect.objectContaining({ cwd: "/repo" }),
+      );
+    }),
+  );
+
   it.effect("surfaces a friendly error when the pull request is not found", () =>
     Effect.gen(function* () {
       mockedRunProcess.mockRejectedValueOnce(
@@ -123,6 +209,178 @@ layer("GitHubCliLive", (it) => {
       }).pipe(Effect.flip);
 
       assert.equal(error.message.includes("Pull request not found"), true);
+    }),
+  );
+
+  it.effect("paginates review threads and nested comments", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: "https://github.com/octocat/demo/pull/42\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    pageInfo: { hasNextPage: true, endCursor: "thread-cursor-1" },
+                    nodes: [
+                      {
+                        id: "PRRT_1",
+                        isResolved: false,
+                        path: "src/app.ts",
+                        line: 12,
+                        diffSide: "RIGHT",
+                        comments: {
+                          pageInfo: { hasNextPage: true, endCursor: "comment-cursor-1" },
+                          nodes: [
+                            {
+                              author: { login: "alice", avatarUrl: null },
+                              body: "first",
+                              createdAt: "2026-06-07T12:00:00Z",
+                              url: "https://github.com/octocat/demo/pull/42#discussion_r1",
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify({
+            data: {
+              node: {
+                comments: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [
+                    {
+                      author: { login: "bob", avatarUrl: "https://avatars.example/bob.png" },
+                      body: "second",
+                      createdAt: "2026-06-07T12:01:00Z",
+                      url: "https://github.com/octocat/demo/pull/42#discussion_r2",
+                    },
+                  ],
+                },
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [
+                      {
+                        id: "PRRT_2",
+                        isResolved: true,
+                        path: "src/old.ts",
+                        line: 5,
+                        diffSide: "LEFT",
+                        comments: {
+                          pageInfo: { hasNextPage: false, endCursor: null },
+                          nodes: [
+                            {
+                              author: { login: "carol", avatarUrl: null },
+                              body: "third",
+                              createdAt: "2026-06-07T12:02:00Z",
+                              url: "https://github.com/octocat/demo/pull/42#discussion_r3",
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.getPullRequestThreads({
+          cwd: "/repo",
+          reference: "42",
+        });
+      });
+
+      assert.deepStrictEqual(result, [
+        {
+          id: "PRRT_1",
+          isResolved: false,
+          path: "src/app.ts",
+          line: 12,
+          side: "RIGHT",
+          comments: [
+            {
+              author: "alice",
+              body: "first",
+              createdAt: "2026-06-07T12:00:00Z",
+              url: "https://github.com/octocat/demo/pull/42#discussion_r1",
+            },
+            {
+              author: "bob",
+              authorAvatarUrl: "https://avatars.example/bob.png",
+              body: "second",
+              createdAt: "2026-06-07T12:01:00Z",
+              url: "https://github.com/octocat/demo/pull/42#discussion_r2",
+            },
+          ],
+        },
+        {
+          id: "PRRT_2",
+          isResolved: true,
+          path: "src/old.ts",
+          line: 5,
+          side: "LEFT",
+          comments: [
+            {
+              author: "carol",
+              body: "third",
+              createdAt: "2026-06-07T12:02:00Z",
+              url: "https://github.com/octocat/demo/pull/42#discussion_r3",
+            },
+          ],
+        },
+      ]);
+
+      expect(mockedRunProcess).toHaveBeenCalledTimes(4);
+      expect(mockedRunProcess).toHaveBeenNthCalledWith(
+        3,
+        "gh",
+        expect.arrayContaining(["-F", "threadId=PRRT_1", "-F", "commentsCursor=comment-cursor-1"]),
+        expect.objectContaining({ cwd: "/repo" }),
+      );
+      expect(mockedRunProcess).toHaveBeenNthCalledWith(
+        4,
+        "gh",
+        expect.arrayContaining(["-F", "threadsCursor=thread-cursor-1"]),
+        expect.objectContaining({ cwd: "/repo" }),
+      );
     }),
   );
 });

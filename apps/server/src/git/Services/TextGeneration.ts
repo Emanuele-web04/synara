@@ -8,7 +8,12 @@
  */
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
-import type { ChatAttachment, ModelSelection, ProviderStartOptions } from "@t3tools/contracts";
+import type {
+  ChatAttachment,
+  ModelSelection,
+  ProviderStartOptions,
+  ReviewAgentResult,
+} from "@t3tools/contracts";
 
 import type { TextGenerationError } from "../Errors.ts";
 
@@ -72,6 +77,22 @@ export interface DiffSummaryGenerationResult {
   summary: string;
 }
 
+export interface ReviewFindingsGenerationInput {
+  cwd: string;
+  patch: string;
+  prTitle?: string;
+  prBody?: string;
+  codexHomePath?: string;
+  /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
+  model?: string;
+  /** Optional provider-aware selection for providers that need more than a raw model slug. */
+  modelSelection?: ModelSelection;
+  /** Optional provider startup overrides, such as custom binary paths or server URLs. */
+  providerOptions?: ProviderStartOptions;
+}
+
+export type ReviewFindingsGenerationResult = ReviewAgentResult;
+
 export interface BranchNameGenerationInput {
   cwd: string;
   message: string;
@@ -110,6 +131,9 @@ export interface TextGenerationService {
   ): Promise<CommitMessageGenerationResult>;
   generatePrContent(input: PrContentGenerationInput): Promise<PrContentGenerationResult>;
   generateDiffSummary(input: DiffSummaryGenerationInput): Promise<DiffSummaryGenerationResult>;
+  generateReviewFindings(
+    input: ReviewFindingsGenerationInput,
+  ): Promise<ReviewFindingsGenerationResult>;
   generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
   generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
 }
@@ -138,6 +162,13 @@ export interface TextGenerationShape {
   readonly generateDiffSummary: (
     input: DiffSummaryGenerationInput,
   ) => Effect.Effect<DiffSummaryGenerationResult, TextGenerationError>;
+
+  /**
+   * Generate structured review findings for a unified diff.
+   */
+  readonly generateReviewFindings: (
+    input: ReviewFindingsGenerationInput,
+  ) => Effect.Effect<ReviewFindingsGenerationResult, TextGenerationError>;
 
   /**
    * Generate a concise branch name from a user message.

@@ -40,6 +40,7 @@ function ComposerSuggestionCard(props: {
   onSelectSuggestion: (suggestion: ComposerSuggestion) => void;
 }) {
   const { suggestion, iconName, onSelectSuggestion } = props;
+  const promptLine = suggestionPromptFirstLine(suggestion);
 
   return (
     <Tooltip>
@@ -49,14 +50,13 @@ function ComposerSuggestionCard(props: {
           <button
             type="button"
             className={SUGGESTION_ROW_CLASS_NAME}
+            aria-label={`${suggestion.label}. ${promptLine}`}
             onClick={() => onSelectSuggestion(suggestion)}
           >
             <CentralIcon name={iconName} className={SUGGESTION_ICON_CLASS_NAME} />
             <span className={SUGGESTION_TEXT_CLASS_NAME}>
               <span className={SUGGESTION_TITLE_CLASS_NAME}>{suggestion.label}</span>
-              <span className={SUGGESTION_DESCRIPTION_CLASS_NAME}>
-                {suggestionPromptFirstLine(suggestion)}
-              </span>
+              <span className={SUGGESTION_DESCRIPTION_CLASS_NAME}>{promptLine}</span>
             </span>
           </button>
         }

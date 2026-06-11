@@ -329,6 +329,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           forkSourceThreadId: null,
           sidechatSourceThreadId: null,
           lastKnownPr: null,
+          reviewChatTarget: null,
           runtime: null,
           latestUserMessageAt: "2026-02-24T00:00:03.500Z",
           hasPendingApprovals: true,
@@ -1269,6 +1270,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           forkSourceThreadId: null,
           sidechatSourceThreadId: null,
           lastKnownPr: null,
+          reviewChatTarget: null,
           runtime: null,
           latestTurn: {
             turnId: asTurnId("turn-shell"),

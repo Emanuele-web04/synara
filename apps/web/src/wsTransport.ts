@@ -9,6 +9,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
+  type ReviewUpdatedPayload,
   type ServerConfigStreamEvent,
   type ServerLifecycleStreamEvent,
   type ServerProviderStatusesUpdatedPayload,
@@ -220,9 +221,15 @@ export class WsTransport {
     this.state = "disposed";
     for (const cleanup of this.streamCleanups.values()) cleanup();
     this.streamCleanups.clear();
-    void this.runtime.runPromise(Scope.close(this.clientScope, Exit.void)).finally(() => {
-      this.runtime.dispose();
-    });
+    void this.runtime
+      .runPromise(Scope.close(this.clientScope, Exit.void))
+      .catch(() => {
+        // Scope close can reject if the runtime is already tearing down; the
+        // transport is disposed either way, so this rejection is terminal noise.
+      })
+      .finally(() => {
+        this.runtime.dispose();
+      });
   }
 
   private createSession() {
@@ -261,9 +268,14 @@ export class WsTransport {
 
     this.state = "connecting";
 
-    void oldRuntime.runPromise(Scope.close(oldClientScope, Exit.void)).finally(() => {
-      oldRuntime.dispose();
-    });
+    void oldRuntime
+      .runPromise(Scope.close(oldClientScope, Exit.void))
+      .catch(() => {
+        // The old runtime is being replaced; a close rejection here is terminal noise.
+      })
+      .finally(() => {
+        oldRuntime.dispose();
+      });
 
     this.reconnectPromise = this.openReconnectSession().finally(() => {
       this.reconnectPromise = null;
@@ -317,6 +329,10 @@ export class WsTransport {
   private startChannelStream(channel: WsPushChannel): void {
     void this.getClient()
       .then((client) => {
+        if (!this.listeners.has(channel)) {
+          return;
+        }
+
         const restartChannel = () => {
           if (this.listeners.has(channel)) {
             this.startChannelStream(channel);
@@ -364,6 +380,13 @@ export class WsTransport {
             (event: TerminalEvent) => this.emit(WS_CHANNELS.terminalEvent, event),
             restartChannel,
           );
+        } else if (channel === WS_CHANNELS.reviewUpdated) {
+          this.startStream(
+            "review.updated",
+            client[WS_METHODS.subscribeReviewUpdates]({}),
+            (event: ReviewUpdatedPayload) => this.emit(WS_CHANNELS.reviewUpdated, event),
+            restartChannel,
+          );
         } else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent) {
           this.startStream(
             "orchestration.domain",
@@ -389,6 +412,7 @@ export class WsTransport {
       this.stopStream("server.providers");
     else if (channel === WS_CHANNELS.serverSettingsUpdated) this.stopStream("server.settings");
     else if (channel === WS_CHANNELS.terminalEvent) this.stopStream("terminal.events");
+    else if (channel === WS_CHANNELS.reviewUpdated) this.stopStream("review.updated");
     else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent)
       this.stopStream("orchestration.domain");
   }
@@ -459,31 +483,32 @@ export class WsTransport {
   ): void {
     if (this.streamCleanups.has(key)) return;
     const runnableStream = stream as Stream.Stream<T, WsTransportRpcError, never>;
-    const cancel = this.runtime.runCallback(
+    let cancel: (() => void) | undefined;
+    cancel = this.runtime.runCallback(
       Stream.runForEach(runnableStream, (event) => Effect.sync(() => listener(event))),
       {
         onExit: (exit) => {
-          if (this.streamCleanups.get(key) === cancel) {
+          if (cancel && this.streamCleanups.get(key) === cancel) {
             this.streamCleanups.delete(key);
           }
           const wasStoppedIntentionally = this.stoppingStreams.delete(key);
           if (wasStoppedIntentionally || this.disposed) {
             return;
           }
-          if (restart && Exit.isFailure(exit)) {
-            window.setTimeout(
-              () => {
-                if (!this.disposed && !this.streamCleanups.has(key)) {
-                  void this.reconnect()
-                    .then(() => restart())
-                    .catch((error) => console.warn("WebSocket RPC stream reconnect failed", error));
-                }
-              },
-              Cause.hasInterruptsOnly(exit.cause) ? 0 : 500,
-            );
+          if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) {
             return;
           }
-          if (Exit.isFailure(exit) && !this.disposed && !Cause.hasInterruptsOnly(exit.cause)) {
+          if (restart && Exit.isFailure(exit)) {
+            window.setTimeout(() => {
+              if (!this.disposed && !this.streamCleanups.has(key)) {
+                void this.reconnect()
+                  .then(() => restart())
+                  .catch((error) => console.warn("WebSocket RPC stream reconnect failed", error));
+              }
+            }, 500);
+            return;
+          }
+          if (Exit.isFailure(exit) && !this.disposed) {
             console.warn("WebSocket RPC stream failed", causeToError(exit.cause));
           }
         },

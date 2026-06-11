@@ -50,6 +50,39 @@ import type {
   GitUnstageFilesResult,
 } from "./git";
 import type {
+  ReviewAddCommentInput,
+  ReviewAgentResult,
+  ReviewChangesetResult,
+  ReviewCheckProjectAccessInput,
+  ReviewCommentList,
+  ReviewGetProjectBoardInput,
+  ReviewGetViewerInput,
+  ReviewListCommentsInput,
+  ReviewListProjectsInput,
+  ReviewListProjectsResult,
+  ReviewListPullRequestsInput,
+  ReviewListPullRequestsResult,
+  ReviewConversationResult,
+  ReviewLoadChangesetInput,
+  ReviewLoadRemoteThreadsInput,
+  ReviewLocalComment,
+  ReviewPullRequestOverview,
+  ReviewPullRequestQueryInput,
+  ReviewMoveProjectCardInput,
+  ReviewMoveProjectCardResult,
+  ReviewProjectAccessResult,
+  ReviewProjectBoard,
+  ReviewRemoteThreadsResult,
+  ReviewRemoveCommentInput,
+  ReviewRemoveCommentResult,
+  ReviewRunAgentInput,
+  ReviewSubmitInput,
+  ReviewSubmitResult,
+  ReviewUpdateCommentInput,
+  ReviewUpdatedPayload,
+  ReviewViewerResult,
+} from "./review";
+import type {
   ProjectListDirectoriesInput,
   ProjectListDirectoriesResult,
   ProjectSearchEntriesInput,
@@ -379,6 +412,27 @@ export interface NativeApi {
     summarizeDiff: (input: GitSummarizeDiffInput) => Promise<GitSummarizeDiffResult>;
     runStackedAction: (input: GitRunStackedActionInput) => Promise<GitRunStackedActionResult>;
     onActionProgress: (callback: (event: GitActionProgressEvent) => void) => () => void;
+  };
+  review: {
+    listPullRequests: (input: ReviewListPullRequestsInput) => Promise<ReviewListPullRequestsResult>;
+    getViewer: (input: ReviewGetViewerInput) => Promise<ReviewViewerResult>;
+    loadChangeset: (input: ReviewLoadChangesetInput) => Promise<ReviewChangesetResult>;
+    loadPullRequest: (input: ReviewPullRequestQueryInput) => Promise<ReviewPullRequestOverview>;
+    loadConversation: (input: ReviewPullRequestQueryInput) => Promise<ReviewConversationResult>;
+    listComments: (input: ReviewListCommentsInput) => Promise<ReviewCommentList>;
+    addComment: (input: ReviewAddCommentInput) => Promise<ReviewLocalComment>;
+    updateComment: (input: ReviewUpdateCommentInput) => Promise<ReviewLocalComment>;
+    removeComment: (input: ReviewRemoveCommentInput) => Promise<ReviewRemoveCommentResult>;
+    submit: (input: ReviewSubmitInput) => Promise<ReviewSubmitResult>;
+    loadRemoteThreads: (input: ReviewLoadRemoteThreadsInput) => Promise<ReviewRemoteThreadsResult>;
+    runAgent: (input: ReviewRunAgentInput) => Promise<ReviewAgentResult>;
+    checkProjectAccess: (
+      input: ReviewCheckProjectAccessInput,
+    ) => Promise<ReviewProjectAccessResult>;
+    listProjects: (input: ReviewListProjectsInput) => Promise<ReviewListProjectsResult>;
+    getProjectBoard: (input: ReviewGetProjectBoardInput) => Promise<ReviewProjectBoard>;
+    moveProjectCard: (input: ReviewMoveProjectCardInput) => Promise<ReviewMoveProjectCardResult>;
+    onUpdated: (callback: (payload: ReviewUpdatedPayload) => void) => () => void;
   };
   contextMenu: {
     show: <T extends string>(

@@ -253,6 +253,31 @@ describe("ProviderRuntimeIngestion", () => {
     };
   }
 
+  async function requestBufferedAssistantDelivery(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    suffix: string,
+    now: string,
+  ): Promise<void> {
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe(`cmd-turn-start-${suffix}`),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId(`message-${suffix}`),
+          role: "user",
+          text: "buffer assistant response",
+          attachments: [],
+        },
+        assistantDeliveryMode: "buffered",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+  }
+
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -948,7 +973,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
-  it("does not project reasoning content deltas into transcript work rows", async () => {
+  it("projects reasoning content deltas into visible thinking work rows without assistant messages", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
@@ -980,15 +1005,65 @@ describe("ProviderRuntimeIngestion", () => {
 
     const thread = await waitForThread(harness.engine, (entry) =>
       entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-turn-completed",
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-delta",
       ),
     );
 
-    expect(
-      thread.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-delta",
+    const reasoningActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-delta",
+    );
+    expect(reasoningActivity).toMatchObject({
+      kind: "reasoning.delta",
+      summary: "Thinking",
+      tone: "info",
+      payload: {
+        streamKind: "reasoning_text",
+        detail: "checking files",
+      },
+      turnId: asTurnId("turn-reasoning"),
+    });
+    expect(thread.messages).toHaveLength(0);
+  });
+
+  it("projects reasoning summary deltas with summary index metadata", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-summary-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("thought-1"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        delta: "reviewing patch shape",
+        summaryIndex: 1,
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-summary-delta",
       ),
-    ).toBe(false);
+    );
+
+    const reasoningActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-summary-delta",
+    );
+    expect(reasoningActivity).toMatchObject({
+      kind: "reasoning.delta",
+      summary: "Thinking summary",
+      tone: "info",
+      payload: {
+        streamKind: "reasoning_summary_text",
+        detail: "reviewing patch shape",
+        summaryIndex: 1,
+      },
+      turnId: asTurnId("turn-reasoning"),
+    });
     expect(thread.messages).toHaveLength(0);
   });
 
@@ -1680,9 +1755,10 @@ describe("ProviderRuntimeIngestion", () => {
     expect(proposedPlan?.planMarkdown).toBe("## Buffered plan\n\n- first\n- second");
   });
 
-  it("buffers assistant deltas by default until completion", async () => {
+  it("buffers assistant deltas when buffered delivery is requested until completion", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
+    await requestBufferedAssistantDelivery(harness, "buffered", now);
 
     harness.emit({
       type: "turn.started",
@@ -1753,6 +1829,7 @@ describe("ProviderRuntimeIngestion", () => {
   it("ignores whitespace-only buffered assistant deltas on completion", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
+    await requestBufferedAssistantDelivery(harness, "buffered-whitespace", now);
 
     harness.emit({
       type: "turn.started",
@@ -1915,9 +1992,121 @@ describe("ProviderRuntimeIngestion", () => {
     expect(finalMessage?.streaming).toBe(false);
   });
 
+  it("keeps streaming delivery scoped to the active turn when another thread requests buffering", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const streamingThreadId = asThreadId("thread-streaming-scope");
+    const streamingTurnId = asTurnId("turn-streaming-scope");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-thread-create-streaming-scope"),
+        threadId: streamingThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Streaming Thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-seed-streaming-scope"),
+        threadId: streamingThreadId,
+        session: {
+          threadId: streamingThreadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          updatedAt: now,
+          lastError: null,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-streaming-scope"),
+        threadId: streamingThreadId,
+        message: {
+          messageId: asMessageId("message-streaming-scope"),
+          role: "user",
+          text: "stream this response",
+          attachments: [],
+        },
+        assistantDeliveryMode: "streaming",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-streaming-scope"),
+      provider: "codex",
+      createdAt: now,
+      threadId: streamingThreadId,
+      turnId: streamingTurnId,
+    });
+    await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.session?.status === "running" && thread.session?.activeTurnId === streamingTurnId,
+      2000,
+      streamingThreadId,
+    );
+
+    await requestBufferedAssistantDelivery(harness, "buffered-other-thread", now);
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-message-delta-streaming-scope"),
+      provider: "codex",
+      createdAt: now,
+      threadId: streamingThreadId,
+      turnId: streamingTurnId,
+      itemId: asItemId("item-streaming-scope"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "visible immediately",
+      },
+    });
+
+    const liveThread = await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-streaming-scope" &&
+            message.streaming &&
+            message.text === "visible immediately",
+        ),
+      2000,
+      streamingThreadId,
+    );
+    const liveMessage = liveThread.messages.find(
+      (message: ProviderRuntimeTestMessage) => message.id === "assistant:item-streaming-scope",
+    );
+    expect(liveMessage?.streaming).toBe(true);
+  });
+
   it("flushes buffered assistant text when streaming mode is requested after an early delta", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
+    await requestBufferedAssistantDelivery(harness, "late-streaming-mode", now);
 
     harness.emit({
       type: "turn.started",
@@ -1992,6 +2181,7 @@ describe("ProviderRuntimeIngestion", () => {
   it("flushes buffered assistant text before session exit clears turn state", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
+    await requestBufferedAssistantDelivery(harness, "buffered-session-exit", now);
 
     harness.emit({
       type: "turn.started",
@@ -2049,6 +2239,7 @@ describe("ProviderRuntimeIngestion", () => {
   it("flushes buffered assistant text before runtime.error marks the session errored", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
+    await requestBufferedAssistantDelivery(harness, "buffered-runtime-error", now);
 
     harness.emit({
       type: "turn.started",
@@ -2114,6 +2305,7 @@ describe("ProviderRuntimeIngestion", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
     const oversizedText = "x".repeat(40_000);
+    await requestBufferedAssistantDelivery(harness, "buffer-spill", now);
 
     harness.emit({
       type: "turn.started",
@@ -2789,6 +2981,44 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.status).toBe("running");
     expect(thread.session?.activeTurnId).toBe("turn-warning");
     expect(thread.session?.lastError).toBeNull();
+  });
+
+  it("labels Codex MCP auth warnings with actionable copy", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "runtime.warning",
+      eventId: asEventId("evt-mcp-auth-warning"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        message:
+          '2026-06-08T22:53:48.409310Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer..." })',
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === "evt-mcp-auth-warning" &&
+          activity.summary === "MCP authentication required",
+      ),
+    );
+    const warning = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-mcp-auth-warning",
+    );
+    const warningPayload =
+      warning?.payload && typeof warning.payload === "object"
+        ? (warning.payload as Record<string, unknown>)
+        : undefined;
+
+    expect(warning?.summary).toBe("MCP authentication required");
+    expect(warningPayload?.message).toBe(
+      "A configured MCP server rejected Codex because it requires Bearer authentication.",
+    );
+    expect(String(warningPayload?.detail)).toContain("rmcp::transport::worker");
   });
 
   it("maps session/thread lifecycle and item.started into session/activity projections", async () => {

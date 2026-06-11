@@ -314,7 +314,7 @@ function InlineWarning({ children }: { children: ReactNode }) {
 function InstalledStatus({ installed }: { installed: boolean }) {
   if (!installed) return null;
   return (
-    <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg border border-border/40 text-muted-foreground/60">
+    <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg border border-border/40 text-muted-foreground/75">
       <CheckIcon className="size-3.5" />
     </span>
   );
@@ -616,7 +616,7 @@ export function PluginLibrary() {
             <InputGroup className="rounded-xl bg-background/70 shadow-xs">
               <InputGroupAddon>
                 <InputGroupText>
-                  <SearchIcon className="size-4 text-muted-foreground/60" />
+                  <SearchIcon className="size-4 text-muted-foreground/75" />
                 </InputGroupText>
               </InputGroupAddon>
               <InputGroupInput

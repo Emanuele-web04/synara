@@ -14,6 +14,7 @@
 import type {
   ProviderForkThreadInput,
   ProviderForkThreadResult,
+  ProviderInjectThreadItemsInput,
   ProviderInterruptTurnInput,
   ProviderKind,
   ProviderRespondToRequestInput,
@@ -72,6 +73,14 @@ export interface ProviderServiceShape {
   readonly startReview: (
     input: ProviderStartReviewInput,
   ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
+
+  /**
+   * Append provider-native model-visible items to a loaded provider thread
+   * without starting a user turn.
+   */
+  readonly injectThreadItems?: (
+    input: ProviderInjectThreadItemsInput,
+  ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
    * Fork a provider thread natively when the underlying adapter supports it.

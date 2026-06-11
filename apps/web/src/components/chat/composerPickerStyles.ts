@@ -24,7 +24,7 @@ export const COMPOSER_PICKER_SEARCH_HEADER_CLASS_NAME =
 
 /** Search field styling inside composer picker submenus. */
 export const COMPOSER_PICKER_SEARCH_INPUT_CLASS_NAME =
-  "rounded-lg border-[color:color-mix(in_srgb,var(--foreground)_8%,transparent)] bg-[color-mix(in_srgb,white_92%,transparent)] shadow-none before:hidden has-focus-visible:border-[color:color-mix(in_srgb,var(--foreground)_14%,transparent)] has-focus-visible:ring-0 [&_input]:font-sans [&_input]:placeholder:text-muted-foreground/55";
+  "rounded-lg border-[color:color-mix(in_srgb,var(--foreground)_8%,transparent)] bg-[color-mix(in_srgb,white_92%,transparent)] shadow-none before:hidden has-focus-visible:border-[color:color-mix(in_srgb,var(--foreground)_14%,transparent)] has-focus-visible:ring-0 [&_input]:font-sans [&_input]:placeholder:text-muted-foreground/70";
 
 /** Scrollable model list body inside searchable provider submenus. */
 export const COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME =
@@ -46,7 +46,7 @@ export const COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME = `grid w-full grid-c
 export const COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME = "pl-[1.125rem]";
 
 /** Muted accent text for effort labels and empty-landing folder names. */
-export const COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME = "text-muted-foreground/45";
+export const COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME = "text-muted-foreground/70";
 
 // NOTE: Composer picker section headers (Effort, Thinking, Mode, …) now render
 // through the shared `MenuGroupLabel` primitive (../ui/menu) so they stay in

@@ -41,6 +41,39 @@ import {
   GitUnstageFilesInput,
   GitUnstageFilesResult,
 } from "./git";
+import {
+  ReviewAddCommentInput,
+  ReviewAgentResult,
+  ReviewChangesetResult,
+  ReviewCheckProjectAccessInput,
+  ReviewCommentList,
+  ReviewGetProjectBoardInput,
+  ReviewGetViewerInput,
+  ReviewListCommentsInput,
+  ReviewListProjectsInput,
+  ReviewListProjectsResult,
+  ReviewListPullRequestsInput,
+  ReviewListPullRequestsResult,
+  ReviewConversationResult,
+  ReviewLoadChangesetInput,
+  ReviewLoadRemoteThreadsInput,
+  ReviewLocalComment,
+  ReviewPullRequestOverview,
+  ReviewPullRequestQueryInput,
+  ReviewMoveProjectCardInput,
+  ReviewMoveProjectCardResult,
+  ReviewProjectAccessResult,
+  ReviewProjectBoard,
+  ReviewRemoteThreadsResult,
+  ReviewRemoveCommentInput,
+  ReviewRemoveCommentResult,
+  ReviewRunAgentInput,
+  ReviewSubmitInput,
+  ReviewSubmitResult,
+  ReviewUpdateCommentInput,
+  ReviewUpdatedPayload,
+  ReviewViewerResult,
+} from "./review";
 import { KeybindingRule } from "./keybindings";
 import {
   ClientOrchestrationCommand,
@@ -381,6 +414,109 @@ export const WsGitHandoffThreadRpc = Rpc.make(WS_METHODS.gitHandoffThread, {
   error: WsRpcError,
 });
 
+export const WsReviewListPullRequestsRpc = Rpc.make(WS_METHODS.reviewListPullRequests, {
+  payload: ReviewListPullRequestsInput,
+  success: ReviewListPullRequestsResult,
+  error: WsRpcError,
+});
+
+export const WsReviewGetViewerRpc = Rpc.make(WS_METHODS.reviewGetViewer, {
+  payload: ReviewGetViewerInput,
+  success: ReviewViewerResult,
+  error: WsRpcError,
+});
+
+export const WsReviewLoadChangesetRpc = Rpc.make(WS_METHODS.reviewLoadChangeset, {
+  payload: ReviewLoadChangesetInput,
+  success: ReviewChangesetResult,
+  error: WsRpcError,
+});
+
+export const WsReviewLoadPullRequestRpc = Rpc.make(WS_METHODS.reviewLoadPullRequest, {
+  payload: ReviewPullRequestQueryInput,
+  success: ReviewPullRequestOverview,
+  error: WsRpcError,
+});
+
+export const WsReviewLoadConversationRpc = Rpc.make(WS_METHODS.reviewLoadConversation, {
+  payload: ReviewPullRequestQueryInput,
+  success: ReviewConversationResult,
+  error: WsRpcError,
+});
+
+export const WsReviewListCommentsRpc = Rpc.make(WS_METHODS.reviewListComments, {
+  payload: ReviewListCommentsInput,
+  success: ReviewCommentList,
+  error: WsRpcError,
+});
+
+export const WsReviewAddCommentRpc = Rpc.make(WS_METHODS.reviewAddComment, {
+  payload: ReviewAddCommentInput,
+  success: ReviewLocalComment,
+  error: WsRpcError,
+});
+
+export const WsReviewUpdateCommentRpc = Rpc.make(WS_METHODS.reviewUpdateComment, {
+  payload: ReviewUpdateCommentInput,
+  success: ReviewLocalComment,
+  error: WsRpcError,
+});
+
+export const WsReviewRemoveCommentRpc = Rpc.make(WS_METHODS.reviewRemoveComment, {
+  payload: ReviewRemoveCommentInput,
+  success: ReviewRemoveCommentResult,
+  error: WsRpcError,
+});
+
+export const WsReviewSubmitRpc = Rpc.make(WS_METHODS.reviewSubmit, {
+  payload: ReviewSubmitInput,
+  success: ReviewSubmitResult,
+  error: WsRpcError,
+});
+
+export const WsReviewLoadRemoteThreadsRpc = Rpc.make(WS_METHODS.reviewLoadRemoteThreads, {
+  payload: ReviewLoadRemoteThreadsInput,
+  success: ReviewRemoteThreadsResult,
+  error: WsRpcError,
+});
+
+export const WsReviewRunAgentRpc = Rpc.make(WS_METHODS.reviewRunAgent, {
+  payload: ReviewRunAgentInput,
+  success: ReviewAgentResult,
+  error: WsRpcError,
+});
+
+export const WsReviewCheckProjectAccessRpc = Rpc.make(WS_METHODS.reviewCheckProjectAccess, {
+  payload: ReviewCheckProjectAccessInput,
+  success: ReviewProjectAccessResult,
+  error: WsRpcError,
+});
+
+export const WsReviewListProjectsRpc = Rpc.make(WS_METHODS.reviewListProjects, {
+  payload: ReviewListProjectsInput,
+  success: ReviewListProjectsResult,
+  error: WsRpcError,
+});
+
+export const WsReviewGetProjectBoardRpc = Rpc.make(WS_METHODS.reviewGetProjectBoard, {
+  payload: ReviewGetProjectBoardInput,
+  success: ReviewProjectBoard,
+  error: WsRpcError,
+});
+
+export const WsReviewMoveProjectCardRpc = Rpc.make(WS_METHODS.reviewMoveProjectCard, {
+  payload: ReviewMoveProjectCardInput,
+  success: ReviewMoveProjectCardResult,
+  error: WsRpcError,
+});
+
+export const WsReviewSubscribeUpdatesRpc = Rpc.make(WS_METHODS.subscribeReviewUpdates, {
+  payload: Schema.Struct({}),
+  success: ReviewUpdatedPayload,
+  error: WsRpcError,
+  stream: true,
+});
+
 export const WsTerminalOpenRpc = Rpc.make(WS_METHODS.terminalOpen, {
   payload: TerminalOpenInput,
   success: TerminalSessionSnapshot,
@@ -616,6 +752,23 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitStageFilesRpc,
   WsGitUnstageFilesRpc,
   WsGitHandoffThreadRpc,
+  WsReviewListPullRequestsRpc,
+  WsReviewGetViewerRpc,
+  WsReviewLoadChangesetRpc,
+  WsReviewLoadPullRequestRpc,
+  WsReviewLoadConversationRpc,
+  WsReviewListCommentsRpc,
+  WsReviewAddCommentRpc,
+  WsReviewUpdateCommentRpc,
+  WsReviewRemoveCommentRpc,
+  WsReviewSubmitRpc,
+  WsReviewLoadRemoteThreadsRpc,
+  WsReviewRunAgentRpc,
+  WsReviewCheckProjectAccessRpc,
+  WsReviewListProjectsRpc,
+  WsReviewGetProjectBoardRpc,
+  WsReviewMoveProjectCardRpc,
+  WsReviewSubscribeUpdatesRpc,
   WsTerminalOpenRpc,
   WsTerminalWriteRpc,
   WsTerminalResizeRpc,

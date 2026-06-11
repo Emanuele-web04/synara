@@ -171,12 +171,12 @@ export const DirectoryTreeBrowser = memo(function DirectoryTreeBrowser({
               {isDirectory ? (
                 <FolderIcon className="size-4 shrink-0 text-muted-foreground/70" />
               ) : (
-                <FileIcon className="size-4 shrink-0 text-muted-foreground/60" />
+                <FileIcon className="size-4 shrink-0 text-muted-foreground/75" />
               )}
               <span className="truncate text-foreground/95">{entry.name}</span>
             </button>
             {isDirectory && isLoadingChildren ? (
-              <span className="shrink-0 text-[11px] text-muted-foreground/45">Loading…</span>
+              <span className="shrink-0 text-[11px] text-muted-foreground/70">Loading…</span>
             ) : null}
           </div>,
           ...renderedChildren,
@@ -198,15 +198,15 @@ export const DirectoryTreeBrowser = memo(function DirectoryTreeBrowser({
   return (
     <div className={className} onMouseEnter={handleEnsureRootLoaded}>
       {!rootPath ? (
-        <div className="px-2 py-8 text-center text-sm text-muted-foreground/60">
+        <div className="px-2 py-8 text-center text-sm text-muted-foreground/75">
           {unavailableLabel}
         </div>
       ) : loadingPaths.has("") && rootEntries.length === 0 ? (
-        <div className="px-2 py-8 text-center text-sm text-muted-foreground/60">{loadingLabel}</div>
+        <div className="px-2 py-8 text-center text-sm text-muted-foreground/75">{loadingLabel}</div>
       ) : renderedTree.length > 0 ? (
         renderedTree
       ) : (
-        <div className="px-2 py-8 text-center text-sm text-muted-foreground/60">{emptyLabel}</div>
+        <div className="px-2 py-8 text-center text-sm text-muted-foreground/75">{emptyLabel}</div>
       )}
       {errorMessage ? <div className="px-2 pt-2 text-xs text-red-400">{errorMessage}</div> : null}
     </div>

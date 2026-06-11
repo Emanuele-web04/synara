@@ -7,7 +7,7 @@ import { it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, PlatformError, Scope } from "effect";
 import { expect } from "vitest";
 import type { GitActionProgressEvent } from "@t3tools/contracts";
-import type { ModelSelection, ProviderStartOptions } from "@t3tools/contracts";
+import type { ModelSelection, ProviderStartOptions, ReviewFinding } from "@t3tools/contracts";
 
 import { GitCommandError, GitHubCliError, TextGenerationError } from "../Errors.ts";
 import { type GitManagerShape } from "../Services/GitManager.ts";
@@ -78,6 +78,19 @@ interface FakeGitTextGeneration {
     model?: string;
     modelSelection?: ModelSelection;
   }) => Effect.Effect<{ summary: string }, TextGenerationError>;
+  generateReviewFindings: (input: {
+    cwd: string;
+    patch: string;
+    prTitle?: string;
+    prBody?: string;
+    codexHomePath?: string;
+    providerOptions?: ProviderStartOptions;
+    model?: string;
+    modelSelection?: ModelSelection;
+  }) => Effect.Effect<
+    { summary: string; findings: ReadonlyArray<ReviewFinding> },
+    TextGenerationError
+  >;
   generateBranchName: (input: {
     cwd: string;
     message: string;
@@ -195,6 +208,11 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
       Effect.succeed({
         summary: "## Summary\n- Explain the selected diff\n\n## Files Changed\n- Not run",
       }),
+    generateReviewFindings: () =>
+      Effect.succeed({
+        summary: "Reviewed the selected diff.",
+        findings: [],
+      }),
     generateBranchName: () =>
       Effect.succeed({
         branch: "update-workflow",
@@ -224,6 +242,17 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
           (cause) =>
             new TextGenerationError({
               operation: "generatePrContent",
+              detail: "fake text generation failed",
+              ...(cause !== undefined ? { cause } : {}),
+            }),
+        ),
+      ),
+    generateReviewFindings: (input) =>
+      implementation.generateReviewFindings(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation: "generateReviewFindings",
               detail: "fake text generation failed",
               ...(cause !== undefined ? { cause } : {}),
             }),
@@ -434,6 +463,20 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
   return {
     service: {
       execute,
+      getReviewPullRequestOverview: () =>
+        Effect.fail(
+          new GitHubCliError({
+            operation: "execute",
+            detail: "getReviewPullRequestOverview not stubbed in test",
+          }),
+        ),
+      getReviewConversation: () =>
+        Effect.fail(
+          new GitHubCliError({
+            operation: "execute",
+            detail: "getReviewConversation not stubbed in test",
+          }),
+        ),
       listOpenPullRequests: (input) =>
         execute({
           cwd: input.cwd,
@@ -522,6 +565,25 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
           ],
         }).pipe(Effect.map((result) => JSON.parse(result.stdout) as GitHubPullRequestSummary)),
+      listRepositoryPullRequests: () => Effect.succeed([]),
+      getAuthenticatedUser: (input) =>
+        execute({
+          cwd: input.cwd,
+          args: ["api", "user", "--jq", ".login"],
+        }).pipe(Effect.map((result) => ({ login: result.stdout.trim() }))),
+      getPullRequestDiff: (input) =>
+        execute({
+          cwd: input.cwd,
+          args: ["pr", "diff", input.reference],
+        }).pipe(Effect.map((result) => result.stdout)),
+      getPullRequestHeadSha: (input) =>
+        execute({
+          cwd: input.cwd,
+          args: ["pr", "view", input.reference, "--json", "headRefOid", "-q", ".headRefOid"],
+        }).pipe(Effect.map((result) => result.stdout.trim())),
+      submitPullRequestReview: () => Effect.void,
+      createPullRequestReviewWithComments: () => Effect.succeed({}),
+      getPullRequestThreads: () => Effect.succeed([]),
       getRepositoryCloneUrls: (input) =>
         execute({
           cwd: input.cwd,
@@ -532,6 +594,21 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
           cwd: input.cwd,
           args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
         }).pipe(Effect.asVoid),
+      projectScopeAvailable: () => Effect.succeed(true),
+      listProjects: () => Effect.succeed([]),
+      getProjectBoard: (input) =>
+        Effect.succeed({
+          project: {
+            id: "",
+            number: input.number,
+            title: `Project #${String(input.number)}`,
+            ownerLogin: input.owner,
+          },
+          statusField: null,
+          items: [],
+        }),
+      moveProjectCard: () => Effect.void,
+      getRepositoryOwner: () => Effect.succeed(""),
     },
     ghCalls,
   };

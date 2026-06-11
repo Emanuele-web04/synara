@@ -445,6 +445,34 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
   }),
 );
 
+it.effect("decodes thread.session.ensure for review chat prewarm", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeClientOrchestrationCommand({
+      type: "thread.session.ensure",
+      commandId: "cmd-session-ensure-1",
+      threadId: "thread-1",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5.3-codex-spark",
+        options: {
+          reasoningEffort: "low",
+        },
+      },
+      runtimeMode: "approval-required",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.type, "thread.session.ensure");
+    assert.deepStrictEqual(parsed.modelSelection, {
+      provider: "codex",
+      model: "gpt-5.3-codex-spark",
+      options: {
+        reasoningEffort: "low",
+      },
+    });
+    assert.strictEqual(parsed.runtimeMode, "approval-required");
+  }),
+);
+
 it.effect("accepts provider-scoped model options in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({

@@ -25,7 +25,7 @@ describe("buildVisibleToastLayout", () => {
 
     const layout = buildVisibleToastLayout(visibleToasts);
 
-    assert.equal(layout.frontmostHeight, 48);
+    assert.equal(layout.frontmostHeight, 168);
     assert.deepEqual(
       layout.items.map(({ toast, visibleIndex, offsetY }) => ({
         id: toast.id,
@@ -40,14 +40,14 @@ describe("buildVisibleToastLayout", () => {
     );
   });
 
-  it("treats missing heights as zero", () => {
+  it("keeps a measured viewport fallback while treating missing offsets as zero", () => {
     const layout = buildVisibleToastLayout([
       { id: "a" },
       { id: "b", height: undefined },
       { id: "c", height: 30 },
     ]);
 
-    assert.equal(layout.frontmostHeight, 0);
+    assert.equal(layout.frontmostHeight, 168);
     assert.deepEqual(
       layout.items.map(({ toast, offsetY }) => ({
         id: toast.id,

@@ -133,6 +133,25 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       }
     }));
 
+  it("persists ready runtime status", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+      const threadId = ThreadId.makeUnsafe("thread-ready");
+
+      yield* directory.upsert({
+        provider: "codex",
+        threadId,
+        status: "ready",
+      });
+
+      const runtime = yield* runtimeRepository.getByThreadId({ threadId });
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.equal(runtime.value.status, "ready");
+      }
+    }));
+
   it("resets adapterKey to the new provider when provider changes without an explicit adapter key", () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;

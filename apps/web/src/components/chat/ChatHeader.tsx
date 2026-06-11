@@ -20,7 +20,14 @@ import { HiMiniArrowsPointingOut } from "react-icons/hi2";
 import { TbExchange } from "react-icons/tb";
 import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
-import { ArrowRightIcon, HandoffIcon, PanelRightCloseIcon, TerminalIcon, XIcon } from "~/lib/icons";
+import {
+  ArrowRightIcon,
+  HandoffIcon,
+  ListChecksIcon,
+  PanelRightCloseIcon,
+  TerminalIcon,
+  XIcon,
+} from "~/lib/icons";
 import {
   CHAT_HEADER_TOGGLE_CLASS_NAME,
   ChatHeaderButton,
@@ -82,6 +89,7 @@ interface ChatHeaderProps {
   showGitActions?: boolean;
   diffOpen: boolean;
   diffDisabledReason?: string | null;
+  reviewOpen?: boolean;
   surfaceMode?: "single" | "split";
   isSidechat?: boolean;
   chatLayoutAction?: {
@@ -99,6 +107,7 @@ interface ChatHeaderProps {
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleDiff: () => void;
+  onToggleReview?: () => void;
   onCreateHandoff: (targetProvider: ProviderKind) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
   onRenameThread: () => void;
@@ -144,6 +153,7 @@ export const ChatHeader = memo(function ChatHeader({
   showGitActions = true,
   diffOpen,
   diffDisabledReason = null,
+  reviewOpen = false,
   surfaceMode = "single",
   isSidechat = false,
   chatLayoutAction = null,
@@ -153,6 +163,7 @@ export const ChatHeader = memo(function ChatHeader({
   onUpdateProjectScript,
   onDeleteProjectScript,
   onToggleDiff,
+  onToggleReview,
   onCreateHandoff,
   onNavigateToThread,
   onRenameThread,
@@ -216,11 +227,11 @@ export const ChatHeader = memo(function ChatHeader({
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <div className="flex min-w-0 flex-1 flex-col">
             {threadBreadcrumbs.length > 0 ? (
-              <div className="flex min-w-0 items-center gap-1 overflow-hidden text-[11px] text-muted-foreground/55">
+              <div className="flex min-w-0 items-center gap-1 overflow-hidden text-[11px] text-muted-foreground/70">
                 {threadBreadcrumbs.map((breadcrumb, index) => (
                   <React.Fragment key={breadcrumb.threadId}>
                     {index > 0 ? (
-                      <span className="shrink-0 text-muted-foreground/35">/</span>
+                      <span className="shrink-0 text-muted-foreground/70">/</span>
                     ) : null}
                     <button
                       type="button"
@@ -456,6 +467,28 @@ export const ChatHeader = memo(function ChatHeader({
                   : "Toggle diff panel"}
           </TooltipPopup>
         </Tooltip>
+        {onToggleReview ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Toggle
+                  className={cn(
+                    CHAT_HEADER_TOGGLE_CLASS_NAME,
+                    "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0",
+                  )}
+                  pressed={reviewOpen}
+                  onPressedChange={onToggleReview}
+                  aria-label="Toggle review panel"
+                  variant="default"
+                  size="xs"
+                >
+                  <SurfaceChipIcon icon={ListChecksIcon} className="size-4" />
+                </Toggle>
+              }
+            />
+            <TooltipPopup side="bottom">Toggle review panel</TooltipPopup>
+          </Tooltip>
+        ) : null}
       </div>
     </div>
   );

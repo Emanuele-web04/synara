@@ -11,6 +11,7 @@ import {
   hasServerAcknowledgedLocalDispatch,
   isVoiceAuthExpiredMessage,
   resolveActiveThreadTitle,
+  resolveCodexSessionPrewarmKey,
   resolveCommittedProviderModel,
   resolveRuntimeModeAfterApprovalDecision,
   sanitizeVoiceErrorMessage,
@@ -21,6 +22,17 @@ import {
   shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
 } from "./ChatView.logic";
+
+const codexModelSelection = {
+  provider: "codex",
+  model: "gpt-5.3-codex",
+} as const;
+
+const codexProviderOptions = {
+  codex: {
+    binaryPath: "/opt/codex",
+  },
+};
 
 describe("voice helpers", () => {
   it("keeps manual titles visible for empty home chats", () => {
@@ -291,6 +303,110 @@ describe("shouldConsumePendingCustomBinaryConfirmation", () => {
         pendingCustomBinaryPath: null,
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveCodexSessionPrewarmKey", () => {
+  it("prewarms inactive server-side Codex threads", () => {
+    expect(
+      resolveCodexSessionPrewarmKey({
+        isServerThread: true,
+        thread: {
+          id: ThreadId.makeUnsafe("thread-codex"),
+          modelSelection: codexModelSelection,
+          session: null,
+        },
+        modelSelection: codexModelSelection,
+        providerOptions: codexProviderOptions,
+        runtimeMode: "approval-required",
+      }),
+    ).toBe(
+      [
+        "thread-codex",
+        "codex",
+        "gpt-5.3-codex",
+        "null",
+        "approval-required",
+        JSON.stringify(codexProviderOptions),
+      ].join("\u001f"),
+    );
+  });
+
+  it("skips local drafts, non-Codex threads, and active sessions", () => {
+    expect(
+      resolveCodexSessionPrewarmKey({
+        isServerThread: false,
+        thread: {
+          id: ThreadId.makeUnsafe("thread-local"),
+          modelSelection: codexModelSelection,
+          session: null,
+        },
+        modelSelection: codexModelSelection,
+        providerOptions: codexProviderOptions,
+        runtimeMode: "approval-required",
+      }),
+    ).toBeNull();
+
+    expect(
+      resolveCodexSessionPrewarmKey({
+        isServerThread: true,
+        thread: {
+          id: ThreadId.makeUnsafe("thread-claude"),
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-sonnet-4-5",
+          },
+          session: null,
+        },
+        modelSelection: codexModelSelection,
+        providerOptions: codexProviderOptions,
+        runtimeMode: "approval-required",
+      }),
+    ).toBeNull();
+
+    expect(
+      resolveCodexSessionPrewarmKey({
+        isServerThread: true,
+        thread: {
+          id: ThreadId.makeUnsafe("thread-running"),
+          modelSelection: codexModelSelection,
+          session: {
+            provider: "codex",
+            status: "running",
+            activeTurnId: ThreadId.makeUnsafe("turn-1") as never,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:01.000Z",
+            orchestrationStatus: "running",
+          },
+        },
+        modelSelection: codexModelSelection,
+        providerOptions: codexProviderOptions,
+        runtimeMode: "approval-required",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not repeatedly prewarm errored Codex sessions", () => {
+    expect(
+      resolveCodexSessionPrewarmKey({
+        isServerThread: true,
+        thread: {
+          id: ThreadId.makeUnsafe("thread-error"),
+          modelSelection: codexModelSelection,
+          session: {
+            provider: "codex",
+            status: "error",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:01.000Z",
+            lastError: "codex app-server failed",
+            orchestrationStatus: "error",
+          },
+        },
+        modelSelection: codexModelSelection,
+        providerOptions: codexProviderOptions,
+        runtimeMode: "approval-required",
+      }),
+    ).toBeNull();
   });
 });
 

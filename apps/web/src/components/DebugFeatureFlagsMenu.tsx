@@ -109,7 +109,7 @@ export function DebugFeatureFlagsMenu() {
           })}
         </MenuGroup>
         <MenuSeparator />
-        <div className="px-2 py-1.5 text-[length:var(--app-font-size-ui-xs,10px)] leading-4 text-muted-foreground/58">
+        <div className="px-2 py-1.5 text-[length:var(--app-font-size-ui-xs,10px)] leading-4 text-muted-foreground/70">
           Stored only in this browser profile.
         </div>
       </MenuPopup>

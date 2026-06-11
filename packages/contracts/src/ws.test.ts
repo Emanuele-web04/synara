@@ -126,6 +126,40 @@ it.effect("accepts git.actionProgress push envelopes", () =>
   }),
 );
 
+it.effect("accepts review.updated push envelopes and subscription requests", () =>
+  Effect.gen(function* () {
+    const request = yield* decode(WebSocketRequest, {
+      id: "req-review-updates",
+      body: {
+        _tag: WS_METHODS.subscribeReviewUpdates,
+      },
+    });
+    assert.strictEqual(request.body._tag, WS_METHODS.subscribeReviewUpdates);
+
+    const parsed = yield* decode(WsResponse, {
+      type: "push",
+      sequence: 4,
+      channel: WS_CHANNELS.reviewUpdated,
+      data: {
+        _tag: "pullRequestList",
+        cwd: "/repo",
+        repositoryId: "repo-1",
+        state: "open",
+        data: {
+          pullRequests: [],
+        },
+        fetchedAt: 1,
+      },
+    });
+
+    if (!("type" in parsed) || parsed.type !== "push") {
+      assert.fail("expected websocket response to decode as a push envelope");
+    }
+
+    assert.strictEqual(parsed.channel, WS_CHANNELS.reviewUpdated);
+  }),
+);
+
 it.effect("rejects push envelopes when channel payload does not match the channel schema", () =>
   Effect.gen(function* () {
     const result = yield* Effect.exit(

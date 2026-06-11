@@ -445,7 +445,7 @@ export const TraitsPicker = memo(function TraitsPicker({
         {showsFastBadge ? (
           <>
             {visiblePrimaryTriggerLabel ? (
-              <span className="shrink-0 text-muted-foreground/45">·</span>
+              <span className="shrink-0 text-muted-foreground/70">·</span>
             ) : null}
             <span className="inline-flex shrink-0 items-center gap-1">
               <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
@@ -456,7 +456,7 @@ export const TraitsPicker = memo(function TraitsPicker({
         {contextWindowLabel ? (
           <>
             {visiblePrimaryTriggerLabel || showsFastBadge ? (
-              <span className="shrink-0 text-muted-foreground/45">·</span>
+              <span className="shrink-0 text-muted-foreground/70">·</span>
             ) : null}
             <span className="shrink-0">{contextWindowLabel}</span>
           </>
@@ -471,7 +471,7 @@ export const TraitsPicker = memo(function TraitsPicker({
         {showsFastBadge ? (
           <>
             {visiblePrimaryTriggerLabel ? (
-              <span className="text-muted-foreground/45">·</span>
+              <span className="text-muted-foreground/70">·</span>
             ) : null}
             <span className="inline-flex items-center gap-1">
               <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
@@ -482,7 +482,7 @@ export const TraitsPicker = memo(function TraitsPicker({
         {contextWindowLabel ? (
           <>
             {visiblePrimaryTriggerLabel || showsFastBadge ? (
-              <span className="text-muted-foreground/45">·</span>
+              <span className="text-muted-foreground/70">·</span>
             ) : null}
             <span>{contextWindowLabel}</span>
           </>

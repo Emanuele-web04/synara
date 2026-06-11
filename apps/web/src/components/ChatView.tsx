@@ -1,7 +1,6 @@
 import {
   type ApprovalRequestId,
   DEFAULT_MODEL_BY_PROVIDER,
-  type ClaudeCodeEffort,
   MessageId,
   type ModelSelection,
   type ProjectScript,
@@ -12,7 +11,6 @@ import {
   type ProviderApprovalDecision,
   type ProviderMentionReference,
   type ProviderNativeCommandDescriptor,
-  type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
   type ProviderSkillReference,
   type ProviderStartOptions,
@@ -29,11 +27,7 @@ import {
   ProviderInteractionMode,
   RuntimeMode,
 } from "@t3tools/contracts";
-import {
-  applyClaudePromptEffortPrefix,
-  getModelCapabilities,
-  normalizeModelSlug,
-} from "@t3tools/shared/model";
+import { getModelCapabilities, normalizeModelSlug } from "@t3tools/shared/model";
 import { resolveTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import {
@@ -81,14 +75,10 @@ import {
 } from "~/lib/providerDiscoveryReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
-import {
-  formatComposerMentionToken,
-  createComposerMentionTokenRegex,
-} from "~/lib/composerMentions";
+import { formatComposerMentionToken } from "~/lib/composerMentions";
 import { getLocalFolderBrowseRootPath, isLocalFolderMentionQuery } from "~/lib/localFolderMentions";
 import {
   isProviderUsable,
-  normalizeCustomBinaryPath,
   normalizeProviderStatusForLocalConfig,
   providerUnavailableReason,
 } from "~/lib/providerAvailability";
@@ -107,8 +97,16 @@ import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   buildThreadBreadcrumbs,
+  canHandleComposerPickerShortcut,
   enrichSubagentWorkEntries,
+  eventTargetsComposer,
+  getConfirmedCustomBinarySessionKey,
+  getProviderHealthBannerDismissalKey,
+  getProviderStartOptionsCustomBinaryPath,
+  getRateLimitBannerDismissalKey,
+  getThreadProviderCustomBinaryPathKey,
   resolveActiveThreadTitle,
+  resolveCodexSessionPrewarmKey,
   resolveCommittedProviderModel,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
@@ -146,18 +144,13 @@ import {
   derivePendingApprovals,
   derivePendingUserInputs,
   derivePhase,
-  deriveTimelineEntries,
   deriveActiveWorkStartedAt,
-  deriveActiveTaskListState,
-  deriveActiveBackgroundTasksState,
   findSidebarProposedPlan,
-  findLatestProposedPlan,
   deriveWorkLogEntries,
   hasActionableProposedPlan,
   hasLiveTurnTailWork,
   isLatestTurnSettled,
   WORK_LOG_PRESENTATION_VERSION,
-  type ActiveTaskListState,
 } from "../session-logic";
 import {
   buildPendingUserInputAnswers,
@@ -209,12 +202,15 @@ import {
   ChevronRightIcon,
   ComposerSendArrowIcon,
   QueueArrow,
-  RefreshCwIcon,
   XIcon,
 } from "~/lib/icons";
 import { QueuedComposerActions } from "./chat/QueuedComposerActions";
+import { ChatComposer } from "./chat/ChatComposer";
+import {
+  ComposerControlSkeleton,
+  ComposerModelLoadingControl,
+} from "./chat/ComposerLoadingControls";
 import { Button } from "./ui/button";
-import { Skeleton } from "./ui/skeleton";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { disposeAndCloseTerminalSession, randomTerminalId } from "./terminal/terminalSession";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
@@ -273,7 +269,6 @@ import {
 } from "../lib/terminalContext";
 import {
   appendAssistantSelectionsToPrompt,
-  formatAssistantSelectionQueuePreview,
   formatAssistantSelectionTitleSeed,
 } from "../lib/assistantSelections";
 import {
@@ -304,9 +299,16 @@ import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationContro
 import { SidebarHeaderTrigger } from "./ui/sidebar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
-import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
+import { useChatTurnDiffAnchoring } from "./chat/useChatTurnDiffAnchoring";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
-import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
+import { useExpandedImagePreview } from "./chat/useExpandedImagePreview";
+import { useDeferredSecondaryChrome } from "./chat/useDeferredSecondaryChrome";
+import { useChatTerminalDrawerProps } from "./chat/useChatTerminalDrawerProps";
+import { useComposerModelHintByProvider } from "./chat/useComposerModelHintByProvider";
+import { useChatActiveProposedPlan } from "./chat/useChatActiveProposedPlan";
+import { useChatTimeline } from "./chat/useChatTimeline";
+import { useChatAttachmentPreviewHandoff } from "./chat/useChatAttachmentPreviewHandoff";
+import { useChatActiveTaskList } from "./chat/useChatActiveTaskList";
 import { AVAILABLE_PROVIDER_OPTIONS } from "./chat/ProviderModelPicker";
 import { ComposerModelEffortPicker } from "./chat/ComposerModelEffortPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
@@ -349,19 +351,28 @@ import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { ProjectPicker } from "./chat/ProjectPicker";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
-import {
-  RateLimitBanner,
-  deriveLatestRateLimitStatus,
-  type RateLimitStatus,
-} from "./chat/RateLimitBanner";
+import { RateLimitBanner, deriveLatestRateLimitStatus } from "./chat/RateLimitBanner";
 import {
   ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS,
   appendVoiceTranscriptToPrompt,
+  buildQueuedComposerPreviewText,
+  type ComposerPluginSuggestion,
+  collectPromptMentionNames,
   describeVoiceRecordingStartError,
+  formatOutgoingPrompt,
   isVoiceAuthExpiredMessage,
+  mergeDynamicModelOptions,
+  normalizeMentionNameKey,
+  promptIncludesSkillMention,
+  providerMentionReferencesEqual,
+  resolvePromptPluginMentions,
   sanitizeVoiceErrorMessage,
   shouldStartActiveTurnLayoutGrace,
   shouldAutoDeleteTerminalThreadOnLastClose,
+  skillMentionPrefix,
+  syncTerminalContextsByIds,
+  terminalContextIdListsEqual,
+  warnVoiceGuard,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
   DISMISSED_PROVIDER_HEALTH_BANNERS_KEY,
@@ -371,7 +382,6 @@ import {
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
-  filterSidechatTranscriptMessages,
   hasServerAcknowledgedLocalDispatch,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
@@ -379,7 +389,6 @@ import {
   PullRequestDialogState,
   readFileAsDataUrl,
   resolveRuntimeModeAfterApprovalDecision,
-  revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -399,7 +408,6 @@ import {
 import {
   buildModelSelection,
   buildNextProviderOptions,
-  formatProviderModelOptionName,
   type ProviderModelOption,
 } from "../providerModelOptions";
 import {
@@ -407,7 +415,6 @@ import {
   waitForRecoverableProjectForDuplicateCreate,
 } from "../lib/projectCreateRecovery";
 
-const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_MESSAGES: ChatMessage[] = [];
@@ -420,419 +427,17 @@ const EMPTY_SUGGESTION_SOURCE_THREADS: Thread[] = [];
 const selectEmptyComposerSuggestionThreads: ReturnType<typeof createAllThreadsSelector> = () =>
   EMPTY_SUGGESTION_SOURCE_THREADS;
 
-function revokeBlobPreviewUrlsAfterPaint(previewUrls: readonly string[]): void {
-  if (previewUrls.length === 0 || typeof window === "undefined") {
-    return;
-  }
-  window.requestAnimationFrame(() => {
-    window.setTimeout(() => {
-      for (const previewUrl of previewUrls) {
-        revokeBlobPreviewUrl(previewUrl);
-      }
-    }, 0);
-  });
-}
-
-function eventTargetsComposer(
-  event: globalThis.KeyboardEvent,
-  composerForm: HTMLFormElement | null,
-): boolean {
-  if (!composerForm) return false;
-  const target = event.target;
-  return target instanceof Node ? composerForm.contains(target) : false;
-}
-
-function canHandleComposerPickerShortcut(
-  event: globalThis.KeyboardEvent,
-  composerForm: HTMLFormElement | null,
-): boolean {
-  if (!composerForm) return false;
-  if (eventTargetsComposer(event, composerForm)) return true;
-  const target = event.target;
-  return (
-    target === document.body ||
-    target === document.documentElement ||
-    document.activeElement === document.body ||
-    document.activeElement === document.documentElement
-  );
-}
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 const MAX_DISMISSED_PROVIDER_HEALTH_BANNERS = 50;
 
-function getThreadProviderCustomBinaryPathKey(threadId: Thread["id"], provider: ProviderKind) {
-  return `${threadId}:${provider}`;
-}
-
-function getConfirmedCustomBinarySessionKey(
-  thread: Thread | null | undefined,
-  provider: ProviderKind,
-): string | null {
-  const session = thread?.session;
-  if (!thread || session?.provider !== provider) {
-    return null;
-  }
-  if (session.status !== "ready" && session.status !== "running") {
-    return null;
-  }
-  return getThreadProviderCustomBinaryPathKey(thread.id, provider);
-}
-
-function getProviderStartOptionsCustomBinaryPath(
-  providerOptions: ProviderStartOptions | undefined,
-  provider: ProviderKind,
-): string | null {
-  switch (provider) {
-    case "codex":
-      return normalizeCustomBinaryPath(providerOptions?.codex?.binaryPath);
-    case "claudeAgent":
-      return normalizeCustomBinaryPath(providerOptions?.claudeAgent?.binaryPath);
-    case "gemini":
-      return normalizeCustomBinaryPath(providerOptions?.gemini?.binaryPath);
-    case "grok":
-      return normalizeCustomBinaryPath(providerOptions?.grok?.binaryPath);
-    case "kilo":
-      return normalizeCustomBinaryPath(providerOptions?.kilo?.binaryPath);
-    case "opencode":
-      return normalizeCustomBinaryPath(providerOptions?.opencode?.binaryPath);
-    case "cursor":
-      return normalizeCustomBinaryPath(providerOptions?.cursor?.binaryPath);
-    case "pi":
-      return normalizeCustomBinaryPath(providerOptions?.pi?.binaryPath);
-  }
-}
-
-function getProviderHealthBannerDismissalKey(status: ServerProviderStatus | null): string | null {
-  if (!status || status.status === "ready") {
-    return null;
-  }
-  return [
-    status.provider,
-    status.status,
-    status.available ? "available" : "unavailable",
-    status.authStatus,
-    status.message?.trim() ?? "",
-  ].join("\u001f");
-}
-
-function getRateLimitBannerDismissalKey(
-  status: RateLimitStatus | null,
-  threadId: Thread["id"] | null,
-): string | null {
-  if (!status || !threadId) {
-    return null;
-  }
-  return [
-    threadId,
-    status.status,
-    status.resetsAt ?? "",
-    typeof status.utilization === "number" ? String(Math.round(status.utilization * 100)) : "",
-  ].join("\u001f");
-}
-
-type ComposerPluginSuggestion = {
-  plugin: ProviderPluginDescriptor;
-  mention: ProviderMentionReference;
-};
-
 const EMPTY_COMPOSER_PLUGIN_SUGGESTIONS: ComposerPluginSuggestion[] = [];
-
-function formatOutgoingPrompt(params: {
-  provider: ProviderKind;
-  model: string | null;
-  effort: string | null;
-  text: string;
-}): string {
-  const caps = getModelCapabilities(params.provider, params.model);
-  if (params.effort && caps.promptInjectedEffortLevels.includes(params.effort)) {
-    return applyClaudePromptEffortPrefix(params.text, params.effort as ClaudeCodeEffort | null);
-  }
-  return params.text;
-}
-
-function buildQueuedComposerPreviewText(input: {
-  trimmedPrompt: string;
-  images: ReadonlyArray<ComposerImageAttachment>;
-  assistantSelections: ReadonlyArray<{ id: string }>;
-  terminalContexts: ReadonlyArray<TerminalContextDraft>;
-}): string {
-  if (input.trimmedPrompt.length > 0) {
-    return input.trimmedPrompt;
-  }
-  const firstImage = input.images[0];
-  if (firstImage) {
-    return `Image: ${firstImage.name}`;
-  }
-  if (input.assistantSelections.length > 0) {
-    return formatAssistantSelectionQueuePreview(input.assistantSelections.length);
-  }
-  const firstTerminalContext = input.terminalContexts[0];
-  if (firstTerminalContext) {
-    return formatTerminalContextLabel(firstTerminalContext);
-  }
-  return "Queued follow-up";
-}
 
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
 const VOICE_RECORDER_ACTION_ARM_DELAY_MS = 250;
-
-function warnVoiceGuard(event: string, details?: Record<string, unknown>) {
-  if (!import.meta.env.DEV) {
-    return;
-  }
-  if (details) {
-    console.warn(`[voice] ${event}`, details);
-    return;
-  }
-  console.warn(`[voice] ${event}`);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string {
-  if (provider === "claudeAgent") {
-    const withoutContextSuffix = slug.replace(/\[[^\]]+\]$/u, "");
-    return normalizeModelSlug(withoutContextSuffix, provider) ?? withoutContextSuffix;
-  }
-  if (provider === "grok") {
-    return slug.trim();
-  }
-  return normalizeModelSlug(slug, provider) ?? slug;
-}
-
-function mergeDynamicModelOptions(input: {
-  provider: ProviderKind;
-  staticOptions: ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>;
-  dynamicModels: ReadonlyArray<{
-    slug: string;
-    name?: string | null;
-    upstreamProviderId?: string | null;
-    upstreamProviderName?: string | null;
-  }>;
-}): ReadonlyArray<ProviderModelOption & { isCustom?: boolean }> {
-  const staticNameBySlug = new Map(input.staticOptions.map((model) => [model.slug, model.name]));
-  const dynamicNormalizedSlugs = new Set<string>();
-  const normalizedDynamicOptions: ProviderModelOption[] = [];
-
-  for (const dynamicModel of input.dynamicModels) {
-    const rawName = dynamicModel.name?.trim() ?? "";
-    const isClaudeDefaultAlias =
-      input.provider === "claudeAgent" &&
-      (rawName.toLowerCase() === "default (recommended)" ||
-        rawName.toLowerCase() === "default recommended" ||
-        dynamicModel.slug.trim().toLowerCase() === "default");
-    if (isClaudeDefaultAlias) {
-      continue;
-    }
-
-    const normalizedSlug = normalizeDynamicModelSlug(input.provider, dynamicModel.slug);
-    const rawSlug = dynamicModel.slug.trim().toLowerCase();
-    const displayNameFallback = formatProviderModelOptionName({
-      provider: input.provider,
-      slug: normalizedSlug,
-    });
-    if (dynamicNormalizedSlugs.has(normalizedSlug)) {
-      continue;
-    }
-    dynamicNormalizedSlugs.add(normalizedSlug);
-    normalizedDynamicOptions.push({
-      slug: normalizedSlug,
-      name:
-        staticNameBySlug.get(normalizedSlug) ??
-        (rawName.length > 0 &&
-        rawName.toLowerCase() !== rawSlug &&
-        rawName.toLowerCase() !== normalizedSlug.toLowerCase()
-          ? rawName
-          : displayNameFallback),
-      ...(dynamicModel.upstreamProviderId?.trim()
-        ? { upstreamProviderId: dynamicModel.upstreamProviderId.trim() }
-        : {}),
-      ...(dynamicModel.upstreamProviderName?.trim()
-        ? { upstreamProviderName: dynamicModel.upstreamProviderName.trim() }
-        : {}),
-    });
-  }
-
-  const customOnlyModels = input.staticOptions.filter(
-    (model) => "isCustom" in model && model.isCustom && !dynamicNormalizedSlugs.has(model.slug),
-  );
-  const staticBuiltInModels = input.staticOptions.filter(
-    (model) => !("isCustom" in model) || model.isCustom !== true,
-  );
-  const missingStaticBuiltIns =
-    (input.provider === "kilo" || input.provider === "opencode" || input.provider === "cursor") &&
-    normalizedDynamicOptions.length > 0
-      ? []
-      : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
-
-  const orderedDynamicOptions =
-    input.provider === "claudeAgent"
-      ? normalizedDynamicOptions.toReversed()
-      : normalizedDynamicOptions;
-
-  return [...orderedDynamicOptions, ...missingStaticBuiltIns, ...customOnlyModels];
-}
-
-function skillMentionPrefix(provider: string): string {
-  if (provider === "pi") return "/skill:";
-  return "/";
-}
-
-function promptIncludesSkillMention(prompt: string, skillName: string, provider: string): boolean {
-  const escapedSkillName = escapeRegExp(skillName);
-  const prefixes = provider === "pi" ? ["/skill:"] : ["/", "$"];
-  return prefixes.some((prefix) => {
-    const pattern = new RegExp(`(^|\\s)${escapeRegExp(prefix)}${escapedSkillName}(?=\\s|$)`, "i");
-    return pattern.test(prompt);
-  });
-}
-
-const PROMPT_MENTION_NAME_REGEX = createComposerMentionTokenRegex({
-  includeTrailingTokenAtEnd: true,
-});
-
-function collectPromptMentionNames(prompt: string): string[] {
-  const names: string[] = [];
-  for (const match of prompt.matchAll(PROMPT_MENTION_NAME_REGEX)) {
-    const mentionName = (match[2] ?? match[3] ?? "").trim();
-    if (mentionName.length > 0) {
-      names.push(mentionName);
-    }
-  }
-  return names;
-}
-
-function normalizeMentionNameKey(name: string): string {
-  return name.trim().toLowerCase();
-}
-
-function resolvePromptPluginMentions(params: {
-  prompt: string;
-  existingMentions: ReadonlyArray<ProviderMentionReference>;
-  providerPlugins: ReadonlyArray<ComposerPluginSuggestion>;
-}): ProviderMentionReference[] {
-  const promptMentionNames = collectPromptMentionNames(params.prompt);
-  if (promptMentionNames.length === 0) {
-    return [];
-  }
-
-  const uniquePromptMentionNames: string[] = [];
-  const seenPromptMentionNames = new Set<string>();
-  for (const mentionName of promptMentionNames) {
-    const key = normalizeMentionNameKey(mentionName);
-    if (seenPromptMentionNames.has(key)) {
-      continue;
-    }
-    seenPromptMentionNames.add(key);
-    uniquePromptMentionNames.push(mentionName);
-  }
-
-  const existingMentionsByName = new Map<string, ProviderMentionReference[]>();
-  for (const mention of params.existingMentions) {
-    const key = normalizeMentionNameKey(mention.name);
-    const bucket = existingMentionsByName.get(key);
-    if (bucket) {
-      bucket.push(mention);
-    } else {
-      existingMentionsByName.set(key, [mention]);
-    }
-  }
-
-  const providerMentionsByName = new Map<string, ProviderMentionReference[]>();
-  for (const suggestion of params.providerPlugins) {
-    const key = normalizeMentionNameKey(suggestion.plugin.name);
-    const bucket = providerMentionsByName.get(key);
-    if (bucket) {
-      bucket.push(suggestion.mention);
-    } else {
-      providerMentionsByName.set(key, [suggestion.mention]);
-    }
-  }
-
-  const resolvedMentions: ProviderMentionReference[] = [];
-  const seenPaths = new Set<string>();
-
-  for (const mentionName of uniquePromptMentionNames) {
-    const key = normalizeMentionNameKey(mentionName);
-    const existingMention = (existingMentionsByName.get(key) ?? []).find(
-      (candidate) => !seenPaths.has(candidate.path),
-    );
-    if (existingMention) {
-      seenPaths.add(existingMention.path);
-      resolvedMentions.push(existingMention);
-      continue;
-    }
-
-    const discoveredMentions = providerMentionsByName.get(key) ?? [];
-    if (discoveredMentions.length === 1) {
-      const discoveredMention = discoveredMentions[0]!;
-      seenPaths.add(discoveredMention.path);
-      resolvedMentions.push(discoveredMention);
-    }
-  }
-
-  return resolvedMentions;
-}
-
-const providerMentionReferencesEqual = (
-  left: ReadonlyArray<ProviderMentionReference>,
-  right: ReadonlyArray<ProviderMentionReference>,
-): boolean =>
-  left.length === right.length &&
-  left.every(
-    (mention, index) => mention.path === right[index]?.path && mention.name === right[index]?.name,
-  );
-
-const syncTerminalContextsByIds = (
-  contexts: ReadonlyArray<TerminalContextDraft>,
-  ids: ReadonlyArray<string>,
-): TerminalContextDraft[] => {
-  const contextsById = new Map(contexts.map((context) => [context.id, context]));
-  return ids.flatMap((id) => {
-    const context = contextsById.get(id);
-    return context ? [context] : [];
-  });
-};
-
-const terminalContextIdListsEqual = (
-  contexts: ReadonlyArray<TerminalContextDraft>,
-  ids: ReadonlyArray<string>,
-): boolean =>
-  contexts.length === ids.length && contexts.every((context, index) => context.id === ids[index]);
-
-function ComposerControlSkeleton(props: { widthClassName: string }) {
-  return (
-    <div
-      aria-hidden="true"
-      className={cn(
-        "flex h-8 shrink-0 items-center rounded-md border border-border/50 px-2",
-        props.widthClassName,
-      )}
-    >
-      <Skeleton className="h-3.5 w-full rounded-full" />
-    </div>
-  );
-}
-
-function ComposerModelLoadingControl(props: { widthClassName: string }) {
-  return (
-    <div
-      aria-label="Loading models"
-      className={cn(
-        "flex h-8 shrink-0 items-center gap-2 rounded-md border border-border/50 px-2 text-muted-foreground",
-        props.widthClassName,
-      )}
-    >
-      <RefreshCwIcon aria-hidden="true" className="size-3.5 animate-spin" />
-      <span className="truncate text-[length:var(--app-font-size-ui-xs,11px)]">Loading models</span>
-    </div>
-  );
-}
 
 interface ChatViewProps {
   threadId: ThreadId;
@@ -843,6 +448,8 @@ interface ChatViewProps {
   onToggleDiffPanel?: () => void;
   onToggleBrowserPanel?: () => void;
   onOpenTurnDiffPanel?: (turnId: TurnId, filePath?: string) => void;
+  reviewPanelOpen?: boolean;
+  onToggleReviewPanel?: () => void;
   onSplitSurface?: () => void;
   onMaximizeSurface?: () => void;
   onChangeThreadInSplitPane?: () => void;
@@ -858,6 +465,8 @@ export default function ChatView({
   onToggleDiffPanel,
   onToggleBrowserPanel,
   onOpenTurnDiffPanel,
+  reviewPanelOpen = false,
+  onToggleReviewPanel,
   onSplitSurface,
   onMaximizeSurface,
   onChangeThreadInSplitPane,
@@ -971,7 +580,14 @@ export default function ChatView({
   );
   const promptRef = useRef(prompt);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
-  const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
+  const {
+    expandedImage,
+    expandedImageItem,
+    openExpandedImage: onExpandTimelineImage,
+    closeExpandedImage,
+    navigateExpandedImage,
+    resetExpandedImage,
+  } = useExpandedImagePreview();
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
@@ -1017,9 +633,11 @@ export default function ChatView({
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
   const [pullRequestDialogState, setPullRequestDialogState] =
     useState<PullRequestDialogState | null>(null);
-  const [attachmentPreviewHandoffByMessageId, setAttachmentPreviewHandoffByMessageId] = useState<
-    Record<string, string[]>
-  >({});
+  const {
+    attachmentPreviewHandoffByMessageId,
+    handoffAttachmentPreviews,
+    clearAttachmentPreviewHandoffs,
+  } = useChatAttachmentPreviewHandoff();
   const [composerCursor, setComposerCursor] = useState(() =>
     collapseExpandedComposerCursor(prompt, prompt.length),
   );
@@ -1088,8 +706,6 @@ export default function ChatView({
   const autoDispatchingQueuedTurnRef = useRef(false);
   const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
   const localDirectoryMenuRef = useRef<ComposerLocalDirectoryMenuHandle | null>(null);
-  const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
-  const attachmentPreviewHandoffTimeoutByMessageIdRef = useRef<Record<string, number>>({});
   const sendInFlightRef = useRef(false);
   const dragDepthRef = useRef(0);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
@@ -1437,6 +1053,7 @@ export default function ChatView({
   const voiceTranscriptionRequestIdRef = useRef(0);
   const voiceThreadIdRef = useRef(threadId);
   const voiceProviderRef = useRef<ProviderKind>(selectedProvider);
+  const codexSessionPrewarmKeyRef = useRef<string | null>(null);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
   voiceThreadIdRef.current = threadId;
   voiceProviderRef.current = selectedProvider;
@@ -1444,31 +1061,11 @@ export default function ChatView({
   const featureFlags = useFeatureFlags();
   const showExpandedCursorModelVariants = featureFlags["show-expanded-cursor-model-variants"];
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
-  const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
-    const threadModelSelection = activeThread?.modelSelection ?? null;
-    const projectModelSelection = activeProject?.defaultModelSelection ?? null;
-    const draftSelections = composerDraft.modelSelectionByProvider;
-
-    const resolveHint = (provider: ProviderKind): string | null =>
-      draftSelections[provider]?.model ??
-      (threadModelSelection?.provider === provider ? threadModelSelection.model : null) ??
-      (projectModelSelection?.provider === provider ? projectModelSelection.model : null);
-
-    return {
-      codex: resolveHint("codex"),
-      claudeAgent: resolveHint("claudeAgent"),
-      cursor: resolveHint("cursor"),
-      gemini: resolveHint("gemini"),
-      grok: resolveHint("grok"),
-      kilo: resolveHint("kilo"),
-      opencode: resolveHint("opencode"),
-      pi: resolveHint("pi"),
-    };
-  }, [
-    activeProject?.defaultModelSelection,
-    activeThread?.modelSelection,
-    composerDraft.modelSelectionByProvider,
-  ]);
+  const composerModelHintByProvider = useComposerModelHintByProvider({
+    threadModelSelection: activeThread?.modelSelection ?? null,
+    projectModelSelection: activeProject?.defaultModelSelection ?? null,
+    draftSelections: composerDraft.modelSelectionByProvider,
+  });
   const claudeDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({ provider: "claudeAgent" }),
   );
@@ -1729,6 +1326,41 @@ export default function ChatView({
     selectedProvider,
   ]);
   const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
+  useEffect(() => {
+    const prewarmKey = resolveCodexSessionPrewarmKey({
+      isServerThread,
+      thread: activeThread,
+      modelSelection: selectedModelSelection,
+      providerOptions: providerOptionsForDispatch,
+      runtimeMode,
+    });
+    const threadIdForPrewarm = activeThread?.id;
+    if (!prewarmKey || !threadIdForPrewarm || codexSessionPrewarmKeyRef.current === prewarmKey) {
+      return;
+    }
+    codexSessionPrewarmKeyRef.current = prewarmKey;
+    const api = readNativeApi();
+    if (!api) {
+      return;
+    }
+    void api.orchestration
+      .dispatchCommand({
+        type: "thread.session.ensure",
+        commandId: newCommandId(),
+        threadId: threadIdForPrewarm,
+        modelSelection: selectedModelSelection,
+        ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
+        runtimeMode,
+        createdAt: new Date().toISOString(),
+      })
+      .catch(() => undefined);
+  }, [
+    activeThread,
+    isServerThread,
+    providerOptionsForDispatch,
+    runtimeMode,
+    selectedModelSelection,
+  ]);
   const selectedModelForPicker =
     selectedModelSelection.provider === selectedProvider
       ? selectedModelSelection.model
@@ -1892,15 +1524,11 @@ export default function ChatView({
   const activePendingIsResponding = activePendingUserInput
     ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
-  const activeProposedPlan = useMemo(() => {
-    if (!latestTurnSettled) {
-      return null;
-    }
-    return findLatestProposedPlan(
-      activeThread?.proposedPlans ?? [],
-      activeLatestTurn?.turnId ?? null,
-    );
-  }, [activeLatestTurn?.turnId, activeThread?.proposedPlans, latestTurnSettled]);
+  const activeProposedPlan = useChatActiveProposedPlan({
+    latestTurnSettled,
+    proposedPlans: activeThread?.proposedPlans,
+    latestTurnId: activeLatestTurn?.turnId,
+  });
   const sidebarPlanSourceThreadId = !latestTurnSettled
     ? (activeLatestTurn?.sourceProposedPlan?.threadId ?? null)
     : null;
@@ -1950,39 +1578,12 @@ export default function ChatView({
   const [activeTaskListCardHeight, setActiveTaskListCardHeight] = useState(0);
   const activeTaskListCardRef = useRef<HTMLDivElement | null>(null);
   const previousActiveTaskListCardHeightRef = useRef(0);
-  const activeTaskList = useMemo((): ActiveTaskListState | null => {
-    if (showDebugTaskBanner) {
-      return {
-        createdAt: new Date().toISOString(),
-        turnId: activeLatestTurn?.turnId ?? null,
-        tasks: [
-          {
-            task: "Inspect banner layout without overlapping transcript text",
-            status: "inProgress",
-          },
-          {
-            task: "Confirm compact task banner width",
-            status: "pending",
-          },
-          {
-            task: "Verify sidebar task controls",
-            status: "completed",
-          },
-        ],
-      };
-    }
-
-    return latestTurnSettled
-      ? null
-      : deriveActiveTaskListState(threadActivities, activeLatestTurn?.turnId ?? undefined);
-  }, [activeLatestTurn?.turnId, latestTurnSettled, showDebugTaskBanner, threadActivities]);
-  const activeBackgroundTasks = useMemo(
-    () =>
-      latestTurnSettled
-        ? null
-        : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
-  );
+  const { activeTaskList, activeBackgroundTasks } = useChatActiveTaskList({
+    showDebugTaskBanner,
+    latestTurnSettled,
+    latestTurnId: activeLatestTurn?.turnId,
+    threadActivities,
+  });
   useLayoutEffect(() => {
     if (!activeTaskList || planSidebarOpen) {
       setActiveTaskListCardHeight(0);
@@ -2144,22 +1745,6 @@ export default function ChatView({
     activePendingProgress?.activeQuestion?.id,
   ]);
   useEffect(() => {
-    attachmentPreviewHandoffByMessageIdRef.current = attachmentPreviewHandoffByMessageId;
-  }, [attachmentPreviewHandoffByMessageId]);
-  const clearAttachmentPreviewHandoffs = useCallback(() => {
-    for (const timeoutId of Object.values(attachmentPreviewHandoffTimeoutByMessageIdRef.current)) {
-      window.clearTimeout(timeoutId);
-    }
-    attachmentPreviewHandoffTimeoutByMessageIdRef.current = {};
-    for (const previewUrls of Object.values(attachmentPreviewHandoffByMessageIdRef.current)) {
-      for (const previewUrl of previewUrls) {
-        revokeBlobPreviewUrl(previewUrl);
-      }
-    }
-    attachmentPreviewHandoffByMessageIdRef.current = {};
-    setAttachmentPreviewHandoffByMessageId({});
-  }, []);
-  useEffect(() => {
     return () => {
       clearAttachmentPreviewHandoffs();
       for (const message of optimisticUserMessagesRef.current) {
@@ -2167,111 +1752,15 @@ export default function ChatView({
       }
     };
   }, [clearAttachmentPreviewHandoffs]);
-  const handoffAttachmentPreviews = useCallback((messageId: MessageId, previewUrls: string[]) => {
-    if (previewUrls.length === 0) return;
-
-    const previousPreviewUrls = attachmentPreviewHandoffByMessageIdRef.current[messageId] ?? [];
-    const replacedPreviewUrls = previousPreviewUrls.filter(
-      (previewUrl) => !previewUrls.includes(previewUrl),
-    );
-    revokeBlobPreviewUrlsAfterPaint(replacedPreviewUrls);
-    setAttachmentPreviewHandoffByMessageId((existing) => {
-      const next = {
-        ...existing,
-        [messageId]: previewUrls,
-      };
-      attachmentPreviewHandoffByMessageIdRef.current = next;
-      return next;
-    });
-
-    const existingTimeout = attachmentPreviewHandoffTimeoutByMessageIdRef.current[messageId];
-    if (typeof existingTimeout === "number") {
-      window.clearTimeout(existingTimeout);
-    }
-    attachmentPreviewHandoffTimeoutByMessageIdRef.current[messageId] = window.setTimeout(() => {
-      const currentPreviewUrls = attachmentPreviewHandoffByMessageIdRef.current[messageId];
-      setAttachmentPreviewHandoffByMessageId((existing) => {
-        if (!(messageId in existing)) return existing;
-        const next = { ...existing };
-        delete next[messageId];
-        attachmentPreviewHandoffByMessageIdRef.current = next;
-        return next;
-      });
-      delete attachmentPreviewHandoffTimeoutByMessageIdRef.current[messageId];
-      // Let React swap the transcript back to persisted /attachments URLs before
-      // invalidating blob previews that may still be mounted in the old row.
-      if (currentPreviewUrls) {
-        revokeBlobPreviewUrlsAfterPaint(currentPreviewUrls);
-      }
-    }, ATTACHMENT_PREVIEW_HANDOFF_TTL_MS);
-  }, []);
   const serverMessages = activeThread?.messages;
-  const timelineMessages = useMemo(() => {
-    const messages = filterSidechatTranscriptMessages(
-      serverMessages ?? [],
-      Boolean(activeThread?.sidechatSourceThreadId),
-    );
-    const serverMessagesWithPreviewHandoff =
-      Object.keys(attachmentPreviewHandoffByMessageId).length === 0
-        ? messages
-        : // Spread only fires for the few messages that actually changed;
-          // unchanged ones early-return their original reference.
-          // In-place mutation would break React's immutable state contract.
-          // oxlint-disable-next-line no-map-spread
-          messages.map((message) => {
-            if (
-              message.role !== "user" ||
-              !message.attachments ||
-              message.attachments.length === 0
-            ) {
-              return message;
-            }
-            const handoffPreviewUrls = attachmentPreviewHandoffByMessageId[message.id];
-            if (!handoffPreviewUrls || handoffPreviewUrls.length === 0) {
-              return message;
-            }
-
-            let changed = false;
-            let imageIndex = 0;
-            const attachments = message.attachments.map((attachment) => {
-              if (attachment.type !== "image") {
-                return attachment;
-              }
-              const handoffPreviewUrl = handoffPreviewUrls[imageIndex];
-              imageIndex += 1;
-              if (!handoffPreviewUrl || attachment.previewUrl === handoffPreviewUrl) {
-                return attachment;
-              }
-              changed = true;
-              return {
-                ...attachment,
-                previewUrl: handoffPreviewUrl,
-              };
-            });
-
-            return changed ? { ...message, attachments } : message;
-          });
-
-    if (optimisticUserMessages.length === 0) {
-      return serverMessagesWithPreviewHandoff;
-    }
-    const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
-    const pendingMessages = optimisticUserMessages.filter((message) => !serverIds.has(message.id));
-    if (pendingMessages.length === 0) {
-      return serverMessagesWithPreviewHandoff;
-    }
-    return [...serverMessagesWithPreviewHandoff, ...pendingMessages];
-  }, [
-    activeThread?.sidechatSourceThreadId,
+  const { timelineMessages, timelineEntries } = useChatTimeline({
     serverMessages,
+    isSidechat: Boolean(activeThread?.sidechatSourceThreadId),
     attachmentPreviewHandoffByMessageId,
     optimisticUserMessages,
-  ]);
-  const timelineEntries = useMemo(
-    () =>
-      deriveTimelineEntries(timelineMessages, activeThread?.proposedPlans ?? [], workLogEntries),
-    [activeThread?.proposedPlans, timelineMessages, workLogEntries],
-  );
+    proposedPlans: activeThread?.proposedPlans,
+    workLogEntries,
+  });
   // Empty top-level threads render the centered landing composer instead of the transcript pane.
   // Home-scoped chats get the global "What should we work on?" copy plus the project picker,
   // while project-scoped drafts reuse the same centered layout with folder-specific copy.
@@ -2280,56 +1769,13 @@ export default function ChatView({
     isCenteredEmptyLanding && Boolean(homeDir) && activeProject?.cwd === homeDir;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
-  const turnDiffSummaryByAssistantMessageId = useMemo(() => {
-    const messagesForDiffAnchoring: {
-      id: MessageId;
-      role: "user" | "assistant" | "system";
-      turnId: TurnId | null;
-    }[] = [];
-    for (const message of timelineMessages) {
-      messagesForDiffAnchoring.push({
-        id: message.id,
-        role: message.role,
-        turnId: message.turnId ?? null,
-      });
-    }
-    return buildTurnDiffSummaryByAssistantMessageId({
+  const { turnDiffSummaryByAssistantMessageId, revertTurnCountByUserMessageId } =
+    useChatTurnDiffAnchoring({
+      timelineMessages,
+      timelineEntries,
       turnDiffSummaries,
-      messages: messagesForDiffAnchoring,
+      inferredCheckpointTurnCountByTurnId,
     });
-  }, [turnDiffSummaries, timelineMessages]);
-  const revertTurnCountByUserMessageId = useMemo(() => {
-    const byUserMessageId = new Map<MessageId, number>();
-    for (let index = 0; index < timelineEntries.length; index += 1) {
-      const entry = timelineEntries[index];
-      if (!entry || entry.kind !== "message" || entry.message.role !== "user") {
-        continue;
-      }
-
-      for (let nextIndex = index + 1; nextIndex < timelineEntries.length; nextIndex += 1) {
-        const nextEntry = timelineEntries[nextIndex];
-        if (!nextEntry || nextEntry.kind !== "message") {
-          continue;
-        }
-        if (nextEntry.message.role === "user") {
-          break;
-        }
-        const summary = turnDiffSummaryByAssistantMessageId.get(nextEntry.message.id);
-        if (!summary) {
-          continue;
-        }
-        const turnCount =
-          summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId];
-        if (typeof turnCount !== "number") {
-          break;
-        }
-        byUserMessageId.set(entry.message.id, Math.max(0, turnCount - 1));
-        break;
-      }
-    }
-
-    return byUserMessageId;
-  }, [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId]);
 
   const threadWorkspaceCwd = activeProject
     ? resolveSharedThreadWorkspaceCwd({
@@ -2891,38 +2337,10 @@ export default function ChatView({
   const secondaryChromeThreadId = activeThread?.id ?? threadId;
   const shouldDeferSecondaryChrome =
     activeThread !== undefined && !isCenteredEmptyLanding && !terminalWorkspaceTerminalTabActive;
-  const [secondaryChromeState, setSecondaryChromeState] = useState(() => ({
-    threadId: secondaryChromeThreadId,
-    ready: true,
-  }));
-  const secondaryChromeReady =
-    !shouldDeferSecondaryChrome ||
-    (secondaryChromeState.threadId === secondaryChromeThreadId && secondaryChromeState.ready);
-
-  useEffect(() => {
-    if (!shouldDeferSecondaryChrome) {
-      setSecondaryChromeState((current) =>
-        current.threadId === secondaryChromeThreadId && current.ready
-          ? current
-          : { threadId: secondaryChromeThreadId, ready: true },
-      );
-      return;
-    }
-
-    setSecondaryChromeState({
-      threadId: secondaryChromeThreadId,
-      ready: false,
-    });
-    const frame = window.requestAnimationFrame(() => {
-      setSecondaryChromeState({
-        threadId: secondaryChromeThreadId,
-        ready: true,
-      });
-    });
-    return () => {
-      window.cancelAnimationFrame(frame);
-    };
-  }, [secondaryChromeThreadId, shouldDeferSecondaryChrome]);
+  const secondaryChromeReady = useDeferredSecondaryChrome({
+    secondaryChromeThreadId,
+    shouldDeferSecondaryChrome,
+  });
   const terminalWorkspaceChatTabActive =
     terminalWorkspaceOpen &&
     terminalState.workspaceLayout === "both" &&
@@ -3380,99 +2798,33 @@ export default function ChatView({
     terminalState.workspaceLayout,
     terminalWorkspaceOpen,
   ]);
-  const terminalDrawerProps = useMemo(
-    () => ({
-      threadId,
-      cwd: gitCwd ?? activeProject?.cwd ?? "",
-      runtimeEnv: threadTerminalRuntimeEnv,
-      height: terminalState.terminalHeight,
-      terminalIds: terminalState.terminalIds,
-      terminalLabelsById: terminalState.terminalLabelsById,
-      terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
-      terminalCliKindsById: terminalState.terminalCliKindsById,
-      terminalAttentionStatesById: terminalState.terminalAttentionStatesById ?? {},
-      runningTerminalIds: terminalState.runningTerminalIds,
-      activeTerminalId: terminalState.activeTerminalId,
-      terminalGroups: terminalState.terminalGroups,
-      activeTerminalGroupId: terminalState.activeTerminalGroupId,
-      focusRequestId: terminalFocusRequestId,
-      onSplitTerminal: splitTerminalRight,
-      onSplitTerminalDown: splitTerminalDown,
-      onNewTerminal: createNewTerminal,
-      onNewTerminalTab: createNewTerminalTab,
-      onMoveTerminalToGroup: moveTerminalToNewGroup,
-      splitShortcutLabel: splitTerminalShortcutLabel ?? undefined,
-      splitDownShortcutLabel: splitTerminalDownShortcutLabel ?? undefined,
-      newShortcutLabel: newTerminalShortcutLabel ?? undefined,
-      closeShortcutLabel: closeTerminalShortcutLabel ?? undefined,
-      workspaceCloseShortcutLabel: closeWorkspaceShortcutLabel ?? undefined,
-      onActiveTerminalChange: activateTerminal,
-      onCloseTerminal: closeTerminal,
-      onCloseTerminalGroup: (groupId: string) => {
-        if (!activeThreadId) return;
-        storeCloseTerminalGroup(activeThreadId, groupId);
-      },
-      onHeightChange: setTerminalHeight,
-      onResizeTerminalSplit: (groupId: string, splitId: string, weights: number[]) => {
-        if (!activeThreadId) return;
-        storeResizeTerminalSplit(activeThreadId, groupId, splitId, weights);
-      },
-      onTerminalMetadataChange: (
-        terminalId: string,
-        metadata: { cliKind: "codex" | "claude" | null; label: string },
-      ) => {
-        if (!activeThreadId) return;
-        storeSetTerminalMetadata(activeThreadId, terminalId, metadata);
-      },
-      onTerminalActivityChange: (
-        terminalId: string,
-        activity: {
-          hasRunningSubprocess: boolean;
-          agentState: "running" | "attention" | "review" | null;
-        },
-      ) => {
-        if (!activeThreadId) return;
-        storeSetTerminalActivity(activeThreadId, terminalId, activity);
-      },
-      onAddTerminalContext: addTerminalContextToDraft,
-    }),
-    [
-      activeProject?.cwd,
-      activateTerminal,
-      addTerminalContextToDraft,
-      closeTerminal,
-      closeTerminalShortcutLabel,
-      closeWorkspaceShortcutLabel,
-      createNewTerminal,
-      createNewTerminalTab,
-      moveTerminalToNewGroup,
-      gitCwd,
-      activeThreadId,
-      newTerminalShortcutLabel,
-      setTerminalHeight,
-      splitTerminalRight,
-      splitTerminalDown,
-      splitTerminalShortcutLabel,
-      splitTerminalDownShortcutLabel,
-      storeCloseTerminalGroup,
-      storeResizeTerminalSplit,
-      storeSetTerminalActivity,
-      storeSetTerminalMetadata,
-      terminalFocusRequestId,
-      terminalState.activeTerminalGroupId,
-      terminalState.activeTerminalId,
-      terminalState.terminalAttentionStatesById,
-      terminalState.terminalCliKindsById,
-      terminalState.terminalGroups,
-      terminalState.terminalHeight,
-      terminalState.terminalIds,
-      terminalState.terminalLabelsById,
-      terminalState.terminalTitleOverridesById,
-      terminalState.runningTerminalIds,
-      threadId,
-      threadTerminalRuntimeEnv,
-    ],
-  );
+  const terminalDrawerProps = useChatTerminalDrawerProps({
+    threadId,
+    gitCwd,
+    activeProject,
+    threadTerminalRuntimeEnv,
+    terminalState,
+    terminalFocusRequestId,
+    splitTerminalRight,
+    splitTerminalDown,
+    createNewTerminal,
+    createNewTerminalTab,
+    moveTerminalToNewGroup,
+    splitTerminalShortcutLabel,
+    splitTerminalDownShortcutLabel,
+    newTerminalShortcutLabel,
+    closeTerminalShortcutLabel,
+    closeWorkspaceShortcutLabel,
+    activateTerminal,
+    closeTerminal,
+    activeThreadId,
+    storeCloseTerminalGroup,
+    setTerminalHeight,
+    storeResizeTerminalSplit,
+    storeSetTerminalMetadata,
+    storeSetTerminalActivity,
+    addTerminalContextToDraft,
+  });
   const runProjectScript = useCallback(
     async (
       script: ProjectScript,
@@ -4237,8 +3589,8 @@ export default function ChatView({
       }
       return [];
     });
-    setExpandedImage(null);
-  }, [threadId]);
+    resetExpandedImage();
+  }, [resetExpandedImage, threadId]);
 
   useEffect(() => {
     voiceTranscriptionRequestIdRef.current += 1;
@@ -4260,8 +3612,8 @@ export default function ChatView({
     setSelectedComposerMentions([]);
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
-    setExpandedImage(null);
-  }, [cancelVoiceRecording, threadId]);
+    resetExpandedImage();
+  }, [cancelVoiceRecording, resetExpandedImage, threadId]);
 
   useEffect(() => {
     if (canStartVoiceNotes || !isVoiceRecording) {
@@ -4349,54 +3701,6 @@ export default function ChatView({
     syncComposerDraftPersistedAttachments,
     threadId,
   ]);
-
-  const closeExpandedImage = useCallback(() => {
-    setExpandedImage(null);
-  }, []);
-  const navigateExpandedImage = useCallback((direction: -1 | 1) => {
-    setExpandedImage((existing) => {
-      if (!existing || existing.images.length <= 1) {
-        return existing;
-      }
-      const nextIndex =
-        (existing.index + direction + existing.images.length) % existing.images.length;
-      if (nextIndex === existing.index) {
-        return existing;
-      }
-      return { ...existing, index: nextIndex };
-    });
-  }, []);
-
-  useEffect(() => {
-    if (!expandedImage) {
-      return;
-    }
-
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        closeExpandedImage();
-        return;
-      }
-      if (expandedImage.images.length <= 1) {
-        return;
-      }
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        event.stopPropagation();
-        navigateExpandedImage(-1);
-        return;
-      }
-      if (event.key !== "ArrowRight") return;
-      event.preventDefault();
-      event.stopPropagation();
-      navigateExpandedImage(1);
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeExpandedImage, expandedImage, navigateExpandedImage]);
 
   useEffect(() => {
     if (!composerMenuOpen) {
@@ -7325,10 +6629,6 @@ export default function ChatView({
     }
     return false;
   };
-  const onExpandTimelineImage = useCallback((preview: ExpandedImagePreview) => {
-    setExpandedImage(preview);
-  }, []);
-  const expandedImageItem = expandedImage ? expandedImage.images[expandedImage.index] : null;
   const onScrollToBottom = useCallback(() => {
     isAtEndRef.current = true;
     showScrollDebouncer.current.cancel();
@@ -7438,7 +6738,7 @@ export default function ChatView({
             )}
           >
             <SidebarHeaderNavigationControls />
-            <span className="text-xs text-muted-foreground/50">No active thread</span>
+            <span className="text-xs text-muted-foreground/70">No active thread</span>
           </div>
         )}
         <div className="flex flex-1 items-center justify-center">
@@ -7549,514 +6849,114 @@ export default function ChatView({
       </div>
     ) : null;
 
-  const composerSection = secondaryChromeReady ? (
-    <>
-      {renderActiveTaskListCard()}
-      <form
-        ref={composerFormRef}
-        onSubmit={onSend}
-        className="relative z-10 w-full overflow-visible"
-        data-chat-composer-form="true"
-        data-chat-pane-scope={paneScopeId}
-      >
-        <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
-          {queuedComposerTurns.length > 0 ? (
-            <div className="flex w-full flex-col">
-              {queuedComposerTurns.map((queuedTurn, queuedTurnIndex) => (
-                <div
-                  key={queuedTurn.id}
-                  data-testid="queued-follow-up-row"
-                  className={cn(
-                    "chat-composer-surface flex items-center gap-2 border border-b-0 px-3 pt-2.5 pb-2.5 text-[12px]",
-                    COMPOSER_SURFACE_BORDER_CLASS_NAME,
-                    queuedTurnIndex === 0 && !taskListAboveComposer
-                      ? "chat-composer-stacked-top"
-                      : "rounded-none",
-                  )}
-                >
-                  <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                    <QueueArrow className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)]" />
-                    <span className="truncate text-[12px] font-medium text-foreground/85">
-                      {queuedTurn.previewText}
-                    </span>
-                  </div>
-                  <QueuedComposerActions
-                    queuedTurn={queuedTurn}
-                    onSteer={onSteerQueuedComposerTurn}
-                    onRemove={removeQueuedComposerTurn}
-                    onEdit={onEditQueuedComposerTurn}
-                  />
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <div
-            className={cn(
-              COMPOSER_INPUT_SHELL_CLASS_NAME,
-              composerHasStackedHeader && "!rounded-t-none",
-              composerProviderState.composerFrameClassName,
-              composerMenuOpen && !isComposerApprovalState && "overflow-visible",
-            )}
-            onDragEnter={onComposerDragEnter}
-            onDragOver={onComposerDragOver}
-            onDragLeave={onComposerDragLeave}
-            onDrop={onComposerDrop}
-          >
-            <div
-              className={cn(
-                COMPOSER_INPUT_SURFACE_CLASS_NAME,
-                composerHasStackedHeader && "!rounded-t-none",
-                isDragOverComposer ? "!bg-[var(--color-background-control)]" : "",
-                composerProviderState.composerSurfaceClassName,
-                composerMenuOpen && !isComposerApprovalState && "overflow-visible",
-              )}
-            >
-              {activePendingApproval ? (
-                <div
-                  className={cn(
-                    COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
-                    composerHasStackedHeader && "!rounded-t-none",
-                  )}
-                >
-                  <ComposerPendingApprovalPanel
-                    approval={activePendingApproval}
-                    pendingCount={pendingApprovals.length}
-                  />
-                </div>
-              ) : pendingUserInputs.length > 0 ? (
-                <div
-                  className={cn(
-                    COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
-                    composerHasStackedHeader && "!rounded-t-none",
-                  )}
-                >
-                  <ComposerPendingUserInputPanel
-                    pendingUserInputs={pendingUserInputs}
-                    respondingRequestIds={respondingUserInputRequestIds}
-                    answers={activePendingDraftAnswers}
-                    questionIndex={activePendingQuestionIndex}
-                    onToggleOption={onToggleActivePendingUserInputOption}
-                    onAdvance={onAdvanceActivePendingUserInput}
-                  />
-                </div>
-              ) : showPlanFollowUpPrompt && activeProposedPlan ? (
-                <div
-                  className={cn(
-                    COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
-                    composerHasStackedHeader && "!rounded-t-none",
-                  )}
-                >
-                  <ComposerPlanFollowUpBanner
-                    key={activeProposedPlan.id}
-                    planTitle={proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null}
-                  />
-                </div>
-              ) : null}
-              <div
-                className={cn(
-                  COMPOSER_EDITOR_PADDING_CLASS_NAME,
-                  composerMenuOpen && !isComposerApprovalState && "overflow-visible",
-                )}
-              >
-                {composerMenuOpen && !isComposerApprovalState ? (
-                  <div className={COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME}>
-                    {isLocalFolderBrowserOpen ? (
-                      <ComposerLocalDirectoryMenu
-                        mentionQuery={mentionTriggerQuery}
-                        rootLabel={localFolderBrowseRootPath ?? "Local folders unavailable"}
-                        homeDir={serverConfigQuery.data?.homeDir ?? null}
-                        onSelectEntry={(absolutePath) =>
-                          handleSelectLocalDirectoryMention(absolutePath)
-                        }
-                        onNavigateFolder={handleNavigateLocalFolder}
-                        handleRef={localDirectoryMenuRef}
-                      />
-                    ) : (
-                      <ComposerCommandMenu
-                        items={composerMenuItems}
-                        resolvedTheme={resolvedTheme}
-                        isLoading={isComposerMenuLoading}
-                        triggerKind={
-                          composerCommandPicker !== null
-                            ? "slash-command"
-                            : effectiveComposerTriggerKind
-                        }
-                        activeItemId={activeComposerMenuItem?.id ?? null}
-                        onHighlightedItemChange={onComposerMenuItemHighlighted}
-                        onSelect={onSelectComposerItem}
-                      />
-                    )}
-                  </div>
-                ) : null}
-                {!isComposerApprovalState &&
-                  pendingUserInputs.length === 0 &&
-                  (composerAssistantSelections.length > 0 || composerImages.length > 0) && (
-                    <ComposerReferenceAttachments
-                      assistantSelections={composerAssistantSelections}
-                      images={composerImages}
-                      nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
-                      onExpandImage={setExpandedImage}
-                      onRemoveAssistantSelections={clearComposerAssistantSelectionsFromDraft}
-                      onRemoveImage={removeComposerImage}
-                    />
-                  )}
-                <ComposerPromptEditor
-                  ref={composerEditorRef}
-                  value={
-                    isComposerApprovalState
-                      ? ""
-                      : activePendingProgress
-                        ? activePendingProgress.customAnswer
-                        : prompt
-                  }
-                  cursor={composerCursor}
-                  terminalContexts={
-                    !isComposerApprovalState && pendingUserInputs.length === 0
-                      ? composerTerminalContexts
-                      : []
-                  }
-                  mentionReferences={selectedComposerMentions}
-                  onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
-                  onChange={onPromptChange}
-                  onCommandKeyDown={onComposerCommandKey}
-                  onPaste={onComposerPaste}
-                  placeholder={
-                    isComposerApprovalState
-                      ? "Resolve this approval request to continue"
-                      : activePendingProgress
-                        ? "Type your own answer, or leave this blank to use the selected option"
-                        : showPlanFollowUpPrompt && activeProposedPlan
-                          ? "Add feedback to refine the plan, or leave this blank to implement it"
-                          : hasLiveTurn
-                            ? "Ask for follow-up changes"
-                            : phase === "disconnected"
-                              ? "Ask for follow-up changes or attach images"
-                              : "Ask anything, @tag files/folders, or use / to show available commands"
-                  }
-                  disabled={isConnecting || isComposerApprovalState}
-                />
-              </div>
-              {/* Bottom toolbar */}
-              {activePendingApproval ? (
-                <div className={COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME}>
-                  <ComposerPendingApprovalActions
-                    requestId={activePendingApproval.requestId}
-                    isResponding={respondingRequestIds.includes(activePendingApproval.requestId)}
-                    onRespondToApproval={onRespondToApproval}
-                  />
-                </div>
-              ) : (
-                <div
-                  data-chat-composer-footer="true"
-                  className={cn(
-                    "@container",
-                    COMPOSER_FOOTER_ROW_CLASS_NAME,
-                    isComposerFooterCompact
-                      ? "gap-1.5"
-                      : "flex-wrap gap-1.5 sm:flex-nowrap sm:gap-0",
-                  )}
-                >
-                  <div
-                    className={cn(
-                      "flex items-center",
-                      isVoiceRecording || isVoiceTranscribing
-                        ? "min-w-0 shrink-0 gap-1"
-                        : isComposerFooterCompact
-                          ? "min-w-0 flex-1 gap-1 overflow-hidden"
-                          : "min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-w-max sm:overflow-visible",
-                    )}
-                  >
-                    <ComposerExtrasMenu
-                      interactionMode={interactionMode}
-                      supportsFastMode={composerTraitSelection.caps.supportsFastMode}
-                      fastModeEnabled={composerTraitSelection.fastModeEnabled}
-                      onAddPhotos={addComposerImages}
-                      onToggleFastMode={toggleFastMode}
-                      onSetPlanMode={setPlanMode}
-                    />
-
-                    {!isVoiceRecording && !isVoiceTranscribing ? (
-                      <>
-                        <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
-
-                        {interactionMode === "plan" ? (
-                          <Button
-                            variant="ghost"
-                            className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] sm:px-3"
-                            size="sm"
-                            type="button"
-                            onClick={toggleInteractionMode}
-                            title="Plan mode — click to return to normal build mode"
-                          >
-                            <GoTasklist className="size-3.5" />
-                            <span className="sr-only sm:not-sr-only">Plan</span>
-                          </Button>
-                        ) : null}
-
-                        {activeTaskList || sidebarProposedPlan || planSidebarOpen ? (
-                          <Button
-                            variant="ghost"
-                            className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal sm:px-3"
-                            size="sm"
-                            type="button"
-                            onClick={togglePlanSidebar}
-                            title={
-                              planSidebarOpen
-                                ? `Hide ${planSidebarLabel.toLowerCase()} sidebar`
-                                : `Show ${planSidebarLabel.toLowerCase()} sidebar`
-                            }
-                          >
-                            <GoTasklist className="size-3.5" />
-                            <span className="sr-only sm:not-sr-only">
-                              {planSidebarOpen ? `Hide ${planSidebarLabel}` : planSidebarLabel}
-                            </span>
-                          </Button>
-                        ) : null}
-                      </>
-                    ) : null}
-                  </div>
-
-                  <div
-                    data-chat-composer-actions="right"
-                    className={cn(
-                      "flex items-center gap-2",
-                      isVoiceRecording || isVoiceTranscribing ? "min-w-0 flex-1" : "shrink-0",
-                    )}
-                  >
-                    {isPreparingWorktree ? (
-                      <span className="text-[length:var(--app-font-size-ui-xs,10px)] text-[var(--color-text-foreground-secondary)]">
-                        Preparing worktree...
-                      </span>
-                    ) : null}
-                    {!isVoiceRecording && !isVoiceTranscribing && runtimeUsageContextWindow ? (
-                      <ContextWindowMeter
-                        usage={runtimeUsageContextWindow}
-                        {...(activeCumulativeCostUsd != null
-                          ? { cumulativeCostUsd: activeCumulativeCostUsd }
-                          : {})}
-                        {...(contextWindowSelectionStatus.activeLabel !== undefined
-                          ? {
-                              activeWindowLabel: contextWindowSelectionStatus.activeLabel,
-                            }
-                          : {})}
-                        {...(contextWindowSelectionStatus.pendingSelectedLabel !== undefined
-                          ? {
-                              pendingWindowLabel: contextWindowSelectionStatus.pendingSelectedLabel,
-                            }
-                          : {})}
-                      />
-                    ) : null}
-                    {!isVoiceRecording && !isVoiceTranscribing
-                      ? composerModelEffortPickerControl
-                      : null}
-                    {showVoiceNotesControl && (isVoiceRecording || isVoiceTranscribing) ? (
-                      <ComposerVoiceRecorderBar
-                        disabled={isComposerApprovalState || isConnecting || isSendBusy}
-                        isRecording={isVoiceRecording}
-                        isTranscribing={isVoiceTranscribing}
-                        durationLabel={voiceRecordingDurationLabel}
-                        waveformLevels={voiceWaveformLevels}
-                        onCancel={() => {
-                          if (isVoiceRecording) {
-                            void submitComposerVoiceRecording();
-                            return;
-                          }
-                          cancelComposerVoiceRecording();
-                        }}
-                        onSubmit={() => {
-                          void submitComposerVoiceRecording();
-                        }}
-                      />
-                    ) : null}
-                    {activePendingProgress ? (
-                      <div className="flex items-center gap-2">
-                        {activePendingProgress.questionIndex > 0 ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="rounded-full"
-                            onClick={onPreviousActivePendingUserInputQuestion}
-                            disabled={activePendingIsResponding}
-                          >
-                            Previous
-                          </Button>
-                        ) : null}
-                        <Button
-                          type="submit"
-                          size="sm"
-                          className="rounded-full px-4"
-                          disabled={
-                            activePendingIsResponding ||
-                            (activePendingProgress.isLastQuestion
-                              ? !activePendingResolvedAnswers
-                              : !activePendingProgress.canAdvance)
-                          }
-                        >
-                          {activePendingIsResponding
-                            ? "Submitting..."
-                            : activePendingProgress.isLastQuestion
-                              ? "Submit answers"
-                              : "Next question"}
-                        </Button>
-                      </div>
-                    ) : phase === "running" ? (
-                      <Button
-                        type="button"
-                        variant="prominent"
-                        size="icon-xs"
-                        className="sm:size-[26px]"
-                        onClick={() => void onInterrupt()}
-                        aria-label="Stop generation"
-                        title="Stop the current response. On Mac, press Ctrl+C to interrupt."
-                      >
-                        <span
-                          aria-hidden="true"
-                          className="block size-2 rounded-[2px] bg-current"
-                        />
-                      </Button>
-                    ) : pendingUserInputs.length === 0 &&
-                      !isVoiceRecording &&
-                      !isVoiceTranscribing ? (
-                      showPlanFollowUpPrompt ? (
-                        prompt.trim().length > 0 ? (
-                          <Button
-                            type="submit"
-                            size="sm"
-                            className="h-9 rounded-full px-4 sm:h-8"
-                            disabled={isSendBusy || isConnecting}
-                          >
-                            {isConnecting || isSendBusy ? "Sending..." : "Refine"}
-                          </Button>
-                        ) : (
-                          <div className="flex items-center">
-                            <Button
-                              type="submit"
-                              size="sm"
-                              className="h-9 rounded-l-full rounded-r-none px-4 sm:h-8"
-                              disabled={isSendBusy || isConnecting}
-                            >
-                              {isConnecting || isSendBusy ? "Sending..." : "Implement"}
-                            </Button>
-                            <Menu>
-                              <MenuTrigger
-                                render={
-                                  <Button
-                                    size="sm"
-                                    variant="default"
-                                    className="h-9 rounded-l-none rounded-r-full border-l-white/12 px-2 sm:h-8"
-                                    aria-label="Implementation actions"
-                                    disabled={isSendBusy || isConnecting}
-                                  />
-                                }
-                              >
-                                <ChevronDownIcon className="size-3.5" />
-                              </MenuTrigger>
-                              <MenuPopup align="end" side="top">
-                                <MenuItem
-                                  disabled={isSendBusy || isConnecting}
-                                  onClick={() => void onImplementPlanInNewThread()}
-                                >
-                                  Implement in a new thread
-                                </MenuItem>
-                              </MenuPopup>
-                            </Menu>
-                          </div>
-                        )
-                      ) : (
-                        <>
-                          {showVoiceNotesControl ? (
-                            <ComposerVoiceButton
-                              disabled={isComposerApprovalState || isConnecting || isSendBusy}
-                              isRecording={isVoiceRecording}
-                              isTranscribing={isVoiceTranscribing}
-                              durationLabel={voiceRecordingDurationLabel}
-                              onClick={toggleComposerVoiceRecording}
-                            />
-                          ) : null}
-                          <Button
-                            type="submit"
-                            variant="prominent"
-                            size="icon-xs"
-                            className="size-7 rounded-full sm:size-7"
-                            disabled={
-                              isSendBusy ||
-                              isConnecting ||
-                              isVoiceTranscribing ||
-                              !composerSendState.hasSendableContent
-                            }
-                            aria-label={
-                              isConnecting
-                                ? "Connecting"
-                                : isVoiceTranscribing
-                                  ? "Transcribing voice note"
-                                  : isPreparingWorktree
-                                    ? "Preparing worktree"
-                                    : isSendBusy
-                                      ? "Sending"
-                                      : "Send message"
-                            }
-                          >
-                            {isConnecting || isSendBusy ? (
-                              <svg
-                                width="12"
-                                height="12"
-                                viewBox="0 0 14 14"
-                                fill="none"
-                                className="animate-spin"
-                                aria-hidden="true"
-                              >
-                                <circle
-                                  cx="7"
-                                  cy="7"
-                                  r="5.5"
-                                  stroke="currentColor"
-                                  strokeWidth="1.5"
-                                  strokeLinecap="round"
-                                  strokeDasharray="20 12"
-                                />
-                              </svg>
-                            ) : (
-                              <ComposerSendArrowIcon
-                                aria-hidden="true"
-                                className="size-5 shrink-0"
-                              />
-                            )}
-                          </Button>
-                        </>
-                      )
-                    ) : null}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </form>
-      {isEmptyChatLanding ? (
-        <div
-          className={cn(
-            "mt-2 flex items-center justify-start gap-3 px-3",
-            COMPOSER_COLUMN_FRAME_CLASS_NAME,
-          )}
-        >
-          <ProjectPicker
-            align="start"
-            side="top"
-            showResetToHome={Boolean(resolvedThreadWorktreePath)}
-            selectedWorkspaceRoot={resolvedThreadWorktreePath}
-            onSelectWorkspaceRoot={handleSelectWorkspaceRoot}
-            onResetToHome={handleResetWorkspaceToHome}
-          />
-        </div>
-      ) : null}
-    </>
-  ) : (
-    <div aria-hidden="true" className="w-full overflow-visible" data-chat-composer-form="deferred">
-      <div
-        className={cn(COMPOSER_INPUT_SURFACE_CLASS_NAME, COMPOSER_COLUMN_FRAME_CLASS_NAME)}
-        style={{ height: secondaryChromePlaceholderHeight }}
-      />
-    </div>
+  const composerSection = (
+    <ChatComposer
+      secondaryChromeReady={secondaryChromeReady}
+      secondaryChromePlaceholderHeight={secondaryChromePlaceholderHeight}
+      activeTaskListCard={renderActiveTaskListCard()}
+      composerFormRef={composerFormRef}
+      onSend={onSend}
+      paneScopeId={paneScopeId}
+      queuedComposerTurns={queuedComposerTurns}
+      taskListAboveComposer={taskListAboveComposer}
+      onSteerQueuedComposerTurn={onSteerQueuedComposerTurn}
+      removeQueuedComposerTurn={removeQueuedComposerTurn}
+      onEditQueuedComposerTurn={onEditQueuedComposerTurn}
+      composerHasStackedHeader={composerHasStackedHeader}
+      composerProviderState={composerProviderState}
+      composerMenuOpen={composerMenuOpen}
+      isComposerApprovalState={isComposerApprovalState}
+      onComposerDragEnter={onComposerDragEnter}
+      onComposerDragOver={onComposerDragOver}
+      onComposerDragLeave={onComposerDragLeave}
+      onComposerDrop={onComposerDrop}
+      isDragOverComposer={isDragOverComposer}
+      activePendingApproval={activePendingApproval}
+      pendingApprovals={pendingApprovals}
+      pendingUserInputs={pendingUserInputs}
+      respondingUserInputRequestIds={respondingUserInputRequestIds}
+      activePendingDraftAnswers={activePendingDraftAnswers}
+      activePendingQuestionIndex={activePendingQuestionIndex}
+      onToggleActivePendingUserInputOption={onToggleActivePendingUserInputOption}
+      onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
+      showPlanFollowUpPrompt={showPlanFollowUpPrompt}
+      activeProposedPlan={activeProposedPlan}
+      proposedPlanTitle={proposedPlanTitle}
+      isLocalFolderBrowserOpen={isLocalFolderBrowserOpen}
+      mentionTriggerQuery={mentionTriggerQuery}
+      localFolderBrowseRootPath={localFolderBrowseRootPath}
+      serverConfigHomeDir={serverConfigQuery.data?.homeDir ?? null}
+      handleSelectLocalDirectoryMention={handleSelectLocalDirectoryMention}
+      handleNavigateLocalFolder={handleNavigateLocalFolder}
+      localDirectoryMenuRef={localDirectoryMenuRef}
+      composerMenuItems={composerMenuItems}
+      resolvedTheme={resolvedTheme}
+      isComposerMenuLoading={isComposerMenuLoading}
+      composerCommandPicker={composerCommandPicker}
+      effectiveComposerTriggerKind={effectiveComposerTriggerKind}
+      activeComposerMenuItem={activeComposerMenuItem}
+      onComposerMenuItemHighlighted={onComposerMenuItemHighlighted}
+      onSelectComposerItem={onSelectComposerItem}
+      composerAssistantSelections={composerAssistantSelections}
+      composerImages={composerImages}
+      nonPersistedComposerImageIdSet={nonPersistedComposerImageIdSet}
+      onExpandTimelineImage={onExpandTimelineImage}
+      clearComposerAssistantSelectionsFromDraft={clearComposerAssistantSelectionsFromDraft}
+      removeComposerImage={removeComposerImage}
+      composerEditorRef={composerEditorRef}
+      activePendingProgress={activePendingProgress}
+      prompt={prompt}
+      composerCursor={composerCursor}
+      composerTerminalContexts={composerTerminalContexts}
+      selectedComposerMentions={selectedComposerMentions}
+      removeComposerTerminalContextFromDraft={removeComposerTerminalContextFromDraft}
+      onPromptChange={onPromptChange}
+      onComposerCommandKey={onComposerCommandKey}
+      onComposerPaste={onComposerPaste}
+      hasLiveTurn={hasLiveTurn}
+      phase={phase}
+      isConnecting={isConnecting}
+      respondingRequestIds={respondingRequestIds}
+      onRespondToApproval={onRespondToApproval}
+      isComposerFooterCompact={isComposerFooterCompact}
+      isVoiceRecording={isVoiceRecording}
+      isVoiceTranscribing={isVoiceTranscribing}
+      interactionMode={interactionMode}
+      composerTraitSelection={composerTraitSelection}
+      addComposerImages={addComposerImages}
+      toggleFastMode={toggleFastMode}
+      setPlanMode={setPlanMode}
+      runtimeUsageControlsProps={runtimeUsageControlsProps}
+      toggleInteractionMode={toggleInteractionMode}
+      activeTaskList={activeTaskList}
+      sidebarProposedPlan={sidebarProposedPlan}
+      planSidebarOpen={planSidebarOpen}
+      togglePlanSidebar={togglePlanSidebar}
+      planSidebarLabel={planSidebarLabel}
+      isPreparingWorktree={isPreparingWorktree}
+      runtimeUsageContextWindow={runtimeUsageContextWindow}
+      activeCumulativeCostUsd={activeCumulativeCostUsd}
+      contextWindowSelectionStatus={contextWindowSelectionStatus}
+      composerModelEffortPickerControl={composerModelEffortPickerControl}
+      showVoiceNotesControl={showVoiceNotesControl}
+      voiceRecordingDurationLabel={voiceRecordingDurationLabel}
+      voiceWaveformLevels={voiceWaveformLevels}
+      submitComposerVoiceRecording={submitComposerVoiceRecording}
+      cancelComposerVoiceRecording={cancelComposerVoiceRecording}
+      activePendingIsResponding={activePendingIsResponding}
+      onPreviousActivePendingUserInputQuestion={onPreviousActivePendingUserInputQuestion}
+      activePendingResolvedAnswers={activePendingResolvedAnswers}
+      onInterrupt={onInterrupt}
+      isSendBusy={isSendBusy}
+      onImplementPlanInNewThread={onImplementPlanInNewThread}
+      toggleComposerVoiceRecording={toggleComposerVoiceRecording}
+      activeProject={activeProject}
+      composerSendState={composerSendState}
+      isEmptyChatLanding={isEmptyChatLanding}
+      resolvedThreadWorktreePath={resolvedThreadWorktreePath}
+      handleSelectWorkspaceRoot={handleSelectWorkspaceRoot}
+      handleResetWorkspaceToHome={handleResetWorkspaceToHome}
+    />
   );
 
   return (
@@ -8138,6 +7038,8 @@ export default function ChatView({
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
           onToggleDiff={onToggleDiff}
+          reviewOpen={reviewPanelOpen}
+          {...(onToggleReviewPanel ? { onToggleReview: onToggleReviewPanel } : {})}
           onCreateHandoff={onCreateHandoffThread}
           onNavigateToThread={onNavigateToThread}
           onRenameThread={() => setRenameDialogOpen(true)}

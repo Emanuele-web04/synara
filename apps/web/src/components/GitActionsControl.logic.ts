@@ -7,6 +7,189 @@ import { isTemporaryWorktreeBranch, resolveUniqueSynaraBranchName } from "@t3too
 
 export type GitActionIconName = "commit" | "push" | "pr";
 
+export type GitGlyphName = GitActionIconName | "sync" | "branch";
+
+export interface GitPickerMenuItem {
+  id: "push" | "pr" | "sync" | "commit" | "commit_push" | "create_branch";
+  label: string;
+  disabled: boolean;
+  disabledReason: string | null;
+  icon: GitGlyphName;
+  onSelect: () => void;
+}
+
+export function buildGitPickerMenuItems(input: {
+  gitActionMenuItems: GitActionMenuItem[];
+  gitStatus: GitStatusResult | null;
+  isBusy: boolean;
+  hasOriginRemote: boolean;
+  openDialogForMenuItem: (item: GitActionMenuItem) => void;
+  openCreateBranchDialog: () => void;
+}): GitPickerMenuItem[] {
+  const { gitActionMenuItems, gitStatus, isBusy, hasOriginRemote, openDialogForMenuItem } = input;
+  const items: GitPickerMenuItem[] = [];
+
+  const byId = (id: GitActionMenuItem["id"], icon: GitGlyphName) => {
+    const menuItem = gitActionMenuItems.find((item) => item.id === id);
+    if (!menuItem) return;
+    items.push({
+      id,
+      label: menuItem.label,
+      disabled: menuItem.disabled,
+      disabledReason: getMenuActionDisabledReason({
+        item: menuItem,
+        gitStatus,
+        isBusy,
+        hasOriginRemote,
+      }),
+      icon,
+      onSelect: () => openDialogForMenuItem(menuItem),
+    });
+  };
+
+  byId("commit", "commit");
+  byId("commit_push", "push");
+  byId("push", "push");
+  byId("pr", "pr");
+
+  const createBranchDisabled = isBusy || !gitStatus;
+  items.push({
+    id: "create_branch",
+    label: "Create Branch",
+    disabled: createBranchDisabled,
+    disabledReason: createBranchDisabled
+      ? isBusy
+        ? "Git action in progress."
+        : "Git status is unavailable."
+      : null,
+    icon: "branch",
+    onSelect: input.openCreateBranchDialog,
+  });
+
+  return items;
+}
+
+export interface ActiveGitActionProgress {
+  toastId: string | number;
+  actionId: string;
+  title: string;
+  phaseStartedAtMs: number | null;
+  hookStartedAtMs: number | null;
+  hookName: string | null;
+  lastOutputLine: string | null;
+  currentPhaseLabel: string | null;
+}
+
+export function formatElapsedDescription(
+  startedAtMs: number | null,
+  nowMs: number = Date.now(),
+): string | undefined {
+  if (startedAtMs === null) {
+    return undefined;
+  }
+  const elapsedSeconds = Math.max(0, Math.floor((nowMs - startedAtMs) / 1000));
+  if (elapsedSeconds < 60) {
+    return `Running for ${elapsedSeconds}s`;
+  }
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const seconds = elapsedSeconds % 60;
+  return `Running for ${minutes}m ${seconds}s`;
+}
+
+export function resolveProgressDescription(
+  progress: ActiveGitActionProgress,
+  nowMs: number = Date.now(),
+): string | undefined {
+  if (progress.lastOutputLine) {
+    return progress.lastOutputLine;
+  }
+  return formatElapsedDescription(progress.hookStartedAtMs ?? progress.phaseStartedAtMs, nowMs);
+}
+
+export function getMenuActionDisabledReason({
+  item,
+  gitStatus,
+  isBusy,
+  hasOriginRemote,
+}: {
+  item: GitActionMenuItem;
+  gitStatus: GitStatusResult | null;
+  isBusy: boolean;
+  hasOriginRemote: boolean;
+}): string | null {
+  if (!item.disabled) return null;
+  if (isBusy) return "Git action in progress.";
+  if (!gitStatus) return "Git status is unavailable.";
+
+  const hasBranch = gitStatus.branch !== null;
+  const hasChanges = gitStatus.hasWorkingTreeChanges;
+  const hasOpenPr = gitStatus.pr?.state === "open";
+  const isAhead = gitStatus.aheadCount > 0;
+  const isBehind = gitStatus.behindCount > 0;
+
+  if (item.id === "commit") {
+    if (!hasChanges) {
+      return "Worktree is clean. Make changes before committing.";
+    }
+    return "Commit is currently unavailable.";
+  }
+
+  if (item.id === "push") {
+    if (!hasBranch) {
+      return "Detached HEAD: checkout a branch before pushing.";
+    }
+    if (hasChanges) {
+      return "Commit or stash local changes before pushing.";
+    }
+    if (isBehind) {
+      return "Branch is behind upstream. Pull/rebase before pushing.";
+    }
+    if (!gitStatus.hasUpstream && !hasOriginRemote) {
+      return 'Add an "origin" remote before pushing.';
+    }
+    if (!isAhead) {
+      return "No local commits to push.";
+    }
+    return "Push is currently unavailable.";
+  }
+
+  if (item.id === "commit_push") {
+    if (!hasBranch) {
+      return "Detached HEAD: checkout a branch before committing and pushing.";
+    }
+    if (isBehind) {
+      return "Branch is behind upstream. Pull/rebase before committing and pushing.";
+    }
+    if (!gitStatus.hasUpstream && !hasOriginRemote) {
+      return 'Add an "origin" remote before committing and pushing.';
+    }
+    if (!hasChanges && !isAhead) {
+      return "No local changes or commits to push.";
+    }
+    return "Commit & push is currently unavailable.";
+  }
+
+  if (hasOpenPr) {
+    return "View PR is currently unavailable.";
+  }
+  if (!hasBranch) {
+    return "Detached HEAD: checkout a branch before creating a PR.";
+  }
+  if (hasChanges) {
+    return "Commit local changes before creating a PR.";
+  }
+  if (!gitStatus.hasUpstream && !hasOriginRemote) {
+    return 'Add an "origin" remote before creating a PR.';
+  }
+  if (!isAhead) {
+    return "No local commits to include in a PR.";
+  }
+  if (isBehind) {
+    return "Branch is behind upstream. Pull/rebase before creating a PR.";
+  }
+  return "Create PR is currently unavailable.";
+}
+
 export type GitDialogAction = "commit" | "push" | "commit_push" | "create_pr";
 
 export interface GitActionMenuItem {

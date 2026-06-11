@@ -39,6 +39,10 @@ import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryS
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
+import { ReviewCommentStore } from "./review/Services/ReviewCommentStore";
+import { ReviewSource } from "./review/Services/ReviewSource";
+import { ReviewSubmission } from "./review/Services/ReviewSubmission";
+import { ReviewUpdateBus } from "./review/Services/ReviewUpdateBus";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
@@ -212,6 +216,10 @@ export const makeWsRpcLayer = () =>
       const providerDiscoveryService = yield* ProviderDiscoveryService;
       const providerHealth = yield* ProviderHealth;
       const providerService = yield* ProviderService;
+      const reviewSource = yield* ReviewSource;
+      const reviewSubmission = yield* ReviewSubmission;
+      const reviewCommentStore = yield* ReviewCommentStore;
+      const reviewUpdateBus = yield* ReviewUpdateBus;
       const lifecycleEvents = yield* ServerLifecycleEvents;
       const runtimeStartup = yield* ServerRuntimeStartup;
       const serverEnvironment = yield* ServerEnvironment;
@@ -579,6 +587,40 @@ export const makeWsRpcLayer = () =>
             gitManager.handoffThread(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             "Failed to hand off thread",
           ),
+
+        [WS_METHODS.reviewListPullRequests]: (input) =>
+          rpcEffect(reviewSource.listPullRequests(input), "Failed to list pull requests"),
+        [WS_METHODS.reviewGetViewer]: (input) =>
+          rpcEffect(reviewSource.getViewer(input), "Failed to resolve GitHub viewer"),
+        [WS_METHODS.reviewLoadChangeset]: (input) =>
+          rpcEffect(reviewSource.loadChangeset(input), "Failed to load changeset"),
+        [WS_METHODS.reviewLoadPullRequest]: (input) =>
+          rpcEffect(reviewSource.loadPullRequest(input), "Failed to load pull request"),
+        [WS_METHODS.reviewLoadConversation]: (input) =>
+          rpcEffect(reviewSource.loadConversation(input), "Failed to load conversation"),
+        [WS_METHODS.reviewListComments]: (input) =>
+          rpcEffect(reviewCommentStore.list(input), "Failed to list review comments"),
+        [WS_METHODS.reviewAddComment]: (input) =>
+          rpcEffect(reviewCommentStore.add(input), "Failed to add review comment"),
+        [WS_METHODS.reviewUpdateComment]: (input) =>
+          rpcEffect(reviewCommentStore.update(input), "Failed to update review comment"),
+        [WS_METHODS.reviewRemoveComment]: (input) =>
+          rpcEffect(reviewCommentStore.remove(input), "Failed to remove review comment"),
+        [WS_METHODS.reviewSubmit]: (input) =>
+          rpcEffect(reviewSubmission.submit(input), "Failed to submit review"),
+        [WS_METHODS.reviewLoadRemoteThreads]: (input) =>
+          rpcEffect(reviewSubmission.loadThreads(input), "Failed to load remote review threads"),
+        [WS_METHODS.reviewRunAgent]: (input) =>
+          rpcEffect(reviewSource.runAgentReview(input), "Failed to run agent review"),
+        [WS_METHODS.reviewCheckProjectAccess]: (input) =>
+          rpcEffect(reviewSource.checkProjectAccess(input), "Failed to check project access"),
+        [WS_METHODS.reviewListProjects]: (input) =>
+          rpcEffect(reviewSource.listProjects(input), "Failed to list projects"),
+        [WS_METHODS.reviewGetProjectBoard]: (input) =>
+          rpcEffect(reviewSource.getProjectBoard(input), "Failed to load project board"),
+        [WS_METHODS.reviewMoveProjectCard]: (input) =>
+          rpcEffect(reviewSource.moveProjectCard(input), "Failed to move project card"),
+        [WS_METHODS.subscribeReviewUpdates]: () => reviewUpdateBus.stream,
 
         [WS_METHODS.terminalOpen]: (input) =>
           rpcEffect(terminalManager.open(input), "Failed to open terminal"),

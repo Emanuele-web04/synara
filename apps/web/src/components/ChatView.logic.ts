@@ -5,10 +5,14 @@ import {
   type ModelSlug,
   type ProviderApprovalDecision,
   type ProviderKind,
+  type ProviderStartOptions,
   type RuntimeMode,
   type ServerProviderAuthStatus,
+  type ServerProviderStatus,
   type ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
+import { normalizeCustomBinaryPath } from "~/lib/providerAvailability";
+import type { RateLimitStatus } from "./chat/RateLimitBanner";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import { buildSynaraBranchName } from "@t3tools/shared/git";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
@@ -33,7 +37,7 @@ import {
 } from "../lib/subagentPresentation";
 import { hasLiveTurnTailWork, type WorkLogEntry } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
-import type { ProviderModelOption } from "../providerModelOptions";
+import { type ProviderModelOption } from "../providerModelOptions";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "synara:last-invoked-script-by-project";
 export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "synara:dismissed-provider-health-banners";
@@ -91,6 +95,41 @@ export function buildLocalDraftThread(
   };
 }
 
+export function resolveCodexSessionPrewarmKey(input: {
+  readonly isServerThread: boolean;
+  readonly thread: Pick<Thread, "id" | "modelSelection" | "session"> | undefined;
+  readonly modelSelection: ModelSelection;
+  readonly providerOptions: ProviderStartOptions | undefined;
+  readonly runtimeMode: RuntimeMode;
+}): string | null {
+  if (!input.isServerThread || !input.thread) {
+    return null;
+  }
+  if (
+    input.thread.modelSelection.provider !== "codex" ||
+    input.modelSelection.provider !== "codex"
+  ) {
+    return null;
+  }
+  const sessionStatus = input.thread.session?.status ?? null;
+  if (
+    sessionStatus === "connecting" ||
+    sessionStatus === "ready" ||
+    sessionStatus === "running" ||
+    sessionStatus === "error"
+  ) {
+    return null;
+  }
+  return [
+    input.thread.id,
+    input.modelSelection.provider,
+    input.modelSelection.model,
+    JSON.stringify(input.modelSelection.options ?? null),
+    input.runtimeMode,
+    JSON.stringify(input.providerOptions),
+  ].join("\u001f");
+}
+
 export function resolveActiveThreadTitle(input: {
   title: string;
   subagentTitle: string | null;
@@ -122,6 +161,118 @@ export function revokeBlobPreviewUrl(previewUrl: string | undefined): void {
     return;
   }
   URL.revokeObjectURL(previewUrl);
+}
+
+export function revokeBlobPreviewUrlsAfterPaint(previewUrls: readonly string[]): void {
+  if (previewUrls.length === 0 || typeof window === "undefined") {
+    return;
+  }
+  window.requestAnimationFrame(() => {
+    window.setTimeout(() => {
+      for (const previewUrl of previewUrls) {
+        revokeBlobPreviewUrl(previewUrl);
+      }
+    }, 0);
+  });
+}
+
+export function eventTargetsComposer(
+  event: globalThis.KeyboardEvent,
+  composerForm: HTMLFormElement | null,
+): boolean {
+  if (!composerForm) return false;
+  const target = event.target;
+  return target instanceof Node ? composerForm.contains(target) : false;
+}
+
+export function canHandleComposerPickerShortcut(
+  event: globalThis.KeyboardEvent,
+  composerForm: HTMLFormElement | null,
+): boolean {
+  if (!composerForm) return false;
+  if (eventTargetsComposer(event, composerForm)) return true;
+  const target = event.target;
+  return (
+    target === document.body ||
+    target === document.documentElement ||
+    document.activeElement === document.body ||
+    document.activeElement === document.documentElement
+  );
+}
+
+export function getThreadProviderCustomBinaryPathKey(
+  threadId: Thread["id"],
+  provider: ProviderKind,
+): string {
+  return `${threadId}:${provider}`;
+}
+
+export function getConfirmedCustomBinarySessionKey(
+  thread: Thread | null | undefined,
+  provider: ProviderKind,
+): string | null {
+  const session = thread?.session;
+  if (!thread || session?.provider !== provider) {
+    return null;
+  }
+  if (session.status !== "ready" && session.status !== "running") {
+    return null;
+  }
+  return getThreadProviderCustomBinaryPathKey(thread.id, provider);
+}
+
+export function getProviderStartOptionsCustomBinaryPath(
+  providerOptions: ProviderStartOptions | undefined,
+  provider: ProviderKind,
+): string | null {
+  switch (provider) {
+    case "codex":
+      return normalizeCustomBinaryPath(providerOptions?.codex?.binaryPath);
+    case "claudeAgent":
+      return normalizeCustomBinaryPath(providerOptions?.claudeAgent?.binaryPath);
+    case "gemini":
+      return normalizeCustomBinaryPath(providerOptions?.gemini?.binaryPath);
+    case "grok":
+      return normalizeCustomBinaryPath(providerOptions?.grok?.binaryPath);
+    case "kilo":
+      return normalizeCustomBinaryPath(providerOptions?.kilo?.binaryPath);
+    case "opencode":
+      return normalizeCustomBinaryPath(providerOptions?.opencode?.binaryPath);
+    case "cursor":
+      return normalizeCustomBinaryPath(providerOptions?.cursor?.binaryPath);
+    case "pi":
+      return normalizeCustomBinaryPath(providerOptions?.pi?.binaryPath);
+  }
+}
+
+export function getProviderHealthBannerDismissalKey(
+  status: ServerProviderStatus | null,
+): string | null {
+  if (!status || status.status === "ready") {
+    return null;
+  }
+  return [
+    status.provider,
+    status.status,
+    status.available ? "available" : "unavailable",
+    status.authStatus,
+    status.message?.trim() ?? "",
+  ].join("");
+}
+
+export function getRateLimitBannerDismissalKey(
+  status: RateLimitStatus | null,
+  threadId: Thread["id"] | null,
+): string | null {
+  if (!status || !threadId) {
+    return null;
+  }
+  return [
+    threadId,
+    status.status,
+    status.resetsAt ?? "",
+    typeof status.utilization === "number" ? String(Math.round(status.utilization * 100)) : "",
+  ].join("");
 }
 
 export function revokeUserMessagePreviewUrls(message: ChatMessage): void {
@@ -711,3 +862,31 @@ export function enrichSubagentWorkEntries(
     };
   });
 }
+
+export function warnVoiceGuard(event: string, details?: Record<string, unknown>) {
+  if (!import.meta.env.DEV) {
+    return;
+  }
+  if (details) {
+    console.warn(`[voice] ${event}`, details);
+    return;
+  }
+  console.warn(`[voice] ${event}`);
+}
+
+export {
+  buildQueuedComposerPreviewText,
+  collectPromptMentionNames,
+  type ComposerPluginSuggestion,
+  escapeRegExp,
+  formatOutgoingPrompt,
+  normalizeMentionNameKey,
+  promptIncludesSkillMention,
+  providerMentionReferencesEqual,
+  resolvePromptPluginMentions,
+  skillMentionPrefix,
+  syncTerminalContextsByIds,
+  terminalContextIdListsEqual,
+} from "./ChatView.logic.prompt";
+
+export { mergeDynamicModelOptions, normalizeDynamicModelSlug } from "./ChatView.logic.model";

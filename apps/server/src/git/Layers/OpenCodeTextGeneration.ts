@@ -8,6 +8,7 @@ import type {
   OpenCodeModelOptions,
   ProviderStartOptions,
 } from "@t3tools/contracts";
+import { ReviewFinding } from "@t3tools/contracts";
 import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
@@ -36,6 +37,7 @@ import {
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
+  buildReviewFindingsPrompt,
   buildThreadTitlePrompt,
   decodeStructuredTextGenerationOutput,
   type RawTextFallback,
@@ -45,6 +47,11 @@ import {
 } from "../textGenerationShared.ts";
 
 const OPENCODE_TEXT_GENERATION_IDLE_TTL = "30 seconds";
+
+const ReviewFindingsOutputSchema = Schema.Struct({
+  summary: Schema.String,
+  findings: Schema.Array(ReviewFinding),
+});
 
 function getOpenCodePromptErrorMessage(error: unknown): string | null {
   if (!error || typeof error !== "object") {
@@ -190,6 +197,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
         | "generateCommitMessage"
         | "generatePrContent"
         | "generateDiffSummary"
+        | "generateReviewFindings"
         | "generateBranchName"
         | "generateThreadTitle";
     }) =>
@@ -287,6 +295,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
         | "generateCommitMessage"
         | "generatePrContent"
         | "generateDiffSummary"
+        | "generateReviewFindings"
         | "generateBranchName"
         | "generateThreadTitle";
       readonly cwd: string;
@@ -512,6 +521,37 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       };
     });
 
+    const generateReviewFindings: TextGenerationShape["generateReviewFindings"] = Effect.fn(
+      `${config.serviceName}.generateReviewFindings`,
+    )(function* (input) {
+      const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
+      if (!modelSelection) {
+        return yield* new TextGenerationError({
+          operation: "generateReviewFindings",
+          detail: `Invalid ${config.displayName} model selection.`,
+        });
+      }
+
+      const { prompt } = buildReviewFindingsPrompt({
+        patch: input.patch,
+        ...(input.prTitle ? { prTitle: input.prTitle } : {}),
+        ...(input.prBody ? { prBody: input.prBody } : {}),
+      });
+      const generated = yield* runOpenCodeJson({
+        operation: "generateReviewFindings",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: ReviewFindingsOutputSchema,
+        modelSelection,
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      });
+
+      return {
+        summary: generated.summary,
+        findings: generated.findings,
+      };
+    });
+
     const generateBranchName: TextGenerationShape["generateBranchName"] = Effect.fn(
       `${config.serviceName}.generateBranchName`,
     )(function* (input) {
@@ -578,6 +618,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       generateCommitMessage,
       generatePrContent,
       generateDiffSummary,
+      generateReviewFindings,
       generateBranchName,
       generateThreadTitle,
     } satisfies TextGenerationShape;

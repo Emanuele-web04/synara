@@ -34,6 +34,9 @@ import {
 } from "../lib/terminalContext";
 import { isMacPlatform } from "../lib/utils";
 import { getRouter } from "../router";
+import { createShellSnapshotFromFixtureSnapshot } from "../test/fixtureToShell";
+import { installRpcBridge } from "../test/wsRpcMockBridge";
+import { __resetWsNativeApiForTests } from "../wsNativeApi";
 import { useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
@@ -49,6 +52,7 @@ const NOW_ISO = "2026-03-04T12:00:00.000Z";
 const BASE_TIME_MS = Date.parse(NOW_ISO);
 const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='300'></svg>";
 let attachmentResponseDelayMs = 0;
+let nextDispatchSequence = 0;
 
 interface WsRequestEnvelope {
   id: string;
@@ -739,6 +743,10 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
   }
+  if (tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+    nextDispatchSequence += 1;
+    return { sequence: nextDispatchSequence };
+  }
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
   }
@@ -809,33 +817,39 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
 
 const worker = setupWorker(
   wsLink.addEventListener("connection", ({ client }) => {
-    client.send(
-      JSON.stringify({
-        type: "push",
-        sequence: 1,
-        channel: WS_CHANNELS.serverWelcome,
-        data: fixture.welcome,
-      }),
-    );
-    client.addEventListener("message", (event) => {
-      const rawData = event.data;
-      if (typeof rawData !== "string") return;
-      let request: WsRequestEnvelope;
-      try {
-        request = JSON.parse(rawData) as WsRequestEnvelope;
-      } catch {
-        return;
-      }
-      const method = request.body?._tag;
-      if (typeof method !== "string") return;
-      wsRequests.push(request.body);
-      client.send(
-        JSON.stringify({
-          id: request.id,
-          result: resolveWsRpc(request.body),
-        }),
-      );
+    const bridge = installRpcBridge(client, {
+      resolveRpc: (tag, payload) => {
+        wsRequests.push({ _tag: tag, ...(payload && typeof payload === "object" ? payload : {}) });
+        if (tag === ORCHESTRATION_WS_METHODS.getShellSnapshot) {
+          return createShellSnapshotFromFixtureSnapshot(fixture.snapshot);
+        }
+        return resolveWsRpc({ _tag: tag, ...(payload as Record<string, unknown> | null) });
+      },
+      onStreamOpen: (tag, payload, emit) => {
+        wsRequests.push({ _tag: tag, ...(payload && typeof payload === "object" ? payload : {}) });
+        if (tag === WS_METHODS.subscribeServerLifecycle) {
+          emit({ type: "welcome", payload: fixture.welcome });
+        } else if (tag === ORCHESTRATION_WS_METHODS.subscribeShell) {
+          emit({
+            kind: "snapshot",
+            snapshot: createShellSnapshotFromFixtureSnapshot(fixture.snapshot),
+          });
+        } else if (tag === ORCHESTRATION_WS_METHODS.subscribeThread) {
+          const threadId = (payload as { threadId?: ThreadId })?.threadId;
+          if (!threadId) return;
+          const thread = fixture.snapshot.threads.find((entry) => entry.id === threadId);
+          if (!thread) return;
+          emit({
+            kind: "snapshot",
+            snapshot: {
+              snapshotSequence: fixture.snapshot.snapshotSequence,
+              thread,
+            },
+          });
+        }
+      },
     });
+    void bridge;
   }),
   http.get("*/attachments/:attachmentId", async () => {
     if (attachmentResponseDelayMs > 0) {
@@ -1082,7 +1096,9 @@ async function measureUserRow(options: {
 
   const timelineRoot =
     row!.closest<HTMLElement>('[data-timeline-root="true"]') ??
-    host.querySelector<HTMLElement>('[data-timeline-root="true"]');
+    host.querySelector<HTMLElement>('[data-timeline-root="true"]') ??
+    row!.closest<HTMLElement>("[data-chat-scroll-container='true']") ??
+    host.querySelector<HTMLElement>("[data-chat-scroll-container='true']");
   if (!(timelineRoot instanceof HTMLElement)) {
     throw new Error("Unable to locate timeline root container.");
   }
@@ -1225,6 +1241,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   beforeEach(async () => {
     await setViewport(DEFAULT_VIEWPORT);
     attachmentResponseDelayMs = 0;
+    nextDispatchSequence = 0;
     localStorage.clear();
     document.body.innerHTML = "";
     wsRequests.length = 0;
@@ -1254,6 +1271,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   afterEach(() => {
+    __resetWsNativeApiForTests();
     document.body.innerHTML = "";
   });
 

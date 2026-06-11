@@ -99,6 +99,16 @@ export interface GitRangeContext {
   diffPatch: string;
 }
 
+export interface GitRangeDiffInput {
+  cwd: string;
+  base: string;
+  head: string;
+}
+
+export interface GitRangeDiff {
+  patch: string;
+}
+
 export interface GitWorkingTreePatch {
   patch: string;
 }
@@ -218,6 +228,13 @@ export interface GitCoreShape {
     cwd: string,
     baseBranch: string,
   ) => Effect.Effect<GitRangeContext, GitCommandError>;
+
+  /**
+   * Read a unified `base...head` patch between two refs.
+   */
+  readonly readRangeDiff: (
+    input: GitRangeDiffInput,
+  ) => Effect.Effect<GitRangeDiff, GitCommandError>;
 
   /**
    * Read a Git config value from the local repository.

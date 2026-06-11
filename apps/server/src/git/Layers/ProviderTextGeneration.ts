@@ -38,6 +38,7 @@ const makeProviderTextGeneration = Effect.gen(function* () {
     generateCommitMessage: (input) => resolveImplementation(input).generateCommitMessage(input),
     generatePrContent: (input) => resolveImplementation(input).generatePrContent(input),
     generateDiffSummary: (input) => resolveImplementation(input).generateDiffSummary(input),
+    generateReviewFindings: (input) => resolveImplementation(input).generateReviewFindings(input),
     generateBranchName: (input) => resolveImplementation(input).generateBranchName(input),
     generateThreadTitle: (input) => resolveImplementation(input).generateThreadTitle(input),
   } satisfies TextGenerationShape;

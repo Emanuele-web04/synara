@@ -139,7 +139,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
               {questionIndex + 1}/{prompt.questions.length}
             </span>
           ) : null}
-          <span className="text-[11px] font-semibold tracking-widest text-muted-foreground/50 uppercase">
+          <span className="text-[11px] font-semibold tracking-widest text-muted-foreground/70 uppercase">
             {activeQuestion.header}
           </span>
         </div>
@@ -181,7 +181,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
               <div className="min-w-0 flex-1">
                 <span className="text-sm font-medium">{option.label}</span>
                 {option.description && option.description !== option.label ? (
-                  <span className="ml-2 text-xs text-muted-foreground/50">
+                  <span className="ml-2 text-xs text-muted-foreground/70">
                     {option.description}
                   </span>
                 ) : null}

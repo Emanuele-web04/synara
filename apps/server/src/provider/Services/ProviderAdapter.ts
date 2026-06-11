@@ -13,6 +13,7 @@ import type {
   ProviderApprovalDecision,
   ProviderForkThreadInput,
   ProviderForkThreadResult,
+  ProviderInjectThreadItemsInput,
   ProviderKind,
   ProviderListAgentsResult,
   ProviderListCommandsInput,
@@ -148,6 +149,14 @@ export interface ProviderAdapterShape<TError> {
   readonly startReview?: (
     input: ProviderStartReviewInput,
   ) => Effect.Effect<ProviderTurnStartResult, TError>;
+
+  /**
+   * Append provider-native model-visible items to an already loaded thread
+   * without starting a new user turn.
+   */
+  readonly injectThreadItems?: (
+    input: ProviderInjectThreadItemsInput,
+  ) => Effect.Effect<void, TError>;
 
   /**
    * Interrupt an active turn.
