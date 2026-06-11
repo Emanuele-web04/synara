@@ -677,6 +677,220 @@ label:has(> select#reasoning-effort) select {
   height: 100%;
 }
 
+/* Active agent status: a tiny Synara mark with a pixel-reflection pass.
+   The mark is sized in em so it follows the user's chat text-size setting. */
+.synara-working-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  --synara-working-ink: color-mix(in srgb, var(--foreground) 54%, transparent);
+  --synara-working-shine: color-mix(in srgb, var(--foreground) 86%, transparent);
+  --synara-working-shimmer-duration: 2.85s;
+  color: var(--synara-working-ink);
+}
+
+.synara-working-status__content {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  min-width: 0;
+}
+
+.synara-working-status__text {
+  display: inline-grid;
+  color: var(--synara-working-ink);
+}
+
+.synara-working-status__text-base,
+.synara-working-status__text-shimmer {
+  grid-area: 1 / 1;
+}
+
+.synara-working-status__text-base {
+  color: var(--synara-working-ink);
+}
+
+.synara-working-status__text-shimmer {
+  pointer-events: none;
+  background:
+    linear-gradient(
+        98deg,
+        transparent 0 38%,
+        var(--synara-working-shine) 47%,
+        color-mix(in srgb, var(--foreground) 64%, transparent) 52%,
+        transparent 62% 100%
+      )
+      132% 0 / 230% 100% no-repeat;
+  background-clip: text;
+  color: transparent;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  opacity: 0;
+  animation: synara-working-text-reflect var(--synara-working-shimmer-duration) linear infinite;
+  will-change: background-position, opacity;
+}
+
+.synara-working-loader {
+  display: inline-flex;
+  inline-size: 1.08em;
+  block-size: 1.08em;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  contain: paint;
+  color: currentColor;
+}
+
+.synara-working-loader__mark {
+  position: relative;
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  background:
+    repeating-conic-gradient(
+        from 45deg,
+        color-mix(in srgb, currentColor 42%, transparent) 0 25%,
+        color-mix(in srgb, currentColor 76%, transparent) 0 50%
+      )
+      0 0 / 0.24em 0.24em,
+    color-mix(in srgb, currentColor 52%, transparent);
+  mask: url("/synara-logo.svg") center / contain no-repeat;
+  -webkit-mask: url("/synara-logo.svg") center / contain no-repeat;
+  opacity: 0.76;
+  overflow: hidden;
+}
+
+.synara-working-loader__mark::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+        98deg,
+        transparent 0 38%,
+        var(--synara-working-shine) 47%,
+        color-mix(in srgb, var(--foreground) 64%, transparent) 52%,
+        transparent 62% 100%
+      )
+      132% 0 / 230% 100% no-repeat;
+  opacity: 0;
+  animation: synara-working-icon-reflect var(--synara-working-shimmer-duration) linear infinite;
+  will-change: background-position, opacity;
+}
+
+@keyframes synara-working-icon-reflect {
+  0% {
+    background-position: 132% 0;
+    opacity: 0;
+    animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  4% {
+    background-position: 58% 0;
+    opacity: 0.88;
+  }
+
+  11% {
+    background-position: -70% 0;
+    opacity: 0.62;
+    animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  18% {
+    background-position: -82% 0;
+    opacity: 0;
+  }
+
+  58% {
+    background-position: -82% 0;
+    opacity: 0;
+    animation-timing-function: cubic-bezier(0.24, 0.86, 0.36, 1);
+  }
+
+  84% {
+    background-position: -14% 0;
+    opacity: 0.48;
+  }
+
+  94% {
+    background-position: 74% 0;
+    opacity: 0.82;
+  }
+
+  100% {
+    background-position: 132% 0;
+    opacity: 0;
+  }
+}
+
+@keyframes synara-working-text-reflect {
+  0% {
+    background-position: 132% 0;
+    opacity: 0;
+    animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  8% {
+    background-position: 124% 0;
+    opacity: 0;
+  }
+
+  18% {
+    background-position: 82% 0;
+    opacity: 0.72;
+  }
+
+  43% {
+    background-position: -78% 0;
+    opacity: 0.6;
+    animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  50% {
+    background-position: -74% 0;
+    opacity: 0;
+  }
+
+  58% {
+    background-position: -78% 0;
+    opacity: 0;
+    animation-timing-function: cubic-bezier(0.24, 0.86, 0.36, 1);
+  }
+
+  72% {
+    background-position: -26% 0;
+    opacity: 0.52;
+  }
+
+  94% {
+    background-position: 112% 0;
+    opacity: 0.62;
+  }
+
+  100% {
+    background-position: 132% 0;
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .synara-working-status__text-shimmer {
+    animation: none;
+    background: transparent;
+    will-change: auto;
+  }
+
+  .synara-working-loader__mark {
+    opacity: 0.68;
+  }
+
+  .synara-working-loader__mark::after {
+    animation: none;
+    opacity: 0;
+    will-change: auto;
+  }
+}
+
 /* Chat markdown rendering */
 .chat-markdown {
   min-width: 0;

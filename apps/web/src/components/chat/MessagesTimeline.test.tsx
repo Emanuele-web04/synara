@@ -1,4 +1,5 @@
 import { MessageId, TurnId } from "@t3tools/contracts";
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
@@ -919,7 +920,24 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Compacting conversation...");
     expect(markup).toContain("Working for");
+    expect(markup).toContain('data-synara-working-loader="true"');
+    expect(markup).toContain("synara-working-status__text-base");
+    expect(markup).toContain("synara-working-status__text-shimmer");
+    expect(markup).toContain('aria-hidden="true"');
     expect(markup).not.toContain("h-px flex-1 bg-border");
+  });
+
+  it("keeps the working loader glow clipped to the logo and text without hiding text", () => {
+    const css = readFileSync(new URL("../../index.css", import.meta.url), "utf8");
+
+    expect(css).toContain(".synara-working-loader__mark");
+    expect(css).toContain('mask: url("/synara-logo.svg") center / contain no-repeat;');
+    expect(css).toContain("overflow: hidden;");
+    expect(css).toContain(".synara-working-status__text-base");
+    expect(css).toContain(".synara-working-status__text-shimmer");
+    expect(css).toContain("@keyframes synara-working-icon-reflect");
+    expect(css).toContain("@keyframes synara-working-text-reflect");
+    expect(css).toContain("@media (prefers-reduced-motion: reduce)");
   });
 
   it("folds work log summaries above the next assistant message footer", async () => {
