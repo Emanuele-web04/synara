@@ -2,6 +2,7 @@ import { DEFAULT_MODEL_BY_PROVIDER, type ModelSelection } from "@t3tools/contrac
 import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 
 import type { Project } from "../types";
+import { buildChatWorkspaceFolderPath } from "./chatWorkspaceFolders";
 
 export interface FirstSendProjectTarget {
   targetProjectId: Project["id"];
@@ -14,6 +15,8 @@ export interface FirstSendProjectTarget {
 export interface FirstSendProjectCreation {
   workspaceRoot: string;
   title: string;
+  kind: Project["kind"];
+  createWorkspaceRootIfMissing: boolean;
   defaultModelSelection: ModelSelection;
 }
 
@@ -38,18 +41,60 @@ function buildProjectTitleFromWorkspaceRoot(workspaceRoot: string): string {
 
 export function resolveFirstSendTarget(input: {
   activeProject: Project;
+  chatWorkspaceRoot: string | null;
+  createdAt: Date;
   isFirstMessage: boolean;
   isHomeChatContainer: boolean;
   projects: readonly Project[];
   selectedWorkspaceRoot: string | null;
+  title: string;
+  titleSeed: string;
 }): FirstSendTargetResolution {
-  const { activeProject, isFirstMessage, isHomeChatContainer, projects, selectedWorkspaceRoot } =
-    input;
+  const {
+    activeProject,
+    chatWorkspaceRoot,
+    createdAt,
+    isFirstMessage,
+    isHomeChatContainer,
+    projects,
+    selectedWorkspaceRoot,
+    title,
+    titleSeed,
+  } = input;
 
-  if (!isFirstMessage || !isHomeChatContainer || !selectedWorkspaceRoot) {
+  if (!isFirstMessage || !isHomeChatContainer) {
     return {
       kind: "current",
       target: buildProjectTarget(activeProject),
+    };
+  }
+
+  // Folder mentions intentionally escape the generic-chat workspace and become normal projects.
+  if (!selectedWorkspaceRoot) {
+    if (!chatWorkspaceRoot) {
+      return {
+        kind: "current",
+        target: buildProjectTarget(activeProject),
+      };
+    }
+
+    return {
+      kind: "create-project",
+      creation: {
+        workspaceRoot: buildChatWorkspaceFolderPath({
+          chatWorkspaceRoot,
+          createdAt,
+          existingWorkspaceRoots: projects.map((project) => project.cwd),
+          titleSeed,
+        }),
+        title,
+        kind: "chat",
+        createWorkspaceRootIfMissing: true,
+        defaultModelSelection: {
+          provider: "codex",
+          model: DEFAULT_MODEL_BY_PROVIDER.codex,
+        },
+      },
     };
   }
 
@@ -69,6 +114,8 @@ export function resolveFirstSendTarget(input: {
     creation: {
       workspaceRoot: selectedWorkspaceRoot,
       title: buildProjectTitleFromWorkspaceRoot(selectedWorkspaceRoot),
+      kind: "project",
+      createWorkspaceRootIfMissing: false,
       defaultModelSelection: {
         provider: "codex",
         model: DEFAULT_MODEL_BY_PROVIDER.codex,
