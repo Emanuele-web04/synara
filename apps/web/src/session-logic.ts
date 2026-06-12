@@ -730,13 +730,29 @@ export function findSidebarProposedPlan(input: {
     }
   }
 
-  return findLatestProposedPlan(activeThreadPlans, input.latestTurn?.turnId ?? null);
+  return findLatestProposedPlan(
+    activeThreadPlans.filter((plan) => plan.implementedAt === null),
+    input.latestTurn?.turnId ?? null,
+  );
 }
 
 export function hasActionableProposedPlan(
   proposedPlan: LatestProposedPlanState | Pick<ProposedPlan, "implementedAt"> | null,
 ): boolean {
   return proposedPlan !== null && proposedPlan.implementedAt === null;
+}
+
+export function buildSourceProposedPlanReference(input: {
+  threadId: ThreadId;
+  proposedPlan: Pick<ProposedPlan, "id"> | null | undefined;
+}): OrchestrationLatestTurn["sourceProposedPlan"] | undefined {
+  if (!input.proposedPlan) {
+    return undefined;
+  }
+  return {
+    threadId: input.threadId,
+    planId: input.proposedPlan.id,
+  };
 }
 
 export function deriveWorkLogEntries(

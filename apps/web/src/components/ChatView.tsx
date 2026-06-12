@@ -175,6 +175,7 @@ import {
   findSidebarProposedPlan,
   findLatestProposedPlan,
   deriveWorkLogEntries,
+  buildSourceProposedPlanReference,
   hasActionableProposedPlan,
   hasLiveTurnTailWork,
   isProviderFileEditWorkLogEntry,
@@ -231,6 +232,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ComposerSendArrowIcon,
+  LayoutSidebarIcon,
   RefreshCwIcon,
   XIcon,
 } from "~/lib/icons";
@@ -1904,7 +1906,10 @@ export default function ChatView({
       sidebarPlanSourceThreadProposedPlans,
     ],
   );
-  const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
+  const planSidebarLabel = sidebarProposedPlan ? "Plan details" : "Tasks";
+  const planSidebarToggleLabel = planSidebarOpen ? `Hide ${planSidebarLabel}` : planSidebarLabel;
+  const planSidebarToggleTitle =
+    `${planSidebarOpen ? "Hide" : "Show"} ${planSidebarLabel.toLowerCase()} sidebar`;
   const [activeTaskListCardHeight, setActiveTaskListCardHeight] = useState(0);
   const activeTaskListCardRef = useRef<HTMLDivElement | null>(null);
   const previousActiveTaskListCardHeightRef = useRef(0);
@@ -3969,12 +3974,34 @@ export default function ChatView({
       if (isLocalDraftThread) {
         setDraftThreadContext(threadId, { interactionMode: mode });
       }
+      if (serverThread) {
+        const api = readNativeApi();
+        if (api) {
+          void api.orchestration
+            .dispatchCommand({
+              type: "thread.interaction-mode.set",
+              commandId: newCommandId(),
+              threadId,
+              interactionMode: mode,
+              createdAt: new Date().toISOString(),
+            })
+            .catch((error) => {
+              toastManager.add({
+                type: "error",
+                title: "Could not update plan mode",
+                description:
+                  error instanceof Error ? error.message : "An unexpected error occurred.",
+              });
+            });
+        }
+      }
       scheduleComposerFocus();
     },
     [
       interactionMode,
       isLocalDraftThread,
       scheduleComposerFocus,
+      serverThread,
       setComposerDraftInteractionMode,
       setDraftThreadContext,
       threadId,
@@ -5537,7 +5564,9 @@ export default function ChatView({
       assistantSelectionCount: composerAssistantSelectionsForSend.length,
       terminalContexts: composerTerminalContextsForSend,
     });
-    if (showPlanFollowUpPrompt && activeProposedPlan) {
+    // Queued chat turns already captured their intended mode; only live composer
+    // submissions should be interpreted as plan refinement/implementation.
+    if (queuedChatTurn === null && showPlanFollowUpPrompt && activeProposedPlan) {
       const followUp = resolvePlanFollowUpSubmission({
         draftText: trimmed,
         planMarkdown: activeProposedPlan.planMarkdown,
@@ -6387,6 +6416,13 @@ export default function ChatView({
       const providerOptionsForPlanDispatch =
         queuedTurn?.providerOptionsForDispatch ?? providerOptionsForDispatch;
       const modelSelectionForPlanDispatch = queuedTurn?.modelSelection ?? selectedModelSelection;
+      const sourceProposedPlan =
+        nextInteractionMode === "default"
+          ? buildSourceProposedPlanReference({
+              threadId: activeThread.id,
+              proposedPlan: activeProposedPlan,
+            })
+          : undefined;
       rememberCustomBinaryPathForDispatch({
         threadId: threadIdForSend,
         provider: modelSelectionForPlanDispatch.provider,
@@ -6412,14 +6448,7 @@ export default function ChatView({
         dispatchMode,
         runtimeMode: queuedTurn?.runtimeMode ?? runtimeMode,
         interactionMode: nextInteractionMode,
-        ...(nextInteractionMode === "default" && activeProposedPlan
-          ? {
-              sourceProposedPlan: {
-                threadId: activeThread.id,
-                planId: activeProposedPlan.id,
-              },
-            }
-          : {}),
+        ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         createdAt: messageCreatedAt,
       });
       // Optimistically open the plan sidebar when implementing (not refining).
@@ -6657,6 +6686,10 @@ export default function ChatView({
     });
     const nextThreadTitle = truncateTitle(buildPlanImplementationThreadTitle(planMarkdown));
     const nextThreadModelSelection: ModelSelection = selectedModelSelection;
+    const sourceProposedPlan = buildSourceProposedPlanReference({
+      threadId: activeThread.id,
+      proposedPlan: activeProposedPlan,
+    });
 
     sendInFlightRef.current = true;
     beginLocalDispatch();
@@ -6706,6 +6739,7 @@ export default function ChatView({
           dispatchMode: "queue",
           runtimeMode,
           interactionMode: "default",
+          ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
           createdAt,
         });
       })
@@ -8229,15 +8263,12 @@ export default function ChatView({
                               size="sm"
                               type="button"
                               onClick={togglePlanSidebar}
-                              title={
-                                planSidebarOpen
-                                  ? `Hide ${planSidebarLabel.toLowerCase()} sidebar`
-                                  : `Show ${planSidebarLabel.toLowerCase()} sidebar`
-                              }
+                              title={planSidebarToggleTitle}
+                              aria-label={planSidebarToggleTitle}
                             >
-                              <GoTasklist className="size-3.5" />
+                              <LayoutSidebarIcon className="size-3.5" />
                               <span className="sr-only sm:not-sr-only">
-                                {planSidebarOpen ? `Hide ${planSidebarLabel}` : planSidebarLabel}
+                                {planSidebarToggleLabel}
                               </span>
                             </Button>
                           ) : null}
