@@ -750,7 +750,10 @@ function shouldKeepActivityForWorkLog(
     return true;
   }
 
-  if (visibleTurnIds) {
+  // An empty set means the transcript has no turn-stamped assistant messages
+  // (e.g. providers that never supply turn ids); fall back to the legacy
+  // latest-turn filter instead of hiding the whole work log.
+  if (visibleTurnIds && visibleTurnIds.size > 0) {
     return activity.turnId !== null && visibleTurnIds.has(activity.turnId);
   }
 
