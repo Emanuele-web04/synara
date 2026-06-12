@@ -699,6 +699,19 @@ function makeAgentDir(agentDir: string | undefined): string {
   return trimToUndefined(agentDir) ?? getAgentDir();
 }
 
+// Keep discovery registries isolated so extension provider registrations reflect
+// the current agent dir + project cwd instead of stale state from prior listings.
+function createPiModelRegistry(agentDir: string): {
+  readonly authStorage: AuthStorage;
+  readonly registry: ModelRegistry;
+} {
+  const authStorage = AuthStorage.create(path.join(agentDir, "auth.json"));
+  return {
+    authStorage,
+    registry: ModelRegistry.create(authStorage, path.join(agentDir, "models.json")),
+  };
+}
+
 function extensionDisplayName(extension: {
   readonly path: string;
   readonly sourceInfo?: { readonly source?: string };
@@ -726,8 +739,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const getModelRegistry = (agentDir: string): ModelRegistry => {
       const existing = modelRegistries.get(agentDir);
       if (existing) return existing;
-      const authStorage = AuthStorage.create(path.join(agentDir, "auth.json"));
-      const registry = ModelRegistry.create(authStorage, path.join(agentDir, "models.json"));
+      const { registry } = createPiModelRegistry(agentDir);
       modelRegistries.set(agentDir, registry);
       return registry;
     };
@@ -1641,15 +1653,22 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       Effect.tryPromise({
         try: async () => {
           const agentDir = makeAgentDir(input.agentDir);
-          const registry = getModelRegistry(agentDir);
-          registry.refresh();
-          const models = registry.getAvailable().map((model) => {
+          const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
+          const { authStorage, registry } = createPiModelRegistry(agentDir);
+          const services = await createAgentSessionServices({
+            cwd,
+            agentDir,
+            authStorage,
+            modelRegistry: registry,
+          });
+          const extensionCount = services.resourceLoader.getExtensions().extensions.length;
+          const models = services.modelRegistry.getAvailable().map((model) => {
             const supportedThinkingOptions = getPiSupportedThinkingOptions(model);
             return {
               slug: `${model.provider}/${model.id}`,
               name: model.name,
               upstreamProviderId: model.provider,
-              upstreamProviderName: registry.getProviderDisplayName(model.provider),
+              upstreamProviderName: services.modelRegistry.getProviderDisplayName(model.provider),
               ...(supportedThinkingOptions.length > 0
                 ? {
                     supportedReasoningEfforts: supportedThinkingOptions.map((option) => ({
@@ -1666,7 +1685,11 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                 : {}),
             };
           });
-          return { models, source: "pi.sdk", cached: false } satisfies ProviderListModelsResult;
+          return {
+            models,
+            source: extensionCount > 0 ? "pi.sdk+extensions" : "pi.sdk",
+            cached: false,
+          } satisfies ProviderListModelsResult;
         },
         catch: (cause) =>
           new ProviderAdapterRequestError({

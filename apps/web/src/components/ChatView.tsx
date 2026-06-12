@@ -1363,6 +1363,7 @@ export default function ChatView({
   const featureFlags = useFeatureFlags();
   const showExpandedCursorModelVariants = featureFlags["show-expanded-cursor-model-variants"];
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
     const threadModelSelection = activeThread?.modelSelection ?? null;
     const projectModelSelection = activeProject?.defaultModelSelection ?? null;
@@ -1388,6 +1389,11 @@ export default function ChatView({
     activeThread?.modelSelection,
     composerDraft.modelSelectionByProvider,
   ]);
+  const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
+    activeThreadWorktreePath: resolvedThreadWorktreePath,
+    activeProjectCwd: activeProject?.cwd ?? null,
+    serverCwd: serverConfigQuery.data?.cwd ?? null,
+  });
   const claudeDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({ provider: "claudeAgent" }),
   );
@@ -1396,6 +1402,8 @@ export default function ChatView({
     selectedProvider === "opencode" || lockedProvider === "opencode" || isModelPickerOpen;
   const kiloModelDiscoveryEnabled =
     selectedProvider === "kilo" || lockedProvider === "kilo" || isModelPickerOpen;
+  const piModelDiscoveryEnabled =
+    selectedProvider === "pi" || lockedProvider === "pi" || isModelPickerOpen;
   const cursorDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "cursor",
@@ -1437,7 +1445,8 @@ export default function ChatView({
       provider: "pi",
       binaryPath: settings.piBinaryPath || null,
       agentDir: settings.piAgentDir || null,
-      enabled: selectedProvider === "pi" || lockedProvider === "pi" || isModelPickerOpen,
+      cwd: providerModelDiscoveryCwd,
+      enabled: piModelDiscoveryEnabled,
     }),
   );
   const claudeDynamicAgentsQuery = useQuery(
@@ -1475,6 +1484,13 @@ export default function ChatView({
     kiloModelDiscoveryEnabled &&
     !hasResolvedKiloModelDiscovery &&
     (kiloDynamicModelsQuery.isLoading || kiloDynamicModelsQuery.isFetching);
+  const hasResolvedPiModelDiscovery =
+    piDynamicModelsQuery.data?.source?.startsWith("pi.sdk") === true &&
+    (piDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const piModelDiscoveryPending =
+    piModelDiscoveryEnabled &&
+    !hasResolvedPiModelDiscovery &&
+    (piDynamicModelsQuery.isLoading || piDynamicModelsQuery.isFetching);
   const modelOptionsByProvider = useMemo(() => {
     const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
       codex: getAppModelOptions(
@@ -1669,18 +1685,22 @@ export default function ChatView({
       ? cursorModelDiscoveryPending
       : selectedProvider === "kilo"
         ? kiloModelDiscoveryPending
+        : selectedProvider === "pi"
+          ? piModelDiscoveryPending
         : selectedProviderModelsQuery !== undefined &&
           (selectedProviderModelsQuery.isLoading ||
             (selectedProviderModelsQuery.isFetching &&
               selectedProviderModelsQuery.data === undefined));
   const selectedProviderRequiresRuntimeModels =
-    selectedProvider === "cursor" || selectedProvider === "kilo";
+    selectedProvider === "cursor" || selectedProvider === "kilo" || selectedProvider === "pi";
   const selectedProviderRuntimeModelDiscoveryPending =
     selectedProvider === "cursor"
       ? cursorModelDiscoveryPending
       : selectedProvider === "kilo"
         ? kiloModelDiscoveryPending
-        : false;
+        : selectedProvider === "pi"
+          ? piModelDiscoveryPending
+          : false;
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
@@ -2415,7 +2435,6 @@ export default function ChatView({
   const isMentionTrigger = composerTriggerKind === "mention";
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
   const branchesQuery = useQuery(gitBranchesQueryOptions(gitBranchSourceCwd));
-  const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const localFolderBrowseRootPath = getLocalFolderBrowseRootPath(
     serverConfigQuery.data?.homeDir ?? null,
     isMacPlatform(platform),
@@ -2431,11 +2450,7 @@ export default function ChatView({
     (debouncerState) => ({ isPending: debouncerState.isPending }),
   );
   const effectiveMentionQuery = mentionTriggerQuery.length > 0 ? debouncedPathQuery : "";
-  const composerSkillCwd = resolveProviderDiscoveryCwd({
-    activeThreadWorktreePath: resolvedThreadWorktreePath,
-    activeProjectCwd: activeProject?.cwd ?? null,
-    serverCwd: serverConfigQuery.data?.cwd ?? null,
-  });
+  const composerSkillCwd = providerModelDiscoveryCwd;
   const providerComposerCapabilitiesQuery = useQuery(
     providerComposerCapabilitiesQueryOptions(selectedProvider),
   );
@@ -6924,6 +6939,7 @@ export default function ChatView({
         loadingModelProviders={{
           cursor: cursorModelDiscoveryPending,
           kilo: kiloModelDiscoveryPending,
+          pi: piModelDiscoveryPending,
         }}
         hiddenProviders={settings.hiddenProviders}
         providerOrder={settings.providerOrder}
@@ -6963,6 +6979,7 @@ export default function ChatView({
       loadingModelProviders={{
         cursor: cursorModelDiscoveryPending,
         kilo: kiloModelDiscoveryPending,
+        pi: piModelDiscoveryPending,
       }}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
