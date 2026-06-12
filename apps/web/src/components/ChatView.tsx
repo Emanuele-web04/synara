@@ -3108,6 +3108,15 @@ export default function ChatView({
     pendingComposerFocusRef.current = false;
     editor.focusAtEnd();
   }, [secondaryChromeReady]);
+  const toggleComposerFocus = useCallback(() => {
+    const editor = composerEditorRef.current;
+    if (secondaryChromeReady && editor?.isFocused()) {
+      pendingComposerFocusRef.current = false;
+      editor.blur();
+      return;
+    }
+    focusComposer();
+  }, [focusComposer, secondaryChromeReady]);
   const scheduleComposerFocus = useCallback(() => {
     pendingComposerFocusRef.current = true;
     window.requestAnimationFrame(() => {
@@ -4916,6 +4925,14 @@ export default function ChatView({
       });
       if (!command) return;
 
+      if (command === "composer.focus.toggle") {
+        if (isComposerApprovalState || isVoiceRecording || isVoiceTranscribing) return;
+        event.preventDefault();
+        event.stopPropagation();
+        toggleComposerFocus();
+        return;
+      }
+
       if (command === "modelPicker.toggle") {
         if (!composerPickerShortcutActive) return;
         event.preventDefault();
@@ -5094,6 +5111,7 @@ export default function ChatView({
     setTerminalWorkspaceTab,
     surfaceMode,
     scheduleComposerFocus,
+    toggleComposerFocus,
     toggleTerminalVisibility,
   ]);
 
