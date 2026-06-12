@@ -713,6 +713,7 @@ function createSnapshotWithSettledPlanAwaitingFollowUp(): OrchestrationReadModel
         ? {
             ...thread,
             interactionMode: "plan",
+            hasActionableProposedPlan: true,
             proposedPlans: [
               {
                 id: "plan-awaiting-follow-up",
@@ -3330,6 +3331,37 @@ describe("ChatView timeline estimator parity (full app)", () => {
           "plan",
         );
       });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("distinguishes plan mode from the plan details sidebar button", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithSettledPlanAwaitingFollowUp(),
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      const footer = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-chat-composer-footer="true"]'),
+        "Unable to find composer footer.",
+      );
+
+      await vi.waitFor(() => {
+        const buttonLabels = Array.from(footer.querySelectorAll("button"))
+          .map((button) => button.textContent?.trim() ?? "")
+          .filter(Boolean);
+
+        expect(buttonLabels.filter((label) => label === "Plan")).toHaveLength(1);
+        expect(buttonLabels).toContain("Plan details");
+        expect(document.querySelector('button[title="Show plan sidebar"]')).toBeNull();
+      });
+      await expect
+        .element(page.getByTitle("Plan mode — click to return to normal build mode"))
+        .toBeInTheDocument();
+      await expect.element(page.getByLabelText("Show plan details sidebar")).toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }

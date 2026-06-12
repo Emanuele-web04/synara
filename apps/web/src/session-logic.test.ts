@@ -8,6 +8,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  buildSourceProposedPlanReference,
   deriveActiveBackgroundTasksState,
   deriveActiveWorkStartedAt,
   deriveActiveTaskListState,
@@ -609,6 +610,29 @@ describe("hasActionableProposedPlan", () => {
   });
 });
 
+describe("buildSourceProposedPlanReference", () => {
+  it("returns source plan metadata for implementation turns", () => {
+    expect(
+      buildSourceProposedPlanReference({
+        threadId: ThreadId.makeUnsafe("thread-source"),
+        proposedPlan: { id: "plan-source" },
+      }),
+    ).toEqual({
+      threadId: ThreadId.makeUnsafe("thread-source"),
+      planId: "plan-source",
+    });
+  });
+
+  it("omits source plan metadata when no plan is active", () => {
+    expect(
+      buildSourceProposedPlanReference({
+        threadId: ThreadId.makeUnsafe("thread-source"),
+        proposedPlan: null,
+      }),
+    ).toBeUndefined();
+  });
+});
+
 describe("findSidebarProposedPlan", () => {
   it("prefers the running turn source proposed plan when available on the same thread", () => {
     expect(
@@ -703,6 +727,38 @@ describe("findSidebarProposedPlan", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
       })?.planMarkdown,
     ).toBe("# Latest");
+  });
+
+  it("hides implemented proposed plans once the implementation turn is settled", () => {
+    expect(
+      findSidebarProposedPlan({
+        threads: [
+          {
+            id: ThreadId.makeUnsafe("thread-1"),
+            proposedPlans: [
+              {
+                id: "plan-implemented",
+                turnId: TurnId.makeUnsafe("turn-plan"),
+                planMarkdown: "# Implemented",
+                implementedAt: "2026-02-23T00:00:05.000Z",
+                implementationThreadId: ThreadId.makeUnsafe("thread-1"),
+                createdAt: "2026-02-23T00:00:01.000Z",
+                updatedAt: "2026-02-23T00:00:05.000Z",
+              },
+            ],
+          },
+        ],
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-implementation"),
+          sourceProposedPlan: {
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            planId: "plan-implemented",
+          },
+        },
+        latestTurnSettled: true,
+        threadId: ThreadId.makeUnsafe("thread-1"),
+      }),
+    ).toBeNull();
   });
 });
 
