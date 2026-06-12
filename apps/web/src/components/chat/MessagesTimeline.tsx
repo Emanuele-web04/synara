@@ -1483,7 +1483,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         initialScrollAtEnd
         maintainScrollAtEnd={followLiveOutput}
         maintainScrollAtEndThreshold={0.1}
-        maintainVisibleContentPosition
+        {...(!followLiveOutput ? { maintainVisibleContentPosition: true } : {})}
         onClickCapture={onMessagesClickCapture}
         onMouseUp={onMessagesMouseUp}
         onPointerCancel={onMessagesPointerCancel}
