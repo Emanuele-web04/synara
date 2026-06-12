@@ -336,6 +336,31 @@ describe("derivePendingUserInputs", () => {
 
     expect(derivePendingUserInputs(activities)[0]?.questions[0]?.multiSelect).toBe(true);
   });
+
+  it("keeps text-only user-input questions so the composer can collect the answer", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "user-input-open-text",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        payload: {
+          requestId: "req-user-input-text-1",
+          questions: [
+            {
+              id: "input",
+              header: "Pi plugin",
+              question: "Type a response.",
+              options: [],
+            },
+          ],
+        },
+      }),
+    ];
+
+    expect(derivePendingUserInputs(activities)[0]?.questions[0]?.options).toEqual([]);
+  });
 });
 
 describe("deriveActiveTaskListState", () => {

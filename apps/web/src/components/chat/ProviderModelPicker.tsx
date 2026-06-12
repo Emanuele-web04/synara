@@ -373,7 +373,11 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
           />
         </MenuRadioGroup>
       ) : (
-        <div className="px-2 py-2 text-muted-foreground text-sm">No matches</div>
+        <div className="px-2 py-2 text-muted-foreground text-sm">
+          {provider === "pi" && normalizedModelSearchQuery.length === 0
+            ? "No Pi models found"
+            : "No matches"}
+        </div>
       );
 
     if (!shouldShowSearch) {

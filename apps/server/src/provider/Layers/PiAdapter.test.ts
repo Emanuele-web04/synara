@@ -5,7 +5,11 @@
 
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { getPiSupportedThinkingOptions } from "./PiAdapter";
+import {
+  getPiSupportedThinkingOptions,
+  makePiUserInputOptions,
+  PLAIN_PI_EXTENSION_THEME,
+} from "./PiAdapter";
 
 function makePiModel(input: {
   reasoning: boolean;
@@ -60,5 +64,24 @@ describe("getPiSupportedThinkingOptions", () => {
     );
 
     expect(options.map((option) => option.value)).toEqual(["minimal", "low", "medium", "high"]);
+  });
+});
+
+describe("Pi extension UI helpers", () => {
+  it("keeps original select values while showing normalized unique labels", () => {
+    const mappings = makePiUserInputOptions(["  OpenRouter  ", "", "OpenRouter"]);
+
+    expect(mappings.map((mapping) => mapping.value)).toEqual(["  OpenRouter  ", "", "OpenRouter"]);
+    expect(mappings.map((mapping) => mapping.option.label)).toEqual([
+      "OpenRouter",
+      "Option 2",
+      "OpenRouter (2)",
+    ]);
+  });
+
+  it("provides a no-color theme object for UI-gated extensions", () => {
+    expect(PLAIN_PI_EXTENSION_THEME.fg("accent", "ready")).toBe("ready");
+    expect(PLAIN_PI_EXTENSION_THEME.bold("done")).toBe("done");
+    expect(PLAIN_PI_EXTENSION_THEME.getThinkingBorderColor("medium")("thinking")).toBe("thinking");
   });
 });

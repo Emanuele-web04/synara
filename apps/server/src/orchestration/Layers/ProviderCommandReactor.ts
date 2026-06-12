@@ -1451,7 +1451,6 @@ const make = Effect.gen(function* () {
         ? "queue"
         : event.payload.dispatchMode;
     const editResendKey = editResendTurnStartKey(event.payload.threadId, event.payload.messageId);
-    const isEditResendTurn = editResendTurnStartKeys.has(editResendKey);
 
     yield* dispatchTurnForThread({
       threadId: event.payload.threadId,
@@ -1585,12 +1584,11 @@ const make = Effect.gen(function* () {
     event: Extract<ProviderIntentEvent, { type: "thread.approval-response-requested" }>,
   ) {
     const thread = yield* resolveThread(event.payload.threadId);
-    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
-    if (!thread || !providerThread) {
+    if (!thread) {
       return;
     }
-    const hasSession = providerThread.session && providerThread.session.status !== "stopped";
-    if (!hasSession) {
+    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
+    if (providerThread?.session?.status === "stopped") {
       return yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
         kind: "provider.approval.respond.failed",
@@ -1601,10 +1599,11 @@ const make = Effect.gen(function* () {
         requestId: event.payload.requestId,
       });
     }
+    const providerThreadId = providerThread?.id ?? event.payload.threadId;
 
     yield* providerService
       .respondToRequest({
-        threadId: providerThread.id,
+        threadId: providerThreadId,
         requestId: event.payload.requestId,
         decision: event.payload.decision,
       })
@@ -1633,12 +1632,11 @@ const make = Effect.gen(function* () {
     event: Extract<ProviderIntentEvent, { type: "thread.user-input-response-requested" }>,
   ) {
     const thread = yield* resolveThread(event.payload.threadId);
-    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
-    if (!thread || !providerThread) {
+    if (!thread) {
       return;
     }
-    const hasSession = providerThread.session && providerThread.session.status !== "stopped";
-    if (!hasSession) {
+    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
+    if (providerThread?.session?.status === "stopped") {
       return yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
         kind: "provider.user-input.respond.failed",
@@ -1649,10 +1647,11 @@ const make = Effect.gen(function* () {
         requestId: event.payload.requestId,
       });
     }
+    const providerThreadId = providerThread?.id ?? event.payload.threadId;
 
     yield* providerService
       .respondToUserInput({
-        threadId: providerThread.id,
+        threadId: providerThreadId,
         requestId: event.payload.requestId,
         answers: event.payload.answers,
       })
