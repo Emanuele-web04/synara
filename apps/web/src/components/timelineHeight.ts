@@ -6,7 +6,6 @@
 import type { TurnDiffFileChange } from "../types";
 import { DEFAULT_CHAT_FONT_SIZE_PX, normalizeChatFontSizePx } from "../appSettings";
 import { deriveDisplayedUserMessageState } from "../lib/terminalContext";
-import { buildTurnDiffTree, type TurnDiffTreeNode } from "../lib/turnDiffTree";
 import { buildInlineTerminalContextText } from "./chat/userMessageTerminalContexts";
 import { deriveUserMessagePreviewState } from "./chat/userMessagePreview";
 import {
@@ -37,8 +36,9 @@ const ASSISTANT_INLINE_CODE_WIDTH_MULTIPLIER = 1.2;
 const ASSISTANT_INLINE_CODE_WRAP_OVERHEAD_CHARS = 2;
 const INLINE_CODE_SPAN_REGEX = /`([^`\n]+)`/g;
 const TURN_DIFF_SUMMARY_CHROME_HEIGHT_PX = 76;
-const TURN_DIFF_TREE_ROW_HEIGHT_PX = 24;
-const TURN_DIFF_TREE_ROW_GAP_PX = 2;
+const TURN_DIFF_FILE_ROW_HEIGHT_PX = 36;
+const TURN_DIFF_FILE_LIST_TOGGLE_HEIGHT_PX = 34;
+const TURN_DIFF_MAX_VISIBLE_FILES = 5;
 const WORK_GROUP_CHROME_HEIGHT_PX = 24;
 const WORK_GROUP_HEADER_HEIGHT_PX = 20;
 const WORK_ENTRY_ROW_HEIGHT_PX = 30;
@@ -61,7 +61,7 @@ interface TimelineMessageHeightInput {
   attachments?: ReadonlyArray<{ id: string; type?: "image" | "assistant-selection" }>;
   dispatchMode?: "queue" | "steer";
   diffSummaryFiles?: ReadonlyArray<TurnDiffFileChange>;
-  diffSummaryAllDirectoriesExpanded?: boolean;
+  diffSummaryFileListExpanded?: boolean;
   inlineToolEntries?: ReadonlyArray<TimelineWorkEntryHeightInput>;
   inlineToolExpanded?: boolean;
 }
@@ -131,43 +131,32 @@ function estimateCharsPerLineForAssistant(
   );
 }
 
-// Count the tree rows the diff summary will render before ResizeObserver corrects the real size.
-function countVisibleTurnDiffTreeRows(
-  nodes: ReadonlyArray<TurnDiffTreeNode>,
-  allDirectoriesExpanded: boolean,
-): number {
-  let count = 0;
-  for (const node of nodes) {
-    count += 1;
-    if (allDirectoriesExpanded && node.kind === "directory") {
-      count += countVisibleTurnDiffTreeRows(node.children, allDirectoriesExpanded);
-    }
-  }
-  return count;
-}
-
 export function estimateChangedFilesSummaryHeight(
   files: ReadonlyArray<TurnDiffFileChange>,
-  allDirectoriesExpanded = true,
+  fileListExpanded = false,
 ): number {
   if (files.length === 0) return 0;
 
-  const cacheKey = allDirectoriesExpanded ? "expanded" : "collapsed";
+  const cacheKey = fileListExpanded ? "expanded" : "collapsed";
   const cachedHeights = changedFilesSummaryHeightCache.get(files);
   const cachedHeight = cachedHeights?.[cacheKey];
   if (typeof cachedHeight === "number") {
     return cachedHeight;
   }
 
-  const visibleRowCount = countVisibleTurnDiffTreeRows(
-    buildTurnDiffTree(files),
-    allDirectoriesExpanded,
-  );
+  // The changed-files card renders a flat list with a five-file collapsed cap.
+  const visibleRowCount = fileListExpanded
+    ? files.length
+    : Math.min(files.length, TURN_DIFF_MAX_VISIBLE_FILES);
+  const toggleHeight =
+    !fileListExpanded && files.length > TURN_DIFF_MAX_VISIBLE_FILES
+      ? TURN_DIFF_FILE_LIST_TOGGLE_HEIGHT_PX
+      : 0;
 
   const height =
     TURN_DIFF_SUMMARY_CHROME_HEIGHT_PX +
-    visibleRowCount * TURN_DIFF_TREE_ROW_HEIGHT_PX +
-    Math.max(visibleRowCount - 1, 0) * TURN_DIFF_TREE_ROW_GAP_PX;
+    visibleRowCount * TURN_DIFF_FILE_ROW_HEIGHT_PX +
+    toggleHeight;
   changedFilesSummaryHeightCache.set(files, {
     ...cachedHeights,
     [cacheKey]: height,
@@ -264,7 +253,7 @@ export function estimateTimelineMessageHeight(
     );
     const changedFilesHeight = estimateChangedFilesSummaryHeight(
       message.diffSummaryFiles ?? [],
-      message.diffSummaryAllDirectoriesExpanded ?? true,
+      message.diffSummaryFileListExpanded ?? false,
     );
     const inlineToolPreviewHeight = estimateTimelineInlineToolPreviewHeight(
       message.inlineToolEntries ?? [],

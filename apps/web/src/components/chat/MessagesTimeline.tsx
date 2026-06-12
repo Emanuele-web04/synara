@@ -57,7 +57,6 @@ import {
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
-import { ChangedFilesTree } from "./ChangedFilesTree";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { ReviewChangesButton } from "./ReviewChangesButton";
 import { FileEntryIcon } from "./FileEntryIcon";
@@ -1006,12 +1005,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             hasGenericInlineFileChangeEntry && (turnSummary?.files.length ?? 0) > 0
               ? turnSummary!.files
               : [];
-          const inlineFileChangeDetailsAlreadyVisible =
-            inlineEditedFilesFromTurnSummary.length > 0 ||
-            visibleRenderableInlineToolEntries.some(
-              (workEntry) =>
-                isFileChangeWorkEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) > 0,
-            );
           const assistantMeta = [
             formatShortTimestamp(row.message.createdAt, timestampFormat),
             inlineWorkSummary,
@@ -1372,49 +1365,33 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         </div>
                       </div>
                       <DisclosureRegion open={fileChangesExpanded}>
-                        {inlineFileChangeDetailsAlreadyVisible ? (
-                          <div className="px-3 py-2">
-                            <ChangedFilesTree
-                              turnId={turnSummary.turnId}
-                              files={checkpointFiles}
-                              allDirectoriesExpanded
-                              resolvedTheme={resolvedTheme}
-                              onOpenTurnDiff={onOpenTurnDiff}
-                            />
-                          </div>
-                        ) : (
-                          <>
-                            {firstCheckpointFiles.map((file) =>
-                              renderCheckpointFileRow(file, true),
+                        {firstCheckpointFiles.map((file) => renderCheckpointFileRow(file, true))}
+                        {overflowCheckpointFiles.length > 0 ? (
+                          <DisclosureRegion open={fileListExpanded}>
+                            {overflowCheckpointFiles.map((file) =>
+                              renderCheckpointFileRow(file, false),
                             )}
-                            {overflowCheckpointFiles.length > 0 ? (
-                              <DisclosureRegion open={fileListExpanded}>
-                                {overflowCheckpointFiles.map((file) =>
-                                  renderCheckpointFileRow(file, false),
-                                )}
-                              </DisclosureRegion>
-                            ) : null}
-                            {overflowCheckpointFiles.length > 0 ? (
-                              <button
-                                type="button"
-                                className="flex w-full items-center justify-start gap-1.5 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2 font-system-ui font-normal text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground"
-                                style={{ fontSize: chatTypographyStyle.fontSize }}
-                                aria-expanded={fileListExpanded}
-                                onClick={() => toggleFileListExpanded(turnSummary.turnId)}
-                              >
-                                <DisclosureChevron open={fileListExpanded} />
-                                <span>
-                                  {fileListExpanded
-                                    ? "Show less"
-                                    : `Show ${overflowCheckpointFiles.length} more ${pluralize(
-                                        overflowCheckpointFiles.length,
-                                        "file",
-                                      )}`}
-                                </span>
-                              </button>
-                            ) : null}
-                          </>
-                        )}
+                          </DisclosureRegion>
+                        ) : null}
+                        {overflowCheckpointFiles.length > 0 ? (
+                          <button
+                            type="button"
+                            className="flex w-full items-center justify-start gap-1.5 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2 font-system-ui font-normal text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground"
+                            style={{ fontSize: chatTypographyStyle.fontSize }}
+                            aria-expanded={fileListExpanded}
+                            onClick={() => toggleFileListExpanded(turnSummary.turnId)}
+                          >
+                            <DisclosureChevron open={fileListExpanded} />
+                            <span>
+                              {fileListExpanded
+                                ? "Show less"
+                                : `Show ${overflowCheckpointFiles.length} more ${pluralize(
+                                    overflowCheckpointFiles.length,
+                                    "file",
+                                  )}`}
+                            </span>
+                          </button>
+                        ) : null}
                       </DisclosureRegion>
                     </div>
                   );

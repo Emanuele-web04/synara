@@ -171,6 +171,53 @@ describe("AcpSessionRuntime", () => {
     ),
   );
 
+  it.effect("preserves upstream assistant message ids across ACP tool-call segments", () =>
+    Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      yield* runtime.start();
+
+      const promptResult = yield* runtime.prompt({
+        prompt: [{ type: "text", text: "hi" }],
+      });
+      expect(promptResult).toMatchObject({ stopReason: "end_turn" });
+
+      const notes = Array.from(yield* Stream.runCollect(Stream.take(runtime.getEvents(), 11)));
+      const contentDeltas = notes.filter((note) => note._tag === "ContentDelta");
+      expect(contentDeltas.map((note) => note.itemId)).toEqual([
+        "upstream-answer",
+        "upstream-answer",
+        "upstream-followup",
+      ]);
+      expect(contentDeltas.map((note) => note.text)).toEqual([
+        "before tool",
+        " after tool",
+        "separate answer",
+      ]);
+      expect(
+        notes
+          .filter((note) => note._tag === "AssistantItemStarted")
+          .map((note) => note.itemId),
+      ).toEqual(["upstream-answer", "upstream-answer", "upstream-followup"]);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: [mockAgentPath],
+            env: {
+              T3_ACP_EMIT_UPSTREAM_ASSISTANT_MESSAGE_IDS: "1",
+            },
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          authMethodId: "test",
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
   it.effect("emits generic placeholder tool lifecycle updates", () =>
     Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime;

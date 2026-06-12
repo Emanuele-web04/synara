@@ -2029,6 +2029,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("+1");
     expect(markup).toContain("-1");
     expect(markup).toContain("+2");
+    expect(markup).not.toContain(">apps/web/src/components/chat<");
   });
 
   it("renders inline edited rows from the turn summary when the file-change tool call has no filenames", async () => {
