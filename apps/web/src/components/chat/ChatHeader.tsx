@@ -86,7 +86,7 @@ interface ChatHeaderProps {
   hideSidebarControls?: boolean;
   hideHandoffControls?: boolean;
   isGitRepo: boolean;
-  openInCwd: string | null;
+  openInTarget: string | null;
   activeProjectScripts: ProjectScript[] | undefined;
   preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
@@ -487,7 +487,7 @@ export const ChatHeader = memo(function ChatHeader({
   hideSidebarControls = false,
   hideHandoffControls = false,
   isGitRepo,
-  openInCwd,
+  openInTarget,
   activeProjectScripts,
   preferredScriptId,
   keybindings,
@@ -538,7 +538,7 @@ export const ChatHeader = memo(function ChatHeader({
   useOpenFavoriteEditorShortcut({
     keybindings,
     availableEditors,
-    openInCwd,
+    openInTarget,
     enabled: !isDisposableThread && Boolean(activeProjectName),
   });
 
@@ -849,7 +849,7 @@ export const ChatHeader = memo(function ChatHeader({
               <OpenInPicker
                 keybindings={keybindings}
                 availableEditors={availableEditors}
-                openInCwd={openInCwd}
+                openInTarget={openInTarget}
                 {...(activeProjectScripts
                   ? { onAddAction: () => setOpenAddActionNonce((current) => current + 1) }
                   : {})}

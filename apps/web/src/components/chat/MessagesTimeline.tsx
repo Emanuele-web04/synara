@@ -77,6 +77,7 @@ import {
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
 import { deriveInlineCommandCall } from "../../lib/toolCallLabel";
+import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
 import { isAgentActivityWorkEntry } from "./agentActivity.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
@@ -2267,6 +2268,22 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const openAgentActivity = canOpenAgentActivity
     ? () => onOpenAgentActivity?.(workEntry.id)
     : undefined;
+  // File-read rows open the referenced file in the in-app viewer when the
+  // hosting surface provides an opener (right-dock file pane / editor pane).
+  const opener = useWorkspaceFileOpener();
+  const readFilePath =
+    opener !== null &&
+    !canOpenAgentActivity &&
+    workEntry.detail &&
+    (workEntry.requestKind === "file-read" || isFileReadToolEntry(workEntry))
+      ? extractFilePathFromDetail(workEntry.detail)
+      : null;
+  const canOpenReadFile = readFilePath !== null;
+  const openReadFile = readFilePath
+    ? () => openWorkspaceFileReference(opener, readFilePath)
+    : undefined;
+  const prefetchReadFile =
+    readFilePath && opener?.prefetchFile ? () => opener.prefetchFile?.(readFilePath) : undefined;
 
   // Use the text font size (matching the UI settings) for tool call rows
   const rowFontSizePx = textFontSizePx;
@@ -2523,10 +2540,11 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           );
           const rowContent = (
             <AgentActivityOpenSurface
-              canOpen={canOpenAgentActivity}
+              canOpen={canOpenAgentActivity || canOpenReadFile}
               compact={compact}
-              title={hoverText}
-              onOpen={openAgentActivity}
+              title={canOpenReadFile ? (readFilePath ?? hoverText) : hoverText}
+              onOpen={openAgentActivity ?? openReadFile}
+              onHover={prefetchReadFile}
             >
               {rowContentChildren}
             </AgentActivityOpenSurface>
@@ -2554,6 +2572,8 @@ function AgentActivityOpenSurface(props: {
   canOpen: boolean;
   children: ReactNode;
   compact: boolean;
+  /** Warm-up hook fired on hover/focus so opening feels instant. */
+  onHover?: (() => void) | undefined;
   onOpen?: (() => void) | undefined;
   title?: string | undefined;
 }) {
@@ -2567,7 +2587,13 @@ function AgentActivityOpenSurface(props: {
 
   if (props.canOpen) {
     return (
-      <button type="button" className={className} title={props.title} onClick={props.onOpen}>
+      <button
+        type="button"
+        className={className}
+        title={props.title}
+        onClick={props.onOpen}
+        {...(props.onHover ? { onPointerEnter: props.onHover, onFocus: props.onHover } : {})}
+      >
         {props.children}
       </button>
     );

@@ -1,7 +1,7 @@
 // FILE: useEditorLaunchers.ts
 // Purpose: Editor-launch logic shared by the chat-header "Open in" split button and the
 //          Environment panel "Editor" section — resolves installed editors, tracks the
-//          preferred one, and opens the project in an editor. The global open-favorite
+//          preferred one, and opens the requested target path in an editor. The global open-favorite
 //          shortcut lives in useOpenFavoriteEditorShortcut so it survives whether or not
 //          these surfaces are mounted. Rendering is left entirely to the call sites.
 // Layer: Chat editor action hook
@@ -25,18 +25,18 @@ export interface EditorLaunchers {
   openFavoriteShortcutLabel: string | null;
   /** Persist the editor used by primary open actions and the global shortcut. */
   setDefaultEditor: (editorId: EditorId) => void;
-  /** Open the project cwd in the given editor (or the preferred one when null). */
+  /** Open the requested target path in the given editor (or the preferred one when null). */
   openInEditor: (editorId: EditorId | null) => void;
 }
 
 export function useEditorLaunchers({
   keybindings,
   availableEditors,
-  openInCwd,
+  openInTarget,
 }: {
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
-  openInCwd: string | null;
+  openInTarget: string | null;
 }): EditorLaunchers {
   const [preferredEditor, setPreferredEditor] = usePreferredEditor(availableEditors);
   const options = useMemo(
@@ -54,13 +54,13 @@ export function useEditorLaunchers({
   const openInEditor = useCallback(
     (editorId: EditorId | null) => {
       const api = readNativeApi();
-      if (!api || !openInCwd) return;
+      if (!api || !openInTarget) return;
       const editor = editorId ?? preferredEditor;
       if (!editor) return;
-      void api.shell.openInEditor(openInCwd, editor);
+      void api.shell.openInEditor(openInTarget, editor);
       setDefaultEditor(editor);
     },
-    [preferredEditor, openInCwd, setDefaultEditor],
+    [preferredEditor, openInTarget, setDefaultEditor],
   );
 
   const openFavoriteShortcutLabel = useMemo(

@@ -27,7 +27,6 @@ import { defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import { openInPreferredEditor } from "../editorPreferences";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeFence";
@@ -35,8 +34,8 @@ import { getFileIconName, pathLooksLikeKnownFile } from "../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
 import { useTheme } from "../hooks/useTheme";
+import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
 import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
-import { readNativeApi } from "../nativeApi";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
 import {
@@ -88,6 +87,36 @@ interface ChatMarkdownProps {
   style?: CSSProperties | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
   markers?: readonly ThreadMarker[] | undefined;
+  /**
+   * Makes GFM task-list checkboxes interactive. Receives the 1-based line of
+   * the task item in `text` so the caller can flip that `[ ]` marker at the
+   * source (line numbers stay valid because the internal dollar protection is
+   * length- and newline-preserving). Without it checkboxes render read-only.
+   */
+  onTaskToggle?: ((input: { sourceLine: number; checked: boolean }) => void) | undefined;
+}
+
+// Source line of the enclosing task-list item, provided by the `li` override.
+// The checkbox `input` element is synthesized by mdast-util-to-hast without
+// position info, so it cannot read its own source location.
+const TaskItemSourceLineContext = React.createContext<number | null>(null);
+
+function MarkdownTaskCheckbox(props: {
+  checked: boolean;
+  onTaskToggle: ChatMarkdownProps["onTaskToggle"];
+}) {
+  const { checked, onTaskToggle } = props;
+  const sourceLine = React.useContext(TaskItemSourceLineContext);
+  const interactive = onTaskToggle !== undefined && sourceLine !== null;
+  return (
+    <input
+      type="checkbox"
+      className="chat-markdown-task-checkbox"
+      checked={checked}
+      disabled={!interactive}
+      {...(interactive ? { onChange: () => onTaskToggle({ sourceLine, checked: !checked }) } : {})}
+    />
+  );
 }
 
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
@@ -692,15 +721,17 @@ function inlineCodeFilePath(raw: string): string | null {
 
 // Shared openable file chip: the same mention-chip UI (file icon + medium label)
 // used for both assistant markdown file links and inline code that names a file.
-// Keeps the file openable in the preferred editor while looking like a composer
-// mention. `targetPath` may carry a `:line` suffix (used to open); the chip icon
-// and title use the position-free path.
+// A plain click prefers the surface's in-app viewer (right-dock file pane);
+// meta/ctrl-click — or a surface without a viewer — opens the preferred
+// external editor. `targetPath` may carry a `:line` suffix (used to open); the
+// chip icon and title use the position-free path.
 function OpenableFileChip(props: {
   targetPath: string;
   theme: "light" | "dark";
   label?: ReactNode;
   href?: string;
 }) {
+  const opener = useWorkspaceFileOpener();
   const chipPath = props.targetPath.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
   return (
     <InlineMentionChip
@@ -710,13 +741,12 @@ function OpenableFileChip(props: {
       onActivate={(event) => {
         event.preventDefault();
         event.stopPropagation();
-        const api = readNativeApi();
-        if (api) {
-          void openInPreferredEditor(api, props.targetPath);
-        } else {
-          console.warn("Native API not found. Unable to open file in editor.");
-        }
+        const forceExternalEditor = event.metaKey || event.ctrlKey;
+        openWorkspaceFileReference(forceExternalEditor ? null : opener, props.targetPath);
       }}
+      {...(opener?.prefetchFile
+        ? { onHoverPrefetch: () => opener.prefetchFile?.(props.targetPath) }
+        : {})}
       {...(props.label !== undefined ? { label: props.label } : {})}
     />
   );
@@ -924,6 +954,7 @@ function ChatMarkdown({
   style,
   onImageExpand,
   markers,
+  onTaskToggle,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
@@ -1044,8 +1075,32 @@ function ChatMarkdown({
         }
         return <img {...props} src={restoredSrc} alt={alt} loading="lazy" />;
       },
+      li({ node, children, ...props }) {
+        // Task items carry their source line down to the checkbox via context.
+        const isTaskItem =
+          typeof props.className === "string" && props.className.includes("task-list-item");
+        const sourceLine = node?.position?.start.line ?? null;
+        if (!isTaskItem || sourceLine === null) {
+          return <li {...props}>{children}</li>;
+        }
+        return (
+          <li {...props}>
+            <TaskItemSourceLineContext.Provider value={sourceLine}>
+              {children}
+            </TaskItemSourceLineContext.Provider>
+          </li>
+        );
+      },
+      input({ node: _node, ...props }) {
+        if (props.type === "checkbox") {
+          return (
+            <MarkdownTaskCheckbox checked={props.checked === true} onTaskToggle={onTaskToggle} />
+          );
+        }
+        return <input {...props} />;
+      },
     }),
-    [cwd, diffThemeName, isStreaming, onImageExpand, resolvedTheme],
+    [cwd, diffThemeName, isStreaming, onImageExpand, onTaskToggle, resolvedTheme],
   );
 
   return (

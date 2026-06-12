@@ -24,12 +24,12 @@ import {
 export function EnvironmentEditorSection({
   keybindings,
   availableEditors,
-  openInCwd,
+  openInTarget,
   onOpenEditorView,
 }: {
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
-  openInCwd: string | null;
+  openInTarget: string | null;
   /** Open the in-app editor workspace view; omitted on surfaces that can't host it. */
   onOpenEditorView?: () => void;
 }) {
@@ -43,7 +43,7 @@ export function EnvironmentEditorSection({
   } = useEditorLaunchers({
     keybindings,
     availableEditors,
-    openInCwd,
+    openInTarget,
   });
 
   // Render the section whenever there is at least one entry to show — the in-app
@@ -67,7 +67,7 @@ export function EnvironmentEditorSection({
       {options.length === 0 ? null : (
         <Menu>
           <MenuTrigger
-            disabled={!openInCwd}
+            disabled={!openInTarget}
             render={<button type="button" className={ENVIRONMENT_ROW_CLASS_NAME} />}
           >
             <EnvironmentRowBody

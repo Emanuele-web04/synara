@@ -220,14 +220,14 @@ describe("EditorWorkspaceView", () => {
     expect(markup).not.toContain("editor-file-viewer__highlight");
   });
 
-  it("shows a Markdown preview toggle for Markdown files", () => {
+  it("shows the file-preview path breadcrumb and overflow menu for Markdown files", () => {
     const queryClient = new QueryClient();
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
         <EditorWorkspaceView
           workspaceRoot="/Users/tester/project"
           projectName="project"
-          selectedFilePath="README.md"
+          selectedFilePath="docs/README.md"
           expandedDirectories={new Set()}
           centerMode="file"
           diffFiles={[]}
@@ -243,8 +243,12 @@ describe("EditorWorkspaceView", () => {
       </QueryClientProvider>,
     );
 
-    expect(markup).toContain('aria-label="Show Markdown preview"');
-    expect(markup).toContain('aria-pressed="false"');
+    // The header renders a path breadcrumb (project › …dirs › file).
+    expect(markup).toContain('aria-label="File path"');
+    expect(markup).toContain("README.md");
+    // Markdown files surface their source/rendered toggle inside the overflow
+    // menu, whose trigger is always rendered.
+    expect(markup).toContain('aria-label="More actions"');
   });
 
   it("renders a search item in the activity bar below files and diff", () => {

@@ -3,13 +3,16 @@
 //          the timeline user-message echo, the assistant markdown view, and
 //          openable file links, so a referenced path reads identically to a
 //          composer mention. Supports a static (span) and an interactive
-//          (anchor) variant so the same UI can stay clickable.
+//          (anchor) variant so the same UI can stay clickable. File-like chips
+//          without an explicit handler become openable automatically when a
+//          surface provides a workspace file opener (right-dock file pane).
 // Layer: UI shared component
 // Exports: InlineMentionChip
 
 import { memo, type MouseEvent, type ReactNode } from "react";
 import type { ProviderMentionReference } from "@t3tools/contracts";
-import { basenameOfPath } from "~/file-icons";
+import { basenameOfPath, pathLooksLikeKnownFile } from "~/file-icons";
+import { openWorkspaceFileReference, useWorkspaceFileOpener } from "~/lib/workspaceFileOpener";
 import {
   COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME,
   COMPOSER_INLINE_MENTION_CHIP_INTERACTIVE_CLASS_NAME,
@@ -27,9 +30,12 @@ interface InlineMentionChipProps {
   /** When set, the chip renders as an openable anchor instead of a static span. */
   href?: string;
   onActivate?: (event: MouseEvent<HTMLAnchorElement>) => void;
+  /** Warm-up hook fired on hover/focus so activating the chip feels instant. */
+  onHoverPrefetch?: (() => void) | undefined;
 }
 
 export const InlineMentionChip = memo(function InlineMentionChip(props: InlineMentionChipProps) {
+  const opener = useWorkspaceFileOpener();
   const label = props.label ?? basenameOfPath(props.path);
   const inner = (
     <InlineChipContent
@@ -45,13 +51,41 @@ export const InlineMentionChip = memo(function InlineMentionChip(props: InlineMe
     />
   );
 
-  if (props.href !== undefined || props.onActivate) {
+  // A plain file chip (no explicit href/handler) still opens in the in-app
+  // viewer when the hosting surface provides one, so every file reference in
+  // the chat stays clickable. Plugin chips and non-file paths stay static.
+  const contextOpenable =
+    props.href === undefined &&
+    props.onActivate === undefined &&
+    opener !== null &&
+    (props.kind === undefined || props.kind === "path") &&
+    pathLooksLikeKnownFile(props.path);
+
+  if (props.href !== undefined || props.onActivate || contextOpenable) {
+    const href = props.href ?? (contextOpenable ? props.path : undefined);
+    const handleActivate =
+      props.onActivate ??
+      (contextOpenable
+        ? (event: MouseEvent<HTMLAnchorElement>) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openWorkspaceFileReference(opener, props.path);
+          }
+        : undefined);
+    const handleHoverPrefetch =
+      props.onHoverPrefetch ??
+      (contextOpenable && opener?.prefetchFile
+        ? () => opener.prefetchFile?.(props.path)
+        : undefined);
     return (
       <a
         className={COMPOSER_INLINE_MENTION_CHIP_INTERACTIVE_CLASS_NAME}
         title={props.path}
-        {...(props.href !== undefined ? { href: props.href } : {})}
-        {...(props.onActivate ? { onClick: props.onActivate } : {})}
+        {...(href !== undefined ? { href } : {})}
+        {...(handleActivate ? { onClick: handleActivate } : {})}
+        {...(handleHoverPrefetch
+          ? { onPointerEnter: handleHoverPrefetch, onFocus: handleHoverPrefetch }
+          : {})}
       >
         {inner}
       </a>

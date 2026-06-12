@@ -70,7 +70,7 @@ export interface EnvironmentPanelProps {
    */
   variant: "docked" | "floating";
   gitCwd: string | null;
-  openInCwd: string | null;
+  openInTarget: string | null;
   githubRepository?: {
     readonly nameWithOwner: string;
     readonly url: string;
@@ -169,7 +169,7 @@ export function EnvironmentPanel({
   open,
   variant,
   gitCwd,
-  openInCwd,
+  openInTarget,
   githubRepository = null,
   isGitRepo,
   keybindings,
@@ -209,7 +209,7 @@ export function EnvironmentPanel({
   // (so an open diff stays toggleable closed even when there are no pending changes).
   const changesDisabled = diffDisabledReason !== null && !diffOpen;
   const showRecap = Boolean(recap?.text) || recap?.status === "pending";
-  const markdownCwd = openInCwd ?? gitCwd ?? undefined;
+  const markdownCwd = openInTarget ?? gitCwd ?? undefined;
 
   const content = (
     <div className="flex flex-col gap-0.5 p-1.5">
@@ -282,7 +282,7 @@ export function EnvironmentPanel({
         <EnvironmentEditorSection
           keybindings={keybindings}
           availableEditors={availableEditors}
-          openInCwd={openInCwd}
+          openInTarget={openInTarget}
           {...(onOpenEditorView
             ? {
                 onOpenEditorView: () => {

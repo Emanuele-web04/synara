@@ -1,5 +1,5 @@
 // FILE: OpenInPicker.tsx
-// Purpose: Render the chat header "Open In" controls for the currently active project.
+// Purpose: Render the chat/file header "Open In" controls for the active editor target.
 // Layer: Chat header action
 // Depends on: shared editor metadata, native shell bridge, and preferred editor state.
 
@@ -7,6 +7,7 @@ import { type EditorId, type ResolvedKeybindingsConfig } from "@t3tools/contract
 import { memo } from "react";
 import { useEditorLaunchers } from "~/hooks/useEditorLaunchers";
 import { ChevronDownIcon, PlusIcon } from "~/lib/icons";
+import { cn } from "~/lib/utils";
 import {
   Menu,
   MenuItem,
@@ -29,14 +30,21 @@ import {
 export const OpenInPicker = memo(function OpenInPicker({
   keybindings,
   availableEditors,
-  openInCwd,
+  openInTarget,
   onAddAction,
+  labelMode = "responsive",
 }: {
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
-  openInCwd: string | null;
+  openInTarget: string | null;
   // Optional project "Add action" entry rendered at the bottom of the editor menu.
   onAddAction?: () => void;
+  // "responsive" (default) hides the "Open" label until the `header-actions`
+  // container is wide enough; "always" keeps it visible regardless. Surfaces
+  // without that container (e.g. the file-preview header) pass "always" so the
+  // label shows without needing an inline-size container that would collapse
+  // the control's own width.
+  labelMode?: "responsive" | "always";
 }) {
   const {
     options,
@@ -45,18 +53,25 @@ export const OpenInPicker = memo(function OpenInPicker({
     openFavoriteShortcutLabel,
     setDefaultEditor,
     openInEditor,
-  } = useEditorLaunchers({ keybindings, availableEditors, openInCwd });
+  } = useEditorLaunchers({ keybindings, availableEditors, openInTarget });
 
   return (
     <ChatHeaderSplitGroup label="Open in editor">
       <ChatHeaderButton
         tone="outline"
         className={CHAT_HEADER_SPLIT_LEADING_CLASS_NAME}
-        disabled={!preferredEditor || !openInCwd}
+        disabled={!preferredEditor || !openInTarget}
         onClick={() => openInEditor(preferredEditor)}
       >
         {primaryOption?.Icon && <primaryOption.Icon aria-hidden="true" className="size-3.5" />}
-        <span className="sr-only font-normal @sm/header-actions:not-sr-only @sm/header-actions:ml-0.5">
+        <span
+          className={cn(
+            "font-normal",
+            labelMode === "always"
+              ? "ml-0.5"
+              : "sr-only @sm/header-actions:not-sr-only @sm/header-actions:ml-0.5",
+          )}
+        >
           Open
         </span>
       </ChatHeaderButton>
