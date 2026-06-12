@@ -2388,6 +2388,41 @@ describe("deriveTimelineEntries", () => {
     });
   });
 
+  it("keeps timestamp ties in message, proposed-plan, then work order", () => {
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("message-same-time"),
+          role: "assistant",
+          text: "same time",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          streaming: false,
+        },
+      ],
+      [
+        {
+          id: "plan:thread-1:turn:turn-same-time",
+          turnId: TurnId.makeUnsafe("turn-same-time"),
+          planMarkdown: "# Same time",
+          implementedAt: null,
+          implementationThreadId: null,
+          createdAt: "2026-02-23T00:00:01.000Z",
+          updatedAt: "2026-02-23T00:00:01.000Z",
+        },
+      ],
+      [
+        {
+          id: "work-same-time",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          label: "Ran command",
+          tone: "tool",
+        },
+      ],
+    );
+
+    expect(entries.map((entry) => entry.kind)).toEqual(["message", "proposed-plan", "work"]);
+  });
+
   it("hides tagged plan markdown from the assistant row when a proposed plan exists", () => {
     const entries = deriveTimelineEntries(
       [

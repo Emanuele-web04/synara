@@ -134,15 +134,26 @@ export function createAllThreadsMessagelessSelector(): (state: AppState) => bool
 export function createThreadProjectIdSelector(
   threadId: ThreadId | null | undefined,
 ): (state: AppState) => ProjectId | null {
-  const selectThread = createThreadSelector(threadId);
-  return (state) => selectThread(state)?.projectId ?? null;
+  return (state) => {
+    if (!threadId) {
+      return null;
+    }
+    return (
+      state.threadShellById?.[threadId]?.projectId ??
+      state.threads.find((thread) => thread.id === threadId)?.projectId ??
+      null
+    );
+  };
 }
 
 export function createThreadExistsSelector(
   threadId: ThreadId | null | undefined,
 ): (state: AppState) => boolean {
-  const selectThread = createThreadSelector(threadId);
-  return (state) => selectThread(state) !== undefined;
+  return (state) =>
+    threadId
+      ? Boolean(state.threadShellById?.[threadId]) ||
+        state.threads.some((thread) => thread.id === threadId)
+      : false;
 }
 
 export function createSidebarThreadSummarySelector(

@@ -1,17 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import type { MessageId, ThreadId } from "@t3tools/contracts";
+import type { MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
 
 import type { AppState } from "./store";
-import { createAllThreadsMessagelessSelector, createThreadShellsSelector } from "./storeSelectors";
+import {
+  createAllThreadsMessagelessSelector,
+  createThreadExistsSelector,
+  createThreadProjectIdSelector,
+  createThreadShellsSelector,
+} from "./storeSelectors";
 import type { ThreadShell } from "./types";
 
 const threadIdA = "thread-a" as ThreadId;
 const threadIdB = "thread-b" as ThreadId;
 const messageId = "message-1" as MessageId;
+const projectId = "project-1" as ProjectId;
 
-const shellA = { id: threadIdA, title: "A" } as ThreadShell;
-const shellB = { id: threadIdB, title: "B" } as ThreadShell;
+const shellA = { id: threadIdA, projectId, title: "A" } as ThreadShell;
+const shellB = { id: threadIdB, projectId, title: "B" } as ThreadShell;
 
 interface TestStateSlices {
   threadIds?: readonly ThreadId[];
@@ -94,5 +100,22 @@ describe("createAllThreadsMessagelessSelector", () => {
       messageIdsByThreadId: { [threadIdB]: [messageId] },
     });
     expect(selectMessageless(state)).toBe(false);
+  });
+});
+
+describe("thread shell route selectors", () => {
+  it("resolve existence and project id without reading detail slices", () => {
+    const state = makeState({
+      threadIds: [threadIdA],
+      threadShellById: { [threadIdA]: shellA },
+    });
+    Object.defineProperty(state, "messageIdsByThreadId", {
+      get() {
+        throw new Error("detail messages should not be read");
+      },
+    });
+
+    expect(createThreadExistsSelector(threadIdA)(state)).toBe(true);
+    expect(createThreadProjectIdSelector(threadIdA)(state)).toBe(projectId);
   });
 });

@@ -179,6 +179,39 @@ export type TimelineEntry =
       entry: WorkLogEntry;
     };
 
+const orderedActivitiesCache = new WeakMap<
+  ReadonlyArray<OrchestrationThreadActivity>,
+  ReadonlyArray<OrchestrationThreadActivity>
+>();
+
+function isActivityOrderStable(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): boolean {
+  for (let index = 1; index < activities.length; index += 1) {
+    if (compareActivitiesByOrder(activities[index - 1]!, activities[index]!) > 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Thread activity arrays are immutable store values and most call sites need the
+// same order; cache it so chat startup does not sort the same array repeatedly.
+function orderedActivities(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<OrchestrationThreadActivity> {
+  const cached = orderedActivitiesCache.get(activities);
+  if (cached) {
+    return cached;
+  }
+
+  const ordered = isActivityOrderStable(activities)
+    ? activities
+    : [...activities].sort(compareActivitiesByOrder);
+  orderedActivitiesCache.set(activities, ordered);
+  return ordered;
+}
+
 function formatDuration(durationMs: number): string {
   if (!Number.isFinite(durationMs) || durationMs < 0) return "0ms";
   if (durationMs < 1_000) return `${Math.max(1, Math.round(durationMs))}ms`;
@@ -307,7 +340,7 @@ export function derivePendingApprovals(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): PendingApproval[] {
   const openByRequestId = new Map<ApprovalRequestId, PendingApproval>();
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = orderedActivities(activities);
 
   for (const activity of ordered) {
     const payload =
@@ -413,7 +446,7 @@ export function derivePendingUserInputs(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): PendingUserInput[] {
   const openByRequestId = new Map<ApprovalRequestId, PendingUserInput>();
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = orderedActivities(activities);
 
   for (const activity of ordered) {
     const payload =
@@ -506,7 +539,7 @@ export function deriveActiveTaskListState(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
 ): ActiveTaskListState | null {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = orderedActivities(activities);
   const allTaskListActivities = ordered.filter(
     (activity) => activity.kind === "turn.tasks.updated",
   );
@@ -555,7 +588,7 @@ export function deriveActiveBackgroundTasksState(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
 ): ActiveBackgroundTasksState | null {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = orderedActivities(activities);
   const activeTasks = new Map<string, { taskType?: string | undefined }>();
 
   for (const activity of ordered) {
@@ -714,7 +747,7 @@ export function deriveWorkLogEntries(
   options: { visibleTurnIds?: ReadonlySet<TurnId | string> } = {},
 ): WorkLogEntry[] {
   const visibleTurnIds = options.visibleTurnIds;
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = orderedActivities(activities);
   const entries = ordered
     .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
     .filter((activity) => !shouldOmitRoutedCollabAgentToolActivity(activity))
@@ -1868,6 +1901,59 @@ function compareActivityLifecycleRank(kind: string): number {
   return 1;
 }
 
+function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry): number {
+  return left.createdAt.localeCompare(right.createdAt);
+}
+
+function areTimelineEntriesOrdered(entries: ReadonlyArray<TimelineEntry>): boolean {
+  for (let index = 1; index < entries.length; index += 1) {
+    if (compareTimelineEntries(entries[index - 1]!, entries[index]!) > 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function sortedTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
+  return areTimelineEntriesOrdered(entries) ? entries : entries.toSorted(compareTimelineEntries);
+}
+
+function mergeTimelineEntries(
+  left: ReadonlyArray<TimelineEntry>,
+  right: ReadonlyArray<TimelineEntry>,
+): TimelineEntry[] {
+  if (left.length === 0) {
+    return [...right];
+  }
+  if (right.length === 0) {
+    return [...left];
+  }
+
+  const merged: TimelineEntry[] = [];
+  let leftIndex = 0;
+  let rightIndex = 0;
+  while (leftIndex < left.length && rightIndex < right.length) {
+    const leftEntry = left[leftIndex]!;
+    const rightEntry = right[rightIndex]!;
+    if (compareTimelineEntries(leftEntry, rightEntry) <= 0) {
+      merged.push(leftEntry);
+      leftIndex += 1;
+    } else {
+      merged.push(rightEntry);
+      rightIndex += 1;
+    }
+  }
+  while (leftIndex < left.length) {
+    merged.push(left[leftIndex]!);
+    leftIndex += 1;
+  }
+  while (rightIndex < right.length) {
+    merged.push(right[rightIndex]!);
+    rightIndex += 1;
+  }
+  return merged;
+}
+
 export function deriveTimelineEntries(
   messages: ChatMessage[],
   proposedPlans: ProposedPlan[],
@@ -1910,8 +1996,13 @@ export function deriveTimelineEntries(
     createdAt: entry.createdAt,
     entry,
   }));
-  return [...messageRows, ...proposedPlanRows, ...workRows].toSorted((a, b) =>
-    a.createdAt.localeCompare(b.createdAt),
+
+  return mergeTimelineEntries(
+    mergeTimelineEntries(
+      sortedTimelineEntries(messageRows),
+      sortedTimelineEntries(proposedPlanRows),
+    ),
+    sortedTimelineEntries(workRows),
   );
 }
 

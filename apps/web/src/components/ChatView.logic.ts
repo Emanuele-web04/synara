@@ -559,8 +559,20 @@ export interface ThreadBreadcrumb {
   title: string;
 }
 
+type ThreadBreadcrumbSource = Pick<
+  Thread,
+  | "id"
+  | "title"
+  | "parentThreadId"
+  | "subagentAgentId"
+  | "subagentNickname"
+  | "subagentRole"
+> & {
+  activities?: Thread["activities"];
+};
+
 export function buildThreadBreadcrumbs(
-  threads: ReadonlyArray<Thread>,
+  threads: ReadonlyArray<ThreadBreadcrumbSource>,
   thread: Pick<Thread, "id" | "parentThreadId"> | null | undefined,
 ): ThreadBreadcrumb[] {
   if (!thread?.parentThreadId) {
