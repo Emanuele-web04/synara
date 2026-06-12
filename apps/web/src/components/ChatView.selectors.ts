@@ -10,7 +10,7 @@ import {
 } from "@t3tools/contracts";
 
 import type { AppState } from "../store";
-import { getThreadFromState } from "../threadDerivation";
+import { collectByIds, getThreadFromState } from "../threadDerivation";
 import type {
   ChatMessage,
   ProposedPlan,
@@ -21,6 +21,8 @@ import type {
   TurnDiffSummary,
 } from "../types";
 import type { WorkLogEntry } from "../session-logic";
+
+const EMPTY_LINEAGE_ACTIVITIES: Thread["activities"] = [];
 
 type ThreadSliceRefs = {
   shell: ThreadShell | undefined;
@@ -36,6 +38,24 @@ type ThreadSliceRefs = {
   turnDiffs: Record<TurnId, TurnDiffSummary> | undefined;
 };
 
+type ThreadLineageSliceRefs = {
+  shell: ThreadShell | undefined;
+  activityIds: readonly string[] | undefined;
+  activities: Record<string, Thread["activities"][number]> | undefined;
+};
+
+export type ThreadLineageEntry = Pick<
+  ThreadShell,
+  | "id"
+  | "title"
+  | "parentThreadId"
+  | "subagentAgentId"
+  | "subagentNickname"
+  | "subagentRole"
+> & {
+  activities: Thread["activities"];
+};
+
 function collectThreadSliceRefs(state: AppState, threadId: ThreadIdType): ThreadSliceRefs {
   return {
     shell: state.threadShellById?.[threadId],
@@ -49,6 +69,17 @@ function collectThreadSliceRefs(state: AppState, threadId: ThreadIdType): Thread
     proposedPlans: state.proposedPlanByThreadId?.[threadId],
     turnDiffIds: state.turnDiffIdsByThreadId?.[threadId],
     turnDiffs: state.turnDiffSummaryByThreadId?.[threadId],
+  };
+}
+
+function collectThreadLineageSliceRefs(
+  state: AppState,
+  threadId: ThreadIdType,
+): ThreadLineageSliceRefs {
+  return {
+    shell: state.threadShellById?.[threadId],
+    activityIds: state.activityIdsByThreadId?.[threadId],
+    activities: state.activityByThreadId?.[threadId],
   };
 }
 
@@ -69,6 +100,18 @@ function threadSliceRefsEqual(left: ThreadSliceRefs | undefined, right: ThreadSl
   );
 }
 
+function threadLineageSliceRefsEqual(
+  left: ThreadLineageSliceRefs | undefined,
+  right: ThreadLineageSliceRefs,
+): boolean {
+  return (
+    left !== undefined &&
+    left.shell === right.shell &&
+    left.activityIds === right.activityIds &&
+    left.activities === right.activities
+  );
+}
+
 function shallowEqualThreadIds(
   left: ReadonlyArray<ThreadIdType>,
   right: ReadonlyArray<ThreadIdType>,
@@ -80,6 +123,13 @@ function shallowEqualThreads(left: ReadonlyArray<Thread>, right: ReadonlyArray<T
   return left.length === right.length && left.every((thread, index) => thread === right[index]);
 }
 
+function shallowEqualThreadLineageEntries(
+  left: ReadonlyArray<ThreadLineageEntry>,
+  right: ReadonlyArray<ThreadLineageEntry>,
+): boolean {
+  return left.length === right.length && left.every((thread, index) => thread === right[index]);
+}
+
 function buildThreadSelectionResult(
   state: AppState,
   selectedThreadIds: ReadonlyArray<ThreadIdType>,
@@ -87,6 +137,35 @@ function buildThreadSelectionResult(
   return selectedThreadIds.flatMap((threadId) => {
     const thread = getThreadFromState(state, threadId);
     return thread ? [thread] : [];
+  });
+}
+
+function buildThreadLineageSelectionResult(
+  state: AppState,
+  selectedThreadIds: ReadonlyArray<ThreadIdType>,
+): ThreadLineageEntry[] {
+  return selectedThreadIds.flatMap((threadId) => {
+    const shell = state.threadShellById?.[threadId];
+    if (!shell) {
+      return [];
+    }
+    return [
+      {
+        id: shell.id,
+        title: shell.title,
+        activities: collectByIds(
+          state.activityIdsByThreadId?.[threadId],
+          state.activityByThreadId?.[threadId],
+          EMPTY_LINEAGE_ACTIVITIES,
+        ),
+        ...(shell.parentThreadId !== undefined ? { parentThreadId: shell.parentThreadId } : {}),
+        ...(shell.subagentAgentId !== undefined ? { subagentAgentId: shell.subagentAgentId } : {}),
+        ...(shell.subagentNickname !== undefined
+          ? { subagentNickname: shell.subagentNickname }
+          : {}),
+        ...(shell.subagentRole !== undefined ? { subagentRole: shell.subagentRole } : {}),
+      },
+    ];
   });
 }
 
@@ -215,19 +294,15 @@ export function createRelevantWorkLogThreadsSelector(input: {
 }
 
 export function createThreadLineageSelector(threadId: ThreadIdType | null) {
-  let previousThreadIds: ReadonlyArray<ThreadIdType> | undefined;
-  let previousThreadShellById: AppState["threadShellById"] | undefined;
   let previousSelectedThreadIds: ThreadIdType[] = [];
-  let previousSliceRefs = new Map<ThreadIdType, ThreadSliceRefs>();
-  let previousResult: Thread[] = [];
+  let previousSliceRefs = new Map<ThreadIdType, ThreadLineageSliceRefs>();
+  let previousResult: ThreadLineageEntry[] = [];
 
-  return (state: AppState): Thread[] => {
+  return (state: AppState): ThreadLineageEntry[] => {
     if (!threadId) {
       if (previousResult.length === 0) {
         return previousResult;
       }
-      previousThreadIds = state.threadIds;
-      previousThreadShellById = state.threadShellById;
       previousSelectedThreadIds = [];
       previousSliceRefs = new Map();
       previousResult = [];
@@ -250,19 +325,21 @@ export function createThreadLineageSelector(threadId: ThreadIdType | null) {
       currentThreadId = thread.parentThreadId ?? null;
     }
 
-    const selectedIdsChanged =
-      previousThreadIds !== threadIds ||
-      previousThreadShellById !== threadShellById ||
-      !shallowEqualThreadIds(previousSelectedThreadIds, selectedThreadIds);
-    const nextSliceRefs = new Map<ThreadIdType, ThreadSliceRefs>();
+    // Breadcrumb labels only need shells plus parent activity identity hints;
+    // avoid subscribing this header path to message/session/diff slices.
+    const selectedIdsChanged = !shallowEqualThreadIds(
+      previousSelectedThreadIds,
+      selectedThreadIds,
+    );
+    const nextSliceRefs = new Map<ThreadIdType, ThreadLineageSliceRefs>();
     let sliceRefsChanged = selectedIdsChanged;
 
     for (const selectedThreadId of selectedThreadIds) {
-      const nextRefs = collectThreadSliceRefs(state, selectedThreadId);
+      const nextRefs = collectThreadLineageSliceRefs(state, selectedThreadId);
       nextSliceRefs.set(selectedThreadId, nextRefs);
       if (
         !sliceRefsChanged &&
-        !threadSliceRefsEqual(previousSliceRefs.get(selectedThreadId), nextRefs)
+        !threadLineageSliceRefsEqual(previousSliceRefs.get(selectedThreadId), nextRefs)
       ) {
         sliceRefsChanged = true;
       }
@@ -272,13 +349,11 @@ export function createThreadLineageSelector(threadId: ThreadIdType | null) {
       return previousResult;
     }
 
-    previousThreadIds = threadIds;
-    previousThreadShellById = threadShellById;
     previousSelectedThreadIds = selectedThreadIds;
     previousSliceRefs = nextSliceRefs;
 
-    const nextResult = buildThreadSelectionResult(state, selectedThreadIds);
-    if (shallowEqualThreads(previousResult, nextResult)) {
+    const nextResult = buildThreadLineageSelectionResult(state, selectedThreadIds);
+    if (shallowEqualThreadLineageEntries(previousResult, nextResult)) {
       return previousResult;
     }
 
