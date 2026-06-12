@@ -603,6 +603,53 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect(
+    "routes early approval and user-input responses to live sessions before persistence",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-live-startup-prompt");
+
+        routing.codex.respondToRequest.mockClear();
+        routing.codex.respondToUserInput.mockClear();
+        yield* routing.codex.adapter.startSession({
+          provider: "codex",
+          threadId,
+          runtimeMode: "approval-required",
+        });
+
+        const bindingBeforeResponse = yield* directory.getBinding(threadId);
+        assert.equal(Option.isNone(bindingBeforeResponse), true);
+
+        yield* provider.respondToRequest({
+          threadId,
+          requestId: asRequestId("req-live-approval"),
+          decision: "accept",
+        });
+        yield* provider.respondToUserInput({
+          threadId,
+          requestId: asRequestId("req-live-user-input"),
+          answers: {
+            answer: "continue",
+          },
+        });
+
+        assert.deepEqual(routing.codex.respondToRequest.mock.calls, [
+          [threadId, asRequestId("req-live-approval"), "accept"],
+        ]);
+        assert.deepEqual(routing.codex.respondToUserInput.mock.calls, [
+          [
+            threadId,
+            asRequestId("req-live-user-input"),
+            {
+              answer: "continue",
+            },
+          ],
+        ]);
+      }),
+  );
+
   it.effect("recovers stale persisted sessions for rollback by resuming thread identity", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

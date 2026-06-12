@@ -1687,10 +1687,10 @@ export default function ChatView({
         ? kiloModelDiscoveryPending
         : selectedProvider === "pi"
           ? piModelDiscoveryPending
-        : selectedProviderModelsQuery !== undefined &&
-          (selectedProviderModelsQuery.isLoading ||
-            (selectedProviderModelsQuery.isFetching &&
-              selectedProviderModelsQuery.data === undefined));
+          : selectedProviderModelsQuery !== undefined &&
+            (selectedProviderModelsQuery.isLoading ||
+              (selectedProviderModelsQuery.isFetching &&
+                selectedProviderModelsQuery.data === undefined));
   const selectedProviderRequiresRuntimeModels =
     selectedProvider === "cursor" || selectedProvider === "kilo" || selectedProvider === "pi";
   const selectedProviderRuntimeModelDiscoveryPending =
@@ -6184,6 +6184,17 @@ export default function ChatView({
     [activeThreadId, setStoreThreadError],
   );
 
+  const onCancelActivePendingUserInput = useCallback(() => {
+    if (!activePendingUserInput || activePendingIsResponding) {
+      return;
+    }
+    promptRef.current = "";
+    setPrompt("");
+    setComposerCursor(0);
+    setComposerTrigger(null);
+    void onRespondToUserInput(activePendingUserInput.requestId, {});
+  }, [activePendingIsResponding, activePendingUserInput, onRespondToUserInput, setPrompt]);
+
   const setActivePendingUserInputQuestionIndex = useCallback(
     (nextQuestionIndex: number) => {
       if (!activePendingUserInput) {
@@ -8095,6 +8106,7 @@ export default function ChatView({
                   pendingUserInputQuestionIndex={activePendingQuestionIndex}
                   onToggleUserInputOption={onToggleActivePendingUserInputOption}
                   onAdvanceUserInput={onAdvanceActivePendingUserInput}
+                  onCancelUserInput={onCancelActivePendingUserInput}
                   planFollowUp={
                     showPlanFollowUpPrompt && activeProposedPlan
                       ? {
@@ -8176,7 +8188,9 @@ export default function ChatView({
                       isComposerApprovalState
                         ? "Resolve this approval request to continue"
                         : activePendingProgress
-                          ? "Type your own answer, or leave this blank to use the selected option"
+                          ? activePendingProgress.activeQuestion?.options.length === 0
+                            ? "Type your answer to continue"
+                            : "Type your own answer, or leave this blank to use the selected option"
                           : showPlanFollowUpPrompt && activeProposedPlan
                             ? "Add feedback to refine the plan, or leave this blank to implement it"
                             : hasLiveTurn

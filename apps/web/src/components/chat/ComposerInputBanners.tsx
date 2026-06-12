@@ -28,6 +28,7 @@ interface ComposerInputBannersProps {
   pendingUserInputQuestionIndex: PendingUserInputPanelProps["questionIndex"];
   onToggleUserInputOption: PendingUserInputPanelProps["onToggleOption"];
   onAdvanceUserInput: PendingUserInputPanelProps["onAdvance"];
+  onCancelUserInput: PendingUserInputPanelProps["onCancel"];
   // `id` keys the banner so it remounts when the proposed plan changes.
   planFollowUp: { id: string; title: string | null } | null;
 }
@@ -42,6 +43,7 @@ export const ComposerInputBanners = memo(function ComposerInputBanners({
   pendingUserInputQuestionIndex,
   onToggleUserInputOption,
   onAdvanceUserInput,
+  onCancelUserInput,
   planFollowUp,
 }: ComposerInputBannersProps) {
   let content: ReactNode = null;
@@ -58,6 +60,7 @@ export const ComposerInputBanners = memo(function ComposerInputBanners({
         questionIndex={pendingUserInputQuestionIndex}
         onToggleOption={onToggleUserInputOption}
         onAdvance={onAdvanceUserInput}
+        onCancel={onCancelUserInput}
       />
     );
   } else if (planFollowUp) {

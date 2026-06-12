@@ -12,6 +12,7 @@ import {
   type AgentSession as PiAgentSession,
   type AgentSessionEvent,
   type CreateAgentSessionRuntimeFactory,
+  type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
@@ -22,6 +23,7 @@ import {
   type TextContent,
 } from "@earendil-works/pi-ai";
 import {
+  ApprovalRequestId,
   type ChatAttachment,
   EventId,
   type ProviderComposerCapabilities,
@@ -31,10 +33,13 @@ import {
   ProviderItemId,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type ProviderUserInputAnswers,
   RuntimeItemId,
+  RuntimeRequestId,
   ThreadId,
   type ThreadTokenUsageSnapshot,
   TurnId,
+  type UserInputQuestion,
 } from "@t3tools/contracts";
 import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
 
@@ -79,6 +84,7 @@ interface PiSessionContext {
   activeAssistantItemId: RuntimeItemId | undefined;
   activeReasoningItemId: RuntimeItemId | undefined;
   activeToolItems: Map<string, PiTrackedToolCall>;
+  pendingUserInputs: Map<ApprovalRequestId, PiPendingUserInput>;
   stopped: boolean;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   unsubscribe: (() => void) | undefined;
@@ -96,6 +102,15 @@ interface PiTrackedToolCall {
   readonly args: unknown;
   readonly itemId: RuntimeItemId;
   readonly itemType: "command_execution" | "file_change" | "dynamic_tool_call" | "web_search";
+}
+
+interface PiPendingUserInput {
+  readonly resolve: (answers: ProviderUserInputAnswers) => void;
+}
+
+export interface PiUserInputOptionMapping {
+  readonly value: string;
+  readonly option: UserInputQuestion["options"][number];
 }
 
 export interface PiAdapterLiveOptions {
@@ -722,6 +737,80 @@ function extensionDisplayName(extension: {
   return extensionPath ? path.basename(extensionPath).replace(/\.(?:ts|js)$/u, "") : "extension";
 }
 
+function makePiUserInputOption(label: string): UserInputQuestion["options"][number] {
+  const normalizedLabel = trimToUndefined(label) ?? "Option";
+  return { label: normalizedLabel, description: normalizedLabel };
+}
+
+export function makePiUserInputOptions(
+  labels: ReadonlyArray<string>,
+): ReadonlyArray<PiUserInputOptionMapping> {
+  const labelCounts = new Map<string, number>();
+  return labels.map((label, index) => {
+    const baseLabel = trimToUndefined(label) ?? `Option ${index + 1}`;
+    const count = (labelCounts.get(baseLabel) ?? 0) + 1;
+    labelCounts.set(baseLabel, count);
+    const displayLabel = count === 1 ? baseLabel : `${baseLabel} (${count})`;
+    return {
+      value: label,
+      option: { label: displayLabel, description: baseLabel },
+    };
+  });
+}
+
+function firstPiUserInputAnswer(
+  answers: ProviderUserInputAnswers,
+  questionId: string,
+): string | undefined {
+  const answer = answers[questionId];
+  if (typeof answer === "string") {
+    return trimToUndefined(answer);
+  }
+  if (Array.isArray(answer)) {
+    return trimToUndefined(answer.find((entry) => typeof entry === "string"));
+  }
+  return undefined;
+}
+
+export const PLAIN_PI_EXTENSION_THEME = {
+  fg(_color: string, text: string) {
+    return text;
+  },
+  bg(_color: string, text: string) {
+    return text;
+  },
+  bold(text: string) {
+    return text;
+  },
+  italic(text: string) {
+    return text;
+  },
+  underline(text: string) {
+    return text;
+  },
+  inverse(text: string) {
+    return text;
+  },
+  strikethrough(text: string) {
+    return text;
+  },
+  getFgAnsi() {
+    return "";
+  },
+  getBgAnsi() {
+    return "";
+  },
+  getColorMode() {
+    return "truecolor";
+  },
+  getThinkingBorderColor() {
+    return (text: string) => text;
+  },
+  getBashModeBorderColor() {
+    return (text: string) => text;
+  },
+} as unknown as ExtensionUIContext["theme"];
+
 const makePiAdapter = (options?: PiAdapterLiveOptions) =>
   Effect.gen(function* () {
     const serverConfig = yield* ServerConfig;
@@ -792,6 +881,270 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       } satisfies ProviderRuntimeEvent);
     };
 
+    const resolvePiExtensionUserInput = (
+      context: PiSessionContext,
+      requestId: ApprovalRequestId,
+      answers: ProviderUserInputAnswers,
+    ) => {
+      const pending = context.pendingUserInputs.get(requestId);
+      if (!pending) return false;
+      pending.resolve(answers);
+      return true;
+    };
+
+    const requestPiExtensionUserInput = (
+      context: PiSessionContext,
+      input: {
+        readonly method: string;
+        readonly question: UserInputQuestion;
+        readonly opts?: Parameters<ExtensionUIContext["select"]>[2];
+        readonly rawPayload?: Record<string, unknown>;
+      },
+    ): Promise<ProviderUserInputAnswers> => {
+      if (context.stopped || input.opts?.signal?.aborted) {
+        return Promise.resolve({});
+      }
+
+      const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
+      const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
+
+      return new Promise((resolve) => {
+        let settled = false;
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        let abort: () => void = () => undefined;
+
+        const cleanup = () => {
+          if (timeoutId !== undefined) {
+            clearTimeout(timeoutId);
+            timeoutId = undefined;
+          }
+          input.opts?.signal?.removeEventListener("abort", abort);
+        };
+        const finish = (answers: ProviderUserInputAnswers) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          context.pendingUserInputs.delete(requestId);
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            type: "user-input.resolved",
+            requestId: runtimeRequestId,
+            payload: { answers },
+            raw: {
+              source: "pi.sdk.event",
+              method: `${input.method}/answered`,
+              payload: { requestId, answers },
+            },
+          } satisfies ProviderRuntimeEvent);
+          resolve(answers);
+        };
+        abort = () => finish({});
+
+        context.pendingUserInputs.set(requestId, { resolve: finish });
+        if (typeof input.opts?.timeout === "number" && input.opts.timeout > 0) {
+          timeoutId = setTimeout(abort, input.opts.timeout);
+        }
+        input.opts?.signal?.addEventListener("abort", abort, { once: true });
+
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          type: "user-input.requested",
+          requestId: runtimeRequestId,
+          payload: { questions: [input.question] },
+          raw: {
+            source: "pi.sdk.event",
+            method: input.method,
+            payload: input.rawPayload ?? { requestId, question: input.question },
+          },
+        } satisfies ProviderRuntimeEvent);
+      });
+    };
+
+    // Bridges the common Pi extension UI primitives onto Synara's existing
+    // pending user-input flow; terminal/TUI-only APIs remain no-op by design.
+    const makePiExtensionUIContext = (context: PiSessionContext): ExtensionUIContext => {
+      const unsupportedWarnings = new Set<string>();
+      const statusTexts = new Map<string, string>();
+      let workingMessage: string | undefined;
+      const warnUnsupported = (method: string) => {
+        if (unsupportedWarnings.has(method)) return;
+        unsupportedWarnings.add(method);
+        offerRuntimeEvent({
+          ...makeEventBase(context, { includeTurnId: false }),
+          type: "runtime.warning",
+          payload: {
+            message: `Pi extension UI API '${method}' is not supported in Synara yet.`,
+            detail: { method },
+          },
+          raw: {
+            source: "pi.sdk.event",
+            method: "extension/ui-unsupported",
+            payload: { method },
+          },
+        } satisfies ProviderRuntimeEvent);
+      };
+      const emitPluginProgress = (summary: string) => {
+        const normalized = trimToUndefined(summary);
+        if (!normalized) return;
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          type: "tool.progress",
+          payload: { toolName: "Pi plugin", summary: normalized },
+          raw: {
+            source: "pi.sdk.event",
+            method: "extension/ui-progress",
+            payload: { summary: normalized },
+          },
+        } satisfies ProviderRuntimeEvent);
+      };
+
+      const uiContext: ExtensionUIContext = {
+        async select(title, options, opts) {
+          const questionId = "selection";
+          const optionMappings = makePiUserInputOptions(options);
+          const answers = await requestPiExtensionUserInput(context, {
+            method: "extension/ui/select",
+            opts,
+            question: {
+              id: questionId,
+              header: trimToUndefined(title) ?? "Pi plugin",
+              question: trimToUndefined(title) ?? "Choose an option.",
+              options: optionMappings.map((mapping) => mapping.option),
+            },
+            rawPayload: { title, options },
+          });
+          const answer = firstPiUserInputAnswer(answers, questionId);
+          return optionMappings.find((mapping) => mapping.option.label === answer)?.value;
+        },
+        async confirm(title, message, opts) {
+          const questionId = "confirmation";
+          const answers = await requestPiExtensionUserInput(context, {
+            method: "extension/ui/confirm",
+            opts,
+            question: {
+              id: questionId,
+              header: trimToUndefined(title) ?? "Pi plugin",
+              question:
+                trimToUndefined(message) ?? trimToUndefined(title) ?? "Confirm this action?",
+              options: [makePiUserInputOption("Yes"), makePiUserInputOption("No")],
+            },
+            rawPayload: { title, message },
+          });
+          return firstPiUserInputAnswer(answers, questionId) === "Yes";
+        },
+        async input(title, placeholder, opts) {
+          const questionId = "input";
+          const answers = await requestPiExtensionUserInput(context, {
+            method: "extension/ui/input",
+            opts,
+            question: {
+              id: questionId,
+              header: trimToUndefined(title) ?? "Pi plugin",
+              question:
+                trimToUndefined(placeholder) ?? trimToUndefined(title) ?? "Type a response.",
+              options: [],
+            },
+            rawPayload: { title, placeholder },
+          });
+          return firstPiUserInputAnswer(answers, questionId);
+        },
+        notify(message, type) {
+          const normalized = trimToUndefined(message);
+          if (!normalized) return;
+          if (type === "warning" || type === "error") {
+            offerRuntimeEvent({
+              ...makeEventBase(context),
+              type: "runtime.warning",
+              payload: { message: normalized, detail: { type: type ?? "info" } },
+              raw: {
+                source: "pi.sdk.event",
+                method: "extension/ui/notify",
+                payload: { message: normalized, type },
+              },
+            } satisfies ProviderRuntimeEvent);
+            return;
+          }
+          emitPluginProgress(normalized);
+        },
+        onTerminalInput() {
+          warnUnsupported("onTerminalInput");
+          return () => undefined;
+        },
+        setStatus(key, text) {
+          const normalizedKey = trimToUndefined(key) ?? "status";
+          const normalizedText = trimToUndefined(text);
+          if (!normalizedText) {
+            statusTexts.delete(normalizedKey);
+            return;
+          }
+          if (statusTexts.get(normalizedKey) === normalizedText) return;
+          statusTexts.set(normalizedKey, normalizedText);
+          emitPluginProgress(`${normalizedKey}: ${normalizedText}`);
+        },
+        setWorkingMessage(message) {
+          const normalizedMessage = trimToUndefined(message);
+          if (!normalizedMessage || normalizedMessage === workingMessage) return;
+          workingMessage = normalizedMessage;
+          emitPluginProgress(normalizedMessage);
+        },
+        setWorkingVisible() {},
+        setWorkingIndicator() {},
+        setHiddenThinkingLabel() {},
+        setWidget() {
+          warnUnsupported("setWidget");
+        },
+        setFooter() {
+          warnUnsupported("setFooter");
+        },
+        setHeader() {
+          warnUnsupported("setHeader");
+        },
+        setTitle(title) {
+          if (title) emitPluginProgress(title);
+        },
+        async custom() {
+          warnUnsupported("custom");
+          return undefined as never;
+        },
+        pasteToEditor() {
+          warnUnsupported("pasteToEditor");
+        },
+        setEditorText() {
+          warnUnsupported("setEditorText");
+        },
+        getEditorText() {
+          return "";
+        },
+        editor(title, prefill) {
+          return uiContext.input(title, prefill);
+        },
+        addAutocompleteProvider() {
+          warnUnsupported("addAutocompleteProvider");
+        },
+        setEditorComponent() {
+          warnUnsupported("setEditorComponent");
+        },
+        getEditorComponent() {
+          return undefined;
+        },
+        theme: PLAIN_PI_EXTENSION_THEME,
+        getAllThemes() {
+          return [];
+        },
+        getTheme() {
+          return undefined;
+        },
+        setTheme() {
+          return { success: false, error: "Synara does not expose Pi themes." };
+        },
+        getToolsExpanded() {
+          return false;
+        },
+        setToolsExpanded() {},
+      };
+      return uiContext;
+    };
+
     const completePromptRejection = (context: PiSessionContext, turnId: TurnId, cause: unknown) => {
       if (context.activeTurnId !== turnId) {
         return;
@@ -841,6 +1194,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const disposeSessionContext = async (context: PiSessionContext) => {
       context.unsubscribe?.();
       context.unsubscribe = undefined;
+      for (const pending of Array.from(context.pendingUserInputs.values())) {
+        pending.resolve({});
+      }
+      context.pendingUserInputs.clear();
       context.stopped = true;
       await context.runtime.dispose();
     };
@@ -1194,7 +1551,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         agentDir: input.agentDir,
         sessionManager: input.sessionManager,
       });
-      await runtime.session.bindExtensions({});
       return { runtime, modelRegistry: runtime.services.modelRegistry };
     };
 
@@ -1268,6 +1624,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           activeAssistantItemId: undefined,
           activeReasoningItemId: undefined,
           activeToolItems: new Map(),
+          pendingUserInputs: new Map(),
           stopped: false,
           lastKnownTokenUsage: undefined,
           unsubscribe: undefined,
@@ -1276,6 +1633,28 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           handleSessionEvent(context, event),
         );
         sessions.set(input.threadId, context);
+        yield* Effect.tryPromise({
+          try: () =>
+            runtime.session.bindExtensions({ uiContext: makePiExtensionUIContext(context) }),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "extension/bind",
+              detail: toMessage(cause, "Failed to bind Pi extensions."),
+              cause,
+            }),
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.gen(function* () {
+              sessions.delete(input.threadId);
+              yield* Effect.tryPromise({
+                try: () => disposeSessionContext(context),
+                catch: () => error,
+              }).pipe(Effect.catch(() => Effect.void));
+              return yield* Effect.fail(error);
+            }),
+          ),
+        );
         const loadedExtensions = runtime.session.resourceLoader.getExtensions().extensions;
         if (loadedExtensions.length > 0) {
           const extensionNames = loadedExtensions.map(extensionDisplayName);
@@ -1284,7 +1663,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             type: "runtime.warning",
             payload: {
               message:
-                "Pi extensions are loaded, but Synara does not yet support Pi extension UI APIs. Non-UI extension behavior should work, but extensions that call ctx.ui.* for prompts, widgets, confirmations, or status updates may not behave correctly.",
+                "Pi extensions are loaded with Synara's limited UI bridge. select/confirm/input/notify/status are supported; TUI-only widgets and editor hooks are ignored.",
               detail: {
                 extensionCount: loadedExtensions.length,
                 extensions: extensionNames,
@@ -1292,7 +1671,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             },
             raw: {
               source: "pi.sdk.event",
-              method: "extension/ui-unsupported-warning",
+              method: "extension/ui-limited-warning",
               payload: { extensionCount: loadedExtensions.length, extensions: extensionNames },
             },
           } satisfies ProviderRuntimeEvent);
@@ -1542,6 +1921,22 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           detail: `Pi does not expose Synara approval/user-input requests for thread ${threadId}.`,
         }),
       );
+
+    const respondToUserInput: PiAdapterShape["respondToUserInput"] = (
+      threadId,
+      requestId,
+      answers,
+    ) =>
+      Effect.gen(function* () {
+        const context = yield* requireSession(threadId);
+        if (!resolvePiExtensionUserInput(context, requestId, answers)) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "user-input/respond",
+            detail: `Unknown pending Pi user-input request: ${requestId}`,
+          });
+        }
+      });
 
     const stopSession: PiAdapterShape["stopSession"] = (threadId) =>
       requireSession(threadId).pipe(
@@ -1852,7 +2247,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       steerTurn,
       interruptTurn,
       respondToRequest: (threadId) => respondUnsupported(threadId, "request/respond"),
-      respondToUserInput: (threadId) => respondUnsupported(threadId, "user-input/respond"),
+      respondToUserInput,
       stopSession,
       listSessions,
       hasSession,
