@@ -22,6 +22,60 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.1.9",
+    date: "Jun 12",
+    features: [
+      {
+        id: "chat-workspace-folders",
+        title: "Chats get Codex-style workspace folders",
+        description:
+          "Project chats now keep their generated files in clearer chat-specific workspace folders, making it easier to understand what belongs to each conversation.",
+        details:
+          "This release adds Codex-like workspace folder creation, associated worktree metadata handling, file-only workspace search, settings search deep links, and harder Gemini probe handling so workspace state stays more predictable across chat and editor surfaces.",
+      },
+      {
+        id: "transcript-turn-stability",
+        title: "Transcript turns collapse more reliably",
+        description:
+          "Long-running assistant work, collapsed turn rows, and transcript tail-follow behavior are steadier during active output and after reconnects.",
+        details:
+          "The timeline now falls back to the latest turn when visible turn ids are empty, fixes collapsed-turn and tail-jitter edge cases, and keeps scroll-follow logic scoped to real transcript messages instead of tool-only churn.",
+      },
+      {
+        id: "browser-and-copy-flow",
+        title: "Browser sessions and copy links feel smoother",
+        description:
+          "In-app browser sessions recover better, and copy-link flows now have cleaner behavior when moving between browser and chat contexts.",
+        details:
+          "Browser session handling, copy-link actions, local image preview state, and shared error-card behavior were tightened so browsing, previewing, and moving references into prompts produce fewer stale or duplicated states.",
+      },
+      {
+        id: "settings-and-density",
+        title: "Settings open faster and density is easier to tune",
+        description:
+          "Settings navigation, sidebar search, and UI density controls picked up polish so repeated configuration work feels lighter.",
+        details:
+          "Settings page open avoids extra streaming-tick re-renders, sidebar search deep links can jump directly to matching settings, UI density follow-ups refine sidebar and composer spacing, and shared project menus replace older bespoke editor picker code.",
+      },
+      {
+        id: "editor-and-kanban-polish",
+        title: "Editor and kanban workflows are cleaner",
+        description:
+          "Editor mode feedback, project picker reuse, kanban composer menus, and image preview handling all received focused follow-ups.",
+        details:
+          "This release fixes editor-mode production feedback, shares project menu picker behavior, splits kanban composer menu discovery from editor logic, and consolidates local image preview state across chat and editor views.",
+      },
+      {
+        id: "soccer-physics-playground",
+        title: "A World Cup soccer ball playground landed",
+        description:
+          "There is now a playful soccer-ball physics view for experimenting with motion and interaction inside Synara.",
+        details:
+          "The new World Cup soccer ball physics playground adds a self-contained visual interaction surface, with follow-up formatting and server typecheck cleanup landed on main before the release.",
+      },
+    ],
+  },
+  {
     version: "0.1.8",
     date: "Jun 11",
     features: [

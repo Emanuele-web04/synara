@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.1.9 - 2026-06-12
+
+### Added
+
+- Added Codex-style chat workspace folder creation and associated workspace/worktree metadata so generated chat files are easier to isolate per conversation.
+- Added settings sidebar search deep links and related project/settings navigation polish.
+- Added a World Cup soccer ball physics playground as a self-contained interactive visual surface.
+- Added file-only workspace search refinements and stronger provider probe handling around Gemini-backed paths.
+
+### Changed
+
+- Reworked transcript turn collapse and live-tail behavior so collapsed work rows, latest-turn fallback, and active transcript scrolling stay calmer during long or partially visible turns.
+- Improved browser session handling and copy-link flow behavior for in-app browsing and chat reference movement.
+- Refined UI density controls, sidebar spacing, composer spacing, and settings page opening performance.
+- Replaced bespoke editor project menu behavior with the shared `ProjectMenuPicker` path.
+- Split kanban composer menu discovery from editor logic so each surface owns less unrelated state.
+- Shared local image preview state and error-card handling across chat and editor views.
+
+### Fixed
+
+- Fixed server typecheck and formatting drift that reached `main` after the soccer playground merge.
+- Fixed transcript turn collapse and tail jitter cases where visible turn ids could be empty while a latest turn still had active work.
+- Fixed browser/copy-link edge cases that could leave stale browser session state or awkward link movement.
+- Fixed editor mode production feedback and local image preview duplication between chat and editor surfaces.
+- Fixed settings page re-render churn caused by streaming ticks while opening settings.
+
+### Verification
+
+- `bun run fmt:check` passed.
+- `bun run lint` passed with 143 warnings, 0 errors.
+- `bun run typecheck` passed with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed.
+- `bun run build` passed. Vite still warns about large web chunks and plugin timings; desktop build still reports the existing typeless `tsdown.config.ts` module warning.
+- First `bun run test` attempt visibly completed the long web/server/integration suites without an assertion failure, then hung during final server Vitest teardown with two workers still alive; it was interrupted and is not counted as a full pass.
+- Final full `bun run test` after release-note and version edits failed in `packages/effect-acp/src/client.test.ts` on two 5000ms timeouts: `returns formatted invalid params when a typed extension request payload is wrong` and `replays buffered notifications to handlers registered after they arrive`. Turbo canceled `t3:test` with code 130 after the `effect-acp` failure, so the full run is not counted as passed.
+- Targeted rerun `bun run test src/client.test.ts -t "returns formatted invalid params when a typed extension request payload is wrong|replays buffered notifications to handlers registered after they arrive"` from `packages/effect-acp` passed: 2 tests passed, 3 skipped.
+- Full `packages/effect-acp` rerun passed: 3 files passed, 24 tests passed.
+- Full `apps/web` rerun passed: 160 files passed, 1838 tests passed.
+- Direct server rerun `bun run test -- --maxWorkers=1` from `apps/server` passed: 125 files passed, 1 skipped; 1197 tests passed, 6 skipped.
+- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.1.9`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+
 ## 0.1.8 - 2026-06-11
 
 ### Added
