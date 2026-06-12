@@ -42,6 +42,7 @@ import {
   ZapIcon,
 } from "~/lib/icons";
 import { Button } from "../ui/button";
+import { ComposerLiveEditorContextChip } from "./ComposerLiveEditorContextChip";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesTree } from "./ChangedFilesTree";
@@ -67,6 +68,11 @@ import {
   deriveDisplayedUserMessageState,
   type ParsedTerminalContextEntry,
 } from "~/lib/terminalContext";
+import {
+  extractBrowserEditorContextPromptBlocks,
+  removeBrowserEditorContextPrompts,
+  type BrowserEditorPromptContextSummary,
+} from "~/lib/browserEditorContext";
 import { cn } from "~/lib/utils";
 import {
   DEFAULT_CHAT_FONT_SIZE_PX,
@@ -116,6 +122,8 @@ import {
 } from "../../lib/subagentPresentation";
 import { RiRobot3Line } from "react-icons/ri";
 import { deriveUserMessagePreviewState } from "./userMessagePreview";
+import type { ComposerBrowserAnnotationContext } from "../../composerDraftStore";
+import { BROWSER_ANNOTATION_SCREENSHOT_NAME } from "../../lib/browserPromptContext";
 
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
 // The composer overlaps the transcript by design, so the list needs extra tail
@@ -123,6 +131,69 @@ const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
 const MIN_BOTTOM_CONTENT_INSET_PX = 64;
 const MESSAGE_HOVER_REVEAL_CLASS_NAME =
   "opacity-0 transition-opacity pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto";
+
+type TimelineImageAttachment = Extract<
+  NonNullable<TimelineMessage["attachments"]>[number],
+  { type: "image" }
+>;
+
+function readBrowserPromptBlockField(block: string, field: string): string {
+  const match = block.match(new RegExp(`^${field}:\\s*(.*)$`, "m"));
+  return match?.[1]?.trim() ?? "";
+}
+
+function readBrowserPromptBlockCount(block: string, field: string): number {
+  const value = Number(readBrowserPromptBlockField(block, field));
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function browserAnnotationFromPromptSummary(
+  summary: BrowserEditorPromptContextSummary,
+): ComposerBrowserAnnotationContext {
+  const selectedSelector =
+    readBrowserPromptBlockField(summary.block, "selectedSelector") ||
+    readBrowserPromptBlockField(summary.block, "selector");
+  return {
+    promptBlock: summary.block,
+    title: summary.title,
+    url: summary.url,
+    strokeCount: readBrowserPromptBlockCount(summary.block, "strokeCount"),
+    textCount: readBrowserPromptBlockCount(summary.block, "textCount"),
+    arrowCount: readBrowserPromptBlockCount(summary.block, "arrowCount"),
+    ...(selectedSelector ? { selectedSelector } : {}),
+  };
+}
+
+function isBrowserAnnotationImage(
+  image: TimelineImageAttachment,
+  browserContextCount: number,
+): boolean {
+  return browserContextCount > 0 && image.name === BROWSER_ANNOTATION_SCREENSHOT_NAME;
+}
+
+function buildTimelineBrowserContextPreview(input: {
+  contexts: ReadonlyArray<BrowserEditorPromptContextSummary>;
+  images: ReadonlyArray<TimelineImageAttachment>;
+  selectedIndex: number;
+}): ExpandedImagePreview | null {
+  const context = input.contexts[input.selectedIndex];
+  if (!context) {
+    return null;
+  }
+  const annotationImage = input.images.find((image) =>
+    isBrowserAnnotationImage(image, input.contexts.length),
+  );
+  return {
+    index: input.selectedIndex,
+    images: input.contexts.map((item) => ({
+      ...(item.kind === "drawing" && annotationImage?.previewUrl
+        ? { src: annotationImage.previewUrl }
+        : {}),
+      name: "Live Editor Context",
+      browserAnnotation: browserAnnotationFromPromptSummary(item),
+    })),
+  };
+}
 
 const AgentTaskIcon: LucideIcon = (props) => (
   <RiRobot3Line className={props.className} style={props.style} />
@@ -520,13 +591,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "message" &&
         row.message.role === "user" &&
         (() => {
-          const userImages = (row.message.attachments ?? []).filter(
+          const rawUserImages = (row.message.attachments ?? []).filter(
             (
               attachment,
-            ): attachment is Extract<
-              NonNullable<TimelineMessage["attachments"]>[number],
-              { type: "image" }
-            > => attachment.type === "image",
+            ): attachment is TimelineImageAttachment => attachment.type === "image",
+          );
+          const browserContexts = extractBrowserEditorContextPromptBlocks(row.message.text);
+          const visibleMessageText =
+            browserContexts.length > 0
+              ? removeBrowserEditorContextPrompts(row.message.text)
+              : row.message.text;
+          const userImages = rawUserImages.filter(
+            (image) => !isBrowserAnnotationImage(image, browserContexts.length),
           );
           const assistantSelections = (row.message.attachments ?? []).filter(
             (
@@ -536,8 +612,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               { type: "assistant-selection" }
             > => attachment.type === "assistant-selection",
           );
-          const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text, {
-            hideImageOnlyBootstrapPrompt: userImages.length > 0 || assistantSelections.length > 0,
+          const displayedUserMessage = deriveDisplayedUserMessageState(visibleMessageText, {
+            hideImageOnlyBootstrapPrompt:
+              rawUserImages.length > 0 ||
+              assistantSelections.length > 0 ||
+              browserContexts.length > 0,
           });
           const renderedAssistantSelections =
             assistantSelections.length > 0
@@ -569,7 +648,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             Boolean(onEditUserMessage) &&
             row.message.id === latestEditableUserMessageId &&
             displayedUserMessage.copyText.trim().length > 0;
-          const hasLeadingMedia = renderedAssistantSelections.length > 0 || userImages.length > 0;
+          const hasLeadingMedia =
+            renderedAssistantSelections.length > 0 ||
+            userImages.length > 0 ||
+            browserContexts.length > 0;
           const isTailContentRow = row.id === tailContentRowId;
           return (
             <div className="flex w-full justify-end">
@@ -587,6 +669,32 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 {renderedAssistantSelections.length > 0 && (
                   <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
                     <AssistantSelectionsSummaryChip selections={renderedAssistantSelections} />
+                  </div>
+                )}
+                {browserContexts.length > 0 && (
+                  <div
+                    className={cn(
+                      "flex max-w-[150px] flex-wrap justify-end gap-1 self-end",
+                      (userImages.length > 0 || showUserText) && "mb-1",
+                    )}
+                  >
+                    {browserContexts.map((context, index) => (
+                      <ComposerLiveEditorContextChip
+                        key={`${row.message.id}:browser-context:${index}`}
+                        size="compact"
+                        title={context.title || context.url || context.label}
+                        onPreview={() => {
+                          const preview = buildTimelineBrowserContextPreview({
+                            contexts: browserContexts,
+                            images: rawUserImages,
+                            selectedIndex: index,
+                          });
+                          if (preview) {
+                            onImageExpand(preview);
+                          }
+                        }}
+                      />
+                    ))}
                   </div>
                 )}
                 {userImages.length > 0 && (

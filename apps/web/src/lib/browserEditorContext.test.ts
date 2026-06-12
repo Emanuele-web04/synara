@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildBrowserDrawingPromptBlock,
   buildBrowserSelectionPromptBlock,
+  extractBrowserEditorContextPromptBlocks,
   removeBrowserAnnotationContextPrompt,
+  removeBrowserEditorContextPrompts,
   upsertBrowserAnnotationContextPrompt,
 } from "./browserEditorContext";
 
@@ -174,5 +176,28 @@ describe("browser editor annotation prompt blocks", () => {
     expect(prompt).toContain("Keep this");
     expect(prompt).toContain("Manual annotation");
     expect(prompt).not.toContain("source: browser-annotation");
+  });
+
+  it("extracts browser context blocks and removes them from display text", () => {
+    const selectionBlock = buildBrowserSelectionPromptBlock({
+      url: "http://localhost:8891/browser-editor-demo/index.html",
+      title: "Northstar Studio",
+      selector: "main > section.hero",
+      tagName: "SECTION",
+      role: "region",
+      accessibleName: "Launch experiments",
+      text: "Launch experiments without losing the plot.",
+      attributes: { class: "hero" },
+      rect: { x: 40, y: 120, width: 720, height: 420 },
+      viewport: { width: 800, height: 600, devicePixelRatio: 2 },
+      outerHTML: '<section class="hero"><h1>Launch experiments without losing the plot.</h1></section>',
+    });
+    const prompt = `Please update this hero.\n\n${selectionBlock}\n\nThanks.`;
+
+    const contexts = extractBrowserEditorContextPromptBlocks(prompt);
+
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]?.kind).toBe("selection");
+    expect(removeBrowserEditorContextPrompts(prompt)).toBe("Please update this hero.\n\nThanks.");
   });
 });

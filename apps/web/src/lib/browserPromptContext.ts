@@ -53,6 +53,8 @@ const INTERNAL_BROWSER_ACTION_PATTERNS = [
   "screen",
 ];
 
+export const BROWSER_ANNOTATION_SCREENSHOT_NAME = "browser-annotation-context.png";
+
 function normalizePromptForMatching(prompt: string): string {
   return prompt.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -84,8 +86,7 @@ function fileFromBrowserScreenshot(
   if (screenshot.bytes.byteLength === 0) {
     throw new Error("Browser screenshot is empty.");
   }
-  const bytes = new Uint8Array(screenshot.bytes);
-  return new File([bytes], name, {
+  return new File([screenshot.bytes], name, {
     type: screenshot.mimeType,
   });
 }

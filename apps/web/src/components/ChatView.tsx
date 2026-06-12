@@ -8962,7 +8962,7 @@ export default function ChatView({
 
       {expandedImage && expandedImageItem && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/82 px-4 py-6 backdrop-blur-[2px] [-webkit-app-region:no-drag]"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/62 px-4 py-6 backdrop-blur-xl [-webkit-app-region:no-drag]"
           role="dialog"
           aria-modal="true"
           aria-label="Expanded image preview"
@@ -8989,8 +8989,8 @@ export default function ChatView({
             </Button>
           )}
           {expandedImageAnnotation ? (
-            <div className="relative isolate z-10 grid h-[min(760px,90vh)] max-h-[90vh] w-[min(1040px,92vw)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-lg border border-white/10 bg-[rgba(13,15,17,0.97)] shadow-2xl">
-              <header className="flex min-w-0 items-start gap-3 border-b border-white/10 bg-[rgba(17,19,21,0.94)] px-4 py-3">
+            <div className="relative isolate z-10 grid h-[min(760px,90vh)] max-h-[90vh] w-[min(1040px,92vw)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-white/12 bg-[rgba(18,20,22,0.68)] shadow-[0_28px_100px_rgba(0,0,0,0.58),0_0_0_1px_rgba(255,255,255,0.04)_inset] backdrop-blur-2xl">
+              <header className="flex min-w-0 items-start gap-3 border-b border-white/10 bg-white/[0.035] px-4 py-3 backdrop-blur-xl">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold text-foreground">
                     {expandedImageContextTitle}
@@ -9000,37 +9000,37 @@ export default function ChatView({
                   </p>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {expandedImageAnnotation.strokeCount > 0 ? (
-                      <span className="rounded-full border border-white/10 bg-[rgba(31,34,37,0.82)] px-2 py-0.5 text-[11px] text-muted-foreground">
+                      <span className="rounded-full border border-white/12 bg-white/[0.055] px-2 py-0.5 text-[11px] text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
                         {expandedImageAnnotation.strokeCount} stroke
                         {expandedImageAnnotation.strokeCount === 1 ? "" : "s"}
                       </span>
                     ) : null}
                     {expandedImageAnnotation.textCount > 0 ? (
-                      <span className="rounded-full border border-white/10 bg-[rgba(31,34,37,0.82)] px-2 py-0.5 text-[11px] text-muted-foreground">
+                      <span className="rounded-full border border-white/12 bg-white/[0.055] px-2 py-0.5 text-[11px] text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
                         {expandedImageAnnotation.textCount} note
                         {expandedImageAnnotation.textCount === 1 ? "" : "s"}
                       </span>
                     ) : null}
                     {(expandedImageAnnotation.arrowCount ?? 0) > 0 ? (
-                      <span className="rounded-full border border-white/10 bg-[rgba(31,34,37,0.82)] px-2 py-0.5 text-[11px] text-muted-foreground">
+                      <span className="rounded-full border border-white/12 bg-white/[0.055] px-2 py-0.5 text-[11px] text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
                         {expandedImageAnnotation.arrowCount} arrow
                         {expandedImageAnnotation.arrowCount === 1 ? "" : "s"}
                       </span>
                     ) : null}
                     {expandedImageAnnotation.selectedSelector ? (
-                      <span className="max-w-[520px] truncate rounded-full border border-white/10 bg-[rgba(31,34,37,0.82)] px-2 py-0.5 text-[11px] text-muted-foreground">
+                      <span className="max-w-[520px] truncate rounded-full border border-white/12 bg-white/[0.055] px-2 py-0.5 text-[11px] text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
                         {expandedImageAnnotation.selectedSelector}
                       </span>
                     ) : null}
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  <div className="inline-flex rounded-md border border-white/10 bg-[rgba(31,34,37,0.78)] p-0.5">
+                  <div className="inline-flex rounded-lg border border-white/12 bg-black/22 p-0.5 shadow-[0_1px_0_rgba(255,255,255,0.05)_inset] backdrop-blur-xl">
                     {expandedImagePaneOptions.map((pane) => (
                       <button
                         key={pane}
                         type="button"
-                        className="rounded px-2 py-1 text-[11px] font-medium capitalize text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground data-[active=true]:bg-[rgba(58,62,67,0.86)] data-[active=true]:text-foreground"
+                        className="rounded-md px-2 py-1 text-[11px] font-medium capitalize text-muted-foreground transition-colors hover:bg-white/8 hover:text-foreground data-[active=true]:bg-white/14 data-[active=true]:text-foreground data-[active=true]:shadow-[0_1px_0_rgba(255,255,255,0.08)_inset]"
                         data-active={expandedImageActivePane === pane}
                         onClick={() => setExpandedImagePane(pane)}
                       >
@@ -9049,9 +9049,9 @@ export default function ChatView({
                   </Button>
                 </div>
               </header>
-              <div className="min-h-0 overflow-hidden p-3">
+              <div className="min-h-0 overflow-hidden bg-black/[0.08] p-4">
                 {expandedImageActivePane === "image" && expandedImageItem.src ? (
-                  <div className="relative h-full min-h-0 rounded-md border border-white/10 bg-[#090b0d] shadow-inner">
+                  <div className="relative h-full min-h-0 rounded-xl border border-white/12 bg-black/24 shadow-[0_1px_0_rgba(255,255,255,0.05)_inset,0_18px_70px_rgba(0,0,0,0.26)] backdrop-blur-xl">
                     <div
                       ref={expandedImageStageRef}
                       className={cn(
@@ -9087,7 +9087,7 @@ export default function ChatView({
                           src={expandedImageItem.src}
                           alt={expandedImageItem.name}
                           className={cn(
-                            "select-none rounded-sm object-contain shadow-[0_18px_60px_rgba(0,0,0,0.42)] will-change-[width] motion-reduce:transition-none",
+                            "select-none rounded-md object-contain shadow-[0_18px_60px_rgba(0,0,0,0.42)] will-change-[width] motion-reduce:transition-none",
                             isExpandedImageWheelZooming
                               ? "transition-none"
                               : "transition-[width] duration-200 ease-out",
@@ -9114,7 +9114,7 @@ export default function ChatView({
                       </div>
                     </div>
                     <div
-                      className="absolute right-3 top-3 z-10 inline-flex items-center gap-1 rounded-md border border-white/10 bg-[rgba(16,18,20,0.88)] p-1 shadow-lg"
+                      className="absolute right-3 top-3 z-10 inline-flex items-center gap-1 rounded-lg border border-white/12 bg-black/32 p-1 shadow-[0_10px_32px_rgba(0,0,0,0.34),0_1px_0_rgba(255,255,255,0.06)_inset] backdrop-blur-xl"
                       onPointerDown={(event) => event.stopPropagation()}
                     >
                       <button
@@ -9162,21 +9162,21 @@ export default function ChatView({
                   </div>
                 ) : null}
                 {expandedImageActivePane === "code" ? (
-                  <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-md border border-white/10 bg-[rgba(11,13,15,0.96)]">
-                    <div className="border-b border-white/10 bg-[rgba(23,25,28,0.94)] px-3 py-2 text-[11px] font-semibold uppercase text-muted-foreground">
+                  <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-white/12 bg-black/24 shadow-[0_1px_0_rgba(255,255,255,0.05)_inset,0_18px_70px_rgba(0,0,0,0.22)] backdrop-blur-xl">
+                    <div className="border-b border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase text-muted-foreground backdrop-blur-md">
                       Selected code
                     </div>
-                    <pre className="h-full min-h-0 overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-[11px] leading-relaxed text-foreground/88">
+                    <pre className="h-full min-h-0 overflow-auto whitespace-pre-wrap break-words bg-black/[0.12] p-3 font-mono text-[11px] leading-relaxed text-foreground/88">
                       {expandedImageSelectedCode ?? "No selected element code captured."}
                     </pre>
                   </section>
                 ) : null}
                 {expandedImageActivePane === "payload" ? (
-                  <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-md border border-white/10 bg-[rgba(11,13,15,0.96)]">
-                    <div className="border-b border-white/10 bg-[rgba(23,25,28,0.94)] px-3 py-2 text-[11px] font-semibold uppercase text-muted-foreground">
+                  <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-white/12 bg-black/24 shadow-[0_1px_0_rgba(255,255,255,0.05)_inset,0_18px_70px_rgba(0,0,0,0.22)] backdrop-blur-xl">
+                    <div className="border-b border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase text-muted-foreground backdrop-blur-md">
                       Metadata payload
                     </div>
-                    <pre className="h-full min-h-0 overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-[11px] leading-relaxed text-foreground/88">
+                    <pre className="h-full min-h-0 overflow-auto whitespace-pre-wrap break-words bg-black/[0.12] p-3 font-mono text-[11px] leading-relaxed text-foreground/88">
                       {expandedImageAnnotation.promptBlock}
                     </pre>
                   </section>

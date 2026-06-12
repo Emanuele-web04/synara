@@ -469,6 +469,60 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("mb-3");
   });
 
+  it("renders browser inspect context as a live editor card instead of raw prompt text", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const browserContext = [
+      "<browser-selection-selection>",
+      "source: browser-selection",
+      "url: http://localhost:8891/browser-editor-demo/index.html",
+      "title: Northstar Studio",
+      "selectedSelector: main > section.hero",
+      "tag: section",
+      "outerHTML:",
+      "    <section class=\"hero\"><h1>Launch experiments</h1></section>",
+      "</browser-selection-selection>",
+    ].join("\n");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-browser-context",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-browser-context"),
+              role: "user",
+              text: browserContext,
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Live Editor Context");
+    expect(markup).not.toContain("browser-selection-selection");
+    expect(markup).not.toContain("source: browser-selection");
+  });
+
   it("renders plain user text without preformatted shrink-wrap markup", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(

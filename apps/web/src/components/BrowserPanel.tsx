@@ -10,6 +10,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
@@ -59,9 +60,11 @@ import {
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { useStore as useAppStore } from "../store";
+import { createProjectSelector, createThreadSelector } from "../storeSelectors";
 import { selectPreviewState, usePreviewStateStore } from "../previewStateStore";
 import { anchoredToastManager } from "./ui/toast";
 import {
+  BROWSER_ANNOTATION_SCREENSHOT_NAME,
   composerImageFromBrowserScreenshot,
   screenshotAttachmentName,
 } from "../lib/browserPromptContext";
@@ -205,18 +208,31 @@ const BROWSER_ANNOTATION_ARROW_HANDLES = [
 const BROWSER_DRAWING_CONTRAST_STROKE_WIDTH = 6;
 const BROWSER_DRAWING_GRADIENT_STROKE_WIDTH = 3.5;
 const BROWSER_DRAWING_GLINT_STROKE_WIDTH = 1;
-const BROWSER_TEXT_ANNOTATION_BOX_WIDTH = 188;
-const BROWSER_TEXT_ANNOTATION_BOX_HEIGHT = 30;
+const BROWSER_DRAWING_MIN_POINT_DISTANCE = 1.5;
+const BROWSER_TEXT_ANNOTATION_BOX_MIN_WIDTH = 84;
+const BROWSER_TEXT_ANNOTATION_BOX_MAX_WIDTH = 360;
+const BROWSER_TEXT_ANNOTATION_BOX_MIN_HEIGHT = 30;
+const BROWSER_TEXT_ANNOTATION_BOX_MAX_HEIGHT = 180;
+const BROWSER_TEXT_ANNOTATION_FONT_WEIGHT = 600;
+const BROWSER_TEXT_ANNOTATION_FONT_SIZE = 12;
+const BROWSER_TEXT_ANNOTATION_LINE_HEIGHT = 16;
+const BROWSER_TEXT_ANNOTATION_PADDING_X = 10;
+const BROWSER_TEXT_ANNOTATION_PADDING_Y = 6;
 const BROWSER_TEXT_ANNOTATION_OFFSET_X = 10;
-const BROWSER_TEXT_ANNOTATION_OFFSET_Y = -34;
+const BROWSER_TEXT_ANNOTATION_ANCHOR_GAP = 4;
+const BROWSER_TEXT_ANNOTATION_PLACEHOLDER = "Add note";
 const BROWSER_ARROW_MIN_LENGTH = 8;
 const BROWSER_ANNOTATION_ARROW_HEAD_LENGTH = 11;
 const BROWSER_ANNOTATION_ARROW_HEAD_ANGLE = Math.PI / 7;
 const BROWSER_ANNOTATION_ATTACHMENT_SOURCE = "browser-annotation";
-const BROWSER_ANNOTATION_SCREENSHOT_NAME = "browser-annotation-context.png";
 const BROWSER_ANNOTATION_SCREENSHOT_DEBOUNCE_MS = 450;
 const BROWSER_ANNOTATION_SCREENSHOT_MAX_DIMENSION = 4096;
+const BROWSER_ANNOTATION_FULL_PAGE_MAX_DIMENSION = 2400;
+const BROWSER_ANNOTATION_FULL_PAGE_MAX_AREA = 3_500_000;
+const BROWSER_ANNOTATION_REGION_PADDING = 96;
 const BROWSER_FALLBACK_CAPTURE_MAX_NODES = 4_000;
+
+let textAnnotationMeasureContext: CanvasRenderingContext2D | null | undefined;
 
 const VIEWPORT_TRANSITION_PROPERTIES = new Set([
   "transform",
@@ -295,20 +311,254 @@ function pointFromOverlayClientPoint(
   };
 }
 
-function textAnnotationBoxPosition(annotation: BrowserTextAnnotation): BrowserDrawingPoint {
+function pointFromOverlayRect(
+  rect: Pick<DOMRect, "left" | "top" | "width" | "height"> | null,
+  clientX: number,
+  clientY: number,
+): BrowserDrawingPoint {
+  if (!rect) {
+    return { x: 0, y: 0 };
+  }
+  return {
+    x: Math.max(0, Math.min(rect.width, clientX - rect.left)),
+    y: Math.max(0, Math.min(rect.height, clientY - rect.top)),
+  };
+}
+
+interface BrowserTextAnnotationBoxMetrics {
+  width: number;
+  height: number;
+  lines: string[];
+  hasOverflow: boolean;
+}
+
+function estimateTextAnnotationTextWidth(text: string): number {
+  let width = 0;
+  for (const character of text) {
+    if (character === " ") {
+      width += 3.5;
+    } else if (/[ilI1.,'`|:;!]/.test(character)) {
+      width += 3.6;
+    } else if (/[mwMW@#%&]/.test(character)) {
+      width += 9;
+    } else if (/[A-Z]/.test(character)) {
+      width += 7.4;
+    } else {
+      width += 6.6;
+    }
+  }
+  return width;
+}
+
+function textAnnotationMeasureFont(): string {
+  return `${BROWSER_TEXT_ANNOTATION_FONT_WEIGHT} ${BROWSER_TEXT_ANNOTATION_FONT_SIZE}px ui-sans-serif, system-ui, sans-serif`;
+}
+
+function getTextAnnotationMeasureContext(): CanvasRenderingContext2D | null {
+  if (textAnnotationMeasureContext !== undefined) {
+    return textAnnotationMeasureContext;
+  }
+  if (typeof document === "undefined") {
+    textAnnotationMeasureContext = null;
+    return null;
+  }
+  try {
+    textAnnotationMeasureContext = document.createElement("canvas").getContext("2d");
+  } catch {
+    textAnnotationMeasureContext = null;
+  }
+  return textAnnotationMeasureContext;
+}
+
+function measureTextAnnotationTextWidth(text: string): number {
+  const context = getTextAnnotationMeasureContext();
+  if (!context) {
+    return estimateTextAnnotationTextWidth(text);
+  }
+  context.font = textAnnotationMeasureFont();
+  return context.measureText(text).width;
+}
+
+function normalizeTextAnnotationText(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
+}
+
+function maxVisibleTextAnnotationLines(): number {
+  return Math.max(
+    1,
+    Math.floor(
+      (BROWSER_TEXT_ANNOTATION_BOX_MAX_HEIGHT - BROWSER_TEXT_ANNOTATION_PADDING_Y * 2) /
+        BROWSER_TEXT_ANNOTATION_LINE_HEIGHT,
+    ),
+  );
+}
+
+function textAnnotationLines(
+  rawText: string,
+  maxWidth: number,
+  input: {
+    maxLines?: number;
+    measureText?: (text: string) => number;
+  } = {},
+): { lines: string[]; hasOverflow: boolean } {
+  const text = normalizeTextAnnotationText(rawText);
+  if (text.length === 0) {
+    return { lines: [""], hasOverflow: false };
+  }
+
+  const measureText = input.measureText ?? measureTextAnnotationTextWidth;
+  const maxLines = input.maxLines ?? Number.POSITIVE_INFINITY;
+  const lines: string[] = [];
+  let hasOverflow = false;
+  let current = "";
+  let currentWidth = 0;
+  const spaceWidth = measureText(" ");
+
+  const pushLine = (line: string): boolean => {
+    if (lines.length >= maxLines) {
+      hasOverflow = true;
+      return false;
+    }
+    lines.push(line);
+    return true;
+  };
+
+  const splitLongWordIntoLines = (word: string): { remainder: string; width: number } | null => {
+    let remainder = "";
+    let remainderWidth = 0;
+
+    for (const character of Array.from(word)) {
+      const characterWidth = Math.min(measureText(character), maxWidth);
+      if (remainder.length > 0 && remainderWidth + characterWidth > maxWidth) {
+        if (!pushLine(remainder)) {
+          return null;
+        }
+        remainder = character;
+        remainderWidth = characterWidth;
+        continue;
+      }
+      remainder += character;
+      remainderWidth += characterWidth;
+    }
+
+    return { remainder, width: remainderWidth };
+  };
+
+  for (const word of text.split(" ")) {
+    if (word.length === 0) {
+      continue;
+    }
+
+    const wordWidth = measureText(word);
+    const candidateWidth =
+      current.length > 0 ? currentWidth + spaceWidth + wordWidth : wordWidth;
+
+    if (candidateWidth <= maxWidth) {
+      current = current.length > 0 ? `${current} ${word}` : word;
+      currentWidth = candidateWidth;
+      continue;
+    }
+
+    if (current.length > 0) {
+      if (!pushLine(current)) {
+        break;
+      }
+      current = "";
+      currentWidth = 0;
+    }
+
+    if (wordWidth <= maxWidth) {
+      current = word;
+      currentWidth = wordWidth;
+      continue;
+    }
+
+    const splitWord = splitLongWordIntoLines(word);
+    if (!splitWord) {
+      break;
+    }
+    current = splitWord.remainder;
+    currentWidth = splitWord.width;
+  }
+
+  if (!hasOverflow && current.length > 0) {
+    pushLine(current);
+  }
+
+  if (lines.length === 0) {
+    return { lines: [text], hasOverflow };
+  }
+  return { lines, hasOverflow };
+}
+
+function textAnnotationBoxMetrics(text: string): BrowserTextAnnotationBoxMetrics {
+  const displayText = text.trim().length > 0 ? text : BROWSER_TEXT_ANNOTATION_PLACEHOLDER;
+  const maxContentWidth =
+    BROWSER_TEXT_ANNOTATION_BOX_MAX_WIDTH - BROWSER_TEXT_ANNOTATION_PADDING_X * 2;
+  const lineWrap = textAnnotationLines(displayText, maxContentWidth, {
+    maxLines: maxVisibleTextAnnotationLines(),
+  });
+  const lines = lineWrap.hasOverflow
+    ? [
+        ...lineWrap.lines.slice(0, Math.max(0, lineWrap.lines.length - 1)),
+        "… more text",
+      ]
+    : lineWrap.lines;
+  const contentWidth = lineWrap.hasOverflow
+    ? maxContentWidth
+    : lines.reduce(
+        (maxWidth, line) => Math.max(maxWidth, measureTextAnnotationTextWidth(line)),
+        0,
+      );
+  const width = Math.ceil(
+    Math.max(
+      BROWSER_TEXT_ANNOTATION_BOX_MIN_WIDTH,
+      Math.min(
+        BROWSER_TEXT_ANNOTATION_BOX_MAX_WIDTH,
+        contentWidth + BROWSER_TEXT_ANNOTATION_PADDING_X * 2,
+      ),
+    ),
+  );
+  const rawHeight = Math.max(
+    BROWSER_TEXT_ANNOTATION_BOX_MIN_HEIGHT,
+    lines.length * BROWSER_TEXT_ANNOTATION_LINE_HEIGHT +
+      BROWSER_TEXT_ANNOTATION_PADDING_Y * 2,
+  );
+  const height = Math.ceil(
+    Math.max(
+      BROWSER_TEXT_ANNOTATION_BOX_MIN_HEIGHT,
+      Math.min(BROWSER_TEXT_ANNOTATION_BOX_MAX_HEIGHT, rawHeight),
+    ),
+  );
+  return { width, height, lines, hasOverflow: lineWrap.hasOverflow };
+}
+
+function browserTextAnnotationMetrics(
+  annotation: BrowserTextAnnotation,
+): BrowserTextAnnotationBoxMetrics {
+  return textAnnotationBoxMetrics(annotation.text);
+}
+
+function textAnnotationBoxPosition(
+  annotation: BrowserTextAnnotation,
+  metrics = browserTextAnnotationMetrics(annotation),
+): BrowserDrawingPoint {
   return {
     x: annotation.boxX ?? Math.max(8, annotation.x + BROWSER_TEXT_ANNOTATION_OFFSET_X),
-    y: annotation.boxY ?? Math.max(8, annotation.y + BROWSER_TEXT_ANNOTATION_OFFSET_Y),
+    y:
+      annotation.boxY ??
+      Math.max(8, annotation.y - metrics.height - BROWSER_TEXT_ANNOTATION_ANCHOR_GAP),
   };
 }
 
 function clampTextAnnotationBoxPosition(
   position: BrowserDrawingPoint,
   overlay: HTMLElement | null,
+  metrics: BrowserTextAnnotationBoxMetrics = textAnnotationBoxMetrics(""),
 ): BrowserDrawingPoint {
   const rect = overlay?.getBoundingClientRect();
-  const maxX = rect ? Math.max(8, rect.width - BROWSER_TEXT_ANNOTATION_BOX_WIDTH - 8) : position.x;
-  const maxY = rect ? Math.max(8, rect.height - BROWSER_TEXT_ANNOTATION_BOX_HEIGHT - 8) : position.y;
+  const maxX = rect ? Math.max(8, rect.width - metrics.width - 8) : position.x;
+  const maxY = rect ? Math.max(8, rect.height - metrics.height - 8) : position.y;
   return {
     x: Math.max(8, Math.min(maxX, position.x)),
     y: Math.max(8, Math.min(maxY, position.y)),
@@ -319,13 +569,14 @@ function textAnnotationHandlePoint(
   annotation: BrowserTextAnnotation,
   handle: BrowserAnnotationArrowHandle,
 ): BrowserDrawingPoint {
-  const position = textAnnotationBoxPosition(annotation);
+  const metrics = browserTextAnnotationMetrics(annotation);
+  const position = textAnnotationBoxPosition(annotation, metrics);
   const left = position.x;
   const top = position.y;
-  const centerX = left + BROWSER_TEXT_ANNOTATION_BOX_WIDTH / 2;
-  const centerY = top + BROWSER_TEXT_ANNOTATION_BOX_HEIGHT / 2;
-  const right = left + BROWSER_TEXT_ANNOTATION_BOX_WIDTH;
-  const bottom = top + BROWSER_TEXT_ANNOTATION_BOX_HEIGHT;
+  const centerX = left + metrics.width / 2;
+  const centerY = top + metrics.height / 2;
+  const right = left + metrics.width;
+  const bottom = top + metrics.height;
   switch (handle) {
     case "top-left":
       return { x: left, y: top };
@@ -411,6 +662,161 @@ function resolveBrowserAnnotationArrowSources(
   return arrows.map((arrow) => resolveBrowserAnnotationArrowSource(arrow, textAnnotations));
 }
 
+function unionBrowserCaptureRect(
+  current: BrowserCaptureRect | null,
+  rect: BrowserCaptureRect,
+): BrowserCaptureRect | null {
+  if (rect.width < 0 || rect.height < 0) {
+    return current;
+  }
+  if (!current) {
+    return rect;
+  }
+  const left = Math.min(current.x, rect.x);
+  const top = Math.min(current.y, rect.y);
+  const right = Math.max(current.x + current.width, rect.x + rect.width);
+  const bottom = Math.max(current.y + current.height, rect.y + rect.height);
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+function browserAnnotationViewportBounds(input: {
+  selectedBox: BrowserInspectHoverBox | null;
+  strokes: BrowserDrawingStroke[];
+  textAnnotations: BrowserTextAnnotation[];
+  arrows: BrowserAnnotationArrow[];
+}): BrowserCaptureRect | null {
+  let bounds: BrowserCaptureRect | null = null;
+  const addRect = (rect: BrowserCaptureRect) => {
+    bounds = unionBrowserCaptureRect(bounds, rect);
+  };
+  const addPoint = (point: BrowserDrawingPoint) => {
+    addRect({ x: point.x, y: point.y, width: 0, height: 0 });
+  };
+
+  if (input.selectedBox) {
+    addRect(input.selectedBox);
+  }
+  for (const stroke of input.strokes) {
+    for (const point of stroke.points) {
+      addPoint(point);
+    }
+  }
+  for (const annotation of input.textAnnotations) {
+    const metrics = browserTextAnnotationMetrics(annotation);
+    const position = textAnnotationBoxPosition(annotation, metrics);
+    addPoint(annotation);
+    addRect({ x: position.x, y: position.y, width: metrics.width, height: metrics.height });
+  }
+  for (const arrow of input.arrows) {
+    if (browserAnnotationArrowLength(arrow) >= BROWSER_ARROW_MIN_LENGTH) {
+      addPoint(arrow.from);
+      addPoint(arrow.to);
+    }
+  }
+  return bounds;
+}
+
+function clampBrowserNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function rectContainsBrowserRect(
+  outer: BrowserCaptureRect,
+  inner: BrowserCaptureRect,
+  tolerance = 0,
+): boolean {
+  return (
+    inner.x >= outer.x - tolerance &&
+    inner.y >= outer.y - tolerance &&
+    inner.x + inner.width <= outer.x + outer.width + tolerance &&
+    inner.y + inner.height <= outer.y + outer.height + tolerance
+  );
+}
+
+function roundBrowserCaptureRect(
+  rect: BrowserCaptureRect,
+  documentWidth: number,
+  documentHeight: number,
+): BrowserCaptureRect {
+  const width = Math.max(1, Math.min(documentWidth, Math.ceil(rect.width)));
+  const height = Math.max(1, Math.min(documentHeight, Math.ceil(rect.height)));
+  return {
+    x: clampBrowserNumber(Math.floor(rect.x), 0, Math.max(0, documentWidth - width)),
+    y: clampBrowserNumber(Math.floor(rect.y), 0, Math.max(0, documentHeight - height)),
+    width,
+    height,
+  };
+}
+
+function browserAnnotationCaptureRect(input: {
+  annotationBounds: BrowserCaptureRect | null;
+  documentWidth: number;
+  documentHeight: number;
+  scrollX: number;
+  scrollY: number;
+  viewportWidth: number;
+  viewportHeight: number;
+}): BrowserCaptureRect {
+  const documentWidth = Math.max(1, Math.ceil(input.documentWidth));
+  const documentHeight = Math.max(1, Math.ceil(input.documentHeight));
+  const viewportWidth = Math.max(1, Math.min(documentWidth, Math.ceil(input.viewportWidth)));
+  const viewportHeight = Math.max(1, Math.min(documentHeight, Math.ceil(input.viewportHeight)));
+  const viewportRect = roundBrowserCaptureRect(
+    {
+      x: input.scrollX,
+      y: input.scrollY,
+      width: viewportWidth,
+      height: viewportHeight,
+    },
+    documentWidth,
+    documentHeight,
+  );
+  const fullPageIsSmall =
+    documentWidth <= BROWSER_ANNOTATION_FULL_PAGE_MAX_DIMENSION &&
+    documentHeight <= BROWSER_ANNOTATION_FULL_PAGE_MAX_DIMENSION &&
+    documentWidth * documentHeight <= BROWSER_ANNOTATION_FULL_PAGE_MAX_AREA;
+
+  if (fullPageIsSmall) {
+    return { x: 0, y: 0, width: documentWidth, height: documentHeight };
+  }
+  if (!input.annotationBounds) {
+    return viewportRect;
+  }
+
+  const pageBounds = {
+    x: input.annotationBounds.x + input.scrollX,
+    y: input.annotationBounds.y + input.scrollY,
+    width: input.annotationBounds.width,
+    height: input.annotationBounds.height,
+  };
+  if (rectContainsBrowserRect(viewportRect, pageBounds, 1)) {
+    return viewportRect;
+  }
+
+  const padded = roundBrowserCaptureRect(
+    {
+      x: pageBounds.x - BROWSER_ANNOTATION_REGION_PADDING,
+      y: pageBounds.y - BROWSER_ANNOTATION_REGION_PADDING,
+      width: pageBounds.width + BROWSER_ANNOTATION_REGION_PADDING * 2,
+      height: pageBounds.height + BROWSER_ANNOTATION_REGION_PADDING * 2,
+    },
+    documentWidth,
+    documentHeight,
+  );
+  const width = Math.min(documentWidth, Math.max(padded.width, viewportWidth));
+  const height = Math.min(documentHeight, Math.max(padded.height, viewportHeight));
+  return roundBrowserCaptureRect(
+    {
+      x: padded.x + padded.width / 2 - width / 2,
+      y: padded.y + padded.height / 2 - height / 2,
+      width,
+      height,
+    },
+    documentWidth,
+    documentHeight,
+  );
+}
+
 function drawCanvasAnnotationArrowPath(
   context: CanvasRenderingContext2D,
   input: {
@@ -456,6 +862,22 @@ function shiftedClosedGradientColors(colors: readonly string[], shift: number): 
 
 function drawingStrokePoints(stroke: BrowserDrawingStroke): string {
   return stroke.points.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" ");
+}
+
+function appendDrawingPoint(
+  stroke: BrowserDrawingStroke,
+  point: BrowserDrawingPoint,
+  minDistance = BROWSER_DRAWING_MIN_POINT_DISTANCE,
+): boolean {
+  const previousPoint = stroke.points.at(-1);
+  if (
+    previousPoint &&
+    Math.hypot(point.x - previousPoint.x, point.y - previousPoint.y) < minDistance
+  ) {
+    return false;
+  }
+  stroke.points.push(point);
+  return true;
 }
 
 function revokeComposerImagePreviewUrl(previewUrl: string): void {
@@ -523,6 +945,17 @@ interface BrowserPageScreenshot {
   documentHeight: number;
   scrollX: number;
   scrollY: number;
+  captureX: number;
+  captureY: number;
+  captureWidth: number;
+  captureHeight: number;
+}
+
+interface BrowserCaptureRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 interface CdpLayoutMetricsResult {
@@ -918,18 +1351,29 @@ function fallbackPageBackground(document: Document, window: Window): string {
 
 async function captureFallbackFramePageScreenshot(
   frame: HTMLIFrameElement,
+  annotationBounds: BrowserCaptureRect | null,
 ): Promise<BrowserPageScreenshot> {
   const captureDocument = resolveFallbackCaptureDocument(frame);
   try {
     const metrics = fallbackDocumentPageMetrics(captureDocument);
+    const captureRect = browserAnnotationCaptureRect({
+      annotationBounds,
+      documentWidth: metrics.documentWidth,
+      documentHeight: metrics.documentHeight,
+      scrollX: metrics.scrollX,
+      scrollY: metrics.scrollY,
+      viewportWidth: captureDocument.window.innerWidth || frame.clientWidth || metrics.documentWidth,
+      viewportHeight:
+        captureDocument.window.innerHeight || frame.clientHeight || metrics.documentHeight,
+    });
     const fitScale = Math.min(
       1,
-      BROWSER_ANNOTATION_SCREENSHOT_MAX_DIMENSION / metrics.documentWidth,
-      BROWSER_ANNOTATION_SCREENSHOT_MAX_DIMENSION / metrics.documentHeight,
+      BROWSER_ANNOTATION_SCREENSHOT_MAX_DIMENSION / captureRect.width,
+      BROWSER_ANNOTATION_SCREENSHOT_MAX_DIMENSION / captureRect.height,
     );
     const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(metrics.documentWidth * fitScale));
-    canvas.height = Math.max(1, Math.round(metrics.documentHeight * fitScale));
+    canvas.width = Math.max(1, Math.round(captureRect.width * fitScale));
+    canvas.height = Math.max(1, Math.round(captureRect.height * fitScale));
     const context = canvas.getContext("2d");
     if (!context) {
       throw new Error("Couldn't compose the fallback page screenshot.");
@@ -937,8 +1381,9 @@ async function captureFallbackFramePageScreenshot(
 
     context.save();
     context.scale(fitScale, fitScale);
+    context.translate(-captureRect.x, -captureRect.y);
     context.fillStyle = fallbackPageBackground(captureDocument.document, captureDocument.window);
-    context.fillRect(0, 0, metrics.documentWidth, metrics.documentHeight);
+    context.fillRect(captureRect.x, captureRect.y, captureRect.width, captureRect.height);
     drawFallbackDomNode({
       context,
       node: captureDocument.document.documentElement,
@@ -954,6 +1399,10 @@ async function captureFallbackFramePageScreenshot(
         name: BROWSER_ANNOTATION_SCREENSHOT_NAME,
       }),
       ...metrics,
+      captureX: captureRect.x,
+      captureY: captureRect.y,
+      captureWidth: captureRect.width,
+      captureHeight: captureRect.height,
     };
   } finally {
     captureDocument.cleanup();
@@ -976,7 +1425,8 @@ function drawCanvasPolyline(
   }
   context.beginPath();
   context.moveTo((firstPoint.x + input.offsetX) * input.scaleX, (firstPoint.y + input.offsetY) * input.scaleY);
-  for (const point of stroke.points.slice(1)) {
+  for (let pointIndex = 1; pointIndex < stroke.points.length; pointIndex += 1) {
+    const point = stroke.points[pointIndex]!;
     context.lineTo((point.x + input.offsetX) * input.scaleX, (point.y + input.offsetY) * input.scaleY);
   }
 }
@@ -998,17 +1448,19 @@ function drawCanvasTextAnnotation(
   }
   const anchorX = (annotation.x + input.offsetX) * input.scaleX;
   const anchorY = (annotation.y + input.offsetY) * input.scaleY;
-  const fontSize = Math.max(12, 15 * input.fitScale);
-  const paddingX = Math.max(8, 10 * input.fitScale);
+  const metrics = browserTextAnnotationMetrics(annotation);
+  const fontSize = Math.max(10, BROWSER_TEXT_ANNOTATION_FONT_SIZE * input.scaleY);
+  const paddingX = BROWSER_TEXT_ANNOTATION_PADDING_X * input.scaleX;
+  const lineHeight = BROWSER_TEXT_ANNOTATION_LINE_HEIGHT * input.scaleY;
   const radius = Math.max(6, 7 * input.fitScale);
-  const boxPosition = textAnnotationBoxPosition(annotation);
-  const boxWidth = BROWSER_TEXT_ANNOTATION_BOX_WIDTH * input.scaleX;
-  const boxHeight = BROWSER_TEXT_ANNOTATION_BOX_HEIGHT * input.scaleY;
+  const boxPosition = textAnnotationBoxPosition(annotation, metrics);
+  const boxWidth = metrics.width * input.scaleX;
+  const boxHeight = metrics.height * input.scaleY;
   const boxX = (boxPosition.x + input.offsetX) * input.scaleX;
   const boxY = (boxPosition.y + input.offsetY) * input.scaleY;
 
   context.save();
-  context.font = `700 ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
+  context.font = `${BROWSER_TEXT_ANNOTATION_FONT_WEIGHT} ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
 
   context.globalCompositeOperation = "source-over";
   context.fillStyle = "rgba(15, 23, 42, 0.92)";
@@ -1019,8 +1471,21 @@ function drawCanvasTextAnnotation(
   context.stroke();
 
   context.fillStyle = "#ffffff";
-  context.textBaseline = "middle";
-  context.fillText(text, boxX + paddingX, boxY + boxHeight / 2, Math.max(24, boxWidth - paddingX * 2));
+  context.textBaseline = "top";
+  const textBlockHeight = metrics.lines.length * lineHeight;
+  const textY = boxY + Math.max(0, (boxHeight - textBlockHeight) / 2);
+  for (const [lineIndex, line] of metrics.lines.entries()) {
+    context.fillStyle =
+      metrics.hasOverflow && lineIndex === metrics.lines.length - 1
+        ? "rgba(255, 255, 255, 0.68)"
+        : "#ffffff";
+    context.fillText(
+      line,
+      boxX + paddingX,
+      textY + lineIndex * lineHeight,
+      Math.max(24, boxWidth - paddingX * 2),
+    );
+  }
 
   context.globalCompositeOperation = "difference";
   context.fillStyle = "#ffffff";
@@ -1110,12 +1575,13 @@ async function composeAnnotatedBrowserScreenshot(input: {
   }
 
   context.drawImage(pageImage, 0, 0, canvas.width, canvas.height);
-  const cssWidth = input.page.documentWidth || pageImage.naturalWidth;
-  const cssHeight = input.page.documentHeight || pageImage.naturalHeight;
+  const cssWidth = input.page.captureWidth || input.page.documentWidth || pageImage.naturalWidth;
+  const cssHeight =
+    input.page.captureHeight || input.page.documentHeight || pageImage.naturalHeight;
   const scaleX = canvas.width / cssWidth;
   const scaleY = canvas.height / cssHeight;
-  const offsetX = input.page.scrollX;
-  const offsetY = input.page.scrollY;
+  const offsetX = input.page.scrollX - input.page.captureX;
+  const offsetY = input.page.scrollY - input.page.captureY;
 
   if (input.selectedBox) {
     const boxX = (input.selectedBox.x + offsetX) * scaleX;
@@ -1140,12 +1606,18 @@ async function composeAnnotatedBrowserScreenshot(input: {
       continue;
     }
     const colors = gradientColorsForStroke(strokeIndex);
-    const pointXs = stroke.points.map((point) => (point.x + offsetX) * scaleX);
-    const pointYs = stroke.points.map((point) => (point.y + offsetY) * scaleY);
-    const minX = Math.min(...pointXs);
-    const maxX = Math.max(...pointXs);
-    const minY = Math.min(...pointYs);
-    const maxY = Math.max(...pointYs);
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const point of stroke.points) {
+      const x = (point.x + offsetX) * scaleX;
+      const y = (point.y + offsetY) * scaleY;
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    }
     const gradient = context.createLinearGradient(minX, minY, maxX || minX + 1, maxY || minY + 1);
     colors.forEach((color, colorIndex) => {
       gradient.addColorStop(colors.length === 1 ? 0 : colorIndex / (colors.length - 1), color);
@@ -1416,16 +1888,16 @@ export function BrowserPanel({
   const composerDraftAssistantSelectionCount = useComposerDraftStore(
     (store) => store.draftsByThreadId[threadId]?.assistantSelections.length ?? 0,
   );
-  const activeThread = useAppStore(
-    (store) => store.threads.find((thread) => thread.id === threadId) ?? null,
+  const serverThread = useAppStore(useMemo(() => createThreadSelector(threadId), [threadId]));
+  const draftThread = useComposerDraftStore(
+    (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
-  const activeProject = useAppStore((store) =>
-    activeThread
-      ? (store.projects.find((project) => project.id === activeThread.projectId) ?? null)
-      : null,
+  const activeProjectId = serverThread?.projectId ?? draftThread?.projectId ?? null;
+  const activeProject = useAppStore(
+    useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
-  const activeProjectId = activeProject?.id ?? null;
-  const previewCwd = activeThread?.worktreePath ?? activeProject?.cwd ?? null;
+  const previewCwd =
+    serverThread?.worktreePath ?? draftThread?.worktreePath ?? activeProject?.cwd ?? null;
   const previewState = usePreviewStateStore(selectPreviewState(previewCwd));
   const upsertPreviewState = usePreviewStateStore((store) => store.upsertState);
   const addressInputRef = useRef<HTMLInputElement>(null);
@@ -1447,14 +1919,17 @@ export function BrowserPanel({
   const boundsBurstFrameRef = useRef<number | null>(null);
   const inspectFrameRef = useRef<number | null>(null);
   const inspectPointRef = useRef<{ x: number; y: number } | null>(null);
-  const activeDrawStrokeIdRef = useRef<string | null>(null);
+  const activeDrawStrokeRef = useRef<BrowserDrawingStroke | null>(null);
+  const activeDrawPointerIdRef = useRef<number | null>(null);
+  const activeDrawFrameRef = useRef<number | null>(null);
+  const activeDrawOverlayRectRef = useRef<DOMRect | null>(null);
   const drawStrokesRef = useRef<BrowserDrawingStroke[]>([]);
   const textAnnotationsRef = useRef<BrowserTextAnnotation[]>([]);
   const annotationArrowsRef = useRef<BrowserAnnotationArrow[]>([]);
   const selectedElementContextRef = useRef<BrowserElementEditorContext | null>(null);
   const browserEditorOverlayRef = useRef<HTMLDivElement>(null);
-  const textAnnotationInputRef = useRef<HTMLInputElement>(null);
-  const editTextAnnotationInputRef = useRef<HTMLInputElement>(null);
+  const textAnnotationInputRef = useRef<HTMLTextAreaElement>(null);
+  const editTextAnnotationInputRef = useRef<HTMLTextAreaElement>(null);
   const textAnnotationDragRef = useRef<{
     id: string;
     pointerId: number;
@@ -1474,6 +1949,9 @@ export function BrowserPanel({
   const annotationArrowHoverHideTimeoutRef = useRef<number | null>(null);
   const annotationUpdateTimeoutRef = useRef<number | null>(null);
   const annotationUpdateRequestIdRef = useRef(0);
+  const annotationUpdateRunningRef = useRef(false);
+  const annotationUpdateQueuedRef = useRef(false);
+  const annotationUpdateDisposedRef = useRef(false);
   const annotationStateInitializedRef = useRef(false);
   const previewAutoStartedCwdRef = useRef<string | null>(null);
   const previewPendingNavigationUrlRef = useRef<string | null>(null);
@@ -1498,11 +1976,13 @@ export function BrowserPanel({
   const [editorMode, setEditorMode] = useState<BrowserEditorMode>("browse");
   const [inspectHoverBox, setInspectHoverBox] = useState<BrowserInspectHoverBox | null>(null);
   const [drawStrokes, setDrawStrokes] = useState<BrowserDrawingStroke[]>([]);
+  const [activeDrawStroke, setActiveDrawStroke] = useState<BrowserDrawingStroke | null>(null);
   const [textAnnotations, setTextAnnotations] = useState<BrowserTextAnnotation[]>([]);
   const [annotationArrows, setAnnotationArrows] = useState<BrowserAnnotationArrow[]>([]);
   const [annotationArrowDraft, setAnnotationArrowDraft] =
     useState<BrowserAnnotationArrow | null>(null);
   const [selectedTextAnnotationId, setSelectedTextAnnotationId] = useState<string | null>(null);
+  const [selectedAnnotationArrowId, setSelectedAnnotationArrowId] = useState<string | null>(null);
   const [hoveredTextAnnotationId, setHoveredTextAnnotationId] = useState<string | null>(null);
   const [hoveredAnnotationArrowId, setHoveredAnnotationArrowId] = useState<string | null>(null);
   const [draggingTextAnnotationId, setDraggingTextAnnotationId] = useState<string | null>(null);
@@ -1668,6 +2148,7 @@ export function BrowserPanel({
 
   const clearBrowserAnnotationContext = useCallback(() => {
     annotationUpdateRequestIdRef.current += 1;
+    annotationUpdateQueuedRef.current = false;
     if (annotationUpdateTimeoutRef.current !== null) {
       window.clearTimeout(annotationUpdateTimeoutRef.current);
       annotationUpdateTimeoutRef.current = null;
@@ -1687,24 +2168,42 @@ export function BrowserPanel({
     setAnnotationAttachmentStatus("idle");
   }, [threadId]);
 
-  const captureBrowserPageScreenshot = useCallback(async (): Promise<BrowserPageScreenshot> => {
+  const captureBrowserPageScreenshot = useCallback(async (
+    annotationBounds: BrowserCaptureRect | null,
+  ): Promise<BrowserPageScreenshot> => {
     if (!api || !activeTab) {
       throw new Error("No browser tab is available to capture.");
     }
 
     if (hasNativeBrowserBridge) {
+      const viewportRect = browserViewportRef.current?.getBoundingClientRect();
+      const viewportWidth = Math.ceil(viewportRect?.width ?? window.innerWidth);
+      const viewportHeight = Math.ceil(viewportRect?.height ?? window.innerHeight);
+      let metrics = {
+        documentWidth: viewportWidth,
+        documentHeight: viewportHeight,
+        scrollX: 0,
+        scrollY: 0,
+      };
       try {
         const metricsResponse = await api.browser.executeCdp({
           threadId,
           tabId: activeTab.id,
           method: "Page.getLayoutMetrics",
         });
-        const metrics = pageMetricsFromCdp(metricsResponse);
-        const viewportRect = browserViewportRef.current?.getBoundingClientRect();
-        const documentWidth =
-          metrics.documentWidth ?? Math.ceil(viewportRect?.width ?? window.innerWidth);
-        const documentHeight =
-          metrics.documentHeight ?? Math.ceil(viewportRect?.height ?? window.innerHeight);
+        const cdpMetrics = pageMetricsFromCdp(metricsResponse);
+        metrics = {
+          documentWidth: cdpMetrics.documentWidth ?? viewportWidth,
+          documentHeight: cdpMetrics.documentHeight ?? viewportHeight,
+          scrollX: cdpMetrics.scrollX,
+          scrollY: cdpMetrics.scrollY,
+        };
+        const captureRect = browserAnnotationCaptureRect({
+          annotationBounds,
+          ...metrics,
+          viewportWidth,
+          viewportHeight,
+        });
         const captureResponse = (await api.browser.executeCdp({
           threadId,
           tabId: activeTab.id,
@@ -1714,10 +2213,10 @@ export function BrowserPanel({
             fromSurface: true,
             captureBeyondViewport: true,
             clip: {
-              x: 0,
-              y: 0,
-              width: documentWidth,
-              height: documentHeight,
+              x: captureRect.x,
+              y: captureRect.y,
+              width: captureRect.width,
+              height: captureRect.height,
               scale: 1,
             },
           },
@@ -1730,26 +2229,43 @@ export function BrowserPanel({
             bytes: bytesFromBase64(captureResponse.data),
             name: BROWSER_ANNOTATION_SCREENSHOT_NAME,
           }),
-          documentWidth,
-          documentHeight,
+          documentWidth: metrics.documentWidth,
+          documentHeight: metrics.documentHeight,
           scrollX: metrics.scrollX,
           scrollY: metrics.scrollY,
+          captureX: captureRect.x,
+          captureY: captureRect.y,
+          captureWidth: captureRect.width,
+          captureHeight: captureRect.height,
         };
       } catch {
         const viewportScreenshot = await api.browser.captureScreenshot({
           threadId,
           tabId: activeTab.id,
         });
-        const viewportRect = browserViewportRef.current?.getBoundingClientRect();
+        const captureRect = roundBrowserCaptureRect(
+          {
+            x: metrics.scrollX,
+            y: metrics.scrollY,
+            width: viewportWidth,
+            height: viewportHeight,
+          },
+          metrics.documentWidth,
+          metrics.documentHeight,
+        );
         return {
           screenshot: {
             ...viewportScreenshot,
             name: BROWSER_ANNOTATION_SCREENSHOT_NAME,
           },
-          documentWidth: viewportRect?.width ?? window.innerWidth,
-          documentHeight: viewportRect?.height ?? window.innerHeight,
-          scrollX: 0,
-          scrollY: 0,
+          documentWidth: metrics.documentWidth,
+          documentHeight: metrics.documentHeight,
+          scrollX: metrics.scrollX,
+          scrollY: metrics.scrollY,
+          captureX: captureRect.x,
+          captureY: captureRect.y,
+          captureWidth: captureRect.width,
+          captureHeight: captureRect.height,
         };
       }
     }
@@ -1758,17 +2274,10 @@ export function BrowserPanel({
     if (!frame) {
       throw new Error("No browser fallback frame is available to capture.");
     }
-    return captureFallbackFramePageScreenshot(frame);
+    return captureFallbackFramePageScreenshot(frame, annotationBounds);
   }, [activeTab, api, hasNativeBrowserBridge, threadId]);
 
-  const updateBrowserAnnotationAttachment = useCallback(async () => {
-    const requestId = annotationUpdateRequestIdRef.current + 1;
-    annotationUpdateRequestIdRef.current = requestId;
-    if (annotationUpdateTimeoutRef.current !== null) {
-      window.clearTimeout(annotationUpdateTimeoutRef.current);
-      annotationUpdateTimeoutRef.current = null;
-    }
-
+  const runBrowserAnnotationAttachmentUpdate = useCallback(async (requestId: number) => {
     const usableStrokes = drawStrokesRef.current.filter((stroke) => stroke.points.length > 1);
     const usableTextAnnotations = textAnnotationsRef.current.filter(
       (annotation) => annotation.text.trim().length > 0,
@@ -1802,7 +2311,11 @@ export function BrowserPanel({
         source: "browser-selection",
         promptBlock,
         title: selectedContext.title || activeTab?.title || "Browser selection",
-        url: selectedContext.url || activeTab?.lastCommittedUrl || activeTab?.url || BROWSER_BLANK_URL,
+        url:
+          selectedContext.url ||
+          activeTab?.lastCommittedUrl ||
+          activeTab?.url ||
+          BROWSER_BLANK_URL,
         strokeCount: 0,
         textCount: 0,
         ...(selectedContext.selector ? { selectedSelector: selectedContext.selector } : {}),
@@ -1817,6 +2330,8 @@ export function BrowserPanel({
       return;
     }
     if (!api || !activeTab) {
+      setAnnotationAttachmentStatus("error");
+      setLocalError("Live editor context will attach after the browser tab is ready.");
       return;
     }
     const effectiveAttachmentCount =
@@ -1836,7 +2351,12 @@ export function BrowserPanel({
 
     setAnnotationAttachmentStatus("capturing");
     try {
-      const page = await captureBrowserPageScreenshot();
+      if (
+        annotationUpdateDisposedRef.current ||
+        annotationUpdateRequestIdRef.current !== requestId
+      ) {
+        return;
+      }
       const selectedBox = selectedContext
         ? {
             x: selectedContext.rect.x,
@@ -1846,6 +2366,19 @@ export function BrowserPanel({
             label: selectedContext.selector || selectedContext.tagName.toLowerCase(),
           }
         : null;
+      const annotationBounds = browserAnnotationViewportBounds({
+        selectedBox,
+        strokes: usableStrokes,
+        textAnnotations: usableTextAnnotations,
+        arrows: usableArrows,
+      });
+      const page = await captureBrowserPageScreenshot(annotationBounds);
+      if (
+        annotationUpdateDisposedRef.current ||
+        annotationUpdateRequestIdRef.current !== requestId
+      ) {
+        return;
+      }
       const annotatedScreenshot = await composeAnnotatedBrowserScreenshot({
         page,
         strokes: usableStrokes,
@@ -1853,6 +2386,12 @@ export function BrowserPanel({
         arrows: usableArrows,
         selectedBox,
       });
+      if (
+        annotationUpdateDisposedRef.current ||
+        annotationUpdateRequestIdRef.current !== requestId
+      ) {
+        return;
+      }
       if (annotatedScreenshot.sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
         setLocalError(
           `'${BROWSER_ANNOTATION_SCREENSHOT_NAME}' exceeds the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`,
@@ -1880,6 +2419,12 @@ export function BrowserPanel({
           x: page.scrollX,
           y: page.scrollY,
         },
+        capture: {
+          x: page.captureX,
+          y: page.captureY,
+          width: page.captureWidth,
+          height: page.captureHeight,
+        },
         selectedSelector: selectedContext?.selector ?? null,
         selectedElement: selectedContext,
         strokes: usableStrokes,
@@ -1899,7 +2444,10 @@ export function BrowserPanel({
           ...(selectedContext?.selector ? { selectedSelector: selectedContext.selector } : {}),
         },
       });
-      if (annotationUpdateRequestIdRef.current !== requestId) {
+      if (
+        annotationUpdateDisposedRef.current ||
+        annotationUpdateRequestIdRef.current !== requestId
+      ) {
         revokeComposerImagePreviewUrl(image.previewUrl);
         return;
       }
@@ -1920,6 +2468,12 @@ export function BrowserPanel({
       setAnnotationAttachmentStatus("attached");
       setLocalError(null);
     } catch (error) {
+      if (
+        annotationUpdateDisposedRef.current ||
+        annotationUpdateRequestIdRef.current !== requestId
+      ) {
+        return;
+      }
       setAnnotationAttachmentStatus("error");
       const message =
         error instanceof Error && error.message.length > 0
@@ -1936,20 +2490,47 @@ export function BrowserPanel({
     threadId,
   ]);
 
+  const queueBrowserAnnotationAttachmentUpdate = useCallback(async () => {
+    annotationUpdateQueuedRef.current = true;
+    if (annotationUpdateRunningRef.current) {
+      return;
+    }
+    annotationUpdateRunningRef.current = true;
+    try {
+      while (annotationUpdateQueuedRef.current && !annotationUpdateDisposedRef.current) {
+        annotationUpdateQueuedRef.current = false;
+        await runBrowserAnnotationAttachmentUpdate(annotationUpdateRequestIdRef.current);
+      }
+    } finally {
+      annotationUpdateRunningRef.current = false;
+    }
+  }, [runBrowserAnnotationAttachmentUpdate]);
+
+  const updateBrowserAnnotationAttachment = useCallback(async () => {
+    annotationUpdateRequestIdRef.current += 1;
+    if (annotationUpdateTimeoutRef.current !== null) {
+      window.clearTimeout(annotationUpdateTimeoutRef.current);
+      annotationUpdateTimeoutRef.current = null;
+    }
+    await queueBrowserAnnotationAttachmentUpdate();
+  }, [queueBrowserAnnotationAttachmentUpdate]);
+
   const scheduleBrowserAnnotationAttachmentUpdate = useCallback(
     (delay = BROWSER_ANNOTATION_SCREENSHOT_DEBOUNCE_MS) => {
+      annotationUpdateRequestIdRef.current += 1;
+      if (annotationUpdateTimeoutRef.current !== null) {
+        window.clearTimeout(annotationUpdateTimeoutRef.current);
+        annotationUpdateTimeoutRef.current = null;
+      }
       if (!autoAttachAnnotationScreenshot) {
         return;
       }
-      if (annotationUpdateTimeoutRef.current !== null) {
-        window.clearTimeout(annotationUpdateTimeoutRef.current);
-      }
       annotationUpdateTimeoutRef.current = window.setTimeout(() => {
         annotationUpdateTimeoutRef.current = null;
-        void updateBrowserAnnotationAttachment();
+        void queueBrowserAnnotationAttachmentUpdate();
       }, delay);
     },
-    [autoAttachAnnotationScreenshot, updateBrowserAnnotationAttachment],
+    [autoAttachAnnotationScreenshot, queueBrowserAnnotationAttachmentUpdate],
   );
 
   const readElementContextAtPoint = useCallback(
@@ -2122,6 +2703,37 @@ export function BrowserPanel({
     void startPreview({ autoNavigate: true, silentIfUnavailable: true });
   }, [api, isLiveRuntime, previewCwd, previewState?.status, startPreview, workspaceReady]);
 
+  const scheduleActiveDrawStrokeRender = useCallback(() => {
+    if (activeDrawFrameRef.current !== null) {
+      return;
+    }
+    activeDrawFrameRef.current = window.requestAnimationFrame(() => {
+      activeDrawFrameRef.current = null;
+      const stroke = activeDrawStrokeRef.current;
+      setActiveDrawStroke(stroke ? { ...stroke, points: stroke.points.slice() } : null);
+    });
+  }, []);
+
+  const resetActiveDrawStroke = useCallback(() => {
+    if (activeDrawFrameRef.current !== null) {
+      window.cancelAnimationFrame(activeDrawFrameRef.current);
+      activeDrawFrameRef.current = null;
+    }
+    activeDrawStrokeRef.current = null;
+    activeDrawPointerIdRef.current = null;
+    activeDrawOverlayRectRef.current = null;
+    setActiveDrawStroke(null);
+  }, []);
+
+  const hasAttachableBrowserEditorContext = useCallback(
+    () =>
+      drawStrokesRef.current.some((stroke) => stroke.points.length > 1) ||
+      selectedElementContextRef.current !== null ||
+      textAnnotationsRef.current.length > 0 ||
+      annotationArrowsRef.current.length > 0,
+    [],
+  );
+
   useEffect(() => {
     const requestedUrl = previewPendingNavigationUrlRef.current;
     if (
@@ -2147,12 +2759,37 @@ export function BrowserPanel({
 
   useEffect(() => {
     if (editorMode !== "inspect") {
+      inspectPointRef.current = null;
       setInspectHoverBox(null);
+      if (inspectFrameRef.current !== null) {
+        window.cancelAnimationFrame(inspectFrameRef.current);
+        inspectFrameRef.current = null;
+      }
     }
     if (editorMode !== "draw") {
-      activeDrawStrokeIdRef.current = null;
+      resetActiveDrawStroke();
     }
-  }, [editorMode]);
+  }, [editorMode, resetActiveDrawStroke]);
+
+  useEffect(() => {
+    if (!isLiveRuntime || !workspaceReady || editorMode !== "inspect") {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      setEditorMode("browse");
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [editorMode, isLiveRuntime, workspaceReady]);
 
   useEffect(() => {
     drawStrokesRef.current = drawStrokes;
@@ -2190,22 +2827,32 @@ export function BrowserPanel({
   useEffect(() => {
     if (
       autoAttachAnnotationScreenshot &&
-      (drawStrokesRef.current.some((stroke) => stroke.points.length > 1) ||
-        selectedElementContextRef.current !== null ||
-        textAnnotationsRef.current.length > 0 ||
-        annotationArrowsRef.current.length > 0)
+      hasAttachableBrowserEditorContext()
     ) {
       scheduleBrowserAnnotationAttachmentUpdate(0);
     }
-  }, [autoAttachAnnotationScreenshot, scheduleBrowserAnnotationAttachmentUpdate]);
+  }, [
+    autoAttachAnnotationScreenshot,
+    hasAttachableBrowserEditorContext,
+    scheduleBrowserAnnotationAttachmentUpdate,
+  ]);
+
+  useEffect(() => {
+    if (!autoAttachAnnotationScreenshot || !hasAttachableBrowserEditorContext()) {
+      return;
+    }
+    scheduleBrowserAnnotationAttachmentUpdate(0);
+  }, [
+    autoAttachAnnotationScreenshot,
+    hasAttachableBrowserEditorContext,
+    scheduleBrowserAnnotationAttachmentUpdate,
+    threadId,
+  ]);
 
   useEffect(() => {
     if (
       !autoAttachAnnotationScreenshot ||
-      (!drawStrokesRef.current.some((stroke) => stroke.points.length > 1) &&
-        selectedElementContextRef.current === null &&
-        textAnnotationsRef.current.length === 0 &&
-        annotationArrowsRef.current.length === 0)
+      !hasAttachableBrowserEditorContext()
     ) {
       return;
     }
@@ -2215,10 +2862,12 @@ export function BrowserPanel({
     activeTab?.lastCommittedUrl,
     activeTab?.url,
     autoAttachAnnotationScreenshot,
+    hasAttachableBrowserEditorContext,
     scheduleBrowserAnnotationAttachmentUpdate,
   ]);
 
   useEffect(() => {
+    annotationUpdateDisposedRef.current = false;
     return () => {
       if (textAnnotationHoverHideTimeoutRef.current !== null) {
         window.clearTimeout(textAnnotationHoverHideTimeoutRef.current);
@@ -2232,10 +2881,19 @@ export function BrowserPanel({
         window.cancelAnimationFrame(inspectFrameRef.current);
         inspectFrameRef.current = null;
       }
+      if (activeDrawFrameRef.current !== null) {
+        window.cancelAnimationFrame(activeDrawFrameRef.current);
+        activeDrawFrameRef.current = null;
+      }
+      activeDrawStrokeRef.current = null;
+      activeDrawPointerIdRef.current = null;
+      activeDrawOverlayRectRef.current = null;
       if (annotationUpdateTimeoutRef.current !== null) {
         window.clearTimeout(annotationUpdateTimeoutRef.current);
         annotationUpdateTimeoutRef.current = null;
       }
+      annotationUpdateQueuedRef.current = false;
+      annotationUpdateDisposedRef.current = true;
       annotationUpdateRequestIdRef.current += 1;
     };
   }, []);
@@ -2826,7 +3484,13 @@ export function BrowserPanel({
       if (text.length === 0) {
         return;
       }
-      const annotation = { ...draft, text };
+      const metrics = textAnnotationBoxMetrics(text);
+      const boxPosition = clampTextAnnotationBoxPosition(
+        textAnnotationBoxPosition({ ...draft, text }, metrics),
+        browserEditorOverlayRef.current,
+        metrics,
+      );
+      const annotation = { ...draft, text, boxX: boxPosition.x, boxY: boxPosition.y };
       setTextAnnotations((current) => {
         const next = [...current, annotation];
         textAnnotationsRef.current = next;
@@ -2845,6 +3509,7 @@ export function BrowserPanel({
       event.preventDefault();
       event.stopPropagation();
       commitTextAnnotationDraft();
+      setSelectedAnnotationArrowId(null);
       setTextAnnotationDraft({
         id: crypto.randomUUID(),
         ...pointFromOverlayEvent(event),
@@ -3017,6 +3682,7 @@ export function BrowserPanel({
       event.preventDefault();
       event.stopPropagation();
       commitTextAnnotationDraft();
+      setSelectedAnnotationArrowId(null);
       textAnnotationEditCancelledRef.current = false;
       setSelectedTextAnnotationId(annotation.id);
       setEditingTextAnnotationId(annotation.id);
@@ -3049,6 +3715,11 @@ export function BrowserPanel({
       const updatedAnnotations = textAnnotationsRef.current.filter(
         (annotation) => annotation.id !== annotationId,
       );
+      const removedArrowIds = new Set(
+        annotationArrowsRef.current
+          .filter((arrow) => arrow.sourceTextAnnotationId === annotationId)
+          .map((arrow) => arrow.id),
+      );
       const updatedArrows = annotationArrowsRef.current.filter(
         (arrow) => arrow.sourceTextAnnotationId !== annotationId,
       );
@@ -3057,6 +3728,9 @@ export function BrowserPanel({
       setTextAnnotations(updatedAnnotations);
       setAnnotationArrows(updatedArrows);
       setSelectedTextAnnotationId((current) => (current === annotationId ? null : current));
+      setSelectedAnnotationArrowId((current) =>
+        current && removedArrowIds.has(current) ? null : current,
+      );
       scheduleBrowserAnnotationAttachmentUpdate(0);
       return;
     }
@@ -3067,11 +3741,42 @@ export function BrowserPanel({
     if (previousAnnotation?.text === text) {
       return;
     }
-    const updatedAnnotations = textAnnotationsRef.current.map((annotation) =>
-      annotation.id === annotationId ? { ...annotation, text } : annotation,
-    );
+    const metrics = textAnnotationBoxMetrics(text);
+    let updatedAnnotation: BrowserTextAnnotation | null = null;
+    const updatedAnnotations = textAnnotationsRef.current.map((annotation) => {
+      if (annotation.id !== annotationId) {
+        return annotation;
+      }
+      const position = clampTextAnnotationBoxPosition(
+        textAnnotationBoxPosition({ ...annotation, text }, metrics),
+        browserEditorOverlayRef.current,
+        metrics,
+      );
+      updatedAnnotation = {
+        ...annotation,
+        text,
+        boxX: position.x,
+        boxY: position.y,
+      };
+      return updatedAnnotation;
+    });
     textAnnotationsRef.current = updatedAnnotations;
     setTextAnnotations(updatedAnnotations);
+
+    const sourceAnnotation = updatedAnnotation;
+    if (sourceAnnotation) {
+      const updatedArrows = annotationArrowsRef.current.map((arrow) =>
+        arrow.sourceTextAnnotationId === annotationId && arrow.sourceHandle
+          ? {
+              ...arrow,
+              from: textAnnotationHandlePoint(sourceAnnotation, arrow.sourceHandle),
+            }
+          : arrow,
+      );
+      annotationArrowsRef.current = updatedArrows;
+      setAnnotationArrows(updatedArrows);
+    }
+
     scheduleBrowserAnnotationAttachmentUpdate(0);
   }, [
     editingTextAnnotationId,
@@ -3087,6 +3792,7 @@ export function BrowserPanel({
       event.preventDefault();
       event.stopPropagation();
       commitTextAnnotationDraft();
+      setSelectedAnnotationArrowId(null);
       setSelectedTextAnnotationId(annotation.id);
       const boxPosition = textAnnotationBoxPosition(annotation);
       textAnnotationDragRef.current = {
@@ -3113,12 +3819,16 @@ export function BrowserPanel({
         return;
       }
       event.preventDefault();
+      const annotation = textAnnotationsRef.current.find(
+        (candidate) => candidate.id === drag.id,
+      );
       const next = clampTextAnnotationBoxPosition(
         {
           x: drag.startBoxX + event.clientX - drag.startClientX,
           y: drag.startBoxY + event.clientY - drag.startClientY,
         },
         browserEditorOverlayRef.current,
+        annotation ? browserTextAnnotationMetrics(annotation) : undefined,
       );
       scheduleTextAnnotationDragPosition(drag, next);
     },
@@ -3133,12 +3843,16 @@ export function BrowserPanel({
       }
       event.preventDefault();
       event.stopPropagation();
+      const annotation = textAnnotationsRef.current.find(
+        (candidate) => candidate.id === drag.id,
+      );
       const next = clampTextAnnotationBoxPosition(
         {
           x: drag.startBoxX + event.clientX - drag.startClientX,
           y: drag.startBoxY + event.clientY - drag.startClientY,
         },
         browserEditorOverlayRef.current,
+        annotation ? browserTextAnnotationMetrics(annotation) : undefined,
       );
       if (drag.frameId !== null) {
         window.cancelAnimationFrame(drag.frameId);
@@ -3188,6 +3902,7 @@ export function BrowserPanel({
         sourceTextAnnotationId: annotation.id,
         sourceHandle: handle,
       } satisfies BrowserAnnotationArrow;
+      setSelectedAnnotationArrowId(null);
       setSelectedTextAnnotationId(annotation.id);
       arrowDraftDragRef.current = { id, pointerId: event.pointerId };
       annotationArrowDraftRef.current = arrow;
@@ -3229,8 +3944,11 @@ export function BrowserPanel({
         annotationArrowsRef.current = next;
         return next;
       });
+      setSelectedAnnotationArrowId(draft.id);
+      setSelectedTextAnnotationId(null);
+      showAnnotationArrowControls(draft.id);
     }
-  }, []);
+  }, [showAnnotationArrowControls]);
 
   const beginAnnotationArrowTargetDrag = useCallback(
     (arrow: BrowserAnnotationArrow, event: ReactPointerEvent<SVGCircleElement>) => {
@@ -3239,7 +3957,8 @@ export function BrowserPanel({
       }
       event.preventDefault();
       event.stopPropagation();
-      setSelectedTextAnnotationId(arrow.sourceTextAnnotationId ?? null);
+      setSelectedAnnotationArrowId(arrow.id);
+      setSelectedTextAnnotationId(null);
       arrowTargetDragRef.current = { id: arrow.id, pointerId: event.pointerId };
       annotationArrowDraftRef.current = arrow;
       setAnnotationArrowDraft(arrow);
@@ -3280,8 +3999,43 @@ export function BrowserPanel({
         annotationArrowsRef.current = next;
         return next;
       });
+      setSelectedAnnotationArrowId(draft.id);
+      setSelectedTextAnnotationId(null);
+      showAnnotationArrowControls(draft.id);
     }
-  }, []);
+  }, [showAnnotationArrowControls]);
+
+  const selectAnnotationArrow = useCallback((arrow: BrowserAnnotationArrow) => {
+    setSelectedAnnotationArrowId(arrow.id);
+    setSelectedTextAnnotationId(null);
+    showAnnotationArrowControls(arrow.id);
+  }, [showAnnotationArrowControls]);
+
+  const deleteAnnotationArrowById = useCallback(
+    (arrowId: string): boolean => {
+      if (!annotationArrowsRef.current.some((arrow) => arrow.id === arrowId)) {
+        return false;
+      }
+
+      if (annotationArrowDraftRef.current?.id === arrowId) {
+        annotationArrowDraftRef.current = null;
+        arrowDraftDragRef.current = null;
+        arrowTargetDragRef.current = null;
+        setAnnotationArrowDraft(null);
+      }
+
+      const nextAnnotationArrows = annotationArrowsRef.current.filter(
+        (arrow) => arrow.id !== arrowId,
+      );
+      annotationArrowsRef.current = nextAnnotationArrows;
+      setAnnotationArrows(nextAnnotationArrows);
+      setSelectedAnnotationArrowId((current) => (current === arrowId ? null : current));
+      setHoveredAnnotationArrowId((current) => (current === arrowId ? null : current));
+      scheduleBrowserAnnotationAttachmentUpdate(0);
+      return true;
+    },
+    [scheduleBrowserAnnotationAttachmentUpdate],
+  );
 
   const deleteTextAnnotationById = useCallback(
     (annotationId: string): boolean => {
@@ -3327,6 +4081,9 @@ export function BrowserPanel({
       setHoveredAnnotationArrowId((current) =>
         current && removedArrowIds.has(current) ? null : current,
       );
+      setSelectedAnnotationArrowId((current) =>
+        current && removedArrowIds.has(current) ? null : current,
+      );
       scheduleBrowserAnnotationAttachmentUpdate(0);
       return true;
     },
@@ -3338,7 +4095,7 @@ export function BrowserPanel({
       !isLiveRuntime ||
       !workspaceReady ||
       editorMode === "browse" ||
-      !selectedTextAnnotationId ||
+      (!selectedAnnotationArrowId && !selectedTextAnnotationId) ||
       editingTextAnnotationId ||
       textAnnotationDraft
     ) {
@@ -3349,7 +4106,12 @@ export function BrowserPanel({
       if (!isBrowserAnnotationDeleteEvent(event)) {
         return;
       }
-      if (!deleteTextAnnotationById(selectedTextAnnotationId)) {
+      const didDelete = selectedAnnotationArrowId
+        ? deleteAnnotationArrowById(selectedAnnotationArrowId)
+        : selectedTextAnnotationId
+          ? deleteTextAnnotationById(selectedTextAnnotationId)
+          : false;
+      if (!didDelete) {
         return;
       }
       event.preventDefault();
@@ -3361,10 +4123,12 @@ export function BrowserPanel({
       window.removeEventListener("keydown", onKeyDown, true);
     };
   }, [
+    deleteAnnotationArrowById,
     deleteTextAnnotationById,
     editingTextAnnotationId,
     editorMode,
     isLiveRuntime,
+    selectedAnnotationArrowId,
     selectedTextAnnotationId,
     textAnnotationDraft,
     workspaceReady,
@@ -3390,17 +4154,20 @@ export function BrowserPanel({
       }
       event.preventDefault();
       event.stopPropagation();
+      resetActiveDrawStroke();
       event.currentTarget.setPointerCapture(event.pointerId);
       const strokeId = crypto.randomUUID();
-      activeDrawStrokeIdRef.current = strokeId;
-      const point = pointFromOverlayEvent(event);
-      setDrawStrokes((current) => {
-        const next = [...current, { id: strokeId, points: [point] }];
-        drawStrokesRef.current = next;
-        return next;
-      });
+      const overlayRect = event.currentTarget.getBoundingClientRect();
+      const stroke = {
+        id: strokeId,
+        points: [pointFromOverlayRect(overlayRect, event.clientX, event.clientY)],
+      };
+      activeDrawPointerIdRef.current = event.pointerId;
+      activeDrawOverlayRectRef.current = overlayRect;
+      activeDrawStrokeRef.current = stroke;
+      setActiveDrawStroke(stroke);
     },
-    [editorMode],
+    [editorMode, resetActiveDrawStroke],
   );
 
   const onDrawPointerMove = useCallback(
@@ -3408,41 +4175,60 @@ export function BrowserPanel({
       if (editorMode !== "draw") {
         return;
       }
-      const strokeId = activeDrawStrokeIdRef.current;
-      if (!strokeId) {
+      const stroke = activeDrawStrokeRef.current;
+      if (!stroke || activeDrawPointerIdRef.current !== event.pointerId) {
         return;
       }
       event.preventDefault();
-      const point = pointFromOverlayEvent(event);
-      setDrawStrokes((current) => {
-        const next = current.map((stroke) =>
-          stroke.id === strokeId
-            ? {
-                ...stroke,
-                points: [...stroke.points, point],
-              }
-            : stroke,
-        );
-        drawStrokesRef.current = next;
-        return next;
-      });
+      const nativeEvent = event.nativeEvent as PointerEvent & {
+        getCoalescedEvents?: () => PointerEvent[];
+      };
+      let changed = false;
+      for (const pointerEvent of nativeEvent.getCoalescedEvents?.() ?? [nativeEvent]) {
+        changed =
+          appendDrawingPoint(
+            stroke,
+            pointFromOverlayRect(
+              activeDrawOverlayRectRef.current,
+              pointerEvent.clientX,
+              pointerEvent.clientY,
+            ),
+          ) || changed;
+      }
+      if (changed) {
+        scheduleActiveDrawStrokeRender();
+      }
     },
-    [editorMode],
+    [editorMode, scheduleActiveDrawStrokeRender],
   );
 
   const onDrawPointerUp = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (!activeDrawStrokeIdRef.current) {
+      const stroke = activeDrawStrokeRef.current;
+      if (!stroke || activeDrawPointerIdRef.current !== event.pointerId) {
         return;
       }
       event.preventDefault();
-      activeDrawStrokeIdRef.current = null;
+      appendDrawingPoint(
+        stroke,
+        pointFromOverlayRect(activeDrawOverlayRectRef.current, event.clientX, event.clientY),
+        0.5,
+      );
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
+      const committedStroke =
+        stroke.points.length > 1 ? { ...stroke, points: stroke.points.slice() } : null;
+      resetActiveDrawStroke();
+      if (!committedStroke) {
+        return;
+      }
+      const nextDrawStrokes = [...drawStrokesRef.current, committedStroke];
+      drawStrokesRef.current = nextDrawStrokes;
+      setDrawStrokes(nextDrawStrokes);
       scheduleBrowserAnnotationAttachmentUpdate(0);
     },
-    [scheduleBrowserAnnotationAttachmentUpdate],
+    [resetActiveDrawStroke, scheduleBrowserAnnotationAttachmentUpdate],
   );
 
   const onBrowserEditorOverlayPointerMove = useCallback(
@@ -3502,7 +4288,7 @@ export function BrowserPanel({
   );
 
   const clearDrawingAnnotations = useCallback(() => {
-    activeDrawStrokeIdRef.current = null;
+    resetActiveDrawStroke();
     drawStrokesRef.current = [];
     textAnnotationsRef.current = [];
     annotationArrowsRef.current = [];
@@ -3522,6 +4308,7 @@ export function BrowserPanel({
     setAnnotationArrows([]);
     setAnnotationArrowDraft(null);
     setSelectedTextAnnotationId(null);
+    setSelectedAnnotationArrowId(null);
     setHoveredTextAnnotationId(null);
     setHoveredAnnotationArrowId(null);
     setDraggingTextAnnotationId(null);
@@ -3535,10 +4322,11 @@ export function BrowserPanel({
     clearAnnotationArrowHoverHideTimeout,
     clearBrowserAnnotationContext,
     clearTextAnnotationHoverHideTimeout,
+    resetActiveDrawStroke,
   ]);
 
   const undoLastDrawingStroke = useCallback(() => {
-    activeDrawStrokeIdRef.current = null;
+    resetActiveDrawStroke();
     if (annotationArrowsRef.current.length > 0) {
       const removedArrowId = annotationArrowsRef.current.at(-1)?.id ?? null;
       setAnnotationArrows((current) => {
@@ -3548,6 +4336,7 @@ export function BrowserPanel({
       });
       if (removedArrowId) {
         setHoveredAnnotationArrowId((current) => (current === removedArrowId ? null : current));
+        setSelectedAnnotationArrowId((current) => (current === removedArrowId ? null : current));
       }
     } else if (drawStrokesRef.current.some((stroke) => stroke.points.length > 1)) {
       setDrawStrokes((current) => {
@@ -3563,6 +4352,11 @@ export function BrowserPanel({
         return next;
       });
       if (removedTextAnnotationId) {
+        const removedArrowIds = new Set(
+          annotationArrowsRef.current
+            .filter((arrow) => arrow.sourceTextAnnotationId === removedTextAnnotationId)
+            .map((arrow) => arrow.id),
+        );
         setSelectedTextAnnotationId((current) =>
           current === removedTextAnnotationId ? null : current,
         );
@@ -3571,6 +4365,12 @@ export function BrowserPanel({
         );
         setHoveredTextAnnotationId((current) =>
           current === removedTextAnnotationId ? null : current,
+        );
+        setSelectedAnnotationArrowId((current) =>
+          current && removedArrowIds.has(current) ? null : current,
+        );
+        setHoveredAnnotationArrowId((current) =>
+          current && removedArrowIds.has(current) ? null : current,
         );
         setAnnotationArrows((current) => {
           const next = current.filter(
@@ -3582,7 +4382,7 @@ export function BrowserPanel({
       }
     }
     scheduleBrowserAnnotationAttachmentUpdate(0);
-  }, [scheduleBrowserAnnotationAttachmentUpdate]);
+  }, [resetActiveDrawStroke, scheduleBrowserAnnotationAttachmentUpdate]);
 
   const addDrawingToPrompt = useCallback(() => {
     const usableStrokes = drawStrokesRef.current.filter((stroke) => stroke.points.length > 1);
@@ -3612,6 +4412,9 @@ export function BrowserPanel({
     hasTextAnnotations ||
     hasAnnotationArrows ||
     selectedElementContext !== null;
+  const renderedDrawStrokes = activeDrawStroke
+    ? [...drawStrokes, activeDrawStroke]
+    : drawStrokes;
   const visibleAnnotationBox =
     editorMode === "inspect" && inspectHoverBox
       ? inspectHoverBox
@@ -4245,13 +5048,13 @@ export function BrowserPanel({
                       </div>
                     </>
                   ) : null}
-                  {drawStrokes.length > 0 ? (
+                  {renderedDrawStrokes.length > 0 ? (
                     <svg
                       className="pointer-events-none absolute inset-0 h-full w-full"
                       aria-hidden="true"
                     >
                       <defs>
-                        {drawStrokes.map((stroke, strokeIndex) => {
+                        {renderedDrawStrokes.map((stroke, strokeIndex) => {
                           const gradientId = `browser-drawing-gradient-${svgFragmentId(threadId)}-${svgFragmentId(stroke.id)}`;
                           const colors = gradientColorsForStroke(strokeIndex);
 
@@ -4320,7 +5123,7 @@ export function BrowserPanel({
                           );
                         })}
                       </defs>
-                      {drawStrokes.map((stroke) => {
+                      {renderedDrawStrokes.map((stroke) => {
                         const points = drawingStrokePoints(stroke);
                         const gradientId = `browser-drawing-gradient-${svgFragmentId(threadId)}-${svgFragmentId(stroke.id)}`;
 
@@ -4432,7 +5235,9 @@ export function BrowserPanel({
                         })}
                       </defs>
                       {visibleAnnotationArrows.map((arrow) => {
+                        const isArrowSelected = selectedAnnotationArrowId === arrow.id;
                         const showTargetHandle =
+                          isArrowSelected ||
                           arrow.id === annotationArrowDraft?.id ||
                           hoveredAnnotationArrowId === arrow.id ||
                           (arrow.sourceTextAnnotationId !== undefined &&
@@ -4477,6 +5282,11 @@ export function BrowserPanel({
                                 showAnnotationArrowControls(arrow.id);
                                 moveAnnotationArrowTargetDrag(event);
                               }}
+                              onPointerDown={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                selectAnnotationArrow(arrow);
+                              }}
                               onPointerLeave={() => {
                                 scheduleHideAnnotationArrowControls(arrow.id);
                               }}
@@ -4489,7 +5299,28 @@ export function BrowserPanel({
                               onMouseLeave={() => {
                                 scheduleHideAnnotationArrowControls(arrow.id);
                               }}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                selectAnnotationArrow(arrow);
+                              }}
                             />
+                            {isArrowSelected
+                              ? segments.map((segment, segmentIndex) => (
+                                  <line
+                                    key={`selected-${segmentIndex}`}
+                                    className="pointer-events-none"
+                                    x1={segment.x1}
+                                    y1={segment.y1}
+                                    x2={segment.x2}
+                                    y2={segment.y2}
+                                    stroke="rgba(125, 211, 252, 0.88)"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={BROWSER_DRAWING_CONTRAST_STROKE_WIDTH + 3}
+                                    opacity="0.55"
+                                  />
+                                ))
+                              : null}
                             {segments.map((segment, segmentIndex) => (
                               <line
                                 key={`contrast-${segmentIndex}`}
@@ -4578,9 +5409,13 @@ export function BrowserPanel({
                     </svg>
                   ) : null}
                   {textAnnotations.map((annotation) => {
-                    const boxPosition = textAnnotationBoxPosition(annotation);
                     const isSelected = selectedTextAnnotationId === annotation.id;
                     const isEditing = editingTextAnnotationId === annotation.id;
+                    const visibleText = isEditing
+                      ? editingTextAnnotationValue
+                      : annotation.text;
+                    const boxMetrics = textAnnotationBoxMetrics(visibleText);
+                    const boxPosition = textAnnotationBoxPosition(annotation, boxMetrics);
                     const showSourceHandles =
                       !isEditing &&
                       (hoveredTextAnnotationId === annotation.id ||
@@ -4594,8 +5429,8 @@ export function BrowserPanel({
                           style={{
                             left: boxPosition.x,
                             top: boxPosition.y,
-                            width: BROWSER_TEXT_ANNOTATION_BOX_WIDTH,
-                            height: BROWSER_TEXT_ANNOTATION_BOX_HEIGHT,
+                            width: boxMetrics.width,
+                            height: boxMetrics.height,
                           }}
                           onClick={(event) => {
                             event.stopPropagation();
@@ -4603,12 +5438,19 @@ export function BrowserPanel({
                         >
                           <div
                             className={cn(
-                              "h-full w-full truncate rounded-md border border-white/80 bg-slate-950/90 px-2.5 py-1.5 text-xs font-semibold leading-snug text-white shadow-[0_0_0_1px_rgba(0,0,0,0.35),0_8px_20px_rgba(0,0,0,0.26)]",
+                              "box-border h-full w-full whitespace-pre-wrap rounded-md border border-white/80 bg-slate-950/90 px-2.5 py-1.5 text-xs font-semibold text-white shadow-[0_0_0_1px_rgba(0,0,0,0.35),0_8px_20px_rgba(0,0,0,0.26)]",
                               isEditing
                                 ? "cursor-text ring-2 ring-cyan-300/80"
                                 : "cursor-grab active:cursor-grabbing",
                               isSelected && !isEditing ? "ring-2 ring-cyan-300/80" : "",
                             )}
+                            style={{
+                              lineHeight: `${BROWSER_TEXT_ANNOTATION_LINE_HEIGHT}px`,
+                              overflowWrap: "anywhere",
+                              overflowX: "hidden",
+                              overflowY: "auto",
+                              wordBreak: "break-word",
+                            }}
                             onDoubleClick={(event) => beginTextAnnotationEdit(annotation, event)}
                             onPointerEnter={() => {
                               showTextAnnotationControls(annotation.id);
@@ -4640,10 +5482,18 @@ export function BrowserPanel({
                             onPointerCancel={finishTextAnnotationDrag}
                           >
                             {isEditing ? (
-                              <input
+                              <textarea
                                 ref={editTextAnnotationInputRef}
                                 value={editingTextAnnotationValue}
-                                className="h-full w-full bg-transparent p-0 text-xs font-semibold text-white outline-none"
+                                rows={1}
+                                className="h-full w-full resize-none bg-transparent p-0 text-xs font-semibold text-white outline-none"
+                                style={{
+                                  lineHeight: `${BROWSER_TEXT_ANNOTATION_LINE_HEIGHT}px`,
+                                  overflowWrap: "anywhere",
+                                  overflowX: "hidden",
+                                  overflowY: "auto",
+                                  wordBreak: "break-word",
+                                }}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                 }}
@@ -4725,40 +5575,60 @@ export function BrowserPanel({
                       </div>
                     );
                   })}
-                  {textAnnotationDraft ? (
-                    <input
-                      ref={textAnnotationInputRef}
-                      value={textAnnotationDraft.text}
-                      className="absolute z-10 h-8 w-64 rounded-md border border-white/80 bg-slate-950/92 px-2.5 text-xs font-semibold text-white shadow-[0_0_0_1px_rgba(0,0,0,0.35),0_8px_20px_rgba(0,0,0,0.28)] outline-none placeholder:text-white/55 focus:ring-2 focus:ring-cyan-300/70"
-                      placeholder="Add note"
-                      style={{
-                        left: Math.max(8, textAnnotationDraft.x + 10),
-                        top: Math.max(8, textAnnotationDraft.y - 34),
-                      }}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                      }}
-                      onPointerDown={(event) => {
-                        event.stopPropagation();
-                      }}
-                      onChange={(event) => {
-                        const text = event.currentTarget.value;
-                        setTextAnnotationDraft((current) => (current ? { ...current, text } : current));
-                      }}
-                      onBlur={() => {
-                        commitTextAnnotationDraft();
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          commitTextAnnotationDraft();
-                        } else if (event.key === "Escape") {
-                          event.preventDefault();
-                          setTextAnnotationDraft(null);
-                        }
-                      }}
-                    />
-                  ) : null}
+                  {textAnnotationDraft
+                    ? (() => {
+                        const draftMetrics = textAnnotationBoxMetrics(textAnnotationDraft.text);
+                        const draftPosition = clampTextAnnotationBoxPosition(
+                          textAnnotationBoxPosition(textAnnotationDraft, draftMetrics),
+                          browserEditorOverlayRef.current,
+                          draftMetrics,
+                        );
+                        return (
+                          <textarea
+                            ref={textAnnotationInputRef}
+                            value={textAnnotationDraft.text}
+                            rows={1}
+                            className="absolute z-10 box-border resize-none whitespace-pre-wrap rounded-md border border-white/80 bg-slate-950/92 px-2.5 py-1.5 text-xs font-semibold text-white shadow-[0_0_0_1px_rgba(0,0,0,0.35),0_8px_20px_rgba(0,0,0,0.28)] outline-none placeholder:text-white/55 focus:ring-2 focus:ring-cyan-300/70"
+                            placeholder={BROWSER_TEXT_ANNOTATION_PLACEHOLDER}
+                            style={{
+                              left: draftPosition.x,
+                              top: draftPosition.y,
+                              width: draftMetrics.width,
+                              height: draftMetrics.height,
+                              lineHeight: `${BROWSER_TEXT_ANNOTATION_LINE_HEIGHT}px`,
+                              overflowWrap: "anywhere",
+                              overflowX: "hidden",
+                              overflowY: "auto",
+                              wordBreak: "break-word",
+                            }}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                            }}
+                            onPointerDown={(event) => {
+                              event.stopPropagation();
+                            }}
+                            onChange={(event) => {
+                              const text = event.currentTarget.value;
+                              setTextAnnotationDraft((current) =>
+                                current ? { ...current, text } : current,
+                              );
+                            }}
+                            onBlur={() => {
+                              commitTextAnnotationDraft();
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                commitTextAnnotationDraft();
+                              } else if (event.key === "Escape") {
+                                event.preventDefault();
+                                setTextAnnotationDraft(null);
+                              }
+                            }}
+                          />
+                        );
+                      })()
+                    : null}
                 </div>
               ) : null}
             </div>

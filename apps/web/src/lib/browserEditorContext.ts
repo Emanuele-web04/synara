@@ -79,6 +79,7 @@ export interface BrowserDrawingEditorContext {
   viewport: BrowserViewport;
   document?: BrowserDocumentSize;
   scroll?: BrowserScrollPosition;
+  capture?: BrowserRect;
   selectedSelector?: string | null;
   selectedElement?: BrowserElementEditorContext | null;
   strokes: BrowserDrawingStroke[];
@@ -105,6 +106,18 @@ const BROWSER_EDITOR_BLOCK_PATTERN =
 
 export function createBrowserEditorContextBlockRegex(): RegExp {
   return new RegExp(BROWSER_EDITOR_BLOCK_PATTERN.source, "g");
+}
+
+export function extractBrowserEditorContextPromptBlocks(
+  prompt: string,
+): BrowserEditorPromptContextSummary[] {
+  return Array.from(prompt.matchAll(createBrowserEditorContextBlockRegex()))
+    .map((match) => summarizeBrowserEditorPromptBlock(match[0] ?? ""))
+    .filter((summary): summary is BrowserEditorPromptContextSummary => summary !== null);
+}
+
+export function removeBrowserEditorContextPrompts(prompt: string): string {
+  return normalizePromptBlockSpacing(prompt.replace(createBrowserEditorContextBlockRegex(), ""));
 }
 
 function escapeCssIdentifier(value: string): string {
@@ -596,6 +609,7 @@ export function buildBrowserDrawingPromptBlock(context: BrowserDrawingEditorCont
     `viewport: ${formatViewport(context.viewport)}`,
     ...(context.document ? [`document: ${formatDocumentSize(context.document)}`] : []),
     ...(context.scroll ? [`scroll: ${formatScrollPosition(context.scroll)}`] : []),
+    ...(context.capture ? [`capture: ${formatRect(context.capture)}`] : []),
     ...(selectedSelector
       ? [`selectedSelector: ${selectedSelector}`]
       : ["selectedSelector: (none)"]),
