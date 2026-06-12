@@ -184,9 +184,7 @@ const orderedActivitiesCache = new WeakMap<
   ReadonlyArray<OrchestrationThreadActivity>
 >();
 
-function isActivityOrderStable(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
-): boolean {
+function isActivityOrderStable(activities: ReadonlyArray<OrchestrationThreadActivity>): boolean {
   for (let index = 1; index < activities.length; index += 1) {
     if (compareActivitiesByOrder(activities[index - 1]!, activities[index]!) > 0) {
       return false;

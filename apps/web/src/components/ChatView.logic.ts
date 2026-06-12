@@ -561,12 +561,7 @@ export interface ThreadBreadcrumb {
 
 type ThreadBreadcrumbSource = Pick<
   Thread,
-  | "id"
-  | "title"
-  | "parentThreadId"
-  | "subagentAgentId"
-  | "subagentNickname"
-  | "subagentRole"
+  "id" | "title" | "parentThreadId" | "subagentAgentId" | "subagentNickname" | "subagentRole"
 > & {
   activities?: Thread["activities"];
 };

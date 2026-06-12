@@ -46,12 +46,7 @@ type ThreadLineageSliceRefs = {
 
 export type ThreadLineageEntry = Pick<
   ThreadShell,
-  | "id"
-  | "title"
-  | "parentThreadId"
-  | "subagentAgentId"
-  | "subagentNickname"
-  | "subagentRole"
+  "id" | "title" | "parentThreadId" | "subagentAgentId" | "subagentNickname" | "subagentRole"
 > & {
   activities: Thread["activities"];
 };
@@ -309,7 +304,6 @@ export function createThreadLineageSelector(threadId: ThreadIdType | null) {
       return previousResult;
     }
 
-    const threadIds: readonly ThreadIdType[] = state.threadIds ?? [];
     const threadShellById: Record<ThreadIdType, ThreadShell> = state.threadShellById ?? {};
     const selectedThreadIds: ThreadIdType[] = [];
     const visitedThreadIds = new Set<ThreadIdType>();
@@ -327,10 +321,7 @@ export function createThreadLineageSelector(threadId: ThreadIdType | null) {
 
     // Breadcrumb labels only need shells plus parent activity identity hints;
     // avoid subscribing this header path to message/session/diff slices.
-    const selectedIdsChanged = !shallowEqualThreadIds(
-      previousSelectedThreadIds,
-      selectedThreadIds,
-    );
+    const selectedIdsChanged = !shallowEqualThreadIds(previousSelectedThreadIds, selectedThreadIds);
     const nextSliceRefs = new Map<ThreadIdType, ThreadLineageSliceRefs>();
     let sliceRefsChanged = selectedIdsChanged;
 
