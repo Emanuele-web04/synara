@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
+import { Route as ChatWorldcupRouteImport } from './routes/_chat.worldcup'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
 import { Route as ChatPluginsRouteImport } from './routes/_chat.plugins'
 import { Route as ChatThreadIdRouteImport } from './routes/_chat.$threadId'
@@ -26,6 +27,11 @@ const ChatRoute = ChatRouteImport.update({
 const ChatIndexRoute = ChatIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => ChatRoute,
+} as any)
+const ChatWorldcupRoute = ChatWorldcupRouteImport.update({
+  id: '/worldcup',
+  path: '/worldcup',
   getParentRoute: () => ChatRoute,
 } as any)
 const ChatSettingsRoute = ChatSettingsRouteImport.update({
@@ -70,6 +76,7 @@ export interface FileRoutesByFullPath {
   '/$threadId': typeof ChatThreadIdRoute
   '/plugins': typeof ChatPluginsRoute
   '/settings': typeof ChatSettingsRoute
+  '/worldcup': typeof ChatWorldcupRoute
   '/kanban/$projectId': typeof ChatKanbanProjectIdRoute
   '/workspace/$workspaceId': typeof ChatWorkspaceWorkspaceIdRoute
   '/kanban/': typeof ChatKanbanIndexRoute
@@ -79,6 +86,7 @@ export interface FileRoutesByTo {
   '/$threadId': typeof ChatThreadIdRoute
   '/plugins': typeof ChatPluginsRoute
   '/settings': typeof ChatSettingsRoute
+  '/worldcup': typeof ChatWorldcupRoute
   '/': typeof ChatIndexRoute
   '/kanban/$projectId': typeof ChatKanbanProjectIdRoute
   '/workspace/$workspaceId': typeof ChatWorkspaceWorkspaceIdRoute
@@ -91,6 +99,7 @@ export interface FileRoutesById {
   '/_chat/$threadId': typeof ChatThreadIdRoute
   '/_chat/plugins': typeof ChatPluginsRoute
   '/_chat/settings': typeof ChatSettingsRoute
+  '/_chat/worldcup': typeof ChatWorldcupRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/kanban/$projectId': typeof ChatKanbanProjectIdRoute
   '/_chat/workspace/$workspaceId': typeof ChatWorkspaceWorkspaceIdRoute
@@ -104,6 +113,7 @@ export interface FileRouteTypes {
     | '/$threadId'
     | '/plugins'
     | '/settings'
+    | '/worldcup'
     | '/kanban/$projectId'
     | '/workspace/$workspaceId'
     | '/kanban/'
@@ -113,6 +123,7 @@ export interface FileRouteTypes {
     | '/$threadId'
     | '/plugins'
     | '/settings'
+    | '/worldcup'
     | '/'
     | '/kanban/$projectId'
     | '/workspace/$workspaceId'
@@ -124,6 +135,7 @@ export interface FileRouteTypes {
     | '/_chat/$threadId'
     | '/_chat/plugins'
     | '/_chat/settings'
+    | '/_chat/worldcup'
     | '/_chat/'
     | '/_chat/kanban/$projectId'
     | '/_chat/workspace/$workspaceId'
@@ -149,6 +161,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof ChatIndexRouteImport
+      parentRoute: typeof ChatRoute
+    }
+    '/_chat/worldcup': {
+      id: '/_chat/worldcup'
+      path: '/worldcup'
+      fullPath: '/worldcup'
+      preLoaderRoute: typeof ChatWorldcupRouteImport
       parentRoute: typeof ChatRoute
     }
     '/_chat/settings': {
@@ -207,6 +226,7 @@ interface ChatRouteChildren {
   ChatThreadIdRoute: typeof ChatThreadIdRoute
   ChatPluginsRoute: typeof ChatPluginsRoute
   ChatSettingsRoute: typeof ChatSettingsRoute
+  ChatWorldcupRoute: typeof ChatWorldcupRoute
   ChatIndexRoute: typeof ChatIndexRoute
   ChatKanbanProjectIdRoute: typeof ChatKanbanProjectIdRoute
   ChatWorkspaceWorkspaceIdRoute: typeof ChatWorkspaceWorkspaceIdRoute
@@ -218,6 +238,7 @@ const ChatRouteChildren: ChatRouteChildren = {
   ChatThreadIdRoute: ChatThreadIdRoute,
   ChatPluginsRoute: ChatPluginsRoute,
   ChatSettingsRoute: ChatSettingsRoute,
+  ChatWorldcupRoute: ChatWorldcupRoute,
   ChatIndexRoute: ChatIndexRoute,
   ChatKanbanProjectIdRoute: ChatKanbanProjectIdRoute,
   ChatWorkspaceWorkspaceIdRoute: ChatWorkspaceWorkspaceIdRoute,
