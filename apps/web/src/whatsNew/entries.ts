@@ -22,6 +22,68 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.2.0",
+    date: "Jun 13",
+    features: [
+      {
+        id: "secure-pdf-preview",
+        title: "PDFs open safely inside Synara",
+        description:
+          "Local PDFs can now be previewed directly in the workspace pane with page navigation, zoom controls, selection-safe rendering, and hardened link handling.",
+        details:
+          "This release replaces browser iframe PDF handling with a pdf.js-powered viewer, authenticated local preview routes, workspace/scratch allowlists, sanitized annotation links, page reset behavior when switching files, fresh page proxies per document, and focused server/web tests for local image/PDF access and PDF navigation helpers.",
+      },
+      {
+        id: "workspace-file-preview",
+        title: "File preview is shared across chat and editor workspaces",
+        description:
+          "The right dock and editor workspace now use the same richer file preview surface, so browsing files, images, markdown, and PDFs feels more consistent.",
+        details:
+          "Synara now routes file preview through `WorkspaceFilePreview`, `PdfFilePreview`, shared preview headers, markdown/source selection references, workspace file openers, dock pane activation metadata, local preview URL helpers, and tighter file reference context-menu behavior.",
+      },
+      {
+        id: "pi-plugin-routing",
+        title: "Pi plugin sessions start in the right place",
+        description:
+          "Pi-backed plugin flows now route through Synara more reliably, discover model support better, and keep startup prompts attached to the correct provider session.",
+        details:
+          "The Pi adapter gained richer ACP handling, extension model discovery, cwd/session wiring, startup prompt routing, provider command reactor coverage, provider service safeguards, and an ACP mock agent so plugin startup, prompt forwarding, and provider state transitions are covered more directly.",
+      },
+      {
+        id: "chat-startup-and-timeline",
+        title: "Chat startup and timelines do less unnecessary work",
+        description:
+          "Opening busy chats should feel calmer: timeline ordering, transcript selection, collapsed turns, and sidebar-driven updates were tightened for the common path.",
+        details:
+          "This release optimizes chat view startup selectors, timeline ordering, settled-turn collapse fallback, message timeline height logic, transcript tail behavior, right-dock runtime activation, and route-level chat restoration with additional selector, timeline, and browser coverage.",
+      },
+      {
+        id: "composer-shortcuts-and-markdown",
+        title: "Composer and markdown interactions picked up useful polish",
+        description:
+          "Cmd+L now focuses the composer, markdown task lists render cleanly, inline mentions behave more predictably, and pending user-input panels are easier to scan.",
+        details:
+          "New keybinding metadata and tests cover the composer focus shortcut, while markdown task-list parsing, chat references, inline mention chips, composer banners, pending user-input panels, and shortcut-sheet entries received focused fixes.",
+      },
+      {
+        id: "cursor-and-changed-files",
+        title: "Cursor and changed-file views are easier to trust",
+        description:
+          "Cursor message ids are handled more carefully, changed files moved to a flatter UI path, and stale plan/sidebar indicators were cleaned up.",
+        details:
+          "Synara now preserves Cursor message identity more reliably, removes the older turn diff tree path, refines changed-file file-list rendering, fixes duplicate plan-mode icons and stale plan sidebar state, and hides inline project actions from the chat header where they created noise.",
+      },
+      {
+        id: "preview-security-and-local-files",
+        title: "Local previews have tighter safety rails",
+        description:
+          "Local image/PDF preview routes are more explicit about what can be opened, how auth applies, and when unsafe paths or URLs should be rejected.",
+        details:
+          "Server-side local preview handling now shares local preview file helpers, narrows CORS behavior for preview responses, covers local image routes, hardens scratch workspace path generation, and keeps external PDF links on an allowlisted path instead of trusting unsafe annotation URLs.",
+      },
+    ],
+  },
+  {
     version: "0.1.9",
     date: "Jun 12",
     features: [
