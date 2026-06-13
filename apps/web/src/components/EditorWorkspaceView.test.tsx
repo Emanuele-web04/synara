@@ -220,6 +220,96 @@ describe("EditorWorkspaceView", () => {
     expect(markup).not.toContain("editor-file-viewer__highlight");
   });
 
+  it("renders PDF files through the in-app PDF viewer instead of the text preview", () => {
+    const queryClient = new QueryClient();
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <EditorWorkspaceView
+          workspaceRoot="/Users/tester/project"
+          projectName="project"
+          selectedFilePath="docs/spec.pdf"
+          expandedDirectories={new Set()}
+          centerMode="file"
+          diffFiles={[]}
+          selectedDiffFilePath={null}
+          diffPanel={<div>Diff panel</div>}
+          chatPanel={<div>Chat panel</div>}
+          onSelectFile={vi.fn()}
+          onSelectDiffFile={vi.fn()}
+          onToggleDirectory={vi.fn()}
+          onCenterModeChange={vi.fn()}
+          onExitEditorView={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    // The custom viewer renders its own surface (here the initial loading state
+    // since document fetch runs in an effect) rather than the browser iframe or
+    // the text preview.
+    expect(markup).toContain('aria-label="Loading PDF..."');
+    expect(markup).not.toContain("<iframe");
+    expect(markup).not.toContain("editor-file-viewer__plain");
+    expect(markup).not.toContain("editor-file-viewer__highlight");
+  });
+
+  it("renders scratch-workspace PDF previews without an attached workspace", () => {
+    const queryClient = new QueryClient();
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <EditorWorkspaceView
+          workspaceRoot={null}
+          projectName="project"
+          selectedFilePath="/tmp/synara-codex-workspaces/thread-1/report.pdf"
+          expandedDirectories={new Set()}
+          centerMode="file"
+          diffFiles={[]}
+          selectedDiffFilePath={null}
+          diffPanel={<div>Diff panel</div>}
+          chatPanel={<div>Chat panel</div>}
+          onSelectFile={vi.fn()}
+          onSelectDiffFile={vi.fn()}
+          onToggleDirectory={vi.fn()}
+          onCenterModeChange={vi.fn()}
+          onExitEditorView={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain('aria-label="Loading PDF..."');
+    expect(markup).not.toContain("No workspace is attached");
+  });
+
+  it("renders scratch-workspace image previews without an attached workspace", () => {
+    const queryClient = new QueryClient();
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <EditorWorkspaceView
+          workspaceRoot={null}
+          projectName="project"
+          selectedFilePath="/tmp/synara-codex-workspaces/thread-1/shot.png"
+          expandedDirectories={new Set()}
+          centerMode="file"
+          diffFiles={[]}
+          selectedDiffFilePath={null}
+          diffPanel={<div>Diff panel</div>}
+          chatPanel={<div>Chat panel</div>}
+          onSelectFile={vi.fn()}
+          onSelectDiffFile={vi.fn()}
+          onToggleDirectory={vi.fn()}
+          onCenterModeChange={vi.fn()}
+          onExitEditorView={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain("local-image-preview");
+    expect(markup).toContain(
+      "/api/local-image?path=%2Ftmp%2Fsynara-codex-workspaces%2Fthread-1%2Fshot.png",
+    );
+    expect(markup).not.toContain("No workspace is attached");
+    expect(markup).not.toContain("cwd=");
+  });
+
   it("shows the file-preview path breadcrumb and overflow menu for Markdown files", () => {
     const queryClient = new QueryClient();
     const markup = renderToStaticMarkup(
@@ -246,9 +336,10 @@ describe("EditorWorkspaceView", () => {
     // The header renders a path breadcrumb (project › …dirs › file).
     expect(markup).toContain('aria-label="File path"');
     expect(markup).toContain("README.md");
-    // Markdown files surface their source/rendered toggle inside the overflow
-    // menu, whose trigger is always rendered.
-    expect(markup).toContain('aria-label="More actions"');
+    // Markdown files surface their source/rendered toggle in the header next
+    // to the Open-in picker, whose editor menu trigger is always rendered.
+    expect(markup).toContain('aria-label="Markdown view"');
+    expect(markup).toContain('aria-label="Editor options"');
   });
 
   it("renders a search item in the activity bar below files and diff", () => {

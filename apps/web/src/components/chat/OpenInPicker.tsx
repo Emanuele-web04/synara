@@ -4,9 +4,11 @@
 // Depends on: shared editor metadata, native shell bridge, and preferred editor state.
 
 import { type EditorId, type ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import { useQuery } from "@tanstack/react-query";
 import { memo } from "react";
 import { useEditorLaunchers } from "~/hooks/useEditorLaunchers";
 import { ChevronDownIcon, PlusIcon } from "~/lib/icons";
+import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import {
   Menu,
@@ -27,15 +29,23 @@ import {
   CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
 } from "./chatHeaderControls";
 
+const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
+const EMPTY_AVAILABLE_EDITORS: ReadonlyArray<EditorId> = [];
+
 export const OpenInPicker = memo(function OpenInPicker({
-  keybindings,
-  availableEditors,
+  keybindings: keybindingsProp,
+  availableEditors: availableEditorsProp,
   openInTarget,
   onAddAction,
   labelMode = "responsive",
+  defaultEditor,
 }: {
-  keybindings: ResolvedKeybindingsConfig;
-  availableEditors: ReadonlyArray<EditorId>;
+  // Editor config is optional: callers that already hold it (e.g. the chat
+  // header) pass it through, while standalone surfaces (file-preview headers)
+  // omit it and let the picker self-fetch. react-query dedupes by key with an
+  // infinite stale time, so multiple self-fetching pickers share one request.
+  keybindings?: ResolvedKeybindingsConfig;
+  availableEditors?: ReadonlyArray<EditorId>;
   openInTarget: string | null;
   // Optional project "Add action" entry rendered at the bottom of the editor menu.
   onAddAction?: () => void;
@@ -45,7 +55,18 @@ export const OpenInPicker = memo(function OpenInPicker({
   // label shows without needing an inline-size container that would collapse
   // the control's own width.
   labelMode?: "responsive" | "always";
+  // Pins the primary "Open" action to a specific editor for this surface without
+  // mutating the shared preferred-editor setting. The PDF viewer uses this to default
+  // to the OS viewer (e.g. Preview) while still listing installed editors.
+  defaultEditor?: EditorId;
 }) {
+  // Only subscribe to the config query when the caller did not supply config.
+  const needsConfig = keybindingsProp === undefined || availableEditorsProp === undefined;
+  const serverConfigQuery = useQuery({ ...serverConfigQueryOptions(), enabled: needsConfig });
+  const keybindings = keybindingsProp ?? serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
+  const availableEditors =
+    availableEditorsProp ?? serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
+
   const {
     options,
     preferredEditor,
@@ -53,7 +74,7 @@ export const OpenInPicker = memo(function OpenInPicker({
     openFavoriteShortcutLabel,
     setDefaultEditor,
     openInEditor,
-  } = useEditorLaunchers({ keybindings, availableEditors, openInTarget });
+  } = useEditorLaunchers({ keybindings, availableEditors, openInTarget, defaultEditor });
 
   return (
     <ChatHeaderSplitGroup label="Open in editor">
