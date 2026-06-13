@@ -8,6 +8,7 @@ import { CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS, type ThreadId } from "@t3tools
 import { useComposerDraftStore } from "../composerDraftStore";
 import { requestComposerFocus } from "../composerFocusRequestStore";
 import { formatComposerMentionToken } from "./composerMentions";
+import { createFileCommentDraft, type FileCommentSelection } from "./fileComments";
 
 export interface ChatFileReference {
   path: string;
@@ -119,6 +120,21 @@ export function appendComposerPromptText(threadId: ThreadId, text: string): void
 
 export function appendChatFileReference(threadId: ThreadId, reference: ChatFileReference): void {
   appendComposerPromptText(threadId, formatChatFileReference(reference));
+}
+
+// Attach an inline "Local comment" (file + line range + request text) to the
+// thread's composer draft so it surfaces as a chip and is serialized into the
+// prompt on send. Returns false when the comment is empty/invalid. Focus is
+// pulled to the composer whenever a valid comment is submitted (even if it
+// dedupes against an existing one) so the resulting chip is visible.
+export function addChatFileComment(threadId: ThreadId, comment: FileCommentSelection): boolean {
+  const draft = createFileCommentDraft(comment);
+  if (!draft) {
+    return false;
+  }
+  useComposerDraftStore.getState().addFileComment(threadId, draft);
+  requestComposerFocus(threadId);
+  return true;
 }
 
 function countNewlines(text: string): number {

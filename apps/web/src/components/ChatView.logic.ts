@@ -446,6 +446,7 @@ export function deriveComposerSendState(options: {
   prompt: string;
   imageCount: number;
   assistantSelectionCount: number;
+  fileCommentCount: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
 }): {
   trimmedPrompt: string;
@@ -465,6 +466,7 @@ export function deriveComposerSendState(options: {
       trimmedPrompt.length > 0 ||
       options.imageCount > 0 ||
       options.assistantSelectionCount > 0 ||
+      options.fileCommentCount > 0 ||
       sendableTerminalContexts.length > 0,
   };
 }

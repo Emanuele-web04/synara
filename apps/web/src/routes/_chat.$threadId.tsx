@@ -87,11 +87,13 @@ import { DockFilePane } from "../components/chat/DockFilePane";
 import { readEditorViewState, storeEditorViewState } from "../editorViewState";
 import { basenameOfPath } from "../file-icons";
 import {
+  addChatFileComment,
   appendChatFileReference,
   appendComposerPromptText,
   buildWhyLinesPrompt,
   type ChatFileReference,
 } from "../lib/chatReferences";
+import type { FileCommentSelection } from "../lib/fileComments";
 import { type DockPaneRuntimeMode } from "../lib/dockPaneActivation";
 import { projectListDirectoriesQueryOptions } from "../lib/projectReactQuery";
 import {
@@ -1614,6 +1616,12 @@ function SingleChatSurface(props: {
     },
     [props.threadId],
   );
+  const handleCommentInChat = useCallback(
+    (comment: FileCommentSelection) => {
+      addChatFileComment(props.threadId, comment);
+    },
+    [props.threadId],
+  );
 
   // Hover warm-up shared by both surfaces' file openers: file contents land in
   // the React Query cache and the matching Shiki highlighter loads, so the
@@ -1992,6 +2000,7 @@ function SingleChatSurface(props: {
               filePath={pane.filePath}
               onReferenceInChat={handleReferenceInChat}
               onAskWhyInChat={handleAskWhyInChat}
+              onCommentInChat={handleCommentInChat}
             />
           );
         case "sidechat":
@@ -2024,6 +2033,7 @@ function SingleChatSurface(props: {
       closePane,
       dockState.open,
       handleAskWhyInChat,
+      handleCommentInChat,
       handleReferenceInChat,
       props.projectId,
       props.threadId,
@@ -2123,6 +2133,7 @@ function SingleChatSurface(props: {
             onExitEditorView={handleCloseEditorView}
             onReferenceInChat={handleReferenceInChat}
             onAskWhyInChat={handleAskWhyInChat}
+            onCommentInChat={handleCommentInChat}
             onSelectProject={handleSelectEditorProject}
             diffPanel={
               <LazyDiffPanel

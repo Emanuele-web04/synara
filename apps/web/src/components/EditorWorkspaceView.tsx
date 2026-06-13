@@ -52,6 +52,7 @@ import {
   formatChatFileReference,
   type ChatFileReference,
 } from "~/lib/chatReferences";
+import type { FileCommentSelection } from "~/lib/fileComments";
 import { getSyntaxHighlighterPromise, getSyntaxLanguageForPath } from "~/lib/syntaxHighlighting";
 import { cn } from "~/lib/utils";
 import { useTheme } from "~/hooks/useTheme";
@@ -127,6 +128,7 @@ interface EditorWorkspaceViewProps {
   onExitEditorView: () => void;
   onReferenceInChat?: (reference: ChatFileReference) => void;
   onAskWhyInChat?: (reference: ChatFileReference) => void;
+  onCommentInChat?: (comment: FileCommentSelection) => void;
   onSelectProject?: (projectId: ProjectId) => void;
 }
 
@@ -1179,6 +1181,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
                   filePath={props.selectedFilePath}
                   onReferenceInChat={props.onReferenceInChat}
                   onAskWhyInChat={props.onAskWhyInChat}
+                  onCommentInChat={props.onCommentInChat}
                 />
               </div>
             ) : null}
