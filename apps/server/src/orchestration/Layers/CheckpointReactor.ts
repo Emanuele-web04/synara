@@ -13,7 +13,7 @@ import {
 import { Cause, Effect, Layer, Option, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
-import { parseTurnDiffFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
+import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import {
   checkpointRefForThreadMessageStart,
   checkpointRefForThreadTurn,
@@ -347,14 +347,7 @@ const make = Effect.gen(function* () {
             ignoreWhitespace: false,
           })
           .pipe(
-            Effect.map((diff) =>
-              parseTurnDiffFilesFromUnifiedDiff(diff).map((file) => ({
-                path: file.path,
-                kind: "modified" as const,
-                additions: file.additions,
-                deletions: file.deletions,
-              })),
-            ),
+            Effect.map((diff) => parseCheckpointFilesFromUnifiedDiff(diff)),
             Effect.tapError((error) =>
               appendCaptureFailureActivity({
                 threadId: input.threadId,

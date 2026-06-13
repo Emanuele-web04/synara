@@ -128,6 +128,7 @@ import {
   buildThreadBreadcrumbs,
   enrichSubagentWorkEntries,
   resolveActiveThreadTitle,
+  resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
@@ -178,7 +179,6 @@ import {
   buildSourceProposedPlanReference,
   hasActionableProposedPlan,
   hasLiveTurnTailWork,
-  isProviderFileEditWorkLogEntry,
   isLatestTurnSettled,
   type ActiveTaskListState,
 } from "../session-logic";
@@ -1156,8 +1156,8 @@ export default function ChatView({
   const latestTurnSettled = latestTurnSettledByProvider && !hasLiveTurnTail;
   // `latestTurnSettled` is also false when there is NO started turn (a brand-new
   // chat), because `isLatestTurnSettled` treats a non-existent turn as unsettled.
-  // Gate "live turn" UI on an actually-started turn so the working-tree diff strip
-  // doesn't leak onto a fresh chat just because the repo happens to be dirty.
+  // Gate live-turn UI on an actually-started turn so composer chrome cannot
+  // appear on a fresh chat just because the repo already has local edits.
   const latestTurnLive = Boolean(activeLatestTurn?.startedAt) && !latestTurnSettled;
   const activeProjectId = activeThread?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = useStore(
@@ -1780,14 +1780,6 @@ export default function ChatView({
         visibleTurnIds: workLogVisibleTurnIds,
       }),
     [activeLatestTurn?.turnId, threadActivities, workLogVisibleTurnIds],
-  );
-  const activeTurnHasFileChangeWork = useMemo(
-    () =>
-      rawWorkLogEntries.some(
-        (entry) =>
-          entry.turnId === activeLatestTurn?.turnId && isProviderFileEditWorkLogEntry(entry),
-      ),
-    [activeLatestTurn?.turnId, rawWorkLogEntries],
   );
   const hasWorkLogSubagents = useMemo(
     () => rawWorkLogEntries.some((entry) => (entry.subagents?.length ?? 0) > 0),
@@ -2872,6 +2864,16 @@ export default function ChatView({
     isGitRepo,
     refetchInterval: repoDiffBadgeRefreshIntervalMs,
   });
+  // The composer live strip is turn-scoped; repoDiffTotals can include unrelated
+  // local edits that existed before the active agent turn started.
+  const activeTurnLiveDiffState = useMemo(
+    () =>
+      resolveActiveTurnLiveDiffState({
+        latestTurnId: activeLatestTurn?.turnId ?? null,
+        turnDiffSummaries,
+      }),
+    [activeLatestTurn?.turnId, turnDiffSummaries],
+  );
   const splitTerminalShortcutLabel = useMemo(
     () =>
       shortcutLabelForCommand(keybindings, "terminal.splitRight") ??
@@ -7772,6 +7774,13 @@ export default function ChatView({
     },
     [diffEnvironmentPending, navigate, onOpenTurnDiffPanel, threadId],
   );
+  const onReviewComposerLiveChanges = useCallback(() => {
+    if (!activeTurnLiveDiffState.turnId) {
+      onOpenDiff();
+      return;
+    }
+    onOpenTurnDiff(activeTurnLiveDiffState.turnId);
+  }, [activeTurnLiveDiffState.turnId, onOpenDiff, onOpenTurnDiff]);
   const onNavigateToThread = useCallback(
     (nextThreadId: ThreadId) => {
       void navigate({
@@ -8083,7 +8092,7 @@ export default function ChatView({
     : null;
 
   const showComposerLiveChangesHeader =
-    latestTurnLive && activeTurnHasFileChangeWork && repoDiffTotals.fileCount > 0;
+    latestTurnLive && activeTurnLiveDiffState.fileCount > 0;
   const showComposerActiveTaskListCard = Boolean(activeTaskList && !planSidebarOpen);
 
   // Composer layout keeps the task list and footer actions in one render path so
@@ -8114,10 +8123,10 @@ export default function ChatView({
           <ComposerColumnFrame>
             {showComposerLiveChangesHeader ? (
               <ComposerLiveChangesHeader
-                fileCount={repoDiffTotals.fileCount}
-                additions={repoDiffTotals.additions}
-                deletions={repoDiffTotals.deletions}
-                onReview={onOpenDiff}
+                fileCount={activeTurnLiveDiffState.fileCount}
+                additions={activeTurnLiveDiffState.additions}
+                deletions={activeTurnLiveDiffState.deletions}
+                onReview={onReviewComposerLiveChanges}
               />
             ) : null}
             {renderActiveTaskListCard(showComposerLiveChangesHeader)}

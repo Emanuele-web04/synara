@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseTurnDiffFilesFromUnifiedDiff } from "./Diffs.ts";
+import { parseCheckpointFilesFromUnifiedDiff, parseTurnDiffFilesFromUnifiedDiff } from "./Diffs.ts";
 
 describe("parseTurnDiffFilesFromUnifiedDiff", () => {
   it("returns empty list for empty diff", () => {
@@ -88,6 +88,24 @@ describe("parseTurnDiffFilesFromUnifiedDiff", () => {
 
     expect(parseTurnDiffFilesFromUnifiedDiff(diff)).toEqual([
       { path: "CLAUDE.md", additions: 2, deletions: 3 },
+    ]);
+  });
+
+  it("maps parsed file summaries into checkpoint files", () => {
+    const diff = [
+      "diff --git a/src/app.ts b/src/app.ts",
+      "index 1111111..2222222 100644",
+      "--- a/src/app.ts",
+      "+++ b/src/app.ts",
+      "@@ -1 +1,2 @@",
+      "-old",
+      "+new",
+      "+extra",
+      "",
+    ].join("\n");
+
+    expect(parseCheckpointFilesFromUnifiedDiff(diff)).toEqual([
+      { path: "src/app.ts", kind: "modified", additions: 2, deletions: 1 },
     ]);
   });
 });

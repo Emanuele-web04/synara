@@ -29,6 +29,7 @@ import {
   generatedImagePathFromRuntimeEvent,
   isGeneratedImageOnlyMarkdown,
 } from "../../codexGeneratedImages.ts";
+import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
@@ -84,6 +85,19 @@ type RuntimeIngestionInput =
     };
 
 type ActivityPayload = OrchestrationThreadActivity["payload"];
+type ProviderDiffPlaceholder = {
+  readonly checkpointRef: CheckpointRef;
+  readonly checkpointTurnCount: number;
+  readonly files: ReturnType<typeof parseCheckpointFilesFromUnifiedDiff>;
+};
+
+function parseProviderTurnDiffFiles(unifiedDiff: string) {
+  try {
+    return parseCheckpointFilesFromUnifiedDiff(unifiedDiff);
+  } catch {
+    return null;
+  }
+}
 
 function toActivityPayload(payload: unknown): ActivityPayload {
   return payload as ActivityPayload;
@@ -1146,6 +1160,7 @@ const make = Effect.gen(function* () {
     timeToLive: BUFFERED_PROPOSED_PLAN_BY_ID_TTL,
     lookup: () => Effect.succeed({ text: "", createdAt: "" }),
   });
+  const providerDiffPlaceholdersRef = yield* Ref.make(new Map<string, ProviderDiffPlaceholder>());
 
   const getThreadDetail = Effect.fnUntraced(function* (
     threadId: ThreadId,
@@ -1185,6 +1200,22 @@ const make = Effect.gen(function* () {
     }
     return isGitRepository(workspaceCwd);
   });
+
+  const supportsLiveTurnDiffPatch = Effect.fnUntraced(function* (
+    provider: ProviderRuntimeEvent["provider"],
+  ) {
+    const capabilities = yield* providerService
+      .getCapabilities(provider)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    return capabilities?.supportsLiveTurnDiffPatch === true;
+  });
+
+  const clearProviderDiffPlaceholder = (threadId: ThreadId, turnId: TurnId) =>
+    Ref.update(providerDiffPlaceholdersRef, (placeholders) => {
+      const next = new Map(placeholders);
+      next.delete(providerTurnKey(threadId, turnId));
+      return next;
+    });
 
   const rememberAssistantMessageId = (threadId: ThreadId, turnId: TurnId, messageId: MessageId) =>
     Cache.getOption(turnMessageIdsByTurnKey, providerTurnKey(threadId, turnId)).pipe(
@@ -2188,6 +2219,7 @@ const make = Effect.gen(function* () {
             turnId: finalizedTurnId,
             updatedAt: now,
           });
+          yield* clearProviderDiffPlaceholder(thread.id, finalizedTurnId);
         }
       }
 
@@ -2202,6 +2234,7 @@ const make = Effect.gen(function* () {
             commandTag: "assistant-complete-session-exit",
             finalDeltaCommandTag: "assistant-delta-session-exit",
           });
+          yield* clearProviderDiffPlaceholder(thread.id, exitedTurnId);
         }
         yield* clearTurnStateForSession(thread.id);
       }
@@ -2219,6 +2252,7 @@ const make = Effect.gen(function* () {
             commandTag: "assistant-complete-runtime-error",
             finalDeltaCommandTag: "assistant-delta-runtime-error",
           });
+          yield* clearProviderDiffPlaceholder(thread.id, erroredTurnId);
         }
 
         const shouldApplyRuntimeError = !STRICT_PROVIDER_LIFECYCLE_GUARD
@@ -2256,17 +2290,41 @@ const make = Effect.gen(function* () {
       if (event.type === "turn.diff.updated") {
         const turnId = toTurnId(event.turnId);
         if (turnId && (yield* isGitRepoForThread(thread.id))) {
-          // Skip if a checkpoint already exists for this turn. A real
-          // (non-placeholder) capture from CheckpointReactor should not
-          // be clobbered, and dispatching a duplicate placeholder for the
-          // same turnId would produce an unstable checkpointTurnCount.
-          if (thread.checkpoints.some((c) => c.turnId === turnId)) {
-            // Already tracked; no-op.
+          const existingCheckpoint = thread.checkpoints.find((c) => c.turnId === turnId);
+          const placeholderKey = providerTurnKey(thread.id, turnId);
+          const trackedPlaceholder = (yield* Ref.get(providerDiffPlaceholdersRef)).get(
+            placeholderKey,
+          );
+          const existingProviderPlaceholder =
+            existingCheckpoint?.checkpointRef.startsWith("provider-diff:") === true
+              ? {
+                  checkpointRef: existingCheckpoint.checkpointRef,
+                  checkpointTurnCount: existingCheckpoint.checkpointTurnCount,
+                  files: existingCheckpoint.files,
+                }
+              : null;
+          // Only provider-diff placeholders are live-updated. A real checkpoint from
+          // CheckpointReactor is the terminal turn diff and must stay authoritative.
+          if (existingCheckpoint && !existingProviderPlaceholder) {
+            yield* clearProviderDiffPlaceholder(thread.id, turnId);
           } else {
+            const canParseLiveDiffPatch = yield* supportsLiveTurnDiffPatch(event.provider);
+            const livePlaceholder = trackedPlaceholder ?? existingProviderPlaceholder;
             const maxTurnCount = thread.checkpoints.reduce(
               (max, c) => Math.max(max, c.checkpointTurnCount),
               0,
             );
+            const files =
+              (canParseLiveDiffPatch
+                ? parseProviderTurnDiffFiles(event.payload.unifiedDiff)
+                : null) ??
+              trackedPlaceholder?.files ??
+              existingCheckpoint?.files ??
+              [];
+            const checkpointRef =
+              livePlaceholder?.checkpointRef ??
+              CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`);
+            const checkpointTurnCount = livePlaceholder?.checkpointTurnCount ?? maxTurnCount + 1;
             // Leave assistantMessageId undefined on the placeholder: the real
             // capture performed by CheckpointReactor will resolve the actual
             // assistant MessageId once the message is finalized. Emitting a
@@ -2278,13 +2336,24 @@ const make = Effect.gen(function* () {
               threadId: thread.id,
               turnId,
               completedAt: now,
-              checkpointRef: CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`),
+              checkpointRef,
               status: "missing",
-              files: [],
+              files,
               assistantMessageId: undefined,
-              checkpointTurnCount: maxTurnCount + 1,
+              checkpointTurnCount,
               createdAt: now,
             });
+            if (canParseLiveDiffPatch) {
+              yield* Ref.update(providerDiffPlaceholdersRef, (placeholders) => {
+                const next = new Map(placeholders);
+                next.set(placeholderKey, {
+                  checkpointRef,
+                  checkpointTurnCount,
+                  files,
+                });
+                return next;
+              });
+            }
           }
         }
       }

@@ -1,4 +1,4 @@
-import { ThreadId, type ModelSlug } from "@t3tools/contracts";
+import { ThreadId, TurnId, type ModelSlug } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -12,6 +12,7 @@ import {
   hasServerAcknowledgedLocalDispatch,
   isVoiceAuthExpiredMessage,
   resolveActiveThreadTitle,
+  resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
@@ -265,6 +266,58 @@ describe("environment panel visibility", () => {
         environmentPanelOpen: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveActiveTurnLiveDiffState", () => {
+  it("uses only the diff summary for the active turn", () => {
+    const activeTurnId = TurnId.makeUnsafe("turn-active");
+
+    expect(
+      resolveActiveTurnLiveDiffState({
+        latestTurnId: activeTurnId,
+        turnDiffSummaries: [
+          {
+            turnId: TurnId.makeUnsafe("turn-previous"),
+            completedAt: "2026-06-13T10:00:00.000Z",
+            files: [{ path: "old.ts", additions: 100, deletions: 50 }],
+          },
+          {
+            turnId: activeTurnId,
+            completedAt: "2026-06-13T10:01:00.000Z",
+            files: [
+              { path: "src/a.ts", additions: 2, deletions: 1 },
+              { path: "src/b.ts", additions: 3, deletions: 0 },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      turnId: activeTurnId,
+      fileCount: 2,
+      additions: 5,
+      deletions: 1,
+    });
+  });
+
+  it("returns zero totals before the active turn has a diff summary", () => {
+    expect(
+      resolveActiveTurnLiveDiffState({
+        latestTurnId: TurnId.makeUnsafe("turn-active"),
+        turnDiffSummaries: [
+          {
+            turnId: TurnId.makeUnsafe("turn-previous"),
+            completedAt: "2026-06-13T10:00:00.000Z",
+            files: [{ path: "old.ts", additions: 100, deletions: 50 }],
+          },
+        ],
+      }),
+    ).toEqual({
+      turnId: null,
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
+    });
   });
 });
 

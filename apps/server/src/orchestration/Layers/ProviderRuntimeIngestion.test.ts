@@ -78,7 +78,11 @@ function createProviderServiceHarness() {
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
     listSessions: () => Effect.succeed([...runtimeSessions]),
-    getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+    getCapabilities: (provider) =>
+      Effect.succeed({
+        sessionModelSwitch: "in-session",
+        supportsLiveTurnDiffPatch: provider === "codex",
+      }),
     rollbackConversation: () => unsupported(),
     compactThread: () => unsupported(),
     streamEvents: Stream.fromPubSub(runtimeEventPubSub),
@@ -3122,7 +3126,17 @@ describe("ProviderRuntimeIngestion", () => {
       turnId: asTurnId("turn-p1"),
       itemId: asItemId("item-p1-assistant"),
       payload: {
-        unifiedDiff: "diff --git a/file.txt b/file.txt\n+hello\n",
+        unifiedDiff: [
+          "diff --git a/file.txt b/file.txt",
+          "index 1111111..2222222 100644",
+          "--- a/file.txt",
+          "+++ b/file.txt",
+          "@@ -1 +1,2 @@",
+          "-hello",
+          "+hello updated",
+          "+again",
+          "",
+        ].join("\n"),
       },
     });
 
@@ -3183,6 +3197,133 @@ describe("ProviderRuntimeIngestion", () => {
     expect(checkpoint?.status).toBe("missing");
     expect(checkpoint?.assistantMessageId).toBeNull();
     expect(checkpoint?.checkpointRef).toBe("provider-diff:evt-turn-diff-updated");
+    expect(checkpoint?.files).toEqual([
+      { path: "file.txt", kind: "modified", additions: 2, deletions: 1 },
+    ]);
+  });
+
+  it("updates live provider diff placeholders for the same turn", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "turn.diff.updated",
+      eventId: asEventId("evt-turn-diff-first"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-live"),
+      payload: {
+        unifiedDiff: [
+          "diff --git a/file.txt b/file.txt",
+          "index 1111111..2222222 100644",
+          "--- a/file.txt",
+          "+++ b/file.txt",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+          "",
+        ].join("\n"),
+      },
+    });
+
+    await waitForThread(harness.engine, (entry) =>
+      entry.checkpoints.some(
+        (checkpoint: ProviderRuntimeTestCheckpoint) =>
+          checkpoint.turnId === "turn-live" && checkpoint.files.length === 1,
+      ),
+    );
+
+    harness.emit({
+      type: "turn.diff.updated",
+      eventId: asEventId("evt-turn-diff-second"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-live"),
+      payload: {
+        unifiedDiff: [
+          "diff --git a/file.txt b/file.txt",
+          "index 1111111..2222222 100644",
+          "--- a/file.txt",
+          "+++ b/file.txt",
+          "@@ -1 +1,2 @@",
+          "-old",
+          "+new",
+          "+second",
+          "diff --git a/src/next.ts b/src/next.ts",
+          "new file mode 100644",
+          "index 0000000..3333333",
+          "--- /dev/null",
+          "+++ b/src/next.ts",
+          "@@ -0,0 +1 @@",
+          "+export const next = true;",
+          "",
+        ].join("\n"),
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.checkpoints.some(
+        (checkpoint: ProviderRuntimeTestCheckpoint) =>
+          checkpoint.turnId === "turn-live" && checkpoint.files.length === 2,
+      ),
+    );
+
+    const checkpoints = thread.checkpoints.filter(
+      (checkpoint: ProviderRuntimeTestCheckpoint) => checkpoint.turnId === "turn-live",
+    );
+    expect(checkpoints).toHaveLength(1);
+    expect(checkpoints[0]).toMatchObject({
+      checkpointTurnCount: 1,
+      checkpointRef: "provider-diff:evt-turn-diff-first",
+      status: "missing",
+      files: [
+        { path: "file.txt", kind: "modified", additions: 2, deletions: 1 },
+        { path: "src/next.ts", kind: "modified", additions: 1, deletions: 0 },
+      ],
+    });
+  });
+
+  it("does not parse live diff files for providers without patch capability", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "turn.diff.updated",
+      eventId: asEventId("evt-claude-diff-placeholder"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-claude"),
+      payload: {
+        unifiedDiff: [
+          "diff --git a/file.txt b/file.txt",
+          "index 1111111..2222222 100644",
+          "--- a/file.txt",
+          "+++ b/file.txt",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+          "",
+        ].join("\n"),
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.checkpoints.some(
+        (checkpoint: ProviderRuntimeTestCheckpoint) => checkpoint.turnId === "turn-claude",
+      ),
+    );
+
+    const checkpoint = thread.checkpoints.find(
+      (entry: ProviderRuntimeTestCheckpoint) => entry.turnId === "turn-claude",
+    );
+    expect(checkpoint).toMatchObject({
+      checkpointRef: "provider-diff:evt-claude-diff-placeholder",
+      status: "missing",
+      files: [],
+    });
   });
 
   it("projects context window updates into normalized thread activities", async () => {
