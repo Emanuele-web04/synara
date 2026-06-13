@@ -5,11 +5,13 @@
 //          instead of an external editor.
 // Layer: Web UI helpers
 // Exports: WorkspaceFileOpenerContext, useWorkspaceFileOpener,
-//          resolveWorkspaceFileOpenTarget, openWorkspaceFileReference,
-//          prefetchWorkspaceFile
+//          resolveWorkspaceFileOpenTarget, resolveScratchPreviewFileOpenTarget,
+//          resolveDockFileOpenTarget,
+//          openWorkspaceFileReference, prefetchWorkspaceFile
 
-import { isSupportedLocalImagePath } from "@t3tools/shared/localImage";
+import { isSupportedLocalPreviewFilePath } from "@t3tools/shared/localPreviewFiles";
 import { isWorkspaceRelativePathSafe, workspaceRelativePathOf } from "@t3tools/shared/path";
+import { isScratchWorkspacePath } from "@t3tools/shared/threadWorkspace";
 import type { QueryClient } from "@tanstack/react-query";
 import { createContext, useContext } from "react";
 
@@ -62,6 +64,36 @@ export function resolveWorkspaceFileOpenTarget(
 }
 
 /**
+ * Out-of-workspace fallback for surfaces that can preview binary files: a
+ * session that starts before its chat workspace exists runs in a scratch
+ * directory under the OS temp dir, and the agent references those files by
+ * absolute path. Images and PDFs stream through the allowlisted local-image
+ * route (which also serves the scratch root), so they can still open in-app.
+ * Anything else returns null — the text file-read RPC only accepts
+ * workspace-relative paths, so those references fall back to the external
+ * editor.
+ */
+export function resolveScratchPreviewFileOpenTarget(rawPath: string): string | null {
+  const withoutPosition = rawPath.trim().replace(FILE_POSITION_SUFFIX_PATTERN, "");
+  if (!isScratchWorkspacePath(withoutPosition)) {
+    return null;
+  }
+  return isSupportedLocalPreviewFilePath(withoutPosition) ? withoutPosition : null;
+}
+
+// Right-dock file panes can show workspace text files plus scratch binary previews.
+// Relative paths still require a workspace; absolute scratch images/PDFs do not.
+export function resolveDockFileOpenTarget(
+  rawPath: string,
+  workspaceRoot: string | null,
+): string | null {
+  const workspaceTarget = workspaceRoot
+    ? resolveWorkspaceFileOpenTarget(rawPath, workspaceRoot)
+    : null;
+  return workspaceTarget ?? resolveScratchPreviewFileOpenTarget(rawPath);
+}
+
+/**
  * Shared activation path for clickable file references: try the surface's
  * in-app viewer first, fall back to the preferred external editor when the
  * reference isn't viewable in-app (path outside the workspace, no opener).
@@ -90,7 +122,9 @@ export function prefetchWorkspaceFile(
   workspaceRoot: string,
   relativePath: string,
 ): void {
-  if (isSupportedLocalImagePath(relativePath)) {
+  // Images and PDFs stream through the local-image HTTP route, so there is no
+  // text read to warm and no syntax highlighter to load.
+  if (isSupportedLocalPreviewFilePath(relativePath)) {
     return;
   }
   void queryClient.prefetchQuery(projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath }));

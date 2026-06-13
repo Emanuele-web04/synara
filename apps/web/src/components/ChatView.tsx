@@ -1928,8 +1928,7 @@ export default function ChatView({
   );
   const planSidebarLabel = sidebarProposedPlan ? "Plan details" : "Tasks";
   const planSidebarToggleLabel = planSidebarOpen ? `Hide ${planSidebarLabel}` : planSidebarLabel;
-  const planSidebarToggleTitle =
-    `${planSidebarOpen ? "Hide" : "Show"} ${planSidebarLabel.toLowerCase()} sidebar`;
+  const planSidebarToggleTitle = `${planSidebarOpen ? "Hide" : "Show"} ${planSidebarLabel.toLowerCase()} sidebar`;
   const [activeTaskListCardHeight, setActiveTaskListCardHeight] = useState(0);
   const activeTaskListCardRef = useRef<HTMLDivElement | null>(null);
   const previousActiveTaskListCardHeightRef = useRef(0);

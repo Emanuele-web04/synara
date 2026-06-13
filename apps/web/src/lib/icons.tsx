@@ -50,6 +50,7 @@ import {
   IconLockOpen,
   IconMaximize,
   IconMinimize,
+  IconMinus,
   IconDeviceLaptop,
   IconMessageCircle,
   IconMoon,
@@ -182,6 +183,7 @@ export const LockOpenIcon = adaptIcon(IconLockOpen);
 export const Maximize2 = adaptIcon(IconMaximize);
 export const Minimize2 = adaptIcon(IconMinimize);
 export const MessageCircleIcon = adaptIcon(IconMessageCircle);
+export const MinusIcon = adaptIcon(IconMinus);
 export const ChatBubbleIcon: LucideIcon = centralIconWrapper("bubble-text");
 export const MicIcon: LucideIcon = centralIconWrapper("microphone");
 export const SidebarHiddenLeftWideIcon = centralIconWrapper("sidebar-hidden-left-wide");

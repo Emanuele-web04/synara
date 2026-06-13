@@ -171,6 +171,75 @@ describe("localImageEffectRouteLayer", () => {
     });
   });
 
+  it("serves an allowlisted workspace PDF and only allows the desktop app origin to read it", async () => {
+    const workspace = makeTempDir("dpcode-effect-pdf-workspace-");
+    writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
+    const pdfPath = path.join(workspace, "spec.pdf");
+    writeFileSync(pdfPath, Buffer.from("%PDF-1.4"));
+    const config = makeServerConfig({ cwd: workspace });
+
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
+      const params = new URLSearchParams({ path: pdfPath, cwd: workspace });
+      const response = await fetch(`${origin}/api/local-image?${params}`, {
+        headers: { Origin: "t3://app" },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("application/pdf");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      // The in-app viewer fetches bytes cross-origin, but only trusted app
+      // origins should get a CORS-readable response.
+      expect(response.headers.get("access-control-allow-origin")).toBe("t3://app");
+      expect(response.headers.get("vary")).toBe("Origin");
+      // Streamed responses must still advertise their size so the browser's
+      // PDF viewer can show load progress.
+      expect(response.headers.get("content-length")).toBe("8");
+      await expect(response.arrayBuffer()).resolves.toHaveProperty("byteLength", 8);
+      // No Content-Disposition: the browser must render the PDF inline in the
+      // preview iframe rather than trigger a download.
+      expect(response.headers.get("content-disposition")).toBeNull();
+    });
+  });
+
+  it("allows the configured Vite dev origin to read PDF bytes", async () => {
+    const workspace = makeTempDir("dpcode-effect-pdf-dev-origin-");
+    writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
+    const pdfPath = path.join(workspace, "spec.pdf");
+    writeFileSync(pdfPath, Buffer.from("%PDF-1.4"));
+    const config = makeServerConfig({
+      cwd: workspace,
+      devUrl: new URL("http://localhost:5173/"),
+    });
+
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
+      const params = new URLSearchParams({ path: pdfPath, cwd: workspace });
+      const response = await fetch(`${origin}/api/local-image?${params}`, {
+        headers: { Origin: "http://localhost:5173" },
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+    });
+  });
+
+  it("does not expose local preview bytes to untrusted web origins through CORS", async () => {
+    const workspace = makeTempDir("dpcode-effect-pdf-untrusted-origin-");
+    writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
+    const pdfPath = path.join(workspace, "spec.pdf");
+    writeFileSync(pdfPath, Buffer.from("%PDF-1.4"));
+    const config = makeServerConfig({ cwd: workspace });
+
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
+      const params = new URLSearchParams({ path: pdfPath, cwd: workspace });
+      const response = await fetch(`${origin}/api/local-image?${params}`, {
+        headers: { Origin: "https://example.test" },
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("access-control-allow-origin")).toBeNull();
+      expect(response.headers.get("vary")).toBeNull();
+    });
+  });
+
   it("returns 404 when the requested path has an unsupported extension", async () => {
     const workspace = makeTempDir("dpcode-effect-image-bad-ext-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");

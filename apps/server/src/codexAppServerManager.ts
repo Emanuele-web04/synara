@@ -1,8 +1,6 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 
@@ -50,6 +48,7 @@ import {
 } from "./provider/codexCliVersion";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
+import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces.ts";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 
 type PendingRequestKey = string;
@@ -512,13 +511,6 @@ function resolveCodexTurnOverrides(context: CodexSessionContext): {
     context.sessionApprovalOverride ??
     mapCodexRuntimeModeToTurnOverrides(context.session.runtimeMode)
   );
-}
-
-export function ensureIsolatedScratchWorkspace(threadId: ThreadId): string {
-  const workspaceRoot = path.join(tmpdir(), "synara-codex-workspaces");
-  const workspaceDir = path.join(workspaceRoot, String(threadId));
-  mkdirSync(workspaceDir, { recursive: true });
-  return workspaceDir;
 }
 
 export function resolveCodexModelForAccount(

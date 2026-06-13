@@ -1334,6 +1334,123 @@ label:has(> select#reasoning-effort) select {
   font-weight: 500;
 }
 
+/* In-app PDF viewer (pdf.js canvas + text/link layers). The scroll area centers
+   a stack of page sheets over a muted backdrop, matching the rest of the chrome. */
+.pdf-viewer-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  background: var(--app-user-message-background);
+}
+
+.pdf-viewer-page {
+  position: relative;
+  flex: 0 0 auto;
+  /* Auto inline margins center the sheet but collapse to 0 once it is wider than
+     the viewport, so zoomed-in pages stay fully scroll-reachable on the left. */
+  margin-inline: auto;
+  background: #fff;
+  border: 1px solid color-mix(in srgb, var(--border), var(--foreground) 10%);
+  overflow: hidden;
+}
+
+.pdf-viewer-page__canvas {
+  display: block;
+}
+
+/* pdf.js text layer: transparent, selectable runs positioned over the canvas. */
+.pdf-viewer-page__text-layer {
+  --scale-factor: 1;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  text-align: initial;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  line-height: 1;
+  overflow: clip;
+}
+
+.pdf-viewer-page__text-layer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+}
+
+.pdf-viewer-page__text-layer span.markedContent {
+  top: 0;
+  height: 0;
+}
+
+.pdf-viewer-page__text-layer ::selection {
+  background: color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+.pdf-viewer-page__text-layer .endOfContent {
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  user-select: none;
+  display: block;
+}
+
+.pdf-viewer-page__text-layer.selecting .endOfContent {
+  top: 0;
+}
+
+/* Clickable links (external URLs + internal page jumps) drawn over the canvas. */
+.pdf-viewer-page__link-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.pdf-viewer-page__link {
+  position: absolute;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.pdf-viewer-page__link:hover,
+.pdf-viewer-page__link:focus-visible {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  outline: none;
+}
+
+/* Per-page render failure marker: a single broken page should report itself
+   rather than blend into the white sheet. */
+.pdf-viewer-page__error {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 16px;
+  text-align: center;
+  color: var(--destructive);
+  font-size: 12px;
+}
+
+.pdf-viewer-page__error-detail {
+  max-width: 90%;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  word-break: break-word;
+}
+
 /* Generated image preview/download card rendered inline from markdown ![alt](file.png) */
 .chat-generated-image {
   position: relative;

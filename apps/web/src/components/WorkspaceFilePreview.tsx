@@ -1,12 +1,17 @@
 // FILE: WorkspaceFilePreview.tsx
 // Purpose: Shared single-file preview (code with syntax highlighting, parsed
-//          markdown, images) for any workspace file, reused by the editor
-//          surface's center pane and the right-dock file pane.
+//          markdown, images, PDFs) for workspace files and allowlisted scratch
+//          binary previews reused by editor and right-dock panes.
 // Layer: Web chat presentation component
 // Exports: WorkspaceFilePreview, isMarkdownPreviewablePath
 
-import { isSupportedLocalImagePath } from "@t3tools/shared/localImage";
-import { joinWorkspaceRelativePath } from "@t3tools/shared/path";
+import {
+  isSupportedLocalImagePath,
+  isSupportedLocalPdfPath,
+  lowerCaseExtensionOf,
+} from "@t3tools/shared/localPreviewFiles";
+import { isWorkspaceRelativePathSafe, joinWorkspaceRelativePath } from "@t3tools/shared/path";
+import { isScratchWorkspacePath } from "@t3tools/shared/threadWorkspace";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Component,
@@ -24,11 +29,7 @@ import {
 
 import { basenameOfPath } from "~/file-icons";
 import { useTheme } from "~/hooks/useTheme";
-import {
-  getSelectionWithin,
-  type ChatFileReference,
-  type SelectionWithin,
-} from "~/lib/chatReferences";
+import { getSelectionWithin, type ChatFileReference } from "~/lib/chatReferences";
 import { resolveDiffThemeName, type DiffThemeName } from "~/lib/diffRendering";
 import { showFileReferenceContextMenu } from "~/lib/fileReferenceContextMenu";
 import { toggleMarkdownTaskMarker } from "~/lib/markdownTaskList";
@@ -50,14 +51,14 @@ import { WorkspaceFilePreviewHeader } from "./chat/WorkspaceFilePreviewHeader";
 import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
 import { useCodeSelectionAction } from "./chat/useCodeSelectionAction";
 import { LocalImagePreview } from "./LocalImagePreview";
+import { PdfFilePreview } from "./PdfFilePreview";
 import { Skeleton } from "./ui/skeleton";
 
 const MARKDOWN_PREVIEW_EXTENSIONS = new Set([".markdown", ".md", ".mdx"]);
 
 export function isMarkdownPreviewablePath(filePath: string): boolean {
-  const dot = filePath.lastIndexOf(".");
-  if (dot < 0) return false;
-  return MARKDOWN_PREVIEW_EXTENSIONS.has(filePath.slice(dot).toLowerCase());
+  const extension = lowerCaseExtensionOf(filePath);
+  return extension !== null && MARKDOWN_PREVIEW_EXTENSIONS.has(extension);
 }
 
 function parentDirectoryFromPath(path: string): string | null {
@@ -283,7 +284,12 @@ function FilePreviewLoadingState() {
 
 export interface WorkspaceFilePreviewProps {
   workspaceRoot: string | null;
-  /** Workspace-relative path of the previewed file. */
+  /**
+   * Workspace-relative path of the previewed file. Binary previews (images,
+   * PDFs) may instead be absolute paths outside the workspace — e.g. a
+   * session's scratch directory — served by the local-image route, which never
+   * touch the workspace-relative file-read RPC.
+   */
   filePath: string | null;
   /**
    * Initial markdown render mode per file: the dock opens markdown already
@@ -307,13 +313,18 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const queryClient = useQueryClient();
   const markdownPreviewDefault = props.markdownPreviewDefault ?? false;
   const fileIsImage = filePath !== null && isSupportedLocalImagePath(filePath);
+  const fileIsPdf = filePath !== null && isSupportedLocalPdfPath(filePath);
+  const fileIsScratchBinaryPreview =
+    filePath !== null && (fileIsImage || fileIsPdf) && isScratchWorkspacePath(filePath);
   const fileIsMarkdown = filePath !== null && isMarkdownPreviewablePath(filePath);
   const [markdownPreviewEnabled, setMarkdownPreviewEnabled] = useState(markdownPreviewDefault);
   const fileQuery = useQuery(
     projectReadFileQueryOptions({
       cwd: props.workspaceRoot,
       relativePath: filePath,
-      enabled: props.workspaceRoot !== null && filePath !== null && !fileIsImage,
+      // Images and PDFs are binary: they stream through the local-image HTTP
+      // route instead of the text file-read RPC.
+      enabled: props.workspaceRoot !== null && filePath !== null && !fileIsImage && !fileIsPdf,
     }),
   );
   useEffect(() => {
@@ -326,14 +337,22 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     () => (fileContents.length === 0 ? 0 : fileContents.split("\n").length),
     [fileContents],
   );
-  // Highlight code -> floating "Add to chat" -> reference that quotes exactly
-  // what was selected (down to a single word), mirroring the transcript flow.
+  // Highlight -> floating "Add to chat" -> reference that points at exactly what
+  // was selected, mirroring the transcript flow. This is offered only in the
+  // source view, where the DOM mirrors the file's lines/columns 1:1 so a
+  // selection resolves to an exact `line 12:5-12` span. The rendered-markdown
+  // view restructures the source (paragraphs, lists, headings), so a selection
+  // there cannot map back to an exact range — referencing a single word on a
+  // 3000-word line would pull in the whole line. The rendered view therefore
+  // stays read-only for references (browsing + task-list toggles only); use the
+  // Source toggle in the header to get a precise selection reference.
   const readPreviewSelection = useCallback(
-    (container: HTMLElement) => getSelectionWithin(container),
-    [],
+    (container: HTMLElement): Omit<ChatFileReference, "path"> | null =>
+      showMarkdownPreview ? null : getSelectionWithin(container),
+    [showMarkdownPreview],
   );
   const commitPreviewSelection = useCallback(
-    (selection: SelectionWithin) => {
+    (selection: Omit<ChatFileReference, "path">) => {
       if (filePath) {
         onReferenceInChat?.({ path: filePath, ...selection });
       }
@@ -341,12 +360,13 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     [onReferenceInChat, filePath],
   );
   const previewSelectionAction = useCodeSelectionAction({
-    enabled: Boolean(onReferenceInChat && filePath),
+    enabled: Boolean(onReferenceInChat && filePath) && !showMarkdownPreview,
     readSelection: readPreviewSelection,
     onCommit: commitPreviewSelection,
   });
-  // Right-click references the selected line range when text is selected,
-  // otherwise the whole file.
+  // Right-click references the selection (line range in source views, quoted
+  // snippet in the rendered-markdown view) when text is selected, otherwise
+  // the whole file.
   const handleContentsContextMenu = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
       if (!filePath) {
@@ -354,7 +374,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       }
       event.preventDefault();
       const container = contentsRef.current;
-      const selection = container ? getSelectionWithin(container) : null;
+      const selection = container ? readPreviewSelection(container) : null;
       void showFileReferenceContextMenu({
         path: filePath,
         position: { x: event.clientX, y: event.clientY },
@@ -363,7 +383,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         onAskWhyInChat,
       });
     },
-    [onAskWhyInChat, onReferenceInChat, filePath],
+    [onAskWhyInChat, onReferenceInChat, filePath, readPreviewSelection],
   );
   // Clicking a task checkbox in the markdown preview persists the toggle to
   // disk: optimistic cache update first, ordered write-through after, refetch
@@ -415,14 +435,14 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     },
     [filePath, queryClient, workspaceRoot],
   );
-  const handleToggleMarkdownPreview = useCallback(() => {
-    setMarkdownPreviewEnabled((previous) => !previous);
+  const handleMarkdownPreviewChange = useCallback((rendered: boolean) => {
+    setMarkdownPreviewEnabled(rendered);
   }, []);
   // Toggling a task rewrites the file, so only enable it when the preview
   // holds the complete contents (writing a truncated read would corrupt it).
   const canToggleTasks = fileQuery.data !== undefined && !fileQuery.data.truncated;
 
-  if (!props.workspaceRoot) {
+  if (!props.workspaceRoot && !fileIsScratchBinaryPreview) {
     return (
       <PanelStateMessage density="compact" fill="flex">
         <p>No workspace is attached to this chat.</p>
@@ -440,6 +460,18 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     );
   }
 
+  // PDFs own their full surface — toolbar (file name, page nav, zoom, Open) plus
+  // the rendered page stack — so they skip the shared breadcrumb header here.
+  if (fileIsPdf) {
+    const openInTarget =
+      props.workspaceRoot && isWorkspaceRelativePathSafe(filePath)
+        ? joinWorkspaceRelativePath(props.workspaceRoot, filePath)
+        : filePath;
+    return (
+      <PdfFilePreview filePath={filePath} cwd={props.workspaceRoot} openInTarget={openInTarget} />
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)]">
       <WorkspaceFilePreviewHeader
@@ -447,7 +479,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         filePath={filePath}
         isMarkdown={fileIsMarkdown}
         markdownPreviewEnabled={showMarkdownPreview}
-        onToggleMarkdownPreview={handleToggleMarkdownPreview}
+        onMarkdownPreviewChange={handleMarkdownPreviewChange}
         onReferenceInChat={onReferenceInChat}
         onAskWhyInChat={onAskWhyInChat}
         truncated={fileQuery.data?.truncated ?? false}
@@ -481,7 +513,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
             showMarkdownPreview && "editor-file-viewer--markdown-preview",
           )}
           onContextMenu={handleContentsContextMenu}
-          onMouseUp={showMarkdownPreview ? undefined : previewSelectionAction.onContainerMouseUp}
+          onMouseUp={previewSelectionAction.onContainerMouseUp}
         >
           {showMarkdownPreview ? (
             <div className="editor-markdown-preview">
@@ -499,7 +531,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           {!showMarkdownPreview && lineCount > 0 ? (
             <span className="sr-only">{lineCount} lines</span>
           ) : null}
-          {!showMarkdownPreview && previewSelectionAction.pendingAction ? (
+          {previewSelectionAction.pendingAction ? (
             <TranscriptSelectionAction
               left={previewSelectionAction.pendingAction.left}
               top={previewSelectionAction.pendingAction.top}

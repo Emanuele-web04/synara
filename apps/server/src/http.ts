@@ -26,7 +26,7 @@ import { SessionCredentialService } from "./auth/Services/SessionCredentialServi
 import { deriveAuthClientMetadata } from "./auth/utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { resolveCachedEditorIcon } from "./editorAppIcons";
-import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalImageFile } from "./localImageFiles.ts";
+import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
 import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
 import type { ServerReadiness } from "./server/readiness";
@@ -36,6 +36,7 @@ const PROJECT_FAVICON_CACHE_CONTROL = "public, max-age=3600";
 const SITE_FAVICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
 const SITE_FAVICON_CACHE_CONTROL_FALLBACK = "public, max-age=3600"; // 1 h (negative result)
 const EDITOR_ICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
+const DESKTOP_APP_CORS_ORIGIN = "t3://app";
 const decodeBootstrapInput = Schema.decodeUnknownEffect(AuthBootstrapInput);
 const decodeCreatePairingCredentialInput = Schema.decodeUnknownEffect(
   AuthCreatePairingCredentialInput,
@@ -122,6 +123,43 @@ function toEffectHttpResponse(payload: HttpPayload) {
     contentType: payload.contentType,
     ...(payload.headers ? { headers: payload.headers } : {}),
   });
+}
+
+function normalizeCorsOrigin(rawOrigin: string | ReadonlyArray<string> | undefined): string | null {
+  const value = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === "null") {
+    return null;
+  }
+  if (trimmed.replace(/\/+$/, "") === DESKTOP_APP_CORS_ORIGIN) {
+    return DESKTOP_APP_CORS_ORIGIN;
+  }
+  try {
+    const origin = new URL(trimmed).origin;
+    return origin === "null" ? null : origin;
+  } catch {
+    return null;
+  }
+}
+
+function localPreviewCorsHeaders(input: {
+  readonly config: ServerConfigShape;
+  readonly request: HttpServerRequest.HttpServerRequest;
+  readonly url: URL;
+}): Record<string, string> {
+  const origin = normalizeCorsOrigin(input.request.headers.origin);
+  if (
+    !origin ||
+    (origin !== input.url.origin &&
+      origin !== input.config.devUrl?.origin &&
+      origin !== DESKTOP_APP_CORS_ORIGIN)
+  ) {
+    return {};
+  }
+  return {
+    "Access-Control-Allow-Origin": origin,
+    Vary: "Origin",
+  };
 }
 
 export function makeEffectHttpRouteLayer(readiness: ServerReadiness) {
@@ -451,6 +489,26 @@ const editorIconEffectRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 
+// Streams a disk file as the response body instead of buffering it in memory:
+// preview files can be large (PDFs especially), and a full-file buffer per
+// request is an easy way to balloon server memory under concurrent loads.
+// Callers must have stat'ed the file already — an unreadable file after that
+// point aborts the connection mid-stream, which clients surface as a failed
+// load (the same outcome the buffered 404 produced, minus the status code).
+function streamedFileResponse(input: {
+  readonly fileSystem: FileSystem.FileSystem;
+  readonly path: string;
+  readonly sizeBytes: number;
+  readonly headers: Record<string, string>;
+}): HttpServerResponse.HttpServerResponse {
+  return HttpServerResponse.stream(input.fileSystem.stream(input.path), {
+    status: 200,
+    contentType: Mime.getType(input.path) ?? "application/octet-stream",
+    contentLength: input.sizeBytes,
+    headers: input.headers,
+  });
+}
+
 export const localImageEffectRouteLayer = HttpRouter.add(
   "GET",
   LOCAL_IMAGE_ROUTE_PATH,
@@ -464,34 +522,35 @@ export const localImageEffectRouteLayer = HttpRouter.add(
       yield* requireAuthenticatedRequest;
     }
 
-    const imageFile = yield* Effect.promise(() =>
-      resolveAllowedLocalImageFile({
+    const previewFile = yield* Effect.promise(() =>
+      resolveAllowedLocalPreviewFile({
         requestedPath: url.searchParams.get("path"),
         cwd: url.searchParams.get("cwd"),
       }).catch(() => null),
     );
-    if (!imageFile) {
+    if (!previewFile) {
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
 
-    // Read the bytes ourselves (mirrors the static-asset route) instead of relying on
-    // HttpServerResponse.file, which depends on Etag.Generator/Path services and was
-    // failing with a 500 on the local-image preview/download path.
+    // Stream (don't use HttpServerResponse.file, which depends on
+    // Etag.Generator/Path services and was failing with a 500 here).
     const fileSystem = yield* FileSystem.FileSystem;
-    const data = yield* fileSystem
-      .readFile(imageFile.path)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!data) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
-    }
-
     const isDownload = url.searchParams.get("download") === "1";
-    const safeFileName = imageFile.fileName.replaceAll('"', "");
-    return HttpServerResponse.uint8Array(data, {
-      status: 200,
-      contentType: Mime.getType(imageFile.path) ?? "application/octet-stream",
+    const safeFileName = previewFile.fileName.replaceAll('"', "");
+    return streamedFileResponse({
+      fileSystem,
+      path: previewFile.path,
+      sizeBytes: previewFile.sizeBytes,
       headers: {
         "Cache-Control": "private, max-age=60",
+        // The PDF viewer fetches bytes from either the desktop app origin or
+        // the configured Vite dev origin. Reflect only those trusted origins:
+        // auth-token-less local servers must not expose workspace files to any
+        // random web page that can guess path/cwd query params.
+        ...localPreviewCorsHeaders({ config, request, url }),
+        // PDFs render in an unsandboxed same-origin iframe; never let the
+        // browser second-guess the declared content type.
+        "X-Content-Type-Options": "nosniff",
         ...(isDownload ? { "Content-Disposition": `attachment; filename="${safeFileName}"` } : {}),
       },
     });
@@ -546,16 +605,10 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
 
     // Mirror local-image serving instead of using HttpServerResponse.file; the Effect
     // route stack used by the desktop server can miss that helper's file services.
-    const data = yield* fileSystem
-      .readFile(filePath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!data) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
-    }
-
-    return HttpServerResponse.uint8Array(data, {
-      status: 200,
-      contentType: Mime.getType(filePath) ?? "application/octet-stream",
+    return streamedFileResponse({
+      fileSystem,
+      path: filePath,
+      sizeBytes: Number(fileInfo.size),
       headers: { "Cache-Control": "public, max-age=31536000, immutable" },
     });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),

@@ -97,6 +97,7 @@ import { projectListDirectoriesQueryOptions } from "../lib/projectReactQuery";
 import {
   WorkspaceFileOpenerContext,
   prefetchWorkspaceFile,
+  resolveDockFileOpenTarget,
   resolveWorkspaceFileOpenTarget,
   type WorkspaceFileOpener,
 } from "../lib/workspaceFileOpener";
@@ -1635,17 +1636,15 @@ function SingleChatSurface(props: {
   const dockFileOpener = useMemo<WorkspaceFileOpener>(
     () => ({
       openFile: (path) => {
-        // Without a workspace the file-read RPC has no cwd, so even relative
-        // references can't be previewed — report unhandled for the fallback.
-        if (!workspaceRoot) {
-          return false;
-        }
-        const relativePath = resolveWorkspaceFileOpenTarget(path, workspaceRoot);
-        if (!relativePath) {
+        // In-workspace references map to relative paths for the file-read RPC;
+        // binary previews in a session's scratch workspace (outside the chat
+        // workspace) open by absolute path through the local-image route.
+        const targetPath = resolveDockFileOpenTarget(path, workspaceRoot);
+        if (!targetPath) {
           return false;
         }
         requestImmediateDockHydration("file");
-        openPane(props.threadId, { kind: "file", filePath: relativePath });
+        openPane(props.threadId, { kind: "file", filePath: targetPath });
         return true;
       },
       prefetchFile: prefetchOpenerFile,

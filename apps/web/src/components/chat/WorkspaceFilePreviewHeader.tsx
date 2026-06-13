@@ -1,46 +1,32 @@
 // FILE: WorkspaceFilePreviewHeader.tsx
 // Purpose: Editor-style header for the shared workspace file preview — a path
 //          breadcrumb (project › …dirs › file) on the left, and an overflow
-//          menu + "Open in editor" split button + copy-path control on the
-//          right. Shared by the right-dock file pane and the editor center pane
-//          so both surfaces read identically.
+//          menu + "Open in editor" split button on the right. Shared by the
+//          right-dock file pane and the editor center pane so both surfaces
+//          read identically.
 // Layer: Chat/editor file-preview UI
 // Exports: WorkspaceFilePreviewHeader
 
-import type { EditorId, ResolvedKeybindingsConfig } from "@t3tools/contracts";
-import { joinWorkspaceRelativePath } from "@t3tools/shared/path";
-import { useQuery } from "@tanstack/react-query";
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { isWorkspaceRelativePathSafe, joinWorkspaceRelativePath } from "@t3tools/shared/path";
+import { Fragment, memo, useCallback, useMemo } from "react";
 
 import { basenameOfPath } from "~/file-icons";
 import type { ChatFileReference } from "~/lib/chatReferences";
-import {
-  CheckIcon,
-  ChevronRightIcon,
-  CopyIcon,
-  EllipsisIcon,
-  EyeIcon,
-  FileIcon,
-} from "~/lib/icons";
-import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
+import { ChevronRightIcon, EllipsisIcon, EyeIcon, FileIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, ChatHeaderIconButton } from "./chatHeaderControls";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { OpenInPicker } from "./OpenInPicker";
 
-const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
-const EMPTY_AVAILABLE_EDITORS: ReadonlyArray<EditorId> = [];
-// Window to flash the copy-path control's check glyph before reverting.
-const COPY_FEEDBACK_MS = 1200;
-
 interface WorkspaceFilePreviewHeaderProps {
-  workspaceRoot: string;
+  workspaceRoot: string | null;
   filePath: string;
-  /** Markdown files get a source/preview toggle in the overflow menu. */
+  /** Markdown files get an inline Source/Preview segmented switcher. */
   isMarkdown: boolean;
+  /** True while the rendered preview is shown; false for the source view. */
   markdownPreviewEnabled: boolean;
-  onToggleMarkdownPreview: () => void;
+  onMarkdownPreviewChange: (rendered: boolean) => void;
   /** Whole-file chat actions, surfaced in the overflow menu when wired. */
   onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
@@ -48,20 +34,44 @@ interface WorkspaceFilePreviewHeaderProps {
   truncated?: boolean;
 }
 
+// Source (raw file, where selecting text yields a precise line/column chat
+// reference) vs. Preview (rendered markdown, read-only — browse + task lists).
+// Ordered Source-first so the interactive mode reads as the primary surface.
+const MARKDOWN_VIEW_SEGMENTS = [
+  {
+    rendered: false,
+    label: "Source",
+    title: "Source view — select text to reference exact lines in chat",
+    Icon: FileIcon,
+  },
+  {
+    rendered: true,
+    label: "Preview",
+    title: "Rendered preview — browse and toggle task lists",
+    Icon: EyeIcon,
+  },
+] as const;
+
 export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHeader(
   props: WorkspaceFilePreviewHeaderProps,
 ) {
   const { filePath, workspaceRoot } = props;
-  const serverConfigQuery = useQuery(serverConfigQueryOptions());
-  const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
-  const availableEditors = serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
+
+  // Out-of-workspace previews (e.g. a session's scratch directory under the
+  // OS temp dir) arrive as absolute paths; everything in-workspace is relative.
+  const fileIsOutsideWorkspace = !isWorkspaceRelativePathSafe(filePath);
 
   // Breadcrumb segments: project folder name, then each path part. Splitting
   // here (vs. rendering the raw string) lets the directory prefix collapse
-  // first under width pressure while the filename stays pinned.
+  // first under width pressure while the filename stays pinned. Absolute
+  // paths drop the project prefix — they live outside the workspace.
   const { prefixSegments, fileSegment } = useMemo(() => {
-    const projectName = basenameOfPath(workspaceRoot);
-    const relativeSegments = filePath.split("/").filter((segment) => segment.length > 0);
+    const projectName =
+      fileIsOutsideWorkspace || !workspaceRoot ? null : basenameOfPath(workspaceRoot);
+    const relativeSegments = filePath
+      .replace(/\\/g, "/")
+      .split("/")
+      .filter((segment) => segment.length > 0);
     const segments = projectName ? [projectName, ...relativeSegments] : relativeSegments;
     // Key each crumb by its cumulative path so repeated folder names (e.g. two
     // `src` dirs at different depths) still get stable, unique React keys.
@@ -73,27 +83,7 @@ export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHead
       prefixSegments: prefix,
       fileSegment: segments.at(-1) ?? filePath,
     };
-  }, [filePath, workspaceRoot]);
-
-  const [copied, setCopied] = useState(false);
-  const copyResetTimerRef = useRef<number | null>(null);
-  useEffect(() => {
-    // The flashed "copied" state is purely cosmetic; clear any pending timer on
-    // unmount (or filePath change) so it never fires against a stale element.
-    return () => {
-      if (copyResetTimerRef.current !== null) {
-        window.clearTimeout(copyResetTimerRef.current);
-      }
-    };
-  }, []);
-  const handleCopyPath = useCallback(() => {
-    void navigator.clipboard?.writeText(filePath);
-    setCopied(true);
-    if (copyResetTimerRef.current !== null) {
-      window.clearTimeout(copyResetTimerRef.current);
-    }
-    copyResetTimerRef.current = window.setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
-  }, [filePath]);
+  }, [fileIsOutsideWorkspace, filePath, workspaceRoot]);
 
   const { onReferenceInChat, onAskWhyInChat } = props;
   const referenceWholeFile = useCallback(() => {
@@ -104,7 +94,6 @@ export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHead
   }, [filePath, onAskWhyInChat]);
 
   const hasChatActions = Boolean(onReferenceInChat || onAskWhyInChat);
-  const hasMenu = props.isMarkdown || hasChatActions;
 
   return (
     <div
@@ -138,25 +127,43 @@ export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHead
       ) : null}
 
       <div className="flex shrink-0 items-center gap-1.5">
-        {hasMenu ? (
+        {props.isMarkdown ? (
+          <div
+            role="radiogroup"
+            aria-label="Markdown view"
+            className="flex h-7 shrink-0 items-center rounded-lg bg-[var(--color-background-elevated-secondary)] p-0.5"
+          >
+            {MARKDOWN_VIEW_SEGMENTS.map((segment) => {
+              const selected = segment.rendered === props.markdownPreviewEnabled;
+              return (
+                <button
+                  key={segment.label}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  title={segment.title}
+                  className={cn(
+                    "flex h-6 cursor-pointer items-center gap-1.5 rounded-md px-2 text-[11px] transition-colors",
+                    selected
+                      ? "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                  onClick={() => props.onMarkdownPreviewChange(segment.rendered)}
+                >
+                  <segment.Icon aria-hidden="true" className="size-3.5 shrink-0" />
+                  {segment.label}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+
+        {hasChatActions ? (
           <Menu>
             <MenuTrigger render={<ChatHeaderIconButton label="More actions" tone="plain" />}>
               <EllipsisIcon aria-hidden="true" className="size-3.5" />
             </MenuTrigger>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-52 min-w-52">
-              {props.isMarkdown ? (
-                <MenuItem onClick={props.onToggleMarkdownPreview}>
-                  <span className="shrink-0">
-                    {props.markdownPreviewEnabled ? (
-                      <FileIcon aria-hidden="true" className="size-3.5 text-muted-foreground" />
-                    ) : (
-                      <EyeIcon aria-hidden="true" className="size-3.5 text-muted-foreground" />
-                    )}
-                  </span>
-                  {props.markdownPreviewEnabled ? "View source" : "View rendered"}
-                </MenuItem>
-              ) : null}
-              {props.isMarkdown && hasChatActions ? <MenuSeparator className="mx-1" /> : null}
               {onReferenceInChat ? (
                 <MenuItem onClick={referenceWholeFile}>Reference in chat</MenuItem>
               ) : null}
@@ -168,25 +175,13 @@ export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHead
         ) : null}
 
         <OpenInPicker
-          keybindings={keybindings}
-          availableEditors={availableEditors}
-          openInTarget={joinWorkspaceRelativePath(workspaceRoot, filePath)}
+          openInTarget={
+            fileIsOutsideWorkspace || !workspaceRoot
+              ? filePath
+              : joinWorkspaceRelativePath(workspaceRoot, filePath)
+          }
           labelMode="always"
         />
-
-        <ChatHeaderIconButton
-          type="button"
-          tone="plain"
-          label={copied ? "Path copied" : "Copy path"}
-          title={copied ? "Path copied" : "Copy path"}
-          onClick={handleCopyPath}
-        >
-          {copied ? (
-            <CheckIcon aria-hidden="true" className="size-3.5 text-success" />
-          ) : (
-            <CopyIcon aria-hidden="true" className="size-3.5" />
-          )}
-        </ChatHeaderIconButton>
       </div>
     </div>
   );

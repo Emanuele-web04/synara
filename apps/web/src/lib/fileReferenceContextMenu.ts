@@ -4,11 +4,7 @@
 // Layer: Web UI helpers
 // Exports: showFileReferenceContextMenu
 
-import {
-  formatSelectionLabel,
-  type ChatFileReference,
-  type SelectionWithin,
-} from "~/lib/chatReferences";
+import { formatSelectionLabel, type ChatFileReference } from "~/lib/chatReferences";
 import { readNativeApi } from "~/nativeApi";
 
 // Right-click menu shared by explorer rows, changed-file rows, and the file
@@ -16,7 +12,9 @@ import { readNativeApi } from "~/nativeApi";
 export async function showFileReferenceContextMenu(input: {
   path: string;
   position: { x: number; y: number };
-  selection?: SelectionWithin | null;
+  /** Line/column range from source views, or a quoted snippet from surfaces
+   * without stable source lines (rendered markdown preview). */
+  selection?: Omit<ChatFileReference, "path"> | null;
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
 }): Promise<void> {
@@ -29,13 +27,18 @@ export async function showFileReferenceContextMenu(input: {
     ...input.selection,
   };
   const rangeLabel = formatSelectionLabel(reference);
+  const hasSnippet = typeof reference.snippet === "string" && reference.snippet.trim().length > 0;
   const clicked = await api.contextMenu.show(
     [
       ...(input.onReferenceInChat
         ? [
             {
               id: "reference-in-chat" as const,
-              label: rangeLabel ? `Reference ${rangeLabel} in chat` : "Reference in chat",
+              label: rangeLabel
+                ? `Reference ${rangeLabel} in chat`
+                : hasSnippet
+                  ? "Reference selection in chat"
+                  : "Reference in chat",
             },
           ]
         : []),
