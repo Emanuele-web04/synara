@@ -5,6 +5,7 @@ import {
   clearWorkspaceIndexCache,
   discoverProjectScripts,
   listWorkspaceDirectories,
+  resolveWorkspaceFileBySuffix,
   searchLocalEntries,
   searchWorkspaceEntries,
 } from "../../workspaceEntries";
@@ -35,6 +36,11 @@ export const WorkspaceEntriesLive = Layer.succeed(WorkspaceEntries, {
     Effect.tryPromise({
       try: () => searchLocalEntries(input),
       catch: (cause) => toWorkspaceEntriesError("search local entries", cause),
+    }),
+  resolveFileBySuffix: (input) =>
+    Effect.tryPromise({
+      try: () => resolveWorkspaceFileBySuffix(input),
+      catch: (cause) => toWorkspaceEntriesError("resolve workspace file by suffix", cause),
     }),
   invalidate: (cwd) => Effect.sync(() => clearWorkspaceIndexCache(cwd)),
 });

@@ -410,6 +410,11 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         return;
       }
       queryClient.setQueryData(options.queryKey, { ...current, contents: nextContents });
+      // The read RPC may have resolved a bare/partial reference (e.g. a clicked
+      // `notes.md`) to its real nested path. Write back to that resolved path,
+      // not the opened reference, so the toggle lands on the file we read from
+      // instead of creating a stray file at the workspace root.
+      const writeRelativePath = current.relativePath;
       // Writes carry the full file contents, so serialize them: a slower earlier
       // checkbox write must never land after a newer toggle and erase it.
       const fileKey = `${workspaceRoot}\0${filePath}`;
@@ -421,7 +426,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         .then(() =>
           api.projects.writeFile({
             cwd: workspaceRoot,
-            relativePath: filePath,
+            relativePath: writeRelativePath,
             contents: nextContents,
           }),
         )
