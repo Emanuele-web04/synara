@@ -478,11 +478,12 @@ describe("TerminalManager", () => {
     expect(process).toBeDefined();
     if (!process) return;
 
-    process.emitData("\u001b[?2004h\u001b[>7u");
+    process.emitData("\u001b[?2004h\u001b[?1002h\u001b[>7u");
     const snapshot = await manager.open(openInput());
 
     expect(snapshot.replayPreamble).toContain("\u001b[?2004h");
     expect(snapshot.replayPreamble).toContain("\u001b[=7;1u");
+    expect(snapshot.replayPreamble ?? "").not.toContain("?1002h");
 
     process.emitData("\u001b[?2004l\u001b[=0;1u");
     const resetSnapshot = await manager.open(openInput());
