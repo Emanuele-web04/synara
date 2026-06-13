@@ -485,7 +485,11 @@ export default function DiffPanel({
     ...gitStatusQueryOptions(activeCwd ?? null),
     enabled: gitStatusQueriesEnabled,
   });
-  const gitRepoStatus = gitBranchesQuery.isSuccess ? gitBranchesQuery.data.isRepo : undefined;
+  const gitRepoStatus = gitBranchesQuery.isSuccess
+    ? gitBranchesQuery.data.isRepo
+    : gitBranchesQuery.isError
+      ? false
+      : undefined;
   const isGitRepo = gitRepoStatus === true;
   const turnDiffSummaries = activeThreadContext?.turnDiffSummaries ?? [];
   const inferredCheckpointTurnCountByTurnId = useMemo(
