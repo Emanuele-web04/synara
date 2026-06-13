@@ -1,8 +1,7 @@
 // FILE: ComposerLiveChangesHeader.tsx
 // Purpose: Live "N files changed +X -Y" strip stacked flush onto the top of the
-// composer while a turn is running, mirroring the queued follow-up header. Reads the
-// same working-tree diff totals as the chat-header badge and offers a Review action
-// that opens the diff panel. Hidden when there are no changes.
+// composer while a turn is running, mirroring the queued follow-up header. The
+// caller supplies turn-scoped diff totals and the Review action target.
 // Layer: Chat composer UI
 // Exports: ComposerLiveChangesHeader
 
