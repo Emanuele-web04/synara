@@ -2,8 +2,11 @@
 // Purpose: Drive the imperative paint pipeline for a single PDF page — HiDPI
 //          canvas render, selectable text layer, and clickable links — keyed on
 //          the active flag and scale. Each pass cancels the previous one so
-//          rapid zooming never races two paints onto the same canvas. Lets
-//          PdfPageView stay declarative (refs + JSX only).
+//          rapid zooming never races two paints onto the same canvas. While a
+//          page is inactive (far from the viewport) its canvas backing store and
+//          text-layer DOM are released so scrolled-through documents don't
+//          accumulate per-page memory. Lets PdfPageView stay declarative
+//          (refs + JSX only).
 // Layer: Web PDF rendering hook
 // Exports: usePdfPageRender, PdfPageRenderState
 
@@ -72,6 +75,25 @@ export function usePdfPageRender(input: {
     setLinks([]);
     setError(null);
   }, [pageNumber, pdfDocument]);
+
+  // Release the page's memory footprint while it is far from the viewport:
+  // zeroing the canvas dimensions drops its backing store and clearing the text
+  // layer removes its DOM. `renderedSize` is kept so the placeholder box (and
+  // total scroll height) stays stable; reactivation repaints from the cached
+  // page proxy. Runs after the render effect's cleanup has cancelled any
+  // in-flight paint for this page.
+  useEffect(() => {
+    if (isActive) {
+      return;
+    }
+    const canvas = canvasRef.current;
+    if (canvas) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+    textLayerRef.current?.replaceChildren();
+    setLinks((current) => (current.length > 0 ? [] : current));
+  }, [isActive, canvasRef, textLayerRef]);
 
   useEffect(() => {
     if (!isActive) {

@@ -194,9 +194,7 @@ describe("AcpSessionRuntime", () => {
         "separate answer",
       ]);
       expect(
-        notes
-          .filter((note) => note._tag === "AssistantItemStarted")
-          .map((note) => note.itemId),
+        notes.filter((note) => note._tag === "AssistantItemStarted").map((note) => note.itemId),
       ).toEqual(["upstream-answer", "upstream-answer", "upstream-followup"]);
     }).pipe(
       Effect.provide(

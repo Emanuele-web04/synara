@@ -1,10 +1,12 @@
 // FILE: PdfPageView.tsx
 // Purpose: Render a single PDF page for the in-app viewer: a HiDPI canvas plus a
-//          selectable text layer and a clickable link layer. Virtualized — the
-//          page only loads + paints when it scrolls near the viewport, and keeps
-//          its placeholder box sized so the scroll height (and page indicator)
-//          stay correct before paint. The paint pipeline lives in
-//          usePdfPageRender; this component owns activation + layout markup.
+//          selectable text layer and a clickable link layer. Virtualized both
+//          ways — a page paints only while it is near the viewport and releases
+//          its canvas/text layer again once scrolled far away, so memory stays
+//          bounded on long documents. The placeholder box keeps its size either
+//          way so the scroll height (and page indicator) stay correct. The paint
+//          pipeline lives in usePdfPageRender; this component owns activation +
+//          layout markup.
 // Layer: Web PDF rendering component
 // Exports: PdfPageView
 
@@ -53,23 +55,27 @@ export const PdfPageView = memo(function PdfPageView({
     return () => registerElement(pageNumber, null);
   }, [pageNumber, registerElement]);
 
-  // Activate (and keep active) once the page nears the viewport.
+  // Track viewport proximity both ways: the page paints while inside the
+  // prerender margin and releases its canvas/text layer (in usePdfPageRender)
+  // once it leaves, keeping memory bounded on long documents. Entries are
+  // batched, so only the most recent one reflects the current state.
   useEffect(() => {
     const element = wrapperRef.current;
-    if (!element || isActive) {
+    if (!element) {
       return;
     }
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          setIsActive(true);
+        const latest = entries.at(-1);
+        if (latest) {
+          setIsActive(latest.isIntersecting);
         }
       },
       { root: scrollRoot, rootMargin: PAGE_PRERENDER_ROOT_MARGIN },
     );
     observer.observe(element);
     return () => observer.disconnect();
-  }, [isActive, scrollRoot]);
+  }, [scrollRoot]);
 
   const { renderedSize, links, error } = usePdfPageRender({
     document: pdfDocument,

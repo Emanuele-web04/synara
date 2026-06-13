@@ -364,9 +364,10 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     readSelection: readPreviewSelection,
     onCommit: commitPreviewSelection,
   });
-  // Right-click references the selection (line range in source views, quoted
-  // snippet in the rendered-markdown view) when text is selected, otherwise
-  // the whole file.
+  // Right-click references the selected line range in the source view,
+  // otherwise the whole file. The rendered-markdown view yields no selection
+  // (readPreviewSelection returns null there), so it always falls back to the
+  // whole-file reference.
   const handleContentsContextMenu = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
       if (!filePath) {
