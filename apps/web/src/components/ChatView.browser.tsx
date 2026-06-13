@@ -1101,6 +1101,17 @@ function dispatchConfiguredShortcut(
   );
 }
 
+function dispatchComposerFocusToggleShortcut(): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key: "l",
+    metaKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  window.dispatchEvent(event);
+  return event;
+}
+
 // The composer model/effort shortcuts both drop into the same combined picker,
 // rendered as a Base UI menu popup. Provider and effort detail live in lazily
 // mounted submenus, so the reliable signal that the surface opened is the popup
@@ -2031,6 +2042,42 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("toggles composer focus with Cmd+L", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-composer-focus-shortcut" as MessageId,
+        targetText: "composer focus shortcut",
+      }),
+    });
+    const focusTarget = document.createElement("button");
+    focusTarget.type = "button";
+    focusTarget.textContent = "Focus sink";
+    document.body.appendChild(focusTarget);
+
+    try {
+      await waitForServerConfigToApply();
+      const composerEditor = await waitForComposerEditor();
+      focusTarget.focus();
+      expect(document.activeElement).toBe(focusTarget);
+
+      const focusEvent = dispatchComposerFocusToggleShortcut();
+      expect(focusEvent.defaultPrevented).toBe(true);
+      await vi.waitFor(() => {
+        expect(document.activeElement).toBe(composerEditor);
+      });
+
+      const blurEvent = dispatchComposerFocusToggleShortcut();
+      expect(blurEvent.defaultPrevented).toBe(true);
+      await vi.waitFor(() => {
+        expect(document.activeElement).not.toBe(composerEditor);
+      });
+    } finally {
+      focusTarget.remove();
       await mounted.cleanup();
     }
   });
