@@ -486,6 +486,12 @@ export default function DiffPanel({
     enabled: gitStatusQueriesEnabled,
   });
   const gitRepoStatus = gitBranchesQuery.isSuccess ? gitBranchesQuery.data.isRepo : undefined;
+  const gitRepoStatusError =
+    gitBranchesQuery.error instanceof Error
+      ? gitBranchesQuery.error.message
+      : gitBranchesQuery.error
+        ? "Failed to check git repository."
+        : null;
   const isGitRepo = gitRepoStatus === true;
   const turnDiffSummaries = activeThreadContext?.turnDiffSummaries ?? [];
   const inferredCheckpointTurnCountByTurnId = useMemo(
@@ -1099,6 +1105,10 @@ export default function DiffPanel({
       ) : gitRepoStatus === false ? (
         <PanelStateMessage density="compact" fill="flex">
           Turn diffs are unavailable because this project is not a git repository.
+        </PanelStateMessage>
+      ) : gitRepoStatusError ? (
+        <PanelStateMessage density="compact" fill="flex">
+          {gitRepoStatusError}
         </PanelStateMessage>
       ) : gitRepoStatus === undefined && diffQueriesEnabled && activeCwd ? (
         <DiffPanelLoadingState label="Checking git repository..." />

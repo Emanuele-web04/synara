@@ -1726,6 +1726,14 @@ function SettingsRouteView() {
           })}
 
           {renderBooleanSettingRow({
+            settingKey: "showEnvironmentInstructions",
+            title: "Project instructions",
+            description: "Show project-level instructions in the Environment panel.",
+            resetLabel: "project instructions section",
+            ariaLabel: "Show the Project instructions section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
             settingKey: "showEnvironmentNotepad",
             title: "Notepad",
             description: "Show the per-thread notepad in the Environment panel.",
