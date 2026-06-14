@@ -626,6 +626,11 @@ export function createWsNativeApi(): NativeApi {
       },
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
     },
+    stats: {
+      getProfileStats: (input) => transport.request(WS_METHODS.statsGetProfileStats, input),
+      getProfileTokenStats: (input) =>
+        transport.request(WS_METHODS.statsGetProfileTokenStats, input),
+    },
     provider: {
       getComposerCapabilities: (input) =>
         transport.request(WS_METHODS.providerGetComposerCapabilities, input),

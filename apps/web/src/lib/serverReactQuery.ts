@@ -21,6 +21,10 @@ export const serverQueryKeys = {
   providerUsage: (provider: ProviderKind | null | undefined, homePath?: string | null) =>
     ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
   allProviderUsage: () => ["server", "allProviderUsage"] as const,
+  profileStats: (utcOffsetMinutes: number) =>
+    ["server", "profileStats", "peak-hour-v2", utcOffsetMinutes] as const,
+  profileTokenStats: (utcOffsetMinutes: number) =>
+    ["server", "profileTokenStats", utcOffsetMinutes] as const,
 };
 
 export const serverMutationKeys = {
@@ -149,6 +153,44 @@ export function serverProviderUsageSnapshotQueryOptions(input: {
 export async function fetchAllProviderUsage(input: ServerListProviderUsageInput = {}) {
   const api = ensureNativeApi();
   return api.server.listProviderUsage(input);
+}
+
+// Local profile + shareable-card core statistics. The client passes its own fixed
+// UTC offset; all metrics are computed from Synara's local DB projections.
+export function serverProfileStatsQueryOptions(input: { enabled?: boolean } = {}) {
+  const utcOffsetMinutes = -new Date().getTimezoneOffset();
+  return queryOptions({
+    queryKey: serverQueryKeys.profileStats(utcOffsetMinutes),
+    enabled: input.enabled ?? true,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      return api.stats.getProfileStats({
+        utcOffsetMinutes,
+      });
+    },
+  });
+}
+
+// DB-backed token totals and token heatmap, split from core stats so the Profile
+// page can paint first and upgrade token-only surfaces later.
+export function serverProfileTokenStatsQueryOptions(input: { enabled?: boolean } = {}) {
+  const utcOffsetMinutes = -new Date().getTimezoneOffset();
+  return queryOptions({
+    queryKey: serverQueryKeys.profileTokenStats(utcOffsetMinutes),
+    enabled: input.enabled ?? true,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      return api.stats.getProfileTokenStats({
+        utcOffsetMinutes,
+      });
+    },
+  });
 }
 
 // Live remaining-usage for every supported provider at once, powering Settings and active usage UI.

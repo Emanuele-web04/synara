@@ -332,12 +332,10 @@ export const ServerLifecycleStreamEvent = Schema.Union([
     type: Schema.Literal("maintenance"),
     payload: Schema.Struct({
       task: Schema.Literal("thread-retention"),
-      state: Schema.Literals(["started", "progress", "compacting", "completed", "failed"]),
+      state: Schema.Literals(["started", "progress", "completed", "failed"]),
       at: IsoDateTime,
       deletedCount: Schema.optional(Schema.Number),
-      purgedCount: Schema.optional(Schema.Number),
       totalCount: Schema.optional(Schema.Number),
-      freePageCount: Schema.optional(Schema.Number),
       error: Schema.optional(Schema.String),
     }),
   }),
