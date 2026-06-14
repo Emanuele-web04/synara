@@ -24,6 +24,7 @@ const InitializeRequest = jsonRpcRequest("initialize", AcpSchema.InitializeReque
 const InitializeResponse = jsonRpcResponse(AcpSchema.InitializeResponse);
 const ExtRequest = jsonRpcRequest("x/test", Schema.Struct({ hello: Schema.String }));
 const ExtResponse = jsonRpcResponse(Schema.Struct({ ok: Schema.Boolean }));
+const CHILD_PROCESS_FIXTURE_TIMEOUT_MS = 15_000;
 
 const mockPeerPath = Effect.map(Effect.service(Path.Path), (path) =>
   path.join(import.meta.dirname, "../test/fixtures/acp-mock-peer.ts"),
@@ -219,90 +220,95 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
       }),
   );
 
-  it.effect("replays buffered notifications to handlers registered after they arrive", () =>
-    Effect.gen(function* () {
-      const updates = yield* Ref.make<Array<unknown>>([]);
-      const elicitationCompletions = yield* Ref.make<Array<unknown>>([]);
-      const typedRequests = yield* Ref.make<Array<unknown>>([]);
-      const typedNotifications = yield* Ref.make<Array<unknown>>([]);
-      const handle = yield* makeHandle();
-      const scope = yield* Scope.make();
-      const acpLayer = AcpClient.layerChildProcess(handle);
-      const context = yield* Layer.buildWithScope(acpLayer, scope);
+  it.effect(
+    "replays buffered notifications to handlers registered after they arrive",
+    () =>
+      Effect.gen(function* () {
+        const updates = yield* Ref.make<Array<unknown>>([]);
+        const elicitationCompletions = yield* Ref.make<Array<unknown>>([]);
+        const typedRequests = yield* Ref.make<Array<unknown>>([]);
+        const typedNotifications = yield* Ref.make<Array<unknown>>([]);
+        const handle = yield* makeHandle();
+        const scope = yield* Scope.make();
+        const acpLayer = AcpClient.layerChildProcess(handle);
+        const context = yield* Layer.buildWithScope(acpLayer, scope);
 
-      yield* Effect.gen(function* () {
-        const acp = yield* AcpClient.AcpClient;
+        yield* Effect.gen(function* () {
+          const acp = yield* AcpClient.AcpClient;
 
-        yield* acp.handleRequestPermission(() =>
-          Effect.succeed({
-            outcome: {
-              outcome: "selected",
-              optionId: "allow",
-            },
-          }),
-        );
-        yield* acp.handleElicitation(() =>
-          Effect.succeed({
-            action: {
-              action: "accept",
-              content: {
-                approved: true,
+          yield* acp.handleRequestPermission(() =>
+            Effect.succeed({
+              outcome: {
+                outcome: "selected",
+                optionId: "allow",
               },
+            }),
+          );
+          yield* acp.handleElicitation(() =>
+            Effect.succeed({
+              action: {
+                action: "accept",
+                content: {
+                  approved: true,
+                },
+              },
+            }),
+          );
+          yield* acp.handleExtRequest(
+            "x/typed_request",
+            Schema.Struct({ message: Schema.String }),
+            (payload) =>
+              Ref.update(typedRequests, (current) => [...current, payload]).pipe(
+                Effect.as({
+                  ok: true,
+                  echoedMessage: payload.message,
+                }),
+              ),
+          );
+          yield* acp.handleExtNotification(
+            "x/typed_notification",
+            Schema.Struct({ count: Schema.Number }),
+            (payload) => Ref.update(typedNotifications, (current) => [...current, payload]),
+          );
+
+          yield* acp.agent.initialize({
+            protocolVersion: 1,
+            clientCapabilities: {
+              fs: { readTextFile: false, writeTextFile: false },
+              terminal: false,
             },
-          }),
-        );
-        yield* acp.handleExtRequest(
-          "x/typed_request",
-          Schema.Struct({ message: Schema.String }),
-          (payload) =>
-            Ref.update(typedRequests, (current) => [...current, payload]).pipe(
-              Effect.as({
-                ok: true,
-                echoedMessage: payload.message,
-              }),
-            ),
-        );
-        yield* acp.handleExtNotification(
-          "x/typed_notification",
-          Schema.Struct({ count: Schema.Number }),
-          (payload) => Ref.update(typedNotifications, (current) => [...current, payload]),
-        );
+            clientInfo: {
+              name: "effect-acp-test",
+              version: "0.0.0",
+            },
+          });
+          yield* acp.agent.authenticate({ methodId: "cursor_login" });
 
-        yield* acp.agent.initialize({
-          protocolVersion: 1,
-          clientCapabilities: {
-            fs: { readTextFile: false, writeTextFile: false },
-            terminal: false,
-          },
-          clientInfo: {
-            name: "effect-acp-test",
-            version: "0.0.0",
-          },
-        });
-        yield* acp.agent.authenticate({ methodId: "cursor_login" });
+          const session = yield* acp.agent.createSession({
+            cwd: process.cwd(),
+            mcpServers: [],
+          });
+          yield* acp.agent.prompt({
+            sessionId: session.sessionId,
+            prompt: [{ type: "text", text: "hello" }],
+          });
 
-        const session = yield* acp.agent.createSession({
-          cwd: process.cwd(),
-          mcpServers: [],
-        });
-        yield* acp.agent.prompt({
-          sessionId: session.sessionId,
-          prompt: [{ type: "text", text: "hello" }],
-        });
+          yield* acp.handleSessionUpdate((notification) =>
+            Ref.update(updates, (current) => [...current, notification]),
+          );
+          yield* acp.handleElicitationComplete((notification) =>
+            Ref.update(elicitationCompletions, (current) => [...current, notification]),
+          );
 
-        yield* acp.handleSessionUpdate((notification) =>
-          Ref.update(updates, (current) => [...current, notification]),
-        );
-        yield* acp.handleElicitationComplete((notification) =>
-          Ref.update(elicitationCompletions, (current) => [...current, notification]),
-        );
-
-        assert.equal((yield* Ref.get(updates)).length, 1);
-        assert.equal((yield* Ref.get(elicitationCompletions)).length, 1);
-        assert.deepEqual(yield* Ref.get(typedRequests), [{ message: "hello from typed request" }]);
-        assert.deepEqual(yield* Ref.get(typedNotifications), [{ count: 2 }]);
-      }).pipe(Effect.provide(context), Effect.ensuring(Scope.close(scope, Exit.void)));
-    }),
+          assert.equal((yield* Ref.get(updates)).length, 1);
+          assert.equal((yield* Ref.get(elicitationCompletions)).length, 1);
+          assert.deepEqual(yield* Ref.get(typedRequests), [
+            { message: "hello from typed request" },
+          ]);
+          assert.deepEqual(yield* Ref.get(typedNotifications), [{ count: 2 }]);
+        }).pipe(Effect.provide(context), Effect.ensuring(Scope.close(scope, Exit.void)));
+      }),
+    CHILD_PROCESS_FIXTURE_TIMEOUT_MS,
   );
 
   it.effect("continues dispatching session updates after one handler fails", () =>

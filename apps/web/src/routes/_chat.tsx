@@ -120,7 +120,7 @@ function ThreadRetentionMaintenanceToast() {
         if (toastId) {
           toastManager.update(toastId, {
             type: "warning",
-          title: "Chat maintenance paused",
+            title: "Chat maintenance paused",
             description: error ?? "Old chats will be retried later.",
             timeout: 6000,
             data: { allowCrossThreadVisibility: true },

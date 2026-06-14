@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.2.2 - 2026-06-14
+
+### Added
+
+- Added richer profile and personalization surfaces, including profile stats, activity heatmap polish, profile editing updates, and settings panel refinements.
+- Added soft-delete thread retention coverage so deleted thread data has clearer cleanup behavior during early WIP usage.
+- Added release-test stability safeguards for child-process ACP fixtures and the server Vitest runner.
+
+### Changed
+
+- Improved live composer edit visibility so per-turn composer changes stay attached to the active turn lifecycle.
+- Refined curated app/profile UI details across the settings, profile dialog, activity heatmap, and chat route.
+- Changed the server test script to run Vitest files serially, avoiding Turbo teardown stalls caused by lingering server Vitest workers after otherwise-passing test runs.
+
+### Fixed
+
+- Fixed flaky `effect-acp` child-process fixture tests by giving slow process-backed assertions an explicit timeout.
+- Fixed full root `bun run test` release validation getting stuck after green server test output by making the server package test runner deterministic under Turbo.
+- Fixed formatting drift in the profile, retention, and chat-route files that had reached `main`.
+
+### Verification
+
+- `bun run fmt:check` initially failed on `apps/server/src/threadRetention.test.ts`, `apps/web/src/components/profile/ActivityHeatmap.tsx`, `apps/web/src/components/profile/EditProfileDialog.tsx`, `apps/web/src/components/settings/ProfileSettingsPanel.tsx`, and `apps/web/src/routes/_chat.tsx`; after formatting those files, `bun run fmt:check` passed.
+- `bun run lint` passed with 148 warnings, 0 errors.
+- `bun run typecheck` passed with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed and refreshed release install/lockfile state.
+- `bun run build` passed. Vite still warns about large web chunks and plugin timings; desktop build still reports the existing typeless `tsdown.config.ts` module warning.
+- Initial full `bun run test` failed in `packages/effect-acp` on 5000ms child-process fixture timeouts, then repeated with timeouts in `packages/effect-acp/src/client.test.ts` and `packages/effect-acp/src/protocol.test.ts`. Targeted reruns passed after adding explicit fixture timeouts.
+- A subsequent root `bun run test` reached green server test output but did not return because the server Vitest process kept worker forks alive during Turbo teardown. Direct server testing showed the suite exits cleanly with `--maxWorkers=1 --no-file-parallelism`, so the server test script was updated accordingly.
+- Final `bun run test` passed: 10 tasks successful, including `@t3tools/web` 167 files / 1935 tests, `effect-acp` 3 files / 24 tests, and `t3` 129 files passed / 1 skipped with 1241 passed / 6 skipped.
+- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.2.2`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+
 ## 0.2.1 - 2026-06-14
 
 ### Added

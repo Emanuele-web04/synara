@@ -228,7 +228,9 @@ export function EditProfileDialog({
         </div>
 
         <div className="flex flex-col-reverse gap-2 px-4 pb-4 pt-4 sm:flex-row sm:justify-end">
-          <DialogClose render={<Button variant="ghost" size="default" className={dialogButtonClassName} />}>
+          <DialogClose
+            render={<Button variant="ghost" size="default" className={dialogButtonClassName} />}
+          >
             Cancel
           </DialogClose>
           <Button

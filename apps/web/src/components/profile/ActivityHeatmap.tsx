@@ -152,7 +152,7 @@ export function ActivityHeatmap({
 
   const columnCount = columns.length;
   const responsiveFill = fill && maxCellSize != null;
-  const resolvedCellSize = fill ? maxCellSize ?? cellSize : cellSize;
+  const resolvedCellSize = fill ? (maxCellSize ?? cellSize) : cellSize;
 
   const columnStyle: CSSProperties = { gap: `${gap}px` };
   const cellStyle: CSSProperties = fill
@@ -203,10 +203,7 @@ export function ActivityHeatmap({
 
   return (
     <div
-      className={cn(
-        fill ? "flex w-full min-w-0 flex-col" : "inline-flex flex-col",
-        className,
-      )}
+      className={cn(fill ? "flex w-full min-w-0 flex-col" : "inline-flex flex-col", className)}
       style={{ gap: `${gap}px` }}
     >
       {showMonths && monthsPosition === "top" ? monthRow : null}
@@ -216,7 +213,11 @@ export function ActivityHeatmap({
             {column.slots.map((slot) => {
               if (slot.kind !== "cell") {
                 return (
-                  <div key={slot.id} className={cn(cellClass, "bg-transparent")} style={cellStyle} />
+                  <div
+                    key={slot.id}
+                    className={cn(cellClass, "bg-transparent")}
+                    style={cellStyle}
+                  />
                 );
               }
               const cellClassName = cn(

@@ -6,10 +6,7 @@
 import { ProjectId, ThreadId, type OrchestrationReadModel } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
-import {
-  getInactiveThreadIdsForRetention,
-  THREAD_RETENTION_UNUSED_MS,
-} from "./threadRetention";
+import { getInactiveThreadIdsForRetention, THREAD_RETENTION_UNUSED_MS } from "./threadRetention";
 
 function makeReadModelThread(
   overrides: Partial<OrchestrationReadModel["threads"][number]> = {},

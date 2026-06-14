@@ -7,11 +7,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  type ProfileStats,
-  type ProfileTokenStats,
-  type ProviderKind,
-} from "@t3tools/contracts";
+import { type ProfileStats, type ProfileTokenStats, type ProviderKind } from "@t3tools/contracts";
 import {
   serverProfileStatsQueryOptions,
   serverProfileTokenStatsQueryOptions,
@@ -34,7 +30,6 @@ import {
   formatNumber,
   toDisplayName,
 } from "../profile/profileFormatting";
-
 
 export function ProfileSettingsPanel() {
   const coreQuery = useQuery(serverProfileStatsQueryOptions());

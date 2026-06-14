@@ -22,6 +22,44 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.2.2",
+    date: "Jun 14",
+    features: [
+      {
+        id: "profile-and-personalization",
+        title: "Your Synara profile has more personality",
+        description:
+          "Profile settings now include richer identity details, activity stats, and a cleaner editing flow so Synara feels more like your own workspace.",
+        details:
+          "This release adds profile stats aggregation, profile settings UI polish, activity heatmap refinements, avatar/profile editing updates, and focused coverage for the new profile data paths.",
+      },
+      {
+        id: "soft-delete-retention",
+        title: "Deleted threads get a safer recovery window",
+        description:
+          "Thread deletion now keeps soft-deleted data around long enough to avoid accidental loss while still letting cleanup happen predictably.",
+        details:
+          "Synara now tracks thread retention state explicitly, covers soft-delete cleanup behavior with server tests, and keeps deletion/recovery semantics more predictable for early WIP data.",
+      },
+      {
+        id: "live-composer-edits",
+        title: "Live composer edits stay visible per turn",
+        description:
+          "Composer changes made while a turn is running now stay attached to the right turn, reducing confusing stale text or hidden edits during active work.",
+        details:
+          "The chat route and composer state handling were tightened so live edits remain visible in the correct turn lifecycle without bleeding into unrelated transcript updates.",
+      },
+      {
+        id: "release-test-stability",
+        title: "Release checks are steadier",
+        description:
+          "The release test path now avoids known teardown and child-process timing traps, making full validation less likely to stall after tests have passed.",
+        details:
+          "Effect ACP child-process fixture tests now have explicit timeouts, and the server test script runs its Vitest files serially so the root Turbo test gate exits cleanly during release validation.",
+      },
+    ],
+  },
+  {
     version: "0.2.1",
     date: "Jun 14",
     features: [
