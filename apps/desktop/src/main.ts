@@ -38,6 +38,11 @@ import type {
 import { autoUpdater, CancellationToken } from "electron-updater";
 
 import type { ContextMenuItem } from "@t3tools/contracts";
+import {
+  SYNARA_DOTHETHING_STABLE_APP_DIR_ENV,
+  resolveDoTheThingLauncherPath as resolveSharedDoTheThingLauncherPath,
+  resolveStableDoTheThingAppDir as resolveSharedStableDoTheThingAppDir,
+} from "@t3tools/shared/dothething";
 import { getMacTrafficLightPosition } from "@t3tools/shared/desktopChrome";
 import { NetService } from "@t3tools/shared/Net";
 import { RotatingFileSink } from "@t3tools/shared/logging";
@@ -113,6 +118,11 @@ import {
   resolveLegacyDesktopUserDataPaths,
   seedDesktopUserDataProfileFromLegacy,
 } from "./desktopUserDataProfile";
+import {
+  ensureStableDoTheThingHelper,
+  terminateRunningDoTheThingProcesses,
+  terminateRunningStableDoTheThingHelper,
+} from "./dothethingStableHelper";
 
 syncShellEnvironment();
 
@@ -215,6 +225,9 @@ let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
+let doTheThingLauncherPathCache: string | null | undefined;
+let doTheThingProcessCleanupDone = false;
+let doTheThingWarmupStarted = false;
 const browserManager = new DesktopBrowserManager();
 let browserUsePipeServer: BrowserUsePipeServer | null = null;
 let configuredGitHubUpdateSource: ReturnType<typeof resolveGitHubUpdateSource> = null;
@@ -766,6 +779,157 @@ function resolveBackendCwd(): string {
     return resolveAppRoot();
   }
   return OS.homedir();
+}
+
+function resolveDoTheThingPackageRoots(): string[] {
+  const appRoot = resolveAppRoot();
+
+  if (app.isPackaged && appRoot.endsWith(".asar")) {
+    const unpackedRoot = Path.join(
+      appRoot.replace(/\.asar$/, ".asar.unpacked"),
+      "node_modules/@t3tools/dothething",
+    );
+    return FS.existsSync(Path.join(unpackedRoot, "package.json")) ? [unpackedRoot] : [];
+  }
+
+  const roots = [
+    Path.join(ROOT_DIR, "packages/dothething"),
+    Path.join(appRoot, "node_modules/@t3tools/dothething"),
+  ];
+
+  if (appRoot.endsWith(".asar")) {
+    roots.push(
+      Path.join(appRoot.replace(/\.asar$/, ".asar.unpacked"), "node_modules/@t3tools/dothething"),
+    );
+  }
+
+  return roots.filter((root) => FS.existsSync(Path.join(root, "package.json")));
+}
+
+function resolveDesktopDoTheThingStableAppDir(): string {
+  if (process.env[SYNARA_DOTHETHING_STABLE_APP_DIR_ENV]?.trim()) {
+    return resolveSharedStableDoTheThingAppDir(process.env);
+  }
+
+  return Path.join(BASE_DIR, "dothething-app");
+}
+
+function resolveDoTheThingLauncherPath(): string | null {
+  if (doTheThingLauncherPathCache !== undefined) {
+    return doTheThingLauncherPathCache;
+  }
+
+  const fallbackPackageRoots = resolveDoTheThingPackageRoots();
+  const bundledLauncherPath = resolveSharedDoTheThingLauncherPath({
+    env: {},
+    fallbackPackageRoots,
+    preferBundled: true,
+  });
+
+  if (app.isPackaged) {
+    const stableResult = ensureStableDoTheThingHelper({
+      bundledLauncherPath,
+      stableAppDir: resolveDesktopDoTheThingStableAppDir(),
+      terminateRunningHelper: terminateRunningStableDoTheThingHelper,
+    });
+
+    if (stableResult.status === "ready") {
+      const action = stableResult.installed
+        ? stableResult.replaced
+          ? "updated"
+          : "installed"
+        : "reused";
+      console.info(
+        `[desktop] Do The Thing stable helper ${action}: ${stableResult.launcherPath ?? ""}`,
+      );
+      if (!doTheThingProcessCleanupDone) {
+        terminateRunningDoTheThingProcesses();
+        doTheThingProcessCleanupDone = true;
+      }
+      doTheThingLauncherPathCache = stableResult.launcherPath;
+      return doTheThingLauncherPathCache;
+    }
+
+    console.warn(
+      `[desktop] Do The Thing stable helper unavailable; Do The Thing MCP will not be registered. ${stableResult.reason ?? ""}`,
+    );
+    doTheThingLauncherPathCache = null;
+    return doTheThingLauncherPathCache;
+  }
+
+  doTheThingLauncherPathCache = resolveSharedDoTheThingLauncherPath({
+    fallbackPackageRoots,
+  });
+  return doTheThingLauncherPathCache;
+}
+
+function warmDoTheThingHelper(): void {
+  if (doTheThingWarmupStarted || process.env.SYNARA_ENABLE_DOTHETHING === "0") {
+    return;
+  }
+
+  const launcherPath = resolveDoTheThingLauncherPath();
+  if (!launcherPath) {
+    return;
+  }
+
+  doTheThingWarmupStarted = true;
+  const child = ChildProcess.spawn(launcherPath, ["doctor", "--json"], {
+    cwd: OS.homedir(),
+    env: {
+      ...process.env,
+      DOTHETHING_SUPPRESS_ONBOARDING: "1",
+      [SYNARA_DOTHETHING_STABLE_APP_DIR_ENV]: resolveDesktopDoTheThingStableAppDir(),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  let stdout = "";
+  let stderr = "";
+  const timeout = setTimeout(() => {
+    child.kill("SIGTERM");
+  }, 12_000);
+  timeout.unref();
+
+  child.stdout?.setEncoding("utf8");
+  child.stderr?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  child.on("exit", (code, signal) => {
+    clearTimeout(timeout);
+    const trimmed = stdout.trim();
+    try {
+      const parsed = trimmed
+        ? (JSON.parse(trimmed) as {
+            summary?: string;
+            allGranted?: boolean;
+            needsRuntimePermissionRefresh?: boolean;
+          })
+        : null;
+      console.info("[desktop] Do The Thing warmup completed", {
+        code,
+        signal,
+        allGranted: parsed?.allGranted,
+        needsRuntimePermissionRefresh: parsed?.needsRuntimePermissionRefresh,
+        summary: parsed?.summary,
+      });
+    } catch {
+      console.warn("[desktop] Do The Thing warmup returned non-JSON output", {
+        code,
+        signal,
+        stdout: trimmed.slice(0, 500),
+        stderr: stderr.trim().slice(0, 500),
+      });
+    }
+  });
+  child.on("error", (error) => {
+    clearTimeout(timeout);
+    console.warn("[desktop] Do The Thing warmup failed", error);
+  });
 }
 
 function resolveDesktopStaticDir(): string | null {
@@ -1853,6 +2017,8 @@ function backendNodeArgs(): string[] {
 }
 
 function backendEnv(): NodeJS.ProcessEnv {
+  const doTheThingLauncherPath = resolveDoTheThingLauncherPath();
+  const doTheThingStableAppDir = resolveDesktopDoTheThingStableAppDir();
   return {
     ...process.env,
     DPCODE_MODE: "desktop",
@@ -1869,6 +2035,9 @@ function backendEnv(): NodeJS.ProcessEnv {
     T3CODE_AUTH_TOKEN: backendAuthToken,
     SYNARA_HOME: BASE_DIR,
     [T3CODE_BROWSER_USE_PIPE_ENV]: SYNARA_BROWSER_USE_PIPE_PATH,
+    SYNARA_ENABLE_DOTHETHING: process.env.SYNARA_ENABLE_DOTHETHING ?? "1",
+    [SYNARA_DOTHETHING_STABLE_APP_DIR_ENV]: doTheThingStableAppDir,
+    ...(doTheThingLauncherPath ? { SYNARA_DOTHETHING_LAUNCHER_PATH: doTheThingLauncherPath } : {}),
   };
 }
 
@@ -2608,6 +2777,7 @@ async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap start");
   backendAuthToken = Crypto.randomBytes(24).toString("hex");
   await reserveBackendEndpoint("bootstrap");
+  warmDoTheThingHelper();
 
   registerIpcHandlers();
   writeDesktopLogHeader("bootstrap ipc handlers registered");

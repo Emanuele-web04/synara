@@ -95,6 +95,7 @@ import {
   extractTodosAsPlan,
   formatCursorPlanUpdateMarkdown,
 } from "../acp/CursorAcpExtension.ts";
+import { withSynaraDoTheThingPromptContext } from "@t3tools/shared/dothething";
 import { CursorAdapter, type CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { discoverCursorSkills } from "../cursorSkillsDiscovery.ts";
@@ -1133,12 +1134,14 @@ export function makeCursorAdapter(
         if (input.input?.trim()) {
           promptParts.push({
             type: "text",
-            text: withCursorPlanModePrompt({
-              text: input.input.trim(),
-              ...(input.interactionMode !== undefined
-                ? { interactionMode: input.interactionMode }
-                : {}),
-            }),
+            text: withSynaraDoTheThingPromptContext(
+              withCursorPlanModePrompt({
+                text: input.input.trim(),
+                ...(input.interactionMode !== undefined
+                  ? { interactionMode: input.interactionMode }
+                  : {}),
+              }),
+            ),
           });
         }
         if (input.attachments && input.attachments.length > 0) {

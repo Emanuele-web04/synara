@@ -56,9 +56,13 @@ function listStaleComputerUsePids() {
     return [];
   }
 
-  const result = spawnSync("pgrep", ["-fal", "Synara \\(Dev\\).*(computerUseMcp\\.mjs mcp)"], {
-    encoding: "utf8",
-  });
+  const result = spawnSync(
+    "pgrep",
+    ["-fal", "Synara \\(Dev\\).*(dothethingMcp\\.mjs|dothething).*mcp"],
+    {
+      encoding: "utf8",
+    },
+  );
   const output = typeof result.stdout === "string" ? result.stdout.trim() : "";
   if (!output) {
     return [];
@@ -97,7 +101,7 @@ function cleanupStaleComputerUseApps() {
   }
 
   console.error(
-    `[desktop-dev] Cleaning up ${stalePids.length} stale Synara (Dev) Computer Use helper process${stalePids.length === 1 ? "" : "es"} from other worktrees.`,
+    `[desktop-dev] Cleaning up ${stalePids.length} stale Synara (Dev) Do The Thing helper process${stalePids.length === 1 ? "" : "es"} from other worktrees.`,
   );
 
   for (const pid of stalePids) {

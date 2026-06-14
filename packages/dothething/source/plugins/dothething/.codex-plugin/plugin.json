@@ -1,0 +1,28 @@
+{
+  "name": "dothething",
+  "version": "0.1.52",
+  "description": "Synara's private cross-platform Computer Use MCP server packaged as a Codex plugin.",
+  "author": {
+    "name": "Synara"
+  },
+  "license": "MIT",
+  "keywords": ["computer-use", "macos", "automation", "mcp", "codex"],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Do The Thing",
+    "shortDescription": "Control desktop apps from Synara with the local server",
+    "longDescription": "Do The Thing packages Synara's private desktop automation runtime as a Codex plugin. It exposes desktop-control MCP tools through a local macOS app bundle or Linux / Windows native binary, with semantic accessibility paths preferred before fallback input.",
+    "developerName": "Synara",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "defaultPrompt": [
+      "Inspect the current UI state of this desktop app without stealing focus when possible",
+      "Open a new local document with keyboard shortcuts first, then type content without moving my real pointer unless required",
+      "Drive the fixture app and verify the nine computer-use tools still behave correctly"
+    ],
+    "brandColor": "#0E7490",
+    "composerIcon": "./assets/dothething-small.svg",
+    "logo": "./assets/dothething.svg",
+    "screenshots": []
+  }
+}

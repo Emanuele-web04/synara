@@ -19,6 +19,7 @@ import {
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
+import { inspectMacCodeSignature } from "./lib/mac-code-signature.ts";
 import { finalizeMacUpdateZip } from "./lib/mac-update-zip-finalize.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
@@ -207,6 +208,30 @@ interface StagePackageJson {
     readonly electron: string;
   };
   readonly overrides: Record<string, unknown>;
+}
+
+const DOTHETHING_PACKAGE_NAME = "@t3tools/dothething";
+const DOTHETHING_STAGE_RELATIVE_DIR = "packages/dothething";
+const DOTHETHING_RUNTIME_PACKAGE_ENTRIES = ["package.json", "bin", "dist", "LICENSE"] as const;
+const DOTHETHING_MACOS_RUNTIME_RELATIVE_PATH = [
+  "dist",
+  "Do The Thing.app",
+  "Contents",
+  "MacOS",
+  "DoTheThing",
+] as const;
+
+function withStagedDoTheThingDependency(
+  dependencies: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!(DOTHETHING_PACKAGE_NAME in dependencies)) {
+    return dependencies;
+  }
+
+  return {
+    ...dependencies,
+    [DOTHETHING_PACKAGE_NAME]: `file:./${DOTHETHING_STAGE_RELATIVE_DIR}`,
+  };
 }
 
 const AzureTrustedSigningOptionsConfig = Config.all({
@@ -539,6 +564,57 @@ const verifyStagedNodePty = Effect.fn("verifyStagedNodePty")(function* (
   );
 });
 
+const stageDoTheThingPackage = Effect.fn("stageDoTheThingPackage")(function* (
+  repoRoot: string,
+  stageAppDir: string,
+  requireStableCodeSignature: boolean,
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const sourceDir = path.join(repoRoot, "packages/dothething");
+  const runtimeBinary = path.join(sourceDir, ...DOTHETHING_MACOS_RUNTIME_RELATIVE_PATH);
+
+  if (!(yield* fs.exists(runtimeBinary))) {
+    return yield* new BuildScriptError({
+      message: `Missing Do The Thing runtime at ${runtimeBinary}. Run 'cd packages/dothething && bun run build:macos' first.`,
+    });
+  }
+
+  if (requireStableCodeSignature) {
+    const appBundlePath = path.join(sourceDir, "dist", "Do The Thing.app");
+    const signature = inspectMacCodeSignature(appBundlePath);
+    if (!signature.isStable) {
+      return yield* new BuildScriptError({
+        message: [
+          "Signed macOS artifacts require Do The Thing.app to be signed with a stable Apple code-signing identity.",
+          "The current Do The Thing runtime is ad-hoc signed, which causes macOS Accessibility/Screen Recording permissions to reset across updates.",
+          "Build it with DOTHETHING_CODESIGN_MODE=identity and DOTHETHING_CODESIGN_IDENTITY before running the signed desktop artifact build.",
+          signature.details,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      });
+    }
+  }
+
+  const targetDir = path.join(stageAppDir, DOTHETHING_STAGE_RELATIVE_DIR);
+  yield* fs.makeDirectory(targetDir, { recursive: true });
+
+  for (const entry of DOTHETHING_RUNTIME_PACKAGE_ENTRIES) {
+    const from = path.join(sourceDir, entry);
+    if (!(yield* fs.exists(from))) {
+      continue;
+    }
+    const to = path.join(targetDir, entry);
+    const stat = yield* fs.stat(from);
+    if (stat.type === "Directory") {
+      yield* fs.copy(from, to);
+      continue;
+    }
+    yield* fs.copyFile(from, to);
+  }
+});
+
 const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
@@ -734,8 +810,20 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   yield* Effect.log("[desktop-artifact] Staging release app...");
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
+  const doTheThingLauncherSource = path.join(repoRoot, "apps/desktop/scripts/dothethingMcp.mjs");
+  if (yield* fs.exists(doTheThingLauncherSource)) {
+    yield* fs.copyFile(
+      doTheThingLauncherSource,
+      path.join(stageAppDir, "apps/desktop/dist-electron/dothethingMcp.mjs"),
+    );
+  }
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
   yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
+  yield* stageDoTheThingPackage(
+    repoRoot,
+    stageAppDir,
+    options.platform === "mac" && options.signed,
+  );
 
   const stagedPlatformResources = yield* assertPlatformBuildResources(
     options.platform,
@@ -777,10 +865,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.mockUpdateServerPort,
       stagedPlatformResources.hasComposerIcon,
     ),
-    dependencies: {
+    dependencies: withStagedDoTheThingDependency({
       ...resolvedServerDependencies,
       ...resolvedDesktopRuntimeDependencies,
-    },
+    }),
     devDependencies: {
       electron: electronVersion,
     },

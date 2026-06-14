@@ -1,0 +1,22 @@
+{
+  "name": "@t3tools/dothething",
+  "version": "0.1.52-synara.4",
+  "private": true,
+  "description": "Synara's private desktop automation runtime (Do The Thing).",
+  "license": "MIT",
+  "bin": {
+    "dothething": "bin/dothething",
+    "dothething-mcp": "bin/dothething-mcp"
+  },
+  "files": [
+    "bin/",
+    "dist/",
+    "LICENSE"
+  ],
+  "type": "commonjs",
+  "scripts": {
+    "build:macos": "cd source && ./scripts/build-dothething-app.sh release && cd .. && rm -rf \"dist/Do The Thing.app\" && mkdir -p dist && ditto \"source/dist/Do The Thing.app\" \"dist/Do The Thing.app\"",
+    "bundle:private": "cd source && node ./scripts/npm/build-packages.mjs --skip-build",
+    "install:dev-app": "bash scripts/install-dev-app.sh"
+  }
+}

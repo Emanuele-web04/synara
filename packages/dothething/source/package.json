@@ -1,0 +1,10 @@
+{
+  "name": "dothething-repo-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bundle:private": "node ./scripts/npm/build-packages.mjs --skip-build",
+    "bundle:private:pack": "./scripts/release-package.sh",
+    "package:skill": "./scripts/package-skill.sh"
+  }
+}

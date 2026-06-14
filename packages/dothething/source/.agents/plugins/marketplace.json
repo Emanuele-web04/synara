@@ -1,0 +1,20 @@
+{
+  "name": "dothething-local",
+  "interface": {
+    "displayName": "Do The Thing Local"
+  },
+  "plugins": [
+    {
+      "name": "dothething",
+      "source": {
+        "source": "local",
+        "path": "./plugins/dothething"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

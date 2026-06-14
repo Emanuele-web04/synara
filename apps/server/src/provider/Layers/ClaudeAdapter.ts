@@ -65,6 +65,10 @@ import {
 } from "@t3tools/shared/model";
 import { buildClaudeSubagentPrompt } from "@t3tools/shared/agentMentions";
 import {
+  buildDoTheThingClaudeMcpServers,
+  DOTHETHING_BROWSER_TOOL_ROUTING_INSTRUCTIONS,
+} from "@t3tools/shared/dothething";
+import {
   Cause,
   DateTime,
   Deferred,
@@ -779,6 +783,7 @@ const EMBEDDED_CLAUDE_SYSTEM_PROMPT_APPEND = [
   "Do not present the host app as Claude Code unless the user is explicitly asking about Claude Code.",
   "Treat the current working directory as the active workspace for the task.",
   "When the user asks about the current project, codebase, or repository, proactively inspect files in the current working directory before asking the user where to look.",
+  DOTHETHING_BROWSER_TOOL_ROUTING_INSTRUCTIONS,
 ].join("\n");
 
 function buildClaudeSdkSubagents(): Record<string, AgentDefinition> {
@@ -3286,6 +3291,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ...(ultracode ? { ultracode: true } : {}),
         };
         const claudeSubagents = buildClaudeSdkSubagents();
+        const doTheThingMcpServers = buildDoTheThingClaudeMcpServers();
 
         const queryOptions: ClaudeQueryOptions = {
           ...(input.cwd ? { cwd: input.cwd } : {}),
@@ -3312,6 +3318,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ? { maxThinkingTokens: providerOptions.maxThinkingTokens }
             : {}),
           ...(Object.keys(settings).length > 0 ? { settings } : {}),
+          ...(Object.keys(doTheThingMcpServers).length > 0
+            ? { mcpServers: doTheThingMcpServers }
+            : {}),
           ...(existingResumeSessionId ? { resume: existingResumeSessionId } : {}),
           ...(newSessionId ? { sessionId: newSessionId } : {}),
           includePartialMessages: true,

@@ -1,0 +1,208 @@
+#!/usr/bin/env node
+const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const platformPackages = {
+  "darwin-arm64": {
+    "executablePath": [
+      "dist",
+      "Do The Thing.app",
+      "Contents",
+      "MacOS",
+      "DoTheThing"
+    ]
+  },
+  "darwin-x64": {
+    "executablePath": [
+      "dist",
+      "Do The Thing.app",
+      "Contents",
+      "MacOS",
+      "DoTheThing"
+    ]
+  },
+  "linux-arm64": {
+    "executablePath": [
+      "dist",
+      "linux",
+      "arm64",
+      "dothething"
+    ]
+  },
+  "linux-x64": {
+    "executablePath": [
+      "dist",
+      "linux",
+      "amd64",
+      "dothething"
+    ]
+  },
+  "win32-arm64": {
+    "executablePath": [
+      "dist",
+      "windows",
+      "arm64",
+      "dothething.exe"
+    ]
+  },
+  "win32-x64": {
+    "executablePath": [
+      "dist",
+      "windows",
+      "amd64",
+      "dothething.exe"
+    ]
+  }
+};
+const packageRoot = path.resolve(__dirname, "..");
+const args = process.argv.slice(2);
+const command = args[0] || "";
+const installCommands = new Map([
+  ["install-claude-mcp", "install-claude-mcp.sh"],
+  ["install-clauce-mcp", "install-claude-mcp.sh"],
+  ["install-gemini-mcp", "install-gemini-mcp.sh"],
+  ["install-codex-mcp", "install-codex-mcp.sh"],
+  ["install-opencode-mcp", "install-opencode-mcp.sh"],
+  ["install-codex-plugin", "install-codex-plugin.sh"],
+]);
+
+function printLauncherHelp() {
+  console.log(`Do The Thing
+
+Usage:
+  dothething [command] [options]
+  dothething
+
+Commands:
+  mcp                  Start the stdio MCP server.
+  doctor               Print permission status and launch onboarding if needed on macOS.
+  list-apps            Print running or recently used apps.
+  snapshot <app>       Print the current accessibility snapshot for an app.
+  call <tool>          Call one tool, or run a JSON array of tool calls.
+  turn-ended           Notify the running MCP process that the host turn ended.
+  install-claude-mcp   Install the MCP server into ~/.claude.json for this project.
+  install-gemini-mcp   Install the MCP server into Gemini CLI config.
+  install-codex-mcp    Install the MCP server into ~/.codex/config.toml.
+  install-opencode-mcp Install the MCP server into ~/.config/opencode.
+  install-codex-plugin Install this npm package into the local Codex plugin cache.
+  help [command]       Show general or command-specific help.
+  version              Print the CLI version.
+
+Global options:
+  -h, --help           Show help.
+  -v, --version        Show version.
+
+Notes:
+  This npm package bundles native runtimes for supported platforms and selects the current os-arch at launch.
+  Use 'dothething help <command>' for command-specific help.`);
+}
+
+function printInstallHelp(scriptName, usage) {
+  console.log(`Usage:
+  ${usage}
+
+This helper updates a local MCP or plugin config to run:
+  dothething mcp
+
+Script:
+  ${scriptName}`);
+}
+
+function fail(message) {
+  console.error(message);
+  process.exit(1);
+}
+
+function spawnAndExit(executable, executableArgs) {
+  const child = spawn(executable, executableArgs, {
+    stdio: "inherit",
+    windowsHide: false,
+  });
+
+  child.on("error", (error) => {
+    fail(`Failed to start ${executable}: ${error.message}`);
+  });
+
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => {
+      child.kill(signal);
+    });
+  }
+
+  child.on("exit", (code, signal) => {
+    if (signal) {
+      process.exit(1);
+    }
+    process.exit(code ?? 0);
+  });
+}
+
+function runInstallCommand(scriptName, scriptArgs) {
+  if (process.platform === "win32") {
+    fail(`${command} currently requires a POSIX shell. Configure your MCP client with command "dothething" and args ["mcp"] on Windows.`);
+  }
+
+  const scriptPath = path.join(packageRoot, "scripts", scriptName);
+  if (!fs.existsSync(scriptPath)) {
+    fail(`Missing installer helper at ${scriptPath}.`);
+  }
+
+  spawnAndExit(scriptPath, scriptArgs);
+}
+
+function resolveNativeExecutable() {
+  const platformKey = `${process.platform}-${process.arch}`;
+  const target = platformPackages[platformKey];
+  if (!target) {
+    const supported = Object.keys(platformPackages).sort().join(", ");
+    fail(`Unsupported platform ${platformKey}. Supported platforms: ${supported}.`);
+  }
+
+  const executablePath = path.join(packageRoot, ...target.executablePath);
+  if (!fs.existsSync(executablePath)) {
+    fail(`Missing bundled native runtime for ${platformKey} at ${executablePath}.
+
+Reinstall with:
+  rebuild or reinstall Synara's private @t3tools/dothething package`);
+  }
+
+  return executablePath;
+}
+
+if (command === "-h" || command === "--help" || (command === "help" && args.length <= 1)) {
+  printLauncherHelp();
+  process.exit(0);
+}
+
+if (command === "help" && args[1] === "install-codex-plugin") {
+  printInstallHelp("install-codex-plugin.sh", "dothething install-codex-plugin");
+  process.exit(0);
+}
+
+if (command === "help" && args[1] === "install-codex-mcp") {
+  printInstallHelp("install-codex-mcp.sh", "dothething install-codex-mcp");
+  process.exit(0);
+}
+
+if (command === "help" && args[1] === "install-gemini-mcp") {
+  printInstallHelp("install-gemini-mcp.sh", "dothething install-gemini-mcp [--scope project|user]");
+  process.exit(0);
+}
+
+if (command === "help" && args[1] === "install-opencode-mcp") {
+  printInstallHelp("install-opencode-mcp.sh", "dothething install-opencode-mcp");
+  process.exit(0);
+}
+
+if (command === "help" && (args[1] === "install-claude-mcp" || args[1] === "install-clauce-mcp")) {
+  printInstallHelp("install-claude-mcp.sh", "dothething install-claude-mcp");
+  process.exit(0);
+}
+
+if (installCommands.has(command)) {
+  const scriptName = installCommands.get(command);
+  runInstallCommand(scriptName, args.slice(1));
+} else {
+  spawnAndExit(resolveNativeExecutable(), args);
+}

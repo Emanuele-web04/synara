@@ -61,6 +61,7 @@ import {
   toOpenCodeQuestionAnswers,
   type OpenCodeServerConnection,
 } from "../opencodeRuntime.ts";
+import { buildDoTheThingOpenCodeMcpConfig } from "@t3tools/shared/dothething";
 import { extractProposedPlanMarkdown, withProviderPlanModePrompt } from "../planMode.ts";
 
 type OpenCodeCompatibleProvider = Extract<ProviderKind, "opencode" | "kilo">;
@@ -3619,6 +3620,51 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   cliSpec: adapterConfig.cliSpec,
                   ...(server.external && serverPassword ? { serverPassword } : {}),
                 });
+                const doTheThingMcp = buildDoTheThingOpenCodeMcpConfig();
+                if (doTheThingMcp) {
+                  const emitDoTheThingMcpWarning = (
+                    operation: string,
+                    cause: Cause.Cause<unknown>,
+                  ) =>
+                    Effect.gen(function* () {
+                      const detail = Cause.pretty(cause);
+                      yield* Effect.logWarning("opencode.dothething_mcp.connection_failed", {
+                        operation,
+                        detail,
+                      });
+                      yield* emit({
+                        ...buildEventBase({ threadId: input.threadId }),
+                        type: "runtime.warning",
+                        payload: {
+                          message: "Do The Thing MCP did not connect.",
+                          detail: {
+                            operation,
+                            error: detail,
+                          },
+                        },
+                      });
+                    });
+                  const addExit = yield* runOpenCodeSdk("mcp.add", () =>
+                    client.mcp.add({
+                      directory,
+                      name: doTheThingMcp.name,
+                      config: doTheThingMcp.config,
+                    }),
+                  ).pipe(Effect.exit);
+                  if (Exit.isFailure(addExit)) {
+                    yield* emitDoTheThingMcpWarning("mcp.add", addExit.cause);
+                  } else {
+                    const connectExit = yield* runOpenCodeSdk("mcp.connect", () =>
+                      client.mcp.connect({
+                        directory,
+                        name: doTheThingMcp.name,
+                      }),
+                    ).pipe(Effect.exit);
+                    if (Exit.isFailure(connectExit)) {
+                      yield* emitDoTheThingMcpWarning("mcp.connect", connectExit.cause);
+                    }
+                  }
+                }
                 const createSessionId = resumedSessionId
                   ? Effect.succeed(resumedSessionId)
                   : runOpenCodeSdk("session.create", () => {

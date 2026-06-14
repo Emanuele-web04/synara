@@ -284,6 +284,7 @@ describe("wsNativeApi", () => {
 
     const payload = {
       settings: {
+        enableDoTheThing: true,
         enableAssistantStreaming: true,
         defaultThreadEnvMode: "local",
         addProjectBaseDirectory: "",

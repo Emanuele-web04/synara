@@ -7,7 +7,12 @@ import {
 
 import type { ComposerImageAttachment } from "../composerDraftStore";
 
-const EXPLICIT_COMPUTER_USE_PATTERNS = [
+const EXPLICIT_DOTHETHING_PATTERNS = [
+  "do the thing",
+  "dothething",
+  "@dothething",
+  "@do-the-thing",
+  "mcp__dothething__",
   "computer use",
   "computer-use",
   "@computer-use",
@@ -55,8 +60,10 @@ function normalizePromptForMatching(prompt: string): string {
 
 export function promptRequestsExplicitComputerUse(prompt: string): boolean {
   const normalized = normalizePromptForMatching(prompt);
-  return EXPLICIT_COMPUTER_USE_PATTERNS.some((pattern) => normalized.includes(pattern));
+  return EXPLICIT_DOTHETHING_PATTERNS.some((pattern) => normalized.includes(pattern));
 }
+
+export const promptRequestsExplicitDoTheThing = promptRequestsExplicitComputerUse;
 
 export function promptLooksLikeInternalBrowserTask(prompt: string): boolean {
   const normalized = normalizePromptForMatching(prompt);

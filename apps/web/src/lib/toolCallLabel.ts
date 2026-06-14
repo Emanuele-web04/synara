@@ -32,6 +32,15 @@ function humanizeMcpToolIdentifier(value: string): string | null {
   return `${normalizedServer}: ${normalizedTool}`;
 }
 
+const DOTHETHING_MCP_SERVER_ALIASES = new Set([
+  "dothething",
+  "do-the-thing",
+  "computer-use",
+  "computer_use",
+  "open-computer-use",
+  "open_computer_use",
+]);
+
 export interface ReadableToolTitleInput {
   readonly title?: string | null;
   readonly fallbackLabel: string;
@@ -162,6 +171,9 @@ function normalizeToolDescriptor(value: string | null): string | null {
 function humanizeMcpToken(value: string | undefined): string {
   if (!value) {
     return "";
+  }
+  if (DOTHETHING_MCP_SERVER_ALIASES.has(value.toLowerCase())) {
+    return "Do The Thing";
   }
   const normalized = value
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")

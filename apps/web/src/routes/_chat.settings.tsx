@@ -953,6 +953,7 @@ function SettingsRouteView() {
     defaults.enableSystemTaskCompletionNotifications
       ? ["Desktop notifications"]
       : []),
+    ...(settings.enableDoTheThing !== defaults.enableDoTheThing ? ["Do The Thing"] : []),
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),
@@ -2066,6 +2067,17 @@ function SettingsRouteView() {
   const renderBehaviorPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Runtime behavior">
+        {isElectron
+          ? renderBooleanSettingRow({
+              settingKey: "enableDoTheThing",
+              title: "Do The Thing",
+              description:
+                "Let Codex control desktop apps outside the in-app browser. macOS may ask for Accessibility and Screen Recording on first use.",
+              resetLabel: "Do The Thing",
+              ariaLabel: "Enable Do The Thing desktop automation",
+            })
+          : null}
+
         {renderBooleanSettingRow({
           settingKey: "enableAssistantStreaming",
           title: "Assistant output",

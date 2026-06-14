@@ -183,6 +183,7 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentPinned: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentMarkers: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => true)),
+  enableDoTheThing: Schema.Boolean.pipe(withDefaults(() => true)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => false)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -445,6 +446,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     cursorApiEndpoint: settings.providers.cursor.apiEndpoint,
     cursorBinaryPath: settings.providers.cursor.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
+    enableDoTheThing: settings.enableDoTheThing,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     geminiBinaryPath: settings.providers.gemini.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
@@ -502,6 +504,9 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
   const providers: MutableServerSettingsProvidersPatch = {};
   const serverPatch: MutableServerSettingsPatch = {};
 
+  if (hasOwn(patch, "enableDoTheThing")) {
+    serverPatch.enableDoTheThing = Boolean(patch.enableDoTheThing);
+  }
   if (hasOwn(patch, "enableAssistantStreaming")) {
     serverPatch.enableAssistantStreaming = Boolean(patch.enableAssistantStreaming);
   }
@@ -641,6 +646,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "cursorApiEndpoint",
     "cursorBinaryPath",
     "defaultThreadEnvMode",
+    "enableDoTheThing",
     "enableAssistantStreaming",
     "geminiBinaryPath",
     "grokBinaryPath",

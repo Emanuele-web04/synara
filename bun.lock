@@ -16,6 +16,7 @@
       "name": "@t3tools/desktop",
       "version": "0.2.1",
       "dependencies": {
+        "@t3tools/dothething": "workspace:*",
         "effect": "catalog:",
         "electron": "40.6.0",
         "electron-updater": "^6.6.2",
@@ -161,6 +162,14 @@
         "tsdown": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:",
+      },
+    },
+    "packages/dothething": {
+      "name": "@t3tools/dothething",
+      "version": "0.1.52-synara.4",
+      "bin": {
+        "dothething": "bin/dothething",
+        "dothething-mcp": "bin/dothething-mcp",
       },
     },
     "packages/effect-acp": {
@@ -1049,6 +1058,8 @@
     "@t3tools/contracts": ["@t3tools/contracts@workspace:packages/contracts"],
 
     "@t3tools/desktop": ["@t3tools/desktop@workspace:apps/desktop"],
+
+    "@t3tools/dothething": ["@t3tools/dothething@workspace:packages/dothething"],
 
     "@t3tools/marketing": ["@t3tools/marketing@workspace:apps/marketing"],
 

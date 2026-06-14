@@ -13,6 +13,7 @@ import {
   GEMINI_3_MODEL_CAPABILITIES,
   geminiCapabilitiesForModel,
 } from "@t3tools/shared/model";
+import { buildDoTheThingAcpMcpServers } from "@t3tools/shared/dothething";
 import { Effect } from "effect";
 import { asNumber, asRecord, trimToUndefined } from "./geminiValue.ts";
 
@@ -345,7 +346,7 @@ export const probeGeminiCapabilities = (input: {
               sessionNewRequested = true;
               sendRequest(2, "session/new", {
                 cwd: input.cwd,
-                mcpServers: [],
+                mcpServers: buildDoTheThingAcpMcpServers(),
               });
             }
             return;

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Do The Thing">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1FABFC"/>
+      <stop offset="100%" stop-color="#F0BDEF"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" fill="url(#bg)"/>
+  <g transform="translate(-5.9259 -5.9259) scale(1.1851852)">
+    <path d="M18.5 39A18.5 18.5 0 0 1 45.5 22" fill="none" stroke="#FFFFFF" stroke-opacity="0.72" stroke-width="3" stroke-linecap="round"/>
+    <path d="M32.25 25.5L32.25 45.25L37.25 40.5L40.25 48.25L44 46.5L41 39.25L48 38Z" fill="#FFFFFF" fill-opacity="0.14"/>
+    <path d="M31.5 24.5L31.5 44.25L36.5 39.5L39.5 47.25L43.25 45.5L40.25 38.25L47.25 37Z" fill="#FFFFFF" fill-opacity="0.94" stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round"/>
+  </g>
+</svg>
