@@ -201,25 +201,41 @@ function AgentActivityEventRow(props: {
 }) {
   const preview = formatAgentActivityEntryPreview(props.entry);
   const title = formatAgentActivityEntryTitle(props.entry);
-  const body = isReasoningUpdateWorkEntry(props.entry) ? preview : (preview ?? props.entry.detail);
+  const isReasoning = isReasoningUpdateWorkEntry(props.entry);
+  const body = isReasoning ? preview : (preview ?? props.entry.detail);
 
   return (
     <div className="py-3 first:pt-0 last:pb-0">
       <div className="flex min-w-0 items-baseline justify-between gap-3">
-        <p className="truncate font-medium text-foreground/78" style={props.chatTypographyStyle}>
+        <p
+          className={cn(
+            "truncate font-medium",
+            isReasoning ? "text-muted-foreground/54" : "text-foreground/74",
+          )}
+          style={isReasoning ? props.footerTextStyle : props.chatTypographyStyle}
+        >
           {title}
         </p>
-        <p className="shrink-0 tabular-nums text-muted-foreground/38" style={props.footerTextStyle}>
+        <p
+          className="shrink-0 tabular-nums text-muted-foreground/38"
+          style={props.footerTextStyle}
+        >
           {formatShortTimestamp(props.entry.createdAt, props.timestampFormat)}
         </p>
       </div>
       {body ? (
-        <div className="mt-1 text-muted-foreground/70">
+        <div
+          className={cn(
+            "mt-1",
+            isReasoning ? "text-muted-foreground/44" : "text-muted-foreground/66",
+          )}
+        >
           <ChatMarkdown
             text={body}
             cwd={props.markdownCwd}
             isStreaming={false}
-            style={props.chatTypographyStyle}
+            variant={isReasoning ? "process" : "subtle"}
+            style={isReasoning ? props.footerTextStyle : props.chatTypographyStyle}
             onImageExpand={props.onImageExpand}
           />
         </div>
