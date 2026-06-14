@@ -66,6 +66,7 @@ import { InlineAgentChip } from "./InlineAgentChip";
 import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
+import { FileCommentsSummaryChip } from "./FileCommentsSummaryChip";
 import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
@@ -789,6 +790,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   text: selection.text,
                 }));
           const terminalContexts = displayedUserMessage.contexts;
+          const renderedFileComments = displayedUserMessage.fileComments;
           const userMessagePreview = deriveUserMessagePreviewState(
             displayedUserMessage.visibleText,
             {
@@ -809,7 +811,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             Boolean(onEditUserMessage) &&
             row.message.id === latestEditableUserMessageId &&
             displayedUserMessage.copyText.trim().length > 0;
-          const hasLeadingMedia = renderedAssistantSelections.length > 0 || userImages.length > 0;
+          const hasLeadingMedia =
+            renderedAssistantSelections.length > 0 ||
+            renderedFileComments.length > 0 ||
+            userImages.length > 0;
           const isTailContentRow = row.id === tailContentRowId;
           return (
             <div className="flex w-full justify-end">
@@ -827,6 +832,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 {renderedAssistantSelections.length > 0 && (
                   <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
                     <AssistantSelectionsSummaryChip selections={renderedAssistantSelections} />
+                  </div>
+                )}
+                {renderedFileComments.length > 0 && (
+                  <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
+                    <FileCommentsSummaryChip comments={renderedFileComments} />
                   </div>
                 )}
                 {userImages.length > 0 && (

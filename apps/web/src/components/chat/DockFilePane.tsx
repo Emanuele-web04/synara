@@ -8,6 +8,7 @@
 import { memo } from "react";
 
 import type { ChatFileReference } from "~/lib/chatReferences";
+import type { FileCommentSelection } from "~/lib/fileComments";
 import { WorkspaceFilePreview } from "../WorkspaceFilePreview";
 import { PanelStateMessage } from "./PanelStateMessage";
 
@@ -16,6 +17,7 @@ export const DockFilePane = memo(function DockFilePane(props: {
   filePath: string | null;
   onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
+  onCommentInChat?: ((comment: FileCommentSelection) => void) | undefined;
 }) {
   return (
     <WorkspaceFilePreview
@@ -29,6 +31,7 @@ export const DockFilePane = memo(function DockFilePane(props: {
       }
       onReferenceInChat={props.onReferenceInChat}
       onAskWhyInChat={props.onAskWhyInChat}
+      onCommentInChat={props.onCommentInChat}
     />
   );
 });

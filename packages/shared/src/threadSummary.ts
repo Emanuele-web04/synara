@@ -17,6 +17,13 @@ export interface ThreadSummaryState extends ThreadSummaryMetadata {
   pendingUserInputCount: number;
 }
 
+export interface PendingThreadRequestIds {
+  approvalRequestIds: ReadonlyArray<string>;
+  userInputRequestIds: ReadonlyArray<string>;
+}
+
+export type PendingThreadRequestKind = "approval" | "user-input";
+
 function maxIso(left: string | null, right: string): string {
   if (left === null) {
     return right;
@@ -72,6 +79,13 @@ function isStalePendingRequestFailureDetail(detail: string | undefined): boolean
     normalized.includes("stale pending user input request") ||
     normalized.includes("unknown pending user input request")
   );
+}
+
+export function buildStalePendingRequestFailureDetail(
+  requestKind: PendingThreadRequestKind,
+  requestId: string,
+): string {
+  return `Stale pending ${requestKind} request: ${requestId}. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.`;
 }
 
 function hasStructuredUserInputQuestions(payload: Record<string, unknown> | null): boolean {
@@ -132,23 +146,12 @@ function resolveLatestProposedPlan(input: {
   );
 }
 
-export function deriveThreadSummaryState(input: {
-  readonly messages: ReadonlyArray<Pick<OrchestrationMessage, "role" | "createdAt">>;
+// Tracks the open human-request lifecycles from timeline activities.
+export function derivePendingThreadRequestIds(input: {
   readonly activities: ReadonlyArray<
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
   >;
-  readonly proposedPlans: ReadonlyArray<
-    Pick<OrchestrationProposedPlan, "id" | "turnId" | "updatedAt" | "implementedAt">
-  >;
-  readonly latestTurn: Pick<OrchestrationLatestTurn, "turnId"> | null;
-}): ThreadSummaryState {
-  let latestUserMessageAt: string | null = null;
-  for (const message of input.messages) {
-    if (message.role === "user") {
-      latestUserMessageAt = maxIso(latestUserMessageAt, message.createdAt);
-    }
-  }
-
+}): PendingThreadRequestIds {
   const openApprovals = new Map<string, true>();
   const openUserInputs = new Map<string, true>();
   const orderedActivities = [...input.activities].toSorted(compareActivitiesByOrder);
@@ -205,6 +208,31 @@ export function deriveThreadSummaryState(input: {
     }
   }
 
+  return {
+    approvalRequestIds: [...openApprovals.keys()],
+    userInputRequestIds: [...openUserInputs.keys()],
+  };
+}
+
+export function deriveThreadSummaryState(input: {
+  readonly messages: ReadonlyArray<Pick<OrchestrationMessage, "role" | "createdAt">>;
+  readonly activities: ReadonlyArray<
+    Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
+  >;
+  readonly proposedPlans: ReadonlyArray<
+    Pick<OrchestrationProposedPlan, "id" | "turnId" | "updatedAt" | "implementedAt">
+  >;
+  readonly latestTurn: Pick<OrchestrationLatestTurn, "turnId"> | null;
+}): ThreadSummaryState {
+  let latestUserMessageAt: string | null = null;
+  for (const message of input.messages) {
+    if (message.role === "user") {
+      latestUserMessageAt = maxIso(latestUserMessageAt, message.createdAt);
+    }
+  }
+
+  const pendingRequestIds = derivePendingThreadRequestIds({ activities: input.activities });
+
   const latestProposedPlan = resolveLatestProposedPlan({
     proposedPlans: input.proposedPlans,
     latestTurn: input.latestTurn,
@@ -212,10 +240,10 @@ export function deriveThreadSummaryState(input: {
 
   return {
     latestUserMessageAt,
-    pendingApprovalCount: openApprovals.size,
-    pendingUserInputCount: openUserInputs.size,
-    hasPendingApprovals: openApprovals.size > 0,
-    hasPendingUserInput: openUserInputs.size > 0,
+    pendingApprovalCount: pendingRequestIds.approvalRequestIds.length,
+    pendingUserInputCount: pendingRequestIds.userInputRequestIds.length,
+    hasPendingApprovals: pendingRequestIds.approvalRequestIds.length > 0,
+    hasPendingUserInput: pendingRequestIds.userInputRequestIds.length > 0,
     hasActionableProposedPlan: latestProposedPlan?.implementedAt === null,
   };
 }

@@ -18,37 +18,115 @@ function isBinaryLike(bytes: Uint8Array): boolean {
   return bytes.includes(0);
 }
 
+function isFileNotFoundError(cause: unknown): boolean {
+  return (cause as NodeJS.ErrnoException | null)?.code === "ENOENT";
+}
+
+// Outcome of canonicalizing a requested path against the workspace root:
+// "resolved" means the file exists inside the root, "outside" means it exists
+// but escapes the root (rejected), and "missing" means it does not exist (so a
+// bare/partial reference can fall back to the workspace index).
+type RealPathResolution =
+  | { readonly status: "resolved"; readonly realPath: string }
+  | { readonly status: "outside" }
+  | { readonly status: "missing"; readonly cause: unknown };
+
 export const makeWorkspaceFileSystem = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const workspacePaths = yield* WorkspacePaths;
   const workspaceEntries = yield* WorkspaceEntries;
 
+  // Canonicalize a workspace-relative path and classify the outcome. ENOENT is
+  // surfaced as "missing" (not a hard failure) so callers can attempt the
+  // bare/partial-reference fallback; other realpath failures still error.
+  const resolveInRootRealPath = (relativePath: string, absolutePath: string, cwd: string) =>
+    Effect.tryPromise({
+      try: async (): Promise<RealPathResolution> => {
+        try {
+          const realPath = await resolveRealPathWithinRoot(cwd, absolutePath);
+          return realPath === null ? { status: "outside" } : { status: "resolved", realPath };
+        } catch (cause) {
+          if (isFileNotFoundError(cause)) {
+            return { status: "missing", cause };
+          }
+          throw cause;
+        }
+      },
+      catch: (cause) =>
+        new WorkspaceFileSystemError({
+          cwd,
+          relativePath,
+          operation: "workspaceFileSystem.realpath",
+          detail: cause instanceof Error ? cause.message : String(cause),
+          cause,
+        }),
+    });
+
   const readFile: WorkspaceFileSystemShape["readFile"] = Effect.fn("WorkspaceFileSystem.readFile")(
     function* (input) {
-      const target = yield* workspacePaths.resolveRelativePathWithinRoot({
+      const maxBytes = input.maxBytes ?? DEFAULT_READ_FILE_MAX_BYTES;
+
+      let target = yield* workspacePaths.resolveRelativePathWithinRoot({
         workspaceRoot: input.cwd,
         relativePath: input.relativePath,
       });
-      const maxBytes = input.maxBytes ?? DEFAULT_READ_FILE_MAX_BYTES;
+      let resolution = yield* resolveInRootRealPath(
+        input.relativePath,
+        target.absolutePath,
+        input.cwd,
+      );
 
-      const realPath = yield* Effect.tryPromise({
-        try: () => resolveRealPathWithinRoot(input.cwd, target.absolutePath),
-        catch: (cause) =>
-          new WorkspaceFileSystemError({
-            cwd: input.cwd,
-            relativePath: input.relativePath,
-            operation: "workspaceFileSystem.realpath",
-            detail: cause instanceof Error ? cause.message : String(cause),
-            cause,
-          }),
-      });
-      if (realPath === null) {
+      // References often carry only a file's basename or a partial tail (e.g.
+      // `chatReferences.test.ts` for `apps/web/src/lib/chatReferences.test.ts`),
+      // which resolves to a non-existent path under the root. Fall back to a
+      // unique match in the tracked workspace index so the in-app viewer can
+      // still open it; ambiguous names stay unresolved and surface the error.
+      if (resolution.status === "missing") {
+        const fallbackRelativePath = yield* workspaceEntries
+          .resolveFileBySuffix({ cwd: input.cwd, relativePath: input.relativePath })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new WorkspaceFileSystemError({
+                  cwd: input.cwd,
+                  relativePath: input.relativePath,
+                  operation: "workspaceFileSystem.realpath",
+                  detail: cause.message,
+                  cause,
+                }),
+            ),
+          );
+        if (fallbackRelativePath !== null) {
+          target = yield* workspacePaths.resolveRelativePathWithinRoot({
+            workspaceRoot: input.cwd,
+            relativePath: fallbackRelativePath,
+          });
+          resolution = yield* resolveInRootRealPath(
+            fallbackRelativePath,
+            target.absolutePath,
+            input.cwd,
+          );
+        }
+      }
+
+      if (resolution.status === "missing") {
+        return yield* new WorkspaceFileSystemError({
+          cwd: input.cwd,
+          relativePath: input.relativePath,
+          operation: "workspaceFileSystem.realpath",
+          detail:
+            resolution.cause instanceof Error ? resolution.cause.message : String(resolution.cause),
+          cause: resolution.cause,
+        });
+      }
+      if (resolution.status === "outside") {
         return yield* new WorkspacePathOutsideRootError({
           workspaceRoot: input.cwd,
           relativePath: input.relativePath,
         });
       }
+      const realPath = resolution.realPath;
 
       // Stat through the open handle so the size and the bytes come from the
       // same file even if the path is swapped between the two calls.

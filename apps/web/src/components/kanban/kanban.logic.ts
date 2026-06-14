@@ -40,6 +40,7 @@ type KanbanComposerDraftSource = Pick<
   | "persistedAttachments"
   | "terminalContexts"
   | "assistantSelections"
+  | "fileComments"
   | "activeProvider"
 >;
 
@@ -56,7 +57,8 @@ export function buildKanbanComposerDraftSnapshot(
       draft.images.length > 0 ||
       draft.persistedAttachments.length > 0 ||
       draft.terminalContexts.some((context) => context.text.trim().length > 0) ||
-      draft.assistantSelections.length > 0,
+      draft.assistantSelections.length > 0 ||
+      draft.fileComments.length > 0,
     provider: draft.activeProvider,
   };
 }

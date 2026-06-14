@@ -290,6 +290,9 @@ export function estimateTimelineMessageHeight(
     const assistantSelectionCount =
       message.attachments?.filter((attachment) => attachment.type === "assistant-selection")
         .length ?? 0;
+    // File comments live in the prompt's <file_comments> block (not as wire
+    // attachments), so count them from the parsed displayed-message state.
+    const fileCommentCount = displayedUserMessage.fileComments.length;
     const imageAttachmentHeight =
       imageAttachmentCount > 0
         ? Math.ceil(imageAttachmentCount / USER_ATTACHMENT_THUMBNAILS_PER_ROW) *
@@ -298,16 +301,18 @@ export function estimateTimelineMessageHeight(
             USER_ATTACHMENT_THUMBNAIL_GAP_PX
         : 0;
     const assistantSelectionHeight = assistantSelectionCount > 0 ? 40 : 0;
+    const fileCommentHeight = fileCommentCount > 0 ? 40 : 0;
     const attachmentHeight =
-      imageAttachmentHeight + assistantSelectionHeight > 0
+      imageAttachmentHeight + assistantSelectionHeight + fileCommentHeight > 0
         ? imageAttachmentHeight +
           assistantSelectionHeight +
+          fileCommentHeight +
           (renderedText.length > 0 ? USER_ATTACHMENT_ROW_MARGIN_BOTTOM_PX : 0)
         : 0;
     const dispatchChipHeight =
       message.dispatchMode === "steer"
         ? USER_DISPATCH_CHIP_HEIGHT_PX +
-          (imageAttachmentCount > 0 || assistantSelectionCount > 0
+          (imageAttachmentCount > 0 || assistantSelectionCount > 0 || fileCommentCount > 0
             ? USER_DISPATCH_CHIP_WITH_MEDIA_MARGIN_BOTTOM_PX
             : USER_DISPATCH_CHIP_MARGIN_BOTTOM_PX)
         : 0;

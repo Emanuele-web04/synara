@@ -23,8 +23,10 @@ import {
   IconBrain,
   IconBug,
   IconCamera,
+  IconChartBar,
   IconCheck,
   IconChevronDown,
+  IconClock,
   IconChevronLeft,
   IconChevronRight,
   IconChevronUp,
@@ -36,7 +38,9 @@ import {
   IconEye,
   IconFile,
   IconFlag,
+  IconFlame,
   IconFlask2,
+  IconHash,
   IconFolder,
   IconFolderOpen,
   IconEdit,
@@ -66,12 +70,15 @@ import {
   IconRotate2,
   IconSelector,
   IconSettings,
+  IconShare3,
+  IconSparkles,
   IconStar,
   IconStarFilled,
   IconSun,
   IconTextWrap,
   IconTool,
   IconTrash,
+  IconTrophy,
   IconWorld,
   IconX,
   type TablerIcon,
@@ -140,6 +147,13 @@ export const CopyIcon = centralIconWrapper("square-behind-square-6");
 export const LinkIcon = centralIconWrapper("chain-link-3");
 export const DiffIcon = centralIconWrapper("difference-modified");
 export const DownloadIcon = adaptIcon(IconDownload);
+export const FlameIcon = adaptIcon(IconFlame);
+export const TrophyIcon = adaptIcon(IconTrophy);
+export const ClockIcon = adaptIcon(IconClock);
+export const ChartBarIcon = adaptIcon(IconChartBar);
+export const ShareIcon = adaptIcon(IconShare3);
+export const SparklesIcon = adaptIcon(IconSparkles);
+export const HashIcon = adaptIcon(IconHash);
 export const EllipsisIcon = adaptIcon(IconDots);
 export const ExternalLinkIcon = adaptIcon(IconExternalLink);
 export const EyeIcon = adaptIcon(IconEye);

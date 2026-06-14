@@ -22,6 +22,44 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.2.1",
+    date: "Jun 14",
+    features: [
+      {
+        id: "inline-file-comments",
+        title: "File comments can ride along with your next message",
+        description:
+          "You can now leave focused line comments from composer and preview surfaces, then send them with the prompt so agents get clearer file-specific context.",
+        details:
+          "This release adds file-line comment boxes, summary chips, draft persistence, reference attachment handling, preview/editor entry points, chat timeline support, and focused tests for comment parsing, composer drafts, terminal context, kanban dispatch, and chat-view logic.",
+      },
+      {
+        id: "active-turn-file-changes",
+        title: "Live file changes stay scoped to the active turn",
+        description:
+          "The live changed-files panel now follows the turn that is actually running, avoiding stale or unrelated file edits when sessions overlap or recover.",
+        details:
+          "Provider runtime ingestion now carries active turn identity through Codex, Claude, checkpoint, and live-change paths. Chat selectors and composer change headers were tightened so tool/file rows from older turns do not masquerade as current live output.",
+      },
+      {
+        id: "workspace-reference-recovery",
+        title: "Partial workspace file references resolve more reliably",
+        description:
+          "Opening files from shortened or partial references is more forgiving, especially when assistant output mentions a file path without the full workspace prefix.",
+        details:
+          "Workspace file-system lookup now searches entries more deliberately, exposes shared server helpers, improves opener behavior, and adds coverage around partial references so previewing referenced files lands on the intended workspace item.",
+      },
+      {
+        id: "restart-and-idle-recovery",
+        title: "Restarted sessions are less likely to leave turns hanging",
+        description:
+          "After provider restarts, reconnects, or quiet ACP sessions, Synara does a better job of reconciling active turns and finishing idle work instead of getting stuck.",
+        details:
+          "Startup turn reconciliation, ACP idle watchdog handling, provider runtime ingestion, Cursor/Grok/OpenCode adapter event paths, command reactor cleanup, and shared thread summaries now work together to recover unfinished turns and surface stale runtime state more predictably.",
+      },
+    ],
+  },
+  {
     version: "0.2.0",
     date: "Jun 13",
     features: [
@@ -858,9 +896,9 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       },
       {
         id: "thread-retention-cleanup",
-        title: "Old inactive threads clean up after seven days",
+        title: "Old inactive threads hide after seven days",
         description:
-          "A safer retention job now removes stale inactive threads in batches, publishes maintenance progress, protects running work and approvals, and compacts SQLite when enough space can be reclaimed.",
+          "The retention job now hides stale inactive threads from the app in batches, publishes maintenance progress, and protects running work and approvals while keeping database history available for long-term stats.",
       },
       {
         id: "websocket-and-server-polish",

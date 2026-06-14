@@ -144,6 +144,12 @@ import type {
   ProviderReadPluginResult,
 } from "./providerDiscovery";
 import type { ProviderCompactThreadInput } from "./provider";
+import type {
+  StatsGetProfileStatsInput,
+  StatsGetProfileStatsResult,
+  StatsGetProfileTokenStatsInput,
+  StatsGetProfileTokenStatsResult,
+} from "./stats";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -486,6 +492,12 @@ export interface NativeApi {
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
+  };
+  stats: {
+    getProfileStats: (input: StatsGetProfileStatsInput) => Promise<StatsGetProfileStatsResult>;
+    getProfileTokenStats: (
+      input: StatsGetProfileTokenStatsInput,
+    ) => Promise<StatsGetProfileTokenStatsResult>;
   };
   provider: {
     getComposerCapabilities: (

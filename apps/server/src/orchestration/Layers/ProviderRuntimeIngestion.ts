@@ -12,6 +12,7 @@ import {
   TurnId,
   type OrchestrationThreadActivity,
   type OrchestrationThread,
+  type OrchestrationThreadShell,
   type ProviderRuntimeEvent,
   type RuntimeMode,
 } from "@t3tools/contracts";
@@ -88,8 +89,62 @@ type ActivityPayload = OrchestrationThreadActivity["payload"];
 type ProviderDiffPlaceholder = {
   readonly checkpointRef: CheckpointRef;
   readonly checkpointTurnCount: number;
-  readonly files: Readonly<ReturnType<typeof parseCheckpointFilesFromUnifiedDiff>>;
+  // Immutable snapshot of the turn's diff files. Stored values are only ever read
+  // (forwarded to dispatch / re-stored), never mutated in place, so this is a
+  // ReadonlyArray — which also lets it accept the readonly `checkpoint.files` from
+  // an OrchestrationThread without a defensive copy.
+  readonly files: ReadonlyArray<ReturnType<typeof parseCheckpointFilesFromUnifiedDiff>[number]>;
 };
+
+/**
+ * Promote a cheap thread *shell* into a full {@link OrchestrationThread} by
+ * filling the heavy arrays with empties. Only valid for events that do not read
+ * those arrays (see {@link eventNeedsHeavyThreadDetail}); the empties are never
+ * observed on those code paths.
+ */
+function threadDetailFromShell(shell: OrchestrationThreadShell): OrchestrationThread {
+  return {
+    ...shell,
+    deletedAt: null,
+    messages: [],
+    proposedPlans: [],
+    activities: [],
+    checkpoints: [],
+  };
+}
+
+/**
+ * PERF: ingesting one runtime event used to load the full thread detail, which
+ * decodes every message's text. For a long turn that streams a large output
+ * (tens of thousands of deltas over a growing transcript) this is quadratic, so
+ * the live transcript — and crucially the `turn.completed` event — fall minutes
+ * behind the provider even though the turn already finished.
+ *
+ * The overwhelming majority of events (assistant deltas, tool-call lifecycle,
+ * message parts) only ever read thread *shell* fields. Only the handlers for the
+ * event types below read the heavy arrays (`thread.messages` /
+ * `thread.proposedPlans` / `thread.checkpoints`), so only those pay for the full
+ * detail; everything else uses the cheap shell.
+ */
+function eventNeedsHeavyThreadDetail(event: ProviderRuntimeEvent): boolean {
+  switch (event.type) {
+    case "turn.proposed.completed":
+    case "turn.completed":
+    case "turn.aborted":
+    case "turn.diff.updated":
+      return true;
+    case "item.completed":
+      // assistant_message completion reads thread.messages to decide whether to
+      // apply fallback completion text; image_generation completion scans
+      // thread.messages to attach the generated-image reference.
+      return (
+        event.payload.itemType === "assistant_message" ||
+        generatedImagePathFromRuntimeEvent(event) !== undefined
+      );
+    default:
+      return false;
+  }
+}
 
 function parseProviderTurnDiffFiles(unifiedDiff: string) {
   try {
@@ -1172,6 +1227,20 @@ const make = Effect.gen(function* () {
     );
   });
 
+  // PERF: cheap counterpart to getThreadDetail for events that never read the
+  // heavy thread arrays. Loads only the shell projection and promotes it with
+  // empty arrays. See eventNeedsHeavyThreadDetail.
+  const getThreadShellDetail = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+  ): Effect.fn.Return<OrchestrationThread | undefined> {
+    const shell = Option.getOrUndefined(
+      yield* projectionSnapshotQuery
+        .getThreadShellById(threadId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+    );
+    return shell ? threadDetailFromShell(shell) : undefined;
+  });
+
   const getProjectShell = Effect.fnUntraced(function* (
     thread: Pick<OrchestrationThread, "projectId">,
   ): Effect.fn.Return<OrchestrationProjectShell | undefined> {
@@ -1773,7 +1842,14 @@ const make = Effect.gen(function* () {
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
       const now = event.createdAt;
-      const parentThread = yield* getThreadDetail(event.threadId);
+      // Load the full (heavy) detail only when this event's handlers actually read
+      // thread.messages / proposedPlans / checkpoints; otherwise use the cheap
+      // shell so high-frequency streaming events don't re-decode the whole
+      // transcript. See eventNeedsHeavyThreadDetail for the safety rationale.
+      const needsHeavyThreadDetail = eventNeedsHeavyThreadDetail(event);
+      const parentThread = needsHeavyThreadDetail
+        ? yield* getThreadDetail(event.threadId)
+        : yield* getThreadShellDetail(event.threadId);
       if (!parentThread) return;
 
       const ensureSubagentThread = (
@@ -1787,7 +1863,14 @@ const make = Effect.gen(function* () {
           const childThreadId = subagentThreadId(parentThread.id, providerThreadId);
           // A single provider event can describe the child both as a collab receiver and
           // as the event's provider thread, so re-read after any earlier dispatch in this handler.
-          const existingThread = yield* projectionSnapshotQuery.getThreadDetailById(childThreadId);
+          // Mirror the parent load: only this event's heavy-detail handlers read the
+          // child's message/plan/checkpoint arrays, so otherwise use the cheap shell.
+          const existingThread = needsHeavyThreadDetail
+            ? yield* projectionSnapshotQuery.getThreadDetailById(childThreadId)
+            : Option.map(
+                yield* projectionSnapshotQuery.getThreadShellById(childThreadId),
+                threadDetailFromShell,
+              );
           const resolvedModelSelection =
             identity?.model && identity.modelIsRequestedHint !== true
               ? {

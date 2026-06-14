@@ -31,6 +31,7 @@ import {
   resolveTailUserMessageEditTarget,
 } from "@t3tools/shared/conversationEdit";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
+import { buildStalePendingRequestFailureDetail } from "@t3tools/shared/threadSummary";
 import { resolveThreadWorkspaceState } from "@t3tools/shared/threadEnvironment";
 
 import {
@@ -219,13 +220,6 @@ function isRollbackStillInProgressError(error: unknown): boolean {
       normalized.includes("turn in progress") ||
       normalized.includes("active turn"))
   );
-}
-
-function stalePendingRequestDetail(
-  requestKind: "approval" | "user-input",
-  requestId: string,
-): string {
-  return `Stale pending ${requestKind} request: ${requestId}. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.`;
 }
 
 function buildGeneratedWorktreeBranchName(raw: string): string {
@@ -1615,7 +1609,7 @@ const make = Effect.gen(function* () {
               kind: "provider.approval.respond.failed",
               summary: "Provider approval response failed",
               detail: isUnknownPendingApprovalRequestError(cause)
-                ? stalePendingRequestDetail("approval", event.payload.requestId)
+                ? buildStalePendingRequestFailureDetail("approval", event.payload.requestId)
                 : Cause.pretty(cause),
               turnId: null,
               createdAt: event.payload.createdAt,
@@ -1662,7 +1656,7 @@ const make = Effect.gen(function* () {
             kind: "provider.user-input.respond.failed",
             summary: "Provider user input response failed",
             detail: isUnknownPendingUserInputRequestError(cause)
-              ? stalePendingRequestDetail("user-input", event.payload.requestId)
+              ? buildStalePendingRequestFailureDetail("user-input", event.payload.requestId)
               : Cause.pretty(cause),
             turnId: null,
             createdAt: event.payload.createdAt,

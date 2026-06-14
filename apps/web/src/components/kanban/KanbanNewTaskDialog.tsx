@@ -121,6 +121,7 @@ export function KanbanNewTaskDialog({
     prompt,
     composerImages,
     composerAssistantSelections,
+    composerFileComments,
     composerTerminalContexts,
     composerSkills,
     composerMentions,
@@ -133,6 +134,7 @@ export function KanbanNewTaskDialog({
     addComposerImages,
     removeComposerImage,
     clearComposerAssistantSelections,
+    clearComposerFileComments,
     removeComposerTerminalContext,
   } = useKanbanTaskScratchDraft({ defaultProvider: settings.defaultProvider });
   const promptRef = useRef(prompt);
@@ -190,6 +192,7 @@ export function KanbanNewTaskDialog({
     trimmedPrompt.length > 0 ||
     composerImages.length > 0 ||
     composerAssistantSelections.length > 0 ||
+    composerFileComments.length > 0 ||
     composerTerminalContexts.some((context) => context.text.trim().length > 0);
   const taskPreview = buildKanbanTaskPreview({
     trimmedPrompt,
@@ -419,10 +422,12 @@ export function KanbanNewTaskDialog({
             ) : null}
             <ComposerReferenceAttachments
               assistantSelections={composerAssistantSelections}
+              fileComments={composerFileComments}
               images={composerImages}
               nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
               onExpandImage={setExpandedImage}
               onRemoveAssistantSelections={clearComposerAssistantSelections}
+              onRemoveFileComments={clearComposerFileComments}
               onRemoveImage={removeComposerImage}
             />
             <ComposerPromptEditor

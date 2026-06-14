@@ -15,8 +15,11 @@ import { ServerConfig } from "./config";
 import { patchBunWebSocketCloseEventCompatibility } from "./bunWebSocketCompatibility";
 import { makeEffectHttpRouteLayer } from "./http";
 import { Keybindings } from "./keybindings";
+import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
+import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
+import { reconcileRestartStuckTurns } from "./orchestration/startupTurnReconciliation";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
@@ -34,7 +37,9 @@ export interface ServerShape {
     | Path.Path
     | Keybindings
     | ServerLifecycleEvents
+    | OrchestrationEngineService
     | OrchestrationReactor
+    | ProjectionSnapshotQuery
     | ProviderSessionReaper
     | ServerRuntimeStartup
     | ServerSettingsService
@@ -121,6 +126,10 @@ export const createEffectServer = Effect.fn(function* () {
   yield* Scope.provide(providerSessionReaper.start(), subscriptionsScope);
   yield* readiness.markOrchestrationSubscriptionsReady;
   yield* readiness.markTerminalSubscriptionsReady;
+  // Heal turns orphaned by the previous process exit (their in-memory runtimes
+  // died, so they can never complete on their own) before clients can observe
+  // the stale "Working" state.
+  yield* reconcileRestartStuckTurns;
   yield* runtimeStartup.markCommandReady;
 
   yield* lifecycleEvents.publish({

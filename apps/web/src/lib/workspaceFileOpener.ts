@@ -127,6 +127,14 @@ export function prefetchWorkspaceFile(
   if (isSupportedLocalPreviewFilePath(relativePath)) {
     return;
   }
+  // Bare filenames (no directory) usually do not exist at the workspace root and
+  // make the read RPC fall back to a tracked-index lookup, which can build the
+  // workspace index. Skip warming those on hover so a pointer sweep over many
+  // such references never triggers repeated index builds; the click-to-open
+  // path still resolves them on demand.
+  if (!relativePath.includes("/")) {
+    return;
+  }
   void queryClient.prefetchQuery(projectReadFileQueryOptions({ cwd: workspaceRoot, relativePath }));
   void import("./syntaxHighlighting")
     .then((module) =>

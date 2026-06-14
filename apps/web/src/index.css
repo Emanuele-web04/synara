@@ -1086,6 +1086,116 @@ label:has(> select#reasoning-effort) select {
   user-select: none;
 }
 
+/* Inline file-comment affordances (hover "+" gutter button, selected-line
+   highlight band, anchored comment box) are positioned as absolute children of
+   the scroll container, so it must establish the positioning context. They live
+   in content space and therefore scroll with the lines. */
+.editor-file-viewer {
+  position: relative;
+}
+
+/* Hover affordance painted over the line-number gutter: an opaque surface strip
+   (so it masks the number) holding a "+" chip, so the row reads as offering a
+   comment instead of showing its number. Width tracks the 4ch number column. */
+.editor-file-viewer__comment-add {
+  position: absolute;
+  left: 0;
+  z-index: 2;
+  display: flex;
+  width: 4ch;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: var(--color-background-surface);
+  cursor: pointer;
+}
+
+.editor-file-viewer__comment-add-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 0.3125rem;
+  background: var(--color-background-button-secondary);
+  color: color-mix(in srgb, var(--color-text-foreground) 70%, transparent);
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.editor-file-viewer__comment-add:hover .editor-file-viewer__comment-add-glyph {
+  background: var(--color-text-accent);
+  color: var(--color-white, #fff);
+}
+
+/* Blue band over the line a comment box is open against (covers gutter + text);
+   translucent + non-interactive so the code stays readable and selectable. */
+.editor-file-viewer__comment-line-highlight {
+  position: absolute;
+  left: 0;
+  z-index: 1;
+  width: 100%;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--color-text-accent) 14%, transparent);
+  box-shadow: inset 2px 0 0 0 var(--color-text-accent);
+}
+
+.editor-file-viewer__comment-box {
+  position: absolute;
+  z-index: 3;
+  margin-top: 0.3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent);
+  border-radius: 0.875rem;
+  background: var(--color-background-elevated-primary-opaque);
+  /* The box lives inside the file viewer, which sets the monospace code font on
+     its content; reset to the normal UI font so the comment chrome reads as app
+     UI, not code. Cascades to the header, textarea, and buttons. */
+  font-family: var(--font-ui-family);
+  box-shadow:
+    0 12px 34px -16px color-mix(in srgb, var(--color-black, #000) 30%, transparent),
+    0 1px 4px -2px color-mix(in srgb, var(--color-black, #000) 16%, transparent);
+}
+
+/* Rounded chip holding the Synara mark in the box header, echoing the source
+   file's row gutter badge so the comment reads as "from Synara". */
+.editor-file-viewer__comment-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 0.4375rem;
+  border: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
+  background: var(--color-background-surface);
+}
+
+/* Borderless request field: it blends into the card so the box reads as one
+   surface (matching Codex's local-comment editor) rather than an input-in-a-box. */
+.editor-file-viewer__comment-input {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  /* Override the global `textarea { font-family: mono }` reset — this field is
+     UI chrome, not code, so it must use the normal UI font. */
+  font-family: var(--font-ui-family);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-foreground);
+  outline: none;
+  resize: none;
+}
+
+.editor-file-viewer__comment-input::placeholder {
+  color: color-mix(in srgb, var(--color-text-foreground) 40%, transparent);
+}
+
 .editor-file-viewer--markdown-preview {
   background: color-mix(in srgb, var(--background) 96%, var(--card));
 }

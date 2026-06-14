@@ -3338,6 +3338,50 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         },
       );
 
+      const collectKnownMessageIds = (context: OpenCodeSessionContext): Set<string> =>
+        new Set(context.messageRoleById.keys());
+
+      const captureTurnSnapshotWatchdogBaseline = Effect.fn("captureTurnSnapshotWatchdogBaseline")(
+        function* (context: OpenCodeSessionContext) {
+          const knownMessageIds = collectKnownMessageIds(context);
+          const snapshotsExit = yield* Effect.exit(rememberCurrentMessageSnapshots(context));
+          if (Exit.isSuccess(snapshotsExit)) {
+            // Preserve already observed ids even if OpenCode returns a partial message list.
+            for (const messageId of snapshotsExit.value) {
+              knownMessageIds.add(messageId);
+            }
+            return {
+              canStartWatchdog: true,
+              messageIds: knownMessageIds,
+            } as const;
+          }
+
+          if (knownMessageIds.size > 0) {
+            return {
+              canStartWatchdog: true,
+              messageIds: knownMessageIds,
+            } as const;
+          }
+
+          // Without a pre-turn or remembered baseline, old completed assistant messages
+          // are indistinguishable from this turn's final response.
+          yield* writeNativeEventBestEffort(context.session.threadId, {
+            observedAt: nowIso(),
+            event: {
+              provider,
+              threadId: context.session.threadId,
+              providerThreadId: context.openCodeSessionId,
+              type: "turn.snapshot-watchdog.disabled",
+              detail: openCodeRuntimeErrorDetail(Cause.squash(snapshotsExit.cause)),
+            },
+          });
+          return {
+            canStartWatchdog: false,
+            messageIds: knownMessageIds,
+          } as const;
+        },
+      );
+
       const replayOpenCodeMessageSnapshots = Effect.fn("replayOpenCodeMessageSnapshots")(function* (
         context: OpenCodeSessionContext,
         snapshots: ReadonlyArray<OpenCodeMessageSnapshot>,
@@ -3375,27 +3419,28 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         }
       });
 
-      const startKiloTurnSnapshotWatchdog = Effect.fn("startKiloTurnSnapshotWatchdog")(function* (
+      // Completion backstop for OpenCode-family providers: the SSE stream can drop or
+      // delay the terminal `session.idle` event (child-session gating, reconnects,
+      // provider-specific final-message shapes), which leaves a turn stuck in
+      // "working" even though the provider already finished. This independent fiber
+      // polls session status and, once the session looks idle with a fresh final
+      // assistant message, synthesizes the idle event so the turn completes.
+      //
+      // `pollMessagesWhileBusy` trades load for liveness: Kilo pulls the full message
+      // list every tick to also act as a live transcript catch-up; plain OpenCode
+      // keeps it cheap by only pulling messages once the session is no longer busy
+      // (fetching a large transcript every 500ms would be wasteful on big turns).
+      const startTurnSnapshotWatchdog = Effect.fn("startTurnSnapshotWatchdog")(function* (
         context: OpenCodeSessionContext,
         turnId: TurnId,
         baselineMessageIds: ReadonlySet<string>,
+        options: { readonly pollMessagesWhileBusy: boolean },
       ) {
         yield* Effect.gen(function* () {
           let idlePollsWithFinalMessage = 0;
 
           while (!(yield* Ref.get(context.stopped)) && context.activeTurnId === turnId) {
             yield* Effect.sleep(500);
-
-            const snapshotsExit = yield* Effect.exit(loadCurrentMessageSnapshots(context));
-            let hasFinalAssistantMessage = false;
-            if (Exit.isSuccess(snapshotsExit)) {
-              yield* replayOpenCodeMessageSnapshots(context, snapshotsExit.value, turnId);
-              hasFinalAssistantMessage = snapshotsExit.value.some(
-                (snapshot) =>
-                  !baselineMessageIds.has(snapshot.info.id) &&
-                  isFinalAssistantMessageSnapshot(snapshot),
-              );
-            }
 
             const statusExit = yield* Effect.exit(
               runOpenCodeSdk("session.status", () =>
@@ -3404,13 +3449,26 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 }),
               ),
             );
-            if (!Exit.isSuccess(statusExit)) {
-              idlePollsWithFinalMessage = 0;
-              continue;
+            const statusKnown = Exit.isSuccess(statusExit);
+            const status = statusKnown
+              ? statusExit.value.data?.[context.openCodeSessionId]
+              : undefined;
+            const sessionBusy = status?.type === "busy" || status?.type === "retry";
+
+            let hasFinalAssistantMessage = false;
+            if (options.pollMessagesWhileBusy || (statusKnown && !sessionBusy)) {
+              const snapshotsExit = yield* Effect.exit(loadCurrentMessageSnapshots(context));
+              if (Exit.isSuccess(snapshotsExit)) {
+                yield* replayOpenCodeMessageSnapshots(context, snapshotsExit.value, turnId);
+                hasFinalAssistantMessage = snapshotsExit.value.some(
+                  (snapshot) =>
+                    !baselineMessageIds.has(snapshot.info.id) &&
+                    isFinalAssistantMessageSnapshot(snapshot),
+                );
+              }
             }
 
-            const status = statusExit.value.data?.[context.openCodeSessionId];
-            if (status?.type === "busy" || status?.type === "retry") {
+            if (!statusKnown || sessionBusy) {
               idlePollsWithFinalMessage = 0;
               continue;
             }
@@ -3776,9 +3834,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         });
 
         if (provider === "kilo") {
-          const baselineMessageIds = yield* rememberCurrentMessageSnapshots(context).pipe(
-            Effect.catchCause(() => Effect.succeed(new Set<string>())),
-          );
+          const snapshotWatchdogBaseline = yield* captureTurnSnapshotWatchdogBaseline(context);
           const recoveryBaselineMessageIds = yield* captureOpenCodeRecoveryBaseline(context);
           const providerActivitySerial = context.activeTurnProviderActivitySerial;
           yield* schedulePromptAcceptedWatchdog(context, {
@@ -3798,8 +3854,15 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
             },
           });
-          yield* startKiloTurnSnapshotWatchdog(context, turnId, baselineMessageIds);
+          if (snapshotWatchdogBaseline.canStartWatchdog) {
+            yield* startTurnSnapshotWatchdog(context, turnId, snapshotWatchdogBaseline.messageIds, {
+              pollMessagesWhileBusy: true,
+            });
+          }
         } else {
+          // Capture the pre-turn message ids before submitting so the watchdog can
+          // distinguish this turn's final assistant message from prior ones.
+          const snapshotWatchdogBaseline = yield* captureTurnSnapshotWatchdogBaseline(context);
           yield* submitOpenCodePromptAsync(context, {
             turnId,
             promptInput: {
@@ -3810,6 +3873,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
             },
           });
+          // OpenCode lacks Kilo's prompt-accepted hard-fail watchdog, but it still
+          // needs a completion backstop for dropped/delayed idle events. Keep the
+          // poll cheap (status-first) so large turns are not penalized.
+          if (snapshotWatchdogBaseline.canStartWatchdog) {
+            yield* startTurnSnapshotWatchdog(context, turnId, snapshotWatchdogBaseline.messageIds, {
+              pollMessagesWhileBusy: false,
+            });
+          }
         }
 
         return {

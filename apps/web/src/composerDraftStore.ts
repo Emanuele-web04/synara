@@ -49,6 +49,11 @@ import {
   ensureInlineTerminalContextPlaceholders,
   normalizeTerminalContextText,
 } from "./lib/terminalContext";
+import {
+  type FileCommentDraft,
+  type FileCommentSelection,
+  normalizeFileCommentSelection,
+} from "./lib/fileComments";
 import { normalizeAssistantSelectionAttachment } from "./lib/assistantSelections";
 import { cloneComposerImageAttachment } from "./lib/composerSend";
 import { buildModelSelection } from "./providerModelOptions";
@@ -114,6 +119,7 @@ export interface QueuedComposerChatTurn {
   images: ComposerImageAttachment[];
   assistantSelections: ComposerAssistantSelectionAttachment[];
   terminalContexts: TerminalContextDraft[];
+  fileComments: FileCommentDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
   selectedProvider: ProviderKind;
@@ -166,6 +172,17 @@ const PersistedQueuedTerminalContextDraft = Schema.Struct({
 });
 type PersistedQueuedTerminalContextDraft = typeof PersistedQueuedTerminalContextDraft.Type;
 
+// File comments always carry their authored text (no live source to re-derive
+// from), so a single schema covers both live drafts and queued turns.
+const PersistedFileCommentDraft = Schema.Struct({
+  id: Schema.String,
+  path: Schema.String,
+  startLine: Schema.Number,
+  endLine: Schema.Number,
+  text: Schema.String,
+});
+type PersistedFileCommentDraft = typeof PersistedFileCommentDraft.Type;
+
 const PersistedQueuedComposerChatTurn = Schema.Struct({
   id: Schema.String,
   kind: Schema.Literal("chat"),
@@ -183,6 +200,7 @@ const PersistedQueuedComposerChatTurn = Schema.Struct({
     ),
   ),
   terminalContexts: Schema.Array(PersistedQueuedTerminalContextDraft),
+  fileComments: Schema.optionalKey(Schema.Array(PersistedFileCommentDraft)),
   skills: Schema.Array(ProviderSkillReference),
   mentions: Schema.Array(ProviderMentionReference),
   selectedProvider: ProviderKind,
@@ -231,6 +249,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
     ),
   ),
   terminalContexts: Schema.optionalKey(Schema.Array(PersistedTerminalContextDraft)),
+  fileComments: Schema.optionalKey(Schema.Array(PersistedFileCommentDraft)),
   skills: Schema.optionalKey(Schema.Array(ProviderSkillReference)),
   mentions: Schema.optionalKey(Schema.Array(ProviderMentionReference)),
   queuedTurns: Schema.optionalKey(Schema.Array(PersistedQueuedComposerTurn)),
@@ -321,6 +340,7 @@ export interface ComposerThreadDraftState {
   persistedAttachments: PersistedComposerImageAttachment[];
   assistantSelections: ComposerAssistantSelectionAttachment[];
   terminalContexts: TerminalContextDraft[];
+  fileComments: FileCommentDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
   queuedTurns: QueuedComposerTurn[];
@@ -454,6 +474,9 @@ export interface ComposerDraftStoreState {
   ) => boolean;
   removeAssistantSelection: (threadId: ThreadId, selectionId: string) => void;
   clearAssistantSelections: (threadId: ThreadId) => void;
+  addFileComment: (threadId: ThreadId, comment: FileCommentDraft) => boolean;
+  removeFileComment: (threadId: ThreadId, commentId: string) => void;
+  clearFileComments: (threadId: ThreadId) => void;
   insertTerminalContext: (
     threadId: ThreadId,
     prompt: string,
@@ -578,6 +601,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   persistedAttachments: EMPTY_PERSISTED_ATTACHMENTS,
   assistantSelections: [],
   terminalContexts: EMPTY_TERMINAL_CONTEXTS,
+  fileComments: [],
   skills: EMPTY_SKILLS,
   mentions: EMPTY_MENTIONS,
   queuedTurns: EMPTY_QUEUED_TURNS,
@@ -595,6 +619,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     persistedAttachments: [],
     assistantSelections: [],
     terminalContexts: [],
+    fileComments: [],
     skills: [],
     mentions: [],
     queuedTurns: [],
@@ -662,6 +687,43 @@ function normalizeAssistantSelections(
   return normalizedSelections;
 }
 
+function fileCommentDedupKey(comment: FileCommentSelection): string {
+  return JSON.stringify([comment.path, comment.startLine, comment.endLine, comment.text]);
+}
+
+function normalizeFileComment(comment: FileCommentDraft): FileCommentDraft | null {
+  const normalized = normalizeFileCommentSelection(comment);
+  if (!normalized) {
+    return null;
+  }
+  return {
+    id: comment.id,
+    ...normalized,
+  };
+}
+
+function normalizeFileComments(comments: ReadonlyArray<FileCommentDraft>): FileCommentDraft[] {
+  const normalizedComments: FileCommentDraft[] = [];
+  const existingIds = new Set<string>();
+  const existingDedupKeys = new Set<string>();
+
+  for (const comment of comments) {
+    const normalizedComment = normalizeFileComment(comment);
+    if (!normalizedComment) {
+      continue;
+    }
+    const dedupKey = fileCommentDedupKey(normalizedComment);
+    if (existingIds.has(normalizedComment.id) || existingDedupKeys.has(dedupKey)) {
+      continue;
+    }
+    normalizedComments.push(normalizedComment);
+    existingIds.add(normalizedComment.id);
+    existingDedupKeys.add(dedupKey);
+  }
+
+  return normalizedComments;
+}
+
 function normalizeTerminalContextForThread(
   threadId: ThreadId,
   context: TerminalContextDraft,
@@ -727,6 +789,7 @@ function buildTransferredComposerDraft(input: {
       targetThreadId,
       sourceDraft.terminalContexts,
     ),
+    fileComments: normalizeFileComments(sourceDraft.fileComments),
     skills: [...sourceDraft.skills],
     mentions: [...sourceDraft.mentions],
   };
@@ -739,6 +802,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.persistedAttachments.length === 0 &&
     draft.assistantSelections.length === 0 &&
     draft.terminalContexts.length === 0 &&
+    draft.fileComments.length === 0 &&
     draft.skills.length === 0 &&
     draft.mentions.length === 0 &&
     draft.queuedTurns.length === 0 &&
@@ -1419,6 +1483,50 @@ function normalizePersistedQueuedTerminalContextDraft(
   };
 }
 
+function normalizePersistedAssistantSelection(
+  value: unknown,
+): { id: string; assistantMessageId: string; text: string } | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  const id = typeof candidate.id === "string" ? candidate.id : "";
+  const assistantMessageId =
+    typeof candidate.assistantMessageId === "string" ? candidate.assistantMessageId : "";
+  const text = typeof candidate.text === "string" ? candidate.text : "";
+  if (id.length === 0) {
+    return null;
+  }
+  const normalized = normalizeAssistantSelectionAttachment({ assistantMessageId, text });
+  if (!normalized) {
+    return null;
+  }
+  return { id, assistantMessageId: normalized.assistantMessageId, text: normalized.text };
+}
+
+function normalizePersistedFileCommentDraft(value: unknown): PersistedFileCommentDraft | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  const id = typeof candidate.id === "string" ? candidate.id : "";
+  if (id.length === 0) {
+    return null;
+  }
+  const path = typeof candidate.path === "string" ? candidate.path : "";
+  const text = typeof candidate.text === "string" ? candidate.text : "";
+  const startLine = typeof candidate.startLine === "number" ? candidate.startLine : Number.NaN;
+  const endLine = typeof candidate.endLine === "number" ? candidate.endLine : Number.NaN;
+  if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) {
+    return null;
+  }
+  const normalized = normalizeFileCommentSelection({ path, startLine, endLine, text });
+  if (!normalized) {
+    return null;
+  }
+  return { id, ...normalized };
+}
+
 function persistImageAttachmentFromDataUrl(input: {
   id: string;
   name: string;
@@ -1514,6 +1622,18 @@ function normalizePersistedQueuedTurns(
             return normalized ? [normalized] : [];
           })
         : [];
+      const assistantSelections = Array.isArray(candidate.assistantSelections)
+        ? candidate.assistantSelections.flatMap((selection) => {
+            const normalized = normalizePersistedAssistantSelection(selection);
+            return normalized ? [normalized] : [];
+          })
+        : [];
+      const fileComments = Array.isArray(candidate.fileComments)
+        ? candidate.fileComments.flatMap((comment) => {
+            const normalized = normalizePersistedFileCommentDraft(comment);
+            return normalized ? [normalized] : [];
+          })
+        : [];
       const skills = Array.isArray(candidate.skills)
         ? candidate.skills.filter(Schema.is(ProviderSkillReference))
         : [];
@@ -1538,7 +1658,9 @@ function normalizePersistedQueuedTurns(
         previewText,
         prompt,
         images,
+        ...(assistantSelections.length > 0 ? { assistantSelections } : {}),
         terminalContexts,
+        ...(fileComments.length > 0 ? { fileComments } : {}),
         skills: [...skills],
         mentions: [...mentions],
         selectedProvider,
@@ -1745,6 +1867,18 @@ function normalizePersistedDraftsByThreadId(
           return normalized ? [normalized] : [];
         })
       : [];
+    const assistantSelections = Array.isArray(draftCandidate.assistantSelections)
+      ? draftCandidate.assistantSelections.flatMap((entry) => {
+          const normalized = normalizePersistedAssistantSelection(entry);
+          return normalized ? [normalized] : [];
+        })
+      : [];
+    const fileComments = Array.isArray(draftCandidate.fileComments)
+      ? draftCandidate.fileComments.flatMap((entry) => {
+          const normalized = normalizePersistedFileCommentDraft(entry);
+          return normalized ? [normalized] : [];
+        })
+      : [];
     const skills = Array.isArray(draftCandidate.skills)
       ? draftCandidate.skills.filter(Schema.is(ProviderSkillReference))
       : [];
@@ -1820,6 +1954,8 @@ function normalizePersistedDraftsByThreadId(
       promptCandidate.length === 0 &&
       attachments.length === 0 &&
       terminalContexts.length === 0 &&
+      assistantSelections.length === 0 &&
+      fileComments.length === 0 &&
       !hasReferenceData &&
       !hasQueuedTurns &&
       !hasModelData &&
@@ -1831,7 +1967,9 @@ function normalizePersistedDraftsByThreadId(
     nextDraftsByThreadId[threadId as ThreadId] = {
       prompt,
       attachments,
+      ...(assistantSelections.length > 0 ? { assistantSelections } : {}),
       ...(terminalContexts.length > 0 ? { terminalContexts } : {}),
+      ...(fileComments.length > 0 ? { fileComments } : {}),
       ...(skills.length > 0 ? { skills } : {}),
       ...(mentions.length > 0 ? { mentions } : {}),
       ...(hasQueuedTurns ? { queuedTurns: normalizedQueuedTurns } : {}),
@@ -1929,6 +2067,17 @@ function partializeComposerDraftStoreState(
             lineEnd: context.lineEnd,
             text: context.text,
           })),
+          ...(queuedTurn.fileComments.length > 0
+            ? {
+                fileComments: queuedTurn.fileComments.map((comment) => ({
+                  id: comment.id,
+                  path: comment.path,
+                  startLine: comment.startLine,
+                  endLine: comment.endLine,
+                  text: comment.text,
+                })),
+              }
+            : {}),
           skills: [...queuedTurn.skills],
           mentions: [...queuedTurn.mentions],
           selectedProvider: queuedTurn.selectedProvider,
@@ -1970,6 +2119,7 @@ function partializeComposerDraftStoreState(
       draft.persistedAttachments.length === 0 &&
       draft.assistantSelections.length === 0 &&
       draft.terminalContexts.length === 0 &&
+      draft.fileComments.length === 0 &&
       !hasReferenceData &&
       !hasQueuedTurns &&
       !hasModelData &&
@@ -2000,6 +2150,17 @@ function partializeComposerDraftStoreState(
               terminalLabel: context.terminalLabel,
               lineStart: context.lineStart,
               lineEnd: context.lineEnd,
+            })),
+          }
+        : {}),
+      ...(draft.fileComments.length > 0
+        ? {
+            fileComments: draft.fileComments.map((comment) => ({
+              id: comment.id,
+              path: comment.path,
+              startLine: comment.startLine,
+              endLine: comment.endLine,
+              text: comment.text,
             })),
           }
         : {}),
@@ -2221,6 +2382,7 @@ function hydrateQueuedTurnsFromPersisted(
         images: hydrateImagesFromPersisted(queuedTurn.images),
         assistantSelections: normalizeAssistantSelections(queuedTurn.assistantSelections ?? []),
         terminalContexts: normalizeTerminalContextsForThread(threadId, queuedTurn.terminalContexts),
+        fileComments: normalizeFileComments(queuedTurn.fileComments ?? []),
         skills: [...queuedTurn.skills],
         mentions: [...queuedTurn.mentions],
       };
@@ -2249,6 +2411,7 @@ function toHydratedThreadDraft(
         ...context,
         text: "",
       })) ?? [],
+    fileComments: normalizeFileComments(persistedDraft.fileComments ?? []),
     skills: [...(persistedDraft.skills ?? [])],
     mentions: [...(persistedDraft.mentions ?? [])],
     queuedTurns: hydrateQueuedTurnsFromPersisted(threadId, persistedDraft.queuedTurns),
@@ -3297,6 +3460,81 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           return { draftsByThreadId: nextDraftsByThreadId };
         });
       },
+      addFileComment: (threadId, comment) => {
+        if (threadId.length === 0) {
+          return false;
+        }
+        let inserted = false;
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+          const normalizedComment = normalizeFileComment(comment);
+          if (!normalizedComment) {
+            return state;
+          }
+          const dedupKey = fileCommentDedupKey(normalizedComment);
+          if (
+            existing.fileComments.some((entry) => entry.id === normalizedComment.id) ||
+            existing.fileComments.some((entry) => fileCommentDedupKey(entry) === dedupKey)
+          ) {
+            return state;
+          }
+          inserted = true;
+          return {
+            draftsByThreadId: {
+              ...state.draftsByThreadId,
+              [threadId]: {
+                ...existing,
+                fileComments: [...existing.fileComments, normalizedComment],
+              },
+            },
+          };
+        });
+        return inserted;
+      },
+      removeFileComment: (threadId, commentId) => {
+        if (threadId.length === 0 || commentId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const current = state.draftsByThreadId[threadId];
+          if (!current) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...current,
+            fileComments: current.fileComments.filter((comment) => comment.id !== commentId),
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
+      clearFileComments: (threadId) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const current = state.draftsByThreadId[threadId];
+          if (!current || current.fileComments.length === 0) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...current,
+            fileComments: [],
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
       insertTerminalContext: (threadId, prompt, context, index) => {
         if (threadId.length === 0) {
           return false;
@@ -3512,6 +3750,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             persistedAttachments: [],
             assistantSelections: [],
             terminalContexts: [],
+            fileComments: [],
             skills: [],
             mentions: [],
           };
