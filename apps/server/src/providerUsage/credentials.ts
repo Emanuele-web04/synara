@@ -22,6 +22,7 @@ export async function readJsonFile(path: string): Promise<unknown | null> {
   try {
     return JSON.parse(await fs.readFile(path, "utf8")) as unknown;
   } catch {
+    console.warn("credentials: failed to read JSON file");
     return null;
   }
 }
@@ -55,6 +56,7 @@ export async function refreshOAuthAccessToken(input: {
       signal: AbortSignal.timeout(input.timeoutMs ?? DEFAULT_OAUTH_REFRESH_TIMEOUT_MS),
     });
   } catch {
+    console.warn("credentials: OAuth token refresh fetch failed");
     return null;
   }
 
@@ -62,6 +64,7 @@ export async function refreshOAuthAccessToken(input: {
   try {
     json = await response.json();
   } catch {
+    console.warn("credentials: failed to parse OAuth token response as JSON");
     json = null;
   }
   if (!response.ok || !json || typeof json !== "object") {
@@ -117,6 +120,7 @@ export async function readKeychainPassword(input: {
     const value = stdout.trim();
     return value.length > 0 ? value : null;
   } catch {
+    console.warn(`credentials: keychain read failed for service=${input.service}`);
     return null;
   }
 }
@@ -145,6 +149,7 @@ export function decodeKeychainJson(value: string): unknown | null {
     try {
       return tryParse(Buffer.from(hex, "hex").toString("utf8"));
     } catch {
+      console.warn("credentials: failed to parse hex-encoded keychain value");
       return null;
     }
   }
@@ -170,6 +175,7 @@ export function decodeJwtExpMs(jwt: string | undefined): number | null {
       ? payload.exp * 1000
       : null;
   } catch {
+    console.warn("credentials: failed to decode JWT exp claim");
     return null;
   }
 }
