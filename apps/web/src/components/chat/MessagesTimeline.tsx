@@ -1424,20 +1424,41 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       {row.kind === "working" && (
         <div
-          className="pt-0.5 text-muted-foreground/70 font-system-ui"
+          className="synara-working-status pt-0.5 text-muted-foreground/70 font-system-ui"
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
           {row.createdAt ? (
-            <>
-              Working for{" "}
-              {nowIso ? (
-                (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
-              ) : (
-                <WorkingTimer createdAt={row.createdAt} />
-              )}
-            </>
+            <span className="synara-working-status__content">
+              <SynaraWorkingLoader />
+              <span className="synara-working-status__text">
+                <span className="synara-working-status__text-base">
+                  Working for{" "}
+                  {nowIso ? (
+                    (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
+                  ) : (
+                    <WorkingTimer createdAt={row.createdAt} />
+                  )}
+                </span>
+                <span className="synara-working-status__text-shimmer" aria-hidden="true">
+                  Working for{" "}
+                  {nowIso ? (
+                    (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
+                  ) : (
+                    <WorkingTimer createdAt={row.createdAt} />
+                  )}
+                </span>
+              </span>
+            </span>
           ) : (
-            "Working..."
+            <span className="synara-working-status__content">
+              <SynaraWorkingLoader />
+              <span className="synara-working-status__text">
+                <span className="synara-working-status__text-base">Working...</span>
+                <span className="synara-working-status__text-shimmer" aria-hidden="true">
+                  Working...
+                </span>
+              </span>
+            </span>
           )}
         </div>
       )}
@@ -1533,6 +1554,21 @@ function WorkingTimer({ createdAt }: { createdAt: string }) {
   }, [createdAt]);
 
   return <span ref={textRef}>{initialText}</span>;
+}
+
+function SynaraWorkingLoader() {
+  return (
+    <span className="synara-working-loader" data-synara-working-loader="true" aria-hidden="true">
+      <svg
+        className="synara-working-loader__mark"
+        viewBox="0 0 24 24"
+        focusable="false"
+        role="presentation"
+      >
+        <path d="M12 4.15 4.9 7.9v4.18l5.34-2.82v9.24h3.52V9.26l5.34 2.82V7.9L12 4.15Z" />
+      </svg>
+    </span>
+  );
 }
 
 function formatWorkingTimer(startIso: string, endIso: string): string | null {
