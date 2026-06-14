@@ -88,7 +88,7 @@ type ActivityPayload = OrchestrationThreadActivity["payload"];
 type ProviderDiffPlaceholder = {
   readonly checkpointRef: CheckpointRef;
   readonly checkpointTurnCount: number;
-  readonly files: ReturnType<typeof parseCheckpointFilesFromUnifiedDiff>;
+  readonly files: Readonly<ReturnType<typeof parseCheckpointFilesFromUnifiedDiff>>;
 };
 
 function parseProviderTurnDiffFiles(unifiedDiff: string) {

@@ -32,7 +32,11 @@ import {
   humanizeSubagentStatus,
   resolveSubagentPresentationForThread,
 } from "../lib/subagentPresentation";
-import { hasLiveTurnTailWork, type WorkLogEntry } from "../session-logic";
+import {
+  hasLiveTurnTailWork,
+  isProviderFileEditWorkLogEntry,
+  type WorkLogEntry,
+} from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
 import type { ProviderModelOption } from "../providerModelOptions";
 
@@ -103,23 +107,62 @@ export function resolveEnvironmentPanelVisible(input: {
 }
 
 export function resolveActiveTurnLiveDiffState(input: {
-  latestTurnId: string | null | undefined;
+  latestTurnId: TurnDiffSummary["turnId"] | null | undefined;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
+  workLogEntries?: ReadonlyArray<
+    Pick<WorkLogEntry, "changedFiles" | "itemType" | "requestKind" | "turnId">
+  >;
 }): {
   turnId: TurnDiffSummary["turnId"] | null;
-  fileCount: number;
+  fileCount: number | null;
   additions: number;
   deletions: number;
+  hasChanges: boolean;
 } {
   const summary = input.latestTurnId
     ? (input.turnDiffSummaries.find((entry) => entry.turnId === input.latestTurnId) ?? null)
     : null;
   const files = summary?.files ?? [];
+  if (summary && files.length > 0) {
+    return {
+      turnId: summary.turnId,
+      fileCount: files.length,
+      additions: files.reduce((total, file) => total + (file.additions ?? 0), 0),
+      deletions: files.reduce((total, file) => total + (file.deletions ?? 0), 0),
+      hasChanges: true,
+    };
+  }
+
+  const workLogFilePaths = new Set<string>();
+  let hasFileEditWork = false;
+  if (input.latestTurnId) {
+    for (const entry of input.workLogEntries ?? []) {
+      if (entry.turnId !== input.latestTurnId || !isProviderFileEditWorkLogEntry(entry)) {
+        continue;
+      }
+      hasFileEditWork = true;
+      for (const filePath of entry.changedFiles ?? []) {
+        workLogFilePaths.add(filePath);
+      }
+    }
+  }
+
+  if (hasFileEditWork && input.latestTurnId) {
+    return {
+      turnId: input.latestTurnId,
+      fileCount: workLogFilePaths.size > 0 ? workLogFilePaths.size : null,
+      additions: 0,
+      deletions: 0,
+      hasChanges: true,
+    };
+  }
+
   return {
-    turnId: summary?.turnId ?? null,
-    fileCount: files.length,
-    additions: files.reduce((total, file) => total + (file.additions ?? 0), 0),
-    deletions: files.reduce((total, file) => total + (file.deletions ?? 0), 0),
+    turnId: null,
+    fileCount: 0,
+    additions: 0,
+    deletions: 0,
+    hasChanges: false,
   };
 }
 

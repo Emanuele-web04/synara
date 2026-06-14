@@ -2871,8 +2871,9 @@ export default function ChatView({
       resolveActiveTurnLiveDiffState({
         latestTurnId: activeLatestTurn?.turnId ?? null,
         turnDiffSummaries,
+        workLogEntries: rawWorkLogEntries,
       }),
-    [activeLatestTurn?.turnId, turnDiffSummaries],
+    [activeLatestTurn?.turnId, rawWorkLogEntries, turnDiffSummaries],
   );
   const splitTerminalShortcutLabel = useMemo(
     () =>
@@ -8091,8 +8092,7 @@ export default function ChatView({
       }
     : null;
 
-  const showComposerLiveChangesHeader =
-    latestTurnLive && activeTurnLiveDiffState.fileCount > 0;
+  const showComposerLiveChangesHeader = latestTurnLive && activeTurnLiveDiffState.hasChanges;
   const showComposerActiveTaskListCard = Boolean(activeTaskList && !planSidebarOpen);
 
   // Composer layout keeps the task list and footer actions in one render path so

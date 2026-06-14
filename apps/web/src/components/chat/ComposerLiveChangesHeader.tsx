@@ -1,5 +1,5 @@
 // FILE: ComposerLiveChangesHeader.tsx
-// Purpose: Live "N files changed +X -Y" strip stacked flush onto the top of the
+// Purpose: Live file-changes strip stacked flush onto the top of the
 // composer while a turn is running, mirroring the queued follow-up header. The
 // caller supplies turn-scoped diff totals and the Review action target.
 // Layer: Chat composer UI
@@ -20,7 +20,7 @@ import { DiffStatLabel } from "./DiffStatLabel";
 import { ReviewChangesButton } from "./ReviewChangesButton";
 
 interface ComposerLiveChangesHeaderProps {
-  fileCount: number;
+  fileCount: number | null;
   additions: number;
   deletions: number;
   onReview: () => void;
@@ -37,15 +37,15 @@ export const ComposerLiveChangesHeader = memo(function ComposerLiveChangesHeader
   if (fileCount === 0) {
     return null;
   }
+  const label =
+    fileCount === null ? "Files changed" : `${fileCount} ${pluralize(fileCount, "file")} changed`;
 
   return (
     <ComposerStackedPanel attachedToPrevious={attachedToPrevious}>
       <ComposerStackedPanelRow>
         <ComposerStackedPanelRowMain>
           <ChangesIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
-          <ComposerStackedPanelRowLabel>
-            {`${fileCount} ${pluralize(fileCount, "file")} changed`}
-          </ComposerStackedPanelRowLabel>
+          <ComposerStackedPanelRowLabel>{label}</ComposerStackedPanelRowLabel>
           {additions + deletions > 0 ? (
             <span className="shrink-0 tabular-nums">
               <DiffStatLabel additions={additions} deletions={deletions} />
