@@ -71,7 +71,7 @@ function ThreadRetentionMaintenanceToast() {
         return;
       }
 
-      const { state, purgedCount, totalCount, freePageCount, error } = event.payload;
+      const { state, deletedCount, totalCount, error } = event.payload;
       const eventMs = Date.parse(event.payload.at);
       const isStaleEvent = Number.isFinite(eventMs)
         ? Date.now() - eventMs > MAINTENANCE_EVENT_STALE_MS
@@ -83,8 +83,8 @@ function ThreadRetentionMaintenanceToast() {
       if (state === "started") {
         toastIdRef.current = toastManager.add({
           type: "loading",
-          title: "Cleaning old chats...",
-          description: "Preparing background cleanup.",
+          title: "Hiding old chats...",
+          description: "Preparing background maintenance.",
           timeout: 0,
           data: { allowCrossThreadVisibility: true },
         });
@@ -96,41 +96,18 @@ function ThreadRetentionMaintenanceToast() {
           toastIdRef.current ??
           toastManager.add({
             type: "loading",
-            title: "Cleaning old chats...",
+            title: "Hiding old chats...",
             timeout: 0,
             data: { allowCrossThreadVisibility: true },
           });
         toastIdRef.current = toastId;
         toastManager.update(toastId, {
           type: "loading",
-          title: "Cleaning old chats...",
+          title: "Hiding old chats...",
           description:
             totalCount && totalCount > 0
-              ? `${purgedCount ?? 0} of ${totalCount} chats removed.`
-              : `${purgedCount ?? 0} chats removed.`,
-          timeout: 0,
-          data: { allowCrossThreadVisibility: true },
-        });
-        return;
-      }
-
-      if (state === "compacting") {
-        const toastId =
-          toastIdRef.current ??
-          toastManager.add({
-            type: "loading",
-            title: "Compacting chat database...",
-            timeout: 0,
-            data: { allowCrossThreadVisibility: true },
-          });
-        toastIdRef.current = toastId;
-        toastManager.update(toastId, {
-          type: "loading",
-          title: "Compacting chat database...",
-          description:
-            freePageCount && freePageCount > 0
-              ? "Reclaiming unused database space."
-              : "Finishing cleanup.",
+              ? `${deletedCount ?? 0} of ${totalCount} chats hidden.`
+              : `${deletedCount ?? 0} chats hidden.`,
           timeout: 0,
           data: { allowCrossThreadVisibility: true },
         });
@@ -143,7 +120,7 @@ function ThreadRetentionMaintenanceToast() {
         if (toastId) {
           toastManager.update(toastId, {
             type: "warning",
-            title: "Cleanup paused",
+          title: "Chat maintenance paused",
             description: error ?? "Old chats will be retried later.",
             timeout: 6000,
             data: { allowCrossThreadVisibility: true },
@@ -152,7 +129,7 @@ function ThreadRetentionMaintenanceToast() {
         }
         toastManager.add({
           type: "warning",
-          title: "Cleanup paused",
+          title: "Chat maintenance paused",
           description: error ?? "Old chats will be retried later.",
           timeout: 6000,
           data: { allowCrossThreadVisibility: true },
@@ -165,11 +142,11 @@ function ThreadRetentionMaintenanceToast() {
       if (!toastId) return;
       toastManager.update(toastId, {
         type: "success",
-        title: "Old chats cleaned",
+        title: "Old chats hidden",
         description:
-          purgedCount && purgedCount > 0
-            ? `${purgedCount} chats removed from the database.`
-            : "No old chats needed cleanup.",
+          deletedCount && deletedCount > 0
+            ? `${deletedCount} old chats hidden from the app.`
+            : "No old chats needed hiding.",
         timeout: 3500,
         data: { allowCrossThreadVisibility: true },
       });

@@ -47,6 +47,7 @@ import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { listProviderUsage } from "./providerUsage";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
+import { ProfileStatsQuery } from "./profileStats";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
@@ -334,6 +335,7 @@ export const makeWsRpcLayer = () =>
       const open = yield* Open;
       const orchestrationEngine = yield* OrchestrationEngineService;
       const path = yield* Path.Path;
+      const profileStatsQuery = yield* ProfileStatsQuery;
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
       const providerDiscoveryService = yield* ProviderDiscoveryService;
@@ -910,6 +912,13 @@ export const makeWsRpcLayer = () =>
           ),
         [WS_METHODS.serverStopLocalServer]: (input) =>
           rpcEffect(stopLocalServerAndTrackedProjectRun(input), "Failed to stop local server"),
+        [WS_METHODS.statsGetProfileStats]: (input) =>
+          rpcEffect(profileStatsQuery.getProfileStats(input), "Failed to load profile stats"),
+        [WS_METHODS.statsGetProfileTokenStats]: (input) =>
+          rpcEffect(
+            profileStatsQuery.getProfileTokenStats(input),
+            "Failed to load profile token stats",
+          ),
         [WS_METHODS.serverGetProviderUsageSnapshot]: (input) =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
         [WS_METHODS.serverListProviderUsage]: (input) =>
