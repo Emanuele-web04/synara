@@ -17,12 +17,10 @@ export interface ServerLifecycleReadyPayload {
 
 export interface ServerLifecycleMaintenancePayload {
   readonly task: "thread-retention";
-  readonly state: "started" | "progress" | "compacting" | "completed" | "failed";
+  readonly state: "started" | "progress" | "completed" | "failed";
   readonly at: string;
   readonly deletedCount?: number;
-  readonly purgedCount?: number;
   readonly totalCount?: number;
-  readonly freePageCount?: number;
   readonly error?: string;
 }
 

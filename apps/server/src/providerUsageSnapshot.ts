@@ -1,6 +1,5 @@
 // FILE: providerUsageSnapshot.ts
-// Purpose: Read provider-specific local usage archives so the UI can show
-// recent usage even when the active thread has no fresh rate-limit events.
+// Purpose: Read provider-specific local usage archives for recent usage snapshots.
 
 import type { Dirent, Stats } from "node:fs";
 import fs from "node:fs/promises";
@@ -25,6 +24,7 @@ const USAGE_CACHE_TTL_MS = 30_000;
 // Keep enough recent archives to make the 30d summary materially different from 7d
 // for heavy local usage without scanning the full historical archive every refresh.
 const MAX_RECENT_USAGE_FILES = 2_000;
+const PROVIDER_USAGE_FILE_READ_CONCURRENCY = 16;
 
 type UsageSnapshot = Exclude<ServerGetProviderUsageSnapshotResult, null>;
 
@@ -100,15 +100,6 @@ function formatRecentSessionsSubtitle(sessionCount: number): string | undefined 
   return `${new Intl.NumberFormat(undefined).format(sessionCount)} recent ${sessionCount === 1 ? "session" : "sessions"}`;
 }
 
-function formatUsageTimestamp(timestampMs: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    month: "short",
-  }).format(timestampMs);
-}
-
 async function safeReadDir(path: string): Promise<ReadonlyArray<Dirent>> {
   try {
     return await fs.readdir(path, { withFileTypes: true });
@@ -125,17 +116,53 @@ async function safeStat(path: string): Promise<Stats | null> {
   }
 }
 
-async function listRecentFiles(paths: ReadonlyArray<string>): Promise<ReadonlyArray<string>> {
-  const filesWithStats = await Promise.all(
-    paths.map(async (path) => ({
+// Bounds archive reads so a cold stats load does useful parallel work without
+// flooding the filesystem with thousands of simultaneous readFile calls.
+async function mapWithConcurrency<T, R>(
+  items: ReadonlyArray<T>,
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: Array<{ index: number; value: R }> = [];
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= items.length) {
+          return;
+        }
+        const item = items[index];
+        if (item === undefined) {
+          continue;
+        }
+        results.push({ index, value: await mapper(item) });
+      }
+    }),
+  );
+
+  return results.toSorted((left, right) => left.index - right.index).map((entry) => entry.value);
+}
+
+async function listRecentFiles(
+  paths: ReadonlyArray<string>,
+  maxFiles: number = MAX_RECENT_USAGE_FILES,
+): Promise<ReadonlyArray<string>> {
+  const filesWithStats = await mapWithConcurrency(
+    paths,
+    PROVIDER_USAGE_FILE_READ_CONCURRENCY,
+    async (path) => ({
       path,
       mtimeMs: (await safeStat(path))?.mtimeMs ?? 0,
-    })),
+    }),
   );
 
   return filesWithStats
-    .sort((left, right) => right.mtimeMs - left.mtimeMs)
-    .slice(0, MAX_RECENT_USAGE_FILES)
+    .toSorted((left, right) => right.mtimeMs - left.mtimeMs)
+    .slice(0, maxFiles)
     .map((entry) => entry.path);
 }
 
@@ -262,10 +289,10 @@ async function readCodexSessionSummary(path: string): Promise<CodexSessionSummar
     return null;
   }
 
-  let latestSummary: CodexSessionSummary | null = null;
   const lines = fileContents.split(/\r?\n/u);
-  for (const line of lines) {
-    if (!line.trim()) {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (!line || !line.trim()) {
       continue;
     }
 
@@ -297,12 +324,12 @@ async function readCodexSessionSummary(path: string): Promise<CodexSessionSummar
       limits: normalizeCodexUsageLimits(payload.rate_limits ?? payload.rateLimits),
     } satisfies CodexSessionSummary;
 
-    if (!latestSummary || summary.timestampMs > latestSummary.timestampMs) {
-      latestSummary = summary;
-    }
+    // Codex session JSONL is chronological; only the final token_count event is
+    // needed for lifetime accounting and the latest quota snapshot per file.
+    return summary;
   }
 
-  return latestSummary;
+  return null;
 }
 
 function readClaudeTotalTokens(value: unknown): number {
@@ -386,8 +413,17 @@ function readClaudeToolResultSample(input: {
   };
 }
 
+// Claude Code stores transcripts under `<CLAUDE_CONFIG_DIR>/projects`, defaulting to
+// `~/.claude/projects`. Honor the override so the Profile reads the SAME transcripts
+// the active Claude provider does (the adapter inherits `process.env`).
+function resolveClaudeProjectsRoot(homeDir: string): string {
+  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
+  return nodePath.join(configDir || nodePath.join(homeDir, ".claude"), "projects");
+}
+
 async function listRecentClaudeTranscriptFiles(
   projectsRoot: string,
+  maxFiles: number = MAX_RECENT_USAGE_FILES,
 ): Promise<ReadonlyArray<string>> {
   const candidates: string[] = [];
   const projectEntries = await safeReadDir(projectsRoot);
@@ -406,7 +442,7 @@ async function listRecentClaudeTranscriptFiles(
     }
   }
 
-  return listRecentFiles(candidates);
+  return listRecentFiles(candidates, maxFiles);
 }
 
 async function readClaudeUsageSamples(path: string): Promise<ReadonlyArray<ClaudeUsageSample>> {
@@ -468,13 +504,13 @@ async function loadCodexUsageSnapshot(input: {
     return null;
   }
 
-  const sessionSummaries: CodexSessionSummary[] = [];
-  for (const sessionFile of sessionFiles) {
-    const summary = await readCodexSessionSummary(sessionFile);
-    if (summary) {
-      sessionSummaries.push(summary);
-    }
-  }
+  const sessionSummaries = (
+    await mapWithConcurrency(
+      sessionFiles,
+      PROVIDER_USAGE_FILE_READ_CONCURRENCY,
+      readCodexSessionSummary,
+    )
+  ).filter((summary): summary is CodexSessionSummary => summary !== null);
 
   if (sessionSummaries.length === 0) {
     return null;
@@ -509,16 +545,19 @@ async function loadCodexUsageSnapshot(input: {
 }
 
 async function loadClaudeUsageSnapshot(input: { homeDir: string }): Promise<UsageSnapshot | null> {
-  const projectsRoot = nodePath.join(input.homeDir, ".claude", "projects");
+  const projectsRoot = resolveClaudeProjectsRoot(input.homeDir);
   const transcriptFiles = await listRecentClaudeTranscriptFiles(projectsRoot);
   if (transcriptFiles.length === 0) {
     return null;
   }
 
-  const usageSamples: ClaudeUsageSample[] = [];
-  for (const transcriptFile of transcriptFiles) {
-    usageSamples.push(...(await readClaudeUsageSamples(transcriptFile)));
-  }
+  const usageSamples = (
+    await mapWithConcurrency(
+      transcriptFiles,
+      PROVIDER_USAGE_FILE_READ_CONCURRENCY,
+      readClaudeUsageSamples,
+    )
+  ).flat();
 
   if (usageSamples.length === 0) {
     return null;
@@ -575,7 +614,7 @@ async function getCachedProviderUsageSnapshot(input: {
   homeDir: string;
   homePath?: string;
 }): Promise<ServerGetProviderUsageSnapshotResult> {
-  const cacheKey = `${input.provider}:${input.homeDir}:${input.homePath?.trim() ?? ""}`;
+  const cacheKey = `${input.provider}:${input.homeDir}:${input.homePath?.trim() ?? ""}:${process.env.CLAUDE_CONFIG_DIR?.trim() ?? ""}`;
   const nowMs = Date.now();
   const existing = usageSnapshotCache.get(cacheKey);
 
