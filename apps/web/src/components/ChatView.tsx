@@ -8148,8 +8148,7 @@ export default function ChatView({
       }
     : null;
 
-  const showComposerLiveChangesHeader =
-    latestTurnLive && activeTurnLiveDiffState.fileCount > 0;
+  const showComposerLiveChangesHeader = latestTurnLive && activeTurnLiveDiffState.fileCount > 0;
   const showComposerActiveTaskListCard = Boolean(activeTaskList && !planSidebarOpen);
 
   // Composer layout keeps the task list and footer actions in one render path so
