@@ -19,6 +19,12 @@ import path from "node:path";
 
 import { readActiveCodexProviderEnvKey } from "@t3tools/shared/codexConfig";
 import {
+  applyWandyCodexConfig,
+  isWandyEnabledInEnv,
+  resolveWandyLauncherPath,
+  resolveWandyPackageRoots,
+} from "@t3tools/shared/wandy";
+import {
   readEnvironmentFromLoginShell,
   resolveLoginShell,
   type ShellEnvironmentReader,
@@ -136,6 +142,7 @@ function ensureCodexOverlaySymlink(input: {
 function prepareDpCodeCodexHomeOverlay(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homePath?: string;
+  readonly disableBrowserPlugin?: boolean;
 }): string | undefined {
   const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
   const overlayHomePath = resolveDpCodeCodexHomeOverlayPath(input.env, sourceHomePath);
@@ -167,11 +174,20 @@ function prepareDpCodeCodexHomeOverlay(input: {
 
   const sourceConfigPath = path.join(sourceHomePath, "config.toml");
   const sourceConfig = existsSync(sourceConfigPath) ? readFileSync(sourceConfigPath, "utf8") : "";
-  writeFileSync(
-    path.join(overlayHomePath, "config.toml"),
-    disableDpCodeBrowserPluginInCodexConfig(sourceConfig),
-    "utf8",
-  );
+  const baseConfig = input.disableBrowserPlugin
+    ? disableDpCodeBrowserPluginInCodexConfig(sourceConfig)
+    : sourceConfig;
+  const launcherPath =
+    resolveWandyLauncherPath({
+      env: input.env,
+      fallbackPackageRoots: resolveWandyPackageRoots({ searchRoots: [process.cwd()] }),
+    }) ?? "";
+  const overlayConfig = applyWandyCodexConfig({
+    config: baseConfig,
+    enabled: isWandyEnabledInEnv(input.env) && launcherPath.length > 0,
+    launcherPath,
+  });
+  writeFileSync(path.join(overlayHomePath, "config.toml"), overlayConfig, "utf8");
 
   return overlayHomePath;
 }
@@ -185,12 +201,16 @@ export function buildCodexProcessEnv(
   } = {},
 ): NodeJS.ProcessEnv {
   const baseEnv = { ...(input.env ?? process.env) };
-  const overlayHomePath = shouldDisableDpCodeBrowserPlugin(baseEnv)
-    ? prepareDpCodeCodexHomeOverlay({
-        env: baseEnv,
-        ...(input.homePath ? { homePath: input.homePath } : {}),
-      })
-    : undefined;
+  const disableBrowserPlugin = shouldDisableDpCodeBrowserPlugin(baseEnv);
+  const needsWandyOverlay = isWandyEnabledInEnv(baseEnv);
+  const overlayHomePath =
+    disableBrowserPlugin || needsWandyOverlay
+      ? prepareDpCodeCodexHomeOverlay({
+          env: baseEnv,
+          ...(input.homePath ? { homePath: input.homePath } : {}),
+          disableBrowserPlugin,
+        })
+      : undefined;
   const effectiveEnv =
     overlayHomePath || input.homePath
       ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? input.homePath }

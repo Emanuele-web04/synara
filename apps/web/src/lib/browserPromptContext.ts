@@ -7,7 +7,12 @@ import {
 
 import type { ComposerImageAttachment } from "../composerDraftStore";
 
-const EXPLICIT_COMPUTER_USE_PATTERNS = [
+const EXPLICIT_WANDY_PATTERNS = [
+  "do the thing",
+  "wandy",
+  "@wandy",
+  "@wandy",
+  "mcp__wandy__",
   "computer use",
   "computer-use",
   "@computer-use",
@@ -55,8 +60,10 @@ function normalizePromptForMatching(prompt: string): string {
 
 export function promptRequestsExplicitComputerUse(prompt: string): boolean {
   const normalized = normalizePromptForMatching(prompt);
-  return EXPLICIT_COMPUTER_USE_PATTERNS.some((pattern) => normalized.includes(pattern));
+  return EXPLICIT_WANDY_PATTERNS.some((pattern) => normalized.includes(pattern));
 }
+
+export const promptRequestsExplicitWandy = promptRequestsExplicitComputerUse;
 
 export function promptLooksLikeInternalBrowserTask(prompt: string): boolean {
   const normalized = normalizePromptForMatching(prompt);

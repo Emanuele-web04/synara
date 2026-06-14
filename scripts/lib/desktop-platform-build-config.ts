@@ -11,6 +11,11 @@ export const MAC_INHERITED_ENTITLEMENTS_PATH =
 const MAC_AFTER_PACK_HOOK_PATH = "./electron-builder-after-pack.cjs";
 const MAC_DMG_ICON_PATH = "icon.icns";
 export const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
+export const WANDY_ASAR_UNPACK_GLOBS = ["node_modules/@t3tools/wandy/**"] as const;
+export const DESKTOP_NATIVE_ASAR_UNPACK_GLOBS = [
+  ...NODE_PTY_ASAR_UNPACK_GLOBS,
+  ...WANDY_ASAR_UNPACK_GLOBS,
+] as const;
 
 export interface DesktopPlatformBuildConfig {
   readonly afterPack?: string;
@@ -54,7 +59,7 @@ export function validateDesktopNativeBuildHost(input: DesktopNativeBuildHostInpu
 export function createDesktopPlatformBuildConfig(
   input: CreateDesktopPlatformBuildConfigInput,
 ): DesktopPlatformBuildConfig {
-  const nativePackaging = { asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS] };
+  const nativePackaging = { asarUnpack: [...DESKTOP_NATIVE_ASAR_UNPACK_GLOBS] };
 
   if (input.platform === "mac") {
     const mac = {

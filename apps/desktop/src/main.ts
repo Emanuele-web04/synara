@@ -38,6 +38,11 @@ import type {
 import { autoUpdater, CancellationToken } from "electron-updater";
 
 import type { ContextMenuItem } from "@t3tools/contracts";
+import {
+  SYNARA_WANDY_STABLE_APP_DIR_ENV,
+  resolveWandyLauncherPath as resolveSharedWandyLauncherPath,
+  resolveStableWandyAppDir as resolveSharedStableWandyAppDir,
+} from "@t3tools/shared/wandy";
 import { getMacTrafficLightPosition } from "@t3tools/shared/desktopChrome";
 import { NetService } from "@t3tools/shared/Net";
 import { RotatingFileSink } from "@t3tools/shared/logging";
@@ -113,6 +118,11 @@ import {
   resolveLegacyDesktopUserDataPaths,
   seedDesktopUserDataProfileFromLegacy,
 } from "./desktopUserDataProfile";
+import {
+  ensureStableWandyHelper,
+  terminateRunningWandyProcesses,
+  terminateRunningStableWandyHelper,
+} from "./wandyStableHelper";
 
 syncShellEnvironment();
 
@@ -215,6 +225,9 @@ let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
+let wandyLauncherPathCache: string | null | undefined;
+let wandyProcessCleanupDone = false;
+let wandyWarmupStarted = false;
 const browserManager = new DesktopBrowserManager();
 let browserUsePipeServer: BrowserUsePipeServer | null = null;
 let configuredGitHubUpdateSource: ReturnType<typeof resolveGitHubUpdateSource> = null;
@@ -766,6 +779,155 @@ function resolveBackendCwd(): string {
     return resolveAppRoot();
   }
   return OS.homedir();
+}
+
+function resolveWandyPackageRoots(): string[] {
+  const appRoot = resolveAppRoot();
+
+  if (app.isPackaged && appRoot.endsWith(".asar")) {
+    const unpackedRoot = Path.join(
+      appRoot.replace(/\.asar$/, ".asar.unpacked"),
+      "node_modules/@t3tools/wandy",
+    );
+    return FS.existsSync(Path.join(unpackedRoot, "package.json")) ? [unpackedRoot] : [];
+  }
+
+  const roots = [
+    Path.join(ROOT_DIR, "packages/wandy"),
+    Path.join(appRoot, "node_modules/@t3tools/wandy"),
+  ];
+
+  if (appRoot.endsWith(".asar")) {
+    roots.push(
+      Path.join(appRoot.replace(/\.asar$/, ".asar.unpacked"), "node_modules/@t3tools/wandy"),
+    );
+  }
+
+  return roots.filter((root) => FS.existsSync(Path.join(root, "package.json")));
+}
+
+function resolveDesktopWandyStableAppDir(): string {
+  if (process.env[SYNARA_WANDY_STABLE_APP_DIR_ENV]?.trim()) {
+    return resolveSharedStableWandyAppDir(process.env);
+  }
+
+  return Path.join(BASE_DIR, "wandy-app");
+}
+
+function resolveWandyLauncherPath(): string | null {
+  if (wandyLauncherPathCache !== undefined) {
+    return wandyLauncherPathCache;
+  }
+
+  const fallbackPackageRoots = resolveWandyPackageRoots();
+  const bundledLauncherPath = resolveSharedWandyLauncherPath({
+    env: {},
+    fallbackPackageRoots,
+    preferBundled: true,
+  });
+
+  if (app.isPackaged) {
+    const stableResult = ensureStableWandyHelper({
+      bundledLauncherPath,
+      stableAppDir: resolveDesktopWandyStableAppDir(),
+      terminateRunningHelper: terminateRunningStableWandyHelper,
+    });
+
+    if (stableResult.status === "ready") {
+      const action = stableResult.installed
+        ? stableResult.replaced
+          ? "updated"
+          : "installed"
+        : "reused";
+      console.info(`[desktop] Wandy stable helper ${action}: ${stableResult.launcherPath ?? ""}`);
+      if (!wandyProcessCleanupDone) {
+        terminateRunningWandyProcesses();
+        wandyProcessCleanupDone = true;
+      }
+      wandyLauncherPathCache = stableResult.launcherPath;
+      return wandyLauncherPathCache;
+    }
+
+    console.warn(
+      `[desktop] Wandy stable helper unavailable; Wandy MCP will not be registered. ${stableResult.reason ?? ""}`,
+    );
+    wandyLauncherPathCache = null;
+    return wandyLauncherPathCache;
+  }
+
+  wandyLauncherPathCache = resolveSharedWandyLauncherPath({
+    fallbackPackageRoots,
+  });
+  return wandyLauncherPathCache;
+}
+
+function warmWandyHelper(): void {
+  if (wandyWarmupStarted || process.env.SYNARA_ENABLE_WANDY === "0") {
+    return;
+  }
+
+  const launcherPath = resolveWandyLauncherPath();
+  if (!launcherPath) {
+    return;
+  }
+
+  wandyWarmupStarted = true;
+  const child = ChildProcess.spawn(launcherPath, ["doctor", "--json"], {
+    cwd: OS.homedir(),
+    env: {
+      ...process.env,
+      WANDY_SUPPRESS_ONBOARDING: "1",
+      [SYNARA_WANDY_STABLE_APP_DIR_ENV]: resolveDesktopWandyStableAppDir(),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  let stdout = "";
+  let stderr = "";
+  const timeout = setTimeout(() => {
+    child.kill("SIGTERM");
+  }, 12_000);
+  timeout.unref();
+
+  child.stdout?.setEncoding("utf8");
+  child.stderr?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  child.on("exit", (code, signal) => {
+    clearTimeout(timeout);
+    const trimmed = stdout.trim();
+    try {
+      const parsed = trimmed
+        ? (JSON.parse(trimmed) as {
+            summary?: string;
+            allGranted?: boolean;
+            needsRuntimePermissionRefresh?: boolean;
+          })
+        : null;
+      console.info("[desktop] Wandy warmup completed", {
+        code,
+        signal,
+        allGranted: parsed?.allGranted,
+        needsRuntimePermissionRefresh: parsed?.needsRuntimePermissionRefresh,
+        summary: parsed?.summary,
+      });
+    } catch {
+      console.warn("[desktop] Wandy warmup returned non-JSON output", {
+        code,
+        signal,
+        stdout: trimmed.slice(0, 500),
+        stderr: stderr.trim().slice(0, 500),
+      });
+    }
+  });
+  child.on("error", (error) => {
+    clearTimeout(timeout);
+    console.warn("[desktop] Wandy warmup failed", error);
+  });
 }
 
 function resolveDesktopStaticDir(): string | null {
@@ -1853,6 +2015,8 @@ function backendNodeArgs(): string[] {
 }
 
 function backendEnv(): NodeJS.ProcessEnv {
+  const wandyLauncherPath = resolveWandyLauncherPath();
+  const wandyStableAppDir = resolveDesktopWandyStableAppDir();
   return {
     ...process.env,
     DPCODE_MODE: "desktop",
@@ -1869,6 +2033,9 @@ function backendEnv(): NodeJS.ProcessEnv {
     T3CODE_AUTH_TOKEN: backendAuthToken,
     SYNARA_HOME: BASE_DIR,
     [T3CODE_BROWSER_USE_PIPE_ENV]: SYNARA_BROWSER_USE_PIPE_PATH,
+    SYNARA_ENABLE_WANDY: process.env.SYNARA_ENABLE_WANDY ?? "1",
+    [SYNARA_WANDY_STABLE_APP_DIR_ENV]: wandyStableAppDir,
+    ...(wandyLauncherPath ? { SYNARA_WANDY_LAUNCHER_PATH: wandyLauncherPath } : {}),
   };
 }
 
@@ -2608,6 +2775,7 @@ async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap start");
   backendAuthToken = Crypto.randomBytes(24).toString("hex");
   await reserveBackendEndpoint("bootstrap");
+  warmWandyHelper();
 
   registerIpcHandlers();
   writeDesktopLogHeader("bootstrap ipc handlers registered");

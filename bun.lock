@@ -16,6 +16,7 @@
       "name": "@t3tools/desktop",
       "version": "0.2.1",
       "dependencies": {
+        "@t3tools/wandy": "workspace:*",
         "effect": "catalog:",
         "electron": "40.6.0",
         "electron-updater": "^6.6.2",
@@ -191,6 +192,14 @@
         "@types/node": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:",
+      },
+    },
+    "packages/wandy": {
+      "name": "@t3tools/wandy",
+      "version": "0.1.52-synara.4",
+      "bin": {
+        "wandy": "bin/wandy",
+        "wandy-mcp": "bin/wandy-mcp",
       },
     },
     "scripts": {
@@ -1055,6 +1064,8 @@
     "@t3tools/scripts": ["@t3tools/scripts@workspace:scripts"],
 
     "@t3tools/shared": ["@t3tools/shared@workspace:packages/shared"],
+
+    "@t3tools/wandy": ["@t3tools/wandy@workspace:packages/wandy"],
 
     "@t3tools/web": ["@t3tools/web@workspace:apps/web"],
 

@@ -1,0 +1,10 @@
+.idea/
+.DS_Store
+.build/
+.swiftpm/
+dist/
+.gemini/
+artifacts/codex-dumps/
+research/
+__pycache__/
+*.pyc

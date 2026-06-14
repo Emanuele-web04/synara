@@ -16,6 +16,7 @@ import {
   ProviderRuntimeEvent,
   ThreadId,
 } from "@t3tools/contracts";
+import { WANDY_BROWSER_TOOL_ROUTING_INSTRUCTIONS } from "@t3tools/shared/wandy";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Fiber, Layer, Random, Stream } from "effect";
 
@@ -317,6 +318,7 @@ describe("ClaudeAdapterLive", () => {
           "Do not present the host app as Claude Code unless the user is explicitly asking about Claude Code.",
           "Treat the current working directory as the active workspace for the task.",
           "When the user asks about the current project, codebase, or repository, proactively inspect files in the current working directory before asking the user where to look.",
+          WANDY_BROWSER_TOOL_ROUTING_INSTRUCTIONS,
         ].join("\n"),
       });
     }).pipe(

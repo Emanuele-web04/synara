@@ -85,6 +85,7 @@ export const SkillsServerSettings = Schema.Struct({
 export type SkillsServerSettings = typeof SkillsServerSettings.Type;
 
 export const ServerSettings = Schema.Struct({
+  enableWandy: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
   defaultThreadEnvMode: ThreadEnvironmentMode.pipe(Schema.withDecodingDefault(() => "local")),
   addProjectBaseDirectory: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
@@ -123,6 +124,7 @@ const ProviderSettingsBasePatch = {
 };
 
 export const ServerSettingsPatch = Schema.Struct({
+  enableWandy: Schema.optionalKey(Schema.Boolean),
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvironmentMode),
   addProjectBaseDirectory: Schema.optionalKey(StringSetting),

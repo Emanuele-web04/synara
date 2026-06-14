@@ -39,6 +39,11 @@ import {
   hasEffortLevel,
   resolveGeminiApiModelId,
 } from "@t3tools/shared/model";
+import {
+  buildWandyAcpMcpServers,
+  shouldSkipAcpSessionResumeForWandy,
+  withSynaraWandyPromptContext,
+} from "@t3tools/shared/wandy";
 import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -1888,31 +1893,35 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
         },
       });
 
-      const startResponse = yield* input.resumeSessionId
+      const mcpServers = buildWandyAcpMcpServers();
+      const resumeSessionId = shouldSkipAcpSessionResumeForWandy()
+        ? undefined
+        : input.resumeSessionId;
+      const startResponse = yield* resumeSessionId
         ? input.allowResumeFallback !== false
           ? sendRequest<Record<string, unknown>>(context, "session/load", {
-              sessionId: input.resumeSessionId,
+              sessionId: resumeSessionId,
               cwd: context.session.cwd ?? process.cwd(),
-              mcpServers: [],
+              mcpServers,
             }).pipe(
               Effect.catch(() =>
                 sendRequest<Record<string, unknown>>(context, "session/new", {
                   cwd: context.session.cwd ?? process.cwd(),
-                  mcpServers: [],
+                  mcpServers,
                 }),
               ),
             )
           : sendRequest<Record<string, unknown>>(context, "session/load", {
-              sessionId: input.resumeSessionId,
+              sessionId: resumeSessionId,
               cwd: context.session.cwd ?? process.cwd(),
-              mcpServers: [],
+              mcpServers,
             })
         : sendRequest<Record<string, unknown>>(context, "session/new", {
             cwd: context.session.cwd ?? process.cwd(),
-            mcpServers: [],
+            mcpServers,
           });
 
-      context.sessionId = resolveStartedGeminiSessionId(input.resumeSessionId, startResponse) ?? "";
+      context.sessionId = resolveStartedGeminiSessionId(resumeSessionId, startResponse) ?? "";
       if (!context.sessionId) {
         return yield* new ProviderAdapterProcessError({
           provider: PROVIDER,
@@ -1993,10 +2002,12 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     const blocks: Array<Record<string, unknown>> = [];
 
     const promptText = trimToUndefined(
-      withProviderPlanModePrompt({
-        text: input.input?.trim() ?? "",
-        interactionMode: input.interactionMode,
-      }),
+      withSynaraWandyPromptContext(
+        withProviderPlanModePrompt({
+          text: input.input?.trim() ?? "",
+          interactionMode: input.interactionMode,
+        }),
+      ),
     );
     if (promptText) {
       blocks.push({

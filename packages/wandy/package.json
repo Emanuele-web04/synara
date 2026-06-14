@@ -1,0 +1,22 @@
+{
+  "name": "@t3tools/wandy",
+  "version": "0.1.52-synara.4",
+  "private": true,
+  "description": "Synara's private desktop automation runtime (Wandy).",
+  "license": "MIT",
+  "bin": {
+    "wandy": "bin/wandy",
+    "wandy-mcp": "bin/wandy-mcp"
+  },
+  "files": [
+    "bin/",
+    "dist/",
+    "LICENSE"
+  ],
+  "type": "commonjs",
+  "scripts": {
+    "build:macos": "cd source && ./scripts/build-wandy-app.sh release && cd .. && rm -rf \"dist/Wandy.app\" && mkdir -p dist && ditto \"source/dist/Wandy.app\" \"dist/Wandy.app\"",
+    "bundle:private": "cd source && node ./scripts/npm/build-packages.mjs --skip-build",
+    "install:dev-app": "bash scripts/install-dev-app.sh"
+  }
+}

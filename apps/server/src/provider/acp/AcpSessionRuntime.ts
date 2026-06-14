@@ -16,6 +16,8 @@ import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 
+import { buildWandyAcpMcpServers, shouldSkipAcpSessionResumeForWandy } from "@t3tools/shared/wandy";
+
 import {
   collectSessionConfigOptionValues,
   extractModelConfigId,
@@ -408,16 +410,21 @@ const makeAcpSessionRuntime = (
         acp.agent.authenticate(authenticatePayload),
       );
 
+      const mcpServers = buildWandyAcpMcpServers();
+      const resumeSessionId = shouldSkipAcpSessionResumeForWandy()
+        ? undefined
+        : options.resumeSessionId;
+
       let sessionId: string;
       let sessionSetupResult:
         | EffectAcpSchema.LoadSessionResponse
         | EffectAcpSchema.NewSessionResponse
         | EffectAcpSchema.ResumeSessionResponse;
-      if (options.resumeSessionId) {
+      if (resumeSessionId) {
         const loadPayload = {
-          sessionId: options.resumeSessionId,
+          sessionId: resumeSessionId,
           cwd: options.cwd,
-          mcpServers: [],
+          mcpServers,
         } satisfies EffectAcpSchema.LoadSessionRequest;
         const resumed = yield* runLoggedRequest(
           "session/load",
@@ -425,12 +432,12 @@ const makeAcpSessionRuntime = (
           acp.agent.loadSession(loadPayload),
         ).pipe(Effect.exit);
         if (Exit.isSuccess(resumed)) {
-          sessionId = options.resumeSessionId;
+          sessionId = resumeSessionId;
           sessionSetupResult = resumed.value;
         } else {
           const createPayload = {
             cwd: options.cwd,
-            mcpServers: [],
+            mcpServers,
           } satisfies EffectAcpSchema.NewSessionRequest;
           const created = yield* runLoggedRequest(
             "session/new",
@@ -443,7 +450,7 @@ const makeAcpSessionRuntime = (
       } else {
         const createPayload = {
           cwd: options.cwd,
-          mcpServers: [],
+          mcpServers,
         } satisfies EffectAcpSchema.NewSessionRequest;
         const created = yield* runLoggedRequest(
           "session/new",
