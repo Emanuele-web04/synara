@@ -332,6 +332,11 @@ import {
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
+import { dispatchThreadNotes } from "~/pinnedMessages";
+import {
+  mergeProjectInstructionsIntoThreadNotes,
+  useProjectInstructionsStore,
+} from "~/projectInstructionsStore";
 import {
   ENVIRONMENT_DOCKED_CONTENT_INSET_PX,
   EnvironmentPanel,
@@ -1194,6 +1199,10 @@ export default function ChatView({
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
+  const projectInstructions = useProjectInstructionsStore((state) =>
+    activeProjectId ? (state.instructionsByProjectId[activeProjectId] ?? "") : "",
+  );
+  const setProjectInstructions = useProjectInstructionsStore((state) => state.setInstructions);
   const homeDir = useWorkspaceStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
@@ -2325,6 +2334,28 @@ export default function ChatView({
     handleRenamePinnedMessage,
     handleNotesChange,
   } = usePinnedMessageActions({ activeThreadId, pinnedMessages });
+  const handleCopyProjectInstructionsToNotes = useCallback(() => {
+    if (!activeThreadId) {
+      return;
+    }
+    const nextNotes = mergeProjectInstructionsIntoThreadNotes({
+      threadNotes,
+      projectInstructions,
+    });
+    if (nextNotes === threadNotes) {
+      return;
+    }
+    void handleNotesChange(activeThreadId, nextNotes)
+      .then(() => {
+        toastManager.add({
+          type: "success",
+          title: "Project instructions added to notepad.",
+        });
+      })
+      .catch(() => {
+        // `handleNotesChange` already surfaces the save failure through the shared notes toast.
+      });
+  }, [activeThreadId, handleNotesChange, projectInstructions, threadNotes]);
   const handleJumpToPinnedMessage = useCallback((messageId: MessageId) => {
     timelineControllerRef.current?.scrollToMessage(messageId);
   }, []);
@@ -6074,6 +6105,13 @@ export default function ChatView({
       );
 
       if (isLocalDraftThread) {
+        const inheritedProjectInstructions =
+          useProjectInstructionsStore.getState().instructionsByProjectId[targetProjectIdForSend] ??
+          "";
+        const inheritedThreadNotes = mergeProjectInstructionsIntoThreadNotes({
+          threadNotes,
+          projectInstructions: inheritedProjectInstructions,
+        });
         await promoteThreadCreate(
           {
             type: "thread.create",
@@ -6092,6 +6130,17 @@ export default function ChatView({
           },
           api,
         );
+        // `thread.create` does not carry notes, so seed the freshly created
+        // server thread's notepad with the inherited project instructions via a
+        // dedicated meta update. Best-effort: a failure here must not abort the turn.
+        if (inheritedThreadNotes !== threadNotes && inheritedThreadNotes.trim().length > 0) {
+          try {
+            await dispatchThreadNotes(threadIdForSend, inheritedThreadNotes);
+          } catch {
+            // Seeding is non-critical; project instructions can still be copied
+            // into the notepad manually from the Environment panel.
+          }
+        }
         if (targetProjectKindForSend === "chat") {
           await api.orchestration.dispatchCommand({
             type: "project.meta.update",
@@ -8121,6 +8170,11 @@ export default function ChatView({
     pinnedMessageTextById,
     markerMessageTextById,
     notes: threadNotes,
+    activeProjectId,
+    projectInstructions,
+    canCopyProjectInstructionsToNotes: !isLocalDraftThread,
+    onProjectInstructionsChange: setProjectInstructions,
+    onCopyProjectInstructionsToNotes: handleCopyProjectInstructionsToNotes,
     onToggleDiff,
     onOpenGithubRepository: openBrowserUrl,
     onJumpToPinnedMessage: handleJumpToPinnedMessage,
