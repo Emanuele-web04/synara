@@ -332,6 +332,7 @@ import {
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
+import { dispatchThreadNotes } from "~/pinnedMessages";
 import {
   mergeProjectInstructionsIntoThreadNotes,
   useProjectInstructionsStore,
@@ -6124,13 +6125,21 @@ export default function ChatView({
             branch: nextThreadBranch,
             worktreePath: nextThreadWorktreePath,
             lastKnownPr: activeThread.lastKnownPr ?? null,
-            ...(inheritedThreadNotes !== threadNotes && inheritedThreadNotes.trim().length > 0
-              ? { notes: inheritedThreadNotes }
-              : {}),
             createdAt: activeThread.createdAt,
           },
           api,
         );
+        // `thread.create` does not carry notes, so seed the freshly created
+        // server thread's notepad with the inherited project instructions via a
+        // dedicated meta update. Best-effort: a failure here must not abort the turn.
+        if (inheritedThreadNotes !== threadNotes && inheritedThreadNotes.trim().length > 0) {
+          try {
+            await dispatchThreadNotes(threadIdForSend, inheritedThreadNotes);
+          } catch {
+            // Seeding is non-critical; project instructions can still be copied
+            // into the notepad manually from the Environment panel.
+          }
+        }
         if (targetProjectKindForSend === "chat") {
           await api.orchestration.dispatchCommand({
             type: "project.meta.update",

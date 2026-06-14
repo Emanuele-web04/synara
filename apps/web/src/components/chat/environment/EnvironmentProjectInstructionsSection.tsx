@@ -92,30 +92,33 @@ function useProjectInstructionsAutosave({
     };
   }, [flush]);
 
-  const handleChange = useCallback<ChangeEventHandler<HTMLTextAreaElement>>((event) => {
-    const nextValue = event.target.value;
-    valueRef.current = nextValue;
-    setValue(nextValue);
-    const currentProjectId = projectIdRef.current;
-    if (!currentProjectId) {
-      pendingSaveRef.current = null;
+  const handleChange = useCallback<ChangeEventHandler<HTMLTextAreaElement>>(
+    (event) => {
+      const nextValue = event.target.value;
+      valueRef.current = nextValue;
+      setValue(nextValue);
+      const currentProjectId = projectIdRef.current;
+      if (!currentProjectId) {
+        pendingSaveRef.current = null;
+        if (debounceRef.current !== null) {
+          window.clearTimeout(debounceRef.current);
+          debounceRef.current = null;
+        }
+        return;
+      }
+      // Keep the project id with the pending payload; active projects can switch before debounce fires.
+      pendingSaveRef.current = {
+        projectId: currentProjectId,
+        value: nextValue,
+        lastCommitted: lastCommittedRef.current,
+      };
       if (debounceRef.current !== null) {
         window.clearTimeout(debounceRef.current);
-        debounceRef.current = null;
       }
-      return;
-    }
-    // Keep the project id with the pending payload; active projects can switch before debounce fires.
-    pendingSaveRef.current = {
-      projectId: currentProjectId,
-      value: nextValue,
-      lastCommitted: lastCommittedRef.current,
-    };
-    if (debounceRef.current !== null) {
-      window.clearTimeout(debounceRef.current);
-    }
-    debounceRef.current = window.setTimeout(flush, PROJECT_INSTRUCTIONS_AUTOSAVE_DEBOUNCE_MS);
-  }, [flush]);
+      debounceRef.current = window.setTimeout(flush, PROJECT_INSTRUCTIONS_AUTOSAVE_DEBOUNCE_MS);
+    },
+    [flush],
+  );
 
   return {
     value,
