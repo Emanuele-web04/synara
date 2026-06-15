@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.3 - 2026-06-16
+
+### Added
+
+- Added a focused in-app What's New entry for the pasted-text editing fix.
+
+### Changed
+
+- Bumped Synara release package versions to `0.2.3` across the server, desktop, web, and contracts packages.
+
+### Fixed
+
+- Fixed message editing so pasted text blocks remain intact when a user edits a previous message.
+
+### Verification
+
+- `bun run fmt:check` passed.
+- `bun run lint` passed with 148 warnings, 0 errors.
+- `bun run typecheck` passed with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed and refreshed release install/lockfile state.
+- `bun run build` passed. Vite still warns about large web chunks and plugin timings; desktop build still reports the existing typeless `tsdown.config.ts` module warning.
+- `bun run test` passed: 10 tasks successful, including `@t3tools/web` 168 files / 1949 tests and `t3` 129 files passed / 1 skipped with 1246 passed / 6 skipped.
+- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.2.3`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+
 ## 0.2.2 - 2026-06-14
 
 ### Added
