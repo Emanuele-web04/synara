@@ -46,7 +46,103 @@ describe("buildReviewSidechatInitialPrompt", () => {
     expect(prompt).toContain("Do not create a new worktree");
     expect(prompt).toContain("do not switch branches");
     expect(prompt).toContain("do not mutate files");
-    expect(prompt).toContain("Use the loaded PR context");
+    expect(prompt).toContain("focused PR packet");
     expect(prompt).toContain("What changed?");
+  });
+
+  it("keeps summary prompts compact", () => {
+    const prompt = buildReviewSidechatInitialPrompt(
+      {
+        ...makePayload(),
+        body: `${"a".repeat(600)}body-tail`,
+        files: Array.from({ length: 8 }, (_, index) => ({
+          path: `src/file-${index}.ts`,
+          status: "modified",
+          insertions: 10 - index,
+          deletions: index,
+        })),
+        recentConversation: [
+          {
+            kind: "comment",
+            author: "reviewer",
+            state: null,
+            body: "This should not be sent for a summary.",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            url: null,
+          },
+        ],
+      },
+      "Summarize this PR",
+    );
+
+    expect(prompt).toContain("Pull request description:");
+    expect(prompt).toContain("Changed files:");
+    expect(prompt).not.toContain("Recent conversation:");
+    expect(prompt).not.toContain("body-tail");
+    expect(prompt).not.toContain("src/file-6.ts");
+  });
+
+  it("keeps failing-check prompts focused on checks", () => {
+    const prompt = buildReviewSidechatInitialPrompt(
+      {
+        ...makePayload(),
+        body: "Large PR body that is not needed for check triage.",
+        checks: [
+          {
+            name: "react-doctor",
+            state: "failure",
+            workflow: "CI",
+            description: "Heavy library import",
+            url: "https://ci.example/react-doctor",
+          },
+          {
+            name: "build",
+            state: "success",
+            workflow: "CI",
+            description: null,
+            url: null,
+          },
+        ],
+        files: [
+          {
+            path: "src/expensive-file.ts",
+            status: "modified",
+            insertions: 100,
+            deletions: 10,
+          },
+        ],
+      },
+      "Explain the failing checks",
+    );
+
+    expect(prompt).toContain("Checks needing attention:");
+    expect(prompt).toContain("react-doctor: failure");
+    expect(prompt).toContain("Heavy library import");
+    expect(prompt).toContain("https://ci.example/react-doctor");
+    expect(prompt).not.toContain("build: success");
+    expect(prompt).not.toContain("Changed files:");
+    expect(prompt).not.toContain("Pull request description:");
+  });
+
+  it("keeps review-order prompts focused on changed files", () => {
+    const prompt = buildReviewSidechatInitialPrompt(
+      {
+        ...makePayload(),
+        body: "Long body that should not be needed to pick a review order.",
+        files: [
+          {
+            path: "src/risky.ts",
+            status: "modified",
+            insertions: 120,
+            deletions: 30,
+          },
+        ],
+      },
+      "What should I review first?",
+    );
+
+    expect(prompt).toContain("Changed files:");
+    expect(prompt).toContain("src/risky.ts");
+    expect(prompt).not.toContain("Pull request description:");
   });
 });

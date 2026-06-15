@@ -63,11 +63,117 @@ export interface ReviewSidechatContextPayload {
 }
 
 type ReviewSidechatRecentConversation = ReviewSidechatContextPayload["recentConversation"][number];
+type ReviewSidechatPromptIntent = "summary" | "checks" | "review-order" | "conversation" | "focused";
 
 function reviewCheckPromptRank(state: string): number {
   if (state === "failure") return 0;
   if (state === "pending") return 1;
   return 2;
+}
+
+function reviewSidechatPromptIntent(question: string): ReviewSidechatPromptIntent {
+  const normalized = question.toLowerCase();
+  if (
+    normalized.includes("failing check") ||
+    normalized.includes("failed check") ||
+    normalized.includes("explain the checks") ||
+    normalized.includes("explain failing") ||
+    normalized.includes("ci")
+  ) {
+    return "checks";
+  }
+  if (
+    normalized.includes("review first") ||
+    normalized.includes("look at first") ||
+    normalized.includes("start reviewing") ||
+    normalized.includes("start with") ||
+    normalized.includes("review order")
+  ) {
+    return "review-order";
+  }
+  if (
+    normalized.includes("comment") ||
+    normalized.includes("conversation") ||
+    normalized.includes("reviewer") ||
+    normalized.includes("requested changes")
+  ) {
+    return "conversation";
+  }
+  if (
+    normalized.includes("summarize") ||
+    normalized.includes("summary") ||
+    normalized.includes("what changed") ||
+    normalized.includes("changed?")
+  ) {
+    return "summary";
+  }
+  return "focused";
+}
+
+function sortedReviewFiles(
+  payload: ReviewSidechatContextPayload,
+): ReviewSidechatContextPayload["files"] {
+  const selectedFile = payload.selectedFilePath;
+  return payload.files.toSorted((left, right) => {
+    if (selectedFile && left.path === selectedFile) return -1;
+    if (selectedFile && right.path === selectedFile) return 1;
+    return right.insertions + right.deletions - (left.insertions + left.deletions);
+  });
+}
+
+function formatReviewFiles(payload: ReviewSidechatContextPayload, limit: number): string {
+  return sortedReviewFiles(payload)
+    .slice(0, limit)
+    .map((file) => `- ${file.path} (+${file.insertions} -${file.deletions})`)
+    .join("\n");
+}
+
+function formatReviewChecks(input: {
+  readonly payload: ReviewSidechatContextPayload;
+  readonly limit: number;
+  readonly includeOnlyAttentionChecks: boolean;
+  readonly includeDetail: boolean;
+}): string {
+  const checks = input.payload.checks
+    .filter((check) => !input.includeOnlyAttentionChecks || check.state !== "success")
+    .toSorted(
+      (left, right) => reviewCheckPromptRank(left.state) - reviewCheckPromptRank(right.state),
+    )
+    .slice(0, input.limit)
+    .map((check) => {
+      const workflow = check.workflow ? ` (${check.workflow})` : "";
+      const detail = input.includeDetail
+        ? [check.description, check.url].filter((value) => value && value.length > 0).join(" ")
+        : "";
+      return `- ${check.name}: ${check.state}${workflow}${detail ? ` - ${detail}` : ""}`;
+    });
+  return checks.join("\n");
+}
+
+function formatRecentConversation(payload: ReviewSidechatContextPayload, limit: number): string {
+  return payload.recentConversation
+    .slice(-limit)
+    .map((event) => `- ${event.kind} by ${event.author}: ${event.body.slice(0, 160)}`)
+    .join("\n");
+}
+
+function promptBaseLines(payload: ReviewSidechatContextPayload): string[] {
+  return [
+    `PR #${payload.number}: ${payload.title}`,
+    "Role: PR review assistant in Synara. Do not create a new worktree, do not switch branches, and do not mutate files.",
+    "Answer concisely from this focused PR packet and existing repo context. Ask for more context instead of running setup.",
+    `Repository: ${payload.repositoryId ?? "unknown"}`,
+    `URL: ${payload.url}`,
+    `Branch: ${payload.headBranch} -> ${payload.baseBranch}`,
+    `Stats: ${payload.stats.files} files, +${payload.stats.additions} -${payload.stats.deletions}, ${payload.stats.commits} commits`,
+    `Checks status: ${payload.checksStatus}`,
+    payload.selectedFilePath ? `Focused file: ${payload.selectedFilePath}` : null,
+  ].filter((line): line is string => line !== null);
+}
+
+function compactReviewBody(payload: ReviewSidechatContextPayload, limit: number): string {
+  const body = payload.body.trim();
+  return body.length > 0 ? body.slice(0, limit) : "(empty)";
 }
 
 export interface BuildReviewSidechatContextInput {
@@ -163,62 +269,56 @@ export function buildReviewSidechatContextPayload(
   };
 }
 
-export function buildReviewSidechatContextPrompt(payload: ReviewSidechatContextPayload): string {
-  const selectedFile = payload.selectedFilePath;
-  const files = payload.files
-    .toSorted((left, right) => {
-      if (selectedFile && left.path === selectedFile) return -1;
-      if (selectedFile && right.path === selectedFile) return 1;
-      return right.insertions + right.deletions - (left.insertions + left.deletions);
-    })
-    .slice(0, 12)
-    .map((file) => `- ${file.path} (+${file.insertions} -${file.deletions})`)
-    .join("\n");
-  const checks = payload.checks
-    .toSorted(
-      (left, right) => reviewCheckPromptRank(left.state) - reviewCheckPromptRank(right.state),
-    )
-    .slice(0, 12)
-    .map(
-      (check) => `- ${check.name}: ${check.state}${check.workflow ? ` (${check.workflow})` : ""}`,
-    )
-    .join("\n");
-  const conversation = payload.recentConversation
-    .slice(-6)
-    .map((event) => `- ${event.kind} by ${event.author}: ${event.body.slice(0, 240)}`)
-    .join("\n");
+export function buildReviewSidechatContextPrompt(
+  payload: ReviewSidechatContextPayload,
+  question: string,
+): string {
+  const intent = reviewSidechatPromptIntent(question);
+  const base = promptBaseLines(payload);
+  const checks = formatReviewChecks({
+    payload,
+    limit: intent === "checks" ? 10 : 5,
+    includeOnlyAttentionChecks: intent === "checks",
+    includeDetail: intent === "checks",
+  });
+  const files = formatReviewFiles(payload, intent === "review-order" ? 10 : 6);
+  const conversation = formatRecentConversation(payload, intent === "conversation" ? 4 : 2);
 
-  return [
-    `You are helping review GitHub PR #${payload.number}: ${payload.title}.`,
-    "You are running as a PR review assistant inside Synara. Do not create a new worktree, do not switch branches, and do not mutate files or repository state.",
-    "Answer directly and keep the first response concise. Use the loaded PR context below plus main branch context already available to the current project. If you need more context, ask for it instead of running setup or checkout commands.",
-    `Repository: ${payload.repositoryId ?? "unknown"}`,
-    `URL: ${payload.url}`,
-    `Author: ${payload.author}`,
-    `Branch: ${payload.headBranch} -> ${payload.baseBranch}`,
-    `Stats: ${payload.stats.files} files, +${payload.stats.additions} -${payload.stats.deletions}, ${payload.stats.commits} commits`,
-    `Checks status: ${payload.checksStatus}`,
-    payload.selectedFilePath ? `Focused file: ${payload.selectedFilePath}` : null,
-    "",
-    "Checks:",
-    checks.length > 0 ? checks : "- No checks reported",
-    "",
-    "Changed files:",
-    files.length > 0 ? files : "- No files loaded",
-    "",
-    "Recent conversation:",
-    conversation.length > 0 ? conversation : "- No comments or reviews loaded",
-    "",
-    "Pull request description:",
-    payload.body.trim().length > 0 ? payload.body.trim().slice(0, 1_500) : "(empty)",
-  ]
-    .filter((line): line is string => line !== null)
-    .join("\n");
+  const sections: string[] = [...base];
+  if (intent === "checks") {
+    sections.push(
+      "",
+      "Checks needing attention:",
+      checks.length > 0 ? checks : "- No failing or pending checks reported",
+    );
+  } else {
+    sections.push("", "Checks:", checks.length > 0 ? checks : "- No checks reported");
+  }
+
+  if (intent === "review-order" || intent === "summary" || intent === "focused") {
+    sections.push("", "Changed files:", files.length > 0 ? files : "- No files loaded");
+  }
+
+  if (intent === "conversation") {
+    sections.push(
+      "",
+      "Recent conversation:",
+      conversation.length > 0 ? conversation : "- No comments or reviews loaded",
+    );
+  }
+
+  if (intent === "summary" || intent === "focused") {
+    sections.push("", "Pull request description:", compactReviewBody(payload, 600));
+  }
+
+  return sections.join("\n");
 }
 
 export function buildReviewSidechatInitialPrompt(
   payload: ReviewSidechatContextPayload,
   question: string,
 ): string {
-  return [buildReviewSidechatContextPrompt(payload), "", "User question:", question].join("\n");
+  return [buildReviewSidechatContextPrompt(payload, question), "", "User question:", question].join(
+    "\n",
+  );
 }
