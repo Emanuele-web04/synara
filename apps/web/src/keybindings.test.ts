@@ -159,6 +159,11 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
+    shortcut: modShortcut("l", { metaKey: true, modKey: false }),
+    command: "composer.focus.toggle",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
     shortcut: modShortcut("u", { shiftKey: true }),
     command: "settings.usage",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
@@ -481,6 +486,33 @@ describe("settings shortcuts", () => {
   });
 });
 
+describe("composer focus shortcuts", () => {
+  it("toggles composer focus with Cmd+L outside terminal focus", () => {
+    assert.equal(
+      resolveShortcutCommand(event({ key: "l", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "composer.focus.toggle",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "l", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+    );
+  });
+
+  it("does not treat Ctrl+L as the composer focus shortcut on non-macOS", () => {
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "l", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "Linux",
+        context: { terminalFocus: false },
+      }),
+    );
+  });
+});
+
 describe("recent view shortcuts", () => {
   it("resolves Ctrl+Tab outside terminal focus", () => {
     assert.strictEqual(
@@ -743,6 +775,10 @@ describe("shortcutLabelForCommand", () => {
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "traitsPicker.toggle", "MacIntel"),
       "⇧⌘E",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "composer.focus.toggle", "MacIntel"),
+      "⌘L",
     );
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "terminal.workspace.terminal", "MacIntel"),
@@ -1174,6 +1210,20 @@ describe("resolveShortcutCommand", () => {
         context: { terminalFocus: false },
       }),
       "traitsPicker.toggle",
+    );
+  });
+
+  it("falls back to the composer focus default when runtime config is missing it", () => {
+    const legacyBindings = DEFAULT_BINDINGS.filter(
+      (binding) => binding.command !== "composer.focus.toggle",
+    );
+
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "l", metaKey: true }), legacyBindings, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "composer.focus.toggle",
     );
   });
 

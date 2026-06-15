@@ -15,6 +15,7 @@ import { applyClaudePromptEffortPrefix, getModelCapabilities } from "@t3tools/sh
 import { formatAssistantSelectionQueuePreview } from "../lib/assistantSelections";
 import { createComposerMentionTokenRegex } from "~/lib/composerMentions";
 import { type ComposerImageAttachment } from "../composerDraftStore";
+import { formatFileCommentLabel, type FileCommentDraft } from "../lib/fileComments";
 import { formatTerminalContextLabel, type TerminalContextDraft } from "../lib/terminalContext";
 
 export type ComposerPluginSuggestion = {
@@ -40,6 +41,7 @@ export function buildQueuedComposerPreviewText(input: {
   images: ReadonlyArray<ComposerImageAttachment>;
   assistantSelections: ReadonlyArray<{ id: string }>;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
+  fileComments: ReadonlyArray<FileCommentDraft>;
 }): string {
   if (input.trimmedPrompt.length > 0) {
     return input.trimmedPrompt;
@@ -54,6 +56,10 @@ export function buildQueuedComposerPreviewText(input: {
   const firstTerminalContext = input.terminalContexts[0];
   if (firstTerminalContext) {
     return formatTerminalContextLabel(firstTerminalContext);
+  }
+  const firstFileComment = input.fileComments[0];
+  if (firstFileComment) {
+    return formatFileCommentLabel(firstFileComment);
   }
   return "Queued follow-up";
 }

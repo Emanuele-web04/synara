@@ -15,6 +15,8 @@ import {
 import type {
   BrowserAttachWebviewInput,
   BrowserCaptureScreenshotResult,
+  BrowserCopyLinkEvent,
+  BrowserDetachWebviewInput,
   BrowserExecuteCdpInput,
   BrowserNavigateInput,
   BrowserNewTabInput,
@@ -27,6 +29,7 @@ import type {
   ThreadBrowserState,
   ThreadId,
 } from "@t3tools/contracts";
+import { resolveCopyableBrowserTabUrl } from "@t3tools/shared/browserSession";
 
 import {
   BROWSER_THREAD_SUSPEND_DELAY_MS,
@@ -35,6 +38,7 @@ import {
 } from "./browserManager.types";
 import type {
   BrowserPerformanceSnapshot,
+  BrowserCopyLinkListener,
   BrowserStateListener,
   BrowserUseCdpEvent,
   BrowserUseSnapshot,
@@ -72,6 +76,7 @@ export class DesktopBrowserManager {
   >();
   private readonly lastEmittedVersionByThreadId = new Map<ThreadId, number>();
   private readonly listeners = new Set<BrowserStateListener>();
+  private readonly copyLinkListeners = new Set<BrowserCopyLinkListener>();
   private readonly suspendTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
   private readonly perfCounters = {
     setPanelBoundsCalls: 0,
@@ -102,6 +107,7 @@ export class DesktopBrowserManager {
       openNewTab: (input) => {
         this.newTab(input);
       },
+      copyTabLink: (threadId, tabId) => this.copyTabLink(threadId, tabId),
       incrementCounter: (counter) => this.bumpRuntimeCounter(counter),
     },
     { WebContentsView, shell },
@@ -130,6 +136,13 @@ export class DesktopBrowserManager {
     };
   }
 
+  subscribeCopyLink(listener: BrowserCopyLinkListener): () => void {
+    this.copyLinkListeners.add(listener);
+    return () => {
+      this.copyLinkListeners.delete(listener);
+    };
+  }
+
   dispose(): void {
     for (const timer of this.suspendTimers.values()) {
       clearTimeout(timer);
@@ -140,6 +153,7 @@ export class DesktopBrowserManager {
     this.runtime.destroyAllRuntimes();
     this.runtime.clearRuntimeBookkeeping();
     this.listeners.clear();
+    this.copyLinkListeners.clear();
     this.states.clear();
     this.threadVersionById.clear();
     this.snapshotCacheByThreadId.clear();
@@ -344,6 +358,29 @@ export class DesktopBrowserManager {
     this.runtime.queueRuntimeStateSync(input.threadId, tab.id);
     this.emitState(input.threadId);
     return this.snapshotThreadState(input.threadId, state);
+  }
+
+  detachWebview(input: BrowserDetachWebviewInput): void {
+    const state = this.states.get(input.threadId);
+    const tab = state ? this.getTab(state, input.tabId) : null;
+    if (!state || !tab) {
+      return;
+    }
+
+    const didDetach = this.runtime.detachRendererRuntime(
+      input.threadId,
+      input.tabId,
+      input.webContentsId,
+    );
+    if (!didDetach) {
+      return;
+    }
+
+    const didChange = suspendTabState(tab) || syncThreadLastError(state);
+    if (didChange) {
+      this.markThreadStateChanged(input.threadId);
+      this.emitState(input.threadId);
+    }
   }
 
   navigate(input: BrowserNavigateInput): ThreadBrowserState {
@@ -579,6 +616,10 @@ export class DesktopBrowserManager {
       throw new Error("Couldn't copy a browser screenshot to the clipboard.");
     }
     clipboard.writeImage(image);
+  }
+
+  copyLink(input: BrowserTabInput): void {
+    this.copyTabLink(input.threadId, input.tabId);
   }
 
   // Runs a Chrome DevTools Protocol command against the requested tab so higher-level
@@ -863,6 +904,24 @@ export class DesktopBrowserManager {
 
   private getTab(state: ThreadBrowserState, tabId: string): BrowserTabState | null {
     return state.tabs.find((tab) => tab.id === tabId) ?? null;
+  }
+
+  private copyTabLink(threadId: ThreadId, tabId: string): void {
+    const state = this.states.get(threadId);
+    const tab = state ? this.getTab(state, tabId) : null;
+    const runtime = this.runtime.getRuntime(threadId, tabId);
+    const liveUrl =
+      runtime && !runtime.webContents.isDestroyed() ? runtime.webContents.getURL() : null;
+    const url = resolveCopyableBrowserTabUrl(tab, liveUrl);
+    if (!url) {
+      return;
+    }
+
+    clipboard.writeText(url);
+    const event: BrowserCopyLinkEvent = { threadId, url };
+    for (const listener of this.copyLinkListeners) {
+      listener(event);
+    }
   }
 
   private emitState(threadId: ThreadId): void {

@@ -12,6 +12,7 @@ import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 export const RIGHT_DOCK_PANE_KINDS = [
   "browser",
   "diff",
+  "file",
   "terminal",
   "sidechat",
   "git",
@@ -30,6 +31,8 @@ export interface RightDockPane {
   // diff panes remember which turn/file they were opened on.
   diffTurnId: TurnId | null;
   diffFilePath: string | null;
+  // file panes preview one workspace-relative file.
+  filePath: string | null;
 }
 
 export interface RightDockThreadState {
@@ -38,11 +41,11 @@ export interface RightDockThreadState {
   activePaneId: string | null;
 }
 
-// Kinds that can only ever have one instance per host thread. Sidechat is the
-// only kind that allows multiple concurrent panes (one per embedded thread), so
-// the singleton set is derived as "every kind except sidechat".
+const MULTI_INSTANCE_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set(["sidechat", "file"]);
+
+// Kinds that can only ever have one instance per host thread.
 export const SINGLETON_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set(
-  RIGHT_DOCK_PANE_KINDS.filter((kind) => kind !== "sidechat"),
+  RIGHT_DOCK_PANE_KINDS.filter((kind) => !MULTI_INSTANCE_PANE_KINDS.has(kind)),
 );
 
 export function isSingletonPaneKind(kind: RightDockPaneKind): boolean {
@@ -79,6 +82,7 @@ function sanitizePersistedPane(value: unknown): RightDockPane | null {
     threadId: typeof candidate.threadId === "string" ? (candidate.threadId as ThreadId) : null,
     diffTurnId: typeof candidate.diffTurnId === "string" ? (candidate.diffTurnId as TurnId) : null,
     diffFilePath: typeof candidate.diffFilePath === "string" ? candidate.diffFilePath : null,
+    filePath: typeof candidate.filePath === "string" ? candidate.filePath : null,
   };
 }
 
@@ -118,6 +122,7 @@ export interface OpenPaneInput {
   threadId?: ThreadId | null;
   diffTurnId?: TurnId | null;
   diffFilePath?: string | null;
+  filePath?: string | null;
 }
 
 function createPane(input: OpenPaneInput): RightDockPane {
@@ -127,7 +132,25 @@ function createPane(input: OpenPaneInput): RightDockPane {
     threadId: input.threadId ?? null,
     diffTurnId: input.diffTurnId ?? null,
     diffFilePath: input.diffFilePath ?? null,
+    filePath: input.filePath ?? null,
   };
+}
+
+function findMatchingMultiInstancePane(
+  state: RightDockThreadState,
+  input: OpenPaneInput,
+): RightDockPane | undefined {
+  if (input.kind === "sidechat") {
+    if (!input.threadId) {
+      return undefined;
+    }
+    return state.panes.find((pane) => pane.kind === "sidechat" && pane.threadId === input.threadId);
+  }
+  if (input.kind === "file") {
+    const filePath = input.filePath ?? null;
+    return state.panes.find((pane) => pane.kind === "file" && pane.filePath === filePath);
+  }
+  return undefined;
 }
 
 function findSingletonPane(
@@ -166,11 +189,9 @@ export function openPaneInState(
       return { open: true, panes: nextPanes, activePaneId: existing.id };
     }
   } else {
-    const existingForThread = input.threadId
-      ? state.panes.find((pane) => pane.kind === input.kind && pane.threadId === input.threadId)
-      : undefined;
-    if (existingForThread) {
-      return { open: true, panes: state.panes, activePaneId: existingForThread.id };
+    const existing = findMatchingMultiInstancePane(state, input);
+    if (existing) {
+      return { open: true, panes: state.panes, activePaneId: existing.id };
     }
   }
 
@@ -246,7 +267,7 @@ export function setDockOpenInState(
 export function updatePaneInState(
   state: RightDockThreadState,
   paneId: string,
-  patch: Partial<Pick<RightDockPane, "diffTurnId" | "diffFilePath" | "threadId">>,
+  patch: Partial<Pick<RightDockPane, "diffTurnId" | "diffFilePath" | "filePath" | "threadId">>,
 ): RightDockThreadState {
   let changed = false;
   const nextPanes = state.panes.map((pane) => {
@@ -257,6 +278,7 @@ export function updatePaneInState(
     if (
       nextPane.diffTurnId !== pane.diffTurnId ||
       nextPane.diffFilePath !== pane.diffFilePath ||
+      nextPane.filePath !== pane.filePath ||
       nextPane.threadId !== pane.threadId
     ) {
       changed = true;

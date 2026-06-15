@@ -96,6 +96,21 @@ export function isWorkspaceRootWithin(
   return normalizedCandidate.startsWith(prefix);
 }
 
+// Per-thread scratch working directories (under the OS temp dir) used when a
+// provider session starts before any project workspace exists, e.g. a chat's
+// first turn racing its workspace provisioning.
+export const SCRATCH_WORKSPACES_DIRNAME = "synara-codex-workspaces";
+
+// True when an absolute path points inside a per-thread scratch workspace.
+// This is a string-level gate on purpose: the web client uses it to decide
+// whether an out-of-workspace file reference can still preview in-app, while
+// the server's local-preview allowlist enforces real (realpath) containment.
+export function isScratchWorkspacePath(filePath: string): boolean {
+  const normalized = filePath.trim().replace(/\\/g, "/");
+  const isAbsolute = normalized.startsWith("/") || /^[a-z]:\//i.test(normalized);
+  return isAbsolute && normalized.includes(`/${SCRATCH_WORKSPACES_DIRNAME}/`);
+}
+
 export function deriveAssociatedWorktreeMetadata(input: {
   branch?: string | null;
   worktreePath?: string | null;

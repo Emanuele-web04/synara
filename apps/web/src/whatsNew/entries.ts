@@ -22,6 +22,198 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.2.2",
+    date: "Jun 14",
+    features: [
+      {
+        id: "profile-and-personalization",
+        title: "Your Synara profile has more personality",
+        description:
+          "Profile settings now include richer identity details, activity stats, and a cleaner editing flow so Synara feels more like your own workspace.",
+        details:
+          "This release adds profile stats aggregation, profile settings UI polish, activity heatmap refinements, avatar/profile editing updates, and focused coverage for the new profile data paths.",
+      },
+      {
+        id: "soft-delete-retention",
+        title: "Deleted threads get a safer recovery window",
+        description:
+          "Thread deletion now keeps soft-deleted data around long enough to avoid accidental loss while still letting cleanup happen predictably.",
+        details:
+          "Synara now tracks thread retention state explicitly, covers soft-delete cleanup behavior with server tests, and keeps deletion/recovery semantics more predictable for early WIP data.",
+      },
+      {
+        id: "live-composer-edits",
+        title: "Live composer edits stay visible per turn",
+        description:
+          "Composer changes made while a turn is running now stay attached to the right turn, reducing confusing stale text or hidden edits during active work.",
+        details:
+          "The chat route and composer state handling were tightened so live edits remain visible in the correct turn lifecycle without bleeding into unrelated transcript updates.",
+      },
+      {
+        id: "release-test-stability",
+        title: "Release checks are steadier",
+        description:
+          "The release test path now avoids known teardown and child-process timing traps, making full validation less likely to stall after tests have passed.",
+        details:
+          "Effect ACP child-process fixture tests now have explicit timeouts, and the server test script runs its Vitest files serially so the root Turbo test gate exits cleanly during release validation.",
+      },
+    ],
+  },
+  {
+    version: "0.2.1",
+    date: "Jun 14",
+    features: [
+      {
+        id: "inline-file-comments",
+        title: "File comments can ride along with your next message",
+        description:
+          "You can now leave focused line comments from composer and preview surfaces, then send them with the prompt so agents get clearer file-specific context.",
+        details:
+          "This release adds file-line comment boxes, summary chips, draft persistence, reference attachment handling, preview/editor entry points, chat timeline support, and focused tests for comment parsing, composer drafts, terminal context, kanban dispatch, and chat-view logic.",
+      },
+      {
+        id: "active-turn-file-changes",
+        title: "Live file changes stay scoped to the active turn",
+        description:
+          "The live changed-files panel now follows the turn that is actually running, avoiding stale or unrelated file edits when sessions overlap or recover.",
+        details:
+          "Provider runtime ingestion now carries active turn identity through Codex, Claude, checkpoint, and live-change paths. Chat selectors and composer change headers were tightened so tool/file rows from older turns do not masquerade as current live output.",
+      },
+      {
+        id: "workspace-reference-recovery",
+        title: "Partial workspace file references resolve more reliably",
+        description:
+          "Opening files from shortened or partial references is more forgiving, especially when assistant output mentions a file path without the full workspace prefix.",
+        details:
+          "Workspace file-system lookup now searches entries more deliberately, exposes shared server helpers, improves opener behavior, and adds coverage around partial references so previewing referenced files lands on the intended workspace item.",
+      },
+      {
+        id: "restart-and-idle-recovery",
+        title: "Restarted sessions are less likely to leave turns hanging",
+        description:
+          "After provider restarts, reconnects, or quiet ACP sessions, Synara does a better job of reconciling active turns and finishing idle work instead of getting stuck.",
+        details:
+          "Startup turn reconciliation, ACP idle watchdog handling, provider runtime ingestion, Cursor/Grok/OpenCode adapter event paths, command reactor cleanup, and shared thread summaries now work together to recover unfinished turns and surface stale runtime state more predictably.",
+      },
+    ],
+  },
+  {
+    version: "0.2.0",
+    date: "Jun 13",
+    features: [
+      {
+        id: "secure-pdf-preview",
+        title: "PDFs open safely inside Synara",
+        description:
+          "Local PDFs can now be previewed directly in the workspace pane with page navigation, zoom controls, selection-safe rendering, and hardened link handling.",
+        details:
+          "This release replaces browser iframe PDF handling with a pdf.js-powered viewer, authenticated local preview routes, workspace/scratch allowlists, sanitized annotation links, page reset behavior when switching files, fresh page proxies per document, and focused server/web tests for local image/PDF access and PDF navigation helpers.",
+      },
+      {
+        id: "workspace-file-preview",
+        title: "File preview is shared across chat and editor workspaces",
+        description:
+          "The right dock and editor workspace now use the same richer file preview surface, so browsing files, images, markdown, and PDFs feels more consistent.",
+        details:
+          "Synara now routes file preview through `WorkspaceFilePreview`, `PdfFilePreview`, shared preview headers, markdown/source selection references, workspace file openers, dock pane activation metadata, local preview URL helpers, and tighter file reference context-menu behavior.",
+      },
+      {
+        id: "pi-plugin-routing",
+        title: "Pi plugin sessions start in the right place",
+        description:
+          "Pi-backed plugin flows now route through Synara more reliably, discover model support better, and keep startup prompts attached to the correct provider session.",
+        details:
+          "The Pi adapter gained richer ACP handling, extension model discovery, cwd/session wiring, startup prompt routing, provider command reactor coverage, provider service safeguards, and an ACP mock agent so plugin startup, prompt forwarding, and provider state transitions are covered more directly.",
+      },
+      {
+        id: "chat-startup-and-timeline",
+        title: "Chat startup and timelines do less unnecessary work",
+        description:
+          "Opening busy chats should feel calmer: timeline ordering, transcript selection, collapsed turns, and sidebar-driven updates were tightened for the common path.",
+        details:
+          "This release optimizes chat view startup selectors, timeline ordering, settled-turn collapse fallback, message timeline height logic, transcript tail behavior, right-dock runtime activation, and route-level chat restoration with additional selector, timeline, and browser coverage.",
+      },
+      {
+        id: "composer-shortcuts-and-markdown",
+        title: "Composer and markdown interactions picked up useful polish",
+        description:
+          "Cmd+L now focuses the composer, markdown task lists render cleanly, inline mentions behave more predictably, and pending user-input panels are easier to scan.",
+        details:
+          "New keybinding metadata and tests cover the composer focus shortcut, while markdown task-list parsing, chat references, inline mention chips, composer banners, pending user-input panels, and shortcut-sheet entries received focused fixes.",
+      },
+      {
+        id: "cursor-and-changed-files",
+        title: "Cursor and changed-file views are easier to trust",
+        description:
+          "Cursor message ids are handled more carefully, changed files moved to a flatter UI path, and stale plan/sidebar indicators were cleaned up.",
+        details:
+          "Synara now preserves Cursor message identity more reliably, removes the older turn diff tree path, refines changed-file file-list rendering, fixes duplicate plan-mode icons and stale plan sidebar state, and hides inline project actions from the chat header where they created noise.",
+      },
+      {
+        id: "preview-security-and-local-files",
+        title: "Local previews have tighter safety rails",
+        description:
+          "Local image/PDF preview routes are more explicit about what can be opened, how auth applies, and when unsafe paths or URLs should be rejected.",
+        details:
+          "Server-side local preview handling now shares local preview file helpers, narrows CORS behavior for preview responses, covers local image routes, hardens scratch workspace path generation, and keeps external PDF links on an allowlisted path instead of trusting unsafe annotation URLs.",
+      },
+    ],
+  },
+  {
+    version: "0.1.9",
+    date: "Jun 12",
+    features: [
+      {
+        id: "chat-workspace-folders",
+        title: "Chats get Codex-style workspace folders",
+        description:
+          "Project chats now keep their generated files in clearer chat-specific workspace folders, making it easier to understand what belongs to each conversation.",
+        details:
+          "This release adds Codex-like workspace folder creation, associated worktree metadata handling, file-only workspace search, settings search deep links, and harder Gemini probe handling so workspace state stays more predictable across chat and editor surfaces.",
+      },
+      {
+        id: "transcript-turn-stability",
+        title: "Transcript turns collapse more reliably",
+        description:
+          "Long-running assistant work, collapsed turn rows, and transcript tail-follow behavior are steadier during active output and after reconnects.",
+        details:
+          "The timeline now falls back to the latest turn when visible turn ids are empty, fixes collapsed-turn and tail-jitter edge cases, and keeps scroll-follow logic scoped to real transcript messages instead of tool-only churn.",
+      },
+      {
+        id: "browser-and-copy-flow",
+        title: "Browser sessions and copy links feel smoother",
+        description:
+          "In-app browser sessions recover better, and copy-link flows now have cleaner behavior when moving between browser and chat contexts.",
+        details:
+          "Browser session handling, copy-link actions, local image preview state, and shared error-card behavior were tightened so browsing, previewing, and moving references into prompts produce fewer stale or duplicated states.",
+      },
+      {
+        id: "settings-and-density",
+        title: "Settings open faster and density is easier to tune",
+        description:
+          "Settings navigation, sidebar search, and UI density controls picked up polish so repeated configuration work feels lighter.",
+        details:
+          "Settings page open avoids extra streaming-tick re-renders, sidebar search deep links can jump directly to matching settings, UI density follow-ups refine sidebar and composer spacing, and shared project menus replace older bespoke editor picker code.",
+      },
+      {
+        id: "editor-and-kanban-polish",
+        title: "Editor and kanban workflows are cleaner",
+        description:
+          "Editor mode feedback, project picker reuse, kanban composer menus, and image preview handling all received focused follow-ups.",
+        details:
+          "This release fixes editor-mode production feedback, shares project menu picker behavior, splits kanban composer menu discovery from editor logic, and consolidates local image preview state across chat and editor views.",
+      },
+      {
+        id: "soccer-physics-playground",
+        title: "A World Cup soccer ball playground landed",
+        description:
+          "There is now a playful soccer-ball physics view for experimenting with motion and interaction inside Synara.",
+        details:
+          "The new World Cup soccer ball physics playground adds a self-contained visual interaction surface, with follow-up formatting and server typecheck cleanup landed on main before the release.",
+      },
+    ],
+  },
+  {
     version: "0.1.8",
     date: "Jun 11",
     features: [
@@ -742,9 +934,9 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       },
       {
         id: "thread-retention-cleanup",
-        title: "Old inactive threads clean up after seven days",
+        title: "Old inactive threads hide after seven days",
         description:
-          "A safer retention job now removes stale inactive threads in batches, publishes maintenance progress, protects running work and approvals, and compacts SQLite when enough space can be reclaimed.",
+          "The retention job now hides stale inactive threads from the app in batches, publishes maintenance progress, and protects running work and approvals while keeping database history available for long-term stats.",
       },
       {
         id: "websocket-and-server-polish",

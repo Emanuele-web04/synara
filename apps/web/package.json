@@ -1,6 +1,6 @@
 {
   "name": "@t3tools/web",
-  "version": "0.1.8",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -46,9 +46,11 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "effect": "catalog:",
+    "html-to-image": "^1.11.13",
     "katex": "^0.16.45",
     "lexical": "^0.41.0",
     "mermaid": "^11.15.0",
+    "pdfjs-dist": "^5.4.296",
     "react": "^19.0.0",
     "react-colorful": "^5.6.1",
     "react-dom": "^19.0.0",

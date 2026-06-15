@@ -11,7 +11,11 @@ import { EDITOR_ICON_ROUTE_PATH } from "@t3tools/shared/editorIcons";
 import { clearEditorIconInFlightCache } from "./editorAppIcons";
 import { createHttpRequestHandler, isLegacyTokenAuthorized } from "./http";
 import type { ServerAuthShape } from "./auth/Services/ServerAuth";
-import { deriveServerPaths, type ServerConfigShape } from "./config";
+import {
+  deriveServerPaths,
+  resolveDefaultChatWorkspaceRoot,
+  type ServerConfigShape,
+} from "./config";
 import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
 import type { ServerReadiness } from "./server/readiness";
 
@@ -57,6 +61,7 @@ async function makeConfig(overrides: Partial<ServerConfigShape> = {}): Promise<S
     host: undefined,
     cwd: baseDir,
     homeDir: os.homedir(),
+    chatWorkspaceRoot: resolveDefaultChatWorkspaceRoot({ homeDir: os.homedir() }),
     baseDir,
     ...derivedPaths,
     staticDir: undefined,

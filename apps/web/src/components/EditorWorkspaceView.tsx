@@ -1,13 +1,13 @@
 // FILE: EditorWorkspaceView.tsx
-// Purpose: Read-only editor-style thread surface with file explorer, file/diff preview, and chat.
+// Purpose: Read-only editor-style thread surface with file explorer, workspace
+//          file search, file/diff preview, and chat.
 // Layer: Chat route presentation
 
-import type { ProjectFileSystemEntry } from "@t3tools/contracts";
+import type { ProjectEntry, ProjectFileSystemEntry, ProjectId } from "@t3tools/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
+import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Component,
-  Suspense,
   type ComponentPropsWithoutRef,
   type CSSProperties,
   type DragEvent as ReactDragEvent,
@@ -16,8 +16,6 @@ import {
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
   forwardRef,
-  memo,
-  use,
   useCallback,
   useEffect,
   useMemo,
@@ -25,44 +23,43 @@ import {
   useState,
 } from "react";
 
-import { ChangesIcon, ChatBubbleIcon, DiffIcon, PanelRightCloseIcon } from "~/lib/icons";
-import { basenameOfPath } from "~/file-icons";
-import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
+import {
+  ChangesIcon,
+  ChatBubbleIcon,
+  ChevronDownIcon,
+  DiffIcon,
+  PanelRightCloseIcon,
+  SearchIcon,
+} from "~/lib/icons";
+import {
+  useDesktopTopBarTrafficLightGutterClassName,
+  useDesktopTopBarWindowControlsGutterClassName,
+} from "~/hooks/useDesktopTopBarGutter";
 import {
   buildFileDiffRenderKey,
-  resolveDiffThemeName,
   resolveFileDiffPath,
   splitRepoRelativePath,
   summarizeFileDiffStats,
-  type DiffThemeName,
 } from "~/lib/diffRendering";
+import { showFileReferenceContextMenu } from "~/lib/fileReferenceContextMenu";
 import {
   projectListDirectoriesQueryOptions,
   projectReadFileQueryOptions,
+  projectSearchEntriesQueryOptions,
 } from "~/lib/projectReactQuery";
 import {
   CHAT_FILE_REFERENCE_DRAG_TYPE,
   formatChatFileReference,
-  formatSelectionLabel,
-  getSelectionWithin,
   type ChatFileReference,
-  type SelectionWithin,
 } from "~/lib/chatReferences";
-import {
-  MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS,
-  cacheSyntaxHighlightedHtml,
-  createSyntaxHighlightCacheKey,
-  getCachedSyntaxHighlightedHtml,
-  getSyntaxHighlighterPromise,
-  getSyntaxLanguageForPath,
-  highlightCodeToHtmlWithFallback,
-} from "~/lib/syntaxHighlighting";
-import { readNativeApi } from "~/nativeApi";
+import type { FileCommentSelection } from "~/lib/fileComments";
+import { getSyntaxHighlighterPromise, getSyntaxLanguageForPath } from "~/lib/syntaxHighlighting";
 import { cn } from "~/lib/utils";
 import { useTheme } from "~/hooks/useTheme";
 import { Skeleton } from "./ui/skeleton";
 import {
   ChatHeaderButton,
+  ChatHeaderIconButton,
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
 } from "./chat/chatHeaderControls";
@@ -71,11 +68,13 @@ import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "./ui/collapsi
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { DiffStat } from "./chat/DiffStatLabel";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
-import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
-import { useCodeSelectionAction } from "./chat/useCodeSelectionAction";
+import { ProjectMenuPicker, type ProjectMenuPickerOption } from "./ProjectMenuPicker";
+import { SearchInput } from "./ui/search-input";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { WorkspaceFilePreview } from "./WorkspaceFilePreview";
 
 type EditorCenterMode = "file" | "diff";
+type EditorActivityBarItem = EditorCenterMode | "search";
 
 const EDITOR_EXPLORER_HIDDEN_DIRECTORY_NAMES = new Set([
   ".cache",
@@ -102,10 +101,17 @@ const EDITOR_CHAT_PANE_DEFAULT_WIDTH = 384;
 const EDITOR_CHAT_PANE_MIN_WIDTH = 320;
 const EDITOR_CHAT_PANE_MAX_WIDTH = 600;
 const EDITOR_CHAT_PANE_KEYBOARD_STEP = 24;
+// Mirrors the composer mention search: debounce keystrokes so they don't fan
+// out into fuzzy-search RPCs, and cap results to keep the sidebar light.
+const EDITOR_SEARCH_QUERY_DEBOUNCE_MS = 120;
+const EDITOR_SEARCH_RESULTS_LIMIT = 80;
+const EMPTY_WORKSPACE_SEARCH_FILE_MATCHES: ReadonlyArray<ProjectEntry> = [];
 
 interface EditorWorkspaceViewProps {
   workspaceRoot: string | null;
   projectName: string | null;
+  currentProjectId?: ProjectId | null;
+  projectOptions?: ReadonlyArray<ProjectMenuPickerOption>;
   selectedFilePath: string | null;
   expandedDirectories: ReadonlySet<string>;
   centerMode: EditorCenterMode;
@@ -122,6 +128,8 @@ interface EditorWorkspaceViewProps {
   onExitEditorView: () => void;
   onReferenceInChat?: (reference: ChatFileReference) => void;
   onAskWhyInChat?: (reference: ChatFileReference) => void;
+  onCommentInChat?: (comment: FileCommentSelection) => void;
+  onSelectProject?: (projectId: ProjectId) => void;
 }
 
 // Marks the drag payload so the chat composer can accept it as a reference.
@@ -129,59 +137,6 @@ function setFileReferenceDragData(dataTransfer: DataTransfer, path: string): voi
   dataTransfer.effectAllowed = "copy";
   dataTransfer.setData(CHAT_FILE_REFERENCE_DRAG_TYPE, formatChatFileReference({ path }));
   dataTransfer.setData("text/plain", path);
-}
-
-// Right-click menu shared by explorer rows, changed-file rows, and the file
-// preview. Falls back to a DOM menu outside the desktop app.
-async function showFileReferenceContextMenu(input: {
-  path: string;
-  position: { x: number; y: number };
-  selection?: SelectionWithin | null;
-  onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
-  onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
-}): Promise<void> {
-  const api = readNativeApi();
-  if (!api) {
-    return;
-  }
-  const reference: ChatFileReference = {
-    path: input.path,
-    ...(input.selection ?? {}),
-  };
-  const rangeLabel = formatSelectionLabel(reference);
-  const clicked = await api.contextMenu.show(
-    [
-      ...(input.onReferenceInChat
-        ? [
-            {
-              id: "reference-in-chat" as const,
-              label: rangeLabel ? `Reference ${rangeLabel} in chat` : "Reference in chat",
-            },
-          ]
-        : []),
-      ...(input.onAskWhyInChat
-        ? [
-            {
-              id: "ask-why-in-chat" as const,
-              label: rangeLabel ? `Ask why ${rangeLabel} changed` : "Ask why this changed",
-            },
-          ]
-        : []),
-      { id: "copy-path" as const, label: "Copy path" },
-    ],
-    input.position,
-  );
-  if (clicked === "reference-in-chat") {
-    input.onReferenceInChat?.(reference);
-    return;
-  }
-  if (clicked === "ask-why-in-chat") {
-    input.onAskWhyInChat?.(reference);
-    return;
-  }
-  if (clicked === "copy-path") {
-    void navigator.clipboard?.writeText(input.path);
-  }
 }
 
 function clampEditorChatPaneWidth(width: number): number {
@@ -273,7 +228,7 @@ function shouldShowExplorerEntry(entry: ProjectFileSystemEntry): boolean {
 function useExplorerEntryPrefetch(cwd: string | null) {
   const queryClient = useQueryClient();
   return useCallback(
-    (entry: ProjectFileSystemEntry) => {
+    (entry: Pick<ProjectFileSystemEntry, "path" | "kind">) => {
       if (!cwd) {
         return;
       }
@@ -693,343 +648,173 @@ function WorkspaceFilesSidebar(props: {
   );
 }
 
-class FilePreviewHighlightErrorBoundary extends Component<
-  { fallback: ReactNode; children: ReactNode },
-  { hasError: boolean }
-> {
-  constructor(props: { fallback: ReactNode; children: ReactNode }) {
-    super(props);
-    this.state = { hasError: false };
-  }
-
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-
-  override render() {
-    if (this.state.hasError) {
-      return this.props.fallback;
-    }
-    return this.props.children;
-  }
-}
-
-// Above this the plain fallback skips per-line spans (and therefore line
-// numbers) to keep the DOM small for huge files.
-const MAX_PLAIN_NUMBERED_LINES = 20_000;
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-function PlainFileContents(props: { contents: string }) {
-  // Wrap each line in a .line span (mirroring Shiki output) so the CSS
-  // counter gutter applies. Built as an HTML string to avoid per-line React
-  // nodes; the trailing \n stays inside each span so selection math and
-  // clipboard copies keep working.
-  const numberedHtml = useMemo(() => {
-    if (props.contents.length === 0) {
-      return null;
-    }
-    const lines = props.contents.split("\n");
-    if (lines.length > MAX_PLAIN_NUMBERED_LINES) {
-      return null;
-    }
-    return `<code>${lines
-      .map((line, index) =>
-        index === lines.length - 1
-          ? `<span class="line">${escapeHtml(line)}</span>`
-          : `<span class="line">${escapeHtml(line)}\n</span>`,
-      )
-      .join("")}</code>`;
-  }, [props.contents]);
-
-  if (numberedHtml !== null) {
-    return (
-      <pre
-        className="editor-file-viewer__plain"
-        aria-readonly="true"
-        dangerouslySetInnerHTML={{ __html: numberedHtml }}
-      />
-    );
-  }
-
-  return (
-    <pre className="editor-file-viewer__plain" aria-readonly="true">
-      {props.contents}
-    </pre>
-  );
-}
-
-function SyntaxHighlightedFileContents(props: {
-  path: string;
-  contents: string;
-  themeName: DiffThemeName;
+function WorkspaceSearchResultRow(props: {
+  entry: ProjectEntry;
+  selected: boolean;
+  onSelectFile: (path: string) => void;
+  onPrefetchEntry: (entry: Pick<ProjectFileSystemEntry, "path" | "kind">) => void;
+  onEntryContextMenu: (path: string, position: { x: number; y: number }) => void;
 }) {
-  const language = useMemo(() => getSyntaxLanguageForPath(props.path), [props.path]);
-  // The cache key hashes the whole file, so keep it off incidental re-renders
-  // (selection state, diff-warming churn) and only recompute when inputs change.
-  const cacheKey = useMemo(
-    () => createSyntaxHighlightCacheKey(props.contents, language, props.themeName),
-    [props.contents, language, props.themeName],
-  );
-  const cachedHighlightedHtml = getCachedSyntaxHighlightedHtml(cacheKey);
-
-  if (cachedHighlightedHtml != null) {
-    return (
-      <div
-        className="editor-file-viewer__highlight"
-        data-syntax-highlighted="true"
-        dangerouslySetInnerHTML={{ __html: cachedHighlightedHtml }}
-      />
-    );
-  }
-
-  // The uncached path lives in its own component: an early return above must
-  // not change this component's hook order once the cache fills.
-  return (
-    <UncachedSyntaxHighlightedFileContents
-      cacheKey={cacheKey}
-      contents={props.contents}
-      language={language}
-      themeName={props.themeName}
-    />
-  );
-}
-
-function UncachedSyntaxHighlightedFileContents(props: {
-  cacheKey: string;
-  contents: string;
-  language: string;
-  themeName: DiffThemeName;
-}) {
-  const highlighter = use(getSyntaxHighlighterPromise(props.language));
-  const highlightedHtml = useMemo(() => {
-    return highlightCodeToHtmlWithFallback(
-      highlighter,
-      props.contents,
-      props.language,
-      props.themeName,
-    );
-  }, [highlighter, props.contents, props.language, props.themeName]);
-
-  useEffect(() => {
-    cacheSyntaxHighlightedHtml(props.cacheKey, highlightedHtml, props.contents);
-  }, [props.cacheKey, highlightedHtml, props.contents]);
+  const { entry, onEntryContextMenu, onPrefetchEntry, onSelectFile } = props;
+  const { dir, name } = splitRepoRelativePath(entry.path);
+  const handlePrefetch = useCallback(() => {
+    onPrefetchEntry(entry);
+  }, [entry, onPrefetchEntry]);
 
   return (
-    <div
-      className="editor-file-viewer__highlight"
-      data-syntax-highlighted="true"
-      dangerouslySetInnerHTML={{ __html: highlightedHtml }}
-    />
-  );
-}
-
-// Memoized: its inputs (path, contents, themeName) are stable across the
-// FilePreview re-renders triggered by selection state and diff-warming, so the
-// highlighted body (and its cache lookup) is skipped unless the file changes.
-const FileContentsView = memo(function FileContentsView(props: {
-  path: string;
-  contents: string;
-  themeName: DiffThemeName;
-}) {
-  const plain = <PlainFileContents contents={props.contents} />;
-  if (props.contents.length === 0 || props.contents.length > MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS) {
-    return plain;
-  }
-
-  return (
-    <FilePreviewHighlightErrorBoundary key={props.path} fallback={plain}>
-      <Suspense fallback={plain}>
-        <SyntaxHighlightedFileContents
-          path={props.path}
-          contents={props.contents}
-          themeName={props.themeName}
-        />
-      </Suspense>
-    </FilePreviewHighlightErrorBoundary>
-  );
-});
-
-// Mimics indented code lines so the placeholder reads as a file body
-// instead of a generic spinner block.
-const FILE_PREVIEW_SKELETON_LINES = [
-  { indent: 0, width: "w-5/12" },
-  { indent: 0, width: "w-8/12" },
-  { indent: 1, width: "w-10/12" },
-  { indent: 1, width: "w-7/12" },
-  { indent: 2, width: "w-9/12" },
-  { indent: 2, width: "w-4/12" },
-  { indent: 1, width: "w-6/12" },
-  { indent: 0, width: "w-3/12" },
-  { indent: 0, width: "w-7/12" },
-  { indent: 1, width: "w-9/12" },
-  { indent: 1, width: "w-5/12" },
-  { indent: 0, width: "w-2/12" },
-];
-
-function FilePreviewLoadingState() {
-  return (
-    <div
-      className="min-h-0 flex-1 space-y-2.5 overflow-hidden px-3 py-3"
-      role="status"
-      aria-label="Loading file..."
+    <button
+      type="button"
+      className={cn(
+        "flex h-8 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-left text-[12px] transition-colors",
+        props.selected
+          ? "bg-[var(--color-background-button-secondary)] text-foreground"
+          : "text-foreground/78 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
+      )}
+      title={entry.path}
+      draggable
+      onDragStart={(event) => {
+        setFileReferenceDragData(event.dataTransfer, entry.path);
+      }}
+      onClick={() => onSelectFile(entry.path)}
+      onPointerEnter={handlePrefetch}
+      onFocus={handlePrefetch}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onEntryContextMenu(entry.path, { x: event.clientX, y: event.clientY });
+      }}
     >
-      {FILE_PREVIEW_SKELETON_LINES.map((line) => (
-        <div key={`${line.indent}-${line.width}`} className="flex h-3 items-center gap-2">
-          <Skeleton className="h-2.5 w-5 shrink-0 rounded-full opacity-60" />
-          <Skeleton
-            className={cn("h-2.5 rounded-full", line.width)}
-            style={{ marginLeft: `${line.indent * 1}rem` }}
-          />
-        </div>
-      ))}
-      <span className="sr-only">Loading file...</span>
-    </div>
-  );
-}
-
-function FilePreview(props: {
-  workspaceRoot: string | null;
-  selectedFilePath: string | null;
-  onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
-  onAskWhyInChat: ((reference: ChatFileReference) => void) | undefined;
-}) {
-  const { resolvedTheme } = useTheme();
-  const diffThemeName = resolveDiffThemeName(resolvedTheme);
-  const contentsRef = useRef<HTMLDivElement>(null);
-  const { onAskWhyInChat, onReferenceInChat, selectedFilePath } = props;
-  const fileQuery = useQuery(
-    projectReadFileQueryOptions({
-      cwd: props.workspaceRoot,
-      relativePath: props.selectedFilePath,
-      enabled: props.workspaceRoot !== null && props.selectedFilePath !== null,
-    }),
-  );
-
-  const fileContents = fileQuery.data?.contents ?? "";
-  const lineCount = useMemo(
-    () => (fileContents.length === 0 ? 0 : fileContents.split("\n").length),
-    [fileContents],
-  );
-  // Highlight code -> floating "Add to chat" -> reference that quotes exactly
-  // what was selected (down to a single word), mirroring the transcript flow.
-  const readPreviewSelection = useCallback(
-    (container: HTMLElement) => getSelectionWithin(container),
-    [],
-  );
-  const commitPreviewSelection = useCallback(
-    (selection: SelectionWithin) => {
-      if (selectedFilePath) {
-        onReferenceInChat?.({ path: selectedFilePath, ...selection });
-      }
-    },
-    [onReferenceInChat, selectedFilePath],
-  );
-  const previewSelectionAction = useCodeSelectionAction({
-    enabled: Boolean(onReferenceInChat && selectedFilePath),
-    readSelection: readPreviewSelection,
-    onCommit: commitPreviewSelection,
-  });
-  // Right-click references the selected line range when text is selected,
-  // otherwise the whole file.
-  const handleContentsContextMenu = useCallback(
-    (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (!selectedFilePath) {
-        return;
-      }
-      event.preventDefault();
-      const container = contentsRef.current;
-      const selection = container ? getSelectionWithin(container) : null;
-      void showFileReferenceContextMenu({
-        path: selectedFilePath,
-        position: { x: event.clientX, y: event.clientY },
-        selection,
-        onReferenceInChat,
-        onAskWhyInChat,
-      });
-    },
-    [onAskWhyInChat, onReferenceInChat, selectedFilePath],
-  );
-
-  if (!props.workspaceRoot) {
-    return (
-      <PanelStateMessage density="compact" fill="flex">
-        <p>No workspace is attached to this chat.</p>
-      </PanelStateMessage>
-    );
-  }
-
-  if (!props.selectedFilePath) {
-    return (
-      <PanelStateMessage density="compact" fill="flex">
-        <p>Select a file from the explorer.</p>
-      </PanelStateMessage>
-    );
-  }
-
-  return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)]">
-      <div
-        className={cn(
-          "flex h-10 shrink-0 items-center gap-2 px-3",
-          CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-        )}
-      >
-        <FileEntryIcon
-          pathValue={props.selectedFilePath}
-          kind="file"
-          className="size-3.5 shrink-0"
-        />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[12px] font-medium text-foreground">
-            {basenameOfPath(props.selectedFilePath)}
-          </div>
-          <div className="truncate text-[10px] text-muted-foreground/75">
-            {props.selectedFilePath}
-          </div>
-        </div>
-        {fileQuery.data?.truncated ? (
-          <span className="shrink-0 text-[10px] text-muted-foreground/70">Shown partially</span>
+      <FileEntryIcon pathValue={entry.path} kind="file" className="size-3.5 shrink-0 opacity-75" />
+      <div className="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden">
+        <span className="shrink-0 truncate font-medium">{name}</span>
+        {dir ? (
+          <span className="min-w-0 truncate text-[11px] text-muted-foreground/55">{dir}</span>
         ) : null}
       </div>
-      {fileQuery.isLoading ? (
-        <FilePreviewLoadingState />
-      ) : fileQuery.error ? (
-        <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
-          <p className="text-left text-[11px] text-destructive/85">
-            {fileQuery.error instanceof Error ? fileQuery.error.message : "Could not read file."}
-          </p>
-        </PanelStateMessage>
-      ) : (
-        <div
-          ref={contentsRef}
-          className="editor-file-viewer min-h-0 flex-1 overflow-auto"
-          onContextMenu={handleContentsContextMenu}
-          onMouseUp={previewSelectionAction.onContainerMouseUp}
-        >
-          <FileContentsView
-            path={props.selectedFilePath}
-            contents={fileContents}
-            themeName={diffThemeName}
-          />
-          {lineCount > 0 ? <span className="sr-only">{lineCount} lines</span> : null}
-          {previewSelectionAction.pendingAction ? (
-            <TranscriptSelectionAction
-              left={previewSelectionAction.pendingAction.left}
-              top={previewSelectionAction.pendingAction.top}
-              placement={previewSelectionAction.pendingAction.placement}
-              onAddToChat={previewSelectionAction.commit}
+    </button>
+  );
+}
+
+export function WorkspaceSearchSidebar(props: {
+  workspaceRoot: string | null;
+  query: string;
+  onQueryChange: (query: string) => void;
+  selectedFilePath: string | null;
+  onSelectFile: (path: string) => void;
+  onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
+}) {
+  const prefetchEntry = useExplorerEntryPrefetch(props.workspaceRoot);
+  const { onQueryChange, onReferenceInChat, onSelectFile } = props;
+  const handleEntryContextMenu = useCallback(
+    (path: string, position: { x: number; y: number }) => {
+      void showFileReferenceContextMenu({ path, position, onReferenceInChat });
+    },
+    [onReferenceInChat],
+  );
+  const [debouncedQuery] = useDebouncedValue(props.query, {
+    wait: EDITOR_SEARCH_QUERY_DEBOUNCE_MS,
+  });
+  const inputQuery = props.query.trim();
+  const trimmedQuery = debouncedQuery.trim();
+  const entriesQuery = useQuery(
+    projectSearchEntriesQueryOptions({
+      cwd: props.workspaceRoot,
+      query: trimmedQuery,
+      kind: "file",
+      limit: EDITOR_SEARCH_RESULTS_LIMIT,
+    }),
+  );
+  // Results are tied to the debounced query. While the user is ahead of that
+  // query, keep old results non-selectable so Enter cannot open a stale match.
+  const searchResultsPending = inputQuery !== trimmedQuery || entriesQuery.isPlaceholderData;
+  const searchResultsCurrent = !searchResultsPending;
+  const fileMatches = searchResultsCurrent
+    ? (entriesQuery.data?.entries ?? EMPTY_WORKSPACE_SEARCH_FILE_MATCHES)
+    : EMPTY_WORKSPACE_SEARCH_FILE_MATCHES;
+  const handleInputKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (!searchResultsCurrent) {
+          return;
+        }
+        const topMatch = fileMatches[0];
+        if (topMatch) {
+          onSelectFile(topMatch.path);
+        }
+        return;
+      }
+      if (event.key === "Escape" && props.query.length > 0) {
+        event.stopPropagation();
+        onQueryChange("");
+      }
+    },
+    [fileMatches, onQueryChange, onSelectFile, props.query.length, searchResultsCurrent],
+  );
+
+  return (
+    <aside className="flex min-h-[11rem] w-full shrink-0 flex-col border-b border-border/65 bg-[var(--color-background-surface)] lg:h-full lg:w-56 lg:border-b-0 lg:border-r">
+      <div className="shrink-0 border-b border-border/65 p-2">
+        <SearchInput
+          value={props.query}
+          autoFocus
+          spellCheck={false}
+          autoCorrect="off"
+          autoCapitalize="off"
+          placeholder="Search files..."
+          aria-label="Search files"
+          onChange={(event) => onQueryChange(event.target.value)}
+          onKeyDown={handleInputKeyDown}
+        />
+      </div>
+      <div
+        className={cn(
+          "min-h-0 flex-1 overflow-auto px-1 py-1",
+          fileMatches.length === 0 && "flex flex-col",
+        )}
+      >
+        {!props.workspaceRoot ? (
+          <PanelStateMessage density="compact" fill="flex">
+            <p>No workspace.</p>
+          </PanelStateMessage>
+        ) : inputQuery.length === 0 ? (
+          <PanelStateMessage density="compact" fill="flex">
+            <p>Search files by name or path.</p>
+          </PanelStateMessage>
+        ) : searchResultsCurrent && entriesQuery.error ? (
+          <PanelStateMessage density="compact" fill="flex">
+            <p className="text-destructive/85">
+              {entriesQuery.error instanceof Error
+                ? entriesQuery.error.message
+                : "Could not search files."}
+            </p>
+          </PanelStateMessage>
+        ) : fileMatches.length === 0 ? (
+          searchResultsPending || entriesQuery.isFetching ? (
+            <ExplorerLoadingRows depth={0} />
+          ) : (
+            <PanelStateMessage density="compact" fill="flex">
+              <p>No matching files.</p>
+            </PanelStateMessage>
+          )
+        ) : (
+          fileMatches.map((entry) => (
+            <WorkspaceSearchResultRow
+              key={entry.path}
+              entry={entry}
+              selected={entry.path === props.selectedFilePath}
+              onSelectFile={onSelectFile}
+              onPrefetchEntry={prefetchEntry}
+              onEntryContextMenu={handleEntryContextMenu}
             />
-          ) : null}
-        </div>
-      )}
-    </div>
+          ))
+        )}
+      </div>
+      {fileMatches.length > 0 && entriesQuery.data?.truncated ? (
+        <p className="shrink-0 border-t border-border/45 px-3 py-1.5 text-[10px] text-muted-foreground/70">
+          Showing the top matches. Refine the search to narrow them down.
+        </p>
+      ) : null}
+    </aside>
   );
 }
 
@@ -1072,22 +857,22 @@ function EditorActivityBarButton(props: {
 
 function EditorActivityBar(props: {
   centerMode: EditorCenterMode;
+  searchActive: boolean;
   sidebarVisible: boolean;
-  onSelectMode: (mode: EditorCenterMode) => void;
+  onSelectItem: (item: EditorActivityBarItem) => void;
 }) {
-  const modeLabel = (mode: EditorCenterMode, label: string) =>
-    props.centerMode === mode && props.sidebarVisible
-      ? `Hide ${label.toLowerCase()} sidebar`
-      : label;
+  const filesActive = props.sidebarVisible && !props.searchActive && props.centerMode === "file";
+  const diffActive = props.sidebarVisible && !props.searchActive && props.centerMode === "diff";
+  const searchActive = props.sidebarVisible && props.searchActive;
   return (
     <nav
       className="flex w-12 shrink-0 flex-col items-center border-r border-border/65 bg-[var(--color-background-surface)]"
       aria-label="Editor activity bar"
     >
       <EditorActivityBarButton
-        label={modeLabel("file", "Files")}
-        active={props.centerMode === "file" && props.sidebarVisible}
-        onClick={() => props.onSelectMode("file")}
+        label={filesActive ? "Hide files sidebar" : "Files"}
+        active={filesActive}
+        onClick={() => props.onSelectItem("file")}
       >
         <FileEntryIcon
           pathValue="Files"
@@ -1097,11 +882,18 @@ function EditorActivityBar(props: {
         />
       </EditorActivityBarButton>
       <EditorActivityBarButton
-        label={modeLabel("diff", "Diff")}
-        active={props.centerMode === "diff" && props.sidebarVisible}
-        onClick={() => props.onSelectMode("diff")}
+        label={diffActive ? "Hide diff sidebar" : "Diff"}
+        active={diffActive}
+        onClick={() => props.onSelectItem("diff")}
       >
         <ChangesIcon className="size-5" />
+      </EditorActivityBarButton>
+      <EditorActivityBarButton
+        label={searchActive ? "Hide search sidebar" : "Search files"}
+        active={searchActive}
+        onClick={() => props.onSelectItem("search")}
+      >
+        <SearchIcon className="size-5" />
       </EditorActivityBarButton>
     </nav>
   );
@@ -1124,10 +916,20 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   const [chatPaneVisible, setChatPaneVisible] = useState(() =>
     readStoredEditorVisibility(EDITOR_CHAT_PANE_VISIBLE_STORAGE_KEY),
   );
+  // The search pane replaces the explorer/diff sidebar without touching the
+  // center mode, so picking a result simply opens it in the file preview. The
+  // query lives here so it survives toggling between sidebar panes.
+  const [searchPaneActive, setSearchPaneActive] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const desktopTopBarWindowControlsGutterClassName =
+    useDesktopTopBarWindowControlsGutterClassName();
   const { centerMode, onCenterModeChange } = props;
-  const handleActivityBarSelectMode = useCallback(
-    (mode: EditorCenterMode) => {
-      if (mode === centerMode && sidebarVisible) {
+  const handleActivityBarSelectItem = useCallback(
+    (item: EditorActivityBarItem) => {
+      const itemActive =
+        sidebarVisible &&
+        (item === "search" ? searchPaneActive : !searchPaneActive && centerMode === item);
+      if (itemActive) {
         setSidebarVisible(false);
         storeEditorVisibility(EDITOR_SIDEBAR_VISIBLE_STORAGE_KEY, false);
         return;
@@ -1136,9 +938,14 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
         setSidebarVisible(true);
         storeEditorVisibility(EDITOR_SIDEBAR_VISIBLE_STORAGE_KEY, true);
       }
-      onCenterModeChange(mode);
+      if (item === "search") {
+        setSearchPaneActive(true);
+        return;
+      }
+      setSearchPaneActive(false);
+      onCenterModeChange(item);
     },
-    [centerMode, onCenterModeChange, sidebarVisible],
+    [centerMode, onCenterModeChange, searchPaneActive, sidebarVisible],
   );
   const toggleChatPaneVisible = useCallback(() => {
     setChatPaneVisible((previous) => {
@@ -1267,15 +1074,38 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           "flex shrink-0 items-center gap-2 px-2 sm:px-3",
           CHAT_SURFACE_HEADER_HEIGHT_CLASS,
           CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
+          desktopTopBarWindowControlsGutterClassName,
         )}
       >
-        <div className={cn("flex min-w-0 flex-1 items-center gap-2", trafficLightGutterClassName)}>
-          <span className="truncate text-[13px] font-medium text-foreground">
-            {props.projectName ?? "Workspace"}
-          </span>
-          <span className="hidden truncate text-[11px] text-muted-foreground/70 sm:inline">
-            {props.workspaceRoot ?? "No workspace"}
-          </span>
+        <div
+          className={cn("flex min-w-0 flex-1 items-center gap-1.5", trafficLightGutterClassName)}
+        >
+          <div className="flex min-w-0 items-baseline gap-2">
+            <span className="truncate text-[13px] font-medium text-foreground">
+              {props.projectName ?? "Workspace"}
+            </span>
+            <span className="hidden truncate text-[11px] text-muted-foreground/70 sm:inline">
+              {props.workspaceRoot ?? "No workspace"}
+            </span>
+          </div>
+          {props.onSelectProject && (props.projectOptions?.length ?? 0) > 0 ? (
+            <ProjectMenuPicker
+              projectOptions={props.projectOptions ?? []}
+              selectedProjectId={props.currentProjectId ?? null}
+              onProjectIdChange={props.onSelectProject}
+              trigger={
+                <ChatHeaderIconButton
+                  type="button"
+                  tone="plain"
+                  label="Switch project"
+                  title="Switch project"
+                  className="size-6"
+                >
+                  <ChevronDownIcon className="size-3.5" />
+                </ChatHeaderIconButton>
+              }
+            />
+          ) : null}
         </div>
         <ChatHeaderButton
           type="button"
@@ -1303,11 +1133,21 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <EditorActivityBar
           centerMode={props.centerMode}
+          searchActive={searchPaneActive}
           sidebarVisible={sidebarVisible}
-          onSelectMode={handleActivityBarSelectMode}
+          onSelectItem={handleActivityBarSelectItem}
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:flex-row">
-          {!sidebarVisible ? null : props.centerMode === "diff" ? (
+          {!sidebarVisible ? null : searchPaneActive ? (
+            <WorkspaceSearchSidebar
+              workspaceRoot={props.workspaceRoot}
+              query={searchQuery}
+              onQueryChange={setSearchQuery}
+              selectedFilePath={props.selectedFilePath}
+              onSelectFile={props.onSelectFile}
+              onReferenceInChat={props.onReferenceInChat}
+            />
+          ) : props.centerMode === "diff" ? (
             <DiffFilesSidebar
               files={props.diffFiles}
               isLoading={props.diffFilesLoading ?? false}
@@ -1336,11 +1176,12 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
             </div>
             {props.centerMode === "file" ? (
               <div className="flex min-h-0 min-w-0 flex-1">
-                <FilePreview
+                <WorkspaceFilePreview
                   workspaceRoot={props.workspaceRoot}
-                  selectedFilePath={props.selectedFilePath}
+                  filePath={props.selectedFilePath}
                   onReferenceInChat={props.onReferenceInChat}
                   onAskWhyInChat={props.onAskWhyInChat}
+                  onCommentInChat={props.onCommentInChat}
                 />
               </div>
             ) : null}

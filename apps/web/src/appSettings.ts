@@ -44,6 +44,10 @@ import {
   SANDBOX_APP_SETTINGS_KEYS,
   sandboxSettingsToAppSettings,
 } from "./sandboxSettings";
+import {
+  DEFAULT_UI_DENSITY,
+  UI_DENSITY_MODES,
+} from "./lib/appDensity";
 
 export {
   type AppModelOption,
@@ -97,6 +101,9 @@ export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "manu
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
+export const UiDensity = Schema.Literals(UI_DENSITY_MODES);
+export type UiDensity = typeof UiDensity.Type;
+export { DEFAULT_UI_DENSITY };
 
 export function getDefaultNativeFontSmoothing(platform = globalThis.navigator?.platform ?? "") {
   return /mac|iphone|ipad|ipod/i.test(platform);
@@ -121,6 +128,7 @@ const SandboxStringSetting = Schema.String.check(Schema.isMaxLength(4096)).pipe(
 
 export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  uiDensity: UiDensity.pipe(withDefaults(() => DEFAULT_UI_DENSITY)),
   chatFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_CHAT_FONT_SIZE_PX)),
   chatCodeFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   terminalFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_TERMINAL_FONT_SIZE_PX)),
@@ -160,6 +168,7 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentRecap: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentPinned: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentMarkers: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => true)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),

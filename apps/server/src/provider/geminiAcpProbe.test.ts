@@ -1,6 +1,37 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeGeminiCapabilityProbeResult } from "./geminiAcpProbe";
+import {
+  buildGeminiProbeEnv,
+  isGeminiOAuthBrowserPrompt,
+  normalizeGeminiCapabilityProbeResult,
+} from "./geminiAcpProbe";
+
+describe("buildGeminiProbeEnv", () => {
+  it("suppresses browser auth flows for health probes", () => {
+    expect(buildGeminiProbeEnv({ PATH: "/bin", CI: "false" })).toMatchObject({
+      PATH: "/bin",
+      NO_BROWSER: "true",
+      BROWSER: "www-browser",
+      CI: "true",
+      DEBIAN_FRONTEND: "noninteractive",
+    });
+  });
+});
+
+describe("isGeminiOAuthBrowserPrompt", () => {
+  it("detects Gemini OAuth browser output", () => {
+    expect(isGeminiOAuthBrowserPrompt("Opening your browser for OAuth sign-in...")).toBe(true);
+    expect(
+      isGeminiOAuthBrowserPrompt(
+        "https://accounts.google.com/v3/signin/accountchooser?client_id=x",
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores ordinary ACP output", () => {
+    expect(isGeminiOAuthBrowserPrompt('{"jsonrpc":"2.0","id":1,"result":{}}')).toBe(false);
+  });
+});
 
 describe("normalizeGeminiCapabilityProbeResult", () => {
   it("treats authenticated ACP sessions without model discovery as ready", () => {

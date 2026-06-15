@@ -715,6 +715,30 @@ label:has(> select#reasoning-effort) select {
   margin-top: 0.25rem;
 }
 
+/* GFM task lists: drop the bullet and paint the checkbox into the list gutter
+   where the bullet would have been (GitHub-style). */
+.chat-markdown li.task-list-item {
+  list-style: none;
+}
+
+.chat-markdown .chat-markdown-task-checkbox {
+  width: 0.95em;
+  height: 0.95em;
+  margin: 0 0.4em 0.1em -1.4em;
+  vertical-align: middle;
+  accent-color: var(--primary);
+}
+
+.chat-markdown .chat-markdown-task-checkbox:not(:disabled) {
+  cursor: pointer;
+}
+
+.chat-markdown hr {
+  margin: 1.5rem 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
 .chat-markdown a {
   color: var(--color-token-text-link-foreground);
   text-decoration: none;
@@ -953,6 +977,481 @@ label:has(> select#reasoning-effort) select {
   }
 }
 
+/* Inline file-comment affordances (hover "+" gutter button, selected-line
+   highlight band, anchored comment box) are positioned as absolute children of
+   the scroll container, so it must establish the positioning context. They live
+   in content space and therefore scroll with the lines. */
+.editor-file-viewer {
+  position: relative;
+}
+
+/* Hover affordance painted over the line-number gutter: an opaque surface strip
+   (so it masks the number) holding a "+" chip, so the row reads as offering a
+   comment instead of showing its number. Width tracks the 4ch number column. */
+.editor-file-viewer__comment-add {
+  position: absolute;
+  left: 0;
+  z-index: 2;
+  display: flex;
+  width: 4ch;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: var(--color-background-surface);
+  cursor: pointer;
+}
+
+.editor-file-viewer__comment-add-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 0.3125rem;
+  background: var(--color-background-button-secondary);
+  color: color-mix(in srgb, var(--color-text-foreground) 70%, transparent);
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.editor-file-viewer__comment-add:hover .editor-file-viewer__comment-add-glyph {
+  background: var(--color-text-accent);
+  color: var(--color-white, #fff);
+}
+
+/* Blue band over the line a comment box is open against (covers gutter + text);
+   translucent + non-interactive so the code stays readable and selectable. */
+.editor-file-viewer__comment-line-highlight {
+  position: absolute;
+  left: 0;
+  z-index: 1;
+  width: 100%;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--color-text-accent) 14%, transparent);
+  box-shadow: inset 2px 0 0 0 var(--color-text-accent);
+}
+
+.editor-file-viewer__comment-box {
+  position: absolute;
+  z-index: 3;
+  margin-top: 0.3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent);
+  border-radius: 0.875rem;
+  background: var(--color-background-elevated-primary-opaque);
+  /* The box lives inside the file viewer, which sets the monospace code font on
+     its content; reset to the normal UI font so the comment chrome reads as app
+     UI, not code. Cascades to the header, textarea, and buttons. */
+  font-family: var(--font-ui-family);
+  box-shadow:
+    0 12px 34px -16px color-mix(in srgb, var(--color-black, #000) 30%, transparent),
+    0 1px 4px -2px color-mix(in srgb, var(--color-black, #000) 16%, transparent);
+}
+
+/* Rounded chip holding the Synara mark in the box header, echoing the source
+   file's row gutter badge so the comment reads as "from Synara". */
+.editor-file-viewer__comment-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 0.4375rem;
+  border: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
+  background: var(--color-background-surface);
+}
+
+/* Borderless request field: it blends into the card so the box reads as one
+   surface (matching Codex's local-comment editor) rather than an input-in-a-box. */
+.editor-file-viewer__comment-input {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  /* Override the global `textarea { font-family: mono }` reset — this field is
+     UI chrome, not code, so it must use the normal UI font. */
+  font-family: var(--font-ui-family);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-foreground);
+  outline: none;
+  resize: none;
+}
+
+.editor-file-viewer__comment-input::placeholder {
+  color: color-mix(in srgb, var(--color-text-foreground) 40%, transparent);
+}
+
+.editor-file-viewer--markdown-preview {
+  background: color-mix(in srgb, var(--background) 96%, var(--card));
+}
+
+.editor-markdown-preview {
+  min-height: 100%;
+  padding: 1rem;
+}
+
+.editor-markdown-preview__body {
+  max-width: 880px;
+  margin: 0 auto;
+  padding-bottom: 3rem;
+}
+
+.editor-markdown-preview__body > :first-child {
+  margin-top: 0;
+}
+
+/* Document typography for full-file markdown previews (dock file pane and
+   editor center pane share this wrapper). Scoped here so the chat transcript
+   keeps its compact message styling; Tailwind's preflight otherwise leaves
+   headings indistinguishable from body text. */
+.editor-markdown-preview .chat-markdown h1,
+.editor-markdown-preview .chat-markdown h2,
+.editor-markdown-preview .chat-markdown h3,
+.editor-markdown-preview .chat-markdown h4,
+.editor-markdown-preview .chat-markdown h5,
+.editor-markdown-preview .chat-markdown h6 {
+  margin: 1.5em 0 0.6em;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+.editor-markdown-preview .chat-markdown h1 {
+  font-size: 1.75em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-markdown-preview .chat-markdown h2 {
+  font-size: 1.4em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-markdown-preview .chat-markdown h3 {
+  font-size: 1.2em;
+}
+
+.editor-markdown-preview .chat-markdown h4 {
+  font-size: 1.05em;
+}
+
+.editor-markdown-preview .chat-markdown h5 {
+  font-size: 0.95em;
+}
+
+.editor-markdown-preview .chat-markdown h6 {
+  font-size: 0.9em;
+  color: var(--muted-foreground);
+}
+
+/* Documents breathe more than chat replies. */
+.editor-markdown-preview .chat-markdown p,
+.editor-markdown-preview .chat-markdown ul,
+.editor-markdown-preview .chat-markdown ol,
+.editor-markdown-preview .chat-markdown blockquote,
+.editor-markdown-preview .chat-markdown pre,
+.editor-markdown-preview .chat-markdown table {
+  margin: 0.85rem 0;
+}
+
+.editor-markdown-preview .chat-markdown ul,
+.editor-markdown-preview .chat-markdown ol {
+  padding-left: 1.5rem;
+}
+
+.editor-markdown-preview .chat-markdown li + li {
+  margin-top: 0.35rem;
+}
+
+/* Local image preview used by editor file and diff views. */
+.local-image-preview {
+  position: relative;
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background:
+    linear-gradient(
+      45deg,
+      color-mix(in srgb, var(--foreground) 4%, transparent) 25%,
+      transparent 25%
+    ),
+    linear-gradient(
+      -45deg,
+      color-mix(in srgb, var(--foreground) 4%, transparent) 25%,
+      transparent 25%
+    ),
+    linear-gradient(
+      45deg,
+      transparent 75%,
+      color-mix(in srgb, var(--foreground) 4%, transparent) 75%
+    ),
+    linear-gradient(
+      -45deg,
+      transparent 75%,
+      color-mix(in srgb, var(--foreground) 4%, transparent) 75%
+    ),
+    color-mix(in srgb, var(--background) 96%, var(--foreground));
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+  background-size: 16px 16px;
+}
+
+.local-image-preview__img {
+  display: block;
+  max-width: 100%;
+  object-fit: contain;
+  border-radius: 0.35rem;
+  box-shadow: 0 1px 16px -10px color-mix(in srgb, var(--foreground) 45%, transparent);
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.local-image-preview[data-status="loading"] .local-image-preview__img {
+  opacity: 0;
+}
+
+.local-image-preview__skeleton {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-foreground);
+}
+
+/* Shared frosted pill chrome for the preview's hover download button and the
+   error card's download action. */
+.local-image-preview__download,
+.local-image-error__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--background) 88%, transparent);
+  color: var(--foreground);
+  text-decoration: none;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.local-image-preview__download:hover,
+.local-image-preview__download:focus-visible,
+.local-image-error__action:hover,
+.local-image-error__action:focus-visible {
+  border-color: color-mix(in srgb, var(--border) 45%, var(--foreground));
+  background: color-mix(in srgb, var(--background) 72%, var(--foreground));
+  color: var(--foreground);
+  text-decoration: none;
+}
+
+.local-image-preview__download {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  width: 1.9rem;
+  height: 1.9rem;
+  opacity: 0;
+}
+
+.local-image-preview[data-status="ready"]:hover .local-image-preview__download,
+.local-image-preview[data-status="ready"]:focus-within .local-image-preview__download {
+  opacity: 1;
+}
+
+/* Shared error card used by chat markdown images and editor/diff previews. */
+.local-image-error {
+  display: inline-flex;
+  align-items: center;
+  /* Beats layout utilities (e.g. min-h-full) forwarded from preview callers,
+     so the card stays compact instead of stretching to the panel height. */
+  min-height: 0;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+}
+
+/* Sits in chat prose: keep paragraph rhythm and match the image card width. */
+.local-image-error--prose {
+  margin: 0.55rem 0;
+  max-width: min(255px, 100%);
+}
+
+.local-image-error__icon {
+  display: inline-flex;
+  width: 1.7rem;
+  height: 1.7rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, var(--destructive) 18%, transparent);
+  color: var(--destructive);
+}
+
+.local-image-error__body {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.05rem;
+}
+
+.local-image-error__title {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+.local-image-error__subtitle {
+  font-size: 0.72rem;
+  color: var(--muted-foreground);
+}
+
+/* Pill chrome shared with .local-image-preview__download above. */
+.local-image-error__action {
+  gap: 0.35rem;
+  flex: 0 0 auto;
+  padding: 0.32rem 0.55rem;
+  font-size: 0.74rem;
+  font-weight: 500;
+}
+
+/* In-app PDF viewer (pdf.js canvas + text/link layers). The scroll area centers
+   a stack of page sheets over a muted backdrop, matching the rest of the chrome. */
+.pdf-viewer-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  background: var(--app-user-message-background);
+}
+
+.pdf-viewer-page {
+  position: relative;
+  flex: 0 0 auto;
+  /* Auto inline margins center the sheet but collapse to 0 once it is wider than
+     the viewport, so zoomed-in pages stay fully scroll-reachable on the left. */
+  margin-inline: auto;
+  background: #fff;
+  border: 1px solid color-mix(in srgb, var(--border), var(--foreground) 10%);
+  overflow: hidden;
+}
+
+.pdf-viewer-page__canvas {
+  display: block;
+}
+
+/* pdf.js text layer: transparent, selectable runs positioned over the canvas. */
+.pdf-viewer-page__text-layer {
+  --scale-factor: 1;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  text-align: initial;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  line-height: 1;
+  overflow: clip;
+}
+
+.pdf-viewer-page__text-layer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+}
+
+.pdf-viewer-page__text-layer span.markedContent {
+  top: 0;
+  height: 0;
+}
+
+.pdf-viewer-page__text-layer ::selection {
+  background: color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+.pdf-viewer-page__text-layer .endOfContent {
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  user-select: none;
+  display: block;
+}
+
+.pdf-viewer-page__text-layer.selecting .endOfContent {
+  top: 0;
+}
+
+/* Clickable links (external URLs + internal page jumps) drawn over the canvas. */
+.pdf-viewer-page__link-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.pdf-viewer-page__link {
+  position: absolute;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.pdf-viewer-page__link:hover,
+.pdf-viewer-page__link:focus-visible {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  outline: none;
+}
+
+/* Per-page render failure marker: a single broken page should report itself
+   rather than blend into the white sheet. */
+.pdf-viewer-page__error {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 16px;
+  text-align: center;
+  color: var(--destructive);
+  font-size: 12px;
+}
+
+.pdf-viewer-page__error-detail {
+  max-width: 90%;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  word-break: break-word;
+}
+
 /* Generated image preview/download card rendered inline from markdown ![alt](file.png) */
 .chat-generated-image {
   position: relative;
@@ -1112,73 +1611,6 @@ label:has(> select#reasoning-effort) select {
   outline-offset: 2px;
 }
 
-/* Inline action used inside the error fallback */
-.chat-generated-image__action--inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  flex: 0 0 auto;
-  padding: 0.3rem 0.55rem;
-  border-radius: 0.5rem;
-  color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 6%, transparent);
-  text-decoration: none;
-  font-size: 0.74rem;
-  font-weight: 500;
-  transition:
-    background-color 120ms ease,
-    color 120ms ease;
-}
-
-.chat-generated-image__action--inline:hover,
-.chat-generated-image__action--inline:focus-visible {
-  background: color-mix(in srgb, var(--foreground) 12%, transparent);
-  color: var(--foreground);
-  text-decoration: none;
-}
-
-.chat-generated-image--error {
-  display: inline-flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.6rem 0.75rem;
-  border-radius: 0.75rem;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  background: color-mix(in srgb, var(--muted) 35%, transparent);
-}
-
-.chat-generated-image__error-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.6rem;
-  height: 1.6rem;
-  border-radius: 0.5rem;
-  background: color-mix(in srgb, var(--destructive) 18%, transparent);
-  color: var(--destructive);
-  flex: 0 0 auto;
-}
-
-.chat-generated-image__error-body {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 0.05rem;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.chat-generated-image__error-title {
-  font-size: 0.8rem;
-  font-weight: 500;
-  color: var(--foreground);
-}
-
-.chat-generated-image__error-subtitle {
-  font-size: 0.72rem;
-  color: var(--muted-foreground);
-}
-
 .chat-markdown table {
   width: 100%;
   border-collapse: collapse;
@@ -1263,6 +1695,11 @@ diffs-container {
 .review-files-workbench .review-diff-viewport .diff-render-file [data-diffs-header],
 .review-files-workbench .review-diff-viewport .diff-render-file [data-file-info] {
   background: var(--review-diff-header-bg);
+}
+
+.diff-render-file__image-preview {
+  min-height: 150px;
+  border-top: 1px solid var(--border);
 }
 
 /* Composer surface follows Codex's renderer token path: light uses

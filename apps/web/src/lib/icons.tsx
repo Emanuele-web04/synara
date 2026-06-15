@@ -23,8 +23,10 @@ import {
   IconBrain,
   IconBug,
   IconCamera,
+  IconChartBar,
   IconCheck,
   IconChevronDown,
+  IconClock,
   IconChevronLeft,
   IconChevronRight,
   IconChevronUp,
@@ -36,7 +38,9 @@ import {
   IconEye,
   IconFile,
   IconFlag,
+  IconFlame,
   IconFlask2,
+  IconHash,
   IconFolder,
   IconFolderOpen,
   IconEdit,
@@ -50,6 +54,7 @@ import {
   IconLockOpen,
   IconMaximize,
   IconMinimize,
+  IconMinus,
   IconDeviceLaptop,
   IconMessageCircle,
   IconMoon,
@@ -65,12 +70,15 @@ import {
   IconRotate2,
   IconSelector,
   IconSettings,
+  IconShare3,
+  IconSparkles,
   IconStar,
   IconStarFilled,
   IconSun,
   IconTextWrap,
   IconTool,
   IconTrash,
+  IconTrophy,
   IconWorld,
   IconX,
   type TablerIcon,
@@ -136,8 +144,16 @@ export const CloudSyncIcon = centralIconWrapper("cloud-sync");
 export const Columns2Icon = adaptIcon(IconColumns2);
 export const ChangesIcon = centralIconWrapper("changes");
 export const CopyIcon = centralIconWrapper("square-behind-square-6");
+export const LinkIcon = centralIconWrapper("chain-link-3");
 export const DiffIcon = centralIconWrapper("difference-modified");
 export const DownloadIcon = adaptIcon(IconDownload);
+export const FlameIcon = adaptIcon(IconFlame);
+export const TrophyIcon = adaptIcon(IconTrophy);
+export const ClockIcon = adaptIcon(IconClock);
+export const ChartBarIcon = adaptIcon(IconChartBar);
+export const ShareIcon = adaptIcon(IconShare3);
+export const SparklesIcon = adaptIcon(IconSparkles);
+export const HashIcon = adaptIcon(IconHash);
 export const EllipsisIcon = adaptIcon(IconDots);
 export const ExternalLinkIcon = adaptIcon(IconExternalLink);
 export const EyeIcon = adaptIcon(IconEye);
@@ -182,6 +198,7 @@ export const LockOpenIcon = adaptIcon(IconLockOpen);
 export const Maximize2 = adaptIcon(IconMaximize);
 export const Minimize2 = adaptIcon(IconMinimize);
 export const MessageCircleIcon = adaptIcon(IconMessageCircle);
+export const MinusIcon = adaptIcon(IconMinus);
 export const ChatBubbleIcon: LucideIcon = centralIconWrapper("bubble-text");
 export const MicIcon: LucideIcon = centralIconWrapper("microphone");
 export const SidebarHiddenLeftWideIcon = centralIconWrapper("sidebar-hidden-left-wide");

@@ -349,22 +349,20 @@ export function deriveMessagesTimelineRows(input: {
   return nextRows;
 }
 
-// Returns the id of the most recent terminal assistant message row, used to keep
-// the live turn expanded when `activeTurnInProgress` is true but no explicit
-// `activeTurnId` is available (a transient window during turn settle).
-function findLastTerminalAssistantMessageId(
+// Returns the terminal assistant only when it is still the transcript tail.
+// A newer user message means the next turn has begun but has not produced text yet.
+function findTailTerminalAssistantMessageId(
   rows: ReadonlyArray<MessagesTimelineRow>,
   terminalAssistantMessageIds: ReadonlySet<string>,
 ): string | null {
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index]!;
-    if (
-      row.kind === "message" &&
-      row.message.role === "assistant" &&
-      terminalAssistantMessageIds.has(row.message.id)
-    ) {
-      return row.message.id;
+    if (row.kind !== "message") {
+      continue;
     }
+    return row.message.role === "assistant" && terminalAssistantMessageIds.has(row.message.id)
+      ? row.message.id
+      : null;
   }
   return null;
 }
@@ -385,7 +383,7 @@ function collapseSettledTurns(
 ): void {
   const { terminalAssistantMessageIds, activeTurnInProgress, activeTurnId } = options;
   const lastTerminalAssistantMessageId = activeTurnInProgress
-    ? findLastTerminalAssistantMessageId(rows, terminalAssistantMessageIds)
+    ? findTailTerminalAssistantMessageId(rows, terminalAssistantMessageIds)
     : null;
 
   const collectWorkItems = (entries: ReadonlyArray<WorkLogEntry>, into: CollapsedTurnItem[]) => {
@@ -549,6 +547,7 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
   return (
     a.id === b.id &&
     a.createdAt === b.createdAt &&
+    a.turnId === b.turnId &&
     a.label === b.label &&
     a.detail === b.detail &&
     a.toolTitle === b.toolTitle &&

@@ -100,6 +100,7 @@ function makeQueuedChatTurn(id: string, image?: ComposerImageAttachment): Queued
     images: image ? [image] : [],
     assistantSelections: [],
     terminalContexts: [makeTerminalContext({ id: `ctx-${id}` })],
+    fileComments: [],
     skills: [{ name: "check-code", path: "/skills/check-code" }],
     mentions: [{ name: "repo", path: "/mentions/repo" }],
     selectedProvider: "codex",

@@ -3,6 +3,7 @@ import {
   type ClientOrchestrationCommand,
   type OrchestrationCommand,
 } from "@t3tools/contracts";
+import { isWorkspaceRootWithin, workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 import type { FileSystem, Path } from "effect";
 import { Effect } from "effect";
 
@@ -11,33 +12,59 @@ import { parseBase64DataUrl } from "../imageMime";
 
 export interface DispatchCommandNormalizerOptions<E> {
   readonly attachmentsDir: string;
+  readonly chatWorkspaceRoot?: string;
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
   readonly canonicalizeProjectWorkspaceRoot: (
     workspaceRoot: string,
     options?: { readonly createIfMissing?: boolean },
   ) => Effect.Effect<string, E>;
+  readonly prepareChatWorkspaceRoot?: (workspaceRoot: string) => Effect.Effect<void, E>;
 }
 
 export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormalizerOptions<E>) {
+  const maybePrepareChatWorkspaceRoot = (
+    command: Extract<
+      ClientOrchestrationCommand,
+      { type: "project.create" | "project.meta.update" }
+    >,
+    workspaceRoot: string,
+  ) => {
+    if (
+      command.kind !== "chat" ||
+      (command.type === "project.create" && command.createWorkspaceRootIfMissing !== true) ||
+      !options.chatWorkspaceRoot ||
+      !options.prepareChatWorkspaceRoot ||
+      !isWorkspaceRootWithin(workspaceRoot, options.chatWorkspaceRoot) ||
+      workspaceRootsEqual(workspaceRoot, options.chatWorkspaceRoot)
+    ) {
+      return Effect.void;
+    }
+    return options.prepareChatWorkspaceRoot(workspaceRoot);
+  };
+
   return Effect.fnUntraced(function* (input: { readonly command: ClientOrchestrationCommand }) {
     if (input.command.type === "project.create") {
+      const workspaceRoot = yield* options.canonicalizeProjectWorkspaceRoot(
+        input.command.workspaceRoot,
+        { createIfMissing: false },
+      );
+      yield* maybePrepareChatWorkspaceRoot(input.command, workspaceRoot);
       return {
         ...input.command,
-        workspaceRoot: yield* options.canonicalizeProjectWorkspaceRoot(
-          input.command.workspaceRoot,
-          {
-            createIfMissing: input.command.createWorkspaceRootIfMissing === true,
-          },
-        ),
-        createWorkspaceRootIfMissing: input.command.createWorkspaceRootIfMissing === true,
+        workspaceRoot,
       } satisfies OrchestrationCommand;
     }
 
     if (input.command.type === "project.meta.update" && input.command.workspaceRoot !== undefined) {
+      const workspaceRoot = yield* options.canonicalizeProjectWorkspaceRoot(
+        input.command.workspaceRoot,
+        { createIfMissing: false },
+      );
+      yield* maybePrepareChatWorkspaceRoot(input.command, workspaceRoot);
       return {
         ...input.command,
-        workspaceRoot: yield* options.canonicalizeProjectWorkspaceRoot(input.command.workspaceRoot),
+        workspaceRoot,
       } satisfies OrchestrationCommand;
     }
 

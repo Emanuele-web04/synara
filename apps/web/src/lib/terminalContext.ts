@@ -3,6 +3,7 @@ import {
   extractTrailingAssistantSelections,
   type ParsedAssistantSelectionEntry,
 } from "./assistantSelections";
+import { extractTrailingFileComments, type ParsedFileCommentEntry } from "./fileComments";
 
 export interface TerminalContextSelection {
   terminalId: string;
@@ -32,6 +33,7 @@ export interface DisplayedUserMessageState {
   previewTitle: string | null;
   contexts: ParsedTerminalContextEntry[];
   assistantSelections: ParsedAssistantSelectionEntry[];
+  fileComments: ParsedFileCommentEntry[];
 }
 
 export interface ParsedTerminalContextEntry {
@@ -263,7 +265,11 @@ export function deriveDisplayedUserMessageState(
   prompt: string,
   options?: DisplayedUserMessageOptions,
 ): DisplayedUserMessageState {
-  const extractedContexts = extractTrailingTerminalContexts(prompt);
+  // Trailing blocks are serialized in order: assistant selections, then terminal
+  // contexts, then file comments (outermost). Strip them in reverse so each
+  // extractor sees its block at the end of the remaining text.
+  const extractedFileComments = extractTrailingFileComments(prompt);
+  const extractedContexts = extractTrailingTerminalContexts(extractedFileComments.promptText);
   const extractedAssistantSelections = extractTrailingAssistantSelections(
     extractedContexts.promptText,
   );
@@ -281,6 +287,7 @@ export function deriveDisplayedUserMessageState(
     previewTitle: extractedContexts.previewTitle,
     contexts: extractedContexts.contexts,
     assistantSelections: extractedAssistantSelections.selections,
+    fileComments: extractedFileComments.comments,
   };
 }
 

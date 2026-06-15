@@ -810,6 +810,10 @@ export async function searchWorkspaceEntries(
   let matchedEntryCount = 0;
 
   for (const entry of index.entries) {
+    if (input.kind && entry.kind !== input.kind) {
+      continue;
+    }
+
     const score = scoreEntry(entry, normalizedQuery);
     if (score === null) {
       continue;
@@ -823,6 +827,39 @@ export async function searchWorkspaceEntries(
     entries: rankedEntries.map((candidate) => candidate.entry),
     truncated: index.truncated || matchedEntryCount > limit,
   };
+}
+
+// Resolve a workspace-relative reference that omits its leading directories.
+// Agents (and rendered chat links) frequently cite a file by just its basename
+// (e.g. `chatReferences.test.ts`) or a partial tail (`lib/chatReferences.ts`),
+// which resolves to a non-existent path under the workspace root. Match it
+// against the tracked workspace index by exact path or `/`-anchored suffix and
+// only resolve when exactly one file matches, so an ambiguous name (many
+// `index.ts`) stays unresolved rather than opening the wrong file.
+export async function resolveWorkspaceFileBySuffix(input: {
+  cwd: string;
+  relativePath: string;
+}): Promise<string | null> {
+  const normalized = toPosixPath(input.relativePath.trim()).replace(/^\/+/, "");
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  const index = await getWorkspaceIndex(input.cwd);
+  const suffix = `/${normalized}`;
+  let match: string | null = null;
+  for (const entry of index.entries) {
+    if (entry.kind !== "file") {
+      continue;
+    }
+    if (entry.path === normalized || entry.path.endsWith(suffix)) {
+      if (match !== null) {
+        return null;
+      }
+      match = entry.path;
+    }
+  }
+  return match;
 }
 
 export async function discoverProjectScripts(

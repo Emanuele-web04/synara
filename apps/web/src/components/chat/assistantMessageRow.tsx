@@ -12,7 +12,6 @@ import { formatShortTimestamp } from "../../timestampFormat";
 import { type getAppTypographyScale } from "../../lib/appTypography";
 import { ChangesIcon, Undo2Icon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { ChangedFilesTree } from "./ChangedFilesTree";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { MessageCopyButton } from "./MessageCopyButton";
@@ -513,52 +512,40 @@ export function AssistantMessageRow({
                 </div>
               </div>
               <DisclosureRegion open={fileChangesExpanded}>
-                {inlineFileChangeDetailsAlreadyVisible ? (
-                  <div className="px-3 py-2">
-                    <ChangedFilesTree
-                      turnId={turnSummary.turnId}
-                      files={checkpointFiles}
-                      allDirectoriesExpanded
-                      resolvedTheme={resolvedTheme}
-                      onOpenTurnDiff={onOpenTurnDiff}
+                {checkpointFiles.map((file) => (
+                  <button
+                    key={file.path}
+                    type="button"
+                    className="group/file-row flex w-full items-center gap-2 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2.5 text-left first:border-t-0 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-transparent dark:hover:bg-transparent"
+                    onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
+                  >
+                    <FileEntryIcon
+                      pathValue={file.path}
+                      kind="file"
+                      theme={resolvedTheme}
+                      className="size-4 shrink-0 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80"
                     />
-                  </div>
-                ) : (
-                  checkpointFiles.map((file) => (
-                    <button
-                      key={file.path}
-                      type="button"
-                      className="group/file-row flex w-full items-center gap-2 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2.5 text-left first:border-t-0 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-transparent dark:hover:bg-transparent"
-                      onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
+                    <span
+                      className="font-system-ui truncate font-normal text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
+                      style={{
+                        fontSize: chatTypographyStyle.fontSize,
+                      }}
                     >
-                      <FileEntryIcon
-                        pathValue={file.path}
-                        kind="file"
-                        theme={resolvedTheme}
-                        className="size-4 shrink-0 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80"
-                      />
+                      {file.path}
+                    </span>
+                    {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
                       <span
-                        className="font-system-ui truncate font-normal text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
-                        style={{
-                          fontSize: chatTypographyStyle.fontSize,
-                        }}
+                        className="font-system-ui ml-auto shrink-0 tabular-nums"
+                        style={{ fontSize: chatTypographyStyle.fontSize }}
                       >
-                        {file.path}
+                        <DiffStatLabel
+                          additions={file.additions ?? 0}
+                          deletions={file.deletions ?? 0}
+                        />
                       </span>
-                      {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
-                        <span
-                          className="font-system-ui ml-auto shrink-0 tabular-nums"
-                          style={{ fontSize: chatTypographyStyle.fontSize }}
-                        >
-                          <DiffStatLabel
-                            additions={file.additions ?? 0}
-                            deletions={file.deletions ?? 0}
-                          />
-                        </span>
-                      )}
-                    </button>
-                  ))
-                )}
+                    )}
+                  </button>
+                ))}
               </DisclosureRegion>
             </div>
           );

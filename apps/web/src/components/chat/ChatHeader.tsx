@@ -414,7 +414,7 @@ export const ChatHeader = memo(function ChatHeader({
           <OpenInPicker
             keybindings={keybindings}
             availableEditors={availableEditors}
-            openInCwd={openInCwd}
+            openInTarget={openInCwd}
             {...(activeProjectScripts
               ? { onAddAction: () => setOpenAddActionNonce((current) => current + 1) }
               : {})}

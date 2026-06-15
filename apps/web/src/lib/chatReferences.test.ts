@@ -77,6 +77,24 @@ describe("formatChatFileReference", () => {
   it("falls back to the line label when columns are missing", () => {
     expect(formatChatFileReference({ path: "src/a.ts", startLine: 5 })).toBe("@src/a.ts (line 5)");
   });
+
+  it("quotes a snippet as a fenced block when there is no line info", () => {
+    expect(formatChatFileReference({ path: "docs/notes.md", snippet: "First point" })).toBe(
+      "@docs/notes.md\n```\nFirst point\n```",
+    );
+  });
+
+  it("prefers the line label over a snippet", () => {
+    expect(
+      formatChatFileReference({ path: "src/a.ts", startLine: 3, snippet: "const a = 1;" }),
+    ).toBe("@src/a.ts (line 3)");
+  });
+
+  it("ignores whitespace-only snippets", () => {
+    expect(formatChatFileReference({ path: "docs/notes.md", snippet: "  \n " })).toBe(
+      "@docs/notes.md",
+    );
+  });
 });
 
 describe("computeSelectionColumns", () => {

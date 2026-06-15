@@ -688,6 +688,11 @@ export function createWsNativeApi(): NativeApi {
       },
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
     },
+    stats: {
+      getProfileStats: (input) => transport.request(WS_METHODS.statsGetProfileStats, input),
+      getProfileTokenStats: (input) =>
+        transport.request(WS_METHODS.statsGetProfileTokenStats, input),
+    },
     provider: {
       getComposerCapabilities: (input) =>
         transport.request(WS_METHODS.providerGetComposerCapabilities, input),
@@ -793,6 +798,18 @@ export function createWsNativeApi(): NativeApi {
         }
         return cloneBrowserState(getFallbackBrowserState(input.threadId));
       },
+      detachWebview: async (input) => {
+        if (window.desktopBridge) {
+          await window.desktopBridge.browser.detachWebview(input);
+        }
+      },
+      copyLink: async (input) => {
+        if (window.desktopBridge) {
+          await window.desktopBridge.browser.copyLink(input);
+          return;
+        }
+        throw new Error("Copying the browser link requires the desktop app.");
+      },
       copyScreenshotToClipboard: async (input) => {
         if (window.desktopBridge) {
           await window.desktopBridge.browser.copyScreenshotToClipboard(input);
@@ -862,11 +879,17 @@ export function createWsNativeApi(): NativeApi {
         if (window.desktopBridge) {
           return window.desktopBridge.browser.closeTab(input);
         }
-        const state = getFallbackBrowserState(input.threadId);
-        state.tabs = state.tabs.filter((tab) => tab.id !== input.tabId);
-        if (state.tabs.length === 0) {
-          state.open = false;
-          state.activeTabId = null;
+        const state = ensureFallbackBrowserWorkspace(input.threadId);
+        const nextTabs = state.tabs.filter((tab) => tab.id !== input.tabId);
+        if (nextTabs.length === state.tabs.length) {
+          return cloneBrowserState(state);
+        }
+        state.tabs = nextTabs;
+        if (nextTabs.length === 0) {
+          const replacementTab = createFallbackTab();
+          state.tabs = [replacementTab];
+          state.activeTabId = replacementTab.id;
+          state.lastError = null;
         } else if (!state.tabs.some((tab) => tab.id === state.activeTabId)) {
           state.activeTabId = state.tabs[0]?.id ?? null;
         }
@@ -896,6 +919,12 @@ export function createWsNativeApi(): NativeApi {
         return () => {
           fallbackBrowserStateListeners.delete(callback);
         };
+      },
+      onCopyLink: (callback) => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.onBrowserCopyLink(callback);
+        }
+        return () => {};
       },
     },
   };

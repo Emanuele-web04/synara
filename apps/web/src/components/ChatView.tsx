@@ -272,6 +272,10 @@ import {
   formatAssistantSelectionTitleSeed,
 } from "../lib/assistantSelections";
 import {
+  appendFileCommentsToPrompt,
+  formatFileCommentTitleSeed,
+} from "../lib/fileComments";
+import {
   deriveContextWindowSelectionStatus,
   deriveCumulativeCostUsd,
   deriveLatestContextWindowSnapshot,
@@ -497,6 +501,7 @@ export default function ChatView({
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
   const composerAssistantSelections = composerDraft.assistantSelections;
+  const composerFileComments = composerDraft.fileComments;
   const composerTerminalContexts = composerDraft.terminalContexts;
   const queuedComposerTurns = composerDraft.queuedTurns;
   const {
@@ -514,9 +519,16 @@ export default function ChatView({
         prompt,
         imageCount: composerImages.length,
         assistantSelectionCount: composerAssistantSelections.length,
+        fileCommentCount: composerFileComments.length,
         terminalContexts: composerTerminalContexts,
       }),
-    [composerAssistantSelections.length, composerImages.length, composerTerminalContexts, prompt],
+    [
+      composerAssistantSelections.length,
+      composerFileComments.length,
+      composerImages.length,
+      composerTerminalContexts,
+      prompt,
+    ],
   );
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
@@ -539,6 +551,7 @@ export default function ChatView({
   const addComposerDraftAssistantSelection = useComposerDraftStore(
     (store) => store.addAssistantSelection,
   );
+  const clearComposerDraftFileComments = useComposerDraftStore((store) => store.clearFileComments);
   const clearComposerDraftAssistantSelections = useComposerDraftStore(
     (store) => store.clearAssistantSelections,
   );
@@ -778,6 +791,9 @@ export default function ChatView({
   const clearComposerAssistantSelectionsFromDraft = useCallback(() => {
     clearComposerDraftAssistantSelections(threadId);
   }, [clearComposerDraftAssistantSelections, threadId]);
+  const clearComposerFileCommentsFromDraft = useCallback(() => {
+    clearComposerDraftFileComments(threadId);
+  }, [clearComposerDraftFileComments, threadId]);
   const removeComposerTerminalContextFromDraft = useCallback(
     (contextId: string) => {
       const contextIndex = composerTerminalContexts.findIndex(
@@ -867,8 +883,12 @@ export default function ChatView({
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
   const homeDir = useWorkspaceStore((state) => state.homeDir);
+  const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
-  const isHomeChatContainer = isHomeChatContainerProject(activeProject, homeDir);
+  const isHomeChatContainer = isHomeChatContainerProject(activeProject, {
+    homeDir,
+    chatWorkspaceRoot,
+  });
   const activeProjectDisplayName = isHomeChatContainer
     ? activeProject?.folderName
     : activeProject?.name;
@@ -4568,6 +4588,7 @@ export default function ChatView({
     let composerImagesForSend = queuedChatTurn?.images ?? composerImages;
     const composerAssistantSelectionsForSend =
       queuedChatTurn?.assistantSelections ?? composerAssistantSelections;
+    const composerFileCommentsForSend = queuedChatTurn?.fileComments ?? composerFileComments;
     const composerTerminalContextsForSend =
       queuedChatTurn?.terminalContexts ?? composerTerminalContexts;
     const selectedComposerSkillsForSend = queuedChatTurn?.skills ?? selectedComposerSkills;
@@ -4591,6 +4612,7 @@ export default function ChatView({
       prompt: promptForSend,
       imageCount: composerImagesForSend.length,
       assistantSelectionCount: composerAssistantSelectionsForSend.length,
+      fileCommentCount: composerFileCommentsForSend.length,
       terminalContexts: composerTerminalContextsForSend,
     });
     if (showPlanFollowUpPrompt && activeProposedPlan) {
@@ -4626,6 +4648,7 @@ export default function ChatView({
     if (
       composerImagesForSend.length === 0 &&
       composerAssistantSelectionsForSend.length === 0 &&
+      composerFileCommentsForSend.length === 0 &&
       sendableComposerTerminalContexts.length === 0
     ) {
       const handledSlashCommand = await handleStandaloneSlashCommand(trimmed);
@@ -4725,11 +4748,13 @@ export default function ChatView({
           images: queuedImagesForPersistence,
           assistantSelections: composerAssistantSelectionsForSend,
           terminalContexts: sendableComposerTerminalContexts,
+          fileComments: composerFileCommentsForSend,
         }),
         prompt: promptForSend,
         images: queuedImagesForPersistence,
         assistantSelections: composerAssistantSelectionsForSend,
         terminalContexts: sendableComposerTerminalContexts,
+        fileComments: composerFileCommentsForSend,
         skills: selectedComposerSkillsForSend,
         mentions: selectedComposerMentionsForSend,
         selectedProvider: selectedProviderForSend,
@@ -4749,10 +4774,14 @@ export default function ChatView({
     const isFirstMessage = !isServerThread || !hasNativeUserMessages;
     const firstSendTarget = resolveFirstSendTarget({
       activeProject,
+      chatWorkspaceRoot,
+      createdAt: new Date(),
       isFirstMessage,
       isHomeChatContainer,
       projects: useStore.getState().projects,
       selectedWorkspaceRoot: isHomeChatContainer ? (resolvedThreadWorktreePath ?? null) : null,
+      title: activeThread.title,
+      titleSeed: trimmed || activeThread.title,
     });
     let {
       targetProjectId: targetProjectIdForSend,
@@ -4861,9 +4890,13 @@ export default function ChatView({
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
     const composerSkillsSnapshot = [...selectedComposerSkillsForSend];
     const composerMentionsSnapshot = [...selectedComposerMentionsForSend];
-    const messageTextForSend = appendTerminalContextsToPrompt(
-      appendAssistantSelectionsToPrompt(promptForSend, composerAssistantSelectionsSnapshot),
-      composerTerminalContextsSnapshot,
+    const composerFileCommentsSnapshot = [...composerFileCommentsForSend];
+    const messageTextForSend = appendFileCommentsToPrompt(
+      appendTerminalContextsToPrompt(
+        appendAssistantSelectionsToPrompt(promptForSend, composerAssistantSelectionsSnapshot),
+        composerTerminalContextsSnapshot,
+      ),
+      composerFileCommentsSnapshot,
     );
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
@@ -4997,6 +5030,8 @@ export default function ChatView({
           titleSeed = formatAssistantSelectionTitleSeed(composerAssistantSelectionsSnapshot.length);
         } else if (composerTerminalContextsSnapshot.length > 0) {
           titleSeed = formatTerminalContextLabel(composerTerminalContextsSnapshot[0]!);
+        } else if (composerFileCommentsSnapshot.length > 0) {
+          titleSeed = formatFileCommentTitleSeed(composerFileCommentsSnapshot.length);
         } else {
           titleSeed = GENERIC_CHAT_THREAD_TITLE;
         }
@@ -5237,6 +5272,17 @@ export default function ChatView({
     },
     [activeThreadId, setStoreThreadError],
   );
+
+  const onCancelActivePendingUserInput = useCallback(() => {
+    if (!activePendingUserInput || activePendingIsResponding) {
+      return;
+    }
+    promptRef.current = "";
+    setPrompt("");
+    setComposerCursor(0);
+    setComposerTrigger(null);
+    void onRespondToUserInput(activePendingUserInput.requestId, {});
+  }, [activePendingIsResponding, activePendingUserInput, onRespondToUserInput, setPrompt]);
 
   const setActivePendingUserInputQuestionIndex = useCallback(
     (nextQuestionIndex: number) => {
@@ -6879,6 +6925,7 @@ export default function ChatView({
       activePendingQuestionIndex={activePendingQuestionIndex}
       onToggleActivePendingUserInputOption={onToggleActivePendingUserInputOption}
       onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
+      onCancelActivePendingUserInput={onCancelActivePendingUserInput}
       showPlanFollowUpPrompt={showPlanFollowUpPrompt}
       activeProposedPlan={activeProposedPlan}
       proposedPlanTitle={proposedPlanTitle}
@@ -6898,10 +6945,12 @@ export default function ChatView({
       onComposerMenuItemHighlighted={onComposerMenuItemHighlighted}
       onSelectComposerItem={onSelectComposerItem}
       composerAssistantSelections={composerAssistantSelections}
+      composerFileComments={composerFileComments}
       composerImages={composerImages}
       nonPersistedComposerImageIdSet={nonPersistedComposerImageIdSet}
       onExpandTimelineImage={onExpandTimelineImage}
       clearComposerAssistantSelectionsFromDraft={clearComposerAssistantSelectionsFromDraft}
+      clearComposerFileCommentsFromDraft={clearComposerFileCommentsFromDraft}
       removeComposerImage={removeComposerImage}
       composerEditorRef={composerEditorRef}
       activePendingProgress={activePendingProgress}

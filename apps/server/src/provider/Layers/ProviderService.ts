@@ -206,6 +206,20 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         return { adapter, session: resumed } as const;
       });
 
+    const findLiveSessionAdapter = (threadId: ThreadId) =>
+      Effect.gen(function* () {
+        const matches = yield* Effect.forEach(
+          adapters,
+          (adapter) =>
+            adapter.hasSession(threadId).pipe(
+              Effect.map((hasSession) => (hasSession ? adapter : null)),
+              Effect.orElseSucceed(() => null),
+            ),
+          { concurrency: "unbounded" },
+        );
+        return matches.find((adapter) => adapter !== null) ?? null;
+      });
+
     const resolveRoutableSession = (input: {
       readonly threadId: ThreadId;
       readonly operation: string;
@@ -215,6 +229,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const bindingOption = yield* directory.getBinding(input.threadId);
         const binding = Option.getOrUndefined(bindingOption);
         if (!binding) {
+          // Startup extension prompts can fire before startSession has persisted
+          // the provider binding, but the adapter already owns a live session.
+          const liveAdapter = yield* findLiveSessionAdapter(input.threadId);
+          if (liveAdapter) {
+            return { adapter: liveAdapter, threadId: input.threadId, isActive: true } as const;
+          }
           return yield* toValidationError(
             input.operation,
             `Cannot route thread '${input.threadId}' because no persisted provider binding exists.`,

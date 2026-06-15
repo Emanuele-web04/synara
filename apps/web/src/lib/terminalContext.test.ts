@@ -25,6 +25,7 @@ import {
   type TerminalContextDraft,
 } from "./terminalContext";
 import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
+import { appendFileCommentsToPrompt } from "./fileComments";
 
 function makeContext(overrides?: Partial<TerminalContextDraft>): TerminalContextDraft {
   return {
@@ -147,6 +148,7 @@ describe("terminalContext", () => {
         },
       ],
       assistantSelections: [],
+      fileComments: [],
     });
   });
 
@@ -164,6 +166,7 @@ describe("terminalContext", () => {
       previewTitle: null,
       contexts: [],
       assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
+      fileComments: [],
     });
   });
 
@@ -190,6 +193,36 @@ describe("terminalContext", () => {
         },
       ],
       assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
+      fileComments: [],
+    });
+  });
+
+  it("separates file comments, terminal context, and assistant selections in display state", () => {
+    // Mirror the composer send path: assistant selections, then terminal
+    // contexts, then file comments (outermost).
+    const prompt = appendFileCommentsToPrompt(
+      appendTerminalContextsToPrompt(
+        appendAssistantSelectionsToPrompt("Investigate this", [
+          { assistantMessageId: "msg-1", text: "selected line" },
+        ]),
+        [makeContext()],
+      ),
+      [{ path: "src/app.ts", startLine: 3, endLine: 5, text: "rename this helper" }],
+    );
+
+    expect(deriveDisplayedUserMessageState(prompt)).toEqual({
+      visibleText: "Investigate this",
+      copyText: "Investigate this",
+      contextCount: 1,
+      previewTitle: "Terminal 1 lines 12-13\n12 | git status\n13 | On branch main",
+      contexts: [
+        {
+          header: "Terminal 1 lines 12-13",
+          body: "12 | git status\n13 | On branch main",
+        },
+      ],
+      assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
+      fileComments: [{ path: "src/app.ts", startLine: 3, endLine: 5, text: "rename this helper" }],
     });
   });
 
@@ -214,6 +247,7 @@ describe("terminalContext", () => {
       previewTitle: null,
       contexts: [],
       assistantSelections: [],
+      fileComments: [],
     });
   });
 

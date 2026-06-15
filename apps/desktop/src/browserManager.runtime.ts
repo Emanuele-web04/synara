@@ -11,6 +11,7 @@ import type {
   ThreadBrowserState,
   ThreadId,
 } from "@t3tools/contracts";
+import { isBrowserCopyLinkChord } from "@t3tools/shared/browserShortcuts";
 
 import {
   ABOUT_BLANK_URL,
@@ -58,6 +59,7 @@ export interface BrowserRuntimeDeps {
   markThreadStateChanged: (threadId: ThreadId) => void;
   emitState: (threadId: ThreadId) => void;
   openNewTab: (input: { threadId: ThreadId; url: string; activate: boolean }) => void;
+  copyTabLink: (threadId: ThreadId, tabId: string) => void;
   incrementCounter: (counter: BrowserRuntimePerfCounter) => void;
 }
 
@@ -170,6 +172,16 @@ export class BrowserRuntimeController {
     };
     this.configureRuntimeWebContents(runtime);
     this.runtimes.set(key, runtime);
+  }
+
+  detachRendererRuntime(threadId: ThreadId, tabId: string, webContentsId: number): boolean {
+    const runtime = this.runtimes.get(buildRuntimeKey(threadId, tabId));
+    if (!runtime || runtime.ownsWebContents || runtime.webContents.id !== webContentsId) {
+      return false;
+    }
+
+    this.destroyRuntime(threadId, tabId);
+    return true;
   }
 
   attachActiveTab(threadId: ThreadId, bounds: BrowserPanelBounds): void {
@@ -343,6 +355,32 @@ export class BrowserRuntimeController {
 
       void this.electron.shell.openExternal(url);
       return { action: "deny" };
+    });
+
+    const beforeInputEvent = (event: Electron.Event, input: Electron.Input) => {
+      if (input.type !== "keyDown") {
+        return;
+      }
+      const matches = isBrowserCopyLinkChord(
+        {
+          meta: input.meta,
+          ctrl: input.control,
+          shift: input.shift,
+          alt: input.alt,
+          key: input.key,
+        },
+        process.platform === "darwin",
+      );
+      if (!matches) {
+        return;
+      }
+
+      event.preventDefault();
+      this.deps.copyTabLink(threadId, tabId);
+    };
+    webContents.on("before-input-event", beforeInputEvent);
+    runtime.listenerDisposers.push(() => {
+      webContents.removeListener("before-input-event", beforeInputEvent);
     });
 
     const pageTitleUpdated = (event: Electron.Event) => {

@@ -71,6 +71,8 @@ import {
   sanitizeTerminalHistoryChunk,
   spawnTerminalShell,
   toSessionKey,
+  resolveShellCandidates,
+  WINDOWS_DEFAULT_TERMINAL_SHELL,
 } from "./Manager.helpers";
 import { TerminalHistoryStore } from "./Manager.persistence";
 import {
@@ -92,6 +94,11 @@ export {
 } from "./Manager.subprocess";
 
 const DEFAULT_SUBPROCESS_POLL_INTERVAL_MS = 1_000;
+
+export const __terminalManagerShellTesting = {
+  resolveShellCandidates,
+  windowsDefaultTerminalShell: WINDOWS_DEFAULT_TERMINAL_SHELL,
+};
 
 interface TerminalManagerEvents {
   event: [event: TerminalEvent];

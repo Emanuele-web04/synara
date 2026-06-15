@@ -13,6 +13,7 @@ const PROJECT_FILE_PATH_MAX_LENGTH = 512;
 const PROJECT_READ_FILE_MAX_BYTES = 1_000_000;
 const PROJECT_DIRECTORY_LIST_MAX_DEPTH = 32;
 const PROJECT_SCRIPT_DISCOVERY_MAX_DEPTH = 3;
+const ProjectEntryKind = Schema.Literals(["file", "directory"]);
 
 export const ProjectKind = Schema.Literals(["project", "chat"]);
 export type ProjectKind = typeof ProjectKind.Type;
@@ -21,10 +22,9 @@ export const ProjectSearchEntriesInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   query: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
   limit: PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_SEARCH_ENTRIES_MAX_LIMIT)),
+  kind: Schema.optional(ProjectEntryKind),
 });
 export type ProjectSearchEntriesInput = typeof ProjectSearchEntriesInput.Type;
-
-const ProjectEntryKind = Schema.Literals(["file", "directory"]);
 
 export const ProjectEntry = Schema.Struct({
   path: TrimmedNonEmptyString,

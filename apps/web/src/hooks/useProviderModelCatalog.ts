@@ -52,10 +52,13 @@ export function useProviderModelCatalog(input: {
    * are warm by the time the user browses them.
    */
   discoveryEnabled: boolean;
+  /** Effective cwd for providers whose model catalog can be extended by project resources. */
+  cwd?: string | null;
   /** Per-provider selected-model hints so an unknown selection still lists itself. */
   modelHintByProvider?: Partial<Record<ProviderKind, string | null>>;
 }): ProviderModelCatalog {
   const { selectedProvider, discoveryEnabled, modelHintByProvider } = input;
+  const discoveryCwd = input.cwd ?? null;
   const { settings } = useAppSettings();
   const featureFlags = useFeatureFlags();
   const showExpandedCursorModelVariants = featureFlags["show-expanded-cursor-model-variants"];
@@ -106,6 +109,7 @@ export function useProviderModelCatalog(input: {
       provider: "pi",
       binaryPath: settings.piBinaryPath || null,
       agentDir: settings.piAgentDir || null,
+      cwd: discoveryCwd,
       enabled: selectedProvider === "pi" || discoveryEnabled,
     }),
   );
@@ -159,6 +163,14 @@ export function useProviderModelCatalog(input: {
     kiloModelDiscoveryEnabled &&
     !hasResolvedKiloModelDiscovery &&
     (kiloDynamicModelsQuery.isLoading || kiloDynamicModelsQuery.isFetching);
+  const piModelDiscoveryEnabled = selectedProvider === "pi" || discoveryEnabled;
+  const hasResolvedPiModelDiscovery =
+    piDynamicModelsQuery.data?.source?.startsWith("pi.sdk") === true &&
+    (piDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const piModelDiscoveryPending =
+    piModelDiscoveryEnabled &&
+    !hasResolvedPiModelDiscovery &&
+    (piDynamicModelsQuery.isLoading || piDynamicModelsQuery.isFetching);
 
   const modelOptionsByProvider = useMemo(() => {
     const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
@@ -245,8 +257,9 @@ export function useProviderModelCatalog(input: {
     () => ({
       cursor: cursorModelDiscoveryPending,
       kilo: kiloModelDiscoveryPending,
+      pi: piModelDiscoveryPending,
     }),
-    [cursorModelDiscoveryPending, kiloModelDiscoveryPending],
+    [cursorModelDiscoveryPending, kiloModelDiscoveryPending, piModelDiscoveryPending],
   );
 
   const runtimeModelsByProvider = useMemo<

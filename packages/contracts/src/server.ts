@@ -86,6 +86,7 @@ const ServerProviderStatuses = Schema.Array(ServerProviderStatus);
 export const ServerConfig = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   homeDir: Schema.optional(TrimmedNonEmptyString),
+  chatWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
   worktreesDir: TrimmedNonEmptyString,
   keybindingsConfigPath: TrimmedNonEmptyString,
   keybindings: ResolvedKeybindingsConfig,
@@ -309,6 +310,7 @@ export type ServerSettingsUpdatedPayload = typeof ServerSettingsUpdatedPayload.T
 export const ServerLifecycleWelcomePayload = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   homeDir: Schema.optional(TrimmedNonEmptyString),
+  chatWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
   projectName: TrimmedNonEmptyString,
   bootstrapProjectId: Schema.optional(ProjectId),
   bootstrapThreadId: Schema.optional(ThreadId),
@@ -330,12 +332,10 @@ export const ServerLifecycleStreamEvent = Schema.Union([
     type: Schema.Literal("maintenance"),
     payload: Schema.Struct({
       task: Schema.Literal("thread-retention"),
-      state: Schema.Literals(["started", "progress", "compacting", "completed", "failed"]),
+      state: Schema.Literals(["started", "progress", "completed", "failed"]),
       at: IsoDateTime,
       deletedCount: Schema.optional(Schema.Number),
-      purgedCount: Schema.optional(Schema.Number),
       totalCount: Schema.optional(Schema.Number),
-      freePageCount: Schema.optional(Schema.Number),
       error: Schema.optional(Schema.String),
     }),
   }),

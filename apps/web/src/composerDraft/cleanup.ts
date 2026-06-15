@@ -44,6 +44,7 @@ export function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.persistedAttachments.length === 0 &&
     draft.assistantSelections.length === 0 &&
     draft.terminalContexts.length === 0 &&
+    draft.fileComments.length === 0 &&
     draft.skills.length === 0 &&
     draft.mentions.length === 0 &&
     draft.queuedTurns.length === 0 &&

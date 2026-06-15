@@ -17,12 +17,12 @@ import { readNativeApi } from "../nativeApi";
 export function useOpenFavoriteEditorShortcut({
   keybindings,
   availableEditors,
-  openInCwd,
+  openInTarget,
   enabled = true,
 }: {
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
-  openInCwd: string | null;
+  openInTarget: string | null;
   /** When false the listener is not registered (e.g. disposable threads with no project). */
   enabled?: boolean;
 }): void {
@@ -33,11 +33,11 @@ export function useOpenFavoriteEditorShortcut({
     const handler = (e: globalThis.KeyboardEvent) => {
       if (!isOpenFavoriteEditorShortcut(e, keybindings)) return;
       const api = readNativeApi();
-      if (!api || !openInCwd || !preferredEditor) return;
+      if (!api || !openInTarget || !preferredEditor) return;
       e.preventDefault();
-      void api.shell.openInEditor(openInCwd, preferredEditor);
+      void api.shell.openInEditor(openInTarget, preferredEditor);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [enabled, preferredEditor, keybindings, openInCwd]);
+  }, [enabled, preferredEditor, keybindings, openInTarget]);
 }

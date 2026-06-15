@@ -24,6 +24,7 @@ import { extractCollabAction, extractCollabSubagents } from "./session-logic.wor
 export interface WorkLogEntry {
   id: string;
   createdAt: string;
+  turnId?: TurnId | null;
   label: string;
   detail?: string;
   command?: string;
@@ -187,6 +188,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
     createdAt: activity.createdAt,
+    turnId: activity.turnId,
     label: activity.summary,
     tone:
       activity.kind === "reasoning.delta"

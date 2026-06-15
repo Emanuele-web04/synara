@@ -60,6 +60,7 @@ import { useComposerDropzone } from "~/hooks/useComposerDropzone";
 import { useTheme } from "~/hooks/useTheme";
 import { ChevronRightIcon, PaperclipIcon } from "~/lib/icons";
 import { findProviderStatus } from "~/lib/providerAvailability";
+import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { type DraftThreadEnvMode, useComposerDraftStore } from "../../composerDraftStore";
@@ -120,6 +121,7 @@ export function KanbanNewTaskDialog({
     prompt,
     composerImages,
     composerAssistantSelections,
+    composerFileComments,
     composerTerminalContexts,
     composerSkills,
     composerMentions,
@@ -132,6 +134,7 @@ export function KanbanNewTaskDialog({
     addComposerImages,
     removeComposerImage,
     clearComposerAssistantSelections,
+    clearComposerFileComments,
     removeComposerTerminalContext,
   } = useKanbanTaskScratchDraft({ defaultProvider: settings.defaultProvider });
   const promptRef = useRef(prompt);
@@ -153,6 +156,11 @@ export function KanbanNewTaskDialog({
     () => projects.find((project) => project.id === selectedProjectId) ?? null,
     [projects, selectedProjectId],
   );
+  const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
+    activeThreadWorktreePath: null,
+    activeProjectCwd: selectedProject?.cwd ?? null,
+    serverCwd: serverConfigQuery.data?.cwd ?? null,
+  });
 
   // Voice transcription always rides on the Codex ChatGPT session, regardless of
   // which provider the task targets — gate the mic on the Codex status.
@@ -176,6 +184,7 @@ export function KanbanNewTaskDialog({
     // Keep discovery warm whenever either picker can open so cursor/codex effort
     // and fast-mode controls are populated, not just the model list.
     discoveryEnabled: isModelPickerOpen || isTraitsPickerOpen,
+    cwd: providerModelDiscoveryCwd,
     modelHintByProvider,
   });
   const trimmedPrompt = prompt.trim();
@@ -183,6 +192,7 @@ export function KanbanNewTaskDialog({
     trimmedPrompt.length > 0 ||
     composerImages.length > 0 ||
     composerAssistantSelections.length > 0 ||
+    composerFileComments.length > 0 ||
     composerTerminalContexts.some((context) => context.text.trim().length > 0);
   const taskPreview = buildKanbanTaskPreview({
     trimmedPrompt,
@@ -412,10 +422,12 @@ export function KanbanNewTaskDialog({
             ) : null}
             <ComposerReferenceAttachments
               assistantSelections={composerAssistantSelections}
+              fileComments={composerFileComments}
               images={composerImages}
               nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
               onExpandImage={setExpandedImage}
               onRemoveAssistantSelections={clearComposerAssistantSelections}
+              onRemoveFileComments={clearComposerFileComments}
               onRemoveImage={removeComposerImage}
             />
             <ComposerPromptEditor

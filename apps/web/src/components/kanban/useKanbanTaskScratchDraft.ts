@@ -34,6 +34,7 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
   const prompt = scratchDraft.prompt;
   const composerImages = scratchDraft.images;
   const composerAssistantSelections = scratchDraft.assistantSelections;
+  const composerFileComments = scratchDraft.fileComments;
   const composerTerminalContexts = scratchDraft.terminalContexts;
   const composerSkills = scratchDraft.skills;
   const composerMentions = scratchDraft.mentions;
@@ -137,6 +138,10 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
     useComposerDraftStore.getState().clearAssistantSelections(scratchThreadId);
   }, [scratchThreadId]);
 
+  const clearComposerFileComments = useCallback(() => {
+    useComposerDraftStore.getState().clearFileComments(scratchThreadId);
+  }, [scratchThreadId]);
+
   const removeComposerTerminalContext = useCallback(
     (contextId: string) => {
       useComposerDraftStore.getState().removeTerminalContext(scratchThreadId, contextId);
@@ -150,6 +155,7 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
     prompt,
     composerImages,
     composerAssistantSelections,
+    composerFileComments,
     composerTerminalContexts,
     composerSkills,
     composerMentions,
@@ -162,6 +168,7 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
     addComposerImages,
     removeComposerImage,
     clearComposerAssistantSelections,
+    clearComposerFileComments,
     removeComposerTerminalContext,
   };
 }

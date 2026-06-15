@@ -692,6 +692,7 @@ describe("AppSettingsSchema", () => {
       ),
     ).toMatchObject({
       claudeBinaryPath: "",
+      uiDensity: "comfortable",
       chatFontSizePx: DEFAULT_CHAT_FONT_SIZE_PX,
       codexBinaryPath: "/usr/local/bin/codex",
       codexHomePath: "",

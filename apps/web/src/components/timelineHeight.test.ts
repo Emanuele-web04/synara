@@ -178,7 +178,7 @@ describe("estimateTimelineMessageHeight", () => {
         },
         { timelineWidthPx: 768 },
       ),
-    ).toBe(222);
+    ).toBe(208);
   });
 
   it("accounts for inline code spans that wrap wider than plain text", () => {
@@ -203,14 +203,18 @@ describe("estimateTimelineMessageHeight", () => {
 });
 
 describe("estimateChangedFilesSummaryHeight", () => {
-  it("grows when nested directories are expanded", () => {
+  it("estimates the flat changed-files list and collapsed overflow toggle", () => {
     const files = [
       { path: "apps/web/src/index.ts", additions: 1, deletions: 0 },
       { path: "apps/web/src/components/Button.tsx", additions: 2, deletions: 1 },
+      { path: "apps/server/src/index.ts", additions: 4, deletions: 0 },
+      { path: "packages/shared/src/path.ts", additions: 0, deletions: 2 },
+      { path: "README.md", additions: 1, deletions: 1 },
+      { path: "CHANGELOG.md", additions: 3, deletions: 0 },
     ];
 
-    expect(estimateChangedFilesSummaryHeight(files, false)).toBe(100);
-    expect(estimateChangedFilesSummaryHeight(files, true)).toBe(178);
+    expect(estimateChangedFilesSummaryHeight(files, false)).toBe(290);
+    expect(estimateChangedFilesSummaryHeight(files, true)).toBe(292);
   });
 });
 

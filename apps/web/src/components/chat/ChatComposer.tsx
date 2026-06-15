@@ -10,6 +10,7 @@ import type {
   QueuedComposerTurn,
 } from "../../composerDraftStore";
 import type { TerminalContextDraft } from "../../lib/terminalContext";
+import type { FileCommentDraft } from "../../lib/fileComments";
 import { cn } from "~/lib/utils";
 import { ChevronDownIcon, ComposerSendArrowIcon, QueueArrow } from "~/lib/icons";
 import { GoTasklist } from "react-icons/go";
@@ -85,6 +86,7 @@ export interface ChatComposerProps {
   activePendingQuestionIndex: number;
   onToggleActivePendingUserInputOption: ComposerPendingUserInputPanelProps["onToggleOption"];
   onAdvanceActivePendingUserInput: ComposerPendingUserInputPanelProps["onAdvance"];
+  onCancelActivePendingUserInput: ComposerPendingUserInputPanelProps["onCancel"];
   showPlanFollowUpPrompt: boolean;
   activeProposedPlan: { id: string; planMarkdown: string } | null;
   proposedPlanTitle: (planMarkdown: string) => string | null;
@@ -104,10 +106,12 @@ export interface ChatComposerProps {
   onComposerMenuItemHighlighted: ComposerCommandMenuProps["onHighlightedItemChange"];
   onSelectComposerItem: ComposerCommandMenuProps["onSelect"];
   composerAssistantSelections: ReadonlyArray<ComposerAssistantSelectionAttachment>;
+  composerFileComments: ReadonlyArray<FileCommentDraft>;
   composerImages: ReadonlyArray<ComposerImageAttachment>;
   nonPersistedComposerImageIdSet: ReadonlySet<string>;
   onExpandTimelineImage: ComponentProps<typeof ComposerReferenceAttachments>["onExpandImage"];
   clearComposerAssistantSelectionsFromDraft: () => void;
+  clearComposerFileCommentsFromDraft: () => void;
   removeComposerImage: (imageId: string) => void;
   composerEditorRef: Ref<ComposerPromptEditorHandle>;
   activePendingProgress: {
@@ -202,6 +206,7 @@ export function ChatComposer({
   activePendingQuestionIndex,
   onToggleActivePendingUserInputOption,
   onAdvanceActivePendingUserInput,
+  onCancelActivePendingUserInput,
   showPlanFollowUpPrompt,
   activeProposedPlan,
   proposedPlanTitle,
@@ -221,10 +226,12 @@ export function ChatComposer({
   onComposerMenuItemHighlighted,
   onSelectComposerItem,
   composerAssistantSelections,
+  composerFileComments,
   composerImages,
   nonPersistedComposerImageIdSet,
   onExpandTimelineImage,
   clearComposerAssistantSelectionsFromDraft,
+  clearComposerFileCommentsFromDraft,
   removeComposerImage,
   composerEditorRef,
   activePendingProgress,
@@ -368,6 +375,7 @@ export function ChatComposer({
                     questionIndex={activePendingQuestionIndex}
                     onToggleOption={onToggleActivePendingUserInputOption}
                     onAdvance={onAdvanceActivePendingUserInput}
+                    onCancel={onCancelActivePendingUserInput}
                   />
                 </div>
               ) : showPlanFollowUpPrompt && activeProposedPlan ? (
@@ -421,13 +429,17 @@ export function ChatComposer({
                 ) : null}
                 {!isComposerApprovalState &&
                   pendingUserInputs.length === 0 &&
-                  (composerAssistantSelections.length > 0 || composerImages.length > 0) && (
+                  (composerAssistantSelections.length > 0 ||
+                    composerFileComments.length > 0 ||
+                    composerImages.length > 0) && (
                     <ComposerReferenceAttachments
                       assistantSelections={composerAssistantSelections}
+                      fileComments={composerFileComments}
                       images={composerImages}
                       nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
                       onExpandImage={onExpandTimelineImage}
                       onRemoveAssistantSelections={clearComposerAssistantSelectionsFromDraft}
+                      onRemoveFileComments={clearComposerFileCommentsFromDraft}
                       onRemoveImage={removeComposerImage}
                     />
                   )}

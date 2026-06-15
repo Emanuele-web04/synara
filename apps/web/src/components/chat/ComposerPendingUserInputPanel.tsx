@@ -18,6 +18,7 @@ interface PendingUserInputPanelProps {
   questionIndex: number;
   onToggleOption: (questionId: string, optionLabel: string) => PendingUserInputDraftAnswer | null;
   onAdvance: (answerOverrides?: Record<string, PendingUserInputDraftAnswer>) => void;
+  onCancel: () => void;
 }
 
 // Keep pending-input choices neutral so they read like Codex list controls instead of accent buttons.
@@ -28,6 +29,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
   questionIndex,
   onToggleOption,
   onAdvance,
+  onCancel,
 }: PendingUserInputPanelProps) {
   if (pendingUserInputs.length === 0) return null;
   const activePrompt = pendingUserInputs[0];
@@ -42,6 +44,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
       questionIndex={questionIndex}
       onToggleOption={onToggleOption}
       onAdvance={onAdvance}
+      onCancel={onCancel}
     />
   );
 });
@@ -53,6 +56,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   questionIndex,
   onToggleOption,
   onAdvance,
+  onCancel,
 }: {
   prompt: PendingUserInput;
   isResponding: boolean;
@@ -60,6 +64,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   questionIndex: number;
   onToggleOption: (questionId: string, optionLabel: string) => PendingUserInputDraftAnswer | null;
   onAdvance: (answerOverrides?: Record<string, PendingUserInputDraftAnswer>) => void;
+  onCancel: () => void;
 }) {
   const progress = derivePendingUserInputProgress(prompt.questions, answers, questionIndex);
   const activeQuestion = progress.activeQuestion;
@@ -148,51 +153,67 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       {activeQuestion.multiSelect ? (
         <p className="mt-1 text-xs text-muted-foreground/65">Select one or more options.</p>
       ) : null}
-      <div className="mt-3 space-y-1">
-        {activeQuestion.options.map((option, index) => {
-          const isSelected = progress.selectedOptionLabels.includes(option.label);
-          const shortcutKey = index < 9 ? index + 1 : null;
-          return (
-            <button
-              key={`${activeQuestion.id}:${option.label}`}
-              type="button"
-              disabled={isResponding}
-              onClick={() => handleOptionSelection(activeQuestion.id, option.label)}
-              className={cn(
-                "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-all duration-150",
-                isSelected
-                  ? "border-[color:var(--color-border)] bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
-                  : "border-transparent bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]/80 hover:border-[color:var(--color-border-light)] hover:bg-[var(--color-background-button-secondary-hover)]",
-                isResponding && "opacity-50 cursor-not-allowed",
-              )}
-            >
-              {shortcutKey !== null ? (
-                <kbd
-                  className={cn(
-                    "flex size-5 shrink-0 items-center justify-center rounded text-[11px] font-medium tabular-nums transition-colors duration-150",
-                    isSelected
-                      ? "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]"
-                      : "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground-secondary)] group-hover:bg-[var(--color-background-button-secondary-hover)] group-hover:text-[var(--color-text-foreground)]",
-                  )}
-                >
-                  {shortcutKey}
-                </kbd>
-              ) : null}
-              <div className="min-w-0 flex-1">
-                <span className="text-sm font-medium">{option.label}</span>
-                {option.description && option.description !== option.label ? (
-                  <span className="ml-2 text-xs text-muted-foreground/70">
-                    {option.description}
-                  </span>
+      {activeQuestion.options.length > 0 ? (
+        <div className="mt-3 space-y-1">
+          {activeQuestion.options.map((option, index) => {
+            const isSelected = progress.selectedOptionLabels.includes(option.label);
+            const shortcutKey = index < 9 ? index + 1 : null;
+            return (
+              <button
+                key={`${activeQuestion.id}:${option.label}`}
+                type="button"
+                disabled={isResponding}
+                onClick={() => handleOptionSelection(activeQuestion.id, option.label)}
+                className={cn(
+                  "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-all duration-150",
+                  isSelected
+                    ? "border-[color:var(--color-border)] bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
+                    : "border-transparent bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]/80 hover:border-[color:var(--color-border-light)] hover:bg-[var(--color-background-button-secondary-hover)]",
+                  isResponding && "opacity-50 cursor-not-allowed",
+                )}
+              >
+                {shortcutKey !== null ? (
+                  <kbd
+                    className={cn(
+                      "flex size-5 shrink-0 items-center justify-center rounded text-[11px] font-medium tabular-nums transition-colors duration-150",
+                      isSelected
+                        ? "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]"
+                        : "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground-secondary)] group-hover:bg-[var(--color-background-button-secondary-hover)] group-hover:text-[var(--color-text-foreground)]",
+                    )}
+                  >
+                    {shortcutKey}
+                  </kbd>
                 ) : null}
-              </div>
-              {isSelected ? (
-                <CheckIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground)]" />
-              ) : null}
-            </button>
-          );
-        })}
-      </div>
+                <div className="min-w-0 flex-1">
+                  <span className="text-sm font-medium">{option.label}</span>
+                  {option.description && option.description !== option.label ? (
+                    <span className="ml-2 text-xs text-muted-foreground/70">
+                      {option.description}
+                    </span>
+                  ) : null}
+                </div>
+                {isSelected ? (
+                  <CheckIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground)]" />
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="mt-3 flex justify-end">
+          <button
+            type="button"
+            disabled={isResponding}
+            onClick={onCancel}
+            className={cn(
+              "rounded-full border border-[color:var(--color-border-light)] px-3 py-1.5 text-xs font-medium text-[var(--color-text-foreground-secondary)] transition-colors duration-150 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
+              isResponding && "opacity-50 cursor-not-allowed",
+            )}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
     </div>
   );
 });

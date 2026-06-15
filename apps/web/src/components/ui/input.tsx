@@ -7,13 +7,24 @@ import { cn } from "~/lib/utils";
 
 type InputProps = Omit<ComponentPropsWithoutRef<typeof InputPrimitive>, "size"> & {
   size?: "sm" | "default" | "lg" | number;
+  // "soft" gives the field a faint filled background instead of the default
+  // surface-matching fill, so it reads as an input even on a flush card.
+  variant?: "default" | "soft";
   unstyled?: boolean;
   nativeInput?: boolean;
 };
 
 // Forward refs so the browser address bar can autofocus and select reliably.
 const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
-  { className, size = "default", unstyled = false, nativeInput = false, style, ...props },
+  {
+    className,
+    size = "default",
+    variant = "default",
+    unstyled = false,
+    nativeInput = false,
+    style,
+    ...props
+  },
   ref,
 ) {
   const inputClassName = cn(
@@ -35,6 +46,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
             "relative inline-flex w-full min-h-9 items-center rounded-lg border border-border bg-background text-[length:var(--app-font-size-ui,12px)] text-foreground has-aria-invalid:border-destructive/30 has-focus-visible:has-aria-invalid:border-destructive/50 has-focus-visible:border-foreground/30 has-autofill:bg-foreground/4 has-disabled:opacity-64 sm:min-h-8 sm:text-[length:var(--app-font-size-ui,12px)] dark:bg-input/32 dark:has-autofill:bg-foreground/8",
           size === "sm" && "min-h-8 sm:min-h-7",
           size === "lg" && "min-h-10 sm:min-h-9",
+          variant === "soft" && "bg-foreground/2 dark:bg-foreground/2",
           className,
         ) || undefined
       }

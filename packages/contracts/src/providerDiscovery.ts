@@ -244,6 +244,7 @@ export const ProviderListModelsInput = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   apiEndpoint: Schema.optional(TrimmedNonEmptyString),
   agentDir: Schema.optional(TrimmedNonEmptyString),
+  cwd: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListModelsInput = typeof ProviderListModelsInput.Type;
 

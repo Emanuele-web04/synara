@@ -57,6 +57,15 @@ export const PersistedQueuedTerminalContextDraft = Schema.Struct({
 });
 export type PersistedQueuedTerminalContextDraft = typeof PersistedQueuedTerminalContextDraft.Type;
 
+export const PersistedFileCommentDraft = Schema.Struct({
+  id: Schema.String,
+  path: Schema.String,
+  startLine: Schema.Number,
+  endLine: Schema.Number,
+  text: Schema.String,
+});
+export type PersistedFileCommentDraft = typeof PersistedFileCommentDraft.Type;
+
 export const PersistedQueuedComposerChatTurn = Schema.Struct({
   id: Schema.String,
   kind: Schema.Literal("chat"),
@@ -74,6 +83,7 @@ export const PersistedQueuedComposerChatTurn = Schema.Struct({
     ),
   ),
   terminalContexts: Schema.Array(PersistedQueuedTerminalContextDraft),
+  fileComments: Schema.optionalKey(Schema.Array(PersistedFileCommentDraft)),
   skills: Schema.Array(ProviderSkillReference),
   mentions: Schema.Array(ProviderMentionReference),
   selectedProvider: ProviderKind,
@@ -122,6 +132,7 @@ export const PersistedComposerThreadDraftState = Schema.Struct({
     ),
   ),
   terminalContexts: Schema.optionalKey(Schema.Array(PersistedTerminalContextDraft)),
+  fileComments: Schema.optionalKey(Schema.Array(PersistedFileCommentDraft)),
   skills: Schema.optionalKey(Schema.Array(ProviderSkillReference)),
   mentions: Schema.optionalKey(Schema.Array(ProviderMentionReference)),
   queuedTurns: Schema.optionalKey(Schema.Array(PersistedQueuedComposerTurn)),

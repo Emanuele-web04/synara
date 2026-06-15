@@ -12,7 +12,7 @@ import {
   type ProviderRuntimeEvent,
   type ThreadId,
 } from "@t3tools/contracts";
-import { isSupportedLocalImagePath as isSupportedLocalImagePathShared } from "@t3tools/shared/localImage";
+import { isSupportedLocalImagePath as isSupportedLocalImagePathShared } from "@t3tools/shared/localPreviewFiles";
 
 import {
   resolveActiveCodexHomeWritePath,

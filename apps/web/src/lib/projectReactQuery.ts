@@ -1,4 +1,5 @@
 import type {
+  ProjectEntry,
   ProjectListDirectoriesResult,
   ProjectReadFileResult,
   ProjectDiscoverScriptsResult,
@@ -16,8 +17,12 @@ export const projectQueryKeys = {
     ["projects", "read-file", cwd, relativePath] as const,
   discoverScripts: (cwd: string | null, depth: number) =>
     ["projects", "discover-scripts", cwd, depth] as const,
-  searchEntries: (cwd: string | null, query: string, limit: number) =>
-    ["projects", "search-entries", cwd, query, limit] as const,
+  searchEntries: (
+    cwd: string | null,
+    query: string,
+    limit: number,
+    kind: ProjectEntry["kind"] | null = null,
+  ) => ["projects", "search-entries", cwd, query, limit, kind] as const,
   searchLocalEntries: (rootPath: string | null, query: string, limit: number) =>
     ["projects", "search-local-entries", rootPath, query, limit] as const,
 };
@@ -138,12 +143,13 @@ export function projectSearchEntriesQueryOptions(input: {
   cwd: string | null;
   query: string;
   enabled?: boolean;
+  kind?: ProjectEntry["kind"];
   limit?: number;
   staleTime?: number;
 }) {
   const limit = input.limit ?? DEFAULT_SEARCH_ENTRIES_LIMIT;
   return queryOptions({
-    queryKey: projectQueryKeys.searchEntries(input.cwd, input.query, limit),
+    queryKey: projectQueryKeys.searchEntries(input.cwd, input.query, limit, input.kind ?? null),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd) {
@@ -153,6 +159,7 @@ export function projectSearchEntriesQueryOptions(input: {
         cwd: input.cwd,
         query: input.query,
         limit,
+        ...(input.kind ? { kind: input.kind } : {}),
       });
     },
     enabled: (input.enabled ?? true) && input.cwd !== null && input.query.length > 0,

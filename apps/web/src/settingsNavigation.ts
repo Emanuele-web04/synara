@@ -5,6 +5,7 @@
 
 export const SETTINGS_SECTION_IDS = [
   "general",
+  "profile",
   "appearance",
   "notifications",
   "behavior",
@@ -12,6 +13,8 @@ export const SETTINGS_SECTION_IDS = [
   "archived",
   "models",
   "providers",
+  "skills",
+  "usage",
   "sandboxes",
   "advanced",
 ] as const;
@@ -53,6 +56,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "Default provider, thread mode, and sidebar organization.",
     icon: "settings-gear-1",
     eyebrow: "Workflow defaults",
+  },
+  {
+    id: "profile",
+    group: "app",
+    label: "Profile",
+    description: "Your local activity, streaks, and a shareable stats card.",
+    icon: "user",
+    eyebrow: "Your stats",
   },
   {
     id: "appearance",
@@ -111,6 +122,22 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     eyebrow: "Picker visibility",
   },
   {
+    id: "skills",
+    group: "synara",
+    label: "Skills",
+    description: "Every skill found across providers, with toggles to control availability.",
+    icon: "building-blocks",
+    eyebrow: "Agent skills",
+  },
+  {
+    id: "usage",
+    group: "synara",
+    label: "Usage",
+    description: "Provider usage, rate limits, and model activity.",
+    icon: "chart-bar",
+    eyebrow: "Provider telemetry",
+  },
+  {
     id: "sandboxes",
     group: "synara",
     label: "Sandboxes",
@@ -127,6 +154,20 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     eyebrow: "System tools",
   },
 ] as const;
+
+/**
+ * Stable DOM id for a settings row, derived from its (string) title. Shared by the row that
+ * renders the anchor and by the search index that deep-links to it via `?target=…`, so the
+ * two can't drift. Panels mount one section at a time, so the slug only needs to be unique
+ * within a section.
+ */
+export function settingRowAnchorId(title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `setting-${slug}`;
+}
 
 export function normalizeSettingsSection(value: unknown): SettingsSectionId {
   if (typeof value !== "string") {

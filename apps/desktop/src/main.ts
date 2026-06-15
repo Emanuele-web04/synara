@@ -39,7 +39,12 @@ import { getAutoUpdateDisabledReason } from "./updateState";
 import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
 import { resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { DesktopBrowserManager } from "./browserManager";
-import { BROWSER_IPC_CHANNELS, registerBrowserIpcHandlers, sendBrowserState } from "./browserIpc";
+import {
+  BROWSER_IPC_CHANNELS,
+  registerBrowserIpcHandlers,
+  sendBrowserCopyLink,
+  sendBrowserState,
+} from "./browserIpc";
 import {
   BrowserUsePipeServer,
   DPCODE_BROWSER_USE_PIPE_ENV,
@@ -191,6 +196,10 @@ let browserUsePipeServer: BrowserUsePipeServer | null = null;
 
 browserManager.subscribe((state) => {
   sendBrowserState(mainWindow?.webContents, state);
+});
+
+browserManager.subscribeCopyLink((event) => {
+  sendBrowserCopyLink(mainWindow?.webContents, event);
 });
 
 function startBrowserPerformanceLogging(): void {

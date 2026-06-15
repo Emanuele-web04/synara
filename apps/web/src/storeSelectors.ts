@@ -284,6 +284,51 @@ export function createAllThreadsSelector(): (state: AppState) => readonly Thread
   };
 }
 
+export function createThreadShellsSelector(): (state: AppState) => readonly ThreadShell[] {
+  let previousThreadIds: readonly ThreadId[] | undefined;
+  let previousThreadShellById = {} as AppState["threadShellById"];
+  let previousShells: readonly ThreadShell[] = [];
+
+  return (state) => {
+    if (
+      previousThreadIds === state.threadIds &&
+      previousThreadShellById === state.threadShellById
+    ) {
+      return previousShells;
+    }
+
+    previousThreadIds = state.threadIds;
+    previousThreadShellById = state.threadShellById;
+    previousShells = (state.threadIds ?? []).flatMap((threadId) => {
+      const shell = state.threadShellById?.[threadId];
+      return shell ? [shell] : [];
+    });
+    return previousShells;
+  };
+}
+
+export function createAllThreadsMessagelessSelector(): (state: AppState) => boolean {
+  let previousThreadIds: readonly ThreadId[] | undefined;
+  let previousMessageIdsByThreadId = {} as AppState["messageIdsByThreadId"];
+  let previousResult = true;
+
+  return (state) => {
+    if (
+      previousThreadIds === state.threadIds &&
+      previousMessageIdsByThreadId === state.messageIdsByThreadId
+    ) {
+      return previousResult;
+    }
+
+    previousThreadIds = state.threadIds;
+    previousMessageIdsByThreadId = state.messageIdsByThreadId;
+    previousResult = (state.threadIds ?? []).every(
+      (threadId) => (state.messageIdsByThreadId?.[threadId]?.length ?? 0) === 0,
+    );
+    return previousResult;
+  };
+}
+
 export function createThreadProjectIdSelector(
   threadId: ThreadId | null | undefined,
 ): (state: AppState) => ProjectId | null {

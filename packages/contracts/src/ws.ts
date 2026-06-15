@@ -100,6 +100,7 @@ import {
   ServerStopLocalServerInput,
   ServerVoiceTranscriptionInput,
 } from "./server";
+import { StatsGetProfileStatsInput, StatsGetProfileTokenStatsInput } from "./stats";
 import {
   ProviderListCommandsInput,
   ProviderGetComposerCapabilitiesInput,
@@ -200,6 +201,8 @@ export const WS_METHODS = {
   serverStopLocalServer: "server.stopLocalServer",
   serverGetProviderUsageSnapshot: "server.getProviderUsageSnapshot",
   serverListProviderUsage: "server.listProviderUsage",
+  statsGetProfileStats: "stats.getProfileStats",
+  statsGetProfileTokenStats: "stats.getProfileTokenStats",
   serverGetDiagnostics: "server.getDiagnostics",
   serverTranscribeVoice: "server.transcribeVoice",
   serverGenerateThreadRecap: "server.generateThreadRecap",
@@ -352,6 +355,8 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverStopLocalServer, ServerStopLocalServerInput),
   tagRequestBody(WS_METHODS.serverGetProviderUsageSnapshot, ServerGetProviderUsageSnapshotInput),
   tagRequestBody(WS_METHODS.serverListProviderUsage, ServerListProviderUsageInput),
+  tagRequestBody(WS_METHODS.statsGetProfileStats, StatsGetProfileStatsInput),
+  tagRequestBody(WS_METHODS.statsGetProfileTokenStats, StatsGetProfileTokenStatsInput),
   tagRequestBody(WS_METHODS.serverGetDiagnostics, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverTranscribeVoice, ServerVoiceTranscriptionInput),
   tagRequestBody(WS_METHODS.serverGenerateThreadRecap, ServerGenerateThreadRecapInput),
@@ -392,6 +397,7 @@ export type WsPushSequence = typeof WsPushSequence.Type;
 export const WsWelcomePayload = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   homeDir: Schema.optional(TrimmedNonEmptyString),
+  chatWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
   projectName: TrimmedNonEmptyString,
   bootstrapProjectId: Schema.optional(ProjectId),
   bootstrapThreadId: Schema.optional(ThreadId),

@@ -150,7 +150,7 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
   side: {
     command: "side",
     label: "/side",
-    description: "Open a guarded sidechat from this thread",
+    description: "Open a guarded Side from this thread",
     source: "app",
   },
   status: {

@@ -4,13 +4,14 @@
 // Exports: row dimension, radius, hover/active, header + thread row class names
 
 /** Compact sidebar row height shared by projects, threads, chats, and settings nav. */
-export const SIDEBAR_ROW_HEIGHT_CLASS_NAME = "h-7";
+export const SIDEBAR_ROW_HEIGHT_CLASS_NAME =
+  "min-h-[var(--app-density-row-height,1.75rem)] h-[var(--app-density-row-height,1.75rem)]";
 
 export const SIDEBAR_ROW_RADIUS_CLASS_NAME = "rounded-md";
 
-export const SIDEBAR_ROW_PADDING_CLASS_NAME = "px-2 py-0.5";
+export const SIDEBAR_ROW_PADDING_CLASS_NAME = "px-2 py-[var(--app-density-row-padding-y,0.125rem)]";
 
-export const SIDEBAR_ROW_GAP_CLASS_NAME = "gap-2";
+export const SIDEBAR_ROW_GAP_CLASS_NAME = "gap-[var(--app-density-row-gap,0.5rem)]";
 
 export const SIDEBAR_ROW_TEXT_CLASS_NAME = "text-[length:var(--app-font-size-ui,12px)] font-normal";
 

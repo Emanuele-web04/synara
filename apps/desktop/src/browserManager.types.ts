@@ -5,6 +5,7 @@
 
 import type { WebContents } from "electron";
 import type {
+  BrowserCopyLinkEvent,
   BrowserPanelBounds,
   BrowserTabState,
   ThreadBrowserState,
@@ -24,6 +25,7 @@ export const LIVE_TAB_STATUS: BrowserTabState["status"] = "live";
 export const SUSPENDED_TAB_STATUS: BrowserTabState["status"] = "suspended";
 
 export type BrowserStateListener = (state: ThreadBrowserState) => void;
+export type BrowserCopyLinkListener = (event: BrowserCopyLinkEvent) => void;
 
 export interface LiveTabRuntime {
   key: string;

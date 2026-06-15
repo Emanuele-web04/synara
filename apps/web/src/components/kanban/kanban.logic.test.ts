@@ -762,6 +762,7 @@ describe("buildKanbanComposerDraftSnapshot", () => {
         },
       ],
       assistantSelections: [],
+      fileComments: [],
       activeProvider: null,
     });
 

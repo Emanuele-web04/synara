@@ -24,6 +24,7 @@ import {
   type ThreadPrimarySurface,
 } from "./types";
 import { type TerminalContextDraft } from "./lib/terminalContext";
+import { type FileCommentDraft, type FileCommentSelection } from "./lib/fileComments";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { createDebouncedStorage, createMemoryStorage } from "./lib/storage";
@@ -63,10 +64,12 @@ import {
 } from "./composerDraft/modelActions";
 import {
   addAssistantSelectionReducer,
+  addFileCommentReducer,
   addImagesReducer,
   addTerminalContextsReducer,
   clearAssistantSelectionsReducer,
   clearComposerContentReducer,
+  clearFileCommentsReducer,
   clearPersistedAttachmentsReducer,
   clearTerminalContextsReducer,
   copyTransferableComposerStateReducer,
@@ -137,6 +140,7 @@ export interface QueuedComposerChatTurn {
   images: ComposerImageAttachment[];
   assistantSelections: ComposerAssistantSelectionAttachment[];
   terminalContexts: TerminalContextDraft[];
+  fileComments: FileCommentDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
   selectedProvider: ProviderKind;
@@ -173,6 +177,7 @@ export interface ComposerThreadDraftState {
   persistedAttachments: PersistedComposerImageAttachment[];
   assistantSelections: ComposerAssistantSelectionAttachment[];
   terminalContexts: TerminalContextDraft[];
+  fileComments: FileCommentDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
   queuedTurns: QueuedComposerTurn[];
@@ -270,6 +275,8 @@ export interface ComposerDraftStoreState {
   ) => boolean;
   removeAssistantSelection: (threadId: ThreadId, selectionId: string) => void;
   clearAssistantSelections: (threadId: ThreadId) => void;
+  addFileComment: (threadId: ThreadId, selection: FileCommentSelection) => boolean;
+  clearFileComments: (threadId: ThreadId) => void;
   insertTerminalContext: (
     threadId: ThreadId,
     prompt: string,
@@ -293,12 +300,14 @@ const EMPTY_IMAGES: ComposerImageAttachment[] = [];
 const EMPTY_IDS: string[] = [];
 const EMPTY_PERSISTED_ATTACHMENTS: PersistedComposerImageAttachment[] = [];
 const EMPTY_TERMINAL_CONTEXTS: TerminalContextDraft[] = [];
+const EMPTY_FILE_COMMENTS: FileCommentDraft[] = [];
 const EMPTY_SKILLS: ProviderSkillReference[] = [];
 const EMPTY_MENTIONS: ProviderMentionReference[] = [];
 const EMPTY_QUEUED_TURNS: QueuedComposerTurn[] = [];
 Object.freeze(EMPTY_IMAGES);
 Object.freeze(EMPTY_IDS);
 Object.freeze(EMPTY_PERSISTED_ATTACHMENTS);
+Object.freeze(EMPTY_FILE_COMMENTS);
 Object.freeze(EMPTY_SKILLS);
 Object.freeze(EMPTY_MENTIONS);
 Object.freeze(EMPTY_QUEUED_TURNS);
@@ -312,6 +321,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   persistedAttachments: EMPTY_PERSISTED_ATTACHMENTS,
   assistantSelections: [],
   terminalContexts: EMPTY_TERMINAL_CONTEXTS,
+  fileComments: EMPTY_FILE_COMMENTS,
   skills: EMPTY_SKILLS,
   mentions: EMPTY_MENTIONS,
   queuedTurns: EMPTY_QUEUED_TURNS,
@@ -636,6 +646,24 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           return;
         }
         set((state) => clearAssistantSelectionsReducer(state, threadId));
+      },
+      addFileComment: (threadId, selection) => {
+        if (threadId.length === 0) {
+          return false;
+        }
+        let inserted = false;
+        set((state) => {
+          const result = addFileCommentReducer(state, threadId, selection);
+          inserted = result.inserted;
+          return result.change;
+        });
+        return inserted;
+      },
+      clearFileComments: (threadId) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        set((state) => clearFileCommentsReducer(state, threadId));
       },
       insertTerminalContext: (threadId, prompt, context, index) => {
         if (threadId.length === 0) {

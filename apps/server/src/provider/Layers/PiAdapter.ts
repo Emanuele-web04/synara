@@ -22,6 +22,7 @@ import {
   type ProviderListSkillsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type UserInputQuestion,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -70,6 +71,54 @@ import {
 
 export { getPiSupportedThinkingOptions };
 export type { PiAdapterLiveOptions };
+
+interface PiUserInputOptionMapping {
+  readonly value: string;
+  readonly option: UserInputQuestion["options"][number];
+}
+
+export function makePiUserInputOptions(
+  labels: ReadonlyArray<string>,
+): ReadonlyArray<PiUserInputOptionMapping> {
+  const labelCounts = new Map<string, number>();
+  return labels.map((label, index) => {
+    const baseLabel = trimToUndefined(label) ?? `Option ${index + 1}`;
+    const count = (labelCounts.get(baseLabel) ?? 0) + 1;
+    labelCounts.set(baseLabel, count);
+    const displayLabel = count === 1 ? baseLabel : `${baseLabel} (${count})`;
+    return {
+      value: label,
+      option: { label: displayLabel, description: baseLabel },
+    };
+  });
+}
+
+export const PLAIN_PI_EXTENSION_THEME = {
+  fg(_color: string, text: string): string {
+    return text;
+  },
+  bg(_color: string, text: string): string {
+    return text;
+  },
+  bold(text: string): string {
+    return text;
+  },
+  italic(text: string): string {
+    return text;
+  },
+  underline(text: string): string {
+    return text;
+  },
+  inverse(text: string): string {
+    return text;
+  },
+  strikethrough(text: string): string {
+    return text;
+  },
+  getThinkingBorderColor(_level: string): (text: string) => string {
+    return (text) => text;
+  },
+} as const;
 
 const makePiAdapter = (options?: PiAdapterLiveOptions) =>
   Effect.gen(function* () {

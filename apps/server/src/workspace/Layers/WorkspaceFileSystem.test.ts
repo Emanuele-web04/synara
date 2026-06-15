@@ -81,6 +81,60 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
       }),
     );
 
+    it.effect("resolves a bare filename to its unique nested file", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(
+          cwd,
+          "apps/web/src/lib/chatReferences.test.ts",
+          "export const v = 1;\n",
+        );
+
+        const result = yield* workspaceFileSystem.readFile({
+          cwd,
+          relativePath: "chatReferences.test.ts",
+        });
+
+        expect(result).toEqual({
+          relativePath: "apps/web/src/lib/chatReferences.test.ts",
+          contents: "export const v = 1;\n",
+          truncated: false,
+        });
+      }),
+    );
+
+    it.effect("resolves a partial path tail to its unique nested file", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "apps/web/src/lib/chatReferences.ts", "export const v = 2;\n");
+
+        const result = yield* workspaceFileSystem.readFile({
+          cwd,
+          relativePath: "lib/chatReferences.ts",
+        });
+
+        expect(result.relativePath).toBe("apps/web/src/lib/chatReferences.ts");
+        expect(result.contents).toBe("export const v = 2;\n");
+      }),
+    );
+
+    it.effect("does not resolve an ambiguous basename to a single file", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "a/index.ts", "export const a = 1;\n");
+        yield* writeTextFile(cwd, "b/index.ts", "export const b = 1;\n");
+
+        const error = yield* workspaceFileSystem
+          .readFile({ cwd, relativePath: "index.ts" })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain("ENOENT");
+      }),
+    );
+
     it.effect("rejects reads outside the workspace root", () =>
       Effect.gen(function* () {
         const workspaceFileSystem = yield* WorkspaceFileSystem;

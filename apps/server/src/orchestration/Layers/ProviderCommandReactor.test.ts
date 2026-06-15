@@ -3494,6 +3494,152 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("forwards approval responses before the session projection is visible", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.approval.respond",
+        commandId: CommandId.makeUnsafe("cmd-approval-respond-early"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: asApprovalRequestId("approval-request-early"),
+        decision: "accept",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.respondToRequest.mock.calls.length === 1);
+    expect(harness.respondToRequest.mock.calls[0]?.[0]).toEqual({
+      threadId: "thread-1",
+      requestId: "approval-request-early",
+      decision: "accept",
+    });
+  });
+
+  it("forwards user-input responses before the session projection is visible", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.makeUnsafe("cmd-user-input-respond-early"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: asApprovalRequestId("user-input-request-early"),
+        answers: {
+          input: "continue",
+        },
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.respondToUserInput.mock.calls.length === 1);
+    expect(harness.respondToUserInput.mock.calls[0]?.[0]).toEqual({
+      threadId: "thread-1",
+      requestId: "user-input-request-early",
+      answers: {
+        input: "continue",
+      },
+    });
+  });
+
+  it("does not forward approval responses when the projected session is stopped", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-stopped-approval"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "stopped",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.approval.respond",
+        commandId: CommandId.makeUnsafe("cmd-approval-respond-stopped"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: asApprovalRequestId("approval-request-stopped"),
+        decision: "accept",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find(
+        (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+      );
+      return (
+        thread?.activities.some(
+          (activity) => activity.kind === "provider.approval.respond.failed",
+        ) ?? false
+      );
+    });
+    expect(harness.respondToRequest).not.toHaveBeenCalled();
+  });
+
+  it("does not forward user-input responses when the projected session is stopped", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-stopped-user-input"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "stopped",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.makeUnsafe("cmd-user-input-respond-stopped"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: asApprovalRequestId("user-input-request-stopped"),
+        answers: {
+          input: "continue",
+        },
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find(
+        (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+      );
+      return (
+        thread?.activities.some(
+          (activity) => activity.kind === "provider.user-input.respond.failed",
+        ) ?? false
+      );
+    });
+    expect(harness.respondToUserInput).not.toHaveBeenCalled();
+  });
+
   it("preserves array and mixed answer shapes through the runtime path", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

@@ -75,6 +75,23 @@ describe("searchWorkspaceEntries", () => {
     assert.isTrue(result.entries.every((entry) => entry.path.toLowerCase().includes("compo")));
   });
 
+  it("can restrict search results to files before ranking", async () => {
+    const cwd = makeTempDir("t3code-workspace-kind-filter-");
+    writeFile(cwd, "src/components/Composer.tsx");
+    writeFile(cwd, "src/components/composePrompt.ts");
+    writeFile(cwd, "docs/components/guide.md");
+
+    const result = await searchWorkspaceEntries({ cwd, query: "compo", kind: "file", limit: 10 });
+
+    assert.isAbove(result.entries.length, 0);
+    assert.isTrue(result.entries.every((entry) => entry.kind === "file"));
+    assert.isFalse(result.entries.some((entry) => entry.path === "src/components"));
+    assert.include(
+      result.entries.map((entry) => entry.path),
+      "src/components/Composer.tsx",
+    );
+  });
+
   it("supports fuzzy subsequence queries for composer path search", async () => {
     const cwd = makeTempDir("t3code-workspace-fuzzy-query-");
     writeFile(cwd, "src/components/Composer.tsx");
@@ -138,19 +155,57 @@ describe("searchWorkspaceEntries", () => {
 
   it("disables fsmonitor and untracked cache helpers during git workspace indexing", async () => {
     const cwd = makeTempDir("t3code-workspace-hardened-git-");
-    runGit(cwd, ["init"]);
-    writeFile(cwd, ".gitignore", "ignored.txt\n");
-    writeFile(cwd, "src/keep.ts", "export {};");
-    writeFile(cwd, "ignored.txt", "ignore me");
 
     const runProcessSpy = vi.spyOn(ProcessRunner, "runProcess");
+    runProcessSpy.mockImplementation(async (command, args) => {
+      if (command !== "git") {
+        throw new Error(`Unexpected command: ${command}`);
+      }
+      if (args.includes("rev-parse")) {
+        return {
+          stdout: "true\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+        };
+      }
+      if (args.includes("ls-files")) {
+        return {
+          stdout: "src/keep.ts\0ignored.txt\0",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+        };
+      }
+      if (args.includes("check-ignore")) {
+        return {
+          stdout: "ignored.txt\0",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+        };
+      }
+      throw new Error(`Unexpected git command: ${args.join(" ")}`);
+    });
 
-    await searchWorkspaceEntries({ cwd, query: "", limit: 100 });
+    const result = await searchWorkspaceEntries({ cwd, query: "", limit: 100 });
+    const paths = result.entries.map((entry) => entry.path);
 
     const gitCalls = runProcessSpy.mock.calls
       .filter(([command]) => command === "git")
       .map(([, args]) => args);
 
+    assert.include(paths, "src/keep.ts");
+    assert.notInclude(paths, "ignored.txt");
     assert.deepInclude(gitCalls, [
       "-c",
       "core.fsmonitor=false",

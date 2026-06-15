@@ -111,7 +111,7 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
     expect(markup).not.toContain('data-index="0"');
     expect(markup).not.toContain('class="relative" style="height:');
     expect(markup).toContain('data-timeline-row-kind="message"');
-  });
+  }, 10_000);
 
   it("renders assistant math through the shared markdown renderer", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
@@ -2030,6 +2030,7 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
     expect(markup).toContain("+1");
     expect(markup).toContain("-1");
     expect(markup).toContain("+2");
+    expect(markup).not.toContain(">apps/web/src/components/chat<");
   });
 
   it("renders inline edited rows from the turn summary when the file-change tool call has no filenames", async () => {

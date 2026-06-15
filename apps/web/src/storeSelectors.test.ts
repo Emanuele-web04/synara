@@ -1,0 +1,121 @@
+import { describe, expect, it } from "vitest";
+
+import type { MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
+
+import type { AppState } from "./store";
+import {
+  createAllThreadsMessagelessSelector,
+  createThreadExistsSelector,
+  createThreadProjectIdSelector,
+  createThreadShellsSelector,
+} from "./storeSelectors";
+import type { ThreadShell } from "./types";
+
+const threadIdA = "thread-a" as ThreadId;
+const threadIdB = "thread-b" as ThreadId;
+const messageId = "message-1" as MessageId;
+const projectId = "project-1" as ProjectId;
+
+const shellA = { id: threadIdA, projectId, title: "A" } as ThreadShell;
+const shellB = { id: threadIdB, projectId, title: "B" } as ThreadShell;
+
+interface TestStateSlices {
+  threadIds?: readonly ThreadId[];
+  threadShellById?: Readonly<Record<string, ThreadShell>>;
+  messageIdsByThreadId?: Readonly<Record<string, readonly MessageId[]>>;
+}
+
+function makeState(slices: TestStateSlices): AppState {
+  return {
+    threadIds: slices.threadIds ?? [],
+    threadShellById: slices.threadShellById ?? {},
+    messageIdsByThreadId: slices.messageIdsByThreadId ?? {},
+  } as unknown as AppState;
+}
+
+describe("createThreadShellsSelector", () => {
+  it("returns shells in threadIds order", () => {
+    const selectShells = createThreadShellsSelector();
+    const state = makeState({
+      threadIds: [threadIdB, threadIdA],
+      threadShellById: { [threadIdA]: shellA, [threadIdB]: shellB },
+    });
+
+    expect(selectShells(state).map((shell) => shell.id)).toEqual([threadIdB, threadIdA]);
+  });
+
+  it("stays reference-stable when unrelated state changes (e.g. streaming messages)", () => {
+    const selectShells = createThreadShellsSelector();
+    const threadIds = [threadIdA];
+    const threadShellById = { [threadIdA]: shellA };
+
+    const before = selectShells(makeState({ threadIds, threadShellById }));
+    const after = selectShells(
+      makeState({
+        threadIds,
+        threadShellById,
+        messageIdsByThreadId: { [threadIdA]: [messageId] },
+      }),
+    );
+
+    expect(after).toBe(before);
+  });
+
+  it("returns a new array when shells change", () => {
+    const selectShells = createThreadShellsSelector();
+    const threadIds = [threadIdA];
+
+    const before = selectShells(makeState({ threadIds, threadShellById: { [threadIdA]: shellA } }));
+    const after = selectShells(
+      makeState({
+        threadIds,
+        threadShellById: { [threadIdA]: { ...shellA, title: "renamed" } },
+      }),
+    );
+
+    expect(after).not.toBe(before);
+    expect(after[0]?.title).toBe("renamed");
+  });
+});
+
+describe("createAllThreadsMessagelessSelector", () => {
+  it("is vacuously true with no threads", () => {
+    const selectMessageless = createAllThreadsMessagelessSelector();
+    expect(selectMessageless(makeState({}))).toBe(true);
+  });
+
+  it("is true when every thread has no message ids", () => {
+    const selectMessageless = createAllThreadsMessagelessSelector();
+    const state = makeState({
+      threadIds: [threadIdA, threadIdB],
+      messageIdsByThreadId: { [threadIdA]: [] },
+    });
+    expect(selectMessageless(state)).toBe(true);
+  });
+
+  it("is false once any thread has a message", () => {
+    const selectMessageless = createAllThreadsMessagelessSelector();
+    const state = makeState({
+      threadIds: [threadIdA, threadIdB],
+      messageIdsByThreadId: { [threadIdB]: [messageId] },
+    });
+    expect(selectMessageless(state)).toBe(false);
+  });
+});
+
+describe("thread shell route selectors", () => {
+  it("resolve existence and project id without reading detail slices", () => {
+    const state = makeState({
+      threadIds: [threadIdA],
+      threadShellById: { [threadIdA]: shellA },
+    });
+    Object.defineProperty(state, "messageIdsByThreadId", {
+      get() {
+        throw new Error("detail messages should not be read");
+      },
+    });
+
+    expect(createThreadExistsSelector(threadIdA)(state)).toBe(true);
+    expect(createThreadProjectIdSelector(threadIdA)(state)).toBe(projectId);
+  });
+});

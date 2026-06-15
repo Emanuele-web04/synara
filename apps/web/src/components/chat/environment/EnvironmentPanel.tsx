@@ -12,6 +12,7 @@ import type {
   EditorId,
   MessageId,
   PinnedMessage,
+  ProjectId,
   ProviderKind,
   ResolvedKeybindingsConfig,
   ThreadId,
@@ -40,6 +41,7 @@ import { EnvironmentLocalServersSection } from "./EnvironmentLocalServersSection
 import { EnvironmentMarkersSection } from "./EnvironmentMarkersSection";
 import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
+import { EnvironmentProjectInstructionsSection } from "./EnvironmentProjectInstructionsSection";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "./environmentPanelStyles";
 import {
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
@@ -70,7 +72,7 @@ export interface EnvironmentPanelProps {
    */
   variant: "docked" | "floating";
   gitCwd: string | null;
-  openInCwd: string | null;
+  openInTarget: string | null;
   githubRepository?: {
     readonly nameWithOwner: string;
     readonly url: string;
@@ -107,6 +109,16 @@ export interface EnvironmentPanelProps {
   markerMessageTextById: ReadonlyMap<MessageId, string>;
   /** Per-thread freeform scratchpad notes (server-synced). */
   notes: string;
+  /** Active project whose local instructions should be edited. */
+  activeProjectId: ProjectId | null;
+  /** Per-project freeform instructions, persisted locally and optionally copied into notes. */
+  projectInstructions: string;
+  /** Whether the current thread is server-backed enough to accept notepad updates. */
+  canCopyProjectInstructionsToNotes: boolean;
+  /** Persist local project instruction edits. */
+  onProjectInstructionsChange: (projectId: ProjectId, instructions: string) => void;
+  /** Copy/append current project instructions into the active thread's notepad. */
+  onCopyProjectInstructionsToNotes: () => void;
   /** Toggle the Diff panel/route (same handler the header diff toggle used). */
   onToggleDiff: () => void;
   /** Open the repository URL in the in-app browser panel. */
@@ -169,7 +181,7 @@ export function EnvironmentPanel({
   open,
   variant,
   gitCwd,
-  openInCwd,
+  openInTarget,
   githubRepository = null,
   isGitRepo,
   keybindings,
@@ -187,6 +199,11 @@ export function EnvironmentPanel({
   pinnedMessageTextById,
   markerMessageTextById,
   notes,
+  activeProjectId,
+  projectInstructions,
+  canCopyProjectInstructionsToNotes,
+  onProjectInstructionsChange,
+  onCopyProjectInstructionsToNotes,
   onToggleDiff,
   onOpenGithubRepository,
   onJumpToPinnedMessage,
@@ -209,7 +226,7 @@ export function EnvironmentPanel({
   // (so an open diff stays toggleable closed even when there are no pending changes).
   const changesDisabled = diffDisabledReason !== null && !diffOpen;
   const showRecap = Boolean(recap?.text) || recap?.status === "pending";
-  const markdownCwd = openInCwd ?? gitCwd ?? undefined;
+  const markdownCwd = openInTarget ?? gitCwd ?? undefined;
 
   const content = (
     <div className="flex flex-col gap-0.5 p-1.5">
@@ -282,7 +299,7 @@ export function EnvironmentPanel({
         <EnvironmentEditorSection
           keybindings={keybindings}
           availableEditors={availableEditors}
-          openInCwd={openInCwd}
+          openInTarget={openInTarget}
           {...(onOpenEditorView
             ? {
                 onOpenEditorView: () => {
@@ -325,6 +342,21 @@ export function EnvironmentPanel({
             onToggleDone={onToggleThreadMarkerDone}
             onRemove={onRemoveThreadMarker}
             onRename={onRenameThreadMarker}
+          />
+        </>
+      ) : null}
+
+      {settings.showEnvironmentInstructions && activeProjectId ? (
+        <>
+          <EnvironmentSectionDivider />
+          <EnvironmentProjectInstructionsSection
+            key={activeProjectId}
+            projectId={activeProjectId}
+            instructions={projectInstructions}
+            threadNotes={notes}
+            canCopyToThreadNotes={canCopyProjectInstructionsToNotes}
+            onInstructionsChange={onProjectInstructionsChange}
+            onCopyToThreadNotes={onCopyProjectInstructionsToNotes}
           />
         </>
       ) : null}

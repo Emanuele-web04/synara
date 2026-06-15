@@ -12,6 +12,7 @@ import type {
   ComposerThreadDraftState,
   QueuedComposerTurn,
 } from "../composerDraftStore";
+import { type FileCommentDraft, normalizeFileCommentSelection } from "../lib/fileComments";
 import type {
   PersistedComposerImageAttachment,
   PersistedComposerThreadDraftState,
@@ -85,11 +86,24 @@ export function hydrateQueuedTurnsFromPersisted(
         images: hydrateImagesFromPersisted(queuedTurn.images),
         assistantSelections: normalizeAssistantSelections(queuedTurn.assistantSelections ?? []),
         terminalContexts: normalizeTerminalContextsForThread(threadId, queuedTurn.terminalContexts),
+        fileComments: hydrateFileCommentsFromPersisted(queuedTurn.fileComments),
         skills: [...queuedTurn.skills],
         mentions: [...queuedTurn.mentions],
       };
     }
     return { ...queuedTurn };
+  });
+}
+
+function hydrateFileCommentsFromPersisted(
+  comments: ReadonlyArray<FileCommentDraft> | undefined,
+): FileCommentDraft[] {
+  if (!comments || comments.length === 0) {
+    return [];
+  }
+  return comments.flatMap((comment) => {
+    const normalized = normalizeFileCommentSelection(comment);
+    return normalized ? [{ id: comment.id, ...normalized }] : [];
   });
 }
 
@@ -108,6 +122,7 @@ export function toHydratedThreadDraft(
     nonPersistedImageIds: [],
     persistedAttachments: [...persistedDraft.attachments],
     assistantSelections: normalizeAssistantSelections(persistedDraft.assistantSelections ?? []),
+    fileComments: hydrateFileCommentsFromPersisted(persistedDraft.fileComments),
     skills: [...(persistedDraft.skills ?? [])],
     mentions: [...(persistedDraft.mentions ?? [])],
     terminalContexts:

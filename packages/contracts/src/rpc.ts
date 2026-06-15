@@ -164,6 +164,12 @@ import {
   TerminalSessionSnapshot,
   TerminalWriteInput,
 } from "./terminal";
+import {
+  StatsGetProfileStatsInput,
+  StatsGetProfileStatsResult,
+  StatsGetProfileTokenStatsInput,
+  StatsGetProfileTokenStatsResult,
+} from "./stats";
 import { WS_METHODS } from "./ws";
 
 export class WsRpcError extends Schema.TaggedErrorClass<WsRpcError>()("WsRpcError", {
@@ -703,6 +709,18 @@ export const WsServerListProviderUsageRpc = Rpc.make(WS_METHODS.serverListProvid
   error: WsRpcError,
 });
 
+export const WsStatsGetProfileStatsRpc = Rpc.make(WS_METHODS.statsGetProfileStats, {
+  payload: StatsGetProfileStatsInput,
+  success: StatsGetProfileStatsResult,
+  error: WsRpcError,
+});
+
+export const WsStatsGetProfileTokenStatsRpc = Rpc.make(WS_METHODS.statsGetProfileTokenStats, {
+  payload: StatsGetProfileTokenStatsInput,
+  success: StatsGetProfileTokenStatsResult,
+  error: WsRpcError,
+});
+
 export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostics, {
   payload: Schema.Struct({}),
   success: ServerDiagnosticsResult,
@@ -899,6 +917,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerStopLocalServerRpc,
   WsServerGetProviderUsageSnapshotRpc,
   WsServerListProviderUsageRpc,
+  WsStatsGetProfileStatsRpc,
+  WsStatsGetProfileTokenStatsRpc,
   WsServerGetDiagnosticsRpc,
   WsServerTranscribeVoiceRpc,
   WsServerGenerateThreadRecapRpc,

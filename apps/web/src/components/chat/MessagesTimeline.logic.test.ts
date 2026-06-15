@@ -668,6 +668,54 @@ describe("deriveMessagesTimelineRows", () => {
     expect(terminal!.collapsedTurnItems).toBeUndefined();
   });
 
+  it("keeps a just-settled tail assistant expanded when the active turn id is briefly unavailable", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:01Z", "tool 1"),
+        assistantEntry("a1", "2026-01-01T00:00:02Z", {
+          turnId: "t1",
+          text: "All done",
+          completedAt: "2026-01-01T00:00:03Z",
+        }),
+      ],
+    });
+
+    const terminal = messageRow(rows, "a1");
+    expect(terminal).toBeDefined();
+    expect(terminal!.inlineWorkEntries?.map((entry) => entry.id)).toEqual(["w1"]);
+    expect(terminal!.collapsedTurnItems).toBeUndefined();
+  });
+
+  it("collapses an older settled turn when a follow-up user message is waiting for output", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnStartedAt: "2026-01-01T00:00:05Z",
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:01Z", "tool 1"),
+        assistantEntry("a1", "2026-01-01T00:00:02Z", {
+          turnId: "t1",
+          text: "All done",
+          completedAt: "2026-01-01T00:00:03Z",
+        }),
+        userEntry("u2", "2026-01-01T00:00:05Z"),
+      ],
+    });
+
+    const previousAssistant = messageRow(rows, "a1");
+    expect(previousAssistant).toBeDefined();
+    expect(collapsedSignature(previousAssistant!)).toEqual(["work:w1"]);
+    expect(previousAssistant!.inlineWorkEntries).toBeUndefined();
+    expect(messageRow(rows, "u2")).toBeDefined();
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
+
   it("collapses adjacent provider mini-turns into the same user-visible response", () => {
     const rows = deriveMessagesTimelineRows({
       ...baseInput,

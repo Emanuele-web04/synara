@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { isWorkspaceRelativePathSafe } from "./path";
+import {
+  isWorkspaceRelativePathSafe,
+  joinWorkspaceRelativePath,
+  workspaceRelativePathOf,
+} from "./path";
 
 describe("isWorkspaceRelativePathSafe", () => {
   it("accepts plain workspace-relative paths", () => {
@@ -26,5 +30,44 @@ describe("isWorkspaceRelativePathSafe", () => {
   it("rejects empty and whitespace-only values", () => {
     expect(isWorkspaceRelativePathSafe("")).toBe(false);
     expect(isWorkspaceRelativePathSafe("   ")).toBe(false);
+  });
+});
+
+describe("workspaceRelativePathOf", () => {
+  it("strips the workspace root from contained absolute paths", () => {
+    expect(workspaceRelativePathOf("/repo/app/src/page.tsx", "/repo/app")).toBe("src/page.tsx");
+    expect(workspaceRelativePathOf("/repo/app/readme.md", "/repo/app/")).toBe("readme.md");
+  });
+
+  it("returns null for paths outside the root or the root itself", () => {
+    expect(workspaceRelativePathOf("/repo/other/src/page.tsx", "/repo/app")).toBeNull();
+    expect(workspaceRelativePathOf("/repo/app", "/repo/app")).toBeNull();
+    expect(workspaceRelativePathOf("/repo/application/file.ts", "/repo/app")).toBeNull();
+  });
+
+  it("normalizes Windows separators and drive-letter casing", () => {
+    expect(workspaceRelativePathOf("C:\\repo\\app\\src\\page.tsx", "c:/repo/app")).toBe(
+      "src/page.tsx",
+    );
+  });
+
+  it("returns null for empty inputs", () => {
+    expect(workspaceRelativePathOf("", "/repo/app")).toBeNull();
+    expect(workspaceRelativePathOf("/repo/app/file.ts", "  ")).toBeNull();
+  });
+});
+
+describe("joinWorkspaceRelativePath", () => {
+  it("joins with the root's separator style", () => {
+    expect(joinWorkspaceRelativePath("/repo/app", "src/page.tsx")).toBe("/repo/app/src/page.tsx");
+    expect(joinWorkspaceRelativePath("/repo/app/", "readme.md")).toBe("/repo/app/readme.md");
+    expect(joinWorkspaceRelativePath("C:\\repo\\app", "src/page.tsx")).toBe(
+      "C:\\repo\\app\\src\\page.tsx",
+    );
+  });
+
+  it("round-trips through workspaceRelativePathOf", () => {
+    const joined = joinWorkspaceRelativePath("/repo/app", "src/page.tsx");
+    expect(workspaceRelativePathOf(joined, "/repo/app")).toBe("src/page.tsx");
   });
 });

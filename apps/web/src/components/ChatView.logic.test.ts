@@ -416,6 +416,7 @@ describe("deriveComposerSendState", () => {
       prompt: "\uFFFC",
       imageCount: 0,
       assistantSelectionCount: 0,
+      fileCommentCount: 0,
       terminalContexts: [
         {
           id: "ctx-expired",
@@ -441,6 +442,7 @@ describe("deriveComposerSendState", () => {
       prompt: `yoo \uFFFC waddup`,
       imageCount: 0,
       assistantSelectionCount: 0,
+      fileCommentCount: 0,
       terminalContexts: [
         {
           id: "ctx-expired",
@@ -465,6 +467,7 @@ describe("deriveComposerSendState", () => {
       prompt: "",
       imageCount: 0,
       assistantSelectionCount: 1,
+      fileCommentCount: 0,
       terminalContexts: [],
     });
 

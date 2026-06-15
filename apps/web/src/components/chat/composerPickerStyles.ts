@@ -98,7 +98,8 @@ export const CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME =
 /** Shared max width for the chat column (transcript + composer). */
 export const CHAT_COLUMN_MAX_WIDTH_CLASS_NAME = COMPOSER_MAX_WIDTH_CLASS_NAME;
 /** Horizontal padding shared by the transcript and composer columns. */
-export const CHAT_COLUMN_GUTTER_CLASS_NAME = "px-3 sm:px-5";
+export const CHAT_COLUMN_GUTTER_CLASS_NAME =
+  "px-[var(--app-density-chat-gutter-x,0.75rem)] sm:px-[var(--app-density-chat-gutter-x-lg,1.25rem)]";
 /** Centers the chat column and applies the shared max width. */
 export const CHAT_COLUMN_FRAME_CLASS_NAME = `mx-auto w-full min-w-0 ${COMPOSER_MAX_WIDTH_CLASS_NAME}`;
 
@@ -107,13 +108,13 @@ export const COMPOSER_COLUMN_FRAME_CLASS_NAME = CHAT_COLUMN_FRAME_CLASS_NAME;
 
 /**
  * Frame for rows stacked above the composer (queued steer/queue rows, active task
- * list). Keeps stacked activity on the same 11/12-width rail as queued rows so
- * the composer input can remain a distinct, fully rounded surface underneath.
+ * list). Keeps stacked activity on the same width as the composer input so wide
+ * screens do not make plan/task rows drift wider than the field they belong to.
  *
  * Prefer ComposerStackedPanel inside ComposerColumnFrame instead of using this
  * token directly so chrome and attached-radius behavior stay centralized.
  */
-export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-11/12 min-w-0";
+export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-full min-w-0";
 
 /** Opaque base behind the composer shell: the composer overlaps the scrolling
  *  transcript (`-mt-5`), so without a solid backing the frosted surface would let
@@ -227,13 +228,28 @@ export const COMPOSER_EDITOR_TEXT_CLASS_NAME = "text-[length:var(--app-font-size
 export const COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME = `font-system-ui ${COMPOSER_EDITOR_TEXT_CLASS_NAME} ${COMPOSER_EDITOR_LINE_HEIGHT_CLASS_NAME}`;
 /** Muted empty-state copy for the composer prompt editor. */
 export const COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME = "text-muted-foreground/40";
-export const COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME = "min-h-[2lh]";
+export const COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME =
+  "min-h-[var(--app-density-composer-editor-min-height,2lh)]";
 /** Lexical wraps lines in `<p>` nodes; reset default margins so text sits flush above the footer. */
 export const COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME = "[&_p]:m-0";
 /** Shared padding around the composer prompt editor. */
-export const COMPOSER_EDITOR_PADDING_CLASS_NAME = "relative pl-3 pr-3.5 pt-3 pb-2";
+export const COMPOSER_EDITOR_PADDING_CLASS_NAME = [
+  "relative",
+  "pl-[var(--app-density-composer-editor-padding-x,0.75rem)]",
+  "pr-[var(--app-density-composer-editor-padding-x-end,0.875rem)]",
+  "pt-[var(--app-density-composer-editor-padding-top,0.75rem)]",
+  "pb-[var(--app-density-composer-editor-padding-bottom,0.5rem)]",
+].join(" ");
 /** Bottom bar row — flush to the composer shell edges. */
-export const COMPOSER_FOOTER_ROW_CLASS_NAME =
-  "flex items-center justify-between pl-1.5 pr-2 pb-1.5";
-export const COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME =
-  "flex items-center justify-end gap-2 pl-1.5 pr-2 pb-1.5";
+export const COMPOSER_FOOTER_ROW_CLASS_NAME = [
+  "flex items-center justify-between",
+  "pl-[var(--app-density-composer-footer-padding,0.375rem)]",
+  "pr-[var(--app-density-composer-footer-padding-end,0.5rem)]",
+  "pb-[var(--app-density-composer-footer-padding,0.375rem)]",
+].join(" ");
+export const COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME = [
+  "flex items-center justify-end gap-2",
+  "pl-[var(--app-density-composer-footer-padding,0.375rem)]",
+  "pr-[var(--app-density-composer-footer-padding-end,0.5rem)]",
+  "pb-[var(--app-density-composer-footer-padding,0.375rem)]",
+].join(" ");

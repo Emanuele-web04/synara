@@ -10,6 +10,11 @@ import {
   type TerminalContextDraft,
   ensureInlineTerminalContextPlaceholders,
 } from "../lib/terminalContext";
+import {
+  type FileCommentSelection,
+  createFileCommentDraft,
+  normalizeFileCommentSelection,
+} from "../lib/fileComments";
 import { revokeObjectPreviewUrl } from "./cleanup";
 import {
   assistantSelectionDedupKey,
@@ -263,6 +268,53 @@ export function clearAssistantSelectionsReducer(
   return commitDraft(state, threadId, { ...current, assistantSelections: [] });
 }
 
+function fileCommentDedupKey(comment: FileCommentSelection): string {
+  return [
+    comment.path,
+    String(comment.startLine),
+    String(comment.endLine),
+    comment.text,
+  ].join("\u0000");
+}
+
+export function addFileCommentReducer(
+  state: ComposerDraftStoreState,
+  threadId: ThreadId,
+  selection: FileCommentSelection,
+): { change: StateChange; inserted: boolean } {
+  const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+  const normalizedSelection = normalizeFileCommentSelection(selection);
+  if (!normalizedSelection) {
+    return { change: state, inserted: false };
+  }
+  const dedupKey = fileCommentDedupKey(normalizedSelection);
+  if (existing.fileComments.some((comment) => fileCommentDedupKey(comment) === dedupKey)) {
+    return { change: state, inserted: false };
+  }
+  const draft = createFileCommentDraft(normalizedSelection);
+  if (!draft) {
+    return { change: state, inserted: false };
+  }
+  return {
+    inserted: true,
+    change: commitDraft(state, threadId, {
+      ...existing,
+      fileComments: [...existing.fileComments, draft],
+    }),
+  };
+}
+
+export function clearFileCommentsReducer(
+  state: ComposerDraftStoreState,
+  threadId: ThreadId,
+): StateChange {
+  const current = state.draftsByThreadId[threadId];
+  if (!current || current.fileComments.length === 0) {
+    return state;
+  }
+  return commitDraft(state, threadId, { ...current, fileComments: [] });
+}
+
 export function insertTerminalContextReducer(
   state: ComposerDraftStoreState,
   threadId: ThreadId,
@@ -430,6 +482,7 @@ export function clearComposerContentReducer(
     persistedAttachments: [],
     assistantSelections: [],
     terminalContexts: [],
+    fileComments: [],
   };
   return commitDraft(state, threadId, nextDraft);
 }

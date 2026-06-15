@@ -665,6 +665,11 @@ export function partializeComposerDraftStoreState(
             lineEnd: context.lineEnd,
             text: context.text,
           })),
+          ...(queuedTurn.fileComments.length > 0
+            ? {
+                fileComments: queuedTurn.fileComments.map((comment) => ({ ...comment })),
+              }
+            : {}),
           skills: [...queuedTurn.skills],
           mentions: [...queuedTurn.mentions],
           selectedProvider: queuedTurn.selectedProvider,
@@ -705,6 +710,7 @@ export function partializeComposerDraftStoreState(
       draft.persistedAttachments.length === 0 &&
       draft.assistantSelections.length === 0 &&
       draft.terminalContexts.length === 0 &&
+      draft.fileComments.length === 0 &&
       draft.skills.length === 0 &&
       draft.mentions.length === 0 &&
       !hasQueuedTurns &&
@@ -738,6 +744,9 @@ export function partializeComposerDraftStoreState(
               lineEnd: context.lineEnd,
             })),
           }
+        : {}),
+      ...(draft.fileComments.length > 0
+        ? { fileComments: draft.fileComments.map((comment) => ({ ...comment })) }
         : {}),
       ...(draft.skills.length > 0 ? { skills: [...draft.skills] } : {}),
       ...(draft.mentions.length > 0 ? { mentions: [...draft.mentions] } : {}),

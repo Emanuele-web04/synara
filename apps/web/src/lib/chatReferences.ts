@@ -8,6 +8,7 @@ import { CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS, type ThreadId } from "@t3tools
 import { useComposerDraftStore } from "../composerDraftStore";
 import { requestComposerFocus } from "../composerFocusRequestStore";
 import { formatComposerMentionToken } from "./composerMentions";
+import { createFileCommentDraft, type FileCommentSelection } from "./fileComments";
 
 export interface ChatFileReference {
   path: string;
@@ -18,6 +19,11 @@ export interface ChatFileReference {
   // single word references just those characters, not the whole line.
   startColumn?: number;
   endColumn?: number;
+  // Verbatim selected text, used by surfaces that cannot map a selection back
+  // to source lines (diff rows, whose split/unified views renumber): the quoted
+  // snippet itself becomes the precise reference. Ignored when line info is
+  // present.
+  snippet?: string;
 }
 
 // DataTransfer type used when dragging a file row toward the composer. The
@@ -66,11 +72,19 @@ export function formatSelectionLabel(reference: ChatFileReference): string | nul
 
 // `@path` mention token plus a parenthetical location suffix (e.g.
 // `@file (line 21:5-12)`). The range/columns live outside the mention token
-// itself so provider-side file resolution keeps working.
+// itself so provider-side file resolution keeps working. References without
+// line info but with a snippet quote the selected text as a fenced block
+// instead — the snippet is the precise reference there.
 export function formatChatFileReference(reference: ChatFileReference): string {
   const token = formatComposerMentionToken(reference.path);
   const label = formatSelectionLabel(reference);
-  return label ? `${token} (${label})` : token;
+  if (label) {
+    return `${token} (${label})`;
+  }
+  if (reference.snippet !== undefined && reference.snippet.trim().length > 0) {
+    return `${token}\n${fenceCodeSnippet(reference.snippet)}`;
+  }
+  return token;
 }
 
 export function buildWhyChangedPrompt(path: string): string {
@@ -92,7 +106,7 @@ export function buildWhyLinesPrompt(reference: ChatFileReference): string {
 // have no stable file line numbers (split/unified views renumber), so the
 // quoted code itself is the precise reference.
 export function buildDiffSelectionReference(path: string, snippet: string): string {
-  return `${formatComposerMentionToken(path)}\n${fenceCodeSnippet(snippet)}`;
+  return formatChatFileReference({ path, snippet });
 }
 
 export function appendComposerPromptText(threadId: ThreadId, text: string): void {
@@ -106,6 +120,21 @@ export function appendComposerPromptText(threadId: ThreadId, text: string): void
 
 export function appendChatFileReference(threadId: ThreadId, reference: ChatFileReference): void {
   appendComposerPromptText(threadId, formatChatFileReference(reference));
+}
+
+// Attach an inline "Local comment" (file + line range + request text) to the
+// thread's composer draft so it surfaces as a chip and is serialized into the
+// prompt on send. Returns false when the comment is empty/invalid. Focus is
+// pulled to the composer whenever a valid comment is submitted (even if it
+// dedupes against an existing one) so the resulting chip is visible.
+export function addChatFileComment(threadId: ThreadId, comment: FileCommentSelection): boolean {
+  const draft = createFileCommentDraft(comment);
+  if (!draft) {
+    return false;
+  }
+  useComposerDraftStore.getState().addFileComment(threadId, draft);
+  requestComposerFocus(threadId);
+  return true;
 }
 
 function countNewlines(text: string): number {
@@ -154,11 +183,11 @@ export interface SelectionWithin {
   endColumn: number;
 }
 
-// Resolve the 1-based line+column span of the current selection inside
-// `container`. Works for both plain <pre> contents and Shiki-highlighted markup
-// because both keep one "\n" of text content per rendered line. Returns null
-// when there is no actionable selection.
-export function getSelectionWithin(container: HTMLElement): SelectionWithin | null {
+// The current window selection scoped to `container`: null when collapsed,
+// reaching outside the container, or whitespace-only.
+function getSelectionRangeWithin(
+  container: HTMLElement,
+): { range: Range; selectedText: string } | null {
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
     return null;
@@ -171,13 +200,25 @@ export function getSelectionWithin(container: HTMLElement): SelectionWithin | nu
   if (selectedText.trim().length === 0) {
     return null;
   }
+  return { range, selectedText };
+}
+
+// Resolve the 1-based line+column span of the current selection inside
+// `container`. Works for both plain <pre> contents and Shiki-highlighted markup
+// because both keep one "\n" of text content per rendered line. Returns null
+// when there is no actionable selection.
+export function getSelectionWithin(container: HTMLElement): SelectionWithin | null {
+  const scoped = getSelectionRangeWithin(container);
+  if (!scoped) {
+    return null;
+  }
   const prefixRange = document.createRange();
   prefixRange.selectNodeContents(container);
-  prefixRange.setEnd(range.startContainer, range.startOffset);
+  prefixRange.setEnd(scoped.range.startContainer, scoped.range.startOffset);
   const prefixText = prefixRange.toString();
   return {
-    ...computeSelectionLineRange(prefixText, selectedText),
-    ...computeSelectionColumns(prefixText, selectedText),
+    ...computeSelectionLineRange(prefixText, scoped.selectedText),
+    ...computeSelectionColumns(prefixText, scoped.selectedText),
   };
 }
 

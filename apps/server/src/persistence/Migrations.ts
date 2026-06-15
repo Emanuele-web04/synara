@@ -11,6 +11,9 @@
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+
+import { MigrationLineageError } from "./Errors.ts";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -57,6 +60,7 @@ import Migration0041 from "./Migrations/041_BackfillReviewChangesetPatchSignatur
 import Migration0042 from "./Migrations/042_BackfillRuntimeWarningSummaries.ts";
 import Migration0043 from "./Migrations/043_ReconcileProjectionThreadAnnotations.ts";
 import Migration0044 from "./Migrations/044_ReconcileProjectionProjectsPinned.ts";
+import Migration0045 from "./Migrations/045_ProfileStatsIndexes.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -113,6 +117,7 @@ export const migrationEntries = [
   [42, "BackfillRuntimeWarningSummaries", Migration0042],
   [43, "ReconcileProjectionThreadAnnotations", Migration0043],
   [44, "ReconcileProjectionProjectsPinned", Migration0044],
+  [45, "ProfileStatsIndexes", Migration0045],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -134,6 +139,50 @@ export interface RunMigrationsOptions {
   readonly toMigrationInclusive?: number | undefined;
 }
 
+const LAST_SHARED_LINEAGE_MIGRATION_ID = 16;
+
+export const reconcileMigrationLineage = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+
+  const trackerTables = yield* sql<{ readonly name: string }>`
+    SELECT name FROM sqlite_master
+    WHERE type = 'table' AND name = 'effect_sql_migrations'
+  `;
+  if (trackerTables.length === 0) {
+    return;
+  }
+
+  const recorded = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+    SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC
+  `;
+  const highWaterMark = recorded[recorded.length - 1]?.migration_id;
+  if (highWaterMark === undefined) {
+    return;
+  }
+
+  const recordedNamesById = new Map(recorded.map((row) => [row.migration_id, row.name]));
+  const diverged = migrationEntries.find(
+    ([id, name]) => id <= highWaterMark && recordedNamesById.get(id) !== name,
+  );
+  if (diverged === undefined) {
+    return;
+  }
+
+  const [firstDivergedId, expectedName] = diverged;
+  const recordedName = recordedNamesById.get(firstDivergedId) ?? "<missing>";
+  if (firstDivergedId <= LAST_SHARED_LINEAGE_MIGRATION_ID) {
+    return yield* Effect.fail(
+      new MigrationLineageError({ firstDivergedId, expectedName, recordedName }),
+    );
+  }
+
+  yield* Effect.logWarning(
+    "Migration tracker diverges from the Synara lineage; re-running migrations from the divergence point",
+  ).pipe(Effect.annotateLogs({ firstDivergedId, expectedName, recordedName, highWaterMark }));
+
+  yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= ${firstDivergedId}`;
+});
+
 /**
  * Run all pending migrations.
  *
@@ -146,6 +195,7 @@ export interface RunMigrationsOptions {
  */
 export const runMigrations = ({ toMigrationInclusive }: RunMigrationsOptions = {}) =>
   Effect.gen(function* () {
+    yield* reconcileMigrationLineage;
     yield* Effect.log(
       toMigrationInclusive === undefined
         ? "Running all migrations..."

@@ -51,6 +51,7 @@ import { ReviewSubmission } from "./review/Services/ReviewSubmission";
 import { ReviewUpdateBus } from "./review/Services/ReviewUpdateBus";
 import { listProviderUsage } from "./providerUsage";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
+import { ProfileStatsQuery } from "./profileStats";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
@@ -356,6 +357,7 @@ export const makeWsRpcLayer = () =>
       const open = yield* Open;
       const orchestrationEngine = yield* OrchestrationEngineService;
       const path = yield* Path.Path;
+      const profileStatsQuery = yield* ProfileStatsQuery;
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
       const providerDiscoveryService = yield* ProviderDiscoveryService;
@@ -425,12 +427,28 @@ export const makeWsRpcLayer = () =>
           return normalizedWorkspaceRoot;
         }
       });
+      const prepareChatWorkspaceRoot = Effect.fnUntraced(function* (workspaceRoot: string) {
+        for (const dirname of ["work", "outputs"]) {
+          const childPath = path.join(workspaceRoot, dirname);
+          yield* fileSystem.makeDirectory(childPath, { recursive: true }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new WsRpcError({
+                  message: `Failed to create chat workspace directory: ${childPath}`,
+                  cause,
+                }),
+            ),
+          );
+        }
+      });
 
       const normalizeDispatchCommand = makeDispatchCommandNormalizer<WsRpcError>({
         attachmentsDir: config.attachmentsDir,
+        chatWorkspaceRoot: config.chatWorkspaceRoot,
         fileSystem,
         path,
         canonicalizeProjectWorkspaceRoot,
+        prepareChatWorkspaceRoot,
       });
 
       const importThread = makeImportThreadHandler({
@@ -504,6 +522,7 @@ export const makeWsRpcLayer = () =>
         return {
           cwd: config.cwd,
           homeDir: config.homeDir,
+          chatWorkspaceRoot: config.chatWorkspaceRoot,
           worktreesDir: config.worktreesDir,
           keybindingsConfigPath: config.keybindingsConfigPath,
           keybindings: keybindingsConfig.keybindings,
@@ -946,6 +965,13 @@ export const makeWsRpcLayer = () =>
           ),
         [WS_METHODS.serverStopLocalServer]: (input) =>
           rpcEffect(stopLocalServerAndTrackedProjectRun(input), "Failed to stop local server"),
+        [WS_METHODS.statsGetProfileStats]: (input) =>
+          rpcEffect(profileStatsQuery.getProfileStats(input), "Failed to load profile stats"),
+        [WS_METHODS.statsGetProfileTokenStats]: (input) =>
+          rpcEffect(
+            profileStatsQuery.getProfileTokenStats(input),
+            "Failed to load profile token stats",
+          ),
         [WS_METHODS.serverGetProviderUsageSnapshot]: (input) =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
         [WS_METHODS.serverListProviderUsage]: (input) =>
