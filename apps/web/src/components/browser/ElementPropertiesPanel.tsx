@@ -548,27 +548,19 @@ function SelectRow({
   );
 }
 
-function NumericRow({
-  element,
-  patch,
-  name,
-  label,
-  spec,
-  onChange,
-}: {
-  element: BrowserElementEditorContext;
-  patch: BrowserElementStylePatch;
-  name: StylePatchKey;
-  label: string;
+function useNumericDraftScrub(input: {
+  value: string;
   spec: NumericSpec;
-  onChange: (name: StylePatchKey, value: string) => void;
+  onChange: (value: string) => void;
 }) {
-  const value = patchValue(element, patch, name);
-  const changed = patch[name]?.trim().length ? true : false;
+  const { value, spec, onChange } = input;
   const [draftValue, setDraftValue] = useState(value);
-  const scrubRef = useRef<{ pointerId: number; startX: number; startAmount: number; unit: string } | null>(
-    null,
-  );
+  const scrubRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startAmount: number;
+    unit: string;
+  } | null>(null);
   const lastScrubValueRef = useRef("");
 
   useEffect(() => {
@@ -590,7 +582,7 @@ function NumericRow({
     if (lastScrubValueRef.current === nextValue) return;
     lastScrubValueRef.current = nextValue;
     setDraftValue(nextValue);
-    onChange(name, nextValue);
+    onChange(nextValue);
   };
 
   const scrubHandlers = {
@@ -617,6 +609,32 @@ function NumericRow({
       }
     },
   };
+
+  return { draftValue, scrubHandlers, setDraftValue };
+}
+
+function NumericRow({
+  element,
+  patch,
+  name,
+  label,
+  spec,
+  onChange,
+}: {
+  element: BrowserElementEditorContext;
+  patch: BrowserElementStylePatch;
+  name: StylePatchKey;
+  label: string;
+  spec: NumericSpec;
+  onChange: (name: StylePatchKey, value: string) => void;
+}) {
+  const value = patchValue(element, patch, name);
+  const changed = patch[name]?.trim().length ? true : false;
+  const { draftValue, scrubHandlers, setDraftValue } = useNumericDraftScrub({
+    value,
+    spec,
+    onChange: (nextValue) => onChange(name, nextValue),
+  });
 
   return (
     <FieldShell label={label} scrub={scrubHandlers}>
@@ -757,55 +775,11 @@ function EffectNumericRow({
   spec: NumericSpec;
   onChange: (value: string) => void;
 }) {
-  const [draftValue, setDraftValue] = useState(value);
-  const scrubRef = useRef<{ pointerId: number; startX: number; startAmount: number; unit: string } | null>(
-    null,
-  );
-  const lastScrubValueRef = useRef("");
-
-  useEffect(() => {
-    if (!scrubRef.current) {
-      setDraftValue(value);
-    }
-  }, [value]);
-
-  const updateFromDelta = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    const scrub = scrubRef.current;
-    if (!scrub || scrub.pointerId !== event.pointerId) return;
-    const deltaX = event.clientX - scrub.startX;
-    const rawValue = scrub.startAmount + deltaX * spec.sensitivity;
-    const nextAmount = clampNumber(snapNumber(rawValue, spec.step), spec.min, spec.max);
-    const nextValue = `${formatNumber(nextAmount, spec.precision)}${scrub.unit}`;
-    if (lastScrubValueRef.current === nextValue) return;
-    lastScrubValueRef.current = nextValue;
-    setDraftValue(nextValue);
-    onChange(nextValue);
-  };
-
-  const scrubHandlers = {
-    onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
-      if (event.button !== 0) return;
-      event.preventDefault();
-      const parsed = parseNumericValue(draftValue || value, spec);
-      scrubRef.current = {
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startAmount: parsed.amount,
-        unit: parsed.unit,
-      };
-      lastScrubValueRef.current = draftValue || value;
-      event.currentTarget.setPointerCapture(event.pointerId);
-    },
-    onPointerMove: updateFromDelta,
-    onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
-      if (scrubRef.current?.pointerId === event.pointerId) {
-        scrubRef.current = null;
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-          event.currentTarget.releasePointerCapture(event.pointerId);
-        }
-      }
-    },
-  };
+  const { draftValue, scrubHandlers, setDraftValue } = useNumericDraftScrub({
+    value,
+    spec,
+    onChange,
+  });
 
   return (
     <FieldShell label={label} scrub={scrubHandlers}>
@@ -838,8 +812,6 @@ export const ElementPropertiesPanel = memo(function ElementPropertiesPanel({
   const [manualOverride, setManualOverride] = useState(false);
   const [activeTab, setActiveTab] = useState<PanelTab>("style");
   const [activeEffectIndex, setActiveEffectIndex] = useState(0);
-  const previewFrameRef = useRef<number | null>(null);
-  const lastPreviewKeyRef = useRef("");
   const elementKey = useMemo(
     () => `${element.url}\u0000${element.selector}\u0000${element.tagName}`,
     [element.selector, element.tagName, element.url],
@@ -887,7 +859,6 @@ export const ElementPropertiesPanel = memo(function ElementPropertiesPanel({
     setDraftPatch(initialPatch ?? {});
     setManualOverride(false);
     setActiveEffectIndex(0);
-    lastPreviewKeyRef.current = "";
   }, [elementKey, initialPatch]);
 
   useEffect(() => {
@@ -897,24 +868,7 @@ export const ElementPropertiesPanel = memo(function ElementPropertiesPanel({
   }, [activeEffectIndex, effects.length]);
 
   useEffect(() => {
-    const previewKey = JSON.stringify(normalizedPatch);
-    if (lastPreviewKeyRef.current === previewKey) {
-      return;
-    }
-    lastPreviewKeyRef.current = previewKey;
-    if (previewFrameRef.current !== null) {
-      window.cancelAnimationFrame(previewFrameRef.current);
-    }
-    previewFrameRef.current = window.requestAnimationFrame(() => {
-      previewFrameRef.current = null;
-      onPreviewPatch(normalizedPatch);
-    });
-    return () => {
-      if (previewFrameRef.current !== null) {
-        window.cancelAnimationFrame(previewFrameRef.current);
-        previewFrameRef.current = null;
-      }
-    };
+    onPreviewPatch(normalizedPatch);
   }, [normalizedPatch, onPreviewPatch]);
 
   return (

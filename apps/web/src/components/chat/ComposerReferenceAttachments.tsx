@@ -6,11 +6,16 @@ import {
   type ComposerBrowserContextAttachment,
   type ComposerImageAttachment,
 } from "../../composerDraftStore";
+import { buildUnifiedBrowserEditorPromptBlock } from "../../lib/browserEditorContext";
 import { type ChatAssistantSelectionAttachment } from "../../types";
-import { type ExpandedImagePreview } from "./ExpandedImagePreview";
+import {
+  buildExpandedLiveEditorContextPreview,
+  type ExpandedImagePreview,
+} from "./ExpandedImagePreview";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
 import { ComposerBrowserContextAttachmentChip } from "./ComposerBrowserContextAttachmentChip";
 import { ComposerImageAttachmentChip } from "./ComposerImageAttachmentChip";
+import { ComposerLiveEditorContextChip } from "./ComposerLiveEditorContextChip";
 
 interface ComposerReferenceAttachmentsProps {
   assistantSelections: ReadonlyArray<ChatAssistantSelectionAttachment>;
@@ -38,6 +43,37 @@ export function ComposerReferenceAttachments({
   if (assistantSelections.length === 0 && images.length === 0 && browserContexts.length === 0) {
     return null;
   }
+  const liveEditorImages = images.filter((image) => image.browserAnnotation);
+  const regularImages = images.filter((image) => !image.browserAnnotation);
+  const liveEditorPromptBlock = buildUnifiedBrowserEditorPromptBlock([
+    ...browserContexts.map((context) => context.promptBlock),
+    ...liveEditorImages.map((image) => image.browserAnnotation?.promptBlock),
+  ]);
+  const liveEditorTitle =
+    liveEditorImages.find((image) => image.browserAnnotation?.title)?.browserAnnotation?.title ||
+    browserContexts[0]?.title ||
+    "Live Editor Context";
+  const liveEditorNonPersisted = liveEditorImages.some((image) =>
+    nonPersistedImageIdSet.has(image.id),
+  );
+  const expandLiveEditorContext = () => {
+    if (!liveEditorPromptBlock) return;
+    const preview = buildExpandedLiveEditorContextPreview({
+      images: liveEditorImages,
+      contexts: browserContexts,
+      promptBlock: liveEditorPromptBlock,
+    });
+    if (!preview) return;
+    onExpandBrowserContext(preview);
+  };
+  const removeLiveEditorContext = () => {
+    for (const context of browserContexts) {
+      onRemoveBrowserContext(context.id);
+    }
+    for (const image of liveEditorImages) {
+      onRemoveImage(image.id);
+    }
+  };
 
   return (
     <div className="mb-2 flex flex-wrap gap-2">
@@ -45,20 +81,30 @@ export function ComposerReferenceAttachments({
         selections={assistantSelections}
         onRemove={assistantSelections.length > 0 ? onRemoveAssistantSelections : undefined}
       />
-      {browserContexts.map((context) => (
-        <ComposerBrowserContextAttachmentChip
-          key={context.id}
-          context={context}
-          contexts={browserContexts}
-          onExpandContext={onExpandBrowserContext}
-          onRemoveContext={onRemoveBrowserContext}
+      {liveEditorPromptBlock ? (
+        <ComposerLiveEditorContextChip
+          title={liveEditorTitle}
+          nonPersisted={liveEditorNonPersisted}
+          nonPersistedTitle="Draft live editor context could not be saved locally and may be lost on navigation."
+          onPreview={expandLiveEditorContext}
+          onRemove={removeLiveEditorContext}
         />
-      ))}
-      {images.map((image) => (
+      ) : (
+        browserContexts.map((context) => (
+          <ComposerBrowserContextAttachmentChip
+            key={context.id}
+            context={context}
+            contexts={browserContexts}
+            onExpandContext={onExpandBrowserContext}
+            onRemoveContext={onRemoveBrowserContext}
+          />
+        ))
+      )}
+      {regularImages.map((image) => (
         <ComposerImageAttachmentChip
           key={image.id}
           image={image}
-          images={images}
+          images={regularImages}
           nonPersisted={nonPersistedImageIdSet.has(image.id)}
           onExpandImage={onExpandImage}
           onRemoveImage={onRemoveImage}

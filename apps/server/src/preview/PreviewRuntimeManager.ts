@@ -315,15 +315,17 @@ export class PreviewRuntimeManager {
         return record.state;
       }
 
-      const port = yield* Effect.tryPromise({
-        try: () => reservePort(input.preferredPort ?? DEFAULT_PREVIEW_PORT),
-        catch: (cause) => new Error("Unable to reserve a preview port.", { cause }),
-      });
+      const previewPort = input.url
+        ? (input.preferredPort ?? DEFAULT_PREVIEW_PORT)
+        : yield* Effect.tryPromise({
+            try: () => reservePort(input.preferredPort ?? DEFAULT_PREVIEW_PORT),
+            catch: (cause) => new Error("Unable to reserve a preview port.", { cause }),
+          });
       const target = yield* Effect.tryPromise({
         try: () =>
           resolvePreviewTarget({
             cwd,
-            port,
+            port: previewPort,
             command: input.command,
             target: input.target,
             url: input.url,
@@ -340,7 +342,7 @@ export class PreviewRuntimeManager {
         targetCwd: target.runCwd,
         status: target.command ? "starting" : "running",
         url: target.url,
-        port: portFromUrl(target.url) ?? port,
+        port: portFromUrl(target.url) ?? previewPort,
         command: target.command,
         resolverKind: target.resolverKind,
         framework: target.framework,
@@ -367,10 +369,10 @@ export class PreviewRuntimeManager {
         env: {
           BROWSER: "none",
           HOST: "127.0.0.1",
-          PORT: String(port),
+          PORT: String(previewPort),
           T3CODE_NO_BROWSER: "1",
           VITE_HOST: "127.0.0.1",
-          VITE_PORT: String(port),
+          VITE_PORT: String(previewPort),
         },
       };
       yield* self.terminalManager.open(openInput);

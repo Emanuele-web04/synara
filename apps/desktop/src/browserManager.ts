@@ -668,7 +668,10 @@ export class DesktopBrowserManager {
   }
 
   closeTab(input: BrowserTabInput): ThreadBrowserState {
-    const state = this.getOrCreateState(input.threadId);
+    const state = this.states.get(input.threadId);
+    if (!state) {
+      return cloneThreadState(defaultThreadBrowserState(input.threadId));
+    }
     const nextTabs = state.tabs.filter((tab) => tab.id !== input.tabId);
     if (nextTabs.length === state.tabs.length) {
       return this.snapshotThreadState(input.threadId, state);

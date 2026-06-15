@@ -93,6 +93,50 @@ export function buildExpandedBrowserContextPreview(
   };
 }
 
+export function buildExpandedLiveEditorContextPreview(input: {
+  images: ReadonlyArray<{
+    id: string;
+    name: string;
+    previewUrl?: string;
+    source?: string;
+    browserAnnotation?: ComposerBrowserAnnotationContext;
+  }>;
+  contexts: ReadonlyArray<ComposerBrowserContextAttachment>;
+  promptBlock: string;
+}): ExpandedImagePreview | null {
+  const annotationImage = input.images.find(
+    (image) => image.source === "browser-annotation" && image.previewUrl,
+  );
+  const firstAnnotation = input.images.find((image) => image.browserAnnotation)?.browserAnnotation;
+  const firstContext = input.contexts[0];
+  const context = {
+    promptBlock: input.promptBlock,
+    title:
+      firstAnnotation?.title ||
+      firstContext?.title ||
+      annotationImage?.name ||
+      "Live Editor Context",
+    url: firstAnnotation?.url || firstContext?.url || "",
+    strokeCount: firstAnnotation?.strokeCount ?? 0,
+    textCount: firstAnnotation?.textCount ?? 0,
+    arrowCount: firstAnnotation?.arrowCount ?? 0,
+    selectedSelector:
+      firstAnnotation?.selectedSelector ||
+      firstContext?.selectedSelector ||
+      undefined,
+  } satisfies ComposerBrowserAnnotationContext;
+  return {
+    images: [
+      {
+        name: "Live Editor Context",
+        ...(annotationImage?.previewUrl ? { src: annotationImage.previewUrl } : {}),
+        browserAnnotation: context,
+      },
+    ],
+    index: 0,
+  };
+}
+
 export function extractBrowserAnnotationSelectedCode(promptBlock: string): string | null {
   const lines = promptBlock.split("\n");
   const outerHtmlLineIndex = lines.findIndex((line) => line.trim() === "outerHTML:");

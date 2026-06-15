@@ -460,6 +460,10 @@ export interface ComposerDraftStoreState {
   addImages: (threadId: ThreadId, images: ComposerImageAttachment[]) => void;
   removeImage: (threadId: ThreadId, imageId: string) => void;
   addBrowserContext: (threadId: ThreadId, context: ComposerBrowserContextAttachment) => void;
+  setBrowserContexts: (
+    threadId: ThreadId,
+    contexts: ComposerBrowserContextAttachment[],
+  ) => void;
   removeBrowserContext: (threadId: ThreadId, contextId: string) => void;
   clearBrowserContexts: (threadId: ThreadId) => void;
   addAssistantSelection: (
@@ -3343,6 +3347,37 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
               },
             },
           };
+        });
+      },
+      setBrowserContexts: (threadId, contexts) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+          const nextContexts: ComposerBrowserContextAttachment[] = [];
+          const seenIds = new Set<string>();
+          const seenDedupKeys = new Set<string>();
+          for (const context of contexts) {
+            const dedupKey = browserContextDedupKey(context);
+            if (seenIds.has(context.id) || seenDedupKeys.has(dedupKey)) {
+              continue;
+            }
+            seenIds.add(context.id);
+            seenDedupKeys.add(dedupKey);
+            nextContexts.push(context);
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...existing,
+            browserContexts: nextContexts,
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
         });
       },
       removeBrowserContext: (threadId, contextId) => {

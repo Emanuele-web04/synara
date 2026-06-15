@@ -110,6 +110,7 @@ import {
 } from "../lib/browserPromptContext";
 import {
   appendBrowserEditorContextPrompt,
+  buildUnifiedBrowserEditorPromptBlock,
   removeBrowserAnnotationContextPrompt,
 } from "../lib/browserEditorContext";
 import { deriveComposerSuggestions, type ComposerSuggestion } from "../lib/composerSuggestions";
@@ -142,7 +143,6 @@ import {
   extendReplacementRangeForTrailingSpace,
 } from "../composerTriggerInsertion";
 import {
-  parseComposerAppSkillInvocation,
   parseLiveEditAppSkillArgs,
   type ComposerAppSkillId,
 } from "../composerAppSkills";
@@ -588,14 +588,13 @@ function appendBrowserAnnotationAttachmentContextsToPrompt(
   browserContexts: ReadonlyArray<ComposerBrowserContextAttachment>,
 ): string {
   const promptWithoutGeneratedBlock = removeBrowserAnnotationContextPrompt(prompt);
-  const blocks = [
+  const block = buildUnifiedBrowserEditorPromptBlock([
     ...browserContexts.map((context) => context.promptBlock),
     ...images.map((image) => image.browserAnnotation?.promptBlock),
-  ].filter((block): block is string => typeof block === "string" && block.length > 0);
-  return blocks.reduce(
-    (currentPrompt, block) => appendBrowserEditorContextPrompt(currentPrompt, block),
-    promptWithoutGeneratedBlock,
-  );
+  ]);
+  return block
+    ? appendBrowserEditorContextPrompt(promptWithoutGeneratedBlock, block)
+    : promptWithoutGeneratedBlock;
 }
 
 function buildQueuedComposerPreviewText(input: {
@@ -962,16 +961,6 @@ interface ChatViewProps {
   onCloseThreadPane?: () => void;
 }
 
-function isBlankOnlyBrowserState(state: ThreadBrowserState): boolean {
-  return (
-    state.tabs.length > 0 &&
-    state.tabs.every((tab) => {
-      const url = (tab.lastCommittedUrl ?? tab.url).trim();
-      return url.length === 0 || url === "about:blank";
-    })
-  );
-}
-
 function closeLiveEditorDockPanesForThreadIds(threadIds: Iterable<ThreadId>): void {
   const dockStore = useRightDockStore.getState();
   for (const threadId of threadIds) {
@@ -987,16 +976,9 @@ function closeLiveEditorDockPanesForThreadIds(threadIds: Iterable<ThreadId>): vo
   }
 }
 
-function closeLiveEditorDockPanesForBrowserStates(
-  states: readonly ThreadBrowserState[],
-  options: { includeBlankOnly?: boolean } = {},
-): void {
+function closeLiveEditorDockPanesForBrowserStates(states: readonly ThreadBrowserState[]): void {
   const threadIds = states
-    .filter(
-      (state) =>
-        (!state.open && state.tabs.length === 0) ||
-        (options.includeBlankOnly === true && isBlankOnlyBrowserState(state)),
-    )
+    .filter((state) => !state.open && state.tabs.length === 0)
     .map((state) => state.threadId);
   closeLiveEditorDockPanesForThreadIds(threadIds);
 }
@@ -3194,10 +3176,6 @@ export default function ChatView({
           for (const closedState of closedStates) {
             upsertThreadBrowserState(closedState);
           }
-          const browserStatesAfterNuke = await api.browser.listStates().catch(() => []);
-          closeLiveEditorDockPanesForBrowserStates([...closedStates, ...browserStatesAfterNuke], {
-            includeBlankOnly: true,
-          });
           closeAllLiveEditorDockPanesWithoutPreviews();
           const portDetail =
             result.killedPortCount > 0
@@ -5972,20 +5950,6 @@ export default function ChatView({
       queuedChatTurn === null ? (composerEditorRef.current?.readSnapshot() ?? null) : null;
     const promptForSend =
       queuedChatTurn?.prompt ?? liveComposerSnapshot?.value ?? promptRef.current;
-    const appSkillInvocation = parseComposerAppSkillInvocation(promptForSend.trim());
-    if (appSkillInvocation) {
-      if (
-        !api ||
-        isSendBusy ||
-        isConnecting ||
-        isVoiceTranscribing ||
-        sendInFlightRef.current
-      ) {
-        return false;
-      }
-      await handleAppSkill(appSkillInvocation.id, appSkillInvocation.args);
-      return true;
-    }
     if (
       !api ||
       !activeThread ||
@@ -9240,6 +9204,7 @@ export default function ChatView({
 
       {expandedImage && expandedImageItem && (
         <div
+          data-live-editor-context-preview="true"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/62 px-4 py-6 backdrop-blur-xl [-webkit-app-region:no-drag]"
           role="dialog"
           aria-modal="true"

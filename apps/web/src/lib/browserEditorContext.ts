@@ -49,33 +49,9 @@ export interface BrowserElementStyleSnapshot {
   animationIterationCount?: string;
 }
 
-export interface BrowserElementStylePatch {
-  color?: string;
-  backgroundColor?: string;
-  backgroundImage?: string;
-  backgroundPosition?: string;
-  backgroundSize?: string;
-  fontFamily?: string;
-  fontSize?: string;
-  fontWeight?: string;
-  fontStyle?: string;
-  lineHeight?: string;
-  letterSpacing?: string;
-  textAlign?: string;
-  opacity?: string;
-  padding?: string;
-  margin?: string;
-  borderWidth?: string;
-  borderColor?: string;
-  borderRadius?: string;
-  boxShadow?: string;
-  filter?: string;
-  animationName?: string;
-  animationDuration?: string;
-  animationTimingFunction?: string;
-  animationIterationCount?: string;
+export type BrowserElementStylePatch = Partial<Omit<BrowserElementStyleSnapshot, "display">> & {
   effectTarget?: BrowserElementEffectSource;
-}
+};
 
 export type BrowserElementFontSource = "current" | "page" | "system" | "fallback";
 export type BrowserElementEffectSource = "element" | "::before" | "::after";
@@ -135,6 +111,7 @@ export interface BrowserElementHoverContext {
   selector: string;
   tagName: string;
   rect: BrowserRect;
+  viewport?: BrowserViewport;
 }
 
 export interface BrowserDrawingPoint {
@@ -216,7 +193,7 @@ const MAX_ELEMENT_TEXT_PAYLOAD_LENGTH = 2_000;
 const MAX_ELEMENT_HTML_PAYLOAD_LENGTH = 4_000;
 const MAX_ATTRIBUTE_VALUE_LENGTH = 200;
 const BROWSER_EDITOR_BLOCK_PATTERN =
-  /<browser-(element|drawing|selection|style-edit)-selection>[\s\S]*?<\/browser-\1-selection>/g;
+  /<browser-(element|drawing|selection|style-edit|live-editor)-selection>[\s\S]*?<\/browser-\1-selection>/g;
 export const BROWSER_STYLE_EDIT_STYLING_NOTE =
   "Implement these visual changes in accordance with the project's styling framework and configuration. Prefer the closest local styling source first: component props/classes, nearby module CSS, scoped styles, Tailwind utilities, design tokens/theme config, then broader/global styles only when appropriate. Avoid permanent inline styles unless the project already uses them or no better styling location exists. If a requested font is not already loaded, add it through the project's existing font pipeline, framework font helper, theme config, or CSS import before applying it.";
 const BROWSER_STYLE_PATCH_KEYS = [
@@ -873,13 +850,28 @@ export function readBrowserElementHoverContextFromDocumentAtPoint(input: {
       width: rect.width,
       height: rect.height,
     },
+    viewport: {
+      width: ownerWindow?.innerWidth ?? input.document.documentElement.clientWidth,
+      height: ownerWindow?.innerHeight ?? input.document.documentElement.clientHeight,
+      devicePixelRatio: ownerWindow?.devicePixelRatio,
+    },
   };
 }
 
-export function cdpElementHoverContextExpression(x: number, y: number): string {
+export function cdpElementHoverContextExpression(
+  x: number,
+  y: number,
+  overlayGeometry?: { overlayWidth: number; overlayHeight: number },
+): string {
   return `(() => {
-    const x = ${JSON.stringify(x)};
-    const y = ${JSON.stringify(y)};
+    const rawX = ${JSON.stringify(x)};
+    const rawY = ${JSON.stringify(y)};
+    const overlayWidth = ${JSON.stringify(overlayGeometry?.overlayWidth ?? null)};
+    const overlayHeight = ${JSON.stringify(overlayGeometry?.overlayHeight ?? null)};
+    const viewportWidth = (window.visualViewport && window.visualViewport.width) || window.innerWidth || document.documentElement.clientWidth || overlayWidth || 1;
+    const viewportHeight = (window.visualViewport && window.visualViewport.height) || window.innerHeight || document.documentElement.clientHeight || overlayHeight || 1;
+    const x = overlayWidth && overlayWidth > 0 ? Math.max(0, Math.min(viewportWidth, rawX * viewportWidth / overlayWidth)) : rawX;
+    const y = overlayHeight && overlayHeight > 0 ? Math.max(0, Math.min(viewportHeight, rawY * viewportHeight / overlayHeight)) : rawY;
     const element = document.elementFromPoint(x, y);
     if (!element || !(element instanceof Element)) {
       return null;
@@ -918,14 +910,29 @@ export function cdpElementHoverContextExpression(x: number, y: number): string {
         width: rect.width,
         height: rect.height,
       },
+      viewport: {
+        width: viewportWidth,
+        height: viewportHeight,
+        devicePixelRatio: window.devicePixelRatio,
+      },
     };
   })()`;
 }
 
-export function cdpElementContextExpression(x: number, y: number): string {
+export function cdpElementContextExpression(
+  x: number,
+  y: number,
+  overlayGeometry?: { overlayWidth: number; overlayHeight: number },
+): string {
   return `(() => {
-    const x = ${JSON.stringify(x)};
-    const y = ${JSON.stringify(y)};
+    const rawX = ${JSON.stringify(x)};
+    const rawY = ${JSON.stringify(y)};
+    const overlayWidth = ${JSON.stringify(overlayGeometry?.overlayWidth ?? null)};
+    const overlayHeight = ${JSON.stringify(overlayGeometry?.overlayHeight ?? null)};
+    const viewportWidth = (window.visualViewport && window.visualViewport.width) || window.innerWidth || document.documentElement.clientWidth || overlayWidth || 1;
+    const viewportHeight = (window.visualViewport && window.visualViewport.height) || window.innerHeight || document.documentElement.clientHeight || overlayHeight || 1;
+    const x = overlayWidth && overlayWidth > 0 ? Math.max(0, Math.min(viewportWidth, rawX * viewportWidth / overlayWidth)) : rawX;
+    const y = overlayHeight && overlayHeight > 0 ? Math.max(0, Math.min(viewportHeight, rawY * viewportHeight / overlayHeight)) : rawY;
     const element = document.elementFromPoint(x, y);
     if (!element || !(element instanceof Element)) {
       return null;
@@ -1511,18 +1518,44 @@ export function summarizeBrowserEditorPromptBlock(
   block: string,
 ): BrowserEditorPromptContextSummary | null {
   const firstLine =
-    block.match(/^<browser-(element|drawing|selection|style-edit)-selection>/)?.[1] ?? null;
+    block.match(/^<browser-(element|drawing|selection|style-edit|live-editor)-selection>/)?.[1] ??
+    null;
   if (
     firstLine !== "element" &&
     firstLine !== "drawing" &&
     firstLine !== "selection" &&
-    firstLine !== "style-edit"
+    firstLine !== "style-edit" &&
+    firstLine !== "live-editor"
   ) {
     return null;
   }
 
   const title = readPromptBlockField(block, "title");
   const url = readPromptBlockField(block, "url");
+  if (firstLine === "live-editor") {
+    const selector = readPromptBlockField(block, "selectedSelector");
+    const sections = readPromptBlockField(block, "sectionCount");
+    const kind: BrowserEditorPromptContextKind = block.includes("<browser-drawing-selection>")
+      ? "drawing"
+      : block.includes("<browser-style-edit-selection>")
+        ? "style-edit"
+        : "selection";
+    return {
+      kind,
+      block,
+      title,
+      url,
+      label: "Live Editor Context",
+      detail: compactPromptBlockText(
+        [
+          sections && sections !== "0" ? `${sections} context section${sections === "1" ? "" : "s"}` : "",
+          selector && selector !== "(none)" ? selector : "",
+        ]
+          .filter(Boolean)
+          .join(" · ") || title || url || "Live editor context",
+      ),
+    };
+  }
   if (firstLine === "element") {
     const tag = readPromptBlockField(block, "tag");
     const selector = readPromptBlockField(block, "selector");
@@ -1594,14 +1627,56 @@ export function appendBrowserEditorContextPrompt(currentPrompt: string, block: s
   return `${trimmedCurrent}\n\n${block}`;
 }
 
+export function buildUnifiedBrowserEditorPromptBlock(
+  blocks: ReadonlyArray<string | null | undefined>,
+): string | null {
+  const uniqueBlocks: string[] = [];
+  const seen = new Set<string>();
+  for (const block of blocks) {
+    const trimmed = block?.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    uniqueBlocks.push(trimmed);
+  }
+  if (uniqueBlocks.length === 0) {
+    return null;
+  }
+  const title =
+    uniqueBlocks.map((block) => readPromptBlockField(block, "title")).find(Boolean) ??
+    "(untitled)";
+  const url = uniqueBlocks.map((block) => readPromptBlockField(block, "url")).find(Boolean) ?? "";
+  const selectedSelector =
+    uniqueBlocks
+      .map((block) => readPromptBlockField(block, "selectedSelector"))
+      .find((selector) => selector && selector !== "(none)") ?? "(none)";
+  return [
+    "<browser-live-editor-selection>",
+    "source: live-editor-context",
+    ...(url ? [`url: ${url}`] : []),
+    `title: ${title}`,
+    `selectedSelector: ${selectedSelector}`,
+    `sectionCount: ${uniqueBlocks.length}`,
+    "sections:",
+    ...uniqueBlocks.flatMap((block, index) => [
+      `--- section ${index + 1} ---`,
+      block,
+    ]),
+    "</browser-live-editor-selection>",
+  ].join("\n");
+}
+
 function normalizePromptBlockSpacing(prompt: string): string {
   return prompt.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function isBrowserAnnotationPromptBlock(block: string): boolean {
   return (
-    block.startsWith("<browser-drawing-selection>") &&
-    /^source:\s*browser-annotation$/m.test(block)
+    (block.startsWith("<browser-drawing-selection>") &&
+      /^source:\s*browser-annotation$/m.test(block)) ||
+    (block.startsWith("<browser-live-editor-selection>") &&
+      /^source:\s*live-editor-context$/m.test(block))
   );
 }
 
@@ -1626,27 +1701,6 @@ export function removeBrowserAnnotationContextPrompt(currentPrompt: string): str
       isBrowserAnnotationPromptBlock(match) ? "" : match,
     ),
   );
-}
-
-export function buildBrowserElementPromptBlock(context: BrowserElementEditorContext): string {
-  return [
-    "<browser-element-selection>",
-    `url: ${context.url}`,
-    `title: ${context.title || "(untitled)"}`,
-    `selector: ${context.selector || "(unavailable)"}`,
-    `tag: ${context.tagName.toLowerCase()}`,
-    `role: ${context.role ?? "(none)"}`,
-    `accessibleName: ${context.accessibleName ?? "(none)"}`,
-    `viewport: ${formatViewport(context.viewport)}`,
-    `bounds: ${formatRect(context.rect)}`,
-    ...formatPayloadMetadata(context),
-    "attributes:",
-    formatAttributes(context.attributes),
-    `text: ${truncateText(context.text, MAX_TEXT_LENGTH) || "(empty)"}`,
-    "outerHTML:",
-    truncateText(context.outerHTML, MAX_HTML_LENGTH) || "(empty)",
-    "</browser-element-selection>",
-  ].join("\n");
 }
 
 export function buildBrowserSelectionPromptBlock(context: BrowserElementEditorContext): string {

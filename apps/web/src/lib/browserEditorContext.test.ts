@@ -4,6 +4,7 @@ import {
   buildBrowserDrawingPromptBlock,
   buildBrowserSelectionPromptBlock,
   buildBrowserStyleEditPromptBlock,
+  buildUnifiedBrowserEditorPromptBlock,
   BROWSER_STYLE_EDIT_STYLING_NOTE,
   extractBrowserEditorContextPromptBlocks,
   normalizeBrowserElementFontOptions,
@@ -313,6 +314,67 @@ describe("browser editor annotation prompt blocks", () => {
     expect(prompt).toContain("Keep this");
     expect(prompt).toContain("Manual annotation");
     expect(prompt).not.toContain("source: browser-annotation");
+  });
+
+  it("combines selection and annotation blocks into one live editor context", () => {
+    const selectionBlock = buildBrowserSelectionPromptBlock({
+      url: "http://localhost:8891/browser-editor-demo/index.html",
+      title: "Northstar Studio",
+      selector: "main > section.hero",
+      tagName: "SECTION",
+      role: "region",
+      accessibleName: "Launch experiments",
+      text: "Launch experiments without losing the plot.",
+      attributes: { class: "hero" },
+      rect: { x: 40, y: 120, width: 720, height: 420 },
+      viewport: { width: 800, height: 600, devicePixelRatio: 2 },
+      outerHTML: '<section class="hero"><h1>Launch experiments without losing the plot.</h1></section>',
+    });
+    const block = buildUnifiedBrowserEditorPromptBlock([selectionBlock, annotationBlock(1)]);
+    if (!block) {
+      throw new Error("Expected a unified browser editor block.");
+    }
+
+    expect(block).toContain("<browser-live-editor-selection>");
+    expect(block).toContain("source: live-editor-context");
+    expect(block).toContain("sectionCount: 2");
+    expect(block).toContain("--- section 1 ---");
+    expect(block).toContain("--- section 2 ---");
+
+    const contexts = extractBrowserEditorContextPromptBlocks(`Update this\n\n${block}`);
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]?.kind).toBe("drawing");
+    expect(contexts[0]?.label).toBe("Live Editor Context");
+    expect(contexts[0]?.detail).toContain("2 context sections");
+  });
+
+  it("removes generated unified live editor context blocks", () => {
+    const generated = buildUnifiedBrowserEditorPromptBlock([annotationBlock(1)]);
+    if (!generated) {
+      throw new Error("Expected a generated unified browser editor block.");
+    }
+    const manualBlock = buildBrowserDrawingPromptBlock({
+      url: "http://localhost:8891/manual.html",
+      title: "Manual annotation",
+      viewport: { width: 400, height: 300 },
+      strokes: [
+        {
+          id: "manual-stroke",
+          points: [
+            { x: 1, y: 2 },
+            { x: 3, y: 4 },
+          ],
+        },
+      ],
+    });
+
+    const prompt = removeBrowserAnnotationContextPrompt(
+      `Keep this\n\n${generated}\n\n${manualBlock}`,
+    );
+
+    expect(prompt).toContain("Keep this");
+    expect(prompt).toContain("Manual annotation");
+    expect(prompt).not.toContain("source: live-editor-context");
   });
 
   it("extracts browser context blocks and removes them from display text", () => {

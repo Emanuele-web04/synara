@@ -105,18 +105,11 @@ function applyPatchToDeclaration(
   for (const [key, cssProperty] of Object.entries(BROWSER_STYLE_PATCH_CSS_PROPERTIES) as Array<
     [keyof BrowserElementStylePatch, string]
   >) {
-    if (!cssProperty) {
-      continue;
-    }
     const value = patch[key]?.trim();
     if (value) {
       declaration.setProperty(cssProperty, value, priority);
     }
   }
-}
-
-function applyCommit(element: HTMLElement, patch: BrowserElementStylePatch): void {
-  applyPatchToDeclaration(element.style, patch, "");
 }
 
 export function applyBrowserStylePreviewToDocument(input: {
@@ -146,7 +139,7 @@ export function applyBrowserStylePreviewToDocument(input: {
       applyPatchToDeclaration(declaration, input.patch, "");
       return true;
     }
-    applyCommit(element as HTMLElement, input.patch);
+    applyPatchToDeclaration((element as HTMLElement).style, input.patch, "");
     clearPreviewStyle(input.document);
     return true;
   }

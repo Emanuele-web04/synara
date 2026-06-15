@@ -94,7 +94,13 @@ import {
   type BrowserElementEditorContext,
   type BrowserElementStylePatch,
   type BrowserTextAnnotation,
+  type BrowserViewport,
 } from "../lib/browserEditorContext";
+import {
+  convertBrowserOverlayAnnotationsToViewport,
+  browserOverlayPointToViewportPoint,
+  type BrowserAnnotationCoordinateGeometry,
+} from "../lib/browserAnnotationGeometry";
 import {
   applyBrowserStylePreviewToDocument,
   browserStylePreviewInstallExpression,
@@ -179,6 +185,7 @@ const BROWSER_EDITOR_CHROME_SELECTOR = [
   "[data-browser-editor-overlay='true']",
 ].join(", ");
 const BROWSER_EDITOR_SURFACE_SELECTOR = "[data-browser-editor-surface='true']";
+const LIVE_EDITOR_CONTEXT_PREVIEW_SELECTOR = "[data-live-editor-context-preview='true']";
 
 interface BrowserViewportPerfCounters {
   syncAttempts: number;
@@ -554,6 +561,7 @@ interface BrowserInspectHoverBox {
   width: number;
   height: number;
   label: string;
+  viewport?: BrowserViewport;
 }
 
 function browserInspectBoxesMatch(
@@ -567,6 +575,27 @@ function browserInspectBoxesMatch(
     Math.abs(first.width - second.width) < 0.5 &&
     Math.abs(first.height - second.height) < 0.5
   );
+}
+
+function browserViewportBoxToOverlayBox(
+  box: BrowserInspectHoverBox,
+  geometry: BrowserAnnotationCoordinateGeometry,
+): BrowserInspectHoverBox {
+  const xScale =
+    Number.isFinite(geometry.overlayWidth) && geometry.viewportWidth > 0
+      ? geometry.overlayWidth / geometry.viewportWidth
+      : 1;
+  const yScale =
+    Number.isFinite(geometry.overlayHeight) && geometry.viewportHeight > 0
+      ? geometry.overlayHeight / geometry.viewportHeight
+      : 1;
+  return {
+    ...box,
+    x: box.x * xScale,
+    y: box.y * yScale,
+    width: box.width * xScale,
+    height: box.height * yScale,
+  };
 }
 
 function BrowserAnnotationBoxOverlay({
@@ -776,6 +805,13 @@ function isBrowserEditorChromeEventTarget(target: EventTarget | null): boolean {
 
 function isBrowserEditorSurfaceEventTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest(BROWSER_EDITOR_SURFACE_SELECTOR));
+}
+
+function liveEditorContextPreviewIsOpen(): boolean {
+  return (
+    typeof document !== "undefined" &&
+    document.querySelector(LIVE_EDITOR_CONTEXT_PREVIEW_SELECTOR) !== null
+  );
 }
 
 function liveEditorShortcutForEvent(event: KeyboardEvent): BrowserEditorMode | null {
@@ -1612,15 +1648,6 @@ function revokeComposerImagePreviewUrl(previewUrl: string): void {
   }
 }
 
-function bytesFromBase64(value: string): Uint8Array {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
-
 function imageFromBytes(bytes: Uint8Array, mimeType: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
@@ -1671,6 +1698,8 @@ interface BrowserPageScreenshot {
   documentHeight: number;
   scrollX: number;
   scrollY: number;
+  viewportWidth: number;
+  viewportHeight: number;
   captureX: number;
   captureY: number;
   captureWidth: number;
@@ -1696,15 +1725,36 @@ interface CdpLayoutMetricsResult {
   visualViewport?: {
     pageX?: number;
     pageY?: number;
+    clientWidth?: number;
+    clientHeight?: number;
+    width?: number;
+    height?: number;
+  };
+  cssVisualViewport?: {
+    pageX?: number;
+    pageY?: number;
+    clientWidth?: number;
+    clientHeight?: number;
+    width?: number;
+    height?: number;
   };
 }
 
-interface CdpCaptureScreenshotResult {
-  data?: unknown;
+interface BrowserPageMetrics {
+  documentWidth: number;
+  documentHeight: number;
+  scrollX: number;
+  scrollY: number;
+  viewportWidth: number;
+  viewportHeight: number;
 }
 
 function readPositiveNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function readFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function pageMetricsFromCdp(value: unknown): {
@@ -1712,8 +1762,11 @@ function pageMetricsFromCdp(value: unknown): {
   documentHeight: number | null;
   scrollX: number;
   scrollY: number;
+  viewportWidth: number | null;
+  viewportHeight: number | null;
 } {
   const metrics = value as CdpLayoutMetricsResult | null;
+  const visualViewport = metrics?.cssVisualViewport ?? metrics?.visualViewport;
   return {
     documentWidth:
       readPositiveNumber(metrics?.cssContentSize?.width) ??
@@ -1721,31 +1774,139 @@ function pageMetricsFromCdp(value: unknown): {
     documentHeight:
       readPositiveNumber(metrics?.cssContentSize?.height) ??
       readPositiveNumber(metrics?.contentSize?.height),
-    scrollX: readPositiveNumber(metrics?.visualViewport?.pageX) ?? 0,
-    scrollY: readPositiveNumber(metrics?.visualViewport?.pageY) ?? 0,
+    scrollX: readPositiveNumber(visualViewport?.pageX) ?? 0,
+    scrollY: readPositiveNumber(visualViewport?.pageY) ?? 0,
+    viewportWidth:
+      readPositiveNumber(visualViewport?.clientWidth) ??
+      readPositiveNumber(visualViewport?.width),
+    viewportHeight:
+      readPositiveNumber(visualViewport?.clientHeight) ??
+      readPositiveNumber(visualViewport?.height),
+  };
+}
+
+function browserPageMetricsExpression(): string {
+  return `(() => {
+    const root = document.documentElement;
+    const body = document.body;
+    const visual = window.visualViewport;
+    const positive = (value) => Number.isFinite(value) && value > 0 ? value : null;
+    const finite = (value) => Number.isFinite(value) ? value : null;
+    const viewportWidth = positive(visual && visual.width) || positive(window.innerWidth) || positive(root && root.clientWidth) || 1;
+    const viewportHeight = positive(visual && visual.height) || positive(window.innerHeight) || positive(root && root.clientHeight) || 1;
+    const scrollX = finite(visual && visual.pageLeft) ?? finite(window.scrollX) ?? finite(root && root.scrollLeft) ?? 0;
+    const scrollY = finite(visual && visual.pageTop) ?? finite(window.scrollY) ?? finite(root && root.scrollTop) ?? 0;
+    const documentWidth = Math.max(
+      viewportWidth,
+      positive(root && root.scrollWidth) || 0,
+      positive(root && root.clientWidth) || 0,
+      positive(body && body.scrollWidth) || 0,
+      positive(body && body.clientWidth) || 0
+    );
+    const documentHeight = Math.max(
+      viewportHeight,
+      positive(root && root.scrollHeight) || 0,
+      positive(root && root.clientHeight) || 0,
+      positive(body && body.scrollHeight) || 0,
+      positive(body && body.clientHeight) || 0
+    );
+    return { documentWidth, documentHeight, scrollX, scrollY, viewportWidth, viewportHeight };
+  })()`;
+}
+
+function pageMetricsFromRuntimeValue(value: unknown): BrowserPageMetrics | null {
+  const metrics = value as Partial<BrowserPageMetrics> | null;
+  const viewportWidth = readPositiveNumber(metrics?.viewportWidth);
+  const viewportHeight = readPositiveNumber(metrics?.viewportHeight);
+  if (!viewportWidth || !viewportHeight) {
+    return null;
+  }
+  return {
+    documentWidth: Math.max(viewportWidth, readPositiveNumber(metrics?.documentWidth) ?? viewportWidth),
+    documentHeight: Math.max(
+      viewportHeight,
+      readPositiveNumber(metrics?.documentHeight) ?? viewportHeight,
+    ),
+    scrollX: readFiniteNumber(metrics?.scrollX) ?? 0,
+    scrollY: readFiniteNumber(metrics?.scrollY) ?? 0,
+    viewportWidth,
+    viewportHeight,
   };
 }
 
 function fallbackDocumentPageMetrics(input: {
   document: Document;
   window: Window;
-}): {
-  documentWidth: number;
-  documentHeight: number;
-  scrollX: number;
-  scrollY: number;
-} {
+}): BrowserPageMetrics {
   const element = input.document.documentElement;
   const body = input.document.body;
+  const viewportWidth = input.window.innerWidth || element.clientWidth;
+  const viewportHeight = input.window.innerHeight || element.clientHeight;
   return {
     documentWidth: Math.ceil(
-      Math.max(element.scrollWidth, element.clientWidth, body?.scrollWidth ?? 0),
+      Math.max(element.scrollWidth, viewportWidth, body?.scrollWidth ?? 0),
     ),
     documentHeight: Math.ceil(
-      Math.max(element.scrollHeight, element.clientHeight, body?.scrollHeight ?? 0),
+      Math.max(element.scrollHeight, viewportHeight, body?.scrollHeight ?? 0),
     ),
     scrollX: input.window.scrollX,
     scrollY: input.window.scrollY,
+    viewportWidth,
+    viewportHeight,
+  };
+}
+
+function browserAnnotationOverlaySize(input: {
+  overlay: HTMLElement | null;
+  viewport: HTMLElement | null;
+  fallbackWidth: number;
+  fallbackHeight: number;
+}): { width: number; height: number } {
+  const overlayRect = input.overlay?.getBoundingClientRect();
+  const viewportRect = input.viewport?.getBoundingClientRect();
+  return {
+    width: Math.max(1, overlayRect?.width ?? viewportRect?.width ?? input.fallbackWidth),
+    height: Math.max(1, overlayRect?.height ?? viewportRect?.height ?? input.fallbackHeight),
+  };
+}
+
+function browserAnnotationGeometryFromMetrics(input: {
+  overlay: HTMLElement | null;
+  viewport: HTMLElement | null;
+  metrics: BrowserPageMetrics;
+}): BrowserAnnotationCoordinateGeometry {
+  const overlaySize = browserAnnotationOverlaySize({
+    overlay: input.overlay,
+    viewport: input.viewport,
+    fallbackWidth: input.metrics.viewportWidth,
+    fallbackHeight: input.metrics.viewportHeight,
+  });
+  return {
+    overlayWidth: overlaySize.width,
+    overlayHeight: overlaySize.height,
+    viewportWidth: Math.max(1, input.metrics.viewportWidth),
+    viewportHeight: Math.max(1, input.metrics.viewportHeight),
+  };
+}
+
+function browserAnnotationGeometryFromViewport(input: {
+  overlay: HTMLElement | null;
+  viewport: HTMLElement | null;
+  viewportSize: BrowserViewport;
+}): BrowserAnnotationCoordinateGeometry {
+  const viewportWidth = Math.max(1, input.viewportSize.width);
+  const viewportHeight = Math.max(1, input.viewportSize.height);
+  const overlaySize = browserAnnotationOverlaySize({
+    overlay: input.overlay,
+    viewport: input.viewport,
+    fallbackWidth: viewportWidth,
+    fallbackHeight: viewportHeight,
+  });
+  return {
+    overlayWidth: overlaySize.width,
+    overlayHeight: overlaySize.height,
+    viewportWidth,
+    viewportHeight,
   };
 }
 
@@ -2088,9 +2249,8 @@ async function captureFallbackFramePageScreenshot(
       documentHeight: metrics.documentHeight,
       scrollX: metrics.scrollX,
       scrollY: metrics.scrollY,
-      viewportWidth: captureDocument.window.innerWidth || frame.clientWidth || metrics.documentWidth,
-      viewportHeight:
-        captureDocument.window.innerHeight || frame.clientHeight || metrics.documentHeight,
+      viewportWidth: metrics.viewportWidth || frame.clientWidth || metrics.documentWidth,
+      viewportHeight: metrics.viewportHeight || frame.clientHeight || metrics.documentHeight,
     });
     const fitScale = Math.min(
       1,
@@ -2157,6 +2317,31 @@ function drawCanvasPolyline(
   }
 }
 
+function browserCanvasTextAnnotationPalette(): {
+  fill: string;
+  stroke: string;
+  text: string;
+  overflowText: string;
+  shadow: string;
+} {
+  const isDark = document.documentElement.classList.contains("dark");
+  return isDark
+    ? {
+        fill: "rgba(15, 23, 42, 0.78)",
+        stroke: "rgba(255, 255, 255, 0.18)",
+        text: "#ffffff",
+        overflowText: "rgba(255, 255, 255, 0.68)",
+        shadow: "rgba(0, 0, 0, 0.24)",
+      }
+    : {
+        fill: "rgba(255, 255, 255, 0.62)",
+        stroke: "rgba(15, 23, 42, 0.12)",
+        text: "rgb(15, 23, 42)",
+        overflowText: "rgba(15, 23, 42, 0.62)",
+        shadow: "rgba(15, 23, 42, 0.18)",
+      };
+}
+
 function drawCanvasTextAnnotation(
   context: CanvasRenderingContext2D,
   annotation: BrowserTextAnnotation,
@@ -2172,8 +2357,6 @@ function drawCanvasTextAnnotation(
   if (text.length === 0) {
     return;
   }
-  const anchorX = (annotation.x + input.offsetX) * input.scaleX;
-  const anchorY = (annotation.y + input.offsetY) * input.scaleY;
   const metrics = browserTextAnnotationMetrics(annotation);
   const baseFontSize = browserTextAnnotationFontSize(annotation);
   const fontSize = Math.max(10, baseFontSize * input.scaleY);
@@ -2187,25 +2370,32 @@ function drawCanvasTextAnnotation(
   const boxY = (boxPosition.y + input.offsetY) * input.scaleY;
 
   context.save();
+  const palette = browserCanvasTextAnnotationPalette();
   context.font = `${BROWSER_TEXT_ANNOTATION_FONT_WEIGHT} ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
 
   context.globalCompositeOperation = "source-over";
-  context.fillStyle = "rgba(15, 23, 42, 0.92)";
+  context.fillStyle = palette.fill;
+  context.shadowColor = palette.shadow;
+  context.shadowBlur = 24 * input.fitScale;
+  context.shadowOffsetY = 10 * input.fitScale;
   roundedCanvasPath(context, boxX, boxY, boxWidth, boxHeight, radius);
   context.fill();
-  context.strokeStyle = "rgba(255, 255, 255, 0.86)";
+  context.shadowColor = "transparent";
+  context.shadowBlur = 0;
+  context.shadowOffsetY = 0;
+  context.strokeStyle = palette.stroke;
   context.lineWidth = Math.max(1, 1.5 * input.fitScale);
   context.stroke();
 
-  context.fillStyle = "#ffffff";
+  context.fillStyle = palette.text;
   context.textBaseline = "top";
   const textBlockHeight = metrics.lines.length * lineHeight;
   const textY = boxY + Math.max(0, (boxHeight - textBlockHeight) / 2);
   for (const [lineIndex, line] of metrics.lines.entries()) {
     context.fillStyle =
       metrics.hasOverflow && lineIndex === metrics.lines.length - 1
-        ? "rgba(255, 255, 255, 0.68)"
-        : "#ffffff";
+        ? palette.overflowText
+        : palette.text;
     context.fillText(
       line,
       boxX + paddingX,
@@ -2213,12 +2403,6 @@ function drawCanvasTextAnnotation(
       Math.max(24, boxWidth - paddingX * 2),
     );
   }
-
-  context.globalCompositeOperation = "difference";
-  context.fillStyle = "#ffffff";
-  context.beginPath();
-  context.arc(anchorX, anchorY, Math.max(4, 4.5 * input.fitScale), 0, Math.PI * 2);
-  context.fill();
   context.restore();
 }
 
@@ -2609,12 +2793,6 @@ export function BrowserPanel({
   const composerDraftImageCount = useComposerDraftStore(
     (store) => store.draftsByThreadId[threadId]?.images.length ?? 0,
   );
-  const browserAnnotationAttachment = useComposerDraftStore(
-    (store) =>
-      store.draftsByThreadId[threadId]?.images.find(
-        (image) => image.source === BROWSER_ANNOTATION_ATTACHMENT_SOURCE,
-      ) ?? null,
-  );
   const composerDraftAssistantSelectionCount = useComposerDraftStore(
     (store) => store.draftsByThreadId[threadId]?.assistantSelections.length ?? 0,
   );
@@ -2793,9 +2971,6 @@ export function BrowserPanel({
   const [textAnnotationFontSize, setTextAnnotationFontSize] = useState(
     BROWSER_TEXT_ANNOTATION_FONT_SIZE,
   );
-  const [, setAnnotationAttachmentStatus] = useState<
-    "idle" | "capturing" | "attached" | "error"
-  >("idle");
   const [previewActionPending, setPreviewActionPending] = useState(false);
   const hasNativeBrowserBridge =
     typeof window !== "undefined" && window.desktopBridge !== undefined;
@@ -3000,45 +3175,41 @@ export function BrowserPanel({
     }
   }, [activeProjectId, api, navigateBrowserToPreviewUrl, previewCwd, threadId, upsertPreviewState]);
 
-  const clearBrowserAnnotationContext = useCallback(() => {
-    annotationUpdateRequestIdRef.current += 1;
-    annotationUpdateQueuedRef.current = false;
-    if (annotationUpdateTimeoutRef.current !== null) {
-      window.clearTimeout(annotationUpdateTimeoutRef.current);
-      annotationUpdateTimeoutRef.current = null;
-    }
-    const draftStore = useComposerDraftStore.getState();
-    const currentDraft = draftStore.draftsByThreadId[threadId];
-    for (const image of currentDraft?.images ?? []) {
-      if (image.source === BROWSER_ANNOTATION_ATTACHMENT_SOURCE) {
-        draftStore.removeImage(threadId, image.id);
-      }
-    }
-    draftStore.clearBrowserContexts(threadId);
-    draftStore.setPrompt(
-      threadId,
-      removeBrowserAnnotationContextPrompt(currentDraft?.prompt ?? ""),
-    );
-    setAnnotationAttachmentStatus("idle");
-  }, [threadId]);
-
-  const captureBrowserPageScreenshot = useCallback(async (
-    annotationBounds: BrowserCaptureRect | null,
-  ): Promise<BrowserPageScreenshot> => {
+  const readBrowserPageMetrics = useCallback(async (): Promise<BrowserPageMetrics> => {
     if (!api || !activeTab) {
-      throw new Error("No browser tab is available to capture.");
+      throw new Error("No browser tab is available.");
     }
 
     if (hasNativeBrowserBridge) {
       const viewportRect = browserViewportRef.current?.getBoundingClientRect();
       const viewportWidth = Math.ceil(viewportRect?.width ?? window.innerWidth);
       const viewportHeight = Math.ceil(viewportRect?.height ?? window.innerHeight);
-      let metrics = {
+      const fallbackMetrics: BrowserPageMetrics = {
         documentWidth: viewportWidth,
         documentHeight: viewportHeight,
         scrollX: 0,
         scrollY: 0,
+        viewportWidth,
+        viewportHeight,
       };
+      try {
+        const runtimeResponse = (await api.browser.executeCdp({
+          threadId,
+          tabId: activeTab.id,
+          method: "Runtime.evaluate",
+          params: {
+            expression: browserPageMetricsExpression(),
+            returnByValue: true,
+            awaitPromise: false,
+          },
+        })) as RuntimeEvaluateResult;
+        const runtimeMetrics = pageMetricsFromRuntimeValue(runtimeResponse.result?.value);
+        if (runtimeMetrics) {
+          return runtimeMetrics;
+        }
+      } catch {
+        // Fall back to Page.getLayoutMetrics below; some pages can block Runtime evaluation.
+      }
       try {
         const metricsResponse = await api.browser.executeCdp({
           threadId,
@@ -3046,82 +3217,71 @@ export function BrowserPanel({
           method: "Page.getLayoutMetrics",
         });
         const cdpMetrics = pageMetricsFromCdp(metricsResponse);
-        metrics = {
+        return {
           documentWidth: cdpMetrics.documentWidth ?? viewportWidth,
           documentHeight: cdpMetrics.documentHeight ?? viewportHeight,
           scrollX: cdpMetrics.scrollX,
           scrollY: cdpMetrics.scrollY,
-        };
-        const captureRect = browserAnnotationCaptureRect({
-          annotationBounds,
-          ...metrics,
-          viewportWidth,
-          viewportHeight,
-        });
-        const captureResponse = (await api.browser.executeCdp({
-          threadId,
-          tabId: activeTab.id,
-          method: "Page.captureScreenshot",
-          params: {
-            format: "png",
-            fromSurface: true,
-            captureBeyondViewport: true,
-            clip: {
-              x: captureRect.x,
-              y: captureRect.y,
-              width: captureRect.width,
-              height: captureRect.height,
-              scale: 1,
-            },
-          },
-        })) as CdpCaptureScreenshotResult;
-        if (typeof captureResponse.data !== "string" || captureResponse.data.length === 0) {
-          throw new Error("CDP did not return screenshot data.");
-        }
-        return {
-          screenshot: screenshotResultFromBytes({
-            bytes: bytesFromBase64(captureResponse.data),
-            name: BROWSER_ANNOTATION_SCREENSHOT_NAME,
-          }),
-          documentWidth: metrics.documentWidth,
-          documentHeight: metrics.documentHeight,
-          scrollX: metrics.scrollX,
-          scrollY: metrics.scrollY,
-          captureX: captureRect.x,
-          captureY: captureRect.y,
-          captureWidth: captureRect.width,
-          captureHeight: captureRect.height,
+          viewportWidth: cdpMetrics.viewportWidth ?? viewportWidth,
+          viewportHeight: cdpMetrics.viewportHeight ?? viewportHeight,
         };
       } catch {
-        const viewportScreenshot = await api.browser.captureScreenshot({
-          threadId,
-          tabId: activeTab.id,
-        });
-        const captureRect = roundBrowserCaptureRect(
-          {
-            x: metrics.scrollX,
-            y: metrics.scrollY,
-            width: viewportWidth,
-            height: viewportHeight,
-          },
-          metrics.documentWidth,
-          metrics.documentHeight,
-        );
-        return {
-          screenshot: {
-            ...viewportScreenshot,
-            name: BROWSER_ANNOTATION_SCREENSHOT_NAME,
-          },
-          documentWidth: metrics.documentWidth,
-          documentHeight: metrics.documentHeight,
-          scrollX: metrics.scrollX,
-          scrollY: metrics.scrollY,
-          captureX: captureRect.x,
-          captureY: captureRect.y,
-          captureWidth: captureRect.width,
-          captureHeight: captureRect.height,
-        };
+        return fallbackMetrics;
       }
+    }
+
+    const frame = browserFallbackFrameRef.current;
+    if (!frame) {
+      throw new Error("No browser fallback frame is available.");
+    }
+    const captureDocument = resolveFallbackCaptureDocument(frame);
+    try {
+      return fallbackDocumentPageMetrics(captureDocument);
+    } finally {
+      captureDocument.cleanup();
+    }
+  }, [activeTab, api, hasNativeBrowserBridge, threadId]);
+
+  const captureBrowserPageScreenshot = useCallback(async (
+    annotationBounds: BrowserCaptureRect | null,
+    pageMetrics?: BrowserPageMetrics,
+  ): Promise<BrowserPageScreenshot> => {
+    if (!api || !activeTab) {
+      throw new Error("No browser tab is available to capture.");
+    }
+
+    if (hasNativeBrowserBridge) {
+      const metrics = pageMetrics ?? (await readBrowserPageMetrics());
+      const viewportScreenshot = await api.browser.captureScreenshot({
+        threadId,
+        tabId: activeTab.id,
+      });
+      const captureRect = roundBrowserCaptureRect(
+        {
+          x: metrics.scrollX,
+          y: metrics.scrollY,
+          width: metrics.viewportWidth,
+          height: metrics.viewportHeight,
+        },
+        metrics.documentWidth,
+        metrics.documentHeight,
+      );
+      return {
+        screenshot: {
+          ...viewportScreenshot,
+          name: BROWSER_ANNOTATION_SCREENSHOT_NAME,
+        },
+        documentWidth: metrics.documentWidth,
+        documentHeight: metrics.documentHeight,
+        scrollX: metrics.scrollX,
+        scrollY: metrics.scrollY,
+        viewportWidth: metrics.viewportWidth,
+        viewportHeight: metrics.viewportHeight,
+        captureX: captureRect.x,
+        captureY: captureRect.y,
+        captureWidth: captureRect.width,
+        captureHeight: captureRect.height,
+      };
     }
 
     const frame = browserFallbackFrameRef.current;
@@ -3129,7 +3289,7 @@ export function BrowserPanel({
       throw new Error("No browser fallback frame is available to capture.");
     }
     return captureFallbackFramePageScreenshot(frame, annotationBounds);
-  }, [activeTab, api, hasNativeBrowserBridge, threadId]);
+  }, [activeTab, api, hasNativeBrowserBridge, readBrowserPageMetrics, threadId]);
 
   const runBrowserAnnotationAttachmentUpdate = useCallback(async (requestId: number) => {
     const usableStrokes = drawStrokesRef.current.filter((stroke) => stroke.points.length > 1);
@@ -3144,7 +3304,6 @@ export function BrowserPanel({
     const hasVisualAnnotations =
       usableStrokes.length > 0 || usableTextAnnotations.length > 0 || usableArrows.length > 0;
     if (!hasVisualAnnotations && !selectedContext) {
-      clearBrowserAnnotationContext();
       return;
     }
 
@@ -3179,12 +3338,10 @@ export function BrowserPanel({
         threadId,
         removeBrowserAnnotationContextPrompt(currentDraft?.prompt ?? ""),
       );
-      setAnnotationAttachmentStatus("attached");
       setLocalError(null);
       return;
     }
     if (!api || !activeTab) {
-      setAnnotationAttachmentStatus("error");
       setLocalError("Live editor context will attach after the browser tab is ready.");
       return;
     }
@@ -3199,11 +3356,9 @@ export function BrowserPanel({
       setLocalError(
         `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
       );
-      setAnnotationAttachmentStatus("error");
       return;
     }
 
-    setAnnotationAttachmentStatus("capturing");
     try {
       if (
         annotationUpdateDisposedRef.current ||
@@ -3220,13 +3375,25 @@ export function BrowserPanel({
             label: selectedContext.selector || selectedContext.tagName.toLowerCase(),
           }
         : null;
-      const annotationBounds = browserAnnotationViewportBounds({
-        selectedBox,
+      const pageMetrics = await readBrowserPageMetrics();
+      const annotationGeometry = browserAnnotationGeometryFromMetrics({
+        overlay: browserEditorOverlayRef.current,
+        viewport: browserViewportRef.current,
+        metrics: pageMetrics,
+      });
+      const viewportAnnotations = convertBrowserOverlayAnnotationsToViewport({
+        geometry: annotationGeometry,
         strokes: usableStrokes,
         textAnnotations: usableTextAnnotations,
         arrows: usableArrows,
       });
-      const page = await captureBrowserPageScreenshot(annotationBounds);
+      const annotationBounds = browserAnnotationViewportBounds({
+        selectedBox,
+        strokes: viewportAnnotations.strokes,
+        textAnnotations: viewportAnnotations.textAnnotations,
+        arrows: viewportAnnotations.arrows,
+      });
+      const page = await captureBrowserPageScreenshot(annotationBounds, pageMetrics);
       if (
         annotationUpdateDisposedRef.current ||
         annotationUpdateRequestIdRef.current !== requestId
@@ -3235,9 +3402,9 @@ export function BrowserPanel({
       }
       const annotatedScreenshot = await composeAnnotatedBrowserScreenshot({
         page,
-        strokes: usableStrokes,
-        textAnnotations: usableTextAnnotations,
-        arrows: usableArrows,
+        strokes: viewportAnnotations.strokes,
+        textAnnotations: viewportAnnotations.textAnnotations,
+        arrows: viewportAnnotations.arrows,
         selectedBox,
       });
       if (
@@ -3250,10 +3417,8 @@ export function BrowserPanel({
         setLocalError(
           `'${BROWSER_ANNOTATION_SCREENSHOT_NAME}' exceeds the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`,
         );
-        setAnnotationAttachmentStatus("error");
         return;
       }
-      const viewportRect = browserViewportRef.current?.getBoundingClientRect();
       const annotationUrl = activeTab.lastCommittedUrl ?? activeTab.url ?? BROWSER_BLANK_URL;
       const annotationTitle = activeTab.title ?? "";
       const metadataBlock = buildBrowserDrawingPromptBlock({
@@ -3261,8 +3426,8 @@ export function BrowserPanel({
         url: annotationUrl,
         title: annotationTitle,
         viewport: {
-          width: viewportRect?.width ?? 0,
-          height: viewportRect?.height ?? 0,
+          width: pageMetrics.viewportWidth,
+          height: pageMetrics.viewportHeight,
           devicePixelRatio: window.devicePixelRatio,
         },
         document: {
@@ -3281,9 +3446,9 @@ export function BrowserPanel({
         },
         selectedSelector: selectedContext?.selector ?? null,
         selectedElement: selectedContext,
-        strokes: usableStrokes,
-        textAnnotations: usableTextAnnotations,
-        arrows: usableArrows,
+        strokes: viewportAnnotations.strokes,
+        textAnnotations: viewportAnnotations.textAnnotations,
+        arrows: viewportAnnotations.arrows,
       });
       const image = composerImageFromBrowserScreenshot(annotatedScreenshot, {
         name: BROWSER_ANNOTATION_SCREENSHOT_NAME,
@@ -3308,7 +3473,6 @@ export function BrowserPanel({
 
       const latestStore = useComposerDraftStore.getState();
       const latestDraft = latestStore.draftsByThreadId[threadId];
-      latestStore.clearBrowserContexts(threadId);
       for (const existingImage of latestDraft?.images ?? []) {
         if (existingImage.source === BROWSER_ANNOTATION_ATTACHMENT_SOURCE) {
           latestStore.removeImage(threadId, existingImage.id);
@@ -3319,7 +3483,6 @@ export function BrowserPanel({
         threadId,
         removeBrowserAnnotationContextPrompt(latestDraft?.prompt ?? ""),
       );
-      setAnnotationAttachmentStatus("attached");
       setLocalError(null);
     } catch (error) {
       if (
@@ -3328,7 +3491,6 @@ export function BrowserPanel({
       ) {
         return;
       }
-      setAnnotationAttachmentStatus("error");
       const message =
         error instanceof Error && error.message.length > 0
           ? error.message
@@ -3339,8 +3501,8 @@ export function BrowserPanel({
     activeTab,
     api,
     captureBrowserPageScreenshot,
-    clearBrowserAnnotationContext,
     composerDraftAssistantSelectionCount,
+    readBrowserPageMetrics,
     threadId,
   ]);
 
@@ -3399,12 +3561,25 @@ export function BrowserPanel({
         }
         try {
           const frameDocument = frame.contentDocument;
-          if (!frameDocument) {
+          const frameWindow = frame.contentWindow;
+          if (!frameDocument || !frameWindow) {
             return null;
           }
+          const frameMetrics = fallbackDocumentPageMetrics({
+            document: frameDocument,
+            window: frameWindow,
+          });
+          const pagePoint = browserOverlayPointToViewportPoint(
+            point,
+            browserAnnotationGeometryFromMetrics({
+              overlay: browserEditorOverlayRef.current,
+              viewport: browserViewportRef.current,
+              metrics: frameMetrics,
+            }),
+          );
           const context = readBrowserElementHoverContextFromDocumentAtPoint({
             document: frameDocument,
-            point,
+            point: pagePoint,
           });
           return context
             ? {
@@ -3413,6 +3588,7 @@ export function BrowserPanel({
                 width: context.rect.width,
                 height: context.rect.height,
                 label: context.selector || context.tagName.toLowerCase(),
+                viewport: context.viewport,
               }
             : null;
         } catch {
@@ -3422,12 +3598,21 @@ export function BrowserPanel({
           return null;
         }
       }
+      const overlaySize = browserAnnotationOverlaySize({
+        overlay: browserEditorOverlayRef.current,
+        viewport: browserViewportRef.current,
+        fallbackWidth: window.innerWidth,
+        fallbackHeight: window.innerHeight,
+      });
       const response = (await api.browser.executeCdp({
         threadId,
         tabId: activeTab.id,
         method: "Runtime.evaluate",
         params: {
-          expression: cdpElementHoverContextExpression(point.x, point.y),
+          expression: cdpElementHoverContextExpression(point.x, point.y, {
+            overlayWidth: overlaySize.width,
+            overlayHeight: overlaySize.height,
+          }),
           returnByValue: true,
           awaitPromise: false,
         },
@@ -3442,6 +3627,7 @@ export function BrowserPanel({
         width: value.rect.width,
         height: value.rect.height,
         label: value.selector || value.tagName.toLowerCase(),
+        viewport: value.viewport,
       };
     },
     [activeTab, api, hasNativeBrowserBridge, threadId],
@@ -3459,12 +3645,25 @@ export function BrowserPanel({
         }
         try {
           const frameDocument = frame.contentDocument;
-          if (!frameDocument) {
+          const frameWindow = frame.contentWindow;
+          if (!frameDocument || !frameWindow) {
             return null;
           }
+          const frameMetrics = fallbackDocumentPageMetrics({
+            document: frameDocument,
+            window: frameWindow,
+          });
+          const pagePoint = browserOverlayPointToViewportPoint(
+            point,
+            browserAnnotationGeometryFromMetrics({
+              overlay: browserEditorOverlayRef.current,
+              viewport: browserViewportRef.current,
+              metrics: frameMetrics,
+            }),
+          );
           return readBrowserElementContextFromDocumentAtPoint({
             document: frameDocument,
-            point,
+            point: pagePoint,
           });
         } catch {
           setLocalError(
@@ -3473,12 +3672,21 @@ export function BrowserPanel({
           return null;
         }
       }
+      const overlaySize = browserAnnotationOverlaySize({
+        overlay: browserEditorOverlayRef.current,
+        viewport: browserViewportRef.current,
+        fallbackWidth: window.innerWidth,
+        fallbackHeight: window.innerHeight,
+      });
       const response = (await api.browser.executeCdp({
         threadId,
         tabId: activeTab.id,
         method: "Runtime.evaluate",
         params: {
-          expression: cdpElementContextExpression(point.x, point.y),
+          expression: cdpElementContextExpression(point.x, point.y, {
+            overlayWidth: overlaySize.width,
+            overlayHeight: overlaySize.height,
+          }),
           returnByValue: true,
           awaitPromise: false,
         },
@@ -3710,7 +3918,7 @@ export function BrowserPanel({
       }
 
       try {
-        await api.projects.applyTextEdit({
+        const result = await api.projects.applyTextEdit({
           cwd,
           originalText,
           nextText,
@@ -3719,12 +3927,28 @@ export function BrowserPanel({
             text: originalText,
           },
         });
+        toastManager.add({
+          type: "success",
+          title: "Text edit saved",
+          description: `Updated ${result.relativePath}.`,
+        });
+        if (activeTab) {
+          window.setTimeout(() => {
+            void runBrowserAction(() => api.browser.reload({ threadId, tabId: activeTab.id })).then(
+              (state) => {
+                if (state) {
+                  upsertThreadState(state);
+                }
+              },
+            );
+          }, 120);
+        }
         setLocalError(null);
       } catch (error) {
         setLocalError(formatInlineTextSaveError(error));
       }
     },
-    [api, previewCwd, previewState?.targetCwd],
+    [activeTab, api, previewCwd, previewState?.targetCwd, runBrowserAction, threadId, upsertThreadState],
   );
 
   const finishInlineTextEditingCommit = useCallback(
@@ -4410,19 +4634,6 @@ export function BrowserPanel({
     editTextAnnotationInputRef.current?.focus();
     editTextAnnotationInputRef.current?.select();
   }, [editingTextAnnotationId]);
-
-  useEffect(() => {
-    if (
-      autoAttachAnnotationScreenshot &&
-      hasAttachableBrowserEditorContext()
-    ) {
-      scheduleBrowserAnnotationAttachmentUpdate(0);
-    }
-  }, [
-    autoAttachAnnotationScreenshot,
-    hasAttachableBrowserEditorContext,
-    scheduleBrowserAnnotationAttachmentUpdate,
-  ]);
 
   useEffect(() => {
     if (!autoAttachAnnotationScreenshot || !hasAttachableBrowserEditorContext()) {
@@ -5890,6 +6101,9 @@ export function BrowserPanel({
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (liveEditorContextPreviewIsOpen()) {
+        return;
+      }
       if (!isBrowserAnnotationDeleteEvent(event)) {
         return;
       }
@@ -6129,11 +6343,9 @@ export function BrowserPanel({
     setTextAnnotationDraft(null);
     setSelectedElementContext(null);
     setInlineTextEditor(null);
-    clearBrowserAnnotationContext();
     setLocalError(null);
   }, [
     clearAnnotationArrowHoverHideTimeout,
-    clearBrowserAnnotationContext,
     clearTextAnnotationHoverHideTimeout,
     cancelAnnotationArrowDraftFrame,
     cancelInlineTextEditing,
@@ -6357,6 +6569,9 @@ export function BrowserPanel({
       return;
     }
     const onKeyDown = (event: KeyboardEvent) => {
+      if (liveEditorContextPreviewIsOpen()) {
+        return;
+      }
       if (!isBrowserEditorRestoreEvent(event) || isEditableKeyboardEventTarget(event.target)) {
         return;
       }
@@ -6496,17 +6711,25 @@ export function BrowserPanel({
   );
 
   useEffect(() => {
+    if (liveEditorContextPreviewIsOpen()) {
+      return;
+    }
     const previousCount = previousComposerBrowserContextCountRef.current;
     previousComposerBrowserContextCountRef.current = composerBrowserContextCount;
     if (previousCount === 0 || composerBrowserContextCount !== 0) {
       return;
     }
-    const hasVisibleEditorState =
-      selectedElementContextRef.current !== null ||
-      drawStrokesRef.current.length > 0 ||
+    const hasVisualAnnotations =
+      drawStrokesRef.current.some((stroke) => stroke.points.length > 1) ||
       textAnnotationsRef.current.length > 0 ||
       annotationArrowsRef.current.length > 0 ||
       annotationArrowDraftRef.current !== null;
+    if (hasVisualAnnotations) {
+      return;
+    }
+    const hasVisibleEditorState =
+      selectedElementContextRef.current !== null ||
+      drawStrokesRef.current.length > 0;
     if (hasVisibleEditorState) {
       clearVisibleBrowserEditorStateWithUndo();
     }
@@ -6517,6 +6740,9 @@ export function BrowserPanel({
       return;
     }
     const onKeyDown = (event: KeyboardEvent) => {
+      if (liveEditorContextPreviewIsOpen()) {
+        return;
+      }
       if (event.key !== "Escape" || event.defaultPrevented) {
         return;
       }
@@ -6589,22 +6815,23 @@ export function BrowserPanel({
     });
     const draftStore = useComposerDraftStore.getState();
     const currentDraft = draftStore.draftsByThreadId[threadId];
-    draftStore.clearBrowserContexts(threadId);
-    draftStore.addBrowserContext(threadId, {
-      id: randomUUID(),
-      type: "browser-context",
-      source: "browser-selection",
-      promptBlock,
-      title: selectedContext.title || activeTab?.title || "Browser style edit",
-      url:
-        selectedContext.url ||
-        activeTab?.lastCommittedUrl ||
-        activeTab?.url ||
-        BROWSER_BLANK_URL,
-      strokeCount: 0,
-      textCount: 0,
-      ...(selectedContext.selector ? { selectedSelector: selectedContext.selector } : {}),
-    } satisfies ComposerBrowserContextAttachment);
+    draftStore.setBrowserContexts(threadId, [
+      {
+        id: randomUUID(),
+        type: "browser-context",
+        source: "browser-selection",
+        promptBlock,
+        title: selectedContext.title || activeTab?.title || "Browser style edit",
+        url:
+          selectedContext.url ||
+          activeTab?.lastCommittedUrl ||
+          activeTab?.url ||
+          BROWSER_BLANK_URL,
+        strokeCount: 0,
+        textCount: 0,
+        ...(selectedContext.selector ? { selectedSelector: selectedContext.selector } : {}),
+      } satisfies ComposerBrowserContextAttachment,
+    ]);
     draftStore.setPrompt(
       threadId,
       removeBrowserAnnotationContextPrompt(currentDraft?.prompt ?? ""),
@@ -6616,9 +6843,8 @@ export function BrowserPanel({
         ? "Previewed style changes were added to Live Editor Context."
         : "Current element styles were added to Live Editor Context.",
     });
-    clearVisibleBrowserEditorStateWithUndo({ stylePatch: previewStyle });
     setLocalError(null);
-  }, [activeTab, clearVisibleBrowserEditorStateWithUndo, threadId]);
+  }, [activeTab, threadId]);
 
   const applyStyleEditToSource = useCallback((patch: BrowserElementStylePatch) => {
     void (async () => {
@@ -6725,7 +6951,7 @@ export function BrowserPanel({
       }),
     [activeDrawStroke?.id, activeDrawStroke?.points.length, browserSvgIdPrefix, renderedDrawStrokes],
   );
-  const selectedAnnotationBox = useMemo(
+  const selectedAnnotationViewportBox = useMemo(
     () =>
       selectedElementContext
         ? {
@@ -6734,16 +6960,44 @@ export function BrowserPanel({
             width: selectedElementContext.rect.width,
             height: selectedElementContext.rect.height,
             label: selectedElementContext.selector || selectedElementContext.tagName.toLowerCase(),
+            viewport: selectedElementContext.viewport,
           }
         : null,
     [selectedElementContext],
   );
+  const selectedAnnotationBox =
+    selectedAnnotationViewportBox && selectedAnnotationViewportBox.viewport
+      ? browserViewportBoxToOverlayBox(
+          selectedAnnotationViewportBox,
+          browserAnnotationGeometryFromViewport({
+            overlay: browserEditorOverlayRef.current,
+            viewport: browserViewportRef.current,
+            viewportSize: selectedAnnotationViewportBox.viewport,
+          }),
+        )
+      : selectedAnnotationViewportBox;
+  const inspectHoverOverlayBox =
+    inspectHoverBox && inspectHoverBox.viewport
+      ? browserViewportBoxToOverlayBox(
+          inspectHoverBox,
+          browserAnnotationGeometryFromViewport({
+            overlay: browserEditorOverlayRef.current,
+            viewport: browserViewportRef.current,
+            viewportSize: inspectHoverBox.viewport,
+          }),
+        )
+      : inspectHoverBox;
   const selectedStyleEditorAnchor = useMemo(
     () =>
       selectedAnnotationBox && selectedElementContext
         ? (() => {
-          const viewportWidth = Math.max(1, selectedElementContext.viewport.width);
-          const viewportHeight = Math.max(1, selectedElementContext.viewport.height);
+          const overlayGeometry = browserAnnotationGeometryFromViewport({
+            overlay: browserEditorOverlayRef.current,
+            viewport: browserViewportRef.current,
+            viewportSize: selectedElementContext.viewport,
+          });
+          const viewportWidth = Math.max(1, overlayGeometry.overlayWidth);
+          const viewportHeight = Math.max(1, overlayGeometry.overlayHeight);
           const panelHeight = Math.min(
             BROWSER_STYLE_PANEL_MAX_HEIGHT,
             Math.max(240, viewportHeight - BROWSER_STYLE_PANEL_VIEWPORT_PADDING * 2),
@@ -6922,9 +7176,11 @@ export function BrowserPanel({
     browserEditorFocused &&
     browserEditorPointerInside &&
     !stylePropertiesPanelOpen &&
-    inspectHoverBox &&
-    (!selectedAnnotationBox || !browserInspectBoxesMatch(inspectHoverBox, selectedAnnotationBox))
-      ? inspectHoverBox
+    inspectHoverOverlayBox &&
+    (!selectedAnnotationViewportBox ||
+      !inspectHoverBox ||
+      !browserInspectBoxesMatch(inspectHoverBox, selectedAnnotationViewportBox))
+      ? inspectHoverOverlayBox
       : null;
   const annotationArrowsForRender = useMemo(
     () =>
@@ -7382,7 +7638,6 @@ export function BrowserPanel({
     !canUseNativeBrowserSurface &&
     activeTab !== null &&
     (activeTab.url === BROWSER_BLANK_URL || activeTab.lastCommittedUrl === BROWSER_BLANK_URL);
-
   const header = (
     <div className="flex min-w-0 flex-1 items-center gap-2">
       {/* Keep the browser chrome interactive inside Electron's draggable titlebar. */}
