@@ -266,6 +266,30 @@ function syncReadyReviewChatSessionForEnsure(input: {
   });
 }
 
+function makeReadyReviewChatSnapshot(input: {
+  readonly commands: readonly ClientOrchestrationCommand[];
+  readonly reviewChatTarget: ReturnType<typeof buildReviewChatTarget>;
+}): OrchestrationShellSnapshot {
+  const createCommand = input.commands.find(isThreadCreateCommand);
+  const ensureCommand = input.commands.find(isThreadSessionEnsureCommand);
+  if (!createCommand || !ensureCommand?.modelSelection) {
+    return makeShellSnapshot({});
+  }
+  return makeShellSnapshot({
+    createCommand,
+    reviewChatTarget: input.reviewChatTarget,
+    session: {
+      threadId: createCommand.threadId,
+      status: "ready",
+      providerName: ensureCommand.modelSelection.provider,
+      runtimeMode: "approval-required",
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: "2026-06-07T12:00:01.000Z",
+    },
+  });
+}
+
 describe("reviewChatThread", () => {
   it("matches review chat threads by durable PR target", () => {
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
@@ -754,7 +778,9 @@ describe("reviewChatThread", () => {
           syncReadyReviewChatSessionForEnsure({ command, commands });
           return { sequence: commands.length };
         }),
-        getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
+        getShellSnapshot: vi.fn(async () =>
+          makeReadyReviewChatSnapshot({ commands, reviewChatTarget: target }),
+        ),
         subscribeThread: vi.fn(async () => undefined),
       },
     };
@@ -795,7 +821,9 @@ describe("reviewChatThread", () => {
           syncReadyReviewChatSessionForEnsure({ command, commands });
           return { sequence: commands.length };
         }),
-        getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
+        getShellSnapshot: vi.fn(async () =>
+          makeReadyReviewChatSnapshot({ commands, reviewChatTarget: target }),
+        ),
         subscribeThread: vi.fn(async () => undefined),
       },
     };
@@ -839,7 +867,9 @@ describe("reviewChatThread", () => {
           syncReadyReviewChatSessionForEnsure({ command, commands });
           return { sequence: commands.length };
         }),
-        getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
+        getShellSnapshot: vi.fn(async () =>
+          makeReadyReviewChatSnapshot({ commands, reviewChatTarget: target }),
+        ),
         subscribeThread: vi.fn(async () => undefined),
       },
     };
@@ -891,7 +921,9 @@ describe("reviewChatThread", () => {
           }
           return { sequence: commands.length };
         }),
-        getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
+        getShellSnapshot: vi.fn(async () =>
+          makeReadyReviewChatSnapshot({ commands, reviewChatTarget: target }),
+        ),
         subscribeThread: vi.fn(async () => undefined),
       },
     };
@@ -977,7 +1009,7 @@ describe("reviewChatThread", () => {
     });
   });
 
-  it("keeps early and complete Codex prewarm on one session ensure", async () => {
+  it("revalidates session readiness when early and complete Codex prewarm targets differ", async () => {
     const payload = makePayload();
     const target = buildReviewChatTarget(payload, projectId);
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
@@ -1012,7 +1044,7 @@ describe("reviewChatThread", () => {
     expect(incomplete.status).toBe("ready");
     expect(complete.status).toBe("ready");
     expect(commands.filter(isThreadCreateCommand)).toHaveLength(1);
-    expect(commands.filter(isThreadSessionEnsureCommand)).toHaveLength(1);
+    expect(commands.filter(isThreadSessionEnsureCommand)).toHaveLength(2);
     // Codex review chats no longer inject context during prewarm.
     // Context is deferred to the first visible user message.
     expect(commands.filter(isThreadContextInjectCommand)).toHaveLength(0);

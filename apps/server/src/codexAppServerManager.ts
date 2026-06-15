@@ -245,6 +245,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       modelCache: this.modelCache,
       resolveContextForDiscovery: (...args) => this.resolveContextForDiscovery(...args),
       sendRequest: (...args) => this.sendRequest(...args),
+      registerSynaraSkillsRoot: (...args) => this.registerSynaraSkillsRoot(...args),
     };
   }
 
@@ -358,7 +359,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       account: {
         type: "unknown",
         planType: null,
-        sparkEnabled: true,
+        sparkEnabled: false,
       },
       transport,
       pending: new Map(),
@@ -382,14 +383,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     };
     rootContext.workspaceRuntime = runtime;
     this.workspaceRuntimes.set(key, runtime);
-    this.discoverySessions.set(input.cwd, rootContext);
     this.attachProcessListeners(rootContext);
 
     try {
       await this.sendRequest(rootContext, "initialize", buildCodexInitializeParams());
       this.writeMessage(rootContext, { method: "initialized" });
-      await this.registerSynaraSkillsRoot(rootContext);
       this.updateSession(rootContext, { status: "ready" });
+      this.discoverySessions.set(input.cwd, rootContext);
       return runtime;
     } catch (error) {
       if (this.workspaceRuntimes.get(key) === runtime) {
@@ -434,7 +434,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private async registerSynaraSkillsRoot(context: CodexSessionContext): Promise<void> {
+    if (context.synaraSkillsRootRegistered === true) {
+      return;
+    }
     if (!this.synaraSkillsDir) {
+      context.synaraSkillsRootRegistered = true;
       return;
     }
     try {
@@ -443,6 +447,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       });
     } catch (error) {
       console.log("codex skills/extraRoots/set unavailable", error);
+    } finally {
+      context.synaraSkillsRootRegistered = true;
     }
   }
 
@@ -465,7 +471,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       let account: CodexAccountSnapshot = {
         type: "unknown",
         planType: null,
-        sparkEnabled: true,
+        sparkEnabled: false,
       };
 
       const [modelListResult, accountReadResult] = await Promise.allSettled([

@@ -87,6 +87,7 @@ export interface CodexSessionContext {
   nextRequestId: number;
   stopping: boolean;
   discovery?: boolean;
+  synaraSkillsRootRegistered?: boolean;
   workspaceRuntime?: CodexWorkspaceRuntime;
   workspaceRuntimeRoot?: boolean;
 }

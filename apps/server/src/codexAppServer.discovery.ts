@@ -67,6 +67,7 @@ export interface CodexDiscoveryQueryDeps {
     method: string,
     params: unknown,
   ): Promise<TResponse>;
+  registerSynaraSkillsRoot(context: CodexSessionContext): Promise<void>;
 }
 
 export async function listSkills(
@@ -89,6 +90,7 @@ export async function listSkills(
   }
 
   const context = await deps.resolveContextForDiscovery(input.threadId, cwd);
+  await deps.registerSynaraSkillsRoot(context);
   let response: Record<string, unknown>;
   try {
     response = await deps.sendRequest<Record<string, unknown>>(context, "skills/list", {

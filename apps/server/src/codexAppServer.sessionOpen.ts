@@ -106,7 +106,7 @@ function freshSessionContext(
     account: {
       type: "unknown",
       planType: null,
-      sparkEnabled: true,
+      sparkEnabled: false,
     },
     transport,
     pending: new Map(),
@@ -252,12 +252,13 @@ export async function startSession(
     const discovery = deferStartupDiscovery
       ? {
           advertisedModelSlugs: [] as ReadonlyArray<string>,
-          account: context.account,
+          account:
+            context.account.type === "unknown" ? sparkDisabledUnknownAccount() : context.account,
         }
       : await deps.resolveStartupDiscovery(context, discoveryCacheKey);
     const discoveryResolvedAt = Date.now();
     const advertisedModelSlugs = discovery.advertisedModelSlugs;
-    context.account = discovery.account;
+    applyCodexAccountSnapshot(context, discovery.account);
 
     const normalizedModel = resolveCodexModelForAccount(
       normalizeCodexModelSlug(input.model),
@@ -426,7 +427,7 @@ export async function startSession(
       void deps
         .resolveStartupDiscovery(context, discoveryCacheKey)
         .then((deferredDiscovery) => {
-          context.account = deferredDiscovery.account;
+          applyCodexAccountSnapshot(context, deferredDiscovery.account);
         })
         .catch((error: unknown) => {
           console.log("codex deferred startup discovery failed", error);
@@ -456,6 +457,29 @@ export async function startSession(
     }
     throw new Error(message, { cause: error });
   }
+}
+
+function applyCodexAccountSnapshot(
+  context: CodexSessionContext,
+  account: CodexSessionContext["account"],
+): void {
+  context.account = account;
+  const runtime = context.workspaceRuntime;
+  if (!runtime) {
+    return;
+  }
+  runtime.rootContext.account = account;
+  for (const sessionContext of runtime.sessions.values()) {
+    sessionContext.account = account;
+  }
+}
+
+function sparkDisabledUnknownAccount(): CodexSessionContext["account"] {
+  return {
+    type: "unknown",
+    planType: null,
+    sparkEnabled: false,
+  };
 }
 
 export async function forkThread(

@@ -81,7 +81,6 @@ const inFlightPrewarmByKey = new Map<
 >();
 const inFlightSessionReadyByKey = new Map<string, Promise<boolean>>();
 const queuedReviewTurnFlushByThreadId = new Map<string, Promise<void>>();
-const sessionPrewarmedTargetModelKeys = new Set<string>();
 const reviewContextBootstrappedKeys = new Set<string>();
 const PREWARM_SESSION_READY_TIMEOUT_MS = 45_000;
 const VISIBLE_SEND_PREWARM_WAIT_MS = 150;
@@ -282,7 +281,6 @@ export function clearReviewChatThreadCacheForTests(): void {
   inFlightPrewarmByKey.clear();
   inFlightSessionReadyByKey.clear();
   queuedReviewTurnFlushByThreadId.clear();
-  sessionPrewarmedTargetModelKeys.clear();
   reviewContextBootstrappedKeys.clear();
 }
 
@@ -305,7 +303,7 @@ function isReviewChatSessionReady(input: {
   return (
     session?.provider === input.modelSelection.provider &&
     session.status === "ready" &&
-    session.activeTurnId === undefined
+    (session.activeTurnId === undefined || session.activeTurnId === null)
   );
 }
 
@@ -386,9 +384,6 @@ function ensureReviewChatSessionReady(input: {
     modelSelection: input.modelSelection,
     threadId: input.threadId,
   });
-  if (sessionPrewarmedTargetModelKeys.has(sessionPrewarmKey)) {
-    return Promise.resolve(true);
-  }
   const inFlight = inFlightSessionReadyByKey.get(sessionPrewarmKey);
   if (inFlight) {
     return inFlight;
@@ -409,9 +404,6 @@ function ensureReviewChatSessionReady(input: {
       threadId: input.threadId,
       modelSelection: input.modelSelection,
     });
-    if (sessionReady) {
-      sessionPrewarmedTargetModelKeys.add(sessionPrewarmKey);
-    }
     return sessionReady;
   })().finally(() => {
     inFlightSessionReadyByKey.delete(sessionPrewarmKey);
@@ -869,25 +861,18 @@ export async function prewarmReviewChatThread(input: {
     void api.orchestration
       .subscribeThread({ threadId: resolution.threadId })
       .catch(() => undefined);
-    const sessionPrewarmKey = reviewChatSessionPrewarmKey({
+    const sessionReady = await ensureReviewChatSessionReady({
+      api,
       target,
-      modelSelection,
       threadId: resolution.threadId,
+      modelSelection,
+      createdAt: new Date().toISOString(),
     });
-    if (!sessionPrewarmedTargetModelKeys.has(sessionPrewarmKey)) {
-      const sessionReady = await ensureReviewChatSessionReady({
-        api,
-        target,
-        threadId: resolution.threadId,
-        modelSelection,
-        createdAt: new Date().toISOString(),
-      });
-      if (!sessionReady) {
-        return {
-          status: "unavailable",
-          reason: "Review chat session did not finish warming before the timeout.",
-        };
-      }
+    if (!sessionReady) {
+      return {
+        status: "unavailable",
+        reason: "Review chat session did not finish warming before the timeout.",
+      };
     }
     if (input.bootstrapReviewContext !== false && hasCompleteReviewBootstrapContext(input.payload)) {
       const threadBootstrapKey = `${bootstrapKey}\u001f${resolution.threadId}`;

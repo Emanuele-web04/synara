@@ -91,7 +91,7 @@ export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapsho
   return {
     type: "unknown",
     planType: null,
-    sparkEnabled: true,
+    sparkEnabled: false,
   };
 }
 
