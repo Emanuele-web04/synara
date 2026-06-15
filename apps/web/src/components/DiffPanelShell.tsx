@@ -11,12 +11,13 @@ import { Skeleton } from "./ui/skeleton";
 
 export type DiffPanelMode = "inline" | "sheet" | "sidebar";
 
-function getDiffPanelHeaderRowClassName(mode: DiffPanelMode) {
+function getDiffPanelHeaderRowClassName(mode: DiffPanelMode, className?: string) {
   const shouldUseDragRegion = isElectron && mode !== "sheet";
   return cn(
     "flex items-center justify-between gap-2 px-4",
     CHAT_SURFACE_HEADER_HEIGHT_CLASS,
     shouldUseDragRegion && cn("drag-region", CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME),
+    className,
   );
 }
 
@@ -24,6 +25,7 @@ export function DiffPanelShell(props: {
   mode: DiffPanelMode;
   header: ReactNode;
   children: ReactNode;
+  headerRowClassName?: string;
 }) {
   const shouldUseDragRegion = isElectron && props.mode !== "sheet";
 
@@ -37,10 +39,14 @@ export function DiffPanelShell(props: {
       )}
     >
       {shouldUseDragRegion ? (
-        <div className={getDiffPanelHeaderRowClassName(props.mode)}>{props.header}</div>
+        <div className={getDiffPanelHeaderRowClassName(props.mode, props.headerRowClassName)}>
+          {props.header}
+        </div>
       ) : (
         <div className={CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME}>
-          <div className={getDiffPanelHeaderRowClassName(props.mode)}>{props.header}</div>
+          <div className={getDiffPanelHeaderRowClassName(props.mode, props.headerRowClassName)}>
+            {props.header}
+          </div>
         </div>
       )}
       {props.children}

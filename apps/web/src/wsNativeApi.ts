@@ -476,6 +476,7 @@ export function createWsNativeApi(): NativeApi {
       getState: (input) => transport.request(WS_METHODS.previewGetState, input),
       start: (input) => transport.request(WS_METHODS.previewStart, input, { timeoutMs: null }),
       stop: (input) => transport.request(WS_METHODS.previewStop, input),
+      stopAll: (input) => transport.request(WS_METHODS.previewStopAll, input),
       restart: (input) =>
         transport.request(WS_METHODS.previewRestart, input, { timeoutMs: null }),
       onState: (callback) => {
@@ -491,6 +492,8 @@ export function createWsNativeApi(): NativeApi {
       searchLocalEntries: (input) =>
         transport.request(WS_METHODS.projectsSearchLocalEntries, input),
       writeFile: (input) => transport.request(WS_METHODS.projectsWriteFile, input),
+      applyTextEdit: (input) => transport.request(WS_METHODS.projectsApplyTextEdit, input),
+      applyStyleEdit: (input) => transport.request(WS_METHODS.projectsApplyStyleEdit, input),
     },
     filesystem: {
       browse: (input) => transport.request(WS_METHODS.filesystemBrowse, input),
@@ -712,6 +715,12 @@ export function createWsNativeApi(): NativeApi {
         }
         return cloneBrowserState(getFallbackBrowserState(input.threadId));
       },
+      listStates: async () => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.listStates();
+        }
+        return Array.from(fallbackBrowserStates.values(), cloneBrowserState);
+      },
       setPanelBounds: async (input) => {
         if (window.desktopBridge) {
           await window.desktopBridge.browser.setPanelBounds(input);
@@ -819,6 +828,11 @@ export function createWsNativeApi(): NativeApi {
           await window.desktopBridge.browser.openDevTools(input);
         }
       },
+      setEditorShortcutsEnabled: async (input) => {
+        if (window.desktopBridge) {
+          await window.desktopBridge.browser.setEditorShortcutsEnabled(input);
+        }
+      },
       onState: (callback) => {
         if (window.desktopBridge) {
           return window.desktopBridge.browser.onState(callback);
@@ -827,6 +841,13 @@ export function createWsNativeApi(): NativeApi {
         return () => {
           fallbackBrowserStateListeners.delete(callback);
         };
+      },
+      onEditorShortcut: (callback) => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.onEditorShortcut(callback);
+        }
+        void callback;
+        return () => undefined;
       },
     },
   };

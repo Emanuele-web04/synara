@@ -96,6 +96,19 @@ it.effect("accepts preview.start requests", () =>
   }),
 );
 
+it.effect("accepts preview.stopAll requests", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WebSocketRequest, {
+      id: "req-preview-stop-all",
+      body: {
+        _tag: WS_METHODS.previewStopAll,
+        threadId: "thread-1",
+      },
+    });
+    assert.strictEqual(parsed.body._tag, WS_METHODS.previewStopAll);
+  }),
+);
+
 it.effect("accepts typed websocket push envelopes with sequence", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(WsResponse, {
@@ -165,6 +178,43 @@ it.effect("accepts preview state push envelopes", () =>
           startedAt: "2026-06-05T00:00:00.000Z",
           updatedAt: "2026-06-05T00:00:01.000Z",
         },
+      },
+    });
+
+    if (!("type" in parsed) || parsed.type !== "push") {
+      assert.fail("expected websocket response to decode as a push envelope");
+    }
+
+    assert.strictEqual(parsed.channel, WS_CHANNELS.previewEvent);
+  }),
+);
+
+it.effect("accepts preview source-change push envelopes", () =>
+  Effect.gen(function* () {
+    const state = {
+      id: "preview-1",
+      threadId: "thread-1",
+      projectId: "project-1",
+      cwd: "/repo",
+      status: "running",
+      url: "http://127.0.0.1:5173/",
+      port: 5173,
+      command: "bun run dev -- --host 127.0.0.1 --port 5173 --strictPort",
+      terminalId: "preview-1",
+      ownedBySynara: true,
+      lastError: null,
+      startedAt: "2026-06-05T00:00:00.000Z",
+      updatedAt: "2026-06-05T00:00:01.000Z",
+    };
+    const parsed = yield* decode(WsResponse, {
+      type: "push",
+      sequence: 5,
+      channel: WS_CHANNELS.previewEvent,
+      data: {
+        type: "source-changed",
+        state,
+        changedPath: "/repo/src/App.tsx",
+        changedCount: 2,
       },
     });
 

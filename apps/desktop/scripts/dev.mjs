@@ -4,14 +4,21 @@
 // Depends on: package.json scripts `dev:bundle` and `dev:electron`
 
 import { spawn } from "node:child_process";
+import { rmSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const bunExecutable = process.execPath;
 const childProcesses = [];
 let isShuttingDown = false;
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const desktopDir = resolve(scriptDir, "..");
+const serverDir = resolve(scriptDir, "../../server");
 
 // Start one named Bun script and stream its output into the current terminal.
-function startScript(scriptName) {
+function startScript(scriptName, cwd = desktopDir) {
   const child = spawn(bunExecutable, ["run", scriptName], {
+    cwd,
     stdio: "inherit",
     env: process.env,
   });
@@ -60,9 +67,13 @@ function wireExit(child, scriptName) {
   });
 }
 
+rmSync(resolve(serverDir, "dist/index.mjs"), { force: true });
+
+const serverBundleWatcher = startScript("dev:bundle", serverDir);
 const bundleWatcher = startScript("dev:bundle");
 const electronWatcher = startScript("dev:electron");
 
+wireExit(serverBundleWatcher, "server dev:bundle");
 wireExit(bundleWatcher, "dev:bundle");
 wireExit(electronWatcher, "dev:electron");
 

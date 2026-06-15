@@ -58,6 +58,8 @@ import {
   PreviewRuntimeInput,
   PreviewRuntimeState,
   PreviewStartInput,
+  PreviewStopAllInput,
+  PreviewStopAllResult,
 } from "./preview";
 import {
   ProviderGetComposerCapabilitiesInput,
@@ -76,6 +78,10 @@ import {
   ProviderReadPluginResult,
 } from "./providerDiscovery";
 import {
+  ProjectApplyStyleEditInput,
+  ProjectApplyStyleEditResult,
+  ProjectApplyTextEditInput,
+  ProjectApplyTextEditResult,
   ProjectListDirectoriesInput,
   ProjectListDirectoriesResult,
   ProjectSearchEntriesInput,
@@ -246,6 +252,18 @@ export const WsProjectsSearchLocalEntriesRpc = Rpc.make(WS_METHODS.projectsSearc
 export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   payload: ProjectWriteFileInput,
   success: ProjectWriteFileResult,
+  error: WsRpcError,
+});
+
+export const WsProjectsApplyTextEditRpc = Rpc.make(WS_METHODS.projectsApplyTextEdit, {
+  payload: ProjectApplyTextEditInput,
+  success: ProjectApplyTextEditResult,
+  error: WsRpcError,
+});
+
+export const WsProjectsApplyStyleEditRpc = Rpc.make(WS_METHODS.projectsApplyStyleEdit, {
+  payload: ProjectApplyStyleEditInput,
+  success: ProjectApplyStyleEditResult,
   error: WsRpcError,
 });
 
@@ -455,6 +473,12 @@ export const WsPreviewStopRpc = Rpc.make(WS_METHODS.previewStop, {
   error: WsRpcError,
 });
 
+export const WsPreviewStopAllRpc = Rpc.make(WS_METHODS.previewStopAll, {
+  payload: PreviewStopAllInput,
+  success: PreviewStopAllResult,
+  error: WsRpcError,
+});
+
 export const WsPreviewRestartRpc = Rpc.make(WS_METHODS.previewRestart, {
   payload: PreviewStartInput,
   success: PreviewRuntimeState,
@@ -637,6 +661,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsSearchEntriesRpc,
   WsProjectsSearchLocalEntriesRpc,
   WsProjectsWriteFileRpc,
+  WsProjectsApplyTextEditRpc,
+  WsProjectsApplyStyleEditRpc,
   WsFilesystemBrowseRpc,
   WsShellOpenInEditorRpc,
   WsGitStatusRpc,
@@ -671,6 +697,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewGetStateRpc,
   WsPreviewStartRpc,
   WsPreviewStopRpc,
+  WsPreviewStopAllRpc,
   WsPreviewRestartRpc,
   WsSubscribePreviewEventsRpc,
   WsServerGetConfigRpc,

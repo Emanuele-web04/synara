@@ -74,14 +74,30 @@ describe("groupCommandItems", () => {
     ]);
   });
 
-  it("groups slash-menu skills separately from app and provider commands", () => {
+  it("groups slash-menu app skills with built-in commands", () => {
     const items: ComposerCommandItem[] = [
       {
-        id: "slash:review",
+        id: "slash:fork",
         type: "slash-command",
-        command: "review",
-        label: "/review",
-        description: "Review changes",
+        command: "fork",
+        label: "/fork",
+        description: "Fork thread",
+        source: "app",
+      },
+      {
+        id: "app-skill:live-edit",
+        type: "app-skill",
+        skillId: "live-edit",
+        label: "Live Edit",
+        trigger: "/live-edit",
+        description: "Start a local frontend preview",
+      },
+      {
+        id: "slash:model",
+        type: "slash-command",
+        command: "model",
+        label: "/model",
+        description: "Switch model",
         source: "app",
       },
       {
@@ -111,17 +127,17 @@ describe("groupCommandItems", () => {
       {
         id: "built-in",
         label: "Built-in",
-        items: [items[0]],
+        items: [items[0], items[1], items[2]],
       },
       {
         id: "provider",
         label: "Provider",
-        items: [items[1]],
+        items: [items[3]],
       },
       {
         id: "skills",
         label: "Skills",
-        items: [items[2]],
+        items: [items[4]],
       },
     ]);
   });

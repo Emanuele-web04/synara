@@ -197,7 +197,9 @@ export const makeWsRpcLayer = () =>
       const terminalManager = yield* TerminalManager;
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
-      const previewRuntimeManager = new PreviewRuntimeManager(terminalManager);
+      const previewRuntimeManager = new PreviewRuntimeManager(terminalManager, {
+        terminalLogsDir: config.terminalLogsDir,
+      });
       yield* terminalManager.subscribe((event) => {
         previewRuntimeManager.handleTerminalEvent(event);
       });
@@ -447,6 +449,10 @@ export const makeWsRpcLayer = () =>
           rpcEffect(workspaceEntries.searchLocal(input), "Failed to search local entries"),
         [WS_METHODS.projectsWriteFile]: (input) =>
           rpcEffect(workspaceFileSystem.writeFile(input), "Failed to write workspace file"),
+        [WS_METHODS.projectsApplyTextEdit]: (input) =>
+          rpcEffect(workspaceFileSystem.applyTextEdit(input), "Failed to apply text edit"),
+        [WS_METHODS.projectsApplyStyleEdit]: (input) =>
+          rpcEffect(workspaceFileSystem.applyStyleEdit(input), "Failed to apply style edit"),
         [WS_METHODS.filesystemBrowse]: (input) =>
           rpcEffect(workspaceEntries.browse(input), "Failed to browse filesystem"),
         [WS_METHODS.shellOpenInEditor]: (input) =>
@@ -590,6 +596,8 @@ export const makeWsRpcLayer = () =>
           rpcEffect(previewRuntimeManager.start(input), "Failed to start preview"),
         [WS_METHODS.previewStop]: (input) =>
           rpcEffect(previewRuntimeManager.stop(input), "Failed to stop preview"),
+        [WS_METHODS.previewStopAll]: (input) =>
+          rpcEffect(previewRuntimeManager.stopAll(input), "Failed to stop previews"),
         [WS_METHODS.previewRestart]: (input) =>
           rpcEffect(previewRuntimeManager.restart(input), "Failed to restart preview"),
         [WS_METHODS.subscribePreviewEvents]: () =>

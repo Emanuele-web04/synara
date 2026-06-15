@@ -21,6 +21,98 @@ interface BrowserScrollPosition {
   y: number;
 }
 
+export interface BrowserElementStyleSnapshot {
+  color: string;
+  backgroundColor: string;
+  backgroundImage?: string;
+  backgroundPosition?: string;
+  backgroundSize?: string;
+  fontFamily: string;
+  fontSize: string;
+  fontWeight: string;
+  fontStyle: string;
+  lineHeight: string;
+  letterSpacing: string;
+  textAlign: string;
+  opacity: string;
+  display: string;
+  padding: string;
+  margin: string;
+  borderWidth: string;
+  borderColor: string;
+  borderRadius: string;
+  boxShadow: string;
+  filter?: string;
+  animationName?: string;
+  animationDuration?: string;
+  animationTimingFunction?: string;
+  animationIterationCount?: string;
+}
+
+export interface BrowserElementStylePatch {
+  color?: string;
+  backgroundColor?: string;
+  backgroundImage?: string;
+  backgroundPosition?: string;
+  backgroundSize?: string;
+  fontFamily?: string;
+  fontSize?: string;
+  fontWeight?: string;
+  fontStyle?: string;
+  lineHeight?: string;
+  letterSpacing?: string;
+  textAlign?: string;
+  opacity?: string;
+  padding?: string;
+  margin?: string;
+  borderWidth?: string;
+  borderColor?: string;
+  borderRadius?: string;
+  boxShadow?: string;
+  filter?: string;
+  animationName?: string;
+  animationDuration?: string;
+  animationTimingFunction?: string;
+  animationIterationCount?: string;
+  effectTarget?: BrowserElementEffectSource;
+}
+
+export type BrowserElementFontSource = "current" | "page" | "system" | "fallback";
+export type BrowserElementEffectSource = "element" | "::before" | "::after";
+export type BrowserElementEffectKind = "shimmer" | "gradient" | "animation" | "visual";
+
+export interface BrowserElementEffectSnapshot {
+  source: BrowserElementEffectSource;
+  label: string;
+  kind: BrowserElementEffectKind;
+  backgroundImage: string;
+  backgroundPosition: string;
+  backgroundSize: string;
+  backgroundColor: string;
+  animationName: string;
+  animationDuration: string;
+  animationTimingFunction: string;
+  animationIterationCount: string;
+  opacity: string;
+  filter: string;
+  transform: string;
+  customProperties?: Record<string, string>;
+}
+
+export interface BrowserElementFontOption {
+  value: string;
+  label: string;
+  source: BrowserElementFontSource;
+  loaded?: boolean;
+}
+
+export interface BrowserElementPayloadMetadata {
+  textLength: number;
+  textTruncated: boolean;
+  outerHTMLLength: number;
+  outerHTMLTruncated: boolean;
+}
+
 export interface BrowserElementEditorContext {
   url: string;
   title: string;
@@ -33,6 +125,16 @@ export interface BrowserElementEditorContext {
   rect: BrowserRect;
   viewport: BrowserViewport;
   outerHTML: string;
+  payload?: BrowserElementPayloadMetadata;
+  style?: BrowserElementStyleSnapshot;
+  availableFonts?: BrowserElementFontOption[];
+  effects?: BrowserElementEffectSnapshot[];
+}
+
+export interface BrowserElementHoverContext {
+  selector: string;
+  tagName: string;
+  rect: BrowserRect;
 }
 
 export interface BrowserDrawingPoint {
@@ -43,6 +145,8 @@ export interface BrowserDrawingPoint {
 export interface BrowserDrawingStroke {
   id: string;
   points: BrowserDrawingPoint[];
+  strokeSize?: number;
+  animated?: boolean;
 }
 
 export type BrowserAnnotationArrowHandle =
@@ -62,6 +166,7 @@ export interface BrowserTextAnnotation {
   text: string;
   boxX?: number;
   boxY?: number;
+  fontSize?: number;
 }
 
 export interface BrowserAnnotationArrow {
@@ -87,7 +192,14 @@ export interface BrowserDrawingEditorContext {
   arrows?: BrowserAnnotationArrow[];
 }
 
-export type BrowserEditorPromptContextKind = "element" | "drawing" | "selection";
+export interface BrowserStyleEditContext {
+  element: BrowserElementEditorContext;
+  currentStyle?: BrowserElementStyleSnapshot | null;
+  previewStyle: BrowserElementStylePatch;
+  manualOverride: boolean;
+}
+
+export type BrowserEditorPromptContextKind = "element" | "drawing" | "selection" | "style-edit";
 
 export interface BrowserEditorPromptContextSummary {
   kind: BrowserEditorPromptContextKind;
@@ -100,9 +212,56 @@ export interface BrowserEditorPromptContextSummary {
 
 const MAX_TEXT_LENGTH = 1_000;
 const MAX_HTML_LENGTH = 2_000;
+const MAX_ELEMENT_TEXT_PAYLOAD_LENGTH = 2_000;
+const MAX_ELEMENT_HTML_PAYLOAD_LENGTH = 4_000;
 const MAX_ATTRIBUTE_VALUE_LENGTH = 200;
 const BROWSER_EDITOR_BLOCK_PATTERN =
-  /<browser-(element|drawing|selection)-selection>[\s\S]*?<\/browser-\1-selection>/g;
+  /<browser-(element|drawing|selection|style-edit)-selection>[\s\S]*?<\/browser-\1-selection>/g;
+export const BROWSER_STYLE_EDIT_STYLING_NOTE =
+  "Implement these visual changes in accordance with the project's styling framework and configuration. Prefer the closest local styling source first: component props/classes, nearby module CSS, scoped styles, Tailwind utilities, design tokens/theme config, then broader/global styles only when appropriate. Avoid permanent inline styles unless the project already uses them or no better styling location exists. If a requested font is not already loaded, add it through the project's existing font pipeline, framework font helper, theme config, or CSS import before applying it.";
+const BROWSER_STYLE_PATCH_KEYS = [
+  "color",
+  "backgroundColor",
+  "backgroundImage",
+  "backgroundPosition",
+  "backgroundSize",
+  "fontFamily",
+  "fontSize",
+  "fontWeight",
+  "fontStyle",
+  "lineHeight",
+  "letterSpacing",
+  "textAlign",
+  "opacity",
+  "padding",
+  "margin",
+  "borderWidth",
+  "borderColor",
+  "borderRadius",
+  "boxShadow",
+  "filter",
+  "animationName",
+  "animationDuration",
+  "animationTimingFunction",
+  "animationIterationCount",
+] as const;
+
+export const BROWSER_SYSTEM_FONT_OPTIONS: readonly BrowserElementFontOption[] = [
+  { value: "system-ui, sans-serif", label: "System UI", source: "system", loaded: true },
+  { value: "Inter, system-ui, sans-serif", label: "Inter stack", source: "fallback" },
+  { value: '"Segoe UI", system-ui, sans-serif', label: "Segoe UI", source: "system" },
+  { value: '"Helvetica Neue", Arial, sans-serif', label: "Helvetica Neue", source: "system" },
+  { value: "Arial, sans-serif", label: "Arial", source: "system" },
+  { value: 'Georgia, "Times New Roman", serif', label: "Georgia", source: "system" },
+  { value: '"Times New Roman", Times, serif', label: "Times New Roman", source: "system" },
+  { value: "ui-serif, Georgia, serif", label: "UI Serif", source: "system" },
+  { value: '"SF Mono", ui-monospace, monospace', label: "SF Mono", source: "system" },
+  {
+    value: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+    label: "UI Mono",
+    source: "system",
+  },
+] as const;
 
 export function createBrowserEditorContextBlockRegex(): RegExp {
   return new RegExp(BROWSER_EDITOR_BLOCK_PATTERN.source, "g");
@@ -175,12 +334,464 @@ function readElementText(element: Element): string {
   return typeof maybeText === "string" ? maybeText : "";
 }
 
+function truncateElementPayloadValue(value: string, limit: number): string {
+  if (value.length <= limit) {
+    return value;
+  }
+  const suffix = `\n...[truncated; original length ${value.length} chars]`;
+  return `${value.slice(0, Math.max(0, limit - suffix.length)).trimEnd()}${suffix}`;
+}
+
+function buildElementPayloadMetadata(input: {
+  text: string;
+  outerHTML: string;
+}): BrowserElementPayloadMetadata {
+  return {
+    textLength: input.text.length,
+    textTruncated: input.text.length > MAX_ELEMENT_TEXT_PAYLOAD_LENGTH,
+    outerHTMLLength: input.outerHTML.length,
+    outerHTMLTruncated: input.outerHTML.length > MAX_ELEMENT_HTML_PAYLOAD_LENGTH,
+  };
+}
+
 function readElementAttributes(element: Element): Record<string, string> {
   const attributes: Record<string, string> = {};
   for (const attribute of Array.from(element.attributes).slice(0, 30)) {
     attributes[attribute.name] = redactAttribute(attribute.name, attribute.value);
   }
   return attributes;
+}
+
+function fourPartStyleValue(
+  top: string,
+  right: string,
+  bottom: string,
+  left: string,
+): string {
+  if (top === right && right === bottom && bottom === left) {
+    return top;
+  }
+  if (top === bottom && right === left) {
+    return `${top} ${right}`;
+  }
+  return `${top} ${right} ${bottom} ${left}`;
+}
+
+function unquoteFontFamily(value: string): string {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function quoteFontFamilyIfNeeded(value: string): string {
+  const trimmed = unquoteFontFamily(value);
+  if (!trimmed) return "";
+  if (/^(serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-serif|ui-sans-serif|ui-monospace|emoji|math|fangsong)$/i.test(trimmed)) {
+    return trimmed;
+  }
+  return /[\s"'(),]/.test(trimmed) ? JSON.stringify(trimmed) : trimmed;
+}
+
+export function splitFontFamilyList(value: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if ((char === '"' || char === "'") && value[index - 1] !== "\\") {
+      quote = quote === char ? null : quote ?? char;
+      current += char;
+      continue;
+    }
+    if (char === "," && !quote) {
+      const part = current.trim();
+      if (part) parts.push(part);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  const lastPart = current.trim();
+  if (lastPart) parts.push(lastPart);
+  return parts;
+}
+
+function fontOptionKey(value: string): string {
+  return value.replace(/\s+/g, " ").replace(/["']/g, "").trim().toLowerCase();
+}
+
+function fontLabel(value: string): string {
+  return unquoteFontFamily(splitFontFamilyList(value)[0] ?? value) || value;
+}
+
+function isFontFamilyLikeValue(value: string): boolean {
+  const trimmed = value.trim();
+  if (
+    !trimmed ||
+    /^(inherit|initial|revert|revert-layer|unset|none|normal|auto)$/i.test(trimmed) ||
+    /^-?(?:\d|\.\d)/.test(trimmed) ||
+    /^(calc|clamp|min|max|rgb|rgba|hsl|hsla|color|var)\(/i.test(trimmed)
+  ) {
+    return false;
+  }
+  if (trimmed.includes(",")) {
+    return true;
+  }
+  const unquoted = unquoteFontFamily(trimmed);
+  return /^[a-zA-Z_-][\w\s.-]*$/.test(unquoted);
+}
+
+function isLikelyFontFamilyProperty(name: string): boolean {
+  const lowerName = name.toLowerCase();
+  if (lowerName === "font-family" || lowerName.includes("fontfamily")) {
+    return true;
+  }
+  if (!lowerName.startsWith("--")) {
+    return false;
+  }
+  return (
+    (lowerName.includes("font") || lowerName.includes("typeface")) &&
+    !/(size|weight|line|letter|tracking|spacing|style|smoothing|feature|variant|stretch|kerning)/.test(
+      lowerName,
+    )
+  );
+}
+
+function addFontStackOptions(
+  options: BrowserElementFontOption[],
+  value: string,
+  source: BrowserElementFontSource,
+  loaded?: boolean,
+): void {
+  const trimmed = value.trim();
+  if (!isFontFamilyLikeValue(trimmed)) {
+    return;
+  }
+  const add = (family: string) => {
+    const normalized = quoteFontFamilyIfNeeded(family);
+    if (!normalized) return;
+    options.push({
+      value: normalized,
+      label: fontLabel(normalized),
+      source,
+      ...(typeof loaded === "boolean" ? { loaded } : {}),
+    });
+  };
+  add(trimmed);
+  for (const family of splitFontFamilyList(trimmed)) {
+    add(family);
+  }
+}
+
+function collectFontsFromRules(rules: CSSRuleList, pageFonts: BrowserElementFontOption[]): void {
+  for (const rule of Array.from(rules)) {
+    if (typeof CSSFontFaceRule !== "undefined" && rule instanceof CSSFontFaceRule) {
+      addFontStackOptions(pageFonts, rule.style.getPropertyValue("font-family"), "page");
+      continue;
+    }
+    if (typeof CSSStyleRule !== "undefined" && rule instanceof CSSStyleRule) {
+      addFontStackOptions(pageFonts, rule.style.getPropertyValue("font-family"), "page");
+      for (const propertyName of Array.from(rule.style)) {
+        if (isLikelyFontFamilyProperty(propertyName)) {
+          addFontStackOptions(pageFonts, rule.style.getPropertyValue(propertyName), "page");
+        }
+      }
+      continue;
+    }
+    const nestedRules = (rule as { cssRules?: CSSRuleList }).cssRules;
+    if (nestedRules) {
+      collectFontsFromRules(nestedRules, pageFonts);
+    }
+  }
+}
+
+const pageFontOptionsCache = new WeakMap<
+  Document,
+  { key: string; pageFonts: BrowserElementFontOption[] }
+>();
+
+function pageFontCacheKey(ownerWindow: Window | null): string {
+  const document = ownerWindow?.document;
+  return [
+    ownerWindow?.location.href ?? "",
+    document?.fonts?.size ?? 0,
+    document?.styleSheets.length ?? 0,
+  ].join("\u0000");
+}
+
+export function normalizeBrowserElementFontOptions(input: {
+  currentFontFamily?: string | null;
+  pageFonts?: readonly Partial<BrowserElementFontOption>[];
+  includeSystemFonts?: boolean;
+}): BrowserElementFontOption[] {
+  const options: BrowserElementFontOption[] = [];
+  const seen = new Set<string>();
+  const addOption = (option: Partial<BrowserElementFontOption>, fallbackSource: BrowserElementFontSource) => {
+    const value = option.value?.trim();
+    if (!value) return;
+    const key = fontOptionKey(value);
+    if (seen.has(key)) return;
+    seen.add(key);
+    options.push({
+      value,
+      label: option.label?.trim() || fontLabel(value),
+      source: option.source ?? fallbackSource,
+      ...(typeof option.loaded === "boolean" ? { loaded: option.loaded } : {}),
+    });
+  };
+
+  if (input.currentFontFamily?.trim()) {
+    addOption(
+      {
+        value: input.currentFontFamily.trim(),
+        label: `Current: ${fontLabel(input.currentFontFamily)}`,
+        source: "current",
+        loaded: true,
+      },
+      "current",
+    );
+  }
+  for (const option of input.pageFonts ?? []) {
+    addOption(option, "page");
+  }
+  if (input.includeSystemFonts !== false) {
+    for (const option of BROWSER_SYSTEM_FONT_OPTIONS) {
+      addOption(option, option.source);
+    }
+  }
+  return options.slice(0, 80);
+}
+
+function readPageFontOptions(ownerWindow: Window | null): BrowserElementFontOption[] {
+  const document = ownerWindow?.document;
+  if (!ownerWindow || !document) {
+    return [];
+  }
+  const key = pageFontCacheKey(ownerWindow);
+  const cached = pageFontOptionsCache.get(document);
+  if (cached?.key === key) {
+    return cached.pageFonts;
+  }
+
+  const pageFonts: BrowserElementFontOption[] = [];
+  const addPageFont = (value: string, loaded?: boolean) => {
+    addFontStackOptions(pageFonts, value, "page", loaded);
+  };
+
+  try {
+    const fonts = document.fonts;
+    if (fonts) {
+      for (const fontFace of Array.from(fonts).slice(0, 80)) {
+        addPageFont(fontFace.family, fontFace.status === "loaded");
+      }
+    }
+  } catch {
+    // Cross-origin or incomplete font APIs should not block element inspection.
+  }
+
+  try {
+    for (const sheet of Array.from(document.styleSheets ?? [])) {
+      let rules: CSSRuleList | null = null;
+      try {
+        rules = sheet.cssRules;
+      } catch {
+        continue;
+      }
+      collectFontsFromRules(rules, pageFonts);
+    }
+  } catch {
+    // Stylesheet inspection is best-effort; inaccessible sheets are expected.
+  }
+
+  try {
+    const sample = Array.from(
+      document.querySelectorAll(
+        "body,h1,h2,h3,h4,h5,h6,p,a,button,input,textarea,label,nav,header,main,section,article,[class]",
+      ),
+    ).slice(0, 160);
+    for (const element of sample) {
+      const fontFamily = ownerWindow.getComputedStyle(element).fontFamily;
+      if (fontFamily) {
+        addPageFont(fontFamily, true);
+      }
+    }
+  } catch {
+    // Computed style sampling is opportunistic; inspection should still succeed.
+  }
+
+  pageFontOptionsCache.set(document, { key, pageFonts });
+  return pageFonts;
+}
+
+function readAvailableFontOptions(
+  ownerWindow: Window | null,
+  currentFontFamily: string,
+): BrowserElementFontOption[] {
+  return normalizeBrowserElementFontOptions({
+    currentFontFamily,
+    pageFonts: readPageFontOptions(ownerWindow),
+  });
+}
+
+export function readElementStyleSnapshot(
+  element: Element,
+  ownerWindow: Window | null = element.ownerDocument.defaultView,
+): BrowserElementStyleSnapshot {
+  const style = (ownerWindow ?? window).getComputedStyle(element);
+
+  return {
+    color: style.color,
+    backgroundColor: style.backgroundColor,
+    backgroundImage: style.backgroundImage,
+    backgroundPosition: style.backgroundPosition,
+    backgroundSize: style.backgroundSize,
+    fontFamily: style.fontFamily,
+    fontSize: style.fontSize,
+    fontWeight: style.fontWeight,
+    fontStyle: style.fontStyle,
+    lineHeight: style.lineHeight,
+    letterSpacing: style.letterSpacing,
+    textAlign: style.textAlign,
+    opacity: style.opacity,
+    display: style.display,
+    padding: fourPartStyleValue(
+      style.paddingTop,
+      style.paddingRight,
+      style.paddingBottom,
+      style.paddingLeft,
+    ),
+    margin: fourPartStyleValue(
+      style.marginTop,
+      style.marginRight,
+      style.marginBottom,
+      style.marginLeft,
+    ),
+    borderWidth: fourPartStyleValue(
+      style.borderTopWidth,
+      style.borderRightWidth,
+      style.borderBottomWidth,
+      style.borderLeftWidth,
+    ),
+    borderColor: fourPartStyleValue(
+      style.borderTopColor,
+      style.borderRightColor,
+      style.borderBottomColor,
+      style.borderLeftColor,
+    ),
+    borderRadius: fourPartStyleValue(
+      style.borderTopLeftRadius,
+      style.borderTopRightRadius,
+      style.borderBottomRightRadius,
+      style.borderBottomLeftRadius,
+    ),
+    boxShadow: style.boxShadow,
+    filter: style.filter,
+    animationName: style.animationName,
+    animationDuration: style.animationDuration,
+    animationTimingFunction: style.animationTimingFunction,
+    animationIterationCount: style.animationIterationCount,
+  };
+}
+
+function readEffectCustomProperties(style: CSSStyleDeclaration): Record<string, string> {
+  const customProperties: Record<string, string> = {};
+  for (const propertyName of Array.from(style)) {
+    if (!propertyName.startsWith("--")) {
+      continue;
+    }
+    const value = style.getPropertyValue(propertyName).trim();
+    if (value) {
+      customProperties[propertyName] = value;
+    }
+    if (Object.keys(customProperties).length >= 24) {
+      break;
+    }
+  }
+  return customProperties;
+}
+
+function readEffectSnapshot(
+  style: CSSStyleDeclaration,
+  source: BrowserElementEffectSource,
+): BrowserElementEffectSnapshot | null {
+  const backgroundImage = style.backgroundImage || "";
+  const animationName = style.animationName || "";
+  const hasGradient = /gradient\(/i.test(backgroundImage);
+  const hasAnimation = animationName.trim() !== "" && animationName !== "none";
+  const hasFilter = Boolean(style.filter && style.filter !== "none");
+  const hasTransform = Boolean(style.transform && style.transform !== "none");
+  const hasVisualBackground =
+    Boolean(backgroundImage && backgroundImage !== "none") ||
+    Boolean(style.backgroundColor && !/rgba?\(0,\s*0,\s*0(?:,\s*0)?\)/i.test(style.backgroundColor));
+  if (!hasGradient && !hasAnimation && !hasFilter && !hasTransform && !hasVisualBackground) {
+    return null;
+  }
+  const kind: BrowserElementEffectKind = hasGradient && hasAnimation
+    ? "shimmer"
+    : hasGradient
+      ? "gradient"
+      : hasAnimation
+        ? "animation"
+        : "visual";
+  return {
+    source,
+    label: source === "element" ? "Element" : source,
+    kind,
+    backgroundImage,
+    backgroundPosition: style.backgroundPosition,
+    backgroundSize: style.backgroundSize,
+    backgroundColor: style.backgroundColor,
+    animationName,
+    animationDuration: style.animationDuration,
+    animationTimingFunction: style.animationTimingFunction,
+    animationIterationCount: style.animationIterationCount,
+    opacity: style.opacity,
+    filter: style.filter,
+    transform: style.transform,
+    customProperties: readEffectCustomProperties(style),
+  };
+}
+
+function readElementEffectSnapshots(
+  element: Element,
+  ownerWindow: Window | null = element.ownerDocument.defaultView,
+): BrowserElementEffectSnapshot[] {
+  const win = ownerWindow ?? window;
+  return (["element", "::before", "::after"] as const)
+    .map((source) =>
+      readEffectSnapshot(
+        source === "element" ? win.getComputedStyle(element) : win.getComputedStyle(element, source),
+        source,
+      ),
+    )
+    .filter((effect): effect is BrowserElementEffectSnapshot => effect !== null)
+    .slice(0, 6);
+}
+
+export function normalizeBrowserElementStylePatch(
+  patch: BrowserElementStylePatch,
+): BrowserElementStylePatch {
+  const normalized: BrowserElementStylePatch = {};
+  for (const key of BROWSER_STYLE_PATCH_KEYS) {
+    const value = patch[key]?.trim();
+    if (value) {
+      normalized[key] = value;
+    }
+  }
+  if (
+    Object.keys(normalized).length > 0 &&
+    (patch.effectTarget === "element" ||
+      patch.effectTarget === "::before" ||
+      patch.effectTarget === "::after")
+  ) {
+    normalized.effectTarget = patch.effectTarget;
+  }
+  return normalized;
 }
 
 export function readBrowserElementContextFromDocumentAtPoint(input: {
@@ -198,12 +809,18 @@ export function readBrowserElementContextFromDocumentAtPoint(input: {
   }
 
   const rect = element.getBoundingClientRect();
-  const text = readElementText(element);
+  const rawText = readElementText(element);
+  const rawOuterHTML = element.outerHTML;
+  const text = truncateElementPayloadValue(rawText, MAX_ELEMENT_TEXT_PAYLOAD_LENGTH);
+  const outerHTML = truncateElementPayloadValue(rawOuterHTML, MAX_ELEMENT_HTML_PAYLOAD_LENGTH);
+  const payload = buildElementPayloadMetadata({ text: rawText, outerHTML: rawOuterHTML });
   const accessibleName =
     element.getAttribute("aria-label") ||
     element.getAttribute("alt") ||
     element.getAttribute("title") ||
-    text;
+    rawText;
+  const style = readElementStyleSnapshot(element, ownerWindow ?? null);
+  const effects = readElementEffectSnapshots(element, ownerWindow ?? null);
 
   return {
     url: input.url ?? ownerWindow?.location.href ?? "",
@@ -227,8 +844,82 @@ export function readBrowserElementContextFromDocumentAtPoint(input: {
         height: ownerWindow?.innerHeight ?? input.document.documentElement.clientHeight,
         devicePixelRatio: ownerWindow?.devicePixelRatio,
       } satisfies BrowserViewport),
-    outerHTML: element.outerHTML,
+    outerHTML,
+    payload,
+    style,
+    availableFonts: readAvailableFontOptions(ownerWindow ?? null, style.fontFamily),
+    effects,
   };
+}
+
+export function readBrowserElementHoverContextFromDocumentAtPoint(input: {
+  document: Document;
+  point: BrowserDrawingPoint;
+}): BrowserElementHoverContext | null {
+  const ownerWindow = input.document.defaultView;
+  const ElementCtor = ownerWindow?.Element ?? Element;
+  const element = input.document.elementFromPoint(input.point.x, input.point.y);
+  if (!element || !(element instanceof ElementCtor)) {
+    return null;
+  }
+
+  const rect = element.getBoundingClientRect();
+  return {
+    selector: selectorForElement(element),
+    tagName: element.tagName,
+    rect: {
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+    },
+  };
+}
+
+export function cdpElementHoverContextExpression(x: number, y: number): string {
+  return `(() => {
+    const x = ${JSON.stringify(x)};
+    const y = ${JSON.stringify(y)};
+    const element = document.elementFromPoint(x, y);
+    if (!element || !(element instanceof Element)) {
+      return null;
+    }
+    const cssEscape = typeof CSS !== "undefined" && CSS.escape ? CSS.escape.bind(CSS) : (value) => String(value).replace(/[^a-zA-Z0-9_-]/g, "\\\\$&");
+    const selectorFor = (target) => {
+      if (!(target instanceof Element)) return "";
+      if (target.id) return "#" + cssEscape(target.id);
+      const parts = [];
+      let current = target;
+      while (current && current instanceof Element && parts.length < 5) {
+        let part = current.localName;
+        if (!part) break;
+        if (current.classList.length > 0) {
+          part += "." + Array.from(current.classList).slice(0, 3).map(cssEscape).join(".");
+        }
+        const parent = current.parentElement;
+        if (parent) {
+          const siblings = Array.from(parent.children).filter((child) => child.localName === current.localName);
+          if (siblings.length > 1) {
+            part += ":nth-of-type(" + (siblings.indexOf(current) + 1) + ")";
+          }
+        }
+        parts.unshift(part);
+        current = parent;
+      }
+      return parts.join(" > ");
+    };
+    const rect = element.getBoundingClientRect();
+    return {
+      selector: selectorFor(element),
+      tagName: element.tagName,
+      rect: {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+      },
+    };
+  })()`;
 }
 
 export function cdpElementContextExpression(x: number, y: number): string {
@@ -274,13 +965,224 @@ export function cdpElementContextExpression(x: number, y: number): string {
     for (const attribute of Array.from(element.attributes).slice(0, 30)) {
       attributes[attribute.name] = redactAttribute(attribute.name, attribute.value);
     }
+    const maxTextPayloadLength = ${JSON.stringify(MAX_ELEMENT_TEXT_PAYLOAD_LENGTH)};
+    const maxHtmlPayloadLength = ${JSON.stringify(MAX_ELEMENT_HTML_PAYLOAD_LENGTH)};
+    const truncatePayloadValue = (value, limit) => {
+      const nextValue = String(value || "");
+      if (nextValue.length <= limit) return nextValue;
+      const suffix = "\\n...[truncated; original length " + nextValue.length + " chars]";
+      return nextValue.slice(0, Math.max(0, limit - suffix.length)).trimEnd() + suffix;
+    };
+    const fourPartStyleValue = (top, right, bottom, left) => {
+      if (top === right && right === bottom && bottom === left) return top;
+      if (top === bottom && right === left) return top + " " + right;
+      return top + " " + right + " " + bottom + " " + left;
+    };
+    const unquoteFontFamily = (value) => {
+      const trimmed = String(value || "").trim();
+      return (trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))
+        ? trimmed.slice(1, -1).trim()
+        : trimmed;
+    };
+    const quoteFontFamilyIfNeeded = (value) => {
+      const trimmed = unquoteFontFamily(value);
+      if (!trimmed) return "";
+      if (/^(serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-serif|ui-sans-serif|ui-monospace|emoji|math|fangsong)$/i.test(trimmed)) {
+        return trimmed;
+      }
+      return /[\\s"'(),]/.test(trimmed) ? JSON.stringify(trimmed) : trimmed;
+    };
+    const splitFontFamilyList = (value) => {
+      const parts = [];
+      let current = "";
+      let quote = null;
+      for (let index = 0; index < String(value || "").length; index += 1) {
+        const char = value[index];
+        if ((char === '"' || char === "'") && value[index - 1] !== "\\\\") {
+          quote = quote === char ? null : quote || char;
+          current += char;
+          continue;
+        }
+        if (char === "," && !quote) {
+          if (current.trim()) parts.push(current.trim());
+          current = "";
+          continue;
+        }
+        current += char;
+      }
+      if (current.trim()) parts.push(current.trim());
+      return parts;
+    };
+    const fontLabel = (value) => unquoteFontFamily(splitFontFamilyList(value)[0] || value) || value;
+    const fontKey = (value) => String(value || "").replace(/\\s+/g, " ").replace(/["']/g, "").trim().toLowerCase();
+    const isFontFamilyLikeValue = (value) => {
+      const trimmed = String(value || "").trim();
+      if (!trimmed || /^(inherit|initial|revert|revert-layer|unset|none|normal|auto)$/i.test(trimmed) || /^-?(?:\\d|\\.\\d)/.test(trimmed) || /^(calc|clamp|min|max|rgb|rgba|hsl|hsla|color|var)\\(/i.test(trimmed)) {
+        return false;
+      }
+      if (trimmed.includes(",")) return true;
+      return /^[a-zA-Z_-][\\w\\s.-]*$/.test(unquoteFontFamily(trimmed));
+    };
+    const isLikelyFontFamilyProperty = (name) => {
+      const lowerName = String(name || "").toLowerCase();
+      if (lowerName === "font-family" || lowerName.includes("fontfamily")) return true;
+      if (!lowerName.startsWith("--")) return false;
+      return (lowerName.includes("font") || lowerName.includes("typeface")) && !/(size|weight|line|letter|tracking|spacing|style|smoothing|feature|variant|stretch|kerning)/.test(lowerName);
+    };
+    const systemFonts = ${JSON.stringify(BROWSER_SYSTEM_FONT_OPTIONS)};
+    const fontCacheKey = [
+      window.location.href,
+      document.fonts && typeof document.fonts.size === "number" ? document.fonts.size : 0,
+      document.styleSheets ? document.styleSheets.length : 0,
+    ].join("\\u0000");
+    const readPageFonts = () => {
+      const cache = window.__synaraBrowserEditorFontCache;
+      if (cache && cache.key === fontCacheKey && Array.isArray(cache.pageFonts)) {
+        return cache.pageFonts;
+      }
+      const pageFonts = [];
+      const addFontValue = (value, source, loaded) => {
+        const trimmed = String(value || "").trim();
+        if (!isFontFamilyLikeValue(trimmed)) return;
+        const addFamily = (family) => {
+          const normalized = quoteFontFamilyIfNeeded(family);
+          if (normalized) {
+            const option = { value: normalized, label: fontLabel(normalized), source };
+            if (typeof loaded === "boolean") option.loaded = loaded;
+            pageFonts.push(option);
+          }
+        };
+        addFamily(trimmed);
+        for (const family of splitFontFamilyList(trimmed)) addFamily(family);
+      };
+      const collectRuleFonts = (rules) => {
+        for (const rule of Array.from(rules || [])) {
+          if (typeof CSSFontFaceRule !== "undefined" && rule instanceof CSSFontFaceRule) {
+            addFontValue(rule.style.getPropertyValue("font-family"), "page");
+            continue;
+          }
+          if (typeof CSSStyleRule !== "undefined" && rule instanceof CSSStyleRule) {
+            addFontValue(rule.style.getPropertyValue("font-family"), "page");
+            for (const propertyName of Array.from(rule.style || [])) {
+              if (isLikelyFontFamilyProperty(propertyName)) {
+                addFontValue(rule.style.getPropertyValue(propertyName), "page");
+              }
+            }
+            continue;
+          }
+          if (rule.cssRules) collectRuleFonts(rule.cssRules);
+        }
+      };
+      try {
+        for (const fontFace of Array.from(document.fonts || []).slice(0, 80)) {
+          addFontValue(fontFace.family, "page", fontFace.status === "loaded");
+        }
+      } catch {}
+      try {
+        for (const sheet of Array.from(document.styleSheets || [])) {
+          let rules = null;
+          try {
+            rules = sheet.cssRules;
+          } catch {
+            continue;
+          }
+          collectRuleFonts(rules);
+        }
+      } catch {}
+      try {
+        const sample = Array.from(document.querySelectorAll("body,h1,h2,h3,h4,h5,h6,p,a,button,input,textarea,label,nav,header,main,section,article,[class]")).slice(0, 160);
+        for (const sampleElement of sample) {
+          addFontValue(window.getComputedStyle(sampleElement).fontFamily, "page", true);
+        }
+      } catch {}
+      window.__synaraBrowserEditorFontCache = { key: fontCacheKey, pageFonts };
+      return pageFonts;
+    };
+    const collectFonts = (currentFontFamily) => {
+      const seen = new Set();
+      const fonts = [];
+      const add = (option, fallbackSource) => {
+        const value = String(option.value || "").trim();
+        if (!value) return;
+        const key = fontKey(value);
+        if (seen.has(key)) return;
+        seen.add(key);
+        const next = {
+          value,
+          label: String(option.label || "").trim() || fontLabel(value),
+          source: option.source || fallbackSource,
+        };
+        if (typeof option.loaded === "boolean") next.loaded = option.loaded;
+        fonts.push(next);
+      };
+      if (currentFontFamily && String(currentFontFamily).trim()) {
+        add({
+          value: String(currentFontFamily).trim(),
+          label: "Current: " + fontLabel(currentFontFamily),
+          source: "current",
+          loaded: true,
+        }, "current");
+      }
+      for (const option of readPageFonts()) add(option, "page");
+      for (const option of systemFonts) add(option, option.source);
+      return fonts.slice(0, 80);
+    };
+    const effectCustomProperties = (style) => {
+      const customProperties = {};
+      for (const propertyName of Array.from(style || [])) {
+        if (!String(propertyName).startsWith("--")) continue;
+        const value = style.getPropertyValue(propertyName).trim();
+        if (value) customProperties[propertyName] = value;
+        if (Object.keys(customProperties).length >= 24) break;
+      }
+      return customProperties;
+    };
+    const effectFromStyle = (style, source) => {
+      const backgroundImage = style.backgroundImage || "";
+      const animationName = style.animationName || "";
+      const hasGradient = /gradient\\(/i.test(backgroundImage);
+      const hasAnimation = animationName.trim() !== "" && animationName !== "none";
+      const hasFilter = Boolean(style.filter && style.filter !== "none");
+      const hasTransform = Boolean(style.transform && style.transform !== "none");
+      const hasVisualBackground =
+        Boolean(backgroundImage && backgroundImage !== "none") ||
+        Boolean(style.backgroundColor && !/rgba?\\(0,\\s*0,\\s*0(?:,\\s*0)?\\)/i.test(style.backgroundColor));
+      if (!hasGradient && !hasAnimation && !hasFilter && !hasTransform && !hasVisualBackground) return null;
+      const kind = hasGradient && hasAnimation ? "shimmer" : hasGradient ? "gradient" : hasAnimation ? "animation" : "visual";
+      return {
+        source,
+        label: source === "element" ? "Element" : source,
+        kind,
+        backgroundImage,
+        backgroundPosition: style.backgroundPosition,
+        backgroundSize: style.backgroundSize,
+        backgroundColor: style.backgroundColor,
+        animationName,
+        animationDuration: style.animationDuration,
+        animationTimingFunction: style.animationTimingFunction,
+        animationIterationCount: style.animationIterationCount,
+        opacity: style.opacity,
+        filter: style.filter,
+        transform: style.transform,
+        customProperties: effectCustomProperties(style),
+      };
+    };
+    const computedStyle = window.getComputedStyle(element);
+    const effects = [
+      effectFromStyle(computedStyle, "element"),
+      effectFromStyle(window.getComputedStyle(element, "::before"), "::before"),
+      effectFromStyle(window.getComputedStyle(element, "::after"), "::after"),
+    ].filter(Boolean).slice(0, 6);
     const rect = element.getBoundingClientRect();
-    const text = "innerText" in element ? element.innerText : element.textContent;
+    const rawText = "innerText" in element ? element.innerText : element.textContent;
+    const text = truncatePayloadValue(rawText, maxTextPayloadLength);
+    const rawOuterHTML = element.outerHTML;
+    const outerHTML = truncatePayloadValue(rawOuterHTML, maxHtmlPayloadLength);
     const accessibleName =
       element.getAttribute("aria-label") ||
       element.getAttribute("alt") ||
       element.getAttribute("title") ||
-      (typeof text === "string" ? text : "");
+      (typeof rawText === "string" ? rawText : "");
     return {
       url: window.location.href,
       title: document.title,
@@ -288,7 +1190,7 @@ export function cdpElementContextExpression(x: number, y: number): string {
       tagName: element.tagName,
       role: element.getAttribute("role"),
       accessibleName,
-      text: typeof text === "string" ? text : "",
+      text,
       attributes,
       rect: {
         x: rect.x,
@@ -301,9 +1203,63 @@ export function cdpElementContextExpression(x: number, y: number): string {
         height: window.innerHeight,
         devicePixelRatio: window.devicePixelRatio,
       },
-      outerHTML: element.outerHTML,
+      outerHTML,
+      payload: {
+        textLength: typeof rawText === "string" ? rawText.length : 0,
+        textTruncated: typeof rawText === "string" && rawText.length > maxTextPayloadLength,
+        outerHTMLLength: rawOuterHTML.length,
+        outerHTMLTruncated: rawOuterHTML.length > maxHtmlPayloadLength,
+      },
+      style: {
+        color: computedStyle.color,
+        backgroundColor: computedStyle.backgroundColor,
+        backgroundImage: computedStyle.backgroundImage,
+        backgroundPosition: computedStyle.backgroundPosition,
+        backgroundSize: computedStyle.backgroundSize,
+        fontFamily: computedStyle.fontFamily,
+        fontSize: computedStyle.fontSize,
+        fontWeight: computedStyle.fontWeight,
+        fontStyle: computedStyle.fontStyle,
+        lineHeight: computedStyle.lineHeight,
+        letterSpacing: computedStyle.letterSpacing,
+        textAlign: computedStyle.textAlign,
+        opacity: computedStyle.opacity,
+        display: computedStyle.display,
+        padding: fourPartStyleValue(computedStyle.paddingTop, computedStyle.paddingRight, computedStyle.paddingBottom, computedStyle.paddingLeft),
+        margin: fourPartStyleValue(computedStyle.marginTop, computedStyle.marginRight, computedStyle.marginBottom, computedStyle.marginLeft),
+        borderWidth: fourPartStyleValue(computedStyle.borderTopWidth, computedStyle.borderRightWidth, computedStyle.borderBottomWidth, computedStyle.borderLeftWidth),
+        borderColor: fourPartStyleValue(computedStyle.borderTopColor, computedStyle.borderRightColor, computedStyle.borderBottomColor, computedStyle.borderLeftColor),
+        borderRadius: fourPartStyleValue(computedStyle.borderTopLeftRadius, computedStyle.borderTopRightRadius, computedStyle.borderBottomRightRadius, computedStyle.borderBottomLeftRadius),
+        boxShadow: computedStyle.boxShadow,
+        filter: computedStyle.filter,
+        animationName: computedStyle.animationName,
+        animationDuration: computedStyle.animationDuration,
+        animationTimingFunction: computedStyle.animationTimingFunction,
+        animationIterationCount: computedStyle.animationIterationCount,
+      },
+      availableFonts: collectFonts(computedStyle.fontFamily),
+      effects,
     };
   })()`;
+}
+
+export function isBrowserElementHoverContext(
+  value: unknown,
+): value is BrowserElementHoverContext {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Partial<BrowserElementHoverContext>;
+  return (
+    typeof candidate.selector === "string" &&
+    typeof candidate.tagName === "string" &&
+    typeof candidate.rect === "object" &&
+    candidate.rect !== null &&
+    typeof candidate.rect.x === "number" &&
+    typeof candidate.rect.y === "number" &&
+    typeof candidate.rect.width === "number" &&
+    typeof candidate.rect.height === "number"
+  );
 }
 
 export function isBrowserElementEditorContext(
@@ -374,7 +1330,8 @@ function formatPoint(point: BrowserDrawingPoint): string {
   return `x=${Math.round(point.x)}, y=${Math.round(point.y)}`;
 }
 
-function formatStrokeSummary(points: BrowserDrawingPoint[]): string {
+function formatStrokeSummary(stroke: BrowserDrawingStroke): string {
+  const { points } = stroke;
   const start = points[0] ?? { x: 0, y: 0 };
   const end = points[points.length - 1] ?? start;
   const bounds = points.reduce(
@@ -391,12 +1348,19 @@ function formatStrokeSummary(points: BrowserDrawingPoint[]): string {
       maxY: start.y,
     },
   );
-  return [
+  const summary = [
     `start: ${formatPoint(start)}`,
     `end: ${formatPoint(end)}`,
     `bounds: x=${Math.round(bounds.minX)}, y=${Math.round(bounds.minY)}, width=${Math.round(bounds.maxX - bounds.minX)}, height=${Math.round(bounds.maxY - bounds.minY)}`,
     `pointCount: ${points.length}`,
-  ].join("; ");
+  ];
+  if (typeof stroke.strokeSize === "number") {
+    summary.push(`strokeSize: ${Number(stroke.strokeSize.toFixed(2))}px`);
+  }
+  if (stroke.animated === false) {
+    summary.push("animated: false");
+  }
+  return summary.join("; ");
 }
 
 function formatTextAnnotation(annotation: BrowserTextAnnotation): string {
@@ -405,7 +1369,9 @@ function formatTextAnnotation(annotation: BrowserTextAnnotation): string {
     typeof annotation.boxX === "number" && typeof annotation.boxY === "number"
       ? `, box: x=${Math.round(annotation.boxX)}, y=${Math.round(annotation.boxY)}`
       : "";
-  return `x=${Math.round(annotation.x)}, y=${Math.round(annotation.y)}${boxPosition}, text: ${text || "(empty)"}`;
+  const fontSize =
+    typeof annotation.fontSize === "number" ? `, fontSize: ${Math.round(annotation.fontSize)}px` : "";
+  return `x=${Math.round(annotation.x)}, y=${Math.round(annotation.y)}${boxPosition}${fontSize}, text: ${text || "(empty)"}`;
 }
 
 function formatArrowSummary(arrow: BrowserAnnotationArrow): string {
@@ -424,11 +1390,95 @@ function formatArrowSummary(arrow: BrowserAnnotationArrow): string {
   ].join("; ") + source + handle;
 }
 
+function formatStyleEntries(
+  value: BrowserElementStyleSnapshot | BrowserElementStylePatch | null | undefined,
+): string {
+  if (!value) {
+    return "none";
+  }
+  const entries = BROWSER_STYLE_PATCH_KEYS.flatMap((key) => {
+    const styleValue = value[key]?.trim();
+    return styleValue ? [`- ${key}: ${styleValue}`] : [];
+  });
+  return entries.length > 0 ? entries.join("\n") : "none";
+}
+
+function formatFontOptions(value: readonly BrowserElementFontOption[] | null | undefined): string {
+  if (!value || value.length === 0) {
+    return "none";
+  }
+  return value
+    .slice(0, 24)
+    .map((option) => {
+      const loaded =
+        typeof option.loaded === "boolean" ? `, loaded=${option.loaded ? "yes" : "no"}` : "";
+      return `- ${option.value} (${option.source}${loaded})`;
+    })
+    .join("\n");
+}
+
+function formatEffectEntries(value: readonly BrowserElementEffectSnapshot[] | null | undefined): string {
+  if (!value || value.length === 0) {
+    return "none";
+  }
+  return value
+    .slice(0, 6)
+    .map((effect) =>
+      [
+        `- ${effect.kind} (${effect.source})`,
+        `  animationName: ${effect.animationName || "none"}`,
+        `  animationDuration: ${effect.animationDuration || "none"}`,
+        `  animationTimingFunction: ${effect.animationTimingFunction || "none"}`,
+        `  animationIterationCount: ${effect.animationIterationCount || "none"}`,
+        `  backgroundImage: ${truncateText(effect.backgroundImage || "none", 500)}`,
+        `  backgroundSize: ${effect.backgroundSize || "none"}`,
+        `  backgroundPosition: ${effect.backgroundPosition || "none"}`,
+        `  opacity: ${effect.opacity || "none"}`,
+        `  filter: ${effect.filter || "none"}`,
+      ].join("\n"),
+    )
+    .join("\n");
+}
+
+function formatRequestedFont(
+  element: BrowserElementEditorContext,
+  previewStyle: BrowserElementStylePatch,
+): string {
+  const requestedFont = previewStyle.fontFamily?.trim();
+  if (!requestedFont) {
+    return "none";
+  }
+  const requestedKey = fontOptionKey(requestedFont);
+  const match = element.availableFonts?.find((option) => fontOptionKey(option.value) === requestedKey);
+  if (!match) {
+    return `value: ${requestedFont}\nsource: custom\nloaded: unknown`;
+  }
+  return [
+    `value: ${match.value}`,
+    `source: ${match.source}`,
+    `loaded: ${match.loaded === true ? "yes" : match.loaded === false ? "no" : "unknown"}`,
+  ].join("\n");
+}
+
 function indentLines(value: string, prefix: string): string {
   return value
     .split("\n")
     .map((line) => `${prefix}${line}`)
     .join("\n");
+}
+
+function formatPayloadMetadata(context: BrowserElementEditorContext, prefix = ""): string[] {
+  const payload = context.payload;
+  if (!payload || (!payload.textTruncated && !payload.outerHTMLTruncated)) {
+    return [];
+  }
+  return [
+    `${prefix}payload:`,
+    `${prefix}  textLength: ${payload.textLength}`,
+    `${prefix}  textTruncated: ${payload.textTruncated ? "yes" : "no"}`,
+    `${prefix}  outerHTMLLength: ${payload.outerHTMLLength}`,
+    `${prefix}  outerHTMLTruncated: ${payload.outerHTMLTruncated ? "yes" : "no"}`,
+  ];
 }
 
 function formatSelectedElement(context: BrowserElementEditorContext): string[] {
@@ -439,6 +1489,7 @@ function formatSelectedElement(context: BrowserElementEditorContext): string[] {
     `  role: ${context.role ?? "(none)"}`,
     `  accessibleName: ${context.accessibleName ?? "(none)"}`,
     `  bounds: ${formatRect(context.rect)}`,
+    ...formatPayloadMetadata(context, "  "),
     "  attributes:",
     indentLines(formatAttributes(context.attributes), "    "),
     `  text: ${truncateText(context.text, MAX_TEXT_LENGTH) || "(empty)"}`,
@@ -459,8 +1510,14 @@ function compactPromptBlockText(value: string): string {
 export function summarizeBrowserEditorPromptBlock(
   block: string,
 ): BrowserEditorPromptContextSummary | null {
-  const firstLine = block.match(/^<browser-(element|drawing|selection)-selection>/)?.[1] ?? null;
-  if (firstLine !== "element" && firstLine !== "drawing" && firstLine !== "selection") {
+  const firstLine =
+    block.match(/^<browser-(element|drawing|selection|style-edit)-selection>/)?.[1] ?? null;
+  if (
+    firstLine !== "element" &&
+    firstLine !== "drawing" &&
+    firstLine !== "selection" &&
+    firstLine !== "style-edit"
+  ) {
     return null;
   }
 
@@ -490,6 +1547,22 @@ export function summarizeBrowserEditorPromptBlock(
       url,
       label: `Browser selection: ${tag || selector || "element"}`,
       detail: compactPromptBlockText(selector || title || url || "Selected page element"),
+    };
+  }
+  if (firstLine === "style-edit") {
+    const selector = readPromptBlockField(block, "selectedSelector");
+    const changed = readPromptBlockField(block, "changedProperties");
+    return {
+      kind: "style-edit",
+      block,
+      title,
+      url,
+      label: "Live Editor Context: style edit",
+      detail: compactPromptBlockText(
+        [changed && changed !== "0" ? `${changed} style change${changed === "1" ? "" : "s"}` : "", selector]
+          .filter(Boolean)
+          .join(" · ") || title || url || "Style edit context",
+      ),
     };
   }
 
@@ -566,6 +1639,7 @@ export function buildBrowserElementPromptBlock(context: BrowserElementEditorCont
     `accessibleName: ${context.accessibleName ?? "(none)"}`,
     `viewport: ${formatViewport(context.viewport)}`,
     `bounds: ${formatRect(context.rect)}`,
+    ...formatPayloadMetadata(context),
     "attributes:",
     formatAttributes(context.attributes),
     `text: ${truncateText(context.text, MAX_TEXT_LENGTH) || "(empty)"}`,
@@ -587,12 +1661,50 @@ export function buildBrowserSelectionPromptBlock(context: BrowserElementEditorCo
     `accessibleName: ${context.accessibleName ?? "(none)"}`,
     `viewport: ${formatViewport(context.viewport)}`,
     `bounds: ${formatRect(context.rect)}`,
+    ...formatPayloadMetadata(context),
     "attributes:",
     formatAttributes(context.attributes),
     `text: ${truncateText(context.text, MAX_TEXT_LENGTH) || "(empty)"}`,
     "outerHTML:",
     truncateText(context.outerHTML, MAX_HTML_LENGTH) || "(empty)",
     "</browser-selection-selection>",
+  ].join("\n");
+}
+
+export function buildBrowserStyleEditPromptBlock(context: BrowserStyleEditContext): string {
+  const previewStyle = normalizeBrowserElementStylePatch(context.previewStyle);
+  return [
+    "<browser-style-edit-selection>",
+    "source: browser-style-edit",
+    `url: ${context.element.url}`,
+    `title: ${context.element.title || "(untitled)"}`,
+    `selectedSelector: ${context.element.selector || "(unavailable)"}`,
+    `tag: ${context.element.tagName.toLowerCase()}`,
+    `role: ${context.element.role ?? "(none)"}`,
+    `accessibleName: ${context.element.accessibleName ?? "(none)"}`,
+    `viewport: ${formatViewport(context.element.viewport)}`,
+    `bounds: ${formatRect(context.element.rect)}`,
+    ...formatPayloadMetadata(context.element),
+    `manualOverride: ${context.manualOverride ? "enabled" : "disabled"}`,
+    `changedProperties: ${Object.keys(previewStyle).length}`,
+    "stylingNote:",
+    `  ${BROWSER_STYLE_EDIT_STYLING_NOTE}`,
+    "currentComputedStyle:",
+    indentLines(formatStyleEntries(context.currentStyle ?? context.element.style), "  "),
+    "detectedEffects:",
+    indentLines(formatEffectEntries(context.element.effects), "  "),
+    "requestedFont:",
+    indentLines(formatRequestedFont(context.element, previewStyle), "  "),
+    "availableFontOptions:",
+    indentLines(formatFontOptions(context.element.availableFonts), "  "),
+    "previewStyleRequest:",
+    indentLines(formatStyleEntries(previewStyle), "  "),
+    "attributes:",
+    formatAttributes(context.element.attributes),
+    `text: ${truncateText(context.element.text, MAX_TEXT_LENGTH) || "(empty)"}`,
+    "outerHTML:",
+    truncateText(context.element.outerHTML, MAX_HTML_LENGTH) || "(empty)",
+    "</browser-style-edit-selection>",
   ].join("\n");
 }
 
@@ -618,7 +1730,7 @@ export function buildBrowserDrawingPromptBlock(context: BrowserDrawingEditorCont
     "strokes:",
     ...context.strokes.map(
       (stroke, index) =>
-        `- stroke ${index + 1}: ${formatStrokeSummary(stroke.points)}`,
+        `- stroke ${index + 1}: ${formatStrokeSummary(stroke)}`,
     ),
     `textCount: ${textAnnotations.length}`,
     "textAnnotations:",

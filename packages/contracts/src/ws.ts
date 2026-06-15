@@ -58,9 +58,12 @@ import {
   PreviewRuntimeEvent,
   PreviewRuntimeInput,
   PreviewStartInput,
+  PreviewStopAllInput,
 } from "./preview";
 import { KeybindingRule } from "./keybindings";
 import {
+  ProjectApplyStyleEditInput,
+  ProjectApplyTextEditInput,
   ProjectListDirectoriesInput,
   ProjectSearchEntriesInput,
   ProjectSearchLocalEntriesInput,
@@ -100,6 +103,8 @@ export const WS_METHODS = {
   projectsSearchEntries: "projects.searchEntries",
   projectsSearchLocalEntries: "projects.searchLocalEntries",
   projectsWriteFile: "projects.writeFile",
+  projectsApplyTextEdit: "projects.applyTextEdit",
+  projectsApplyStyleEdit: "projects.applyStyleEdit",
 
   // Filesystem browse methods
   filesystemBrowse: "filesystem.browse",
@@ -143,6 +148,7 @@ export const WS_METHODS = {
   previewGetState: "preview.getState",
   previewStart: "preview.start",
   previewStop: "preview.stop",
+  previewStopAll: "preview.stopAll",
   previewRestart: "preview.restart",
 
   // Server meta
@@ -227,6 +233,8 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.projectsSearchEntries, ProjectSearchEntriesInput),
   tagRequestBody(WS_METHODS.projectsSearchLocalEntries, ProjectSearchLocalEntriesInput),
   tagRequestBody(WS_METHODS.projectsWriteFile, ProjectWriteFileInput),
+  tagRequestBody(WS_METHODS.projectsApplyTextEdit, ProjectApplyTextEditInput),
+  tagRequestBody(WS_METHODS.projectsApplyStyleEdit, ProjectApplyStyleEditInput),
 
   // Filesystem browse
   tagRequestBody(WS_METHODS.filesystemBrowse, FilesystemBrowseInput),
@@ -270,6 +278,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.previewGetState, PreviewRuntimeInput),
   tagRequestBody(WS_METHODS.previewStart, PreviewStartInput),
   tagRequestBody(WS_METHODS.previewStop, PreviewRuntimeInput),
+  tagRequestBody(WS_METHODS.previewStopAll, PreviewStopAllInput),
   tagRequestBody(WS_METHODS.previewRestart, PreviewStartInput),
 
   // Server meta

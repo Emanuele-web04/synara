@@ -3,9 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   buildBrowserDrawingPromptBlock,
   buildBrowserSelectionPromptBlock,
+  buildBrowserStyleEditPromptBlock,
+  BROWSER_STYLE_EDIT_STYLING_NOTE,
   extractBrowserEditorContextPromptBlocks,
+  normalizeBrowserElementFontOptions,
+  normalizeBrowserElementStylePatch,
   removeBrowserAnnotationContextPrompt,
   removeBrowserEditorContextPrompts,
+  splitFontFamilyList,
   upsertBrowserAnnotationContextPrompt,
 } from "./browserEditorContext";
 
@@ -149,6 +154,138 @@ describe("browser editor annotation prompt blocks", () => {
     expect(block).toContain("outerHTML:");
     expect(block).not.toContain("strokeCount");
     expect(block).not.toContain("textAnnotations");
+  });
+
+  it("includes payload truncation metadata for large selected elements", () => {
+    const block = buildBrowserSelectionPromptBlock({
+      url: "http://localhost:8891/browser-editor-demo/index.html",
+      title: "Northstar Studio",
+      selector: "main > section.hero",
+      tagName: "SECTION",
+      role: "region",
+      accessibleName: "Launch experiments",
+      text: "Launch experiments\n...[truncated; original length 2400 chars]",
+      attributes: { class: "hero" },
+      rect: { x: 40, y: 120, width: 720, height: 420 },
+      viewport: { width: 800, height: 600, devicePixelRatio: 2 },
+      outerHTML: '<section class="hero">...</section>\n...[truncated; original length 5200 chars]',
+      payload: {
+        textLength: 2400,
+        textTruncated: true,
+        outerHTMLLength: 5200,
+        outerHTMLTruncated: true,
+      },
+    });
+
+    expect(block).toContain("payload:");
+    expect(block).toContain("textLength: 2400");
+    expect(block).toContain("textTruncated: yes");
+    expect(block).toContain("outerHTMLLength: 5200");
+    expect(block).toContain("outerHTMLTruncated: yes");
+  });
+
+  it("builds style edit context with styling-location priority guidance", () => {
+    const block = buildBrowserStyleEditPromptBlock({
+      element: {
+        url: "http://localhost:8891/browser-editor-demo/index.html",
+        title: "Northstar Studio",
+        selector: "main > section.hero > h1",
+        tagName: "H1",
+        role: null,
+        accessibleName: "Launch experiments",
+        text: "Launch experiments without losing the plot.",
+        attributes: {
+          class: "headline",
+        },
+        rect: { x: 40, y: 120, width: 720, height: 160 },
+        viewport: { width: 800, height: 600, devicePixelRatio: 2 },
+        outerHTML: '<h1 class="headline">Launch experiments without losing the plot.</h1>',
+        style: {
+          color: "rgb(15, 23, 42)",
+          backgroundColor: "rgba(0, 0, 0, 0)",
+          fontFamily: "Inter, sans-serif",
+          fontSize: "72px",
+          fontWeight: "800",
+          fontStyle: "normal",
+          lineHeight: "76px",
+          letterSpacing: "normal",
+          textAlign: "start",
+          opacity: "1",
+          display: "block",
+          padding: "0px",
+          margin: "0px",
+          borderWidth: "0px",
+          borderColor: "rgb(15, 23, 42)",
+          borderRadius: "0px",
+          boxShadow: "none",
+        },
+      },
+      currentStyle: null,
+      previewStyle: {
+        color: "#123456",
+        fontSize: "64px",
+        backgroundColor: "",
+      },
+      manualOverride: false,
+    });
+
+    expect(block).toContain("<browser-style-edit-selection>");
+    expect(block).toContain("source: browser-style-edit");
+    expect(block).toContain("selectedSelector: main > section.hero > h1");
+    expect(block).toContain("manualOverride: disabled");
+    expect(block).toContain("changedProperties: 2");
+    expect(block).toContain(BROWSER_STYLE_EDIT_STYLING_NOTE);
+    expect(block).toContain("- color: rgb(15, 23, 42)");
+    expect(block).toContain("- fontSize: 72px");
+    expect(block).toContain("- color: #123456");
+    expect(block).toContain("- fontSize: 64px");
+    expect(block.match(/previewStyleRequest:[\s\S]*attributes:/)?.[0]).not.toContain(
+      "backgroundColor:",
+    );
+
+    const contexts = extractBrowserEditorContextPromptBlocks(block);
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]?.kind).toBe("style-edit");
+    expect(contexts[0]?.label).toBe("Live Editor Context: style edit");
+  });
+
+  it("normalizes empty style patch values", () => {
+    expect(
+      normalizeBrowserElementStylePatch({
+        color: " #fff ",
+        fontSize: "",
+        borderRadius: " 8px",
+      }),
+    ).toEqual({
+      color: "#fff",
+      borderRadius: "8px",
+    });
+  });
+
+  it("normalizes page font options with the current font first", () => {
+    expect(splitFontFamilyList('Inter, "Helvetica Neue", sans-serif')).toEqual([
+      "Inter",
+      '"Helvetica Neue"',
+      "sans-serif",
+    ]);
+
+    const fonts = normalizeBrowserElementFontOptions({
+      currentFontFamily: 'Inter, "Helvetica Neue", sans-serif',
+      pageFonts: [
+        { value: "Inter", source: "page", loaded: true },
+        { value: '"Display Serif"', source: "page", loaded: false },
+      ],
+    });
+
+    expect(fonts[0]).toMatchObject({
+      value: 'Inter, "Helvetica Neue", sans-serif',
+      source: "current",
+      loaded: true,
+    });
+    expect(fonts.some((font) => font.value === '"Display Serif"' && font.loaded === false)).toBe(
+      true,
+    );
+    expect(fonts.filter((font) => font.value === "Inter")).toHaveLength(1);
   });
 
   it("removes only the generated live annotation block", () => {

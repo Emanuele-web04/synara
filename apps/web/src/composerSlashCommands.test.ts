@@ -8,6 +8,7 @@ import {
   canOfferSideSlashCommand,
   filterComposerSlashCommands,
   getAvailableComposerSlashCommands,
+  getComposerSlashCommandMenuTitle,
   hasProviderNativeSlashCommand,
   isBuiltInComposerSlashCommand,
   parseComposerSlashInvocation,
@@ -27,6 +28,12 @@ describe("composerSlashCommands", () => {
   it("filters slash commands by query", () => {
     expect(filterComposerSlashCommands("rev").map((entry) => entry.command)).toEqual(["review"]);
     expect(filterComposerSlashCommands("fast").map((entry) => entry.command)).toEqual(["fast"]);
+  });
+
+  it("returns slash command menu titles used for display ordering", () => {
+    expect(getComposerSlashCommandMenuTitle("fork")).toBe("Fork");
+    expect(getComposerSlashCommandMenuTitle("model")).toBe("Model");
+    expect(getComposerSlashCommandMenuTitle("review")).toBe("Code Review");
   });
 
   it("parses slash invocations with optional arguments", () => {

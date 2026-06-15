@@ -6,6 +6,7 @@
 import type { LucideIcon } from "~/lib/icons";
 import {
   DiffIcon,
+  EyeIcon,
   GitCommitIcon,
   GlobeIcon,
   InfoIcon,
@@ -25,6 +26,7 @@ export interface RightDockPaneMeta {
 
 export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> = {
   browser: { label: "Browser", Icon: GlobeIcon },
+  "live-editor": { label: "Editor", Icon: EyeIcon },
   diff: { label: "Diff", Icon: DiffIcon },
   terminal: { label: "Terminal", Icon: TerminalIcon },
   sidechat: { label: "Side chat", Icon: MessageCircleIcon },

@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { execFile } from "node:child_process";
+import { watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
@@ -8,33 +10,40 @@ import type {
   PreviewRuntimeInput,
   PreviewRuntimeState,
   PreviewStartInput,
+  PreviewStopAllInput,
+  PreviewStopAllResult,
   TerminalEvent,
   TerminalOpenInput,
   TerminalWriteInput,
 } from "@t3tools/contracts";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 
 import type { TerminalManagerShape } from "../terminal/Services/Manager";
+import { extractLocalUrl, resolvePreviewTarget } from "./PreviewTargetResolver";
 
 const DEFAULT_PREVIEW_PORT = 5173;
 const PREVIEW_HEALTH_TIMEOUT_MS = 1_500;
 const PREVIEW_START_DEADLINE_MS = 45_000;
 const PREVIEW_MONITOR_INTERVAL_MS = 5_000;
 const PREVIEW_MONITOR_FAILURE_LIMIT = 3;
-const PREVIEW_SCRIPT_PRIORITY = ["dev", "start", "serve", "preview"] as const;
-
-type PreviewPackageManager = "bun" | "pnpm" | "yarn" | "npm";
+const PREVIEW_PORT_KILL_GRACE_MS = 500;
+const PREVIEW_SOURCE_CHANGE_DEBOUNCE_MS = 450;
+const SAFE_PREVIEW_TERMINAL_PREFIX = "_cHJldmlldy0";
+const LOG_SAMPLE_BYTES = 96 * 1024;
 
 interface PreviewRuntimeRecord {
   state: PreviewRuntimeState;
   failures: number;
   monitor: ReturnType<typeof setInterval> | null;
   startPoll: ReturnType<typeof setTimeout> | null;
+  sourceWatcher: FSWatcher | null;
+  sourceChangeTimer: ReturnType<typeof setTimeout> | null;
+  sourceChangeCount: number;
+  sourceChangePath: string | null;
 }
 
-interface PackageJsonShape {
-  packageManager?: string;
-  scripts?: Record<string, string>;
+interface PreviewRuntimeManagerOptions {
+  terminalLogsDir?: string;
 }
 
 function nowIso(): string {
@@ -54,64 +63,186 @@ function terminalIdForCwd(cwd: string): string {
   return previewIdForCwd(cwd);
 }
 
-function normalizeLocalUrl(url: string): string {
-  return url.replace("://0.0.0.0", "://127.0.0.1").replace("://[::]", "://127.0.0.1");
-}
-
-function extractLocalUrl(output: string): string | null {
-  const match = output.match(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|\[::\])(?::\d+)?[^\s'")<>]*/i);
-  return match ? normalizeLocalUrl(match[0]) : null;
+function safeTerminalId(terminalId: string): string {
+  return Buffer.from(terminalId, "utf8").toString("base64url");
 }
 
 function portFromUrl(url: string): number | null {
   try {
     const parsed = new URL(url);
-    const port = parsed.port.length > 0 ? Number.parseInt(parsed.port, 10) : parsed.protocol === "https:" ? 443 : 80;
+    const port =
+      parsed.port.length > 0
+        ? Number.parseInt(parsed.port, 10)
+        : parsed.protocol === "https:"
+          ? 443
+          : 80;
     return Number.isFinite(port) ? port : null;
   } catch {
     return null;
   }
 }
 
-async function readJsonFile<T>(filePath: string): Promise<T | null> {
+function localPreviewKillPort(state: PreviewRuntimeState): number | null {
+  if (!state.url) {
+    return state.command && state.port ? state.port : null;
+  }
   try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw) as T;
+    const parsed = new URL(state.url);
+    const host = parsed.hostname.toLowerCase();
+    if (host !== "localhost" && host !== "127.0.0.1" && host !== "::1" && host !== "[::1]") {
+      return null;
+    }
+    if (!parsed.port && !state.command) {
+      return null;
+    }
+    const port = parsed.port ? Number.parseInt(parsed.port, 10) : state.port;
+    return port && port > 0 && port <= 65_535 ? port : null;
   } catch {
     return null;
   }
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function processIsAlive(pid: number): boolean {
   try {
-    await fs.access(filePath);
+    process.kill(pid, 0);
     return true;
   } catch {
     return false;
   }
 }
 
-function packageManagerFromPackageJson(value: string | undefined): PreviewPackageManager | null {
-  const normalized = value?.trim().toLowerCase() ?? "";
-  if (normalized.startsWith("bun@")) return "bun";
-  if (normalized.startsWith("pnpm@")) return "pnpm";
-  if (normalized.startsWith("yarn@")) return "yarn";
-  if (normalized.startsWith("npm@")) return "npm";
-  return null;
+async function listeningPidsForPort(port: number): Promise<number[]> {
+  if (process.platform === "win32") {
+    return [];
+  }
+  return new Promise((resolve) => {
+    execFile(
+      "lsof",
+      ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"],
+      { timeout: 1_000 },
+      (_error, stdout) => {
+        const pids = stdout
+          .split(/\s+/)
+          .map((value) => Number.parseInt(value, 10))
+          .filter((pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid);
+        resolve([...new Set(pids)]);
+      },
+    );
+  });
 }
 
-async function detectPackageManager(
-  cwd: string,
-  packageJson: PackageJsonShape | null,
-): Promise<PreviewPackageManager> {
-  const declaredManager = packageManagerFromPackageJson(packageJson?.packageManager);
-  if (declaredManager) return declaredManager;
-  if (await fileExists(path.join(cwd, "bun.lockb"))) return "bun";
-  if (await fileExists(path.join(cwd, "bun.lock"))) return "bun";
-  if (await fileExists(path.join(cwd, "pnpm-lock.yaml"))) return "pnpm";
-  if (await fileExists(path.join(cwd, "yarn.lock"))) return "yarn";
-  if (await fileExists(path.join(cwd, "package-lock.json"))) return "npm";
-  return "npm";
+async function killLocalPreviewPort(port: number): Promise<number> {
+  const pids = await listeningPidsForPort(port);
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // Process already exited or cannot be signaled.
+    }
+  }
+  if (pids.length > 0) {
+    await delay(PREVIEW_PORT_KILL_GRACE_MS);
+  }
+  for (const pid of pids) {
+    if (!processIsAlive(pid)) {
+      continue;
+    }
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Process already exited or cannot be signaled.
+    }
+  }
+  return pids.length;
+}
+
+function parsePreviewPorts(text: string): number[] {
+  const stripped = text.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
+  const ports = new Set<number>();
+  const patterns = [
+    /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|\[::\]):(\d{2,5})/gi,
+    /\bpython3?\s+-m\s+http\.server\s+(\d{2,5})\b/gi,
+    /(?:^|\s)(?:--port|-p)\s+(\d{2,5})\b/gi,
+    /\b(?:PORT|VITE_PORT)=(\d{2,5})\b/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of stripped.matchAll(pattern)) {
+      const port = Number.parseInt(match[1] ?? "", 10);
+      if (port > 0 && port <= 65_535) {
+        ports.add(port);
+      }
+    }
+  }
+  return [...ports];
+}
+
+function shouldIgnoreSourceChange(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, "/");
+  if (
+    /(^|\/)(node_modules|\.git|\.turbo|\.next|\.nuxt|\.svelte-kit|dist|build|coverage|out)(\/|$)/.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  return /\.(log|tmp|swp|map)$/i.test(normalized);
+}
+
+async function readLogSample(filePath: string): Promise<string> {
+  const stat = await fs.stat(filePath);
+  if (stat.size <= LOG_SAMPLE_BYTES * 2) {
+    return fs.readFile(filePath, "utf8");
+  }
+  const handle = await fs.open(filePath, "r");
+  try {
+    const head = Buffer.alloc(LOG_SAMPLE_BYTES);
+    const tail = Buffer.alloc(LOG_SAMPLE_BYTES);
+    await handle.read(head, 0, LOG_SAMPLE_BYTES, 0);
+    await handle.read(tail, 0, LOG_SAMPLE_BYTES, stat.size - LOG_SAMPLE_BYTES);
+    return `${head.toString("utf8")}\n${tail.toString("utf8")}`;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function liveEditPortsFromLogs(input: {
+  terminalLogsDir: string | undefined;
+  terminalId?: string;
+}): Promise<number[]> {
+  if (!input.terminalLogsDir) {
+    return [];
+  }
+  const terminalMarker = input.terminalId ? `_${safeTerminalId(input.terminalId)}` : null;
+  try {
+    const entries = await fs.readdir(input.terminalLogsDir, { withFileTypes: true });
+    const ports = new Set<number>();
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".log")) {
+        continue;
+      }
+      const matchesTerminal = terminalMarker
+        ? entry.name.includes(terminalMarker)
+        : entry.name.includes(SAFE_PREVIEW_TERMINAL_PREFIX);
+      if (!matchesTerminal) {
+        continue;
+      }
+      const sample = await readLogSample(path.join(input.terminalLogsDir, entry.name)).catch(
+        () => "",
+      );
+      for (const port of parsePreviewPorts(sample)) {
+        ports.add(port);
+      }
+    }
+    return [...ports];
+  } catch {
+    return [];
+  }
 }
 
 async function reservePort(preferredPort: number): Promise<number> {
@@ -140,47 +271,6 @@ async function reservePort(preferredPort: number): Promise<number> {
   });
 }
 
-function commandForPackageManager(manager: PreviewPackageManager, scriptName: string): string {
-  switch (manager) {
-    case "bun":
-      return `bun run ${scriptName}`;
-    case "pnpm":
-      return `pnpm run ${scriptName}`;
-    case "yarn":
-      return `yarn ${scriptName}`;
-    case "npm":
-      return `npm run ${scriptName}`;
-  }
-}
-
-async function resolvePreviewCommand(input: {
-  cwd: string;
-  port: number;
-  command?: string;
-}): Promise<string> {
-  if (input.command && input.command.trim().length > 0) {
-    return input.command.trim();
-  }
-
-  const packageJson = await readJsonFile<PackageJsonShape>(path.join(input.cwd, "package.json"));
-  const scripts = packageJson?.scripts ?? {};
-  const scriptName = PREVIEW_SCRIPT_PRIORITY.find((candidate) => scripts[candidate]);
-  if (!scriptName) {
-    throw new Error("No package.json preview script found. Expected one of: dev, start, serve, preview.");
-  }
-
-  const manager = await detectPackageManager(input.cwd, packageJson);
-  const baseCommand = commandForPackageManager(manager, scriptName);
-  const scriptCommand = scripts[scriptName] ?? "";
-  const shouldForceVitePort =
-    /\bvite\b/i.test(scriptCommand) || scriptName === "dev" || scriptName === "preview";
-  if (!shouldForceVitePort || /(?:^|\s)--port(?:\s|=|$)/.test(scriptCommand)) {
-    return baseCommand;
-  }
-
-  return `${baseCommand} -- --host 127.0.0.1 --port ${input.port} --strictPort`;
-}
-
 async function checkPreviewUrl(url: string): Promise<boolean> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PREVIEW_HEALTH_TIMEOUT_MS);
@@ -202,7 +292,10 @@ export class PreviewRuntimeManager {
   private readonly listeners = new Set<(event: PreviewRuntimeEvent) => void>();
   private readonly terminalIds = new Map<string, string>();
 
-  constructor(private readonly terminalManager: TerminalManagerShape) {}
+  constructor(
+    private readonly terminalManager: TerminalManagerShape,
+    private readonly options: PreviewRuntimeManagerOptions = {},
+  ) {}
 
   getState(input: PreviewRuntimeInput): Effect.Effect<PreviewRuntimeState> {
     return Effect.sync(() => this.getOrCreateRecord(input).state);
@@ -226,33 +319,49 @@ export class PreviewRuntimeManager {
         try: () => reservePort(input.preferredPort ?? DEFAULT_PREVIEW_PORT),
         catch: (cause) => new Error("Unable to reserve a preview port.", { cause }),
       });
-      const command = yield* Effect.tryPromise({
-        try: () => resolvePreviewCommand({ cwd, port, command: input.command }),
+      const target = yield* Effect.tryPromise({
+        try: () =>
+          resolvePreviewTarget({
+            cwd,
+            port,
+            command: input.command,
+            target: input.target,
+            url: input.url,
+          }),
         catch: (cause) =>
-          cause instanceof Error ? cause : new Error("Unable to resolve preview command.", { cause }),
+          cause instanceof Error ? cause : new Error("Unable to resolve preview target.", { cause }),
       });
-      const terminalId = terminalIdForCwd(cwd);
-      const url = `http://127.0.0.1:${port}/`;
+      const terminalId = target.command ? terminalIdForCwd(cwd) : null;
       const startedAt = nowIso();
 
       self.updateRecord(record, {
         ...record.state,
         cwd,
-        status: "starting",
-        url,
-        port,
-        command,
+        targetCwd: target.runCwd,
+        status: target.command ? "starting" : "running",
+        url: target.url,
+        port: portFromUrl(target.url) ?? port,
+        command: target.command,
+        resolverKind: target.resolverKind,
+        framework: target.framework,
+        scriptName: target.scriptName,
+        diagnostics: target.diagnostics,
         terminalId,
-        ownedBySynara: true,
+        ownedBySynara: Boolean(target.command),
         lastError: null,
         startedAt,
         updatedAt: startedAt,
       });
+      self.ensureSourceWatcher(record, target.runCwd);
+
+      if (!target.command || !terminalId) {
+        return record.state;
+      }
 
       const openInput: TerminalOpenInput = {
         threadId: input.threadId,
         terminalId,
-        cwd,
+        cwd: target.runCwd,
         cols: 120,
         rows: 30,
         env: {
@@ -268,11 +377,11 @@ export class PreviewRuntimeManager {
       const writeInput: TerminalWriteInput = {
         threadId: input.threadId,
         terminalId,
-        data: `${command}\r`,
+        data: `${target.command}\r`,
       };
       yield* self.terminalManager.write(writeInput);
 
-      self.scheduleStartPoll(record, url);
+      self.scheduleStartPoll(record, target.url);
       return record.state;
     });
   }
@@ -282,23 +391,44 @@ export class PreviewRuntimeManager {
     return Effect.gen(function* () {
       const cwd = runtimeKey(input.cwd);
       const record = self.getOrCreateRecord({ ...input, cwd });
-      self.clearTimers(record);
-
-      if (record.state.ownedBySynara && record.state.terminalId) {
-        yield* self.terminalManager.close({
-          threadId: input.threadId,
-          terminalId: record.state.terminalId,
-          deleteHistory: false,
-        });
-      }
-
-      self.updateRecord(record, {
-        ...record.state,
-        status: "stopped",
-        lastError: null,
-        updatedAt: nowIso(),
-      });
+      yield* self.stopRecord(record, { killPort: false });
       return record.state;
+    });
+  }
+
+  stopAll(input: PreviewStopAllInput): Effect.Effect<PreviewStopAllResult> {
+    const self = this;
+    return Effect.gen(function* () {
+      let stoppedCount = 0;
+      let killedPortCount = 0;
+      let failedCount = 0;
+      const urls = new Set<string>();
+      for (const record of self.records.values()) {
+        if (record.state.status === "idle" || record.state.status === "stopped") {
+          continue;
+        }
+        if (record.state.url) {
+          urls.add(record.state.url);
+        }
+        const result = yield* self.stopRecord(record, {
+          fallbackThreadId: input.threadId,
+          killPort: true,
+        });
+        stoppedCount += 1;
+        killedPortCount += result.killedPortCount;
+        failedCount += result.failedCount;
+      }
+      const orphanPorts = yield* Effect.promise(() =>
+        liveEditPortsFromLogs({ terminalLogsDir: self.options.terminalLogsDir }),
+      );
+      for (const port of orphanPorts) {
+        const killedForPort = yield* Effect.promise(() =>
+          killLocalPreviewPort(port).catch(() => 0),
+        );
+        killedPortCount += killedForPort;
+        urls.add(`http://127.0.0.1:${port}`);
+      }
+      return { stoppedCount, killedPortCount, failedCount, urls: Array.from(urls) };
     });
   }
 
@@ -397,15 +527,23 @@ export class PreviewRuntimeManager {
       failures: 0,
       monitor: null,
       startPoll: null,
+      sourceWatcher: null,
+      sourceChangeTimer: null,
+      sourceChangeCount: 0,
+      sourceChangePath: null,
     };
     this.records.set(key, record);
     return record;
   }
 
   private updateRecord(record: PreviewRuntimeRecord, nextState: PreviewRuntimeState): void {
+    const previousTerminalId = record.state.terminalId;
     record.state = nextState;
     const key = runtimeKey(nextState.cwd);
     this.records.set(key, record);
+    if (previousTerminalId && previousTerminalId !== nextState.terminalId) {
+      this.terminalIds.delete(previousTerminalId);
+    }
     if (nextState.terminalId) {
       this.terminalIds.set(nextState.terminalId, key);
     }
@@ -416,6 +554,109 @@ export class PreviewRuntimeManager {
     for (const listener of this.listeners) {
       listener(event);
     }
+  }
+
+  private ensureSourceWatcher(record: PreviewRuntimeRecord, root: string): void {
+    this.clearSourceWatcher(record);
+    const rootPath = path.resolve(root);
+    const scheduleSourceChange = (changedPath: string | null) => {
+      if (changedPath && shouldIgnoreSourceChange(changedPath)) {
+        return;
+      }
+      record.sourceChangeCount += 1;
+      record.sourceChangePath = changedPath;
+      if (record.sourceChangeTimer !== null) {
+        clearTimeout(record.sourceChangeTimer);
+      }
+      record.sourceChangeTimer = setTimeout(() => {
+        record.sourceChangeTimer = null;
+        if (record.state.status !== "running") {
+          record.sourceChangeCount = 0;
+          record.sourceChangePath = null;
+          return;
+        }
+        const event: PreviewRuntimeEvent = {
+          type: "source-changed",
+          state: record.state,
+          changedPath: record.sourceChangePath,
+          changedCount: record.sourceChangeCount,
+        };
+        record.sourceChangeCount = 0;
+        record.sourceChangePath = null;
+        for (const listener of this.listeners) {
+          listener(event);
+        }
+      }, PREVIEW_SOURCE_CHANGE_DEBOUNCE_MS);
+    };
+
+    try {
+      record.sourceWatcher = watch(
+        rootPath,
+        { recursive: process.platform === "darwin" || process.platform === "win32" },
+        (_eventType, filename) => {
+          const changedPath = filename ? path.join(rootPath, filename.toString()) : null;
+          scheduleSourceChange(changedPath);
+        },
+      );
+      record.sourceWatcher.on("error", () => {
+        this.clearSourceWatcher(record);
+      });
+    } catch {
+      record.sourceWatcher = null;
+    }
+  }
+
+  private clearSourceWatcher(record: PreviewRuntimeRecord): void {
+    if (record.sourceChangeTimer !== null) {
+      clearTimeout(record.sourceChangeTimer);
+      record.sourceChangeTimer = null;
+    }
+    record.sourceChangeCount = 0;
+    record.sourceChangePath = null;
+    record.sourceWatcher?.close();
+    record.sourceWatcher = null;
+  }
+
+  private stopRecord(
+    record: PreviewRuntimeRecord,
+    options: {
+      fallbackThreadId?: PreviewStopAllInput["threadId"];
+      killPort: boolean;
+    },
+  ): Effect.Effect<{ killedPortCount: number; failedCount: number }> {
+    const self = this;
+    return Effect.gen(function* () {
+      let failedCount = 0;
+      self.clearTimers(record);
+
+      if (record.state.terminalId) {
+        const closeResult = yield* Effect.exit(
+          self.terminalManager.close({
+            threadId: record.state.threadId ?? options.fallbackThreadId,
+            terminalId: record.state.terminalId,
+            deleteHistory: false,
+          }),
+        );
+        if (Exit.isFailure(closeResult)) {
+          failedCount += 1;
+        }
+      }
+
+      const port = localPreviewKillPort(record.state);
+      let killedPortCount = 0;
+      if (options.killPort && port) {
+        killedPortCount = yield* Effect.promise(() => killLocalPreviewPort(port).catch(() => 0));
+      }
+
+      self.updateRecord(record, {
+        ...record.state,
+        status: "stopped",
+        lastError:
+          failedCount > 0 ? "Live Edit stopped, but terminal cleanup reported an error." : null,
+        updatedAt: nowIso(),
+      });
+      return { killedPortCount, failedCount };
+    });
   }
 
   private scheduleStartPoll(record: PreviewRuntimeRecord, url: string): void {
@@ -496,6 +737,7 @@ export class PreviewRuntimeManager {
       clearInterval(record.monitor);
       record.monitor = null;
     }
+    this.clearSourceWatcher(record);
     record.failures = 0;
   }
 }

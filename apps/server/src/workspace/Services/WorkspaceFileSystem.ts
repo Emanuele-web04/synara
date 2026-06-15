@@ -1,6 +1,13 @@
 import { Effect, Schema, ServiceMap } from "effect";
 
-import type { ProjectWriteFileInput, ProjectWriteFileResult } from "@t3tools/contracts";
+import type {
+  ProjectApplyStyleEditInput,
+  ProjectApplyStyleEditResult,
+  ProjectApplyTextEditInput,
+  ProjectApplyTextEditResult,
+  ProjectWriteFileInput,
+  ProjectWriteFileResult,
+} from "@t3tools/contracts";
 import { WorkspacePathOutsideRootError } from "./WorkspacePaths";
 
 export class WorkspaceFileSystemError extends Schema.TaggedErrorClass<WorkspaceFileSystemError>()(
@@ -25,6 +32,12 @@ export interface WorkspaceFileSystemShape {
     ProjectWriteFileResult,
     WorkspaceFileSystemError | WorkspacePathOutsideRootError
   >;
+  readonly applyTextEdit: (
+    input: ProjectApplyTextEditInput,
+  ) => Effect.Effect<ProjectApplyTextEditResult, WorkspaceFileSystemError>;
+  readonly applyStyleEdit: (
+    input: ProjectApplyStyleEditInput,
+  ) => Effect.Effect<ProjectApplyStyleEditResult, WorkspaceFileSystemError>;
 }
 
 export class WorkspaceFileSystem extends ServiceMap.Service<

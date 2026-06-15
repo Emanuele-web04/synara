@@ -21,6 +21,7 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ResolvedKeybindingsConfig,
   type ServerProviderStatus,
+  type ThreadBrowserState,
   ThreadId,
   type TurnId,
   type EditorId,
@@ -141,6 +142,16 @@ import {
   extendReplacementRangeForTrailingSpace,
 } from "../composerTriggerInsertion";
 import {
+  parseComposerAppSkillInvocation,
+  parseLiveEditAppSkillArgs,
+  type ComposerAppSkillId,
+} from "../composerAppSkills";
+import {
+  closeLiveEditPreviewTabs,
+  hasLiveEditPreviewForThread,
+  openLiveEditPreviewTab,
+} from "../lib/liveEditPreviewTabs";
+import {
   createAllThreadsSelector,
   createProjectSelector,
   createThreadSelector,
@@ -244,6 +255,7 @@ import {
 } from "~/projectScripts";
 import { newCommandId, newMessageId, newProjectId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import { useBrowserStateStore } from "../browserStateStore";
 import {
   confirmTerminalTabClose,
   resolveTerminalCloseTitle,
@@ -941,11 +953,58 @@ interface ChatViewProps {
   panelState?: SplitViewPanePanelState;
   onToggleDiffPanel?: () => void;
   onToggleBrowserPanel?: () => void;
+  onOpenBrowserPanel?: () => void;
+  onOpenLiveEditorPanel?: () => void;
   onOpenTurnDiffPanel?: (turnId: TurnId, filePath?: string) => void;
   onSplitSurface?: () => void;
   onMaximizeSurface?: () => void;
   onChangeThreadInSplitPane?: () => void;
   onCloseThreadPane?: () => void;
+}
+
+function isBlankOnlyBrowserState(state: ThreadBrowserState): boolean {
+  return (
+    state.tabs.length > 0 &&
+    state.tabs.every((tab) => {
+      const url = (tab.lastCommittedUrl ?? tab.url).trim();
+      return url.length === 0 || url === "about:blank";
+    })
+  );
+}
+
+function closeLiveEditorDockPanesForThreadIds(threadIds: Iterable<ThreadId>): void {
+  const dockStore = useRightDockStore.getState();
+  for (const threadId of threadIds) {
+    if (hasLiveEditPreviewForThread(threadId)) {
+      continue;
+    }
+    const dockState = dockStore.dockStateByThreadId[threadId];
+    for (const pane of dockState?.panes ?? []) {
+      if (pane.kind === "live-editor") {
+        dockStore.closePane(threadId, pane.id);
+      }
+    }
+  }
+}
+
+function closeLiveEditorDockPanesForBrowserStates(
+  states: readonly ThreadBrowserState[],
+  options: { includeBlankOnly?: boolean } = {},
+): void {
+  const threadIds = states
+    .filter(
+      (state) =>
+        (!state.open && state.tabs.length === 0) ||
+        (options.includeBlankOnly === true && isBlankOnlyBrowserState(state)),
+    )
+    .map((state) => state.threadId);
+  closeLiveEditorDockPanesForThreadIds(threadIds);
+}
+
+function closeAllLiveEditorDockPanesWithoutPreviews(): void {
+  closeLiveEditorDockPanesForThreadIds(
+    Object.keys(useRightDockStore.getState().dockStateByThreadId) as ThreadId[],
+  );
 }
 
 export default function ChatView({
@@ -956,6 +1015,8 @@ export default function ChatView({
   panelState,
   onToggleDiffPanel,
   onToggleBrowserPanel,
+  onOpenBrowserPanel,
+  onOpenLiveEditorPanel,
   onOpenTurnDiffPanel,
   onSplitSurface,
   onMaximizeSurface,
@@ -1076,6 +1137,14 @@ export default function ChatView({
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
+  const upsertThreadBrowserState = useBrowserStateStore((store) => store.upsertThreadState);
+  const getLiveEditBrowserThreadIds = useCallback((): ThreadId[] => {
+    const ids = new Set<ThreadId>([threadId]);
+    for (const id of Object.keys(useBrowserStateStore.getState().threadStatesByThreadId)) {
+      ids.add(id as ThreadId);
+    }
+    return [...ids];
+  }, [threadId]);
   const fallbackDraftProjectId = draftThread?.projectId ?? null;
   const fallbackDraftProject = useStore(
     useMemo(() => createProjectSelector(fallbackDraftProjectId), [fallbackDraftProjectId]),
@@ -1102,6 +1171,9 @@ export default function ChatView({
   );
   const composerBrowserContextsRef =
     useRef<ComposerBrowserContextAttachment[]>(composerBrowserContexts);
+  const browserSelectionFocusKeyRef = useRef(
+    composerBrowserContexts.map((context) => context.id).join("\0"),
+  );
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>(composerTerminalContexts);
   const [localDraftErrorsByThreadId, setLocalDraftErrorsByThreadId] = useState<
     Record<ThreadId, string | null>
@@ -3060,6 +3132,188 @@ export default function ChatView({
       },
     });
   }, [browserOpen, navigate, onToggleBrowserPanel, threadId]);
+  const onOpenBrowser = useCallback(() => {
+    if (resolvedBrowserOpen) {
+      return;
+    }
+    if (onOpenBrowserPanel) {
+      onOpenBrowserPanel();
+      return;
+    }
+    if (onToggleBrowserPanel) {
+      onToggleBrowserPanel();
+      return;
+    }
+    void navigate({
+      to: "/$threadId",
+      params: { threadId },
+      replace: true,
+      search: (previous) => ({
+        ...stripDiffSearchParams(previous),
+        panel: "browser",
+      }),
+    });
+  }, [navigate, onOpenBrowserPanel, onToggleBrowserPanel, resolvedBrowserOpen, threadId]);
+  const onOpenLiveEditor = useCallback(() => {
+    if (onOpenLiveEditorPanel) {
+      onOpenLiveEditorPanel();
+      return;
+    }
+    onOpenBrowser();
+  }, [onOpenBrowser, onOpenLiveEditorPanel]);
+  const handleLiveEditSkill = useCallback(
+    async (args: string) => {
+      const api = readNativeApi();
+      const parsedArgs = parseLiveEditAppSkillArgs(args);
+      const cwd = resolvedThreadWorktreePath ?? activeProject?.cwd ?? null;
+      if (!api) {
+        toastManager.add({
+          type: "warning",
+          title: "Live Edit is unavailable",
+          description: "The app API is not available in this window.",
+        });
+        return;
+      }
+      if (parsedArgs.action !== "nuke" && !cwd) {
+        toastManager.add({
+          type: "warning",
+          title: "Live Edit is unavailable",
+          description: "Open a project or worktree before using Live Edit.",
+        });
+        return;
+      }
+
+      try {
+        if (parsedArgs.action === "nuke") {
+          const result = await api.preview.stopAll({ threadId });
+          const closedStates = await closeLiveEditPreviewTabs(api, {
+            urls: result.urls,
+            fallbackThreadIds: getLiveEditBrowserThreadIds(),
+            closeLocalPreviewTabs: true,
+          }).catch(() => []);
+          for (const closedState of closedStates) {
+            upsertThreadBrowserState(closedState);
+          }
+          const browserStatesAfterNuke = await api.browser.listStates().catch(() => []);
+          closeLiveEditorDockPanesForBrowserStates([...closedStates, ...browserStatesAfterNuke], {
+            includeBlankOnly: true,
+          });
+          closeAllLiveEditorDockPanesWithoutPreviews();
+          const portDetail =
+            result.killedPortCount > 0
+              ? ` Freed ${result.killedPortCount} local preview port${result.killedPortCount === 1 ? "" : "s"}.`
+              : "";
+          const failureDetail =
+            result.failedCount > 0
+              ? ` ${result.failedCount} cleanup ${result.failedCount === 1 ? "step" : "steps"} reported errors.`
+              : "";
+          toastManager.add({
+            type: result.failedCount > 0 ? "warning" : "success",
+            title: "Live Edit previews stopped",
+            description: `Stopped ${result.stoppedCount} Live Edit preview${result.stoppedCount === 1 ? "" : "s"}.${portDetail}${failureDetail}`,
+          });
+          return;
+        }
+
+        if (parsedArgs.action === "stop") {
+          const runningPreviewState = await api.preview
+            .getState({
+              threadId,
+              cwd,
+              ...(activeProjectId ? { projectId: activeProjectId } : {}),
+            })
+            .catch(() => null);
+          await api.preview.stop({
+            threadId,
+            cwd,
+            ...(activeProjectId ? { projectId: activeProjectId } : {}),
+          });
+          const closedStates = await closeLiveEditPreviewTabs(api, {
+            threadId,
+            cwd,
+            projectId: activeProjectId,
+            urls: runningPreviewState?.url ? [runningPreviewState.url] : [],
+            fallbackThreadIds: [threadId],
+          }).catch(() => []);
+          for (const closedState of closedStates) {
+            upsertThreadBrowserState(closedState);
+          }
+          closeLiveEditorDockPanesForBrowserStates(closedStates);
+          closeLiveEditorDockPanesForThreadIds([threadId]);
+          toastManager.add({
+            type: "success",
+            title: "Live Edit stopped",
+            description: "Stopped the current project preview.",
+          });
+          return;
+        }
+
+        const previewState = await api.preview.start({
+          threadId,
+          cwd,
+          ...(activeProjectId ? { projectId: activeProjectId } : {}),
+          ...(parsedArgs.target ? { target: parsedArgs.target } : {}),
+          ...(parsedArgs.url ? { url: parsedArgs.url } : {}),
+          ...(parsedArgs.command ? { command: parsedArgs.command } : {}),
+          ...(parsedArgs.preferredPort ? { preferredPort: parsedArgs.preferredPort } : {}),
+        });
+        if (!previewState.url) {
+          throw new Error("Live Edit did not return a preview URL.");
+        }
+        await openLiveEditPreviewTab(api, {
+          threadId,
+          cwd,
+          projectId: activeProjectId,
+          targetCwd: previewState.targetCwd ?? null,
+          url: previewState.url,
+        });
+        onOpenLiveEditor();
+        toastManager.add({
+          type: "success",
+          title: "Live Edit starting",
+          description:
+            previewState.framework && previewState.framework !== "unknown"
+              ? `Opened ${previewState.framework} preview in the browser editor.`
+              : "Opened the preview in the browser editor.",
+        });
+      } catch (error) {
+        const failureTitle =
+          parsedArgs.action === "nuke"
+            ? "Could not nuke Live Edit previews"
+            : parsedArgs.action === "stop"
+              ? "Could not stop Live Edit"
+              : "Could not start Live Edit";
+        const fallbackDescription =
+          parsedArgs.action === "nuke"
+            ? "An error occurred while stopping Live Edit previews."
+            : parsedArgs.action === "stop"
+              ? "An error occurred while stopping the frontend preview."
+              : "An error occurred while starting the frontend preview.";
+        toastManager.add({
+          type: "error",
+          title: failureTitle,
+          description: error instanceof Error ? error.message : fallbackDescription,
+        });
+      }
+    },
+    [
+      activeProject?.cwd,
+      activeProjectId,
+      getLiveEditBrowserThreadIds,
+      onOpenLiveEditor,
+      resolvedThreadWorktreePath,
+      threadId,
+      upsertThreadBrowserState,
+    ],
+  );
+  const handleAppSkill = useCallback(
+    async (skillId: ComposerAppSkillId, args: string) => {
+      if (skillId === "live-edit") {
+        await handleLiveEditSkill(args);
+      }
+    },
+    [handleLiveEditSkill],
+  );
 
   const envLocked = Boolean(
     activeThread &&
@@ -3168,6 +3422,15 @@ export default function ChatView({
       focusComposer();
     });
   }, [focusComposer]);
+  useEffect(() => {
+    const nextFocusKey = composerBrowserContexts.map((context) => context.id).join("\0");
+    const previousFocusKey = browserSelectionFocusKeyRef.current;
+    browserSelectionFocusKeyRef.current = nextFocusKey;
+    if (nextFocusKey.length === 0 || nextFocusKey === previousFocusKey) {
+      return;
+    }
+    scheduleComposerFocus();
+  }, [composerBrowserContexts, scheduleComposerFocus]);
   // Context gate is intentionally prompt-independent so the suggestion list stays
   // mounted while the user types — that lets us animate it closed instead of an
   // abrupt unmount (which jolted the centered composer).
@@ -5704,6 +5967,25 @@ export default function ChatView({
   ): Promise<boolean> => {
     e?.preventDefault();
     const api = readNativeApi();
+    const queuedChatTurn = queuedTurn ?? null;
+    const liveComposerSnapshot =
+      queuedChatTurn === null ? (composerEditorRef.current?.readSnapshot() ?? null) : null;
+    const promptForSend =
+      queuedChatTurn?.prompt ?? liveComposerSnapshot?.value ?? promptRef.current;
+    const appSkillInvocation = parseComposerAppSkillInvocation(promptForSend.trim());
+    if (appSkillInvocation) {
+      if (
+        !api ||
+        isSendBusy ||
+        isConnecting ||
+        isVoiceTranscribing ||
+        sendInFlightRef.current
+      ) {
+        return false;
+      }
+      await handleAppSkill(appSkillInvocation.id, appSkillInvocation.args);
+      return true;
+    }
     if (
       !api ||
       !activeThread ||
@@ -5749,11 +6031,6 @@ export default function ChatView({
       }
       return onAdvanceActivePendingUserInput(answerOverrides);
     }
-    const queuedChatTurn = queuedTurn ?? null;
-    const liveComposerSnapshot =
-      queuedChatTurn === null ? (composerEditorRef.current?.readSnapshot() ?? null) : null;
-    const promptForSend =
-      queuedChatTurn?.prompt ?? liveComposerSnapshot?.value ?? promptRef.current;
     let composerImagesForSend = queuedChatTurn?.images ?? composerImages;
     const composerBrowserContextsForSend =
       queuedChatTurn?.browserContexts ?? composerBrowserContexts;
@@ -7543,6 +7820,7 @@ export default function ChatView({
       await handleNewThread(activeProject.id, { entryPoint: "chat" });
     },
     handleInteractionModeChange,
+    handleAppSkill,
     openForkTargetPicker: () => {
       setComposerCommandPicker("fork-target");
       setComposerHighlightedItemId("fork-target:worktree");
@@ -7588,7 +7866,7 @@ export default function ChatView({
         handleNavigateLocalFolder(localFolderBrowseRootPath ?? "/");
         return;
       }
-      if (item.type === "slash-command") {
+      if (item.type === "slash-command" || item.type === "app-skill") {
         handleSlashCommandSelection(item);
         return;
       }
@@ -8989,8 +9267,8 @@ export default function ChatView({
             </Button>
           )}
           {expandedImageAnnotation ? (
-            <div className="relative isolate z-10 grid h-[min(760px,90vh)] max-h-[90vh] w-[min(1040px,92vw)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-white/12 bg-[rgba(18,20,22,0.68)] shadow-[0_28px_100px_rgba(0,0,0,0.58),0_0_0_1px_rgba(255,255,255,0.04)_inset] backdrop-blur-2xl">
-              <header className="flex min-w-0 items-start gap-3 border-b border-white/10 bg-white/[0.035] px-4 py-3 backdrop-blur-xl">
+            <div className="relative isolate z-10 grid h-[min(760px,90vh)] max-h-[90vh] w-[min(1040px,92vw)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-black/10 bg-white/54 text-slate-950 shadow-[0_28px_100px_rgba(15,23,42,0.24),0_0_0_1px_rgba(255,255,255,0.62)_inset] backdrop-blur-2xl dark:border-white/12 dark:bg-[rgba(18,20,22,0.68)] dark:text-foreground dark:shadow-[0_28px_100px_rgba(0,0,0,0.58),0_0_0_1px_rgba(255,255,255,0.04)_inset]">
+              <header className="flex min-w-0 items-start gap-3 border-b border-black/10 bg-white/26 px-4 py-3 backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.035]">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold text-foreground">
                     {expandedImageContextTitle}
@@ -9000,37 +9278,37 @@ export default function ChatView({
                   </p>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {expandedImageAnnotation.strokeCount > 0 ? (
-                      <span className="rounded-full border border-white/12 bg-white/[0.055] px-2 py-0.5 text-[11px] text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
+                      <span className="rounded-full border border-black/10 bg-white/36 px-2 py-0.5 text-[11px] text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.48)_inset] dark:border-white/12 dark:bg-white/[0.055] dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
                         {expandedImageAnnotation.strokeCount} stroke
                         {expandedImageAnnotation.strokeCount === 1 ? "" : "s"}
                       </span>
                     ) : null}
                     {expandedImageAnnotation.textCount > 0 ? (
-                      <span className="rounded-full border border-white/12 bg-white/[0.055] px-2 py-0.5 text-[11px] text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
+                      <span className="rounded-full border border-black/10 bg-white/36 px-2 py-0.5 text-[11px] text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.48)_inset] dark:border-white/12 dark:bg-white/[0.055] dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
                         {expandedImageAnnotation.textCount} note
                         {expandedImageAnnotation.textCount === 1 ? "" : "s"}
                       </span>
                     ) : null}
                     {(expandedImageAnnotation.arrowCount ?? 0) > 0 ? (
-                      <span className="rounded-full border border-white/12 bg-white/[0.055] px-2 py-0.5 text-[11px] text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
+                      <span className="rounded-full border border-black/10 bg-white/36 px-2 py-0.5 text-[11px] text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.48)_inset] dark:border-white/12 dark:bg-white/[0.055] dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
                         {expandedImageAnnotation.arrowCount} arrow
                         {expandedImageAnnotation.arrowCount === 1 ? "" : "s"}
                       </span>
                     ) : null}
                     {expandedImageAnnotation.selectedSelector ? (
-                      <span className="max-w-[520px] truncate rounded-full border border-white/12 bg-white/[0.055] px-2 py-0.5 text-[11px] text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
+                      <span className="max-w-[520px] truncate rounded-full border border-black/10 bg-white/36 px-2 py-0.5 text-[11px] text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.48)_inset] dark:border-white/12 dark:bg-white/[0.055] dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
                         {expandedImageAnnotation.selectedSelector}
                       </span>
                     ) : null}
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  <div className="inline-flex rounded-lg border border-white/12 bg-black/22 p-0.5 shadow-[0_1px_0_rgba(255,255,255,0.05)_inset] backdrop-blur-xl">
+                  <div className="inline-flex rounded-lg border border-black/10 bg-white/36 p-0.5 shadow-[0_1px_0_rgba(255,255,255,0.52)_inset] backdrop-blur-xl dark:border-white/12 dark:bg-black/22 dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
                     {expandedImagePaneOptions.map((pane) => (
                       <button
                         key={pane}
                         type="button"
-                        className="rounded-md px-2 py-1 text-[11px] font-medium capitalize text-muted-foreground transition-colors hover:bg-white/8 hover:text-foreground data-[active=true]:bg-white/14 data-[active=true]:text-foreground data-[active=true]:shadow-[0_1px_0_rgba(255,255,255,0.08)_inset]"
+                        className="rounded-md px-2 py-1 text-[11px] font-medium capitalize text-muted-foreground transition-colors hover:bg-white/46 hover:text-foreground data-[active=true]:bg-white/68 data-[active=true]:text-slate-950 data-[active=true]:shadow-sm dark:hover:bg-white/8 dark:data-[active=true]:bg-white/14 dark:data-[active=true]:text-foreground"
                         data-active={expandedImageActivePane === pane}
                         onClick={() => setExpandedImagePane(pane)}
                       >
@@ -9049,9 +9327,9 @@ export default function ChatView({
                   </Button>
                 </div>
               </header>
-              <div className="min-h-0 overflow-hidden bg-black/[0.08] p-4">
+              <div className="min-h-0 overflow-hidden bg-white/12 p-4 backdrop-blur-xl dark:bg-black/[0.08]">
                 {expandedImageActivePane === "image" && expandedImageItem.src ? (
-                  <div className="relative h-full min-h-0 rounded-xl border border-white/12 bg-black/24 shadow-[0_1px_0_rgba(255,255,255,0.05)_inset,0_18px_70px_rgba(0,0,0,0.26)] backdrop-blur-xl">
+                  <div className="relative h-full min-h-0 rounded-xl border border-black/10 bg-white/24 shadow-[0_1px_0_rgba(255,255,255,0.58)_inset,0_18px_70px_rgba(15,23,42,0.14)] backdrop-blur-xl dark:border-white/12 dark:bg-black/24 dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset,0_18px_70px_rgba(0,0,0,0.26)]">
                     <div
                       ref={expandedImageStageRef}
                       className={cn(
@@ -9114,12 +9392,12 @@ export default function ChatView({
                       </div>
                     </div>
                     <div
-                      className="absolute right-3 top-3 z-10 inline-flex items-center gap-1 rounded-lg border border-white/12 bg-black/32 p-1 shadow-[0_10px_32px_rgba(0,0,0,0.34),0_1px_0_rgba(255,255,255,0.06)_inset] backdrop-blur-xl"
+                      className="absolute right-3 top-3 z-10 inline-flex items-center gap-1 rounded-lg border border-black/10 bg-white/56 p-1 shadow-[0_10px_32px_rgba(15,23,42,0.18),0_1px_0_rgba(255,255,255,0.62)_inset] backdrop-blur-xl dark:border-white/12 dark:bg-black/32 dark:shadow-[0_10px_32px_rgba(0,0,0,0.34),0_1px_0_rgba(255,255,255,0.06)_inset]"
                       onPointerDown={(event) => event.stopPropagation()}
                     >
                       <button
                         type="button"
-                        className="inline-flex h-7 items-center gap-1 rounded px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-white/6 hover:text-foreground data-[active=true]:bg-[rgba(58,62,67,0.9)] data-[active=true]:text-foreground"
+                        className="inline-flex h-7 items-center gap-1 rounded px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-white/46 hover:text-foreground data-[active=true]:bg-white/70 data-[active=true]:text-slate-950 dark:hover:bg-white/6 dark:data-[active=true]:bg-[rgba(58,62,67,0.9)] dark:data-[active=true]:text-foreground"
                         data-active={expandedImageZoomMode === "fit"}
                         onClick={resetExpandedImageZoom}
                         title="Fit image"
@@ -9129,7 +9407,7 @@ export default function ChatView({
                       </button>
                       <button
                         type="button"
-                        className="inline-flex h-7 items-center rounded px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-white/6 hover:text-foreground data-[active=true]:bg-[rgba(58,62,67,0.9)] data-[active=true]:text-foreground"
+                        className="inline-flex h-7 items-center rounded px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-white/46 hover:text-foreground data-[active=true]:bg-white/70 data-[active=true]:text-slate-950 dark:hover:bg-white/6 dark:data-[active=true]:bg-[rgba(58,62,67,0.9)] dark:data-[active=true]:text-foreground"
                         data-active={expandedImageZoomMode === "manual" && expandedImageZoom === 1}
                         onClick={setExpandedImageActualSize}
                         title="View at 100%"
@@ -9138,7 +9416,7 @@ export default function ChatView({
                       </button>
                       <button
                         type="button"
-                        className="inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-white/6 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                        className="inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-white/46 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-white/6"
                         disabled={expandedImageZoomMode === "fit"}
                         onClick={() => stepExpandedImageZoom(-1)}
                         title="Zoom out"
@@ -9151,7 +9429,7 @@ export default function ChatView({
                       </span>
                       <button
                         type="button"
-                        className="inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-white/6 hover:text-foreground"
+                        className="inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-white/46 hover:text-foreground dark:hover:bg-white/6"
                         onClick={() => stepExpandedImageZoom(1)}
                         title="Zoom in"
                         aria-label="Zoom in"
@@ -9162,21 +9440,21 @@ export default function ChatView({
                   </div>
                 ) : null}
                 {expandedImageActivePane === "code" ? (
-                  <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-white/12 bg-black/24 shadow-[0_1px_0_rgba(255,255,255,0.05)_inset,0_18px_70px_rgba(0,0,0,0.22)] backdrop-blur-xl">
-                    <div className="border-b border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase text-muted-foreground backdrop-blur-md">
+                  <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-black/10 bg-white/24 shadow-[0_1px_0_rgba(255,255,255,0.58)_inset,0_18px_70px_rgba(15,23,42,0.12)] backdrop-blur-xl dark:border-white/12 dark:bg-black/24 dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset,0_18px_70px_rgba(0,0,0,0.22)]">
+                    <div className="border-b border-black/10 bg-white/26 px-3 py-2 text-[11px] font-semibold uppercase text-muted-foreground backdrop-blur-md dark:border-white/10 dark:bg-white/[0.04]">
                       Selected code
                     </div>
-                    <pre className="h-full min-h-0 overflow-auto whitespace-pre-wrap break-words bg-black/[0.12] p-3 font-mono text-[11px] leading-relaxed text-foreground/88">
+                    <pre className="h-full min-h-0 overflow-auto whitespace-pre-wrap break-words bg-white/14 p-3 font-mono text-[11px] leading-relaxed text-foreground/88 dark:bg-black/[0.12]">
                       {expandedImageSelectedCode ?? "No selected element code captured."}
                     </pre>
                   </section>
                 ) : null}
                 {expandedImageActivePane === "payload" ? (
-                  <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-white/12 bg-black/24 shadow-[0_1px_0_rgba(255,255,255,0.05)_inset,0_18px_70px_rgba(0,0,0,0.22)] backdrop-blur-xl">
-                    <div className="border-b border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] font-semibold uppercase text-muted-foreground backdrop-blur-md">
+                  <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-black/10 bg-white/24 shadow-[0_1px_0_rgba(255,255,255,0.58)_inset,0_18px_70px_rgba(15,23,42,0.12)] backdrop-blur-xl dark:border-white/12 dark:bg-black/24 dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset,0_18px_70px_rgba(0,0,0,0.22)]">
+                    <div className="border-b border-black/10 bg-white/26 px-3 py-2 text-[11px] font-semibold uppercase text-muted-foreground backdrop-blur-md dark:border-white/10 dark:bg-white/[0.04]">
                       Metadata payload
                     </div>
-                    <pre className="h-full min-h-0 overflow-auto whitespace-pre-wrap break-words bg-black/[0.12] p-3 font-mono text-[11px] leading-relaxed text-foreground/88">
+                    <pre className="h-full min-h-0 overflow-auto whitespace-pre-wrap break-words bg-white/14 p-3 font-mono text-[11px] leading-relaxed text-foreground/88 dark:bg-black/[0.12]">
                       {expandedImageAnnotation.promptBlock}
                     </pre>
                   </section>
