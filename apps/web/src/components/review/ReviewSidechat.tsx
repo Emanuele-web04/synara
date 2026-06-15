@@ -54,6 +54,7 @@ import { toastManager } from "../ui/toast";
 import {
   defaultReviewChatModelSelection,
   prewarmReviewChatThread,
+  REVIEW_RISKS_NATIVE_REVIEW_QUESTION,
   sendReviewChatQuestion,
   startNewReviewChatThread,
 } from "~/lib/reviewChatThread";
@@ -67,7 +68,7 @@ const ASK_SUGGESTIONS = [
   "Summarize this PR",
   "What should I review first?",
   "Explain the failing checks",
-  "Find review risks",
+  REVIEW_RISKS_NATIVE_REVIEW_QUESTION,
 ] as const;
 
 const noopComposerPaste: ClipboardEventHandler<HTMLElement> = () => {};
@@ -698,7 +699,9 @@ export function ReviewSidechat(props: {
       return "starting";
     }
     if (pendingReviewTurn !== null) {
-      return "starting";
+      return pendingReviewTurn.phase === "sent" || activeTurnBelongsToPendingReviewTurn
+        ? "thinking"
+        : "starting";
     }
     if (activeTurnState === "running" && !hasHiddenBootstrapTurnInProgress) {
       return "thinking";
@@ -713,6 +716,7 @@ export function ReviewSidechat(props: {
     isReviewChatWorking,
     isStartingNewThread,
     isStartingSidechat,
+    activeTurnBelongsToPendingReviewTurn,
     pendingReviewTurn,
     reviewWorkLogEntries.length,
   ]);

@@ -18,6 +18,7 @@ import {
   findProjectForReviewChat,
   prewarmReviewChatThread,
   reviewChatTargetsEqual,
+  REVIEW_RISKS_NATIVE_REVIEW_QUESTION,
   sendReviewChatQuestion,
   startNewReviewChatThread,
 } from "./reviewChatThread";
@@ -323,6 +324,40 @@ describe("reviewChatThread", () => {
     ]);
     expect(events.indexOf("thread.turn.start")).toBeGreaterThan(events.indexOf("thread.create"));
     expect(events.indexOf("shell-snapshot")).toBeGreaterThan(events.indexOf("thread.create"));
+  });
+
+  it("routes the review risks suggestion through native base-branch review", async () => {
+    useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
+    const commands: ClientOrchestrationCommand[] = [];
+    const api: ReviewChatTestApi = {
+      orchestration: {
+        dispatchCommand: vi.fn(async (command) => {
+          commands.push(command);
+          syncReadyReviewChatSessionForEnsure({ command, commands });
+          return { sequence: commands.length };
+        }),
+        getShellSnapshot: vi.fn(async () => {
+          return makeShellSnapshot({
+            createCommand: commands.find(isThreadCreateCommand),
+          });
+        }),
+        subscribeThread: vi.fn(async () => undefined),
+      },
+    };
+
+    const result = await sendReviewChatQuestion({
+      payload: makePayload(),
+      question: REVIEW_RISKS_NATIVE_REVIEW_QUESTION,
+      api,
+    });
+
+    expect(result.status).toBe("queued");
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
+    });
+    const turnCommand = commands.find(isThreadTurnStartCommand);
+    expect(turnCommand?.reviewTarget).toEqual({ type: "baseBranch", branch: "main" });
+    expect(turnCommand?.message.text).toBe(REVIEW_RISKS_NATIVE_REVIEW_QUESTION);
   });
 
   it("passes selected skill references through review chat turns", async () => {

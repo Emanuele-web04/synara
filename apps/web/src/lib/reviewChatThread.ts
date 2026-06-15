@@ -5,6 +5,7 @@ import {
   type NativeApi,
   type OrchestrationMessageSource,
   type OrchestrationReviewChatTarget,
+  type ProviderReviewTarget,
   type ProviderSkillReference,
   type ProjectId,
   type ThreadId,
@@ -82,6 +83,7 @@ const PREWARM_SESSION_READY_TIMEOUT_MS = 45_000;
 const VISIBLE_SEND_PREWARM_WAIT_MS = 150;
 const REVIEW_CONTEXT_BOOTSTRAP_QUESTION =
   "Reply exactly: ready. Do not summarize yet; just load this PR context for the next user question.";
+export const REVIEW_RISKS_NATIVE_REVIEW_QUESTION = "Find review risks";
 
 export function defaultReviewChatModelSelection(): ModelSelection {
   return {
@@ -544,6 +546,7 @@ function buildTurnStartCommand(input: {
   threadId: ThreadId;
   modelSelection: ModelSelection;
   skills?: readonly ProviderSkillReference[] | undefined;
+  reviewTarget?: ProviderReviewTarget | undefined;
   includeReviewContext: boolean;
   dispatchMode?: "queue" | "steer" | undefined;
   source?: OrchestrationMessageSource | undefined;
@@ -565,12 +568,28 @@ function buildTurnStartCommand(input: {
       ...(input.source !== undefined ? { source: input.source } : {}),
     },
     modelSelection: input.modelSelection,
+    ...(input.reviewTarget !== undefined ? { reviewTarget: input.reviewTarget } : {}),
     assistantDeliveryMode: "streaming",
     ...(input.dispatchMode !== undefined ? { dispatchMode: input.dispatchMode } : {}),
     runtimeMode: "approval-required",
     interactionMode: "default",
     createdAt: input.createdAt,
   };
+}
+
+function buildNativeReviewTargetForQuestion(input: {
+  readonly payload: ReviewSidechatContextPayload;
+  readonly question: string;
+  readonly skills?: readonly ProviderSkillReference[] | undefined;
+}): ProviderReviewTarget | null {
+  if (input.question !== REVIEW_RISKS_NATIVE_REVIEW_QUESTION) {
+    return null;
+  }
+  if (input.skills && input.skills.length > 0) {
+    return null;
+  }
+  const branch = input.payload.baseBranch.trim();
+  return branch.length > 0 ? { type: "baseBranch", branch } : null;
 }
 
 function shouldBootstrapReviewContext(thread: Thread | undefined): boolean {
@@ -1012,7 +1031,13 @@ async function dispatchReviewChatTurn(input: {
   const hasBootstrappedReviewContext =
     hasCompleteReviewBootstrapContext(input.payload) &&
     reviewContextBootstrappedKeys.has(threadBootstrapKey);
+  const reviewTarget = buildNativeReviewTargetForQuestion({
+    payload: input.payload,
+    question: input.question,
+    skills: input.skills,
+  });
   const includeReviewContext =
+    reviewTarget === null &&
     !hasBootstrappedReviewContext &&
     (input.resolution.created || shouldBootstrapReviewContext(thread));
   const dispatchMode = isReviewContextBootstrapRunning(thread) ? "steer" : undefined;
@@ -1026,6 +1051,7 @@ async function dispatchReviewChatTurn(input: {
       threadId: input.resolution.threadId,
       modelSelection: input.modelSelection,
       skills: input.skills,
+      ...(reviewTarget !== null ? { reviewTarget } : {}),
       includeReviewContext,
       dispatchMode,
       createdAt: input.createdAt,
