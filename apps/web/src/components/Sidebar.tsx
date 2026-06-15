@@ -280,6 +280,10 @@ export default function Sidebar() {
   const isOnWorkspace = pathname.startsWith("/workspace");
   const isOnReview = pathname.startsWith("/review");
   const { settings: appSettings, updateSettings } = useAppSettings();
+  const isMacDesktop =
+    typeof navigator !== "undefined" ? isMacPlatform(navigator.platform) : false;
+  const shouldReserveOpenSidebarTrafficLightGutter =
+    isElectron && isMacDesktop && appSettings.sidebarSide === "left";
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
   const { createThreadHandoff } = useThreadHandoff();
@@ -2093,7 +2097,8 @@ export default function Sidebar() {
             className={cn(
               "drag-region flex-row items-center gap-2 px-4 py-0 font-system-ui",
               CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-              appSettings.sidebarSide === "left" && DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS,
+              shouldReserveOpenSidebarTrafficLightGutter &&
+                DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS,
             )}
           >
             {titlebarControls}

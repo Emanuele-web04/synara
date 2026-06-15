@@ -99,6 +99,10 @@
     -webkit-backdrop-filter: var(--app-sidebar-backdrop-filter, none);
   }
 
+  .desktop-top-bar-traffic-light-gutter {
+    padding-left: var(--desktop-top-bar-traffic-light-gutter, 90px) !important;
+  }
+
   /* ─── Chat card seam (sidebar ↔ chat divider) ─────────────────────────────────
      ONE seam only. Do NOT add a border to the sidebar surface, and do NOT draw a
      divider line on the SidebarRail — either one makes a SECOND vertical line.
