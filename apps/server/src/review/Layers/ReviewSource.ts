@@ -14,7 +14,7 @@ import {
   type ReviewTargetKey,
   type ReviewTimelineEvent,
 } from "@t3tools/contracts";
-import { Clock, Effect, Layer, Option } from "effect";
+import { Clock, Effect, Fiber, Layer, Option } from "effect";
 
 import type { GitHubCliError } from "../../git/Errors.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -757,87 +757,105 @@ const makeReviewSource = Effect.gen(function* () {
 
   const runAgentReview: ReviewSourceShape["runAgentReview"] = (input) =>
     Effect.gen(function* () {
-      const changeset = yield* loadChangeset({ cwd: input.cwd, source: input.source });
-      const currentPatchSignature = changeset.patchSignature ?? patchSignature(changeset.patch);
-      const currentPatchSource = changeset.patchSource ?? "github";
-      const headMoved =
-        input.expectedHeadSha !== undefined &&
-        changeset.headSha !== undefined &&
-        changeset.headSha !== input.expectedHeadSha;
-      const patchChanged =
-        input.expectedPatchSignature !== undefined &&
-        currentPatchSignature !== input.expectedPatchSignature;
-      if (headMoved || patchChanged) {
-        return {
-          summary: "",
-          findings: [],
-          ...(changeset.headSha ? { reviewedHeadSha: changeset.headSha } : {}),
-          patchSignature: currentPatchSignature,
-          patchSource: currentPatchSource,
-          totalFindings: 0,
-          anchoredFindings: 0,
-          droppedFindings: 0,
-          headMoved,
-          patchChanged,
-          warnings: ["The pull request changed before the agent review could run."],
-        };
-      }
-      if (changeset.patch.trim().length === 0) {
-        return {
-          summary: "",
-          findings: [],
-          ...(changeset.headSha ? { reviewedHeadSha: changeset.headSha } : {}),
-          patchSignature: currentPatchSignature,
-          patchSource: currentPatchSource,
-          totalFindings: 0,
-          anchoredFindings: 0,
-          droppedFindings: 0,
-        };
-      }
-      const pullRequestOverview =
+      const pullRequestOverviewFiber =
         input.source._tag === "pullRequest"
           ? yield* loadPullRequest({ cwd: input.cwd, reference: input.source.reference }).pipe(
               Effect.catch(() => Effect.succeed(null)),
+              Effect.forkChild,
             )
           : null;
+      let pullRequestOverviewJoined = false;
+      const interruptPullRequestOverview =
+        pullRequestOverviewFiber === null
+          ? Effect.void
+          : Effect.gen(function* () {
+              if (!pullRequestOverviewJoined) {
+                yield* Fiber.interrupt(pullRequestOverviewFiber).pipe(Effect.ignore);
+              }
+            });
 
-      const generated = yield* textGeneration.generateReviewFindings({
-        cwd: input.cwd,
-        patch: changeset.patch,
-        ...(changeset.pullRequest ? { prTitle: changeset.pullRequest.title } : {}),
-        ...(pullRequestOverview ? { prBody: pullRequestOverview.detail.body } : {}),
-        ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
-        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-        ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
-        ...(input.textGenerationModel ? { model: input.textGenerationModel } : {}),
-      });
-      const filtered = filterAnchorableFindings(changeset.patch, generated.findings);
-      const findings = filtered.findings.map((finding) => ({
-        ...finding,
-        id: finding.id ?? findingId({ patchSignature: currentPatchSignature, finding }),
-      }));
-      const warnings = [
-        ...(currentPatchSource === "localFallback"
-          ? ["GitHub diff could not be loaded, so the agent reviewed a local fallback diff."]
-          : []),
-        ...(filtered.droppedFindings > 0
-          ? [
-              `${String(filtered.droppedFindings)} finding(s) were dropped because they did not anchor to the current patch.`,
-            ]
-          : []),
-      ];
+      return yield* Effect.gen(function* () {
+        const changeset = yield* loadChangeset({ cwd: input.cwd, source: input.source });
+        const currentPatchSignature = changeset.patchSignature ?? patchSignature(changeset.patch);
+        const currentPatchSource = changeset.patchSource ?? "github";
+        const headMoved =
+          input.expectedHeadSha !== undefined &&
+          changeset.headSha !== undefined &&
+          changeset.headSha !== input.expectedHeadSha;
+        const patchChanged =
+          input.expectedPatchSignature !== undefined &&
+          currentPatchSignature !== input.expectedPatchSignature;
+        if (headMoved || patchChanged) {
+          return {
+            summary: "",
+            findings: [],
+            ...(changeset.headSha ? { reviewedHeadSha: changeset.headSha } : {}),
+            patchSignature: currentPatchSignature,
+            patchSource: currentPatchSource,
+            totalFindings: 0,
+            anchoredFindings: 0,
+            droppedFindings: 0,
+            headMoved,
+            patchChanged,
+            warnings: ["The pull request changed before the agent review could run."],
+          };
+        }
+        if (changeset.patch.trim().length === 0) {
+          return {
+            summary: "",
+            findings: [],
+            ...(changeset.headSha ? { reviewedHeadSha: changeset.headSha } : {}),
+            patchSignature: currentPatchSignature,
+            patchSource: currentPatchSource,
+            totalFindings: 0,
+            anchoredFindings: 0,
+            droppedFindings: 0,
+          };
+        }
+        let pullRequestOverview: ReviewPullRequestOverview | null = null;
+        if (pullRequestOverviewFiber !== null) {
+          pullRequestOverview = yield* Fiber.join(pullRequestOverviewFiber);
+          pullRequestOverviewJoined = true;
+        }
 
-      return {
-        summary: generated.summary,
-        findings,
-        ...(changeset.headSha ? { reviewedHeadSha: changeset.headSha } : {}),
-        patchSignature: currentPatchSignature,
-        patchSource: currentPatchSource,
-        totalFindings: generated.findings.length,
-        anchoredFindings: findings.length,
-        droppedFindings: filtered.droppedFindings,
-        ...(warnings.length > 0 ? { warnings } : {}),
-      };
+        const generated = yield* textGeneration.generateReviewFindings({
+          cwd: input.cwd,
+          patch: changeset.patch,
+          ...(changeset.pullRequest ? { prTitle: changeset.pullRequest.title } : {}),
+          ...(pullRequestOverview ? { prBody: pullRequestOverview.detail.body } : {}),
+          ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+          ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+          ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+          ...(input.textGenerationModel ? { model: input.textGenerationModel } : {}),
+        });
+        const filtered = filterAnchorableFindings(changeset.patch, generated.findings);
+        const findings = filtered.findings.map((finding) => ({
+          ...finding,
+          id: finding.id ?? findingId({ patchSignature: currentPatchSignature, finding }),
+        }));
+        const warnings = [
+          ...(currentPatchSource === "localFallback"
+            ? ["GitHub diff could not be loaded, so the agent reviewed a local fallback diff."]
+            : []),
+          ...(filtered.droppedFindings > 0
+            ? [
+                `${String(filtered.droppedFindings)} finding(s) were dropped because they did not anchor to the current patch.`,
+              ]
+            : []),
+        ];
+
+        return {
+          summary: generated.summary,
+          findings,
+          ...(changeset.headSha ? { reviewedHeadSha: changeset.headSha } : {}),
+          patchSignature: currentPatchSignature,
+          patchSource: currentPatchSource,
+          totalFindings: generated.findings.length,
+          anchoredFindings: findings.length,
+          droppedFindings: filtered.droppedFindings,
+          ...(warnings.length > 0 ? { warnings } : {}),
+        };
+      }).pipe(Effect.ensuring(interruptPullRequestOverview));
     });
 
   const mapProjectScopeError =

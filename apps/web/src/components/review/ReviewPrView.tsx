@@ -102,6 +102,61 @@ function reviewChatPrewarmContextKey(
   ].join("\u001f");
 }
 
+function reviewNumberFromReference(reference: string): number | null {
+  const parsed = Number(reference.trim());
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function buildEarlyReviewSidechatContextPayload(input: {
+  readonly cwd: string | null;
+  readonly reference: string;
+  readonly source: ReviewSourceRef;
+  readonly currentView: "conversation" | "files";
+  readonly selectedFilePath: string | null;
+}): ReviewSidechatContextPayload | null {
+  if (input.cwd === null || input.source._tag !== "pullRequest") {
+    return null;
+  }
+  const number =
+    reviewNumberFromReference(input.source.reference) ?? reviewNumberFromReference(input.reference);
+  if (number === null) {
+    return null;
+  }
+  return {
+    cwd: input.cwd,
+    reference: input.reference,
+    url: "",
+    number,
+    title: `PR #${String(number)}`,
+    author: "unknown",
+    state: "open",
+    isDraft: false,
+    baseBranch: "main",
+    headBranch: "unknown",
+    headSha: null,
+    reviewDecision: null,
+    mergeable: "UNKNOWN",
+    checksStatus: "none",
+    repositoryId: null,
+    source: input.source,
+    target: null,
+    stats: {
+      files: 0,
+      additions: 0,
+      deletions: 0,
+      commits: 0,
+    },
+    body: "",
+    labels: [],
+    reviewers: [],
+    checks: [],
+    files: [],
+    recentConversation: [],
+    currentView: input.currentView,
+    selectedFilePath: input.selectedFilePath,
+  };
+}
+
 export function ReviewPrView(props: {
   cwd: string | null;
   reference: string;
@@ -113,6 +168,7 @@ export function ReviewPrView(props: {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
   const projects = useStore((state) => state.projects);
   const prewarmedReviewChatKeyRef = useRef<string | null>(null);
+  const prewarmingReviewChatKeyRef = useRef<string | null>(null);
   const latestSidechatContextRef = useRef<ReviewSidechatContextPayload | null>(null);
   const sourceKey = reviewSourceKey(props.source);
   useEffect(() => {
@@ -168,6 +224,18 @@ export function ReviewPrView(props: {
     selectedFilePath,
     tab,
   ]);
+  const earlySidechatContext = useMemo(
+    () =>
+      buildEarlyReviewSidechatContextPayload({
+        cwd: props.cwd,
+        reference: props.reference,
+        source: props.source,
+        currentView: tab,
+        selectedFilePath,
+      }),
+    [props.cwd, props.reference, props.source, selectedFilePath, tab],
+  );
+  const prewarmSidechatContext = sidechatContext ?? earlySidechatContext;
   const reviewChatTarget = useMemo(() => {
     if (!sidechatContext) {
       return null;
@@ -188,35 +256,49 @@ export function ReviewPrView(props: {
   );
   const reviewChatThreadId = useStore(selectReviewChatThreadId);
   const reviewChatPrewarmKey = useMemo(() => {
-    if (!sidechatContext?.cwd) {
+    if (!prewarmSidechatContext?.cwd) {
       return null;
     }
     const modelSelection = defaultReviewChatModelSelection();
     return [
-      reviewChatPrewarmContextKey(sidechatContext),
+      reviewChatPrewarmContextKey(prewarmSidechatContext),
       modelSelection.provider,
       modelSelection.model,
       JSON.stringify(modelSelection.options ?? null),
     ].join("\u001f");
-  }, [sidechatContext]);
+  }, [prewarmSidechatContext]);
   useEffect(() => {
-    latestSidechatContextRef.current = sidechatContext;
-  }, [sidechatContext]);
+    latestSidechatContextRef.current = prewarmSidechatContext;
+  }, [prewarmSidechatContext]);
   useEffect(() => {
     const sidechatContext = latestSidechatContextRef.current;
     if (!sidechatContext?.cwd || !reviewChatPrewarmKey) {
       return;
     }
     const modelSelection = defaultReviewChatModelSelection();
-    if (prewarmedReviewChatKeyRef.current === reviewChatPrewarmKey) {
+    if (
+      prewarmedReviewChatKeyRef.current === reviewChatPrewarmKey ||
+      prewarmingReviewChatKeyRef.current === reviewChatPrewarmKey
+    ) {
       return;
     }
-    prewarmedReviewChatKeyRef.current = reviewChatPrewarmKey;
+    prewarmingReviewChatKeyRef.current = reviewChatPrewarmKey;
     void prewarmReviewChatThread({
       payload: sidechatContext,
       modelSelection,
-    }).catch(() => undefined);
-  }, [reviewChatPrewarmKey]);
+    })
+      .then((result) => {
+        if (result.status === "ready") {
+          prewarmedReviewChatKeyRef.current = reviewChatPrewarmKey;
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (prewarmingReviewChatKeyRef.current === reviewChatPrewarmKey) {
+          prewarmingReviewChatKeyRef.current = null;
+        }
+      });
+  }, [projects, reviewChatPrewarmKey]);
   const reviewAction =
     tab === "files" ? (
       <ReviewSubmitBar
@@ -299,7 +381,6 @@ export function ReviewPrView(props: {
                 sidechatContext={sidechatContext}
                 hostThreadId={props.hostThreadId ?? null}
                 reviewThreadId={reviewChatThreadId}
-                sidechatOwnsPrewarm={false}
                 collapsed={sidebarCollapsed}
                 onCollapsedChange={updateSidebarCollapsed}
               />

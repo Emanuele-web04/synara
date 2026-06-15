@@ -5,7 +5,7 @@ import {
   type ProviderKind,
   type ThreadId,
 } from "@t3tools/contracts";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   memo,
   useCallback,
@@ -20,7 +20,10 @@ import {
 } from "react";
 
 import { getAppModelOptions } from "~/appSettings";
-import { splitPromptIntoComposerSegments } from "~/composer-editor-mentions";
+import {
+  splitPromptIntoComposerSegments,
+  splitPromptIntoDisplaySegments,
+} from "~/composer-editor-mentions";
 import {
   deriveCompactChatTimelineEntries,
   deriveWorkLogEntries,
@@ -81,20 +84,23 @@ type OptimisticReviewMessage = {
 type PendingReviewTurn = {
   question: string;
   startedAt: string;
+  phase: "queued" | "sent";
 };
 
 const REVIEW_TURN_START_TIMEOUT_MS = 15_000;
 
 type ReviewSidechatComposerProps = {
-  availableSkills: readonly ProviderSkillDescriptor[];
   compact: boolean;
   isReviewChatWorking: boolean;
+  isSkillDiscoveryPending: boolean;
   isStartingSidechat: boolean;
   modelOptionsByProvider: Record<ProviderKind, ReturnType<typeof getAppModelOptions>>;
   selectedModelSelection: ModelSelection;
   showSuggestions: boolean;
   suggestions: readonly string[];
   onModelSelectionChange: (modelSelection: ModelSelection) => void;
+  onDraftSkillMentionChange: (hasSkillMention: boolean) => void;
+  onResolveSkillsForQuestion: (question: string) => Promise<readonly ProviderSkillReference[]>;
   onSendQuestion: (
     question: string,
     skills: readonly ProviderSkillReference[],
@@ -184,6 +190,10 @@ function buildReviewModelOptionsByProvider(
 
 function normalizeSkillName(name: string): string {
   return name.toLowerCase();
+}
+
+function promptHasDisplaySkillMention(prompt: string): boolean {
+  return splitPromptIntoDisplaySegments(prompt).some((segment) => segment.type === "skill");
 }
 
 function resolveReviewChatSkills(input: {
@@ -387,63 +397,85 @@ const ReviewSidechatTimeline = memo(function ReviewSidechatTimeline({
 });
 
 const ReviewSidechatComposer = memo(function ReviewSidechatComposer({
-  availableSkills,
   compact,
   isReviewChatWorking,
+  isSkillDiscoveryPending,
   isStartingSidechat,
   modelOptionsByProvider,
   selectedModelSelection,
   showSuggestions,
   suggestions,
   onModelSelectionChange,
+  onDraftSkillMentionChange,
+  onResolveSkillsForQuestion,
   onSendQuestion,
 }: ReviewSidechatComposerProps) {
   const [draft, setDraft] = useState("");
   const [cursor, setCursor] = useState(0);
+  const [isResolvingSkills, setIsResolvingSkills] = useState(false);
   const hasPrompt = draft.trim().length > 0;
+  const isSendBlocked = isReviewChatWorking || isSkillDiscoveryPending || isResolvingSkills;
   const sendDraft = useCallback(
     async (rawQuestion: string) => {
       const question = rawQuestion.trim();
-      if (question.length === 0 || isReviewChatWorking) {
+      if (question.length === 0 || isSendBlocked) {
         return;
       }
       const previousDraft = draft;
-      const nextOptimisticMessage = buildOptimisticReviewMessage(question);
-      const skills = resolveReviewChatSkills({
-        prompt: question,
-        availableSkills,
-      });
-      setDraft("");
-      setCursor(0);
-      const sent = await onSendQuestion(question, skills, nextOptimisticMessage);
-      if (!sent) {
-        setDraft(previousDraft);
-        setCursor(previousDraft.length);
+      setIsResolvingSkills(true);
+      try {
+        const skills = await onResolveSkillsForQuestion(question);
+        const nextOptimisticMessage = buildOptimisticReviewMessage(question);
+        setDraft("");
+        setCursor(0);
+        onDraftSkillMentionChange(false);
+        const sent = await onSendQuestion(question, skills, nextOptimisticMessage);
+        if (!sent) {
+          setDraft(previousDraft);
+          setCursor(previousDraft.length);
+          onDraftSkillMentionChange(promptHasDisplaySkillMention(previousDraft));
+        }
+      } finally {
+        setIsResolvingSkills(false);
       }
     },
-    [availableSkills, draft, isReviewChatWorking, onSendQuestion],
+    [
+      draft,
+      isSendBlocked,
+      onDraftSkillMentionChange,
+      onResolveSkillsForQuestion,
+      onSendQuestion,
+    ],
   );
   const handleSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      if (!isReviewChatWorking) {
+      if (!isSendBlocked) {
         void sendDraft(draft);
       }
     },
-    [draft, isReviewChatWorking, sendDraft],
+    [draft, isSendBlocked, sendDraft],
   );
   const handleComposerCommandKey = useCallback(
     (key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash", event: KeyboardEvent): boolean => {
       if (key === "Enter" && !event.shiftKey) {
         event.preventDefault();
-        if (!isReviewChatWorking) {
+        if (!isSendBlocked) {
           void sendDraft(draft);
         }
         return true;
       }
       return false;
     },
-    [draft, isReviewChatWorking, sendDraft],
+    [draft, isSendBlocked, sendDraft],
+  );
+  const handleDraftChange = useCallback(
+    (nextValue: string, nextCursor: number) => {
+      setDraft(nextValue);
+      setCursor(nextCursor);
+      onDraftSkillMentionChange(promptHasDisplaySkillMention(nextValue));
+    },
+    [onDraftSkillMentionChange],
   );
 
   return (
@@ -460,7 +492,7 @@ const ReviewSidechatComposer = memo(function ReviewSidechatComposer({
             <button
               key={suggestion}
               type="button"
-              disabled={isReviewChatWorking}
+              disabled={isSendBlocked}
               className={cn(
                 "rounded-full border border-border/35 bg-muted/20 text-muted-foreground transition-[background-color,color,border-color] duration-150 hover:border-border/60 hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
                 "disabled:pointer-events-none disabled:opacity-45",
@@ -480,14 +512,11 @@ const ReviewSidechatComposer = memo(function ReviewSidechatComposer({
               value={draft}
               cursor={cursor}
               terminalContexts={[]}
-              disabled={isStartingSidechat}
+              disabled={isStartingSidechat || isResolvingSkills}
               placeholder="Ask about this review"
               ariaLabel="Ask about this pull request"
               onRemoveTerminalContext={noopMessagesHandler}
-              onChange={(nextValue, nextCursor) => {
-                setDraft(nextValue);
-                setCursor(nextCursor);
-              }}
+              onChange={handleDraftChange}
               onCommandKeyDown={handleComposerCommandKey}
               onPaste={noopComposerPaste}
               className={cn("max-h-24 overflow-y-auto text-foreground", compact && "max-h-16")}
@@ -507,11 +536,11 @@ const ReviewSidechatComposer = memo(function ReviewSidechatComposer({
             />
             <button
               type="submit"
-              disabled={!hasPrompt || isReviewChatWorking}
+              disabled={!hasPrompt || isSendBlocked}
               className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-foreground text-background opacity-95 transition-[opacity,transform] hover:scale-[1.03] hover:opacity-100 disabled:pointer-events-none disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
               aria-label={isStartingSidechat ? "Starting PR chat" : "Send PR chat question"}
             >
-              {isStartingSidechat ? (
+              {isStartingSidechat || isResolvingSkills ? (
                 <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
               ) : (
                 <ComposerSendArrowIcon className="size-3.5" aria-hidden="true" />
@@ -534,13 +563,16 @@ export function ReviewSidechat(props: {
   header?: ReactNode;
   bodyAfterMessages?: ReactNode;
 }) {
+  const queryClient = useQueryClient();
   const [isStartingSidechat, setIsStartingSidechat] = useState(false);
   const [isStartingNewThread, setIsStartingNewThread] = useState(false);
   const [optimisticMessage, setOptimisticMessage] = useState<OptimisticReviewMessage | null>(null);
   const [pendingReviewTurn, setPendingReviewTurn] = useState<PendingReviewTurn | null>(null);
   const [openedSidechatThreadId, setOpenedSidechatThreadId] = useState<ThreadId | null>(null);
+  const [draftHasSkillMention, setDraftHasSkillMention] = useState(false);
   const manualThreadIdRef = useRef<ThreadId | null>(null);
   const prewarmedKeyRef = useRef<string | null>(null);
+  const prewarmingKeyRef = useRef<string | null>(null);
   const latestContextRef = useRef(props.context);
   const [selectedModelSelection, setSelectedModelSelection] = useState<ModelSelection>(() =>
     defaultReviewChatModelSelection(),
@@ -577,10 +609,14 @@ export function ReviewSidechat(props: {
       provider: selectedModelSelection.provider,
       cwd: props.context.cwd,
       threadId: activeThreadId,
-      enabled: props.context.cwd != null,
+      enabled: props.context.cwd != null && draftHasSkillMention,
     }),
   );
-  const availableSkills = providerSkillsQuery.data?.skills ?? emptyProviderSkills;
+  const availableSkills = draftHasSkillMention
+    ? (providerSkillsQuery.data?.skills ?? emptyProviderSkills)
+    : emptyProviderSkills;
+  const isSkillDiscoveryPending =
+    draftHasSkillMention && providerSkillsQuery.isLoading && availableSkills.length === 0;
   const displayMessages = useMemo(() => {
     const hasServerEcho =
       optimisticMessage !== null &&
@@ -693,6 +729,36 @@ export function ReviewSidechat(props: {
       }),
     [props.context, selectedModelSelection],
   );
+  const handleDraftSkillMentionChange = useCallback((hasSkillMention: boolean) => {
+    setDraftHasSkillMention(hasSkillMention);
+  }, []);
+  const resolveSkillsForQuestion = useCallback(
+    async (question: string): Promise<readonly ProviderSkillReference[]> => {
+      const skillNames = splitPromptIntoComposerSegments(question).filter(
+        (segment) => segment.type === "skill",
+      );
+      if (skillNames.length === 0 || props.context.cwd === null) {
+        return [];
+      }
+      try {
+        const result = await queryClient.ensureQueryData(
+          providerSkillsQueryOptions({
+            provider: selectedModelSelection.provider,
+            cwd: props.context.cwd,
+            threadId: activeThreadId,
+            enabled: true,
+          }),
+        );
+        return resolveReviewChatSkills({
+          prompt: question,
+          availableSkills: result.skills,
+        });
+      } catch {
+        return [];
+      }
+    },
+    [activeThreadId, props.context.cwd, queryClient, selectedModelSelection.provider],
+  );
   useEffect(() => {
     manualThreadIdRef.current = null;
     setOpenedSidechatThreadId(props.reviewThreadId ?? null);
@@ -709,10 +775,10 @@ export function ReviewSidechat(props: {
     if (!latestContextRef.current.cwd) {
       return;
     }
-    if (prewarmedKeyRef.current === prewarmKey) {
+    if (prewarmedKeyRef.current === prewarmKey || prewarmingKeyRef.current === prewarmKey) {
       return;
     }
-    prewarmedKeyRef.current = prewarmKey;
+    prewarmingKeyRef.current = prewarmKey;
     let cancelled = false;
     void prewarmReviewChatThread({
       payload: latestContextRef.current,
@@ -722,7 +788,18 @@ export function ReviewSidechat(props: {
           setOpenedSidechatThreadId(threadId);
         }
       },
-    }).catch(() => undefined);
+    })
+      .then((result) => {
+        if (result.status === "ready") {
+          prewarmedKeyRef.current = prewarmKey;
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (prewarmingKeyRef.current === prewarmKey) {
+          prewarmingKeyRef.current = null;
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -779,6 +856,7 @@ export function ReviewSidechat(props: {
   useEffect(() => {
     if (
       !pendingReviewTurn ||
+      pendingReviewTurn.phase === "queued" ||
       activeTurnBelongsToPendingReviewTurn ||
       hasVisibleProgressAfterPendingTurn
     ) {
@@ -810,7 +888,7 @@ export function ReviewSidechat(props: {
     ): Promise<boolean> => {
       setIsStartingSidechat(true);
       setOptimisticMessage(nextOptimisticMessage);
-      setPendingReviewTurn({ question, startedAt: nextOptimisticMessage.message.createdAt });
+      setPendingReviewTurn(null);
       try {
         const result = await sendReviewChatQuestion({
           payload: latestContextRef.current,
@@ -821,9 +899,29 @@ export function ReviewSidechat(props: {
           onThreadReady: (threadId) => {
             setOpenedSidechatThreadId(threadId);
           },
+          onQueuedTurnStarted: (threadId, startedAt) => {
+            setOpenedSidechatThreadId(threadId);
+            setPendingReviewTurn((current) =>
+              current?.startedAt === startedAt ? { ...current, phase: "sent" } : current,
+            );
+          },
+          onQueuedTurnFailed: (_threadId, queuedAt, reason) => {
+            setPendingReviewTurn((current) => (current?.startedAt === queuedAt ? null : current));
+            setOptimisticMessage(null);
+            toastManager.add({
+              type: "error",
+              title: "Could not send PR chat message",
+              description: reason,
+            });
+          },
         });
-        if (result.status === "sent") {
+        if (result.status === "sent" || result.status === "queued") {
           setOpenedSidechatThreadId(result.threadId);
+          setPendingReviewTurn({
+            question,
+            startedAt: result.status === "sent" ? result.turnRequestedAt : result.queuedAt,
+            phase: result.status,
+          });
           return true;
         }
         setOptimisticMessage(null);
@@ -941,15 +1039,17 @@ export function ReviewSidechat(props: {
         <div className="min-h-0 flex-1 overflow-y-auto">{props.bodyAfterMessages}</div>
       ) : null}
       <ReviewSidechatComposer
-        availableSkills={availableSkills}
         compact={compact}
         isReviewChatWorking={isReviewChatWorking}
+        isSkillDiscoveryPending={isSkillDiscoveryPending}
         isStartingSidechat={isStartingSidechat}
         modelOptionsByProvider={modelOptionsByProvider}
         selectedModelSelection={selectedModelSelection}
         showSuggestions={visibleMessages.length === 0 && optimisticMessage === null}
         suggestions={suggestions}
+        onDraftSkillMentionChange={handleDraftSkillMentionChange}
         onModelSelectionChange={setSelectedModelSelection}
+        onResolveSkillsForQuestion={resolveSkillsForQuestion}
         onSendQuestion={sendQuestion}
       />
     </section>

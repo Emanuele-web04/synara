@@ -53,6 +53,34 @@ const sendReviewChatQuestionMock = vi.mocked(sendReviewChatQuestion);
 const initialStoreState = useStore.getState();
 type SendReviewChatResult = Awaited<ReturnType<typeof sendReviewChatQuestion>>;
 
+const nativeApiMock = vi.hoisted(() => ({
+  listSkills: vi.fn(async () => ({
+    skills: [
+      {
+        name: "hallmark",
+        description: "Check generated-code tells.",
+        path: "/Users/tylersheffield/.agents/skills/hallmark/SKILL.md",
+        enabled: true,
+      },
+    ],
+    source: "mock",
+    cached: false,
+  })),
+}));
+
+vi.mock("~/nativeApi", () => ({
+  ensureNativeApi: () => ({
+    provider: {
+      listSkills: nativeApiMock.listSkills,
+    },
+  }),
+  readNativeApi: () => ({
+    provider: {
+      listSkills: nativeApiMock.listSkills,
+    },
+  }),
+}));
+
 const DETAIL = {
   number: 7866,
   title: "docs(test): dashboard vitest harness research",
@@ -157,6 +185,7 @@ describe("ReviewPrSidebar", () => {
     useStore.setState(initialStoreState, true);
     prewarmReviewChatThreadMock.mockClear();
     sendReviewChatQuestionMock.mockClear();
+    nativeApiMock.listSkills.mockClear();
   });
 
   it("shows checks and keeps PR chat on the PR-bound Synara thread path", async () => {
@@ -272,7 +301,30 @@ describe("ReviewPrSidebar", () => {
         status: "sent",
         threadId: ThreadId.makeUnsafe("thread-review-chat-optimistic"),
         created: true,
+        turnRequestedAt: new Date().toISOString(),
       });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the outgoing question visible when PR chat send is queued", async () => {
+    sendReviewChatQuestionMock.mockResolvedValueOnce({
+      status: "queued",
+      threadId: ThreadId.makeUnsafe("thread-review-chat-queued"),
+      created: true,
+      queuedAt: new Date().toISOString(),
+      reason: "session_warming",
+    });
+    const mounted = await mountSidebar();
+
+    try {
+      await page.getByTestId("composer-editor").fill("What changed?");
+      await page.getByRole("button", { name: "Send PR chat question" }).click();
+
+      await expect.element(page.getByText("What changed?")).toBeVisible();
+      await expect.element(page.getByText("Starting review agent...")).toBeVisible();
+      await expect.element(page.getByText("PR chat is unavailable")).not.toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }
@@ -326,6 +378,7 @@ describe("ReviewPrSidebar", () => {
         status: "sent",
         threadId: ThreadId.makeUnsafe("thread-review-chat"),
         created: false,
+        turnRequestedAt: new Date().toISOString(),
       });
     } finally {
       await mounted.cleanup();
@@ -357,6 +410,65 @@ describe("ReviewPrSidebar", () => {
       await page.getByRole("button", { name: "Find review risks" }).click();
       expect(sendReviewChatQuestionMock).toHaveBeenCalledTimes(1);
       expect(sendReviewChatQuestionMock.mock.calls[0]?.[0].question).toBe("Find review risks");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps skill discovery off plain PR chat sends", async () => {
+    const mounted = await mountSidebar();
+    try {
+      await expect.element(page.getByRole("heading", { name: "Ask Devin" })).toBeVisible();
+      expect(nativeApiMock.listSkills).toHaveBeenCalledTimes(0);
+
+      await page.getByRole("button", { name: "Find review risks" }).click();
+
+      expect(nativeApiMock.listSkills).toHaveBeenCalledTimes(0);
+      expect(sendReviewChatQuestionMock).toHaveBeenCalledTimes(1);
+      expect(sendReviewChatQuestionMock.mock.calls[0]?.[0].skills).toEqual([]);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("discovers skills only after a PR chat draft mentions one", async () => {
+    let resolveSkills = (_result: Awaited<ReturnType<typeof nativeApiMock.listSkills>>) => {};
+    nativeApiMock.listSkills.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSkills = resolve;
+        }),
+    );
+    const mounted = await mountSidebar();
+    try {
+      await page.getByTestId("composer-editor").fill("$hallmark Find review risks");
+      await page.getByRole("button", { name: "Send PR chat question" }).click();
+
+      expect(nativeApiMock.listSkills).toHaveBeenCalledTimes(1);
+      expect(sendReviewChatQuestionMock).toHaveBeenCalledTimes(0);
+      resolveSkills({
+        skills: [
+          {
+            name: "hallmark",
+            description: "Check generated-code tells.",
+            path: "/Users/tylersheffield/.agents/skills/hallmark/SKILL.md",
+            enabled: true,
+          },
+        ],
+        source: "mock",
+        cached: false,
+      });
+
+      await vi.waitFor(() => {
+        expect(sendReviewChatQuestionMock).toHaveBeenCalledTimes(1);
+      });
+      expect(sendReviewChatQuestionMock).toHaveBeenCalledTimes(1);
+      expect(sendReviewChatQuestionMock.mock.calls[0]?.[0].skills).toEqual([
+        {
+          name: "hallmark",
+          path: "/Users/tylersheffield/.agents/skills/hallmark/SKILL.md",
+        },
+      ]);
     } finally {
       await mounted.cleanup();
     }
@@ -558,7 +670,7 @@ describe("ReviewPrSidebar", () => {
       const input = page.getByTestId("composer-editor");
       await expect.element(page.getByText("Reading changed files")).toBeVisible();
       await vi.waitFor(() => {
-        expect(prewarmReviewChatThreadMock).toHaveBeenCalledTimes(1);
+        expect(prewarmReviewChatThreadMock).toHaveBeenCalledTimes(2);
       });
 
       const threadId = ThreadId.makeUnsafe("thread-review-chat-normalized");
@@ -592,7 +704,7 @@ describe("ReviewPrSidebar", () => {
 
       expect(performance.now() - startedAt).toBeLessThan(1_500);
       await expect.element(input).toHaveTextContent("Production question 19");
-      expect(prewarmReviewChatThreadMock).toHaveBeenCalledTimes(1);
+      expect(prewarmReviewChatThreadMock).toHaveBeenCalledTimes(2);
     } finally {
       await mounted.cleanup();
     }
