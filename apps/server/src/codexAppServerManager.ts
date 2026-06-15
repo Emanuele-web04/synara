@@ -138,6 +138,15 @@ export type {
   CodexTransportFactoryInput,
 } from "./codexAppServer.types.ts";
 
+const DEFAULT_CODEX_REQUEST_TIMEOUT_MS = 20_000;
+const CODEX_THREAD_OPEN_REQUEST_TIMEOUT_MS = 90_000;
+
+function codexRequestTimeoutMs(method: string): number {
+  return method === "thread/start" || method === "thread/resume"
+    ? CODEX_THREAD_OPEN_REQUEST_TIMEOUT_MS
+    : DEFAULT_CODEX_REQUEST_TIMEOUT_MS;
+}
+
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
   private readonly discoverySessions = new Map<string, CodexSessionContext>();
@@ -294,25 +303,30 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         sparkEnabled: true,
       };
 
-      try {
-        const modelListResponse = await this.sendRequest(context, "model/list", {});
-        console.log("codex model/list response", modelListResponse);
-        advertisedModelSlugs = parseModelListResponse(modelListResponse).map((model) => model.slug);
-      } catch (error) {
-        console.log("codex model/list failed", error);
+      const [modelListResult, accountReadResult] = await Promise.allSettled([
+        this.sendRequest(context, "model/list", {}),
+        this.sendRequest(context, "account/read", {}),
+      ]);
+
+      if (modelListResult.status === "fulfilled") {
+        console.log("codex model/list response", modelListResult.value);
+        advertisedModelSlugs = parseModelListResponse(modelListResult.value).map(
+          (model) => model.slug,
+        );
+      } else {
+        console.log("codex model/list failed", modelListResult.reason);
       }
 
-      try {
-        const accountReadResponse = await this.sendRequest(context, "account/read", {});
-        console.log("codex account/read response", accountReadResponse);
-        account = readCodexAccountSnapshot(accountReadResponse);
+      if (accountReadResult.status === "fulfilled") {
+        console.log("codex account/read response", accountReadResult.value);
+        account = readCodexAccountSnapshot(accountReadResult.value);
         console.log("codex subscription status", {
           type: account.type,
           planType: account.planType,
           sparkEnabled: account.sparkEnabled,
         });
-      } catch (error) {
-        console.log("codex account/read failed", error);
+      } else {
+        console.log("codex account/read failed", accountReadResult.reason);
       }
 
       return { advertisedModelSlugs, account };
@@ -856,7 +870,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
     method: string,
     params: unknown,
-    timeoutMs = 20_000,
+    timeoutMs = codexRequestTimeoutMs(method),
   ): Promise<TResponse> {
     const id = context.nextRequestId;
     context.nextRequestId += 1;

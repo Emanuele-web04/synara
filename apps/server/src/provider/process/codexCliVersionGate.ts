@@ -8,6 +8,7 @@ import {
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
 
 const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
+const supportedVersionChecks = new Set<string>();
 
 /**
  * Local-only Codex CLI version gate. Lives on the local-process path so the
@@ -19,6 +20,11 @@ export function assertSupportedCodexCliVersion(input: {
   readonly cwd: string;
   readonly homePath?: string;
 }): void {
+  const cacheKey = [input.binaryPath, input.cwd, input.homePath ?? ""].join("\u001f");
+  if (supportedVersionChecks.has(cacheKey)) {
+    return;
+  }
+
   const result = spawnSync(input.binaryPath, ["--version"], {
     cwd: input.cwd,
     env: buildCodexProcessEnv(input.homePath ? { homePath: input.homePath } : {}),
@@ -54,4 +60,5 @@ export function assertSupportedCodexCliVersion(input: {
   if (parsedVersion && !isCodexCliVersionSupported(parsedVersion)) {
     throw new Error(formatCodexCliUpgradeMessage(parsedVersion));
   }
+  supportedVersionChecks.add(cacheKey);
 }

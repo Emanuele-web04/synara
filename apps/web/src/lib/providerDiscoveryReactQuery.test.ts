@@ -21,7 +21,7 @@ describe("provider discovery query keys are search-independent", () => {
 
   it("commands key does not vary with what the user types", () => {
     const key = providerDiscoveryQueryKeys.commands("codex", "/repo", null);
-    expect(key).toEqual(["provider-discovery", "commands", "codex", "/repo", null]);
+    expect(key).toEqual(["provider-discovery", "commands", "codex", "/repo", null, null]);
   });
 
   it("two skill option builds for the same workspace share one cache key", () => {
@@ -30,6 +30,22 @@ describe("provider discovery query keys are search-independent", () => {
     const a = providerSkillsQueryOptions({ provider: "codex", cwd: "/repo" });
     const b = providerSkillsQueryOptions({ provider: "codex", cwd: "/repo" });
     expect(a.queryKey).toEqual(b.queryKey);
+  });
+
+  it("can defer skill discovery while keeping the same cache key", () => {
+    const deferred = providerSkillsQueryOptions({
+      provider: "codex",
+      cwd: "/repo",
+      enabled: false,
+    });
+    const enabled = providerSkillsQueryOptions({
+      provider: "codex",
+      cwd: "/repo",
+      enabled: true,
+    });
+    expect(deferred.queryKey).toEqual(enabled.queryKey);
+    expect(deferred.enabled).toBe(false);
+    expect(enabled.enabled).toBe(true);
   });
 
   it("two command option builds for the same workspace share one cache key", () => {
