@@ -85,7 +85,7 @@ type OptimisticReviewMessage = {
 type PendingReviewTurn = {
   question: string;
   startedAt: string;
-  phase: "queued" | "sent";
+  phase: "queued" | "provider-start-requested" | "sent";
 };
 
 const REVIEW_TURN_START_TIMEOUT_MS = 15_000;
@@ -699,7 +699,9 @@ export function ReviewSidechat(props: {
       return "starting";
     }
     if (pendingReviewTurn !== null) {
-      return pendingReviewTurn.phase === "sent" || activeTurnBelongsToPendingReviewTurn
+      return pendingReviewTurn.phase === "sent" ||
+        pendingReviewTurn.phase === "provider-start-requested" ||
+        activeTurnBelongsToPendingReviewTurn
         ? "thinking"
         : "starting";
     }
@@ -902,6 +904,14 @@ export function ReviewSidechat(props: {
           skills,
           onThreadReady: (threadId) => {
             setOpenedSidechatThreadId(threadId);
+          },
+          onQueuedProviderStartRequested: (threadId, startedAt) => {
+            setOpenedSidechatThreadId(threadId);
+            setPendingReviewTurn((current) =>
+              current?.startedAt === startedAt
+                ? { ...current, phase: "provider-start-requested" }
+                : current,
+            );
           },
           onQueuedTurnStarted: (threadId, startedAt) => {
             setOpenedSidechatThreadId(threadId);

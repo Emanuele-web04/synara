@@ -242,10 +242,19 @@ export async function startSession(
     }
     const discoveryCacheKey =
       input.createTransport === undefined ? `${codexBinaryPath}${codexHomePath ?? ""}` : undefined;
+    const usesReviewProfile = input.reviewProfile === "review-chat";
+    const deferStartupDiscovery = input.createTransport === undefined && usesReviewProfile;
     const usedDiscoveryCache =
-      discoveryCacheKey !== undefined && deps.localStartupDiscoveryCache.has(discoveryCacheKey);
+      !deferStartupDiscovery &&
+      discoveryCacheKey !== undefined &&
+      deps.localStartupDiscoveryCache.has(discoveryCacheKey);
     const discoveryStartedAt = Date.now();
-    const discovery = await deps.resolveStartupDiscovery(context, discoveryCacheKey);
+    const discovery = deferStartupDiscovery
+      ? {
+          advertisedModelSlugs: [] as ReadonlyArray<string>,
+          account: context.account,
+        }
+      : await deps.resolveStartupDiscovery(context, discoveryCacheKey);
     const discoveryResolvedAt = Date.now();
     const advertisedModelSlugs = discovery.advertisedModelSlugs;
     context.account = discovery.account;
@@ -266,7 +275,6 @@ export async function startSession(
           })
         : (normalizedModel ?? null);
     const runtimeSessionOverrides = mapCodexRuntimeMode(input.runtimeMode ?? "full-access");
-    const usesReviewProfile = input.reviewProfile === "review-chat";
     const effectiveApprovalPolicy =
       input.approvalPolicy ??
       (usesReviewProfile ? "never" : runtimeSessionOverrides.approvalPolicy);
@@ -399,6 +407,7 @@ export async function startSession(
       threadOpenMs: Date.now() - discoveryResolvedAt,
       totalMs: Date.now() - startupStartedAt,
       usedDiscoveryCache,
+      deferredStartupDiscovery: deferStartupDiscovery,
       reusedPooledAppServer,
       usedThreadStart: threadOpenMethod === "thread/start",
       usedThreadResume: threadOpenMethod === "thread/resume",
@@ -413,6 +422,16 @@ export async function startSession(
       pluginCount: null,
       skillCount: null,
     }).pipe(deps.runPromise);
+    if (deferStartupDiscovery) {
+      void deps
+        .resolveStartupDiscovery(context, discoveryCacheKey)
+        .then((deferredDiscovery) => {
+          context.account = deferredDiscovery.account;
+        })
+        .catch((error: unknown) => {
+          console.log("codex deferred startup discovery failed", error);
+        });
+    }
     return { ...context.session };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to start Codex session.";

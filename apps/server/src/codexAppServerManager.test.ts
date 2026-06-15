@@ -2991,6 +2991,15 @@ describe("Codex protocol over an in-memory transport", () => {
         ephemeral: true,
         serviceName: "synara_review_chat",
       });
+      await waitFor(
+        () =>
+          harness.outboundFrames.some((frame) => frame.method === "model/list") &&
+          harness.outboundFrames.some((frame) => frame.method === "account/read"),
+        "deferred startup discovery",
+      );
+      const methods = harness.outboundFrames.map((frame) => frame.method);
+      expect(methods.indexOf("thread/start")).toBeLessThan(methods.indexOf("model/list"));
+      expect(methods.indexOf("thread/start")).toBeLessThan(methods.indexOf("account/read"));
     } finally {
       await harness.stop();
     }

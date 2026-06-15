@@ -52,6 +52,10 @@ export type ReviewChatPrewarmResult = ReviewChatThreadResult;
 
 export type ReviewChatThreadReadyHandler = (threadId: ThreadId, created: boolean) => void;
 export type ReviewChatQueuedTurnStartedHandler = (threadId: ThreadId, startedAt: string) => void;
+export type ReviewChatQueuedProviderStartRequestedHandler = (
+  threadId: ThreadId,
+  startedAt: string,
+) => void;
 export type ReviewChatQueuedTurnFailedHandler = (
   threadId: ThreadId,
   queuedAt: string,
@@ -1072,6 +1076,9 @@ async function flushQueuedReviewTurn(input: {
   readonly question: string;
   readonly skills?: readonly ProviderSkillReference[] | undefined;
   readonly queuedAt: string;
+  readonly onQueuedProviderStartRequested?:
+    | ReviewChatQueuedProviderStartRequestedHandler
+    | undefined;
   readonly onQueuedTurnStarted?: ReviewChatQueuedTurnStartedHandler | undefined;
 }): Promise<void> {
   const sessionReady = await ensureReviewChatSessionReady({
@@ -1084,6 +1091,7 @@ async function flushQueuedReviewTurn(input: {
   if (!sessionReady) {
     throw new Error("Review chat session did not finish warming before the timeout.");
   }
+  input.onQueuedProviderStartRequested?.(input.resolution.threadId, input.queuedAt);
   await dispatchReviewChatTurn({
     api: input.api,
     payload: input.payload,
@@ -1106,6 +1114,9 @@ function enqueueQueuedReviewTurn(input: {
   readonly question: string;
   readonly skills?: readonly ProviderSkillReference[] | undefined;
   readonly queuedAt: string;
+  readonly onQueuedProviderStartRequested?:
+    | ReviewChatQueuedProviderStartRequestedHandler
+    | undefined;
   readonly onQueuedTurnStarted?: ReviewChatQueuedTurnStartedHandler | undefined;
   readonly onQueuedTurnFailed?: ReviewChatQueuedTurnFailedHandler | undefined;
 }): void {
@@ -1136,6 +1147,7 @@ export async function sendReviewChatQuestion(input: {
   modelSelection?: ModelSelection | undefined;
   skills?: readonly ProviderSkillReference[] | undefined;
   onThreadReady?: ReviewChatThreadReadyHandler | undefined;
+  onQueuedProviderStartRequested?: ReviewChatQueuedProviderStartRequestedHandler | undefined;
   onQueuedTurnStarted?: ReviewChatQueuedTurnStartedHandler | undefined;
   onQueuedTurnFailed?: ReviewChatQueuedTurnFailedHandler | undefined;
   api?: ReviewChatApi | undefined;
@@ -1216,6 +1228,7 @@ export async function sendReviewChatQuestion(input: {
       question: input.question,
       skills: input.skills,
       queuedAt: createdAt,
+      onQueuedProviderStartRequested: input.onQueuedProviderStartRequested,
       onQueuedTurnStarted: input.onQueuedTurnStarted,
       onQueuedTurnFailed: input.onQueuedTurnFailed,
     });

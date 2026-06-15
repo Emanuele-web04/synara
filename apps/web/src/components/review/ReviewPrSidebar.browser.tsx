@@ -360,6 +360,36 @@ describe("ReviewPrSidebar", () => {
     }
   });
 
+  it("shows thinking once a queued PR chat turn is handed to the provider", async () => {
+    let sendInput: Parameters<typeof sendReviewChatQuestion>[0] | null = null;
+    const queuedAt = new Date().toISOString();
+    sendReviewChatQuestionMock.mockImplementationOnce(async (input) => {
+      sendInput = input;
+      return {
+        status: "queued",
+        threadId: ThreadId.makeUnsafe("thread-review-chat-provider-starting"),
+        created: true,
+        queuedAt,
+        reason: "session_warming",
+      };
+    });
+    const mounted = await mountSidebar();
+
+    try {
+      await page.getByTestId("composer-editor").fill("Find the issue");
+      await page.getByRole("button", { name: "Send PR chat question" }).click();
+
+      await expect.element(page.getByText("Starting review agent...")).toBeVisible();
+      sendInput?.onQueuedProviderStartRequested?.(
+        ThreadId.makeUnsafe("thread-review-chat-provider-starting"),
+        queuedAt,
+      );
+      await expect.element(page.getByText("Thinking...")).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("renders first model reasoning in review chat within the app-side first-output budget", async () => {
     const sendDeferred: { resolve?: (result: SendReviewChatResult) => void } = {};
     sendReviewChatQuestionMock.mockImplementationOnce(

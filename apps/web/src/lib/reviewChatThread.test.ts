@@ -439,6 +439,53 @@ describe("reviewChatThread", () => {
     expect(commands.find(isThreadTurnStartCommand)?.message.text).toContain("Summarize this PR");
   });
 
+  it("notifies when a queued review turn is being dispatched to the provider", async () => {
+    const payload = makePayload();
+    const target = buildReviewChatTarget(payload, projectId);
+    const existingThreadId = ThreadId.makeUnsafe("thread-existing-review-chat-provider-start");
+    useStore.getState().syncServerShellSnapshot(
+      makeShellSnapshot({
+        existingThreadId,
+        reviewChatTarget: target,
+      }),
+    );
+    const events: string[] = [];
+    const api: ReviewChatTestApi = {
+      orchestration: {
+        dispatchCommand: vi.fn(async (command) => {
+          events.push(command.type);
+          syncReadyReviewChatSessionForEnsure({
+            command,
+            commands: [command],
+            reviewChatTarget: target,
+          });
+          return { sequence: events.length };
+        }),
+        getShellSnapshot: vi.fn(async () =>
+          makeShellSnapshot({ existingThreadId, reviewChatTarget: target }),
+        ),
+        subscribeThread: vi.fn(async () => undefined),
+      },
+    };
+
+    const result = await sendReviewChatQuestion({
+      payload,
+      question: "Summarize this PR",
+      api,
+      onQueuedProviderStartRequested: () => events.push("provider-start-requested"),
+    });
+
+    expect(result).toMatchObject({ status: "queued", threadId: existingThreadId, created: false });
+    await vi.waitFor(() => {
+      expect(events).toContain("thread.turn.start");
+    });
+    expect(events).toEqual([
+      "thread.session.ensure",
+      "provider-start-requested",
+      "thread.turn.start",
+    ]);
+  });
+
   it("can start a fresh bound review thread even when one already exists", async () => {
     const payload = makePayload();
     const target = buildReviewChatTarget(payload, projectId);
