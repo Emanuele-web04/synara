@@ -41,6 +41,7 @@ import type {
   CodexStartupDiscovery,
   CodexTransportFactory,
   CodexTransportFactoryInput,
+  CodexWorkspaceRuntime,
 } from "./codexAppServer.types.ts";
 import type { JsonRpcLineTransport } from "./provider/process/JsonRpcLineTransport.ts";
 
@@ -62,6 +63,17 @@ export interface CodexSessionOpenDeps {
     input: CodexTransportFactoryInput,
     perSessionFactory?: CodexTransportFactory,
   ): Promise<JsonRpcLineTransport>;
+  canUseWorkspaceRuntime(input: {
+    readonly binaryPath: string;
+    readonly cwd: string;
+    readonly homePath?: string;
+    readonly createTransport?: CodexTransportFactory;
+  }): boolean;
+  ensureWorkspaceRuntime(input: {
+    readonly binaryPath: string;
+    readonly cwd: string;
+    readonly homePath?: string;
+  }): Promise<CodexWorkspaceRuntime>;
   attachProcessListeners(context: CodexSessionContext): void;
   emitLifecycleEvent(context: CodexSessionContext, method: string, message: string): void;
   emitErrorEvent(context: CodexSessionContext, method: string, message: string): void;
@@ -146,47 +158,74 @@ export async function startSession(
     });
     let reusedPooledAppServer = false;
     let appServerProcessAgeMs = 0;
-    const pooledContext =
-      input.createTransport === undefined &&
-      codexHomePath === undefined &&
-      codexBinaryPath === "codex"
-        ? deps.discoverySessions.get(resolvedCwd)
-        : undefined;
     if (
-      pooledContext &&
-      !pooledContext.stopping &&
-      pooledContext.pending.size === 0 &&
-      pooledContext.pendingApprovals.size === 0 &&
-      pooledContext.pendingUserInputs.size === 0 &&
-      (await deps.isContextAlive(pooledContext))
+      deps.canUseWorkspaceRuntime({
+        binaryPath: codexBinaryPath,
+        cwd: resolvedCwd,
+        ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        ...(input.createTransport ? { createTransport: input.createTransport } : {}),
+      })
     ) {
-      const pooledStartedAtMs = Date.parse(pooledContext.session.createdAt);
-      appServerProcessAgeMs = Number.isNaN(pooledStartedAtMs) ? 0 : Date.now() - pooledStartedAtMs;
-      const idleTimer = deps.discoverySessionIdleTimers.get(resolvedCwd);
-      if (idleTimer) {
-        clearTimeout(idleTimer);
-        deps.discoverySessionIdleTimers.delete(resolvedCwd);
-      }
-      deps.discoverySessions.delete(resolvedCwd);
-      pooledContext.session = session;
-      pooledContext.discovery = false;
-      context = pooledContext;
+      const workspaceRuntime = await deps.ensureWorkspaceRuntime({
+        binaryPath: codexBinaryPath,
+        cwd: resolvedCwd,
+        ...(codexHomePath ? { homePath: codexHomePath } : {}),
+      });
+      const workspaceStartedAtMs = Date.parse(workspaceRuntime.rootContext.session.createdAt);
+      appServerProcessAgeMs = Number.isNaN(workspaceStartedAtMs)
+        ? 0
+        : Date.now() - workspaceStartedAtMs;
+      context = freshSessionContext(session, workspaceRuntime.rootContext.transport);
+      context.workspaceRuntime = workspaceRuntime;
+      context.account = workspaceRuntime.rootContext.account;
+      workspaceRuntime.sessions.set(threadId, context);
       deps.sessions.set(threadId, context);
       reusedPooledAppServer = true;
     } else {
-      const transport = await deps.createTransport(
-        {
-          binaryPath: codexBinaryPath,
-          cwd: resolvedCwd,
-          ...(codexHomePath ? { homePath: codexHomePath } : {}),
-        },
-        input.createTransport,
-      );
+      const pooledContext =
+        input.createTransport === undefined &&
+        codexHomePath === undefined &&
+        codexBinaryPath === "codex"
+          ? deps.discoverySessions.get(resolvedCwd)
+          : undefined;
+      if (
+        pooledContext &&
+        !pooledContext.stopping &&
+        pooledContext.pending.size === 0 &&
+        pooledContext.pendingApprovals.size === 0 &&
+        pooledContext.pendingUserInputs.size === 0 &&
+        (await deps.isContextAlive(pooledContext))
+      ) {
+        const pooledStartedAtMs = Date.parse(pooledContext.session.createdAt);
+        appServerProcessAgeMs = Number.isNaN(pooledStartedAtMs)
+          ? 0
+          : Date.now() - pooledStartedAtMs;
+        const idleTimer = deps.discoverySessionIdleTimers.get(resolvedCwd);
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+          deps.discoverySessionIdleTimers.delete(resolvedCwd);
+        }
+        deps.discoverySessions.delete(resolvedCwd);
+        pooledContext.session = session;
+        pooledContext.discovery = false;
+        context = pooledContext;
+        deps.sessions.set(threadId, context);
+        reusedPooledAppServer = true;
+      } else {
+        const transport = await deps.createTransport(
+          {
+            binaryPath: codexBinaryPath,
+            cwd: resolvedCwd,
+            ...(codexHomePath ? { homePath: codexHomePath } : {}),
+          },
+          input.createTransport,
+        );
 
-      context = freshSessionContext(session, transport);
+        context = freshSessionContext(session, transport);
 
-      deps.sessions.set(threadId, context);
-      deps.attachProcessListeners(context);
+        deps.sessions.set(threadId, context);
+        deps.attachProcessListeners(context);
+      }
     }
 
     deps.emitLifecycleEvent(context, "session/connecting", "Starting codex app-server");
@@ -260,6 +299,7 @@ export async function startSession(
         ? `Attempting to resume thread ${resumeThreadId}.`
         : "Starting a new Codex thread.",
     );
+    context.workspaceRuntime?.openingSessions.add(threadId);
     await Effect.logInfo("codex app-server opening thread", {
       threadId,
       requestedRuntimeMode: input.runtimeMode,
@@ -326,6 +366,10 @@ export async function startSession(
       throw new Error(`${threadOpenMethod} response did not include a thread id.`);
     }
     const providerThreadId = threadIdRaw;
+    if (context.workspaceRuntime) {
+      context.workspaceRuntime.providerThreadIds.set(providerThreadId, threadId);
+      context.workspaceRuntime.openingSessions.delete(threadId);
+    }
 
     deps.updateSession(context, {
       status: "ready",
@@ -373,6 +417,7 @@ export async function startSession(
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to start Codex session.";
     if (context) {
+      context.workspaceRuntime?.openingSessions.delete(threadId);
       deps.updateSession(context, {
         status: "error",
         lastError: message,

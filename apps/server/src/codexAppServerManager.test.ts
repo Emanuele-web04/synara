@@ -2851,9 +2851,13 @@ function createInMemoryCodexHarness(options?: {
 
   const outboundFrames: OutboundFrame[] = [];
   const events: ProviderEvent[] = [];
+  let transportFactoryCalls = 0;
 
   const manager = new CodexAppServerManager(undefined, {
-    createTransport: async () => built.transport,
+    createTransport: async () => {
+      transportFactoryCalls += 1;
+      return built.transport;
+    },
   });
   manager.on("event", (event) => {
     events.push(event);
@@ -2893,6 +2897,7 @@ function createInMemoryCodexHarness(options?: {
     controller,
     events,
     outboundFrames,
+    getTransportFactoryCalls: () => transportFactoryCalls,
     pushInbound: (message: unknown) => Effect.runPromise(controller.pushInboundMessage(message)),
     pushStderr: (line: string) => Effect.runPromise(controller.pushStderr(line)),
     signalExit: (status: ProcessExit) => Effect.runPromise(controller.signalExit(status)),
@@ -3010,6 +3015,70 @@ describe("Codex protocol over an in-memory transport", () => {
       expect(methods.filter((method) => method === "initialize")).toHaveLength(1);
       expect(methods).toContain("skills/list");
       expect(methods).toContain("thread/start");
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("runs multiple Synara threads on one workspace app-server and routes by provider thread id", async () => {
+    let providerThreadCounter = 0;
+    const harness = createInMemoryCodexHarness({
+      responders: {
+        "thread/start": () => {
+          providerThreadCounter += 1;
+          return { thread: { id: `provider_thread_${providerThreadCounter}` } };
+        },
+        "turn/start": () => ({ turn: { id: "turn_workspace_2" } }),
+      },
+    });
+    try {
+      await harness.manager.startSession({
+        threadId: asThreadId("thread_workspace_1"),
+        provider: "codex",
+        cwd: "/tmp/mem-workspace",
+        runtimeMode: "full-access",
+      });
+      await harness.manager.startSession({
+        threadId: asThreadId("thread_workspace_2"),
+        provider: "codex",
+        cwd: "/tmp/mem-workspace",
+        runtimeMode: "full-access",
+      });
+
+      expect(harness.getTransportFactoryCalls()).toBe(1);
+      const methods = harness.outboundFrames.map((frame) => frame.method);
+      expect(methods.filter((method) => method === "initialize")).toHaveLength(1);
+      expect(methods.filter((method) => method === "thread/start")).toHaveLength(2);
+
+      await harness.pushInbound({
+        method: "turn/completed",
+        params: {
+          threadId: "provider_thread_2",
+          turn: { id: "turn_workspace_2", status: "completed" },
+        },
+      });
+
+      await waitFor(
+        () =>
+          harness.events.some(
+            (event) =>
+              event.kind === "notification" &&
+              event.method === "turn/completed" &&
+              event.threadId === "thread_workspace_2",
+          ),
+        "workspace runtime routed notification",
+      );
+
+      harness.manager.stopSession(asThreadId("thread_workspace_1"));
+      await harness.manager.sendTurn({
+        threadId: asThreadId("thread_workspace_2"),
+        input: "Still alive?",
+      });
+
+      const turnStartFrame = harness.outboundFrames.find((frame) => frame.method === "turn/start");
+      expect(turnStartFrame?.params).toMatchObject({
+        threadId: "provider_thread_2",
+      });
     } finally {
       await harness.stop();
     }
