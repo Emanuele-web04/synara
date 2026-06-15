@@ -23,6 +23,8 @@ const USER_ATTACHMENT_THUMBNAIL_SIZE_PX = 60;
 const USER_ATTACHMENT_THUMBNAIL_GAP_PX = 8;
 const USER_ATTACHMENT_THUMBNAILS_PER_ROW = 4;
 const USER_ATTACHMENT_ROW_MARGIN_BOTTOM_PX = 4;
+const USER_PASTED_TEXT_CARD_HEIGHT_PX = 52;
+const USER_PASTED_TEXT_CARD_GAP_PX = 6;
 const USER_MESSAGE_TOGGLE_HEIGHT_PX = 20;
 const USER_DISPATCH_CHIP_HEIGHT_PX = 24;
 const USER_DISPATCH_CHIP_MARGIN_BOTTOM_PX = 6;
@@ -290,9 +292,10 @@ export function estimateTimelineMessageHeight(
     const assistantSelectionCount =
       message.attachments?.filter((attachment) => attachment.type === "assistant-selection")
         .length ?? 0;
-    // File comments live in the prompt's <file_comments> block (not as wire
-    // attachments), so count them from the parsed displayed-message state.
+    // Prompt-serialized reference cards are not wire attachments, so count them
+    // from the parsed display state to keep virtualization estimates aligned.
     const fileCommentCount = displayedUserMessage.fileComments.length;
+    const pastedTextCount = displayedUserMessage.pastedTexts.length;
     const imageAttachmentHeight =
       imageAttachmentCount > 0
         ? Math.ceil(imageAttachmentCount / USER_ATTACHMENT_THUMBNAILS_PER_ROW) *
@@ -302,17 +305,26 @@ export function estimateTimelineMessageHeight(
         : 0;
     const assistantSelectionHeight = assistantSelectionCount > 0 ? 40 : 0;
     const fileCommentHeight = fileCommentCount > 0 ? 40 : 0;
+    const pastedTextHeight =
+      pastedTextCount > 0
+        ? pastedTextCount * USER_PASTED_TEXT_CARD_HEIGHT_PX +
+          Math.max(pastedTextCount - 1, 0) * USER_PASTED_TEXT_CARD_GAP_PX
+        : 0;
     const attachmentHeight =
-      imageAttachmentHeight + assistantSelectionHeight + fileCommentHeight > 0
+      imageAttachmentHeight + assistantSelectionHeight + fileCommentHeight + pastedTextHeight > 0
         ? imageAttachmentHeight +
           assistantSelectionHeight +
           fileCommentHeight +
+          pastedTextHeight +
           (renderedText.length > 0 ? USER_ATTACHMENT_ROW_MARGIN_BOTTOM_PX : 0)
         : 0;
     const dispatchChipHeight =
       message.dispatchMode === "steer"
         ? USER_DISPATCH_CHIP_HEIGHT_PX +
-          (imageAttachmentCount > 0 || assistantSelectionCount > 0 || fileCommentCount > 0
+          (imageAttachmentCount > 0 ||
+          assistantSelectionCount > 0 ||
+          fileCommentCount > 0 ||
+          pastedTextCount > 0
             ? USER_DISPATCH_CHIP_WITH_MEDIA_MARGIN_BOTTOM_PX
             : USER_DISPATCH_CHIP_MARGIN_BOTTOM_PX)
         : 0;

@@ -81,6 +81,7 @@ function ProfileContent({
 
   const heatmapCells = stats.activity.heatmap;
   const peakHourLabel = formatPeakHourLabel(stats.activeHours.startHour);
+  const mostWorkedProjectLabel = formatMostWorkedProjectLabel(stats.mostWorkedProject);
 
   return (
     <div className="flex min-w-0 flex-col gap-7">
@@ -177,6 +178,7 @@ function ProfileContent({
               }
             />
             <InsightRow label="Most active hour" value={peakHourLabel} />
+            <InsightRow label="Most worked project" value={mostWorkedProjectLabel} />
             <InsightRow
               label="Skills explored"
               value={formatNumber(stats.insights.skillsExplored)}
@@ -308,6 +310,14 @@ function formatHour(hour: number): string {
 
 function formatPeakHourLabel(startHour: number | null): string {
   return startHour === null ? "—" : formatHour(startHour);
+}
+
+function formatMostWorkedProjectLabel(project: ProfileStats["mostWorkedProject"]): string {
+  if (!project) {
+    return "—";
+  }
+  const promptLabel = project.promptCount === 1 ? "prompt" : "prompts";
+  return `${project.title} · ${formatNumber(project.promptCount)} ${promptLabel}`;
 }
 
 function formatProviderLabel(provider: ProviderKind): string {

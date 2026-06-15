@@ -101,6 +101,7 @@ function makeQueuedChatTurn(id: string, image?: ComposerImageAttachment): Queued
     assistantSelections: [],
     terminalContexts: [makeTerminalContext({ id: `ctx-${id}` })],
     fileComments: [],
+    pastedTexts: [],
     skills: [{ name: "check-code", path: "/skills/check-code" }],
     mentions: [{ name: "repo", path: "/mentions/repo" }],
     selectedProvider: "codex",
@@ -1594,6 +1595,40 @@ describe("composerDraftStore sticky composer settings", () => {
       modelSelection("codex", "gpt-5.4"),
     );
     expect(useComposerDraftStore.getState().stickyActiveProvider).toBe("codex");
+  });
+
+  it("preserves current sticky model fields during storage-version migration", () => {
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        migrate: (persistedState: unknown, version: number) => unknown;
+      };
+    };
+    const migratedState = persistApi.getOptions().migrate(
+      {
+        draftsByThreadId: {},
+        draftThreadsByThreadId: {},
+        projectDraftThreadIdByProjectId: {},
+        stickyModelSelectionByProvider: {
+          claudeAgent: modelSelection("claudeAgent", "claude-opus-4-6", {
+            effort: "max",
+          }),
+        },
+        stickyActiveProvider: "claudeAgent",
+        stickyProvider: "codex",
+        stickyModel: "gpt-5",
+      },
+      4,
+    ) as {
+      stickyModelSelectionByProvider: Partial<Record<ModelSelection["provider"], ModelSelection>>;
+      stickyActiveProvider: ModelSelection["provider"] | null;
+    };
+
+    expect(migratedState.stickyModelSelectionByProvider.claudeAgent).toEqual(
+      modelSelection("claudeAgent", "claude-opus-4-6", {
+        effort: "max",
+      }),
+    );
+    expect(migratedState.stickyActiveProvider).toBe("claudeAgent");
   });
 
   it("applies sticky activeProvider to new drafts", () => {

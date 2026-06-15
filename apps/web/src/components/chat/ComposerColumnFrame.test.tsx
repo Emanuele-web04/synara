@@ -52,7 +52,9 @@ describe("ComposerStackedHeaderFrame", () => {
     );
 
     expect(markup).toContain('class="pointer-events-none w-full"');
-    expect(markup).toContain('class="pointer-events-auto mx-auto -mb-px w-full min-w-0"');
+    expect(markup).toContain(
+      `class="pointer-events-auto ${COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME}"`,
+    );
     expect(markup).toContain('data-testid="content"');
   });
 });

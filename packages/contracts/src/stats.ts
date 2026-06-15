@@ -49,6 +49,17 @@ export const ProfileSkillUsage = Schema.Struct({
 });
 export type ProfileSkillUsage = typeof ProfileSkillUsage.Type;
 
+export const ProfileMostWorkedProject = Schema.Struct({
+  projectId: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  workspaceRoot: TrimmedNonEmptyString,
+  promptCount: NonNegativeInt,
+  threadCount: NonNegativeInt,
+  activeDays: NonNegativeInt,
+  lastWorkedAt: IsoDateTime,
+});
+export type ProfileMostWorkedProject = typeof ProfileMostWorkedProject.Type;
+
 export const ProfileQuota = Schema.Struct({
   status: Schema.Literals(["available", "unavailable"]),
   provider: Schema.NullOr(ProviderKind),
@@ -115,6 +126,7 @@ export const ProfileStats = Schema.Struct({
   providerModels: Schema.Array(ProfileProviderUsage),
   skills: Schema.Array(ProfileSkillUsage),
   mostUsedSkill: Schema.NullOr(ProfileSkillUsage),
+  mostWorkedProject: Schema.NullOr(ProfileMostWorkedProject),
   quota: ProfileQuota,
 });
 export type ProfileStats = typeof ProfileStats.Type;

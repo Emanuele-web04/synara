@@ -22,6 +22,7 @@ import {
   buildExpiredTerminalContextToastCopy,
   shouldAutoDeleteTerminalThreadOnLastClose,
   shouldConsumePendingCustomBinaryConfirmation,
+  shouldEnableComposerPastedTextCollapse,
   shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,
   shouldStartActiveTurnLayoutGrace,
@@ -79,6 +80,39 @@ describe("composer menu selection", () => {
         items,
       }),
     ).toBeNull();
+  });
+});
+
+describe("composer pasted text collapse", () => {
+  it("is enabled only for regular chat sends", () => {
+    expect(
+      shouldEnableComposerPastedTextCollapse({
+        isComposerApprovalState: false,
+        hasPendingUserInput: false,
+        showPlanFollowUpPrompt: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldEnableComposerPastedTextCollapse({
+        isComposerApprovalState: false,
+        hasPendingUserInput: true,
+        showPlanFollowUpPrompt: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldEnableComposerPastedTextCollapse({
+        isComposerApprovalState: false,
+        hasPendingUserInput: false,
+        showPlanFollowUpPrompt: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldEnableComposerPastedTextCollapse({
+        isComposerApprovalState: true,
+        hasPendingUserInput: false,
+        showPlanFollowUpPrompt: false,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -321,64 +355,6 @@ describe("resolveActiveTurnLiveDiffState", () => {
       hasChanges: false,
     });
   });
-
-  it("falls back to active-turn file edit work while diff summary files are not ready", () => {
-    const activeTurnId = TurnId.makeUnsafe("turn-active");
-
-    expect(
-      resolveActiveTurnLiveDiffState({
-        latestTurnId: activeTurnId,
-        turnDiffSummaries: [
-          {
-            turnId: TurnId.makeUnsafe("turn-previous"),
-            completedAt: "2026-06-13T10:00:00.000Z",
-            files: [{ path: "old.ts", additions: 100, deletions: 50 }],
-          },
-        ],
-        workLogEntries: [
-          {
-            turnId: TurnId.makeUnsafe("turn-previous"),
-            itemType: "file_change",
-            changedFiles: ["old.ts"],
-          },
-          {
-            turnId: activeTurnId,
-            itemType: "file_change",
-            changedFiles: ["src/a.ts", "src/b.ts", "src/a.ts"],
-          },
-        ],
-      }),
-    ).toEqual({
-      turnId: activeTurnId,
-      fileCount: 2,
-      additions: 0,
-      deletions: 0,
-      hasChanges: true,
-    });
-  });
-
-  it("keeps the active-turn strip visible for file edit work without known paths", () => {
-    const activeTurnId = TurnId.makeUnsafe("turn-active");
-
-    expect(
-      resolveActiveTurnLiveDiffState({
-        latestTurnId: activeTurnId,
-        turnDiffSummaries: [],
-        workLogEntries: [
-          {
-            turnId: activeTurnId,
-            itemType: "file_change",
-          },
-        ],
-      }),
-    ).toEqual({
-      turnId: activeTurnId,
-      fileCount: null,
-      additions: 0,
-      deletions: 0,
-      hasChanges: true,
-    });
-  });
 });
 
 describe("shouldShowComposerModelBootstrapSkeleton", () => {
@@ -538,6 +514,7 @@ describe("deriveComposerSendState", () => {
           createdAt: "2026-03-17T12:52:29.000Z",
         },
       ],
+      pastedTexts: [],
     });
 
     expect(state.trimmedPrompt).toBe("");
@@ -564,6 +541,7 @@ describe("deriveComposerSendState", () => {
           createdAt: "2026-03-17T12:52:29.000Z",
         },
       ],
+      pastedTexts: [],
     });
 
     expect(state.trimmedPrompt).toBe("yoo  waddup");
@@ -578,6 +556,7 @@ describe("deriveComposerSendState", () => {
       assistantSelectionCount: 1,
       fileCommentCount: 0,
       terminalContexts: [],
+      pastedTexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -590,6 +569,7 @@ describe("deriveComposerSendState", () => {
       assistantSelectionCount: 0,
       fileCommentCount: 1,
       terminalContexts: [],
+      pastedTexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);

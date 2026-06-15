@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { appendPastedTextsToPrompt } from "../lib/composerPastedText";
 import { appendTerminalContextsToPrompt } from "../lib/terminalContext";
 import { buildInlineTerminalContextText } from "./chat/userMessageTerminalContexts";
 import {
@@ -134,6 +135,26 @@ describe("estimateTimelineMessageHeight", () => {
       estimateTimelineMessageHeight({
         role: "user",
         text: `${buildInlineTerminalContextText([{ header: "Terminal 1 lines 40-43" }])} Investigate this`,
+      }),
+    );
+  });
+
+  it("adds pasted text card chrome without counting the hidden block as message text", () => {
+    const prompt = appendPastedTextsToPrompt("", [
+      {
+        text: "first pasted line\nsecond pasted line",
+      },
+    ]);
+
+    expect(
+      estimateTimelineMessageHeight({
+        role: "user",
+        text: prompt,
+      }),
+    ).toBeGreaterThan(
+      estimateTimelineMessageHeight({
+        role: "user",
+        text: "",
       }),
     );
   });

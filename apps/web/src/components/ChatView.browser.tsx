@@ -2476,6 +2476,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         assistantSelections: [],
         terminalContexts: [],
         fileComments: [],
+        pastedTexts: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -2499,6 +2500,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         assistantSelections: [],
         terminalContexts: [],
         fileComments: [],
+        pastedTexts: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -2588,6 +2590,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         assistantSelections: [],
         terminalContexts: [],
         fileComments: [],
+        pastedTexts: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -2666,6 +2669,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         assistantSelections: [],
         terminalContexts: [],
         fileComments: [],
+        pastedTexts: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -2896,6 +2900,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await newWorktreeOption.click();
 
       useComposerDraftStore.getState().setPrompt(newThreadId, "Ship it");
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditor.textContent ?? "").toContain("Ship it");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
 
       const sendButton = await waitForSendButton();
       expect(sendButton.disabled).toBe(false);
@@ -3252,6 +3263,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           assistantSelections: [],
           terminalContexts: [],
           fileComments: [],
+          pastedTexts: [],
           skills: [],
           mentions: [],
           queuedTurns: [],

@@ -61,6 +61,7 @@ import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
 } from "~/lib/terminalContext";
+import { shouldCollapsePastedText } from "~/lib/composerPastedText";
 import type { ProviderMentionReference } from "@t3tools/contracts";
 import { cn } from "~/lib/utils";
 import {
@@ -506,6 +507,11 @@ interface ComposerPromptEditorProps {
   placeholder: string;
   className?: string;
   onRemoveTerminalContext: (contextId: string) => void;
+  /**
+   * Invoked when a sufficiently large text paste should collapse into an attachment
+   * card instead of inserting raw text. When omitted, pastes insert as text.
+   */
+  onCollapsePastedText?: (text: string) => void;
   onChange: (
     nextValue: string,
     nextCursor: number,
@@ -812,6 +818,45 @@ function ComposerLinkPastePlugin() {
   return null;
 }
 
+// A sufficiently large text paste collapses into an attachment card instead of
+// flooding the editor. Intercepting at the Lexical command level (rather than the
+// React onPaste prop) is required: Lexical's own paste listener would otherwise
+// insert the raw text before a bubbled React handler could preventDefault.
+function ComposerBigPastePlugin(props: { onCollapsePastedText: (text: string) => void }) {
+  const [editor] = useLexicalComposerContext();
+  const onCollapseRef = useRef(props.onCollapsePastedText);
+
+  useEffect(() => {
+    onCollapseRef.current = props.onCollapsePastedText;
+  }, [props.onCollapsePastedText]);
+
+  useEffect(() => {
+    return editor.registerCommand(
+      PASTE_COMMAND,
+      (event) => {
+        const clipboardData = event instanceof ClipboardEvent ? event.clipboardData : null;
+        if (!clipboardData) {
+          return false;
+        }
+        // Image/file pastes are handled by the composer dropzone — never collapse them.
+        if (clipboardData.files.length > 0) {
+          return false;
+        }
+        const text = clipboardData.getData("text/plain");
+        if (!shouldCollapsePastedText(text)) {
+          return false;
+        }
+        event.preventDefault();
+        onCollapseRef.current(text);
+        return true;
+      },
+      COMMAND_PRIORITY_HIGH,
+    );
+  }, [editor]);
+
+  return null;
+}
+
 function ComposerPromptEditorInner({
   value,
   cursor,
@@ -821,6 +866,7 @@ function ComposerPromptEditorInner({
   placeholder,
   className,
   onRemoveTerminalContext,
+  onCollapsePastedText,
   onChange,
   onCommandKeyDown,
   onPaste,
@@ -1090,6 +1136,9 @@ function ComposerPromptEditorInner({
         <ComposerInlineTokenBackspacePlugin />
         <ComposerLinkTransformPlugin />
         <ComposerLinkPastePlugin />
+        {onCollapsePastedText ? (
+          <ComposerBigPastePlugin onCollapsePastedText={onCollapsePastedText} />
+        ) : null}
         <HistoryPlugin />
       </div>
     </ComposerTerminalContextActionsContext.Provider>
@@ -1109,6 +1158,7 @@ export const ComposerPromptEditor = forwardRef<
     placeholder,
     className,
     onRemoveTerminalContext,
+    onCollapsePastedText,
     onChange,
     onCommandKeyDown,
     onPaste,
@@ -1152,6 +1202,7 @@ export const ComposerPromptEditor = forwardRef<
         onChange={onChange}
         onPaste={onPaste}
         editorRef={ref}
+        {...(onCollapsePastedText ? { onCollapsePastedText } : {})}
         {...(onCommandKeyDown ? { onCommandKeyDown } : {})}
         {...(className ? { className } : {})}
       />

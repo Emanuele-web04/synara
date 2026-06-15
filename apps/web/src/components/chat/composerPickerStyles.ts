@@ -114,7 +114,7 @@ export const COMPOSER_COLUMN_FRAME_CLASS_NAME = CHAT_COLUMN_FRAME_CLASS_NAME;
  * Prefer ComposerStackedPanel inside ComposerColumnFrame instead of using this
  * token directly so chrome and attached-radius behavior stay centralized.
  */
-export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-full min-w-0";
+export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-11/12 min-w-0";
 
 /** Opaque base behind the composer shell: the composer overlaps the scrolling
  *  transcript (`-mt-5`), so without a solid backing the frosted surface would let

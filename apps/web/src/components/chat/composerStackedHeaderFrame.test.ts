@@ -13,8 +13,8 @@ describe("COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME", () => {
 
     expect(classes).toContain("mx-auto");
     expect(classes).toContain("-mb-px");
-    expect(classes).toContain("w-full");
+    expect(classes).toContain("w-11/12");
     expect(classes).toContain("min-w-0");
-    expect(classes).not.toContain("w-11/12");
+    expect(classes).not.toContain("w-full");
   });
 });

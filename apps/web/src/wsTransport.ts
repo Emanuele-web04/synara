@@ -245,9 +245,18 @@ export class WsTransport {
     this.setState("disposed");
     for (const cleanup of this.streamCleanups.values()) cleanup();
     this.streamCleanups.clear();
-    void this.runtime.runPromise(Scope.close(this.clientScope, Exit.void)).finally(() => {
-      this.runtime.dispose();
-    });
+    // Dispose can race with initial connection or reconnect promises. Mark them
+    // handled before closing the runtime so test/browser teardown stays quiet.
+    void this.clientPromise.catch(() => undefined);
+    void this.reconnectPromise?.catch(() => undefined);
+    const runtime = this.runtime;
+    const clientScope = this.clientScope;
+    void runtime
+      .runPromise(Scope.close(clientScope, Exit.void))
+      .catch(() => undefined)
+      .finally(() => {
+        runtime.dispose();
+      });
   }
 
   private createSession() {
@@ -291,9 +300,12 @@ export class WsTransport {
 
     this.setState("connecting");
 
-    void oldRuntime.runPromise(Scope.close(oldClientScope, Exit.void)).finally(() => {
-      oldRuntime.dispose();
-    });
+    void oldRuntime
+      .runPromise(Scope.close(oldClientScope, Exit.void))
+      .catch(() => undefined)
+      .finally(() => {
+        oldRuntime.dispose();
+      });
 
     this.reconnectPromise = this.openReconnectSession().finally(() => {
       this.reconnectPromise = null;

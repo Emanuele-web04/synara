@@ -124,6 +124,10 @@
       "types": "./src/localPreviewFiles.ts",
       "import": "./src/localPreviewFiles.ts"
     },
+    "./composerSlashCommands": {
+      "types": "./src/composerSlashCommands.ts",
+      "import": "./src/composerSlashCommands.ts"
+    },
     "./editorIcons": {
       "types": "./src/editorIcons.ts",
       "import": "./src/editorIcons.ts"
