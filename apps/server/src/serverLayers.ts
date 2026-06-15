@@ -51,6 +51,7 @@ import { ServerRuntimeStartupLive } from "./serverRuntimeStartup";
 import { ServerSettingsLive } from "./serverSettings";
 import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
+import { ProfileStatsQueryLive } from "./profileStats";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
@@ -258,6 +259,7 @@ export function makeServerRuntimeServicesLayer() {
     authServicesLayer,
     ServerLifecycleEventsLive,
     ServerRuntimeStartupLive,
+    ProfileStatsQueryLive,
     DevServerManagerLive.pipe(Layer.provide(TerminalLayerLive)),
     WorkspaceLayerLive,
     ProjectFaviconResolverLive,
