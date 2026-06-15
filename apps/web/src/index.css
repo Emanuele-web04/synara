@@ -197,6 +197,8 @@
 
   [data-sidebar-side="left"] .chat-content-card {
     --seam-shadow-x: -11px;
+    border-radius: var(--app-content-card-radius, 0.75rem) 0 0
+      var(--app-content-card-radius, 0.75rem);
   }
 
   [data-sidebar-side="right"] .chat-content-card {
