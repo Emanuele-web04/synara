@@ -862,6 +862,8 @@ export const makeWsRpcLayer = () =>
           rpcEffect(reviewSource.loadPullRequest(input), "Failed to load pull request"),
         [WS_METHODS.reviewLoadConversation]: (input) =>
           rpcEffect(reviewSource.loadConversation(input), "Failed to load conversation"),
+        [WS_METHODS.reviewLoadPullRequestSurface]: (input) =>
+          rpcEffect(reviewSource.loadPullRequestSurface(input), "Failed to load pull request"),
         [WS_METHODS.reviewListComments]: (input) =>
           rpcEffect(reviewCommentStore.list(input), "Failed to list review comments"),
         [WS_METHODS.reviewAddComment]: (input) =>

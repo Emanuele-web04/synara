@@ -80,6 +80,22 @@ it.effect("accepts git.preparePullRequestThread requests", () =>
   }),
 );
 
+it.effect("accepts aggregate review pull request surface requests", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WebSocketRequest, {
+      id: "req-review-surface-1",
+      body: {
+        _tag: WS_METHODS.reviewLoadPullRequestSurface,
+        cwd: "/repo",
+        reference: "42",
+        source: { _tag: "pullRequest", reference: "42" },
+        includeConversation: true,
+      },
+    });
+    assert.strictEqual(parsed.body._tag, WS_METHODS.reviewLoadPullRequestSurface);
+  }),
+);
+
 it.effect("accepts project script discovery requests", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(WebSocketRequest, {

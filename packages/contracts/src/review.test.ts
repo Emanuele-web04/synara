@@ -4,11 +4,15 @@ import { Effect, Schema } from "effect";
 
 import {
   ReviewChangesetResult,
+  ReviewPullRequestSurfaceInput,
+  ReviewPullRequestSurfaceResult,
   ReviewListPullRequestsInput,
   ReviewListPullRequestsResult,
 } from "./review";
 
 const decodeChangeset = Schema.decodeUnknownEffect(ReviewChangesetResult);
+const decodeSurfaceInput = Schema.decodeUnknownEffect(ReviewPullRequestSurfaceInput);
+const decodeSurfaceResult = Schema.decodeUnknownEffect(ReviewPullRequestSurfaceResult);
 const decodeListInput = Schema.decodeUnknownEffect(ReviewListPullRequestsInput);
 const decodeListResult = Schema.decodeUnknownEffect(ReviewListPullRequestsResult);
 
@@ -72,6 +76,65 @@ it.effect("accepts review list server-side filter fields", () =>
       columns: ["needs-review", "approved"],
       checks: ["passing", "pending"],
     });
+  }),
+);
+
+it.effect("accepts aggregate pull request surface payloads with optional pieces", () =>
+  Effect.gen(function* () {
+    const input = yield* decodeSurfaceInput({
+      cwd: "/repo",
+      reference: "42",
+      source: { _tag: "pullRequest", reference: "42" },
+      includeConversation: true,
+      includeChangeset: true,
+    });
+    const result = yield* decodeSurfaceResult({
+      overview: {
+        detail: {
+          number: 42,
+          title: "Review loading",
+          url: "https://github.com/acme/demo/pull/42",
+          state: "open",
+          isDraft: false,
+          author: "alice",
+          baseBranch: "main",
+          headBranch: "feature/review-loading",
+          body: "Body",
+          createdAt: "2026-06-16T12:00:00Z",
+          updatedAt: "2026-06-16T12:00:00Z",
+          additions: 1,
+          deletions: 0,
+          changedFiles: 1,
+          commitsCount: 1,
+          reviewDecision: null,
+          mergeable: "MERGEABLE",
+          checksStatus: "passing",
+          milestone: null,
+          labels: [],
+          assignees: [],
+          reviewers: [],
+        },
+        commits: [],
+        checks: [],
+      },
+      conversation: { events: [] },
+      changeset: {
+        target: { _tag: "pullRequest", repositoryId: "repo", number: 42 },
+        patch: "diff --git a/a.ts b/a.ts\n",
+        files: [],
+      },
+    });
+
+    assert.deepEqual(input, {
+      cwd: "/repo",
+      reference: "42",
+      source: { _tag: "pullRequest", reference: "42" },
+      includeConversation: true,
+      includeChangeset: true,
+    });
+    assert.equal(result.overview.detail.number, 42);
+    assert.deepEqual(result.conversation, { events: [] });
+    assert.equal(result.changeset?.patch, "diff --git a/a.ts b/a.ts\n");
   }),
 );
 

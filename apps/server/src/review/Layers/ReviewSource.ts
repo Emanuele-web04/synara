@@ -4,6 +4,7 @@ import { realpathSync } from "node:fs";
 import {
   type ReviewChangedFile,
   type ReviewChangesetResult,
+  type ReviewConversationResult,
   type ReviewFinding,
   type ReviewListPullRequestsInput,
   type ReviewListPullRequestsResult,
@@ -11,6 +12,7 @@ import {
   type ReviewProjectColumn,
   type ReviewProjectSummary,
   type ReviewPullRequestOverview,
+  type ReviewPullRequestSurfaceResult,
   type ReviewPullRequestSummary,
   type ReviewSourceRef,
   type ReviewTargetKey,
@@ -933,6 +935,27 @@ const makeReviewSource = Effect.gen(function* () {
       return data;
     });
 
+  const loadPullRequestSurface: ReviewSourceShape["loadPullRequestSurface"] = (input) =>
+    Effect.gen(function* () {
+      const overview = yield* loadPullRequest({ cwd: input.cwd, reference: input.reference });
+      const [conversation, changeset] = yield* Effect.all(
+        [
+          input.includeConversation === true
+            ? loadConversation({ cwd: input.cwd, reference: input.reference })
+            : Effect.succeed<ReviewConversationResult | undefined>(undefined),
+          input.includeChangeset === true
+            ? loadChangeset({ cwd: input.cwd, source: input.source })
+            : Effect.succeed<ReviewChangesetResult | undefined>(undefined),
+        ] as const,
+        { concurrency: "unbounded" },
+      );
+      return {
+        overview,
+        ...(conversation !== undefined ? { conversation } : {}),
+        ...(changeset !== undefined ? { changeset } : {}),
+      } satisfies ReviewPullRequestSurfaceResult;
+    });
+
   const refreshPullRequestList = (
     input: Parameters<ReviewSourceShape["listPullRequests"]>[0],
     repositoryId: string,
@@ -1268,6 +1291,7 @@ const makeReviewSource = Effect.gen(function* () {
     loadChangeset,
     loadPullRequest,
     loadConversation,
+    loadPullRequestSurface,
     runAgentReview,
     checkProjectAccess,
     listProjects,

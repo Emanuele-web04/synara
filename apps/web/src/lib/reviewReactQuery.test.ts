@@ -1,6 +1,56 @@
 import { describe, expect, it } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
+import type {
+  ReviewChangesetResult,
+  ReviewConversationResult,
+  ReviewPullRequestOverview,
+  ReviewPullRequestSurfaceInput,
+  ReviewPullRequestSurfaceResult,
+  ReviewSourceRef,
+} from "@t3tools/contracts";
 
-import { buildReviewListPullRequestsRequest, reviewQueryKeys } from "./reviewReactQuery";
+import {
+  applyReviewPullRequestSurfacePayload,
+  buildReviewListPullRequestsRequest,
+  reviewQueryKeys,
+  reviewSourceKey,
+} from "./reviewReactQuery";
+
+const REVIEW_SOURCE = { _tag: "pullRequest", reference: "42" } satisfies ReviewSourceRef;
+const REVIEW_OVERVIEW = {
+  detail: {
+    number: 42,
+    title: "Review loading",
+    url: "https://github.com/acme/demo/pull/42",
+    state: "open",
+    isDraft: false,
+    author: "alice",
+    baseBranch: "main",
+    headBranch: "feature/review-loading",
+    body: "Body",
+    createdAt: "2026-06-16T12:00:00Z",
+    updatedAt: "2026-06-16T12:00:00Z",
+    additions: 1,
+    deletions: 0,
+    changedFiles: 1,
+    commitsCount: 1,
+    reviewDecision: null,
+    mergeable: "MERGEABLE",
+    checksStatus: "passing",
+    milestone: null,
+    labels: [],
+    assignees: [],
+    reviewers: [],
+  },
+  commits: [],
+  checks: [],
+} satisfies ReviewPullRequestOverview;
+const REVIEW_CONVERSATION = { events: [] } satisfies ReviewConversationResult;
+const REVIEW_CHANGESET = {
+  target: { _tag: "pullRequest", repositoryId: "repo", number: 42 },
+  patch: "diff --git a/a.ts b/a.ts\n",
+  files: [],
+} satisfies ReviewChangesetResult;
 
 describe("reviewQueryKeys.pullRequests", () => {
   it("normalizes equivalent server-side filter values into the same cache key", () => {
@@ -54,6 +104,58 @@ describe("reviewQueryKeys.pullRequests", () => {
       search: "review board",
     });
     expect(key.slice(0, 3)).toEqual(reviewQueryKeys.pullRequestLists("/repo"));
+  });
+});
+
+describe("reviewQueryKeys.pullRequestSurface", () => {
+  it("separates aggregate surface keys by source and requested pieces", () => {
+    expect(
+      reviewQueryKeys.pullRequestSurface(
+        "/repo",
+        "42",
+        reviewSourceKey(REVIEW_SOURCE),
+        true,
+        false,
+      ),
+    ).not.toEqual(
+      reviewQueryKeys.pullRequestSurface(
+        "/repo",
+        "42",
+        reviewSourceKey(REVIEW_SOURCE),
+        false,
+        true,
+      ),
+    );
+  });
+});
+
+describe("applyReviewPullRequestSurfacePayload", () => {
+  it("primes the existing overview conversation and changeset cache entries", () => {
+    const queryClient = new QueryClient();
+    const input = {
+      cwd: "/repo",
+      reference: "42",
+      source: REVIEW_SOURCE,
+      includeConversation: true,
+      includeChangeset: true,
+    } satisfies ReviewPullRequestSurfaceInput;
+    const payload = {
+      overview: REVIEW_OVERVIEW,
+      conversation: REVIEW_CONVERSATION,
+      changeset: REVIEW_CHANGESET,
+    } satisfies ReviewPullRequestSurfaceResult;
+
+    applyReviewPullRequestSurfacePayload(queryClient, input, payload);
+
+    expect(queryClient.getQueryData(reviewQueryKeys.pullRequest("/repo", "42"))).toBe(
+      REVIEW_OVERVIEW,
+    );
+    expect(queryClient.getQueryData(reviewQueryKeys.conversation("/repo", "42"))).toBe(
+      REVIEW_CONVERSATION,
+    );
+    expect(
+      queryClient.getQueryData(reviewQueryKeys.changeset("/repo", reviewSourceKey(REVIEW_SOURCE))),
+    ).toBe(REVIEW_CHANGESET);
   });
 });
 

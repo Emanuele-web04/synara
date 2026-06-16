@@ -4,13 +4,15 @@ import type {
   ReviewTimelineEvent,
   ThreadId,
 } from "@t3tools/contracts";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   reviewLoadChangesetQueryOptions,
   reviewLoadConversationQueryOptions,
   reviewLoadPullRequestQueryOptions,
+  reviewLoadPullRequestSurfaceQueryOptions,
+  reviewSourceKey,
 } from "~/lib/reviewReactQuery";
 import {
   buildReviewChatTarget,
@@ -41,13 +43,6 @@ type PrTab = "conversation" | "files";
 
 const EMPTY_CHECKS: ReadonlyArray<ReviewCheck> = [];
 const EMPTY_EVENTS: ReadonlyArray<ReviewTimelineEvent> = [];
-
-function reviewSourceKey(source: ReviewSourceRef): string {
-  if (source._tag === "pullRequest") {
-    return `pullRequest:${source.reference}`;
-  }
-  return `branchRange:${source.base}:${source.head}`;
-}
 
 function reviewConversationHydrationKey(input: {
   readonly cwd: string | null;
@@ -174,6 +169,7 @@ export function ReviewPrView(props: {
   source: ReviewSourceRef;
   hostThreadId?: ThreadId | null;
 }) {
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState<PrTab>("conversation");
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
@@ -219,19 +215,48 @@ export function ReviewPrView(props: {
       cwd: props.cwd,
       reference: detail ? props.reference : null,
     }),
-    enabled:
-      props.cwd !== null &&
-      detail !== null &&
-      tab === "conversation" &&
-      isConversationHydrationReady,
+    enabled: false,
   });
   const changesetQuery = useQuery({
     ...reviewLoadChangesetQueryOptions({
       cwd: props.cwd,
       source: props.source,
     }),
-    enabled: detail !== null && tab === "files" && props.cwd !== null,
+    enabled: false,
   });
+  const shouldLoadConversation =
+    props.cwd !== null &&
+    detail !== null &&
+    tab === "conversation" &&
+    isConversationHydrationReady &&
+    conversationQuery.data === undefined;
+  const shouldLoadChangeset =
+    props.cwd !== null && detail !== null && tab === "files" && changesetQuery.data === undefined;
+  const surfaceQuery = useQuery(
+    reviewLoadPullRequestSurfaceQueryOptions({
+      cwd: props.cwd,
+      reference: detail ? props.reference : null,
+      source: props.source,
+      includeConversation: shouldLoadConversation,
+      includeChangeset: shouldLoadChangeset,
+      queryClient,
+    }),
+  );
+  const changesetState = useMemo(
+    () => ({
+      data: changesetQuery.data,
+      isLoading: changesetQuery.isLoading || (shouldLoadChangeset && surfaceQuery.isLoading),
+      error: changesetQuery.error ?? (shouldLoadChangeset ? surfaceQuery.error : null),
+    }),
+    [
+      changesetQuery.data,
+      changesetQuery.error,
+      changesetQuery.isLoading,
+      shouldLoadChangeset,
+      surfaceQuery.error,
+      surfaceQuery.isLoading,
+    ],
+  );
   const checks = overviewQuery.data?.checks ?? EMPTY_CHECKS;
   const events = conversationQuery.data?.events ?? EMPTY_EVENTS;
   const sidechatContext = useMemo(() => {
@@ -244,17 +269,17 @@ export function ReviewPrView(props: {
       detail,
       checks,
       events,
-      files: changesetQuery.data?.files ?? [],
+      files: changesetState.data?.files ?? [],
       source: props.source,
-      target: changesetQuery.data?.target ?? null,
-      headSha: changesetQuery.data?.headSha ?? null,
+      target: changesetState.data?.target ?? null,
+      headSha: changesetState.data?.headSha ?? null,
       currentView: tab,
       selectedFilePath,
     });
   }, [
-    changesetQuery.data?.files,
-    changesetQuery.data?.headSha,
-    changesetQuery.data?.target,
+    changesetState.data?.files,
+    changesetState.data?.headSha,
+    changesetState.data?.target,
     checks,
     detail,
     events,
@@ -345,8 +370,8 @@ export function ReviewPrView(props: {
         mode="header"
         cwd={props.cwd}
         reference={props.reference}
-        target={changesetQuery.data?.target ?? null}
-        expectedHeadSha={changesetQuery.data?.headSha ?? null}
+        target={changesetState.data?.target ?? null}
+        expectedHeadSha={changesetState.data?.headSha ?? null}
       />
     ) : undefined;
   const navigationAction =
@@ -385,7 +410,7 @@ export function ReviewPrView(props: {
                     onSelectedFilePathChange={setSelectedFilePath}
                     reviewAction={reviewAction}
                     navigationAction={navigationAction}
-                    changesetState={changesetQuery}
+                    changesetState={changesetState}
                   />
                 </main>
               ) : (
@@ -405,6 +430,7 @@ export function ReviewPrView(props: {
                     events={conversationQuery.data?.events ?? []}
                     isLoading={
                       conversationQuery.isLoading ||
+                      (shouldLoadConversation && surfaceQuery.isLoading) ||
                       (detail !== null && tab === "conversation" && !isConversationHydrationReady)
                     }
                     className={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}
@@ -420,7 +446,7 @@ export function ReviewPrView(props: {
                 mode={tab}
                 cwd={props.cwd}
                 source={props.source}
-                target={changesetQuery.data?.target ?? null}
+                target={changesetState.data?.target ?? null}
                 sidechatContext={sidechatContext}
                 hostThreadId={props.hostThreadId ?? null}
                 reviewThreadId={reviewChatThreadId}

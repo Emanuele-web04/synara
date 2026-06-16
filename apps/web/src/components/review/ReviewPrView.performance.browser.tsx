@@ -10,7 +10,37 @@ import { reviewQueryKeys } from "~/lib/reviewReactQuery";
 import { ReviewPrView } from "./ReviewPrView";
 
 const nativeApiMock = vi.hoisted(() => ({
-  loadConversation: vi.fn(async () => ({ events: [] })),
+  loadPullRequestSurface: vi.fn(async () => ({
+    overview: {
+      detail: {
+        number: 42,
+        title: "Speed up review loading",
+        url: "https://github.com/acme/repo/pull/42",
+        state: "open" as const,
+        isDraft: false,
+        author: "alice",
+        baseBranch: "main",
+        headBranch: "feature/review-loading",
+        body: "Review body",
+        createdAt: "2026-06-16T00:00:00.000Z",
+        updatedAt: "2026-06-16T00:00:00.000Z",
+        additions: 12,
+        deletions: 3,
+        changedFiles: 2,
+        commitsCount: 1,
+        reviewDecision: null,
+        mergeable: "MERGEABLE" as const,
+        checksStatus: "passing" as const,
+        milestone: null,
+        labels: [],
+        assignees: [],
+        reviewers: [],
+      },
+      commits: [],
+      checks: [],
+    },
+    conversation: { events: [] },
+  })),
 }));
 
 const reviewChatThreadMock = vi.hoisted(() => ({
@@ -46,12 +76,12 @@ const reviewChatThreadMock = vi.hoisted(() => ({
 vi.mock("~/nativeApi", () => ({
   ensureNativeApi: () => ({
     review: {
-      loadConversation: nativeApiMock.loadConversation,
+      loadPullRequestSurface: nativeApiMock.loadPullRequestSurface,
     },
   }),
   readNativeApi: () => ({
     review: {
-      loadConversation: nativeApiMock.loadConversation,
+      loadPullRequestSurface: nativeApiMock.loadPullRequestSurface,
     },
   }),
 }));
@@ -89,7 +119,7 @@ const DETAIL = {
 
 describe("ReviewPrView performance", () => {
   afterEach(() => {
-    nativeApiMock.loadConversation.mockClear();
+    nativeApiMock.loadPullRequestSurface.mockClear();
     reviewChatThreadMock.buildReviewChatTarget.mockClear();
     reviewChatThreadMock.defaultReviewChatModelSelection.mockClear();
     reviewChatThreadMock.findProjectForReviewChat.mockClear();
@@ -137,13 +167,18 @@ describe("ReviewPrView performance", () => {
 
     try {
       await expect.element(page.getByRole("heading", { name: DETAIL.title })).toBeVisible();
-      expect(nativeApiMock.loadConversation).toHaveBeenCalledTimes(0);
+      expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledTimes(0);
       expect(queuedFrame).not.toBeNull();
 
       queuedFrame?.(performance.now());
 
-      await expect.poll(() => nativeApiMock.loadConversation.mock.calls.length).toBe(1);
-      expect(nativeApiMock.loadConversation).toHaveBeenCalledWith({ cwd: CWD, reference: REFERENCE });
+      await expect.poll(() => nativeApiMock.loadPullRequestSurface.mock.calls.length).toBe(1);
+      expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledWith({
+        cwd: CWD,
+        reference: REFERENCE,
+        source: SOURCE,
+        includeConversation: true,
+      });
     } finally {
       await screen.unmount();
       queryClient.clear();

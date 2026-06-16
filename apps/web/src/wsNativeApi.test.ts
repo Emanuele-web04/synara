@@ -55,6 +55,7 @@ vi.mock("./wsTransport", () => {
     WsTransport: class MockWsTransport {
       request = requestMock;
       subscribe = subscribeMock;
+      onStateChange = vi.fn(() => () => undefined);
       getLatestPush(channel: string) {
         return latestPushByChannel.get(channel) ?? null;
       }
@@ -488,6 +489,55 @@ describe("wsNativeApi", () => {
     await api.server.getEnvironment();
 
     expect(requestMock).toHaveBeenCalledWith(WS_METHODS.serverGetEnvironment);
+  });
+
+  it("forwards aggregate review pull request surface requests to the websocket review method", async () => {
+    requestMock.mockResolvedValue({
+      overview: {
+        detail: {
+          number: 42,
+          title: "Review loading",
+          url: "https://github.com/acme/demo/pull/42",
+          state: "open",
+          isDraft: false,
+          author: "alice",
+          baseBranch: "main",
+          headBranch: "feature/review-loading",
+          body: "Body",
+          createdAt: "2026-06-16T12:00:00Z",
+          updatedAt: "2026-06-16T12:00:00Z",
+          additions: 1,
+          deletions: 0,
+          changedFiles: 1,
+          commitsCount: 1,
+          reviewDecision: null,
+          mergeable: "MERGEABLE",
+          checksStatus: "passing",
+          milestone: null,
+          labels: [],
+          assignees: [],
+          reviewers: [],
+        },
+        commits: [],
+        checks: [],
+      },
+    });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.review.loadPullRequestSurface({
+      cwd: "/repo",
+      reference: "42",
+      source: { _tag: "pullRequest", reference: "42" },
+      includeConversation: true,
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.reviewLoadPullRequestSurface, {
+      cwd: "/repo",
+      reference: "42",
+      source: { _tag: "pullRequest", reference: "42" },
+      includeConversation: true,
+    });
   });
 
   it("fetches auth session state over HTTP", async () => {

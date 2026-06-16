@@ -16,6 +16,8 @@ import {
   ReviewProjectBoard,
   ReviewPullRequestOverview,
   ReviewPullRequestQueryInput,
+  ReviewPullRequestSurfaceInput,
+  ReviewPullRequestSurfaceResult,
   ReviewRunAgentInput,
   ReviewViewerResult,
 } from "@t3tools/contracts";
@@ -44,6 +46,10 @@ export interface ReviewSourceShape {
   readonly loadConversation: (
     input: ReviewPullRequestQueryInput,
   ) => Effect.Effect<ReviewConversationResult, ReviewServiceError>;
+
+  readonly loadPullRequestSurface: (
+    input: ReviewPullRequestSurfaceInput,
+  ) => Effect.Effect<ReviewPullRequestSurfaceResult, ReviewServiceError>;
 
   readonly runAgentReview: (
     input: ReviewRunAgentInput,

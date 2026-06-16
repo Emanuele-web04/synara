@@ -62,6 +62,8 @@ import {
   ReviewLocalComment,
   ReviewPullRequestOverview,
   ReviewPullRequestQueryInput,
+  ReviewPullRequestSurfaceInput,
+  ReviewPullRequestSurfaceResult,
   ReviewMoveProjectCardInput,
   ReviewMoveProjectCardResult,
   ReviewProjectAccessResult,
@@ -518,6 +520,15 @@ export const WsReviewLoadConversationRpc = Rpc.make(WS_METHODS.reviewLoadConvers
   error: WsRpcError,
 });
 
+export const WsReviewLoadPullRequestSurfaceRpc = Rpc.make(
+  WS_METHODS.reviewLoadPullRequestSurface,
+  {
+    payload: ReviewPullRequestSurfaceInput,
+    success: ReviewPullRequestSurfaceResult,
+    error: WsRpcError,
+  },
+);
+
 export const WsReviewListCommentsRpc = Rpc.make(WS_METHODS.reviewListComments, {
   payload: ReviewListCommentsInput,
   success: ReviewCommentList,
@@ -886,6 +897,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsReviewLoadChangesetRpc,
   WsReviewLoadPullRequestRpc,
   WsReviewLoadConversationRpc,
+  WsReviewLoadPullRequestSurfaceRpc,
   WsReviewListCommentsRpc,
   WsReviewAddCommentRpc,
   WsReviewUpdateCommentRpc,

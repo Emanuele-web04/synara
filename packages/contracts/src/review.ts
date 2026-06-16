@@ -396,6 +396,15 @@ export const ReviewPullRequestQueryInput = Schema.Struct({
 });
 export type ReviewPullRequestQueryInput = typeof ReviewPullRequestQueryInput.Type;
 
+export const ReviewPullRequestSurfaceInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  reference: ReviewPullRequestReference,
+  source: ReviewSourceRef,
+  includeConversation: Schema.optional(Schema.Boolean),
+  includeChangeset: Schema.optional(Schema.Boolean),
+});
+export type ReviewPullRequestSurfaceInput = typeof ReviewPullRequestSurfaceInput.Type;
+
 export const ReviewLabel = Schema.Struct({
   name: TrimmedNonEmptyStringSchema,
   // 6-digit hex without a leading '#', as GitHub returns it.
@@ -583,6 +592,13 @@ export const ReviewConversationResult = Schema.Struct({
   events: Schema.Array(ReviewTimelineEvent),
 });
 export type ReviewConversationResult = typeof ReviewConversationResult.Type;
+
+export const ReviewPullRequestSurfaceResult = Schema.Struct({
+  overview: ReviewPullRequestOverview,
+  conversation: Schema.optional(ReviewConversationResult),
+  changeset: Schema.optional(ReviewChangesetResult),
+});
+export type ReviewPullRequestSurfaceResult = typeof ReviewPullRequestSurfaceResult.Type;
 
 export const ReviewUpdatedPayload = Schema.Union([
   Schema.TaggedStruct("pullRequestList", {

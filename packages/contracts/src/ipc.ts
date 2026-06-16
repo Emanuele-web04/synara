@@ -70,6 +70,8 @@ import type {
   ReviewLocalComment,
   ReviewPullRequestOverview,
   ReviewPullRequestQueryInput,
+  ReviewPullRequestSurfaceInput,
+  ReviewPullRequestSurfaceResult,
   ReviewMoveProjectCardInput,
   ReviewMoveProjectCardResult,
   ReviewProjectAccessResult,
@@ -484,6 +486,9 @@ export interface NativeApi {
     loadChangeset: (input: ReviewLoadChangesetInput) => Promise<ReviewChangesetResult>;
     loadPullRequest: (input: ReviewPullRequestQueryInput) => Promise<ReviewPullRequestOverview>;
     loadConversation: (input: ReviewPullRequestQueryInput) => Promise<ReviewConversationResult>;
+    loadPullRequestSurface: (
+      input: ReviewPullRequestSurfaceInput,
+    ) => Promise<ReviewPullRequestSurfaceResult>;
     listComments: (input: ReviewListCommentsInput) => Promise<ReviewCommentList>;
     addComment: (input: ReviewAddCommentInput) => Promise<ReviewLocalComment>;
     updateComment: (input: ReviewUpdateCommentInput) => Promise<ReviewLocalComment>;

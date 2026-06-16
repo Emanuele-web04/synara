@@ -6,6 +6,8 @@ import type {
   ReviewMoveProjectCardInput,
   ReviewProjectBoard,
   ReviewRemoveCommentInput,
+  ReviewPullRequestSurfaceInput,
+  ReviewPullRequestSurfaceResult,
   ReviewRunAgentInput,
   ReviewSourceRef,
   ReviewSubmitInput,
@@ -33,7 +35,7 @@ type ReviewListState = NonNullable<ReviewListPullRequestsInput["state"]>;
 type ReviewListColumn = NonNullable<ReviewListPullRequestsInput["columns"]>[number];
 type ReviewListChecksStatus = NonNullable<ReviewListPullRequestsInput["checks"]>[number];
 
-function reviewSourceKey(source: ReviewSourceRef): string {
+export function reviewSourceKey(source: ReviewSourceRef): string {
   return source._tag === "pullRequest"
     ? `pullRequest:${source.reference}`
     : `branchRange:${source.base}...${source.head}`;
@@ -123,6 +125,29 @@ export function applyReviewUpdatedPayload(
   );
 }
 
+export function applyReviewPullRequestSurfacePayload(
+  queryClient: QueryClient,
+  input: ReviewPullRequestSurfaceInput,
+  payload: ReviewPullRequestSurfaceResult,
+): void {
+  queryClient.setQueryData(
+    reviewQueryKeys.pullRequest(input.cwd, input.reference),
+    payload.overview,
+  );
+  if (payload.conversation !== undefined) {
+    queryClient.setQueryData(
+      reviewQueryKeys.conversation(input.cwd, input.reference),
+      payload.conversation,
+    );
+  }
+  if (payload.changeset !== undefined) {
+    queryClient.setQueryData(
+      reviewQueryKeys.changeset(input.cwd, reviewSourceKey(input.source)),
+      payload.changeset,
+    );
+  }
+}
+
 export const reviewQueryKeys = {
   all: ["review"] as const,
   viewer: (cwd: string | null) => ["review", "viewer", "avatar-v2", cwd] as const,
@@ -171,6 +196,22 @@ export const reviewQueryKeys = {
     ["review", "changeset", cwd, sourceKey] as const,
   pullRequest: (cwd: string | null, reference: string | null) =>
     ["review", "pull-request", cwd, reference] as const,
+  pullRequestSurface: (
+    cwd: string | null,
+    reference: string | null,
+    sourceKey: string | null,
+    includeConversation: boolean,
+    includeChangeset: boolean,
+  ) =>
+    [
+      "review",
+      "pull-request-surface",
+      cwd,
+      reference,
+      sourceKey,
+      includeConversation,
+      includeChangeset,
+    ] as const,
   conversation: (cwd: string | null, reference: string | null) =>
     ["review", "conversation", cwd, reference] as const,
   comments: (targetKey: string) => ["review", "comments", targetKey] as const,
@@ -347,6 +388,50 @@ export function reviewLoadConversationQueryOptions(input: {
     },
     enabled: input.cwd !== null && input.reference !== null,
     staleTime: REVIEW_CONVERSATION_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
+export function reviewLoadPullRequestSurfaceQueryOptions(input: {
+  cwd: string | null;
+  reference: string | null;
+  source: ReviewSourceRef | null;
+  includeConversation: boolean;
+  includeChangeset: boolean;
+  queryClient: QueryClient;
+}) {
+  const sourceKey = input.source ? reviewSourceKey(input.source) : null;
+  return queryOptions({
+    queryKey: reviewQueryKeys.pullRequestSurface(
+      input.cwd,
+      input.reference,
+      sourceKey,
+      input.includeConversation,
+      input.includeChangeset,
+    ),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd || !input.reference || !input.source) {
+        throw new Error("Pull request surface is unavailable.");
+      }
+      const request: ReviewPullRequestSurfaceInput = {
+        cwd: input.cwd,
+        reference: input.reference,
+        source: input.source,
+        ...(input.includeConversation ? { includeConversation: true } : {}),
+        ...(input.includeChangeset ? { includeChangeset: true } : {}),
+      };
+      const payload = await api.review.loadPullRequestSurface(request);
+      applyReviewPullRequestSurfacePayload(input.queryClient, request, payload);
+      return payload;
+    },
+    enabled:
+      input.cwd !== null &&
+      input.reference !== null &&
+      input.source !== null &&
+      (input.includeConversation || input.includeChangeset),
+    staleTime: REVIEW_PULL_REQUEST_STALE_TIME_MS,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
