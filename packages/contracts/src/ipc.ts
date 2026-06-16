@@ -12,6 +12,19 @@ import type {
   AuthWebSocketTokenResult,
 } from "./auth";
 import type {
+  AutomationCancelRunInput,
+  AutomationCancelRunResult,
+  AutomationCreateInput,
+  AutomationDefinition,
+  AutomationDeleteInput,
+  AutomationListInput,
+  AutomationListResult,
+  AutomationRunNowInput,
+  AutomationRunNowResult,
+  AutomationStreamEvent,
+  AutomationUpdateInput,
+} from "./automation";
+import type {
   GitCheckoutInput,
   GitActionProgressEvent,
   GitCreateBranchInput,
@@ -532,6 +545,15 @@ export interface NativeApi {
     onDomainEvent: (callback: (event: OrchestrationEvent) => void) => () => void;
     onShellEvent: (callback: (event: OrchestrationShellStreamItem) => void) => () => void;
     onThreadEvent: (callback: (event: OrchestrationThreadStreamItem) => void) => () => void;
+  };
+  automation: {
+    list: (input?: AutomationListInput) => Promise<AutomationListResult>;
+    create: (input: AutomationCreateInput) => Promise<AutomationDefinition>;
+    update: (input: AutomationUpdateInput) => Promise<AutomationDefinition>;
+    delete: (input: AutomationDeleteInput) => Promise<void>;
+    runNow: (input: AutomationRunNowInput) => Promise<AutomationRunNowResult>;
+    cancelRun: (input: AutomationCancelRunInput) => Promise<AutomationCancelRunResult>;
+    onEvent: (callback: (event: AutomationStreamEvent) => void) => () => void;
   };
   browser: {
     open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;

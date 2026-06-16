@@ -43,6 +43,10 @@ export const MessageId = makeEntityId("MessageId");
 export type MessageId = typeof MessageId.Type;
 export const ThreadMarkerId = makeEntityId("ThreadMarkerId");
 export type ThreadMarkerId = typeof ThreadMarkerId.Type;
+export const AutomationId = makeEntityId("AutomationId");
+export type AutomationId = typeof AutomationId.Type;
+export const AutomationRunId = makeEntityId("AutomationRunId");
+export type AutomationRunId = typeof AutomationRunId.Type;
 export const TurnId = makeEntityId("TurnId");
 export type TurnId = typeof TurnId.Type;
 

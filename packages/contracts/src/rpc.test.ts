@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { WsProjectsDiscoverScriptsRpc, WsRpcError, WsRpcGroup } from "./rpc";
+import { WsAutomationCreateRpc, WsProjectsDiscoverScriptsRpc, WsRpcError, WsRpcGroup } from "./rpc";
 
 describe("WS RPC contracts", () => {
   it("exports the additive Effect RPC group", () => {
@@ -13,5 +13,9 @@ describe("WS RPC contracts", () => {
 
   it("exports the project script discovery RPC", () => {
     expect(WsProjectsDiscoverScriptsRpc).toBeDefined();
+  });
+
+  it("exports the automation create RPC", () => {
+    expect(WsAutomationCreateRpc).toBeDefined();
   });
 });
