@@ -4,13 +4,12 @@ import type {
   ReviewTimelineEvent,
   ThreadId,
 } from "@t3tools/contracts";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  reviewLoadChangesetQueryOptions,
-  reviewLoadConversationQueryOptions,
   reviewLoadPullRequestHeaderQueryOptions,
+  reviewLoadPullRequestSurfaceQueryOptions,
   reviewSourceKey,
 } from "~/lib/reviewReactQuery";
 import {
@@ -116,6 +115,7 @@ export function ReviewPrView(props: {
   const [tab, setTab] = useState<PrTab>("conversation");
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
+  const queryClient = useQueryClient();
   const projects = useStore((state) => state.projects);
   const prewarmedReviewChatKeyRef = useRef<string | null>(null);
   const prewarmingReviewChatKeyRef = useRef<string | null>(null);
@@ -130,59 +130,64 @@ export function ReviewPrView(props: {
     setTab("conversation");
     setSelectedFilePath(null);
   }, [props.reference, sourceKey]);
-  const [readyConversationHydrationKey, setReadyConversationHydrationKey] = useState<string | null>(
+  const [readySurfaceHydrationKey, setReadySurfaceHydrationKey] = useState<string | null>(
     null,
   );
   useEffect(() => {
-    setReadyConversationHydrationKey(null);
+    setReadySurfaceHydrationKey(null);
   }, [conversationHydrationKey]);
   const headerQuery = useQuery({
     ...reviewLoadPullRequestHeaderQueryOptions({ cwd: props.cwd, reference: props.reference }),
     enabled: props.cwd !== null,
   });
   const headerDetail = headerQuery.data?.detail ?? null;
-  const detail = headerDetail;
   useEffect(() => {
-    if (conversationHydrationKey === null || detail === null || tab !== "conversation") {
-      setReadyConversationHydrationKey(null);
+    if (conversationHydrationKey === null || headerDetail === null) {
+      setReadySurfaceHydrationKey(null);
       return;
     }
     const frame = window.requestAnimationFrame(() =>
-      setReadyConversationHydrationKey(conversationHydrationKey),
+      setReadySurfaceHydrationKey(conversationHydrationKey),
     );
     return () => window.cancelAnimationFrame(frame);
-  }, [conversationHydrationKey, detail, tab]);
-  const isConversationHydrationReady =
-    readyConversationHydrationKey !== null &&
-    readyConversationHydrationKey === conversationHydrationKey;
-  const conversationQuery = useQuery({
-    ...reviewLoadConversationQueryOptions({
+  }, [conversationHydrationKey, headerDetail]);
+  const isSurfaceHydrationReady =
+    readySurfaceHydrationKey !== null && readySurfaceHydrationKey === conversationHydrationKey;
+  const surfaceQuery = useQuery({
+    ...reviewLoadPullRequestSurfaceQueryOptions({
       cwd: props.cwd,
-      reference: detail ? props.reference : null,
-    }),
-    enabled:
-      props.cwd !== null &&
-      detail !== null &&
-      tab === "conversation" &&
-      isConversationHydrationReady,
-  });
-  const changesetQuery = useQuery({
-    ...reviewLoadChangesetQueryOptions({
-      cwd: props.cwd,
+      reference: headerDetail ? props.reference : null,
       source: props.source,
+      includeConversation: tab === "conversation",
+      includeChangeset: tab === "files",
+      queryClient,
     }),
-    enabled: props.cwd !== null && detail !== null && tab === "files",
+    enabled: props.cwd !== null && headerDetail !== null && isSurfaceHydrationReady,
   });
+  const overview = surfaceQuery.data?.overview ?? null;
+  const detail = overview?.detail ?? headerDetail;
   const changesetState = useMemo(
     () => ({
-      data: changesetQuery.data,
-      isLoading: changesetQuery.isLoading,
-      error: changesetQuery.error,
+      data: surfaceQuery.data?.changeset,
+      isLoading:
+        detail !== null &&
+        tab === "files" &&
+        isSurfaceHydrationReady &&
+        surfaceQuery.isLoading &&
+        surfaceQuery.data?.changeset === undefined,
+      error: surfaceQuery.data?.changeset === undefined ? surfaceQuery.error : null,
     }),
-    [changesetQuery.data, changesetQuery.error, changesetQuery.isLoading],
+    [
+      detail,
+      isSurfaceHydrationReady,
+      surfaceQuery.data?.changeset,
+      surfaceQuery.error,
+      surfaceQuery.isLoading,
+      tab,
+    ],
   );
-  const checks = EMPTY_CHECKS;
-  const events = conversationQuery.data?.events ?? EMPTY_EVENTS;
+  const checks = overview?.checks ?? EMPTY_CHECKS;
+  const events = surfaceQuery.data?.conversation?.events ?? EMPTY_EVENTS;
   const sidechatContext = useMemo(() => {
     if (!detail) {
       return null;
@@ -340,10 +345,14 @@ export function ReviewPrView(props: {
                     detail={detail}
                     cwd={props.cwd}
                     reference={props.reference}
-                    events={conversationQuery.data?.events ?? []}
+                    events={events}
                     isLoading={
-                      conversationQuery.isLoading ||
-                      (detail !== null && tab === "conversation" && !isConversationHydrationReady)
+                      (detail !== null && tab === "conversation" && !isSurfaceHydrationReady) ||
+                      (detail !== null &&
+                        tab === "conversation" &&
+                        isSurfaceHydrationReady &&
+                        surfaceQuery.isLoading &&
+                        surfaceQuery.data?.conversation === undefined)
                     }
                     className={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}
                   />

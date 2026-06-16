@@ -112,6 +112,7 @@ async function mountOptimizedBoard(pullRequests: ReadonlyArray<ReviewPullRequest
   await expect
     .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
     .toBeVisible();
+  await expect.element(page.getByText("Review benchmark PR 1", { exact: true })).toBeVisible();
   const elapsedMs = performance.now() - startedAt;
 
   return {

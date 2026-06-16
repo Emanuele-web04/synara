@@ -128,10 +128,13 @@ describe("ReviewBoard performance", () => {
       await expect
         .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
         .toBeVisible();
-
-      const cards = Array.from(
-        document.querySelectorAll<HTMLElement>('[data-slot="review-card-shell"]'),
-      );
+      let cards: HTMLElement[] = [];
+      await vi.waitFor(() => {
+        cards = Array.from(
+          document.querySelectorAll<HTMLElement>('[data-slot="review-card-shell"]'),
+        );
+        expect(cards.length).toBeGreaterThan(3);
+      });
       expect(cards.length).toBeGreaterThan(3);
 
       const heights = cards
@@ -145,6 +148,27 @@ describe("ReviewBoard performance", () => {
         .sort((a, b) => a.top - b.top);
       for (let index = 1; index < orderedRects.length; index += 1) {
         expect(orderedRects[index]!.top).toBeGreaterThanOrEqual(orderedRects[index - 1]!.bottom);
+      }
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps vertical scrolling inside each populated board column", async () => {
+    const mounted = await mountBoard(makePullRequests(120));
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+      await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
+
+      expect(document.querySelector("[data-radix-scroll-area-viewport]")).toBeNull();
+      const columnLists = Array.from(document.querySelectorAll<HTMLElement>('[role="list"]'));
+      expect(columnLists.length).toBeGreaterThan(0);
+      for (const list of columnLists) {
+        expect(getComputedStyle(list).overflowY).toBe("auto");
+        expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
       }
     } finally {
       await mounted.cleanup();
@@ -207,7 +231,6 @@ describe("ReviewBoard performance", () => {
           limit: 100,
         });
       });
-      await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
 
       resolveNextWindow?.({
         pullRequests: makePullRequests(100),
@@ -223,83 +246,6 @@ describe("ReviewBoard performance", () => {
         },
       });
     } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("loads more when the board bottom comes into view", async () => {
-    const originalIntersectionObserver = window.IntersectionObserver;
-    let callback: IntersectionObserverCallback | null = null;
-    class TestIntersectionObserver implements IntersectionObserver {
-      readonly root = null;
-      readonly rootMargin = "0px";
-      readonly thresholds = [];
-      observe = vi.fn();
-      unobserve = vi.fn();
-      disconnect = vi.fn();
-      takeRecords = () => [];
-
-      constructor(nextCallback: IntersectionObserverCallback) {
-        callback = nextCallback;
-      }
-    }
-    window.IntersectionObserver = TestIntersectionObserver;
-
-    let resolveNextWindow:
-      | ((value: ReviewListPullRequestsResult) => void)
-      | null = null;
-    const mounted = await mountBoard({
-      pullRequests: makePullRequests(50),
-      meta: {
-        resultLimit: 50,
-        candidateLimit: 50,
-        candidateCount: 50,
-        candidateLimitReached: true,
-        matchedCount: 50,
-        returnedCount: 50,
-        bounded: true,
-      },
-    });
-
-    try {
-      await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
-      await vi.waitFor(() => {
-        expect(callback).not.toBeNull();
-      });
-      nativeApiMock.listPullRequests.mockImplementationOnce(
-        () =>
-          new Promise<ReviewListPullRequestsResult>((resolve) => {
-            resolveNextWindow = resolve;
-          }),
-      );
-
-      callback?.(
-        [{ isIntersecting: true } as IntersectionObserverEntry],
-        {} as IntersectionObserver,
-      );
-
-      await vi.waitFor(() => {
-        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
-          cwd: "/repo",
-          limit: 100,
-        });
-      });
-
-      resolveNextWindow?.({
-        pullRequests: makePullRequests(100),
-        meta: {
-          requestedLimit: 100,
-          resultLimit: 100,
-          candidateLimit: 100,
-          candidateCount: 100,
-          candidateLimitReached: false,
-          matchedCount: 100,
-          returnedCount: 100,
-          bounded: true,
-        },
-      });
-    } finally {
-      window.IntersectionObserver = originalIntersectionObserver;
       await mounted.cleanup();
     }
   });

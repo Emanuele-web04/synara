@@ -102,6 +102,12 @@ const nativeApiMock = vi.hoisted(() => ({
       checks: [],
     },
     conversation: { events: [] },
+    changeset: {
+      files: [],
+      headSha: "abc123",
+      patch: "",
+      target: null,
+    },
   })),
 }));
 
@@ -273,12 +279,15 @@ describe("ReviewPrView performance", () => {
 
       queuedFrame?.(performance.now());
 
-      await expect.poll(() => nativeApiMock.loadConversation.mock.calls.length).toBe(1);
-      expect(nativeApiMock.loadConversation).toHaveBeenCalledWith({
+      await expect.poll(() => nativeApiMock.loadPullRequestSurface.mock.calls.length).toBe(1);
+      expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledWith({
         cwd: CWD,
         reference: REFERENCE,
+        source: SOURCE,
+        includeConversation: true,
       });
-      expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledTimes(0);
+      expect(nativeApiMock.loadConversation).toHaveBeenCalledTimes(0);
+      expect(nativeApiMock.loadChangeset).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadPullRequest).toHaveBeenCalledTimes(0);
     } finally {
       await screen.unmount();
@@ -287,7 +296,7 @@ describe("ReviewPrView performance", () => {
     }
   });
 
-  it("loads files through the direct changeset query without aggregate surface hydration", async () => {
+  it("hydrates files through the aggregate surface query after the first overview frame", async () => {
     await page.viewport(1200, 800);
     let queuedFrame: FrameRequestCallback | null = null;
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
@@ -317,16 +326,21 @@ describe("ReviewPrView performance", () => {
     try {
       await expect.element(page.getByRole("heading", { name: DETAIL.title })).toBeVisible();
       expect(queuedFrame).not.toBeNull();
+      queuedFrame?.(performance.now());
+      await expect.poll(() => nativeApiMock.loadPullRequestSurface.mock.calls.length).toBe(1);
+      nativeApiMock.loadPullRequestSurface.mockClear();
 
       await page.getByRole("button", { name: "Review changes" }).click();
 
-      await expect.poll(() => nativeApiMock.loadChangeset.mock.calls.length).toBe(1);
-      expect(nativeApiMock.loadChangeset).toHaveBeenCalledWith({
+      await expect.poll(() => nativeApiMock.loadPullRequestSurface.mock.calls.length).toBe(1);
+      expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledWith({
         cwd: CWD,
+        reference: REFERENCE,
         source: SOURCE,
+        includeChangeset: true,
       });
+      expect(nativeApiMock.loadChangeset).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadConversation).toHaveBeenCalledTimes(0);
-      expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadPullRequest).toHaveBeenCalledTimes(0);
     } finally {
       await screen.unmount();

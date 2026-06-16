@@ -12,7 +12,6 @@ import {
 import { GitPullRequestIcon, RefreshCwIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
-import { ScrollArea } from "../ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "../base-ui/tabs";
 import { CountChip, EmptyState } from "./reviewPrimitives";
 import {
@@ -22,7 +21,7 @@ import {
 } from "./ReviewInitialSync";
 import { ReviewBoardCard } from "./ReviewBoardCard";
 import { ReviewFilterBar } from "./ReviewFilterBar";
-import { EndReachedSentinel, VirtualizedPullRequestRows } from "./VirtualizedPullRequestRows";
+import { VirtualizedPullRequestRows } from "./VirtualizedPullRequestRows";
 import {
   type ActiveReviewFilter,
   buildReviewPullFilterOptions,
@@ -184,7 +183,7 @@ export function ReviewBoard(props: { cwd: string | null }) {
   };
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       <div className="shrink-0 border-b border-border/45 bg-background/78 px-3 py-2.5">
         <div
           className="flex min-w-0 flex-wrap items-center gap-2 rounded-[1.15rem] border border-border/55 bg-card/60 px-2 py-2 shadow-[0_10px_28px_-26px_var(--foreground)]"
@@ -262,26 +261,20 @@ export function ReviewBoard(props: { cwd: string | null }) {
             : "Failed to load pull requests."}
         </div>
       ) : (
-        <ScrollArea className="flex-1">
-          <div className="flex h-full min-w-0 flex-col gap-3 p-3">
-            {isRefreshing ? <ReviewSyncStatusStrip /> : null}
-            <div className="flex min-w-0 flex-col gap-3 md:min-w-max md:flex-row">
-              {REVIEW_BOARD_COLUMNS.map((column) => (
-                <ReviewBoardColumn
-                  key={column.id}
-                  column={column}
-                  pullRequests={grouped[column.id]}
-                  cwd={cwd}
-                  onEndReached={loadMore}
-                />
-              ))}
-            </div>
-            <EndReachedSentinel
-              disabled={!canLoadMore || pullRequestsQuery.isFetching}
-              onEndReached={loadMore}
-            />
+        <div className="flex h-full min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3">
+          {isRefreshing ? <ReviewSyncStatusStrip /> : null}
+          <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-x-auto overflow-y-hidden md:flex-row">
+            {REVIEW_BOARD_COLUMNS.map((column) => (
+              <ReviewBoardColumn
+                key={column.id}
+                column={column}
+                pullRequests={grouped[column.id]}
+                cwd={cwd}
+                onEndReached={loadMore}
+              />
+            ))}
           </div>
-        </ScrollArea>
+        </div>
       )}
     </div>
   );
@@ -296,7 +289,7 @@ function ReviewBoardColumn(props: {
   const { column, pullRequests, cwd, onEndReached } = props;
   const isEmpty = pullRequests.length === 0;
   return (
-    <section className="flex h-full w-full shrink-0 flex-col gap-2 rounded-[1.5rem] border border-border/60 bg-card/55 p-2.5 shadow-sm md:w-72">
+    <section className="flex min-h-0 w-full shrink-0 flex-col gap-2 overflow-hidden rounded-[1.5rem] border border-border/60 bg-card/55 p-2.5 shadow-sm md:h-full md:w-72">
       <header className="flex shrink-0 items-center gap-2 px-1">
         <span
           className="min-w-0 truncate font-medium text-[11px] text-muted-foreground uppercase tracking-wide"
@@ -332,32 +325,30 @@ function ReviewBoardColumn(props: {
 // fills the columns in place instead of popping a centered spinner into a full board.
 function BoardLoadingSkeleton(props: { isFetching: boolean; onRetry: () => void }) {
   return (
-    <ScrollArea className="flex-1">
-      <div className="flex h-full min-w-0 flex-col gap-3 p-3" aria-busy="true">
-        <ReviewInitialSyncPanel
-          onAction={props.onRetry}
-          actionLabel="Sync now"
-          actionDisabled={props.isFetching}
-        />
-        <div className="flex min-w-0 flex-col gap-3 md:min-w-max md:flex-row">
-          {REVIEW_BOARD_COLUMNS.map((column) => (
-            <section
-              key={column.id}
-              className="flex h-full w-full shrink-0 flex-col gap-2 rounded-[1.5rem] border border-border/60 bg-card/55 p-2.5 shadow-sm md:w-72"
-            >
-              <header className="flex shrink-0 items-center gap-2 px-1">
-                <span
-                  className="min-w-0 truncate font-medium text-[11px] text-muted-foreground uppercase tracking-wide"
-                  title={column.label}
-                >
-                  {column.label}
-                </span>
-              </header>
-              <ReviewSyncRowsSkeleton rows={3} compact />
-            </section>
-          ))}
-        </div>
+    <div className="flex h-full min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3" aria-busy="true">
+      <ReviewInitialSyncPanel
+        onAction={props.onRetry}
+        actionLabel="Sync now"
+        actionDisabled={props.isFetching}
+      />
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-x-auto overflow-y-hidden md:flex-row">
+        {REVIEW_BOARD_COLUMNS.map((column) => (
+          <section
+            key={column.id}
+            className="flex min-h-0 w-full shrink-0 flex-col gap-2 overflow-hidden rounded-[1.5rem] border border-border/60 bg-card/55 p-2.5 shadow-sm md:h-full md:w-72"
+          >
+            <header className="flex shrink-0 items-center gap-2 px-1">
+              <span
+                className="min-w-0 truncate font-medium text-[11px] text-muted-foreground uppercase tracking-wide"
+                title={column.label}
+              >
+                {column.label}
+              </span>
+            </header>
+            <ReviewSyncRowsSkeleton rows={3} compact />
+          </section>
+        ))}
       </div>
-    </ScrollArea>
+    </div>
   );
 }
