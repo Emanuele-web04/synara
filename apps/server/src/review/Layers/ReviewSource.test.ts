@@ -1084,6 +1084,11 @@ it.effect("bounds GitHub candidate fetches by 10x for large locally filtered lis
   const pullRequests = Array.from({ length: repositoryPullRequestCount }, (_, index) =>
     ghPr({
       number: index + 1,
+      author: index % 2 === 0 ? "alice" : "bob",
+      baseRefName: "main",
+      headRefName: index % 2 === 0 ? "feature/perf" : "feature/other",
+      labels: index % 2 === 0 ? ["perf,label"] : ["other"],
+      assignees: index % 2 === 0 ? ["tyler"] : ["someone-else"],
       reviewDecision: null,
       checksStatus: "failing",
     }),
@@ -1094,6 +1099,11 @@ it.effect("bounds GitHub candidate fetches by 10x for large locally filtered lis
     const startedAt = performance.now();
     const result = yield* runList(layer, {
       cwd: "/repo",
+      author: "alice",
+      baseBranch: "main",
+      headBranch: "feature/perf",
+      label: "perf,label",
+      assignee: "tyler",
       columns: ["needs-review"],
       checks: ["failing"],
     });
@@ -1113,7 +1123,16 @@ it.effect("bounds GitHub candidate fetches by 10x for large locally filtered lis
     );
 
     expect(recorded.listCalls).toEqual([
-      { cwd: "/repo", state: "open", limit: 1000, checksStatuses: ["failing"] },
+      {
+        cwd: "/repo",
+        state: "open",
+        limit: 1000,
+        author: "alice",
+        baseBranch: "main",
+        headBranch: "feature/perf",
+        assignee: "tyler",
+        checksStatuses: ["failing"],
+      },
     ]);
     expect(result.pullRequests).toHaveLength(50);
     expect(result.meta).toEqual({
@@ -1121,7 +1140,7 @@ it.effect("bounds GitHub candidate fetches by 10x for large locally filtered lis
       candidateLimit: 1000,
       candidateCount: 1000,
       candidateLimitReached: true,
-      matchedCount: 1000,
+      matchedCount: 500,
       returnedCount: 50,
       bounded: true,
     });

@@ -104,16 +104,18 @@ export function ReviewBoard(props: { cwd: string | null }) {
   );
   const clientSearch = search.trim() === serverSearch.trim() ? "" : search;
   const facetBasePullRequests = useMemo(() => {
-    const cachedPullRequests = queryClient
-      .getQueriesData<ReviewListPullRequestsResult>({
-        queryKey: reviewQueryKeys.pullRequestLists(cwd),
-      })
-      .flatMap(([, data]) => data?.pullRequests ?? []);
+    const basePullRequests =
+      queryClient.getQueryData<ReviewListPullRequestsResult>(
+        reviewQueryKeys.pullRequests({
+          cwd,
+          ...(listState === "merged" ? { state: listState } : {}),
+        }),
+      )?.pullRequests ?? [];
     return uniqueReviewPullRequests([
-      ...cachedPullRequests,
+      ...basePullRequests,
       ...(pullRequestsQuery.data?.pullRequests ?? []),
     ]);
-  }, [queryClient, cwd, pullRequestsQuery.data]);
+  }, [queryClient, cwd, listState, pullRequestsQuery.data]);
 
   const byView = useMemo(() => {
     const all = pullRequestsQuery.data?.pullRequests ?? [];

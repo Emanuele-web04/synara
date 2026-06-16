@@ -201,11 +201,10 @@ function reviewColumn(summary: ReviewPullRequestSummary): string {
   return "needs-review";
 }
 
-function matchesListFilters(
-  summary: ReviewPullRequestSummary,
+function makeListFilterMatcher(
   input: ReviewListPullRequestsInput,
   viewerLogin: string,
-): boolean {
+): (summary: ReviewPullRequestSummary) => boolean {
   const authors = resolvedAliasMergedSet(input.author, input.authors, viewerLogin);
   const reviewRequested = resolveViewerAlias(
     normalizeOptionalText(input.reviewRequested),
@@ -217,7 +216,7 @@ function matchesListFilters(
   const assignees = resolvedAliasMergedSet(input.assignee, input.assignees, viewerLogin);
   const columns = normalizedSet(input.columns);
   const checks = normalizedSet(input.checks);
-  return (
+  return (summary) =>
     (authors.size === 0 || authors.has(summary.author)) &&
     (!reviewRequested || summary.reviewRequests.includes(reviewRequested)) &&
     (baseBranches.size === 0 || baseBranches.has(summary.baseBranch)) &&
@@ -229,8 +228,7 @@ function matchesListFilters(
       summary.assignees.some((summaryAssignee) => assignees.has(summaryAssignee))) &&
     (input.draft !== true || summary.isDraft) &&
     (columns.size === 0 || columns.has(reviewColumn(summary))) &&
-    (checks.size === 0 || checks.has(summary.checksStatus))
-  );
+    (checks.size === 0 || checks.has(summary.checksStatus));
 }
 
 function hasLocalListFilters(input: ReviewListPullRequestsInput, viewerLogin: string): boolean {
@@ -577,10 +575,11 @@ const makeReviewSource = Effect.gen(function* () {
       })
       .pipe(
         Effect.map((pullRequests): ReviewListPullRequestsResult => {
+          const matchesListFilters = makeListFilterMatcher(input, viewerLogin);
           const summaries = pullRequests
             .map(toPullRequestSummary)
             .filter((summary): summary is ReviewPullRequestSummary => summary !== null)
-            .filter((summary) => matchesListFilters(summary, input, viewerLogin));
+            .filter(matchesListFilters);
           const usesLocalCandidateWindow = hasLocalListFilters(input, viewerLogin);
           const candidateLimit = listLimit ?? resultListLimit(input);
           const resultLimit = resultListLimit(input);

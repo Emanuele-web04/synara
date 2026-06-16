@@ -73,12 +73,11 @@ export function PullRequestList(props: {
 
   const allPullRequests = pullRequestsQuery.data?.pullRequests ?? EMPTY_PULL_REQUESTS;
   const facetItems = useMemo(() => {
-    const cachedPullRequests = queryClient
-      .getQueriesData<ReviewListPullRequestsResult>({
-        queryKey: reviewQueryKeys.pullRequestLists(props.cwd),
-      })
-      .flatMap(([, data]) => data?.pullRequests ?? []);
-    return uniqueReviewPullRequests([...cachedPullRequests, ...allPullRequests]);
+    const basePullRequests =
+      queryClient.getQueryData<ReviewListPullRequestsResult>(
+        reviewQueryKeys.pullRequests({ cwd: props.cwd }),
+      )?.pullRequests ?? [];
+    return uniqueReviewPullRequests([...basePullRequests, ...allPullRequests]);
   }, [queryClient, props.cwd, allPullRequests]);
   const filterOptionsByFieldId = useMemo(
     () => buildReviewPullFilterOptions(facetItems),
