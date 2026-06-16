@@ -231,4 +231,15 @@ describe("toReviewServerListFilters", () => {
       ]),
     ).toEqual({});
   });
+
+  it("pushes single draft status natively without changing mixed-status OR semantics", () => {
+    expect(toReviewServerListFilters([filter("status", ["draft"])])).toEqual({
+      draft: true,
+      columns: ["draft"],
+    });
+
+    expect(toReviewServerListFilters([filter("status", ["approved", "draft"])])).toEqual({
+      columns: ["approved", "draft"],
+    });
+  });
 });

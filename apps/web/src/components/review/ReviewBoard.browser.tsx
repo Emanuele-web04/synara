@@ -214,6 +214,42 @@ describe("ReviewBoard performance", () => {
     }
   });
 
+  it("pushes a single draft status facet into the server list request", async () => {
+    const pullRequests = [
+      {
+        ...makePullRequests(1)[0],
+        number: 55,
+        title: "Draft review work",
+        isDraft: true,
+      },
+      {
+        ...makePullRequests(1)[0],
+        number: 56,
+        title: "Ready review work",
+        isDraft: false,
+      },
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+
+      await page.getByRole("button", { name: "Status", exact: true }).click();
+      await page.getByRole("button", { name: "Draft", exact: true }).click();
+      await vi.waitFor(() => {
+        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+          cwd: "/repo",
+          draft: true,
+          columns: ["draft"],
+        });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("pushes a single base branch facet into the server list request", async () => {
     const pullRequests = [
       {

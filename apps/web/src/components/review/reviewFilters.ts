@@ -34,6 +34,7 @@ export interface ReviewServerListFilters {
   readonly headBranch?: string;
   readonly label?: string;
   readonly assignee?: string;
+  readonly draft?: boolean;
   readonly columns?: ReadonlyArray<ReviewColumnId>;
   readonly checks?: ReadonlyArray<ReviewPullRequestSummary["checksStatus"]>;
 }
@@ -290,6 +291,7 @@ export function toReviewServerListFilters(
     ...(headBranches.length === 1 ? { headBranch: headBranches[0] } : {}),
     ...(labels.length === 1 ? { label: labels[0] } : {}),
     ...(assignees.length === 1 ? { assignee: assignees[0] } : {}),
+    ...(columns.length === 1 && columns[0] === "draft" ? { draft: true } : {}),
     ...(columns.length > 0 ? { columns } : {}),
     ...(checks.length > 0 ? { checks } : {}),
   };

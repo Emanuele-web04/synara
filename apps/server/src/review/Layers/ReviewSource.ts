@@ -213,13 +213,17 @@ function matchesListFilters(
     (!headBranch || summary.headBranch === headBranch || summary.headSelector === headBranch) &&
     (!label || summary.labels.includes(label)) &&
     (!assignee || summary.assignees.includes(assignee)) &&
+    (input.draft !== true || summary.isDraft) &&
     (columns.size === 0 || columns.has(reviewColumn(summary))) &&
     (checks.size === 0 || checks.has(summary.checksStatus))
   );
 }
 
 function hasLocalListFilters(input: ReviewListPullRequestsInput): boolean {
-  return normalizedSet(input.columns).size > 0 || normalizedSet(input.checks).size > 0;
+  const localColumns = [...normalizedSet(input.columns)].filter(
+    (column) => column !== "draft" || input.draft !== true,
+  );
+  return localColumns.length > 0 || normalizedSet(input.checks).size > 0;
 }
 
 function resolveViewerAlias(value: string | null, viewerLogin: string): string | null {
@@ -324,6 +328,7 @@ function pullRequestListFilter(input: {
   readonly headBranch?: string | undefined;
   readonly label?: string | undefined;
   readonly assignee?: string | undefined;
+  readonly draft?: boolean | undefined;
   readonly columns?: ReadonlyArray<string> | undefined;
   readonly checks?: ReadonlyArray<string> | undefined;
 }): string {
@@ -337,6 +342,7 @@ function pullRequestListFilter(input: {
     headBranch: normalizeOptionalText(input.headBranch),
     label: normalizeOptionalText(input.label),
     assignee: normalizeOptionalText(input.assignee),
+    draft: input.draft === true ? true : null,
     columns: [...normalizedSet(input.columns)].sort(),
     checks: [...normalizedSet(input.checks)].sort(),
   });
@@ -413,6 +419,7 @@ const makeReviewSource = Effect.gen(function* () {
         ...(input.headBranch !== undefined ? { headBranch: input.headBranch } : {}),
         ...(input.label !== undefined ? { label: input.label } : {}),
         ...(input.assignee !== undefined ? { assignee: input.assignee } : {}),
+        ...(input.draft === true ? { draft: true } : {}),
       })
       .pipe(
         Effect.map((pullRequests): ReviewListPullRequestsResult => {
@@ -811,6 +818,7 @@ const makeReviewSource = Effect.gen(function* () {
                     ...(input.headBranch !== undefined ? { headBranch: input.headBranch } : {}),
                     ...(input.label !== undefined ? { label: input.label } : {}),
                     ...(input.assignee !== undefined ? { assignee: input.assignee } : {}),
+                    ...(input.draft === true ? { draft: true } : {}),
                     ...(input.columns !== undefined ? { columns: input.columns } : {}),
                     ...(input.checks !== undefined ? { checks: input.checks } : {}),
                     data,

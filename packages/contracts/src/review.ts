@@ -88,6 +88,7 @@ export const ReviewListPullRequestsInput = Schema.Struct({
   headBranch: Schema.optional(TrimmedNonEmptyStringSchema),
   label: Schema.optional(TrimmedNonEmptyStringSchema),
   assignee: Schema.optional(TrimmedNonEmptyStringSchema),
+  draft: Schema.optional(Schema.Boolean),
   columns: Schema.optional(Schema.Array(ReviewListColumn)),
   checks: Schema.optional(Schema.Array(ReviewChecksStatus)),
 });
@@ -591,6 +592,7 @@ export const ReviewUpdatedPayload = Schema.Union([
     headBranch: Schema.optional(TrimmedNonEmptyStringSchema),
     label: Schema.optional(TrimmedNonEmptyStringSchema),
     assignee: Schema.optional(TrimmedNonEmptyStringSchema),
+    draft: Schema.optional(Schema.Boolean),
     columns: Schema.optional(Schema.Array(ReviewListColumn)),
     checks: Schema.optional(Schema.Array(ReviewChecksStatus)),
     data: ReviewListPullRequestsResult,

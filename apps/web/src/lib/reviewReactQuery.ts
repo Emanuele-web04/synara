@@ -78,6 +78,7 @@ export function applyReviewUpdatedPayload(
         headBranch: payload.headBranch,
         label: payload.label,
         assignee: payload.assignee,
+        draft: payload.draft,
         columns: payload.columns,
         checks: payload.checks,
       }),
@@ -123,6 +124,7 @@ export const reviewQueryKeys = {
     headBranch?: string;
     label?: string;
     assignee?: string;
+    draft?: boolean;
     columns?: ReadonlyArray<ReviewListColumn>;
     checks?: ReadonlyArray<ReviewListChecksStatus>;
   }) =>
@@ -137,6 +139,7 @@ export const reviewQueryKeys = {
       reviewPullRequestListText(input.headBranch),
       reviewPullRequestListText(input.label),
       reviewPullRequestListText(input.assignee),
+      input.draft === true ? true : null,
       reviewPullRequestListValues(input.columns),
       reviewPullRequestListValues(input.checks),
     ] as const,
@@ -167,6 +170,7 @@ export function reviewListPullRequestsQueryOptions(input: {
   headBranch?: string;
   label?: string;
   assignee?: string;
+  draft?: boolean;
   columns?: ReadonlyArray<ReviewListColumn>;
   checks?: ReadonlyArray<ReviewListChecksStatus>;
 }) {
@@ -198,6 +202,7 @@ export function buildReviewListPullRequestsRequest(input: {
   headBranch?: string;
   label?: string;
   assignee?: string;
+  draft?: boolean;
   columns?: ReadonlyArray<ReviewListColumn>;
   checks?: ReadonlyArray<ReviewListChecksStatus>;
 }): ReviewListPullRequestsInput {
@@ -221,6 +226,7 @@ export function buildReviewListPullRequestsRequest(input: {
     ...(headBranch !== null ? { headBranch } : {}),
     ...(label !== null ? { label } : {}),
     ...(assignee !== null ? { assignee } : {}),
+    ...(input.draft === true ? { draft: true } : {}),
     ...(columns.length > 0 ? { columns } : {}),
     ...(checks.length > 0 ? { checks } : {}),
   };

@@ -150,6 +150,7 @@ layer("GitHubCliLive", (it) => {
           headBranch: "review-perf",
           label: "bug",
           reviewRequested: "tyler",
+          draft: true,
         });
       });
 
@@ -194,6 +195,7 @@ layer("GitHubCliLive", (it) => {
           "review-perf",
           "--label",
           "bug",
+          "--draft",
           "--search",
           "review board review-requested:tyler",
           "--json",

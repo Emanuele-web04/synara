@@ -42,6 +42,7 @@ it.effect("accepts review list server-side filter fields", () =>
       headBranch: "feature/review-board",
       label: "bug",
       assignee: "alice",
+      draft: true,
       columns: ["needs-review", "approved"],
       checks: ["passing", "pending"],
     });
@@ -57,6 +58,7 @@ it.effect("accepts review list server-side filter fields", () =>
       headBranch: "feature/review-board",
       label: "bug",
       assignee: "alice",
+      draft: true,
       columns: ["needs-review", "approved"],
       checks: ["passing", "pending"],
     });

@@ -36,6 +36,8 @@ interface RecordedListCall {
   readonly baseBranch?: string;
   readonly headBranch?: string;
   readonly label?: string;
+  readonly assignee?: string;
+  readonly draft?: boolean;
 }
 
 interface RecordedCacheWrite {
@@ -305,6 +307,7 @@ it.effect("pushes text search to GitHub and caches the normalized filter key", (
       headBranch: "branch-1",
       label: null,
       assignee: null,
+      draft: null,
       columns: [],
       checks: [],
     });
@@ -423,6 +426,7 @@ it.effect("uses a larger bounded candidate window for local-only status and chec
       headBranch: null,
       label: null,
       assignee: null,
+      draft: null,
       columns: ["approved"],
       checks: ["failing"],
     });
@@ -462,6 +466,7 @@ it.effect("pushes a single label filter to GitHub and keeps it in the cache key"
       headBranch: null,
       label: "bug",
       assignee: null,
+      draft: null,
       columns: [],
       checks: [],
     });
@@ -501,9 +506,118 @@ it.effect("pushes a single assignee filter to GitHub and keeps it in the cache k
       headBranch: null,
       label: null,
       assignee: "alice",
+      draft: null,
       columns: [],
       checks: [],
     });
+  });
+});
+
+it.effect("pushes a single draft status to GitHub without the local candidate window", () => {
+  const { layer, recorded } = makeLayer({
+    pullRequests: [
+      ghPr({ number: 1, isDraft: true }),
+      ghPr({ number: 2, isDraft: false }),
+    ],
+  });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      limit: 200,
+      draft: true,
+      columns: ["draft"],
+    });
+
+    expect(numbers(result)).toEqual([1]);
+    expect(result.meta).toEqual({
+      requestedLimit: 200,
+      resultLimit: 100,
+      candidateLimit: 100,
+      candidateCount: 2,
+      candidateLimitReached: false,
+      matchedCount: 1,
+      returnedCount: 1,
+      bounded: true,
+    });
+    expect(recorded.listCalls).toEqual([
+      {
+        cwd: "/repo",
+        state: "open",
+        limit: 100,
+        draft: true,
+      },
+    ]);
+    expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
+      state: "open",
+      limit: 100,
+      search: null,
+      author: null,
+      reviewRequested: null,
+      baseBranch: null,
+      headBranch: null,
+      label: null,
+      assignee: null,
+      draft: true,
+      columns: ["draft"],
+      checks: [],
+    });
+  });
+});
+
+it.effect("keeps mixed draft status filters on the local candidate window", () => {
+  const { layer, recorded } = makeLayer({
+    pullRequests: [
+      ghPr({ number: 1, isDraft: true }),
+      ghPr({ number: 2, reviewDecision: "APPROVED" }),
+      ghPr({ number: 3, isDraft: false, reviewDecision: null }),
+    ],
+  });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      columns: ["draft", "approved"],
+    });
+
+    expect(numbers(result)).toEqual([1, 2]);
+    expect(recorded.listCalls).toEqual([
+      {
+        cwd: "/repo",
+        state: "open",
+        limit: 1000,
+      },
+    ]);
+    expect(result.meta?.candidateLimit).toBe(1000);
+  });
+});
+
+it.effect("uses the local candidate window when native draft combines with local checks", () => {
+  const { layer, recorded } = makeLayer({
+    pullRequests: [
+      ghPr({ number: 1, isDraft: true, checksStatus: "passing" }),
+      ghPr({ number: 2, isDraft: true, checksStatus: "failing" }),
+    ],
+  });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      draft: true,
+      columns: ["draft"],
+      checks: ["passing"],
+    });
+
+    expect(numbers(result)).toEqual([1]);
+    expect(recorded.listCalls).toEqual([
+      {
+        cwd: "/repo",
+        state: "open",
+        limit: 1000,
+        draft: true,
+      },
+    ]);
+    expect(result.meta?.candidateLimit).toBe(1000);
   });
 });
 

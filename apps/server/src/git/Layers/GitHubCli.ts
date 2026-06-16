@@ -84,6 +84,7 @@ function repositoryPullRequestListArgs(input: {
   readonly headBranch?: string;
   readonly label?: string;
   readonly assignee?: string;
+  readonly draft?: boolean;
 }): string[] {
   const args = [
     "pr",
@@ -112,6 +113,9 @@ function repositoryPullRequestListArgs(input: {
   const label = optionalTrimmed(input.label);
   if (label) {
     args.push("--label", label);
+  }
+  if (input.draft === true) {
+    args.push("--draft");
   }
   const search = pullRequestListSearch(input);
   if (search) {
