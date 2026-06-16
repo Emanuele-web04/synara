@@ -59,7 +59,7 @@ function AutomationDetailView() {
 
   if (!definition) {
     return (
-      <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
         <header className="drag-region flex h-12 shrink-0 items-center gap-3 border-b border-border/60 px-3">
           <SidebarHeaderNavigationControls />
           <h1 className="truncate font-heading text-sm font-semibold">Automations</h1>
@@ -108,51 +108,53 @@ function AutomationDetailView() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
-      <header className="drag-region flex h-12 shrink-0 items-center gap-3 border-b border-border/60 px-3">
-        <SidebarHeaderNavigationControls />
-        <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
-          <button
-            type="button"
-            onClick={() => void navigate({ to: "/automations" })}
-            className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-          >
-            Automations
-          </button>
-          <span className="shrink-0 text-muted-foreground">/</span>
-          <span className="truncate font-heading font-semibold">{definition.name}</span>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button type="button" size="sm" variant="ghost" onClick={togglePause}>
-            {definition.enabled ? "Pause" : "Resume"}
-          </Button>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            aria-label="Edit"
-            onClick={openEditDialog}
-          >
-            <PencilIcon className="size-4" />
-          </Button>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            aria-label="Delete"
-            onClick={() => void deleteDefinition()}
-          >
-            <Trash2 className="size-4" />
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            disabled={runNowMutation.isPending}
-            onClick={() => runNowMutation.mutate(definition)}
-          >
-            <PlayIcon className="size-4" />
-            Run now
-          </Button>
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
+      <header className="drag-region flex h-12 shrink-0 items-center border-b border-border/60">
+        <div className="mx-auto flex w-full max-w-5xl items-center gap-3 px-6">
+          <SidebarHeaderNavigationControls />
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
+            <button
+              type="button"
+              onClick={() => void navigate({ to: "/automations" })}
+              className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Automations
+            </button>
+            <span className="shrink-0 text-muted-foreground">/</span>
+            <span className="truncate font-heading font-semibold">{definition.name}</span>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button type="button" size="sm" variant="ghost" onClick={togglePause}>
+              {definition.enabled ? "Pause" : "Resume"}
+            </Button>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Edit"
+              onClick={openEditDialog}
+            >
+              <PencilIcon className="size-4" />
+            </Button>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Delete"
+              onClick={() => void deleteDefinition()}
+            >
+              <Trash2 className="size-4" />
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={runNowMutation.isPending}
+              onClick={() => runNowMutation.mutate(definition)}
+            >
+              <PlayIcon className="size-4" />
+              Run now
+            </Button>
+          </div>
         </div>
       </header>
 

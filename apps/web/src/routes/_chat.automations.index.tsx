@@ -115,26 +115,28 @@ function AutomationsRouteView() {
     ) : null;
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
-      <header className="drag-region flex h-12 shrink-0 items-center gap-3 border-b border-border/60 px-3">
-        <SidebarHeaderNavigationControls />
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate font-heading text-sm font-semibold">Automations</h1>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button type="button" size="sm" variant="ghost" onClick={() => void refetch()}>
-            <RefreshCwIcon className="size-4" />
-            Refresh
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            onClick={openCreateDialog}
-            disabled={projects.length === 0}
-          >
-            <PlusIcon className="size-4" />
-            New
-          </Button>
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
+      <header className="drag-region flex h-12 shrink-0 items-center border-b border-border/60">
+        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-6">
+          <SidebarHeaderNavigationControls />
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate font-heading text-sm font-semibold">Automations</h1>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button type="button" size="sm" variant="ghost" onClick={() => void refetch()}>
+              <RefreshCwIcon className="size-4" />
+              Refresh
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={openCreateDialog}
+              disabled={projects.length === 0}
+            >
+              <PlusIcon className="size-4" />
+              New
+            </Button>
+          </div>
         </div>
       </header>
 
