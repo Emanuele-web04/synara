@@ -215,12 +215,14 @@ export function normalizeReviewPullRequest(
   const author = raw.author?.login?.trim() ?? "";
   const authorAvatarUrl = normalizeAvatarUrl(raw.author?.avatarUrl);
   const reviewDecision = raw.reviewDecision?.trim() ?? "";
+  const headRepositoryOwnerLogin = raw.headRepositoryOwner?.login?.trim() ?? "";
   return {
     number: raw.number,
     title: raw.title,
     url: raw.url,
     baseRefName: raw.baseRefName,
     headRefName: raw.headRefName,
+    ...(headRepositoryOwnerLogin.length > 0 ? { headRepositoryOwnerLogin } : {}),
     author,
     ...(authorAvatarUrl ? { authorAvatarUrl } : {}),
     updatedAt: raw.updatedAt ?? "",

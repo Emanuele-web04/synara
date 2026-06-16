@@ -1,5 +1,6 @@
 import type { ReviewPullRequestSummary } from "@t3tools/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 
@@ -14,14 +15,15 @@ import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
 import { Skeleton } from "../ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "../base-ui/tabs";
-import { Kanban, KanbanBoard, KanbanColumn, KanbanColumnContent } from "../reui/kanban";
 import { CountChip, EmptyState } from "./reviewPrimitives";
 import { ReviewBoardCard } from "./ReviewBoardCard";
 import { ReviewFilterBar } from "./ReviewFilterBar";
+import { VirtualizedPullRequestRows } from "./VirtualizedPullRequestRows";
 import {
   type ActiveReviewFilter,
   filterReviewPullRequests,
   reviewPullFilterDefs,
+  toReviewServerListFilters,
 } from "./reviewFilters";
 import {
   REVIEW_BOARD_COLUMNS,
@@ -37,11 +39,33 @@ export function ReviewBoard(props: { cwd: string | null }) {
   const queryClient = useQueryClient();
   const [view, setView] = useState<ReviewBoardView>("all");
   const [search, setSearch] = useState("");
+  const [serverSearch] = useDebouncedValue(search, { wait: 250 });
   const [activeFilters, setActiveFilters] = useState<ActiveReviewFilter[]>([]);
 
-  const pullRequestsQuery = useQuery(reviewListPullRequestsQueryOptions({ cwd }));
   const viewerQuery = useQuery(reviewViewerQueryOptions({ cwd }));
   const viewerLogin = viewerQuery.data?.login ?? null;
+  const listState = view === "merged" ? "merged" : "open";
+  const serverFilters = useMemo(() => {
+    const activeServerFilters = toReviewServerListFilters(activeFilters);
+    if (!viewerLogin || view === "all" || view === "merged") {
+      return activeServerFilters;
+    }
+    if (view === "mine") {
+      return { ...activeServerFilters, author: viewerLogin };
+    }
+    if (view === "needs-my-review") {
+      return { ...activeServerFilters, reviewRequested: viewerLogin };
+    }
+    return activeServerFilters;
+  }, [activeFilters, view, viewerLogin]);
+  const pullRequestsQuery = useQuery(
+    reviewListPullRequestsQueryOptions({
+      cwd,
+      ...(listState === "merged" ? { state: listState } : {}),
+      search: serverSearch,
+      ...serverFilters,
+    }),
+  );
 
   const byView = useMemo(() => {
     const all = pullRequestsQuery.data?.pullRequests ?? [];
@@ -52,6 +76,9 @@ export function ReviewBoard(props: { cwd: string | null }) {
     [byView, search, activeFilters],
   );
   const grouped = useMemo(() => groupByColumn(visiblePullRequests), [visiblePullRequests]);
+  const resultCountIsIncomplete =
+    pullRequestsQuery.data?.meta?.candidateLimitReached === true &&
+    visiblePullRequests.length >= (pullRequestsQuery.data.meta.returnedCount ?? 0);
 
   if (cwd === null) {
     return (
@@ -62,7 +89,7 @@ export function ReviewBoard(props: { cwd: string | null }) {
   }
 
   const handleSync = () => {
-    void queryClient.invalidateQueries({ queryKey: reviewQueryKeys.pullRequests(cwd) });
+    void queryClient.invalidateQueries({ queryKey: reviewQueryKeys.pullRequestLists(cwd) });
   };
 
   const openReference = (reference: string) => {
@@ -84,7 +111,12 @@ export function ReviewBoard(props: { cwd: string | null }) {
           <Tabs
             value={view}
             onValueChange={(next) => {
-              if (next === "needs-my-review" || next === "mine" || next === "all") {
+              if (
+                next === "needs-my-review" ||
+                next === "mine" ||
+                next === "merged" ||
+                next === "all"
+              ) {
                 setView(next);
               }
             }}
@@ -111,6 +143,7 @@ export function ReviewBoard(props: { cwd: string | null }) {
             items={byView}
             defs={reviewPullFilterDefs}
             resultCount={visiblePullRequests.length}
+            resultCountIsIncomplete={resultCountIsIncomplete}
             search={search}
             onSearchChange={setSearch}
             activeFilters={activeFilters}
@@ -143,30 +176,23 @@ export function ReviewBoard(props: { cwd: string | null }) {
         </div>
       ) : (
         <ScrollArea className="flex-1">
-          <Kanban
-            value={grouped}
-            onValueChange={() => undefined}
-            getItemValue={(pullRequest) => String(pullRequest.number)}
-            disabled
-          >
-            <KanbanBoard className="h-full flex-col p-3 md:min-w-max md:flex-row">
-              {REVIEW_BOARD_COLUMNS.map((column) => (
-                <ReviewBoardKanbanColumn
-                  key={column.id}
-                  column={column}
-                  pullRequests={grouped[column.id]}
-                  cwd={cwd}
-                />
-              ))}
-            </KanbanBoard>
-          </Kanban>
+          <div className="flex h-full min-w-0 flex-col gap-3 p-3 md:min-w-max md:flex-row">
+            {REVIEW_BOARD_COLUMNS.map((column) => (
+              <ReviewBoardColumn
+                key={column.id}
+                column={column}
+                pullRequests={grouped[column.id]}
+                cwd={cwd}
+              />
+            ))}
+          </div>
         </ScrollArea>
       )}
     </div>
   );
 }
 
-function ReviewBoardKanbanColumn(props: {
+function ReviewBoardColumn(props: {
   column: (typeof REVIEW_BOARD_COLUMNS)[number];
   pullRequests: readonly ReviewPullRequestSummary[];
   cwd: string;
@@ -174,14 +200,7 @@ function ReviewBoardKanbanColumn(props: {
   const { column, pullRequests, cwd } = props;
   const isEmpty = pullRequests.length === 0;
   return (
-    <KanbanColumn
-      value={column.id}
-      className={cn(
-        "flex h-full w-full shrink-0 flex-col gap-2 rounded-[1.5rem] border border-border/60 bg-card/55 p-2.5 shadow-sm md:w-72",
-        "transition-[background-color,box-shadow] duration-150 motion-reduce:transition-none",
-        "data-[over]:bg-primary/[0.04] data-[over]:ring-2 data-[over]:ring-ring data-[over]:ring-inset",
-      )}
-    >
+    <section className="flex h-full w-full shrink-0 flex-col gap-2 rounded-[1.5rem] border border-border/60 bg-card/55 p-2.5 shadow-sm md:w-72">
       <header className="flex shrink-0 items-center gap-2 px-1">
         <span
           className="min-w-0 truncate font-medium text-[11px] text-muted-foreground uppercase tracking-wide"
@@ -196,18 +215,19 @@ function ReviewBoardKanbanColumn(props: {
           {column.emptyHint}
         </EmptyState>
       ) : (
-        <KanbanColumnContent
-          value={column.id}
-          className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto"
-        >
-          {pullRequests.map((pullRequest) => (
-            <li key={pullRequest.number}>
-              <ReviewBoardCard pullRequest={pullRequest} cwd={cwd} />
-            </li>
-          ))}
-        </KanbanColumnContent>
+        <VirtualizedPullRequestRows
+          pullRequests={pullRequests}
+          estimateSize={116}
+          overscan={8}
+          threshold={30}
+          className="min-h-0 flex-1"
+          rowClassName="pb-2"
+          renderPullRequest={(pullRequest) => (
+            <ReviewBoardCard pullRequest={pullRequest} cwd={cwd} />
+          )}
+        />
       )}
-    </KanbanColumn>
+    </section>
   );
 }
 

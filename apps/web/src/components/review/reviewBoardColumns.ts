@@ -2,7 +2,7 @@ import type { ReviewPullRequestSummary } from "@t3tools/contracts";
 
 export type ReviewColumnId = "draft" | "needs-review" | "changes-requested" | "approved" | "merged";
 
-export type ReviewBoardView = "needs-my-review" | "mine" | "all";
+export type ReviewBoardView = "needs-my-review" | "mine" | "merged" | "all";
 
 export const REVIEW_BOARD_COLUMNS: ReadonlyArray<{
   id: ReviewColumnId;
@@ -45,6 +45,7 @@ export const REVIEW_BOARD_COLUMNS: ReadonlyArray<{
 export const REVIEW_BOARD_VIEWS: ReadonlyArray<{ id: ReviewBoardView; label: string }> = [
   { id: "needs-my-review", label: "Needs my review" },
   { id: "mine", label: "My open PRs" },
+  { id: "merged", label: "Merged" },
   { id: "all", label: "All open" },
 ];
 
@@ -69,7 +70,7 @@ export function filterByView(
   view: ReviewBoardView,
   viewerLogin: string | null,
 ): readonly ReviewPullRequestSummary[] {
-  if (view === "all" || !viewerLogin) {
+  if (view === "all" || view === "merged" || !viewerLogin) {
     return summaries;
   }
   if (view === "mine") {
@@ -91,7 +92,12 @@ export function filterBySearch(
       summary.title.toLowerCase().includes(normalized) ||
       String(summary.number).includes(normalized) ||
       `#${summary.number}`.includes(normalized) ||
-      summary.author.toLowerCase().includes(normalized),
+      summary.author.toLowerCase().includes(normalized) ||
+      summary.baseBranch.toLowerCase().includes(normalized) ||
+      summary.headBranch.toLowerCase().includes(normalized) ||
+      (summary.headSelector?.toLowerCase().includes(normalized) ?? false) ||
+      summary.url.toLowerCase().includes(normalized) ||
+      summary.reviewRequests.some((reviewer) => reviewer.toLowerCase().includes(normalized)),
   );
 }
 

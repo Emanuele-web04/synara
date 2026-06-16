@@ -37,6 +37,7 @@ export interface GitHubReviewPullRequest {
   readonly url: string;
   readonly baseRefName: string;
   readonly headRefName: string;
+  readonly headRepositoryOwnerLogin?: string;
   readonly author: string;
   readonly authorAvatarUrl?: string;
   readonly updatedAt: string;
@@ -270,8 +271,13 @@ export interface GitHubCliShape {
    */
   readonly listRepositoryPullRequests: (input: {
     readonly cwd: string;
-    readonly state: "open" | "closed" | "all";
+    readonly state: "open" | "closed" | "merged" | "all";
     readonly limit?: number;
+    readonly search?: string;
+    readonly author?: string;
+    readonly reviewRequested?: string;
+    readonly baseBranch?: string;
+    readonly headBranch?: string;
   }) => Effect.Effect<ReadonlyArray<GitHubReviewPullRequest>, GitHubCliError>;
 
   /**

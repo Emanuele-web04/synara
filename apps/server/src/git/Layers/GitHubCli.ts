@@ -52,6 +52,80 @@ import {
   RawProjectListSchema,
 } from "./GitHubCli.types.ts";
 
+function optionalTrimmed(value: string | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function pullRequestListSearch(input: {
+  readonly search?: string;
+  readonly reviewRequested?: string;
+}): string | null {
+  const search = optionalTrimmed(input.search);
+  const reviewRequested = optionalTrimmed(input.reviewRequested);
+  return [search, reviewRequested ? `review-requested:${reviewRequested}` : null]
+    .filter((value): value is string => value !== null)
+    .join(" ") || null;
+}
+
+function repositoryPullRequestListArgs(input: {
+  readonly state: "open" | "closed" | "merged" | "all";
+  readonly limit?: number;
+  readonly search?: string;
+  readonly author?: string;
+  readonly reviewRequested?: string;
+  readonly baseBranch?: string;
+  readonly headBranch?: string;
+}): string[] {
+  const args = [
+    "pr",
+    "list",
+    "--state",
+    input.state,
+    "--limit",
+    String(input.limit ?? DEFAULT_REVIEW_PULL_REQUEST_LIST_LIMIT),
+  ];
+  const author = optionalTrimmed(input.author);
+  if (author) {
+    args.push("--author", author);
+  }
+  const baseBranch = optionalTrimmed(input.baseBranch);
+  if (baseBranch) {
+    args.push("--base", baseBranch);
+  }
+  const headBranch = optionalTrimmed(input.headBranch);
+  if (headBranch) {
+    args.push("--head", headBranch);
+  }
+  const search = pullRequestListSearch(input);
+  if (search) {
+    args.push("--search", search);
+  }
+  const jsonFields = [
+    "number",
+    "title",
+    "author",
+    "updatedAt",
+    "state",
+    "mergedAt",
+    "reviewDecision",
+    "baseRefName",
+    "headRefName",
+    "headRepositoryOwner",
+    "url",
+    "isDraft",
+    "additions",
+    "deletions",
+    "statusCheckRollup",
+    ...(optionalTrimmed(input.reviewRequested) ? ["reviewRequests"] : []),
+  ];
+  args.push(
+    "--json",
+    jsonFields.join(","),
+  );
+  return args;
+}
+
 const makeGitHubCli = Effect.sync(() => {
   const execute: GitHubCliShape["execute"] = (input) =>
     Effect.tryPromise({
@@ -120,16 +194,7 @@ const makeGitHubCli = Effect.sync(() => {
     listRepositoryPullRequests: (input) =>
       execute({
         cwd: input.cwd,
-        args: [
-          "pr",
-          "list",
-          "--state",
-          input.state,
-          "--limit",
-          String(input.limit ?? DEFAULT_REVIEW_PULL_REQUEST_LIST_LIMIT),
-          "--json",
-          "number,title,author,updatedAt,state,mergedAt,reviewDecision,baseRefName,headRefName,url,isDraft,additions,deletions",
-        ],
+        args: repositoryPullRequestListArgs(input),
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>

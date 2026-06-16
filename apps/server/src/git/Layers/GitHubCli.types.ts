@@ -79,6 +79,13 @@ export const RawGitHubReviewPullRequestSchema = Schema.Struct({
   url: Schema.String,
   baseRefName: Schema.String,
   headRefName: Schema.String,
+  headRepositoryOwner: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        login: Schema.String,
+      }),
+    ),
+  ),
   author: Schema.optional(Schema.NullOr(RawReviewAuthorSchema)),
   updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
   state: Schema.optional(Schema.NullOr(Schema.String)),

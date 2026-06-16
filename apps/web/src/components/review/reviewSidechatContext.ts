@@ -128,6 +128,13 @@ function formatReviewFiles(payload: ReviewSidechatContextPayload, limit: number)
     .join("\n");
 }
 
+function reviewFilesFallback(payload: ReviewSidechatContextPayload): string {
+  if (payload.stats.files > 0) {
+    return `- File list not loaded yet. This PR reports ${String(payload.stats.files)} changed files; open Review changes for file-level context.`;
+  }
+  return "- No changed files reported";
+}
+
 function formatReviewChecks(input: {
   readonly payload: ReviewSidechatContextPayload;
   readonly limit: number;
@@ -296,7 +303,7 @@ export function buildReviewSidechatContextPrompt(
   }
 
   if (intent === "review-order" || intent === "summary" || intent === "focused") {
-    sections.push("", "Changed files:", files.length > 0 ? files : "- No files loaded");
+    sections.push("", "Changed files:", files.length > 0 ? files : reviewFilesFallback(payload));
   }
 
   if (intent === "conversation") {

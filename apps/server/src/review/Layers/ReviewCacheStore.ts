@@ -36,6 +36,8 @@ const decodeList = Schema.decodeUnknownEffect(ReviewListPullRequestsResult);
 const decodeOverview = Schema.decodeUnknownEffect(ReviewPullRequestOverview);
 const decodeConversation = Schema.decodeUnknownEffect(ReviewConversationResult);
 const decodeChangeset = Schema.decodeUnknownEffect(ReviewChangesetResult);
+const LIST_CACHE_RETENTION_MS = 24 * 60 * 60 * 1000;
+const LIST_CACHE_MAX_ROWS_PER_REPOSITORY = 64;
 const DIFF_CACHE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 function patchSignature(patch: string): string {
@@ -156,6 +158,26 @@ const makeReviewCacheStore = Effect.gen(function* () {
         token_identity = excluded.token_identity,
         head_sha = excluded.head_sha
     `.pipe(
+      Effect.flatMap(
+        () => sql`
+        DELETE FROM review_cache_pr_list
+        WHERE repository_id = ${input.repositoryId}
+          AND fetched_at < ${input.fetchedAt - LIST_CACHE_RETENTION_MS}
+      `,
+      ),
+      Effect.flatMap(
+        () => sql`
+        DELETE FROM review_cache_pr_list
+        WHERE repository_id = ${input.repositoryId}
+          AND list_filter NOT IN (
+            SELECT list_filter
+            FROM review_cache_pr_list
+            WHERE repository_id = ${input.repositoryId}
+            ORDER BY fetched_at DESC, list_filter DESC
+            LIMIT ${LIST_CACHE_MAX_ROWS_PER_REPOSITORY}
+          )
+      `,
+      ),
       Effect.asVoid,
       Effect.mapError(toPersistenceSqlError("ReviewCacheStore.upsertPullRequestList:query")),
     );

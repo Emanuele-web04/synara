@@ -106,6 +106,165 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  it.effect("lists repository pull requests with server-side filters", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          {
+            number: 42,
+            title: "Speed up review board",
+            url: "https://github.com/octocat/demo/pull/42",
+            baseRefName: "main",
+            headRefName: "review-perf",
+            headRepositoryOwner: { login: "alice" },
+            author: { login: "alice", avatarUrl: "https://avatars.example/alice.png" },
+            updatedAt: "2026-06-16T12:00:00Z",
+            state: "OPEN",
+            mergedAt: null,
+            reviewDecision: "REVIEW_REQUIRED",
+            isDraft: false,
+            additions: 12,
+            deletions: 4,
+            statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
+            reviewRequests: [{ login: "tyler", avatarUrl: "https://avatars.example/tyler.png" }],
+          },
+        ]),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.listRepositoryPullRequests({
+          cwd: "/repo",
+          state: "all",
+          limit: 25,
+          search: "review board",
+          author: "alice",
+          baseBranch: "main",
+          headBranch: "review-perf",
+          reviewRequested: "tyler",
+        });
+      });
+
+      assert.deepStrictEqual(result, [
+        {
+          number: 42,
+          title: "Speed up review board",
+          url: "https://github.com/octocat/demo/pull/42",
+          baseRefName: "main",
+          headRefName: "review-perf",
+          headRepositoryOwnerLogin: "alice",
+          author: "alice",
+          authorAvatarUrl: "https://avatars.example/alice.png",
+          updatedAt: "2026-06-16T12:00:00Z",
+          state: "open",
+          reviewDecision: "REVIEW_REQUIRED",
+          isDraft: false,
+          additions: 12,
+          deletions: 4,
+          checksStatus: "passing",
+          reviewRequests: ["tyler"],
+        },
+      ]);
+      expect(mockedRunProcess).toHaveBeenCalledWith(
+        "gh",
+        [
+          "pr",
+          "list",
+          "--state",
+          "all",
+          "--limit",
+          "25",
+          "--author",
+          "alice",
+          "--base",
+          "main",
+          "--head",
+          "review-perf",
+          "--search",
+          "review board review-requested:tyler",
+          "--json",
+          "number,title,author,updatedAt,state,mergedAt,reviewDecision,baseRefName,headRefName,headRepositoryOwner,url,isDraft,additions,deletions,statusCheckRollup,reviewRequests",
+        ],
+        expect.objectContaining({ cwd: "/repo" }),
+      );
+    }),
+  );
+
+  it.effect("omits review request payloads unless reviewer filtering needs them", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          {
+            number: 43,
+            title: "Searchable review board",
+            url: "https://github.com/octocat/demo/pull/43",
+            baseRefName: "main",
+            headRefName: "review-search",
+            author: { login: "alice", avatarUrl: "https://avatars.example/alice.png" },
+            updatedAt: "2026-06-16T12:00:00Z",
+            state: "OPEN",
+            mergedAt: null,
+            reviewDecision: null,
+            isDraft: false,
+            additions: 2,
+            deletions: 1,
+            statusCheckRollup: [],
+          },
+        ]),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.listRepositoryPullRequests({
+          cwd: "/repo",
+          state: "open",
+          limit: 50,
+          search: "review",
+          author: "alice",
+        });
+      });
+
+      assert.deepStrictEqual(result[0]?.reviewRequests, []);
+      const jsonFieldsArg = mockedRunProcess.mock.calls[0]?.[1]?.at(-1);
+      expect(jsonFieldsArg).not.toContain("reviewRequests");
+      expect(jsonFieldsArg).not.toContain("body");
+      expect(jsonFieldsArg).not.toContain("comments");
+      expect(jsonFieldsArg).not.toContain("reviews");
+      expect(jsonFieldsArg).not.toContain("commits");
+      expect(jsonFieldsArg).not.toContain("latestReviews");
+      expect(jsonFieldsArg).not.toContain("labels");
+      expect(jsonFieldsArg).not.toContain("assignees");
+      expect(jsonFieldsArg).not.toContain("milestone");
+      expect(jsonFieldsArg).not.toContain("changedFiles");
+      expect(mockedRunProcess).toHaveBeenCalledWith(
+        "gh",
+        [
+          "pr",
+          "list",
+          "--state",
+          "open",
+          "--limit",
+          "50",
+          "--author",
+          "alice",
+          "--search",
+          "review",
+          "--json",
+          "number,title,author,updatedAt,state,mergedAt,reviewDecision,baseRefName,headRefName,headRepositoryOwner,url,isDraft,additions,deletions,statusCheckRollup",
+        ],
+        expect.objectContaining({ cwd: "/repo" }),
+      );
+    }),
+  );
+
   it.effect("enriches review conversation authors with GitHub avatars", () =>
     Effect.gen(function* () {
       mockedRunProcess

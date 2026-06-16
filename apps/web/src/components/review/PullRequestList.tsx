@@ -1,5 +1,6 @@
 import type { ReviewSourceRef } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
+import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useMemo, useState } from "react";
 
 import { GitPullRequestIcon } from "~/lib/icons";
@@ -9,22 +10,35 @@ import { EmptyState } from "./reviewPrimitives";
 import { Skeleton } from "../ui/skeleton";
 import { PullRequestRow } from "./PullRequestRow";
 import { ReviewFilterBar } from "./ReviewFilterBar";
+import { VirtualizedPullRequestRows } from "./VirtualizedPullRequestRows";
 import {
   type ActiveReviewFilter,
   filterReviewPullRequests,
   reviewPullFilterDefs,
   reviewPullSortOptions,
   sortReviewItems,
+  toReviewServerListFilters,
 } from "./reviewFilters";
 
 export function PullRequestList(props: {
   cwd: string | null;
   onSelectSource: (source: ReviewSourceRef) => void;
 }) {
-  const pullRequestsQuery = useQuery(reviewListPullRequestsQueryOptions({ cwd: props.cwd }));
   const [search, setSearch] = useState("");
+  const [serverSearch] = useDebouncedValue(search, { wait: 250 });
   const [activeFilters, setActiveFilters] = useState<ActiveReviewFilter[]>([]);
   const [sortId, setSortId] = useState("updated");
+  const serverFilters = useMemo(
+    () => toReviewServerListFilters(activeFilters),
+    [activeFilters],
+  );
+  const pullRequestsQuery = useQuery(
+    reviewListPullRequestsQueryOptions({
+      cwd: props.cwd,
+      search: serverSearch,
+      ...serverFilters,
+    }),
+  );
 
   const allPullRequests = pullRequestsQuery.data?.pullRequests ?? [];
   const visible = useMemo(
@@ -36,6 +50,9 @@ export function PullRequestList(props: {
       ),
     [allPullRequests, search, activeFilters, sortId],
   );
+  const resultCountIsIncomplete =
+    pullRequestsQuery.data?.meta?.candidateLimitReached === true &&
+    visible.length >= (pullRequestsQuery.data.meta.returnedCount ?? 0);
 
   if (pullRequestsQuery.isError) {
     return (
@@ -62,6 +79,7 @@ export function PullRequestList(props: {
         items={allPullRequests}
         defs={reviewPullFilterDefs}
         resultCount={visible.length}
+        resultCountIsIncomplete={resultCountIsIncomplete}
         search={search}
         onSearchChange={setSearch}
         activeFilters={activeFilters}
@@ -79,13 +97,17 @@ export function PullRequestList(props: {
           No pull requests match your filters.
         </EmptyState>
       ) : (
-        <ul className="flex flex-col gap-1.5">
-          {visible.map((pullRequest) => (
-            <li key={pullRequest.number}>
-              <PullRequestRow pullRequest={pullRequest} onSelectSource={props.onSelectSource} />
-            </li>
-          ))}
-        </ul>
+        <VirtualizedPullRequestRows
+          pullRequests={visible}
+          estimateSize={82}
+          overscan={10}
+          threshold={30}
+          className="flex max-h-[min(64vh,42rem)] flex-col gap-1.5"
+          rowClassName="pb-1.5"
+          renderPullRequest={(pullRequest) => (
+            <PullRequestRow pullRequest={pullRequest} onSelectSource={props.onSelectSource} />
+          )}
+        />
       )}
     </div>
   );

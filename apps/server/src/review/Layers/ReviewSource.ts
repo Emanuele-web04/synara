@@ -5,6 +5,8 @@ import {
   type ReviewChangedFile,
   type ReviewChangesetResult,
   type ReviewFinding,
+  type ReviewListPullRequestsInput,
+  type ReviewListPullRequestsResult,
   type ReviewProjectCard,
   type ReviewProjectColumn,
   type ReviewProjectSummary,
@@ -38,6 +40,9 @@ const PROJECT_ACCESS_DETAIL =
 const REVIEW_CACHE_TTL_MS = 30_000;
 const REVIEW_CACHE_TOKEN_IDENTITY_PREFIX = "gh-user-v1";
 const REVIEW_ANCHOR_KEY_SEPARATOR = "\u0000";
+const DEFAULT_REVIEW_LIST_RESULT_LIMIT = 50;
+const MAX_REVIEW_LIST_RESULT_LIMIT = 100;
+const FILTERED_REVIEW_LIST_CANDIDATE_LIMIT = 1_000;
 const inFlightRefreshKeys = new Set<string>();
 
 function reviewError(operation: string, detail: string, cause?: unknown): ReviewError {
@@ -109,12 +114,18 @@ function toPullRequestSummary(pr: GitHubReviewPullRequest): ReviewPullRequestSum
   if (pr.title.length === 0 || pr.baseRefName.length === 0 || pr.headRefName.length === 0) {
     return null;
   }
+  const headRepositoryOwnerLogin = pr.headRepositoryOwnerLogin?.trim() ?? "";
+  const headSelector =
+    headRepositoryOwnerLogin.length > 0
+      ? `${headRepositoryOwnerLogin}:${pr.headRefName}`
+      : pr.headRefName;
   return {
     number: pr.number,
     title: pr.title,
     url: pr.url,
     baseBranch: pr.baseRefName,
     headBranch: pr.headRefName,
+    ...(headSelector !== pr.headRefName ? { headSelector } : {}),
     author: pr.author,
     ...(pr.authorAvatarUrl !== undefined ? { authorAvatarUrl: pr.authorAvatarUrl } : {}),
     updatedAt: pr.updatedAt,
@@ -126,6 +137,103 @@ function toPullRequestSummary(pr: GitHubReviewPullRequest): ReviewPullRequestSum
     checksStatus: pr.checksStatus,
     reviewRequests: pr.reviewRequests,
   };
+}
+
+function normalizeOptionalText(value: string | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizedSet(values: ReadonlyArray<string> | undefined): ReadonlySet<string> {
+  if (!values || values.length === 0) {
+    return new Set();
+  }
+  return new Set(values.map((value) => value.trim()).filter((value) => value.length > 0));
+}
+
+function reviewColumn(summary: ReviewPullRequestSummary): string {
+  if (summary.isDraft) {
+    return "draft";
+  }
+  if (summary.state === "merged") {
+    return "merged";
+  }
+  if (summary.reviewDecision === "CHANGES_REQUESTED") {
+    return "changes-requested";
+  }
+  if (summary.reviewDecision === "APPROVED") {
+    return "approved";
+  }
+  return "needs-review";
+}
+
+function matchesSearch(summary: ReviewPullRequestSummary, search: string | null): boolean {
+  if (!search) {
+    return true;
+  }
+  const query = search.toLowerCase();
+  return (
+    summary.title.toLowerCase().includes(query) ||
+    String(summary.number).includes(query) ||
+    `#${String(summary.number)}`.includes(query) ||
+    summary.author.toLowerCase().includes(query) ||
+    summary.baseBranch.toLowerCase().includes(query) ||
+    summary.headBranch.toLowerCase().includes(query) ||
+    (summary.headSelector?.toLowerCase().includes(query) ?? false) ||
+    summary.url.toLowerCase().includes(query) ||
+    summary.reviewRequests.some((reviewer) => reviewer.toLowerCase().includes(query))
+  );
+}
+
+function matchesListFilters(
+  summary: ReviewPullRequestSummary,
+  input: ReviewListPullRequestsInput,
+  viewerLogin: string,
+): boolean {
+  const author = resolveViewerAlias(normalizeOptionalText(input.author), viewerLogin);
+  const reviewRequested = resolveViewerAlias(
+    normalizeOptionalText(input.reviewRequested),
+    viewerLogin,
+  );
+  const baseBranch = normalizeOptionalText(input.baseBranch);
+  const headBranch = normalizeOptionalText(input.headBranch);
+  const columns = normalizedSet(input.columns);
+  const checks = normalizedSet(input.checks);
+  return (
+    matchesSearch(summary, normalizeOptionalText(input.search)) &&
+    (!author || summary.author === author) &&
+    (!reviewRequested || summary.reviewRequests.includes(reviewRequested)) &&
+    (!baseBranch || summary.baseBranch === baseBranch) &&
+    (!headBranch || summary.headBranch === headBranch || summary.headSelector === headBranch) &&
+    (columns.size === 0 || columns.has(reviewColumn(summary))) &&
+    (checks.size === 0 || checks.has(summary.checksStatus))
+  );
+}
+
+function hasLocalListFilters(input: ReviewListPullRequestsInput): boolean {
+  return normalizedSet(input.columns).size > 0 || normalizedSet(input.checks).size > 0;
+}
+
+function resolveViewerAlias(value: string | null, viewerLogin: string): string | null {
+  if (value !== "@me") {
+    return value;
+  }
+  return viewerLogin.trim().length > 0 ? viewerLogin.trim() : value;
+}
+
+function resultListLimit(input: ReviewListPullRequestsInput): number {
+  return normalizedResultListLimit(input.limit);
+}
+
+function normalizedResultListLimit(limit: number | undefined): number {
+  return Math.min(limit ?? DEFAULT_REVIEW_LIST_RESULT_LIMIT, MAX_REVIEW_LIST_RESULT_LIMIT);
+}
+
+function githubListLimit(input: ReviewListPullRequestsInput): number | undefined {
+  if (!hasLocalListFilters(input)) {
+    return resultListLimit(input);
+  }
+  return Math.max(resultListLimit(input), FILTERED_REVIEW_LIST_CANDIDATE_LIMIT);
 }
 
 function toChangedFiles(patch: string): ReadonlyArray<ReviewChangedFile> {
@@ -201,8 +309,25 @@ function reviewAnchorKey(path: string, line: number, side: string): string {
 function pullRequestListFilter(input: {
   readonly state?: string | undefined;
   readonly limit?: number | undefined;
+  readonly search?: string | undefined;
+  readonly author?: string | undefined;
+  readonly reviewRequested?: string | undefined;
+  readonly baseBranch?: string | undefined;
+  readonly headBranch?: string | undefined;
+  readonly columns?: ReadonlyArray<string> | undefined;
+  readonly checks?: ReadonlyArray<string> | undefined;
 }): string {
-  return JSON.stringify({ state: input.state ?? "open", limit: input.limit ?? null });
+  return JSON.stringify({
+    state: input.state ?? "open",
+    limit: normalizedResultListLimit(input.limit),
+    search: normalizeOptionalText(input.search),
+    author: normalizeOptionalText(input.author),
+    reviewRequested: normalizeOptionalText(input.reviewRequested),
+    baseBranch: normalizeOptionalText(input.baseBranch),
+    headBranch: normalizeOptionalText(input.headBranch),
+    columns: [...normalizedSet(input.columns)].sort(),
+    checks: [...normalizedSet(input.checks)].sort(),
+  });
 }
 
 function isUsableCacheEnvelope<T>(
@@ -220,13 +345,25 @@ const makeReviewSource = Effect.gen(function* () {
   const reviewUpdateBus = yield* ReviewUpdateBus;
   const textGeneration = yield* TextGeneration;
 
-  const readCacheTokenIdentity = (cwd: string) =>
+  const readCacheIdentity = (cwd: string) =>
     gitHubCli.getAuthenticatedUser({ cwd }).pipe(
-      Effect.map((viewer) => `${REVIEW_CACHE_TOKEN_IDENTITY_PREFIX}:${viewer.login.trim()}`),
+      Effect.map((viewer) => {
+        const login = viewer.login.trim();
+        return {
+          login,
+          tokenIdentity: `${REVIEW_CACHE_TOKEN_IDENTITY_PREFIX}:${login}`,
+        };
+      }),
       Effect.catchTag("GitHubCliError", () =>
-        Effect.succeed(`${REVIEW_CACHE_TOKEN_IDENTITY_PREFIX}:unknown`),
+        Effect.succeed({
+          login: "",
+          tokenIdentity: `${REVIEW_CACHE_TOKEN_IDENTITY_PREFIX}:unknown`,
+        }),
       ),
     );
+
+  const readCacheTokenIdentity = (cwd: string) =>
+    readCacheIdentity(cwd).pipe(Effect.map((identity) => identity.tokenIdentity));
 
   const resolveRepositoryId = (cwd: string) =>
     gitCore
@@ -250,20 +387,51 @@ const makeReviewSource = Effect.gen(function* () {
         ),
       );
 
-  const listPullRequestsUncached: ReviewSourceShape["listPullRequests"] = (input) =>
-    gitHubCli
+  const listPullRequestsUncached = (input: ReviewListPullRequestsInput, viewerLogin: string) => {
+    const listLimit = githubListLimit(input);
+    return gitHubCli
       .listRepositoryPullRequests({
         cwd: input.cwd,
         state: input.state ?? "open",
-        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        ...(listLimit !== undefined ? { limit: listLimit } : {}),
+        ...(input.search !== undefined ? { search: input.search } : {}),
+        ...(input.author !== undefined ? { author: input.author } : {}),
+        ...(input.reviewRequested !== undefined ? { reviewRequested: input.reviewRequested } : {}),
+        ...(input.baseBranch !== undefined ? { baseBranch: input.baseBranch } : {}),
+        ...(input.headBranch !== undefined ? { headBranch: input.headBranch } : {}),
       })
       .pipe(
-        Effect.map((pullRequests) => ({
-          pullRequests: pullRequests
+        Effect.map((pullRequests): ReviewListPullRequestsResult => {
+          const summaries = pullRequests
             .map(toPullRequestSummary)
-            .filter((summary): summary is ReviewPullRequestSummary => summary !== null),
-        })),
+            .filter((summary): summary is ReviewPullRequestSummary => summary !== null)
+            .filter((summary) => matchesListFilters(summary, input, viewerLogin));
+          const usesLocalCandidateWindow = hasLocalListFilters(input);
+          const candidateLimit = listLimit ?? resultListLimit(input);
+          const resultLimit = resultListLimit(input);
+          const returnedPullRequests = usesLocalCandidateWindow
+            ? summaries.slice(0, resultLimit)
+            : summaries;
+          return {
+            pullRequests: returnedPullRequests,
+            ...(candidateLimit !== undefined
+              ? {
+                  meta: {
+                    ...(input.limit !== undefined ? { requestedLimit: input.limit } : {}),
+                    resultLimit,
+                    candidateLimit,
+                    candidateCount: pullRequests.length,
+                    candidateLimitReached: pullRequests.length >= candidateLimit,
+                    matchedCount: summaries.length,
+                    returnedCount: returnedPullRequests.length,
+                    bounded: true,
+                  },
+                }
+              : {}),
+          };
+        }),
       );
+  };
 
   const cacheWriteClock = Clock.currentTimeMillis;
 
@@ -292,20 +460,20 @@ const makeReviewSource = Effect.gen(function* () {
   const listPullRequests: ReviewSourceShape["listPullRequests"] = (input) =>
     Effect.gen(function* () {
       const repositoryId = yield* resolveRepositoryId(input.cwd);
-      const tokenIdentity = yield* readCacheTokenIdentity(input.cwd);
+      const cacheIdentity = yield* readCacheIdentity(input.cwd);
       const listFilter = pullRequestListFilter(input);
       const cached = yield* cacheStore
         .getPullRequestList({ repositoryId, listFilter })
         .pipe(Effect.catch(() => Effect.succeed(Option.none())));
-      if (Option.isSome(cached) && isUsableCacheEnvelope(cached.value, tokenIdentity)) {
+      if (Option.isSome(cached) && isUsableCacheEnvelope(cached.value, cacheIdentity.tokenIdentity)) {
         yield* forkRefreshIfStale(
           `pr-list:${repositoryId}:${listFilter}`,
           cached.value,
-          refreshPullRequestList(input, repositoryId, listFilter, tokenIdentity),
+          refreshPullRequestList(input, repositoryId, listFilter, cacheIdentity),
         );
         return cached.value.data;
       }
-      const data = yield* listPullRequestsUncached(input).pipe(
+      const data = yield* listPullRequestsUncached(input, cacheIdentity.login).pipe(
         Effect.mapError((error) =>
           reviewError("listPullRequests", `Could not list pull requests: ${error.message}`, error),
         ),
@@ -318,7 +486,7 @@ const makeReviewSource = Effect.gen(function* () {
           data,
           fetchedAt,
           ttlMs: REVIEW_CACHE_TTL_MS,
-          tokenIdentity,
+          tokenIdentity: cacheIdentity.tokenIdentity,
         })
         .pipe(Effect.ignore);
       return data;
@@ -597,9 +765,9 @@ const makeReviewSource = Effect.gen(function* () {
     input: Parameters<ReviewSourceShape["listPullRequests"]>[0],
     repositoryId: string,
     listFilter: string,
-    tokenIdentity: string,
+    cacheIdentity: { readonly login: string; readonly tokenIdentity: string },
   ) =>
-    listPullRequestsUncached(input).pipe(
+    listPullRequestsUncached(input, cacheIdentity.login).pipe(
       Effect.flatMap((data) =>
         cacheWriteClock.pipe(
           Effect.flatMap((fetchedAt) =>
@@ -610,7 +778,7 @@ const makeReviewSource = Effect.gen(function* () {
                 data,
                 fetchedAt,
                 ttlMs: REVIEW_CACHE_TTL_MS,
-                tokenIdentity,
+                tokenIdentity: cacheIdentity.tokenIdentity,
               })
               .pipe(
                 Effect.andThen(
@@ -620,6 +788,15 @@ const makeReviewSource = Effect.gen(function* () {
                     repositoryId,
                     state: input.state ?? "open",
                     ...(input.limit !== undefined ? { limit: input.limit } : {}),
+                    ...(input.search !== undefined ? { search: input.search } : {}),
+                    ...(input.author !== undefined ? { author: input.author } : {}),
+                    ...(input.reviewRequested !== undefined
+                      ? { reviewRequested: input.reviewRequested }
+                      : {}),
+                    ...(input.baseBranch !== undefined ? { baseBranch: input.baseBranch } : {}),
+                    ...(input.headBranch !== undefined ? { headBranch: input.headBranch } : {}),
+                    ...(input.columns !== undefined ? { columns: input.columns } : {}),
+                    ...(input.checks !== undefined ? { checks: input.checks } : {}),
                     data,
                     fetchedAt,
                   }),

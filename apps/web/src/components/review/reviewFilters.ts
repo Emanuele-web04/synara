@@ -28,6 +28,14 @@ export interface ActiveReviewFilter {
   values: ReadonlySet<string>;
 }
 
+export interface ReviewServerListFilters {
+  readonly author?: string;
+  readonly baseBranch?: string;
+  readonly headBranch?: string;
+  readonly columns?: ReadonlyArray<ReviewColumnId>;
+  readonly checks?: ReadonlyArray<ReviewPullRequestSummary["checksStatus"]>;
+}
+
 const STATUS_LABEL: Record<ReviewColumnId, string> = {
   "needs-review": "Needs Review",
   "changes-requested": "Changes Requested",
@@ -50,7 +58,13 @@ const CHECKS_LABEL: Record<string, string> = {
   pending: "Pending",
 };
 
-const CHECKS_ORDER: ReadonlyArray<string> = ["passing", "failing", "pending"];
+const CHECKS_ORDER: ReadonlyArray<ReviewPullRequestSummary["checksStatus"]> = [
+  "passing",
+  "failing",
+  "pending",
+];
+const STATUS_VALUES: ReadonlySet<string> = new Set(STATUS_ORDER);
+const CHECKS_VALUES: ReadonlySet<string> = new Set(CHECKS_ORDER);
 
 export const authorFilterDef: ReviewFilterDefinition = {
   id: "author",
@@ -68,6 +82,43 @@ export const authorFilterDef: ReviewFilterDefinition = {
     return options.sort((a, b) => a.label.localeCompare(b.label));
   },
   match: (item, values) => values.has(item.author.trim()),
+};
+
+export const baseBranchFilterDef: ReviewFilterDefinition = {
+  id: "base",
+  label: "Base",
+  extractOptions: (items) => {
+    const seen = new Set<string>();
+    const options: ReviewFilterOption[] = [];
+    for (const item of items) {
+      const branch = item.baseBranch.trim();
+      if (branch.length > 0 && !seen.has(branch)) {
+        seen.add(branch);
+        options.push({ value: branch, label: branch });
+      }
+    }
+    return options.sort((a, b) => a.label.localeCompare(b.label));
+  },
+  match: (item, values) => values.has(item.baseBranch.trim()),
+};
+
+export const headBranchFilterDef: ReviewFilterDefinition = {
+  id: "head",
+  label: "Head",
+  extractOptions: (items) => {
+    const seen = new Set<string>();
+    const options: ReviewFilterOption[] = [];
+    for (const item of items) {
+      const branch = item.headBranch.trim();
+      const selector = item.headSelector?.trim() || branch;
+      if (selector.length > 0 && !seen.has(selector)) {
+        seen.add(selector);
+        options.push({ value: selector, label: selector });
+      }
+    }
+    return options.sort((a, b) => a.label.localeCompare(b.label));
+  },
+  match: (item, values) => values.has(item.headSelector?.trim() || item.headBranch.trim()),
 };
 
 export const statusFilterDef: ReviewFilterDefinition = {
@@ -106,6 +157,8 @@ export const checksFilterDef: ReviewFilterDefinition = {
 
 export const reviewPullFilterDefs: ReadonlyArray<ReviewFilterDefinition> = [
   authorFilterDef,
+  baseBranchFilterDef,
+  headBranchFilterDef,
   statusFilterDef,
   checksFilterDef,
 ];
@@ -160,6 +213,38 @@ export function sortReviewItems(
 
 export function hasActiveReviewFilters(activeFilters: ReadonlyArray<ActiveReviewFilter>): boolean {
   return activeFilters.some((filter) => filter.values.size > 0);
+}
+
+function valuesForFilter(
+  activeFilters: ReadonlyArray<ActiveReviewFilter>,
+  fieldId: string,
+): ReadonlyArray<string> {
+  return [...(activeFilters.find((filter) => filter.fieldId === fieldId)?.values ?? [])].sort();
+}
+
+function isReviewColumnId(value: string): value is ReviewColumnId {
+  return STATUS_VALUES.has(value);
+}
+
+function isReviewChecksStatus(value: string): value is ReviewPullRequestSummary["checksStatus"] {
+  return CHECKS_VALUES.has(value);
+}
+
+export function toReviewServerListFilters(
+  activeFilters: ReadonlyArray<ActiveReviewFilter>,
+): ReviewServerListFilters {
+  const authors = valuesForFilter(activeFilters, authorFilterDef.id);
+  const baseBranches = valuesForFilter(activeFilters, baseBranchFilterDef.id);
+  const headBranches = valuesForFilter(activeFilters, headBranchFilterDef.id);
+  const columns = valuesForFilter(activeFilters, statusFilterDef.id).filter(isReviewColumnId);
+  const checks = valuesForFilter(activeFilters, checksFilterDef.id).filter(isReviewChecksStatus);
+  return {
+    ...(authors.length === 1 ? { author: authors[0] } : {}),
+    ...(baseBranches.length === 1 ? { baseBranch: baseBranches[0] } : {}),
+    ...(headBranches.length === 1 ? { headBranch: headBranches[0] } : {}),
+    ...(columns.length > 0 ? { columns } : {}),
+    ...(checks.length > 0 ? { checks } : {}),
+  };
 }
 
 // Search + facet filters in one pass (search reuses the board's matcher).

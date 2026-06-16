@@ -118,6 +118,7 @@ export function ReviewFilterBar(props: {
   activeFilters: ReadonlyArray<ActiveReviewFilter>;
   onActiveFiltersChange: (next: ActiveReviewFilter[]) => void;
   resultCount?: number;
+  resultCountIsIncomplete?: boolean;
   sortOptions?: ReadonlyArray<ReviewSortOption>;
   sortId?: string;
   onSortChange?: (id: string) => void;
@@ -128,6 +129,10 @@ export function ReviewFilterBar(props: {
   const showClear = hasActiveReviewFilters(props.activeFilters) || props.search.trim().length > 0;
   const sortLabel = props.sortOptions?.find((option) => option.id === props.sortId)?.label;
   const resultCount = props.resultCount ?? props.items.length;
+  const resultCountLabel = `${String(resultCount)}${props.resultCountIsIncomplete ? "+" : ""}`;
+  const resultCountTitle = props.resultCountIsIncomplete
+    ? "GitHub returned the maximum fetched pull requests, so more matches may exist."
+    : undefined;
   const parsedReference = parsePullRequestReference(props.search);
   const canOpenReference = parsedReference !== null && props.onOpenReference !== undefined;
 
@@ -217,8 +222,16 @@ export function ReviewFilterBar(props: {
         </Popover>
       ) : null}
 
-      <span className="hidden h-8 shrink-0 items-center rounded-full bg-muted/28 px-2.5 text-[11px] font-medium text-muted-foreground tabular-nums ring-1 ring-border/40 sm:inline-flex">
-        {resultCount} PR{resultCount === 1 ? "" : "s"}
+      <span
+        className="hidden h-8 shrink-0 items-center rounded-full bg-muted/28 px-2.5 text-[11px] font-medium text-muted-foreground tabular-nums ring-1 ring-border/40 sm:inline-flex"
+        title={resultCountTitle}
+        aria-label={
+          props.resultCountIsIncomplete
+            ? `${resultCountLabel} pull requests; more matches may exist`
+            : undefined
+        }
+      >
+        {resultCountLabel} PR{resultCount === 1 && !props.resultCountIsIncomplete ? "" : "s"}
       </span>
 
       {showClear ? (

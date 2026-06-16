@@ -178,19 +178,19 @@ export function ReviewPrView(props: {
   const overviewQuery = useQuery(
     reviewLoadPullRequestQueryOptions({ cwd: props.cwd, reference: props.reference }),
   );
+  const detail = overviewQuery.data?.detail ?? null;
   const conversationQuery = useQuery(
     reviewLoadConversationQueryOptions({
       cwd: props.cwd,
-      reference: overviewQuery.data?.detail ? props.reference : null,
+      reference: detail ? props.reference : null,
     }),
   );
-  const detail = overviewQuery.data?.detail ?? null;
   const changesetQuery = useQuery({
     ...reviewLoadChangesetQueryOptions({
       cwd: props.cwd,
       source: props.source,
     }),
-    enabled: detail !== null && props.cwd !== null,
+    enabled: detail !== null && tab === "files" && props.cwd !== null,
   });
   const checks = overviewQuery.data?.checks ?? EMPTY_CHECKS;
   const events = conversationQuery.data?.events ?? EMPTY_EVENTS;

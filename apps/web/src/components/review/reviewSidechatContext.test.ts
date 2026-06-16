@@ -82,6 +82,15 @@ describe("buildReviewSidechatInitialPrompt", () => {
     expect(prompt).not.toContain("src/file-6.ts");
   });
 
+  it("does not claim there are no files when details are lazily unloaded", () => {
+    const prompt = buildReviewSidechatInitialPrompt(makePayload(), "What changed?");
+
+    expect(prompt).toContain("Changed files:");
+    expect(prompt).toContain("File list not loaded yet");
+    expect(prompt).toContain("24 changed files");
+    expect(prompt).not.toContain("No files loaded");
+  });
+
   it("keeps failing-check prompts focused on checks", () => {
     const prompt = buildReviewSidechatInitialPrompt(
       {

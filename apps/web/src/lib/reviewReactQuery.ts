@@ -30,6 +30,8 @@ const REVIEW_PROJECTS_STALE_TIME_MS = 60_000;
 const REVIEW_PROJECT_BOARD_STALE_TIME_MS = 30_000;
 
 type ReviewListState = NonNullable<ReviewListPullRequestsInput["state"]>;
+type ReviewListColumn = NonNullable<ReviewListPullRequestsInput["columns"]>[number];
+type ReviewListChecksStatus = NonNullable<ReviewListPullRequestsInput["checks"]>[number];
 
 function reviewSourceKey(source: ReviewSourceRef): string {
   return source._tag === "pullRequest"
@@ -45,13 +47,38 @@ function reviewPullRequestListLimit(limit?: number): number | null {
   return limit ?? null;
 }
 
+function reviewPullRequestListText(value?: string): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function reviewPullRequestListValues<T extends string>(
+  values?: ReadonlyArray<T>,
+): ReadonlyArray<T> {
+  if (!values || values.length === 0) {
+    return [];
+  }
+  return [...new Set(values)].sort();
+}
+
 export function applyReviewUpdatedPayload(
   queryClient: QueryClient,
   payload: ReviewUpdatedPayload,
 ): void {
   if (payload._tag === "pullRequestList") {
     queryClient.setQueryData(
-      reviewQueryKeys.pullRequests(payload.cwd, payload.state, payload.limit),
+      reviewQueryKeys.pullRequests({
+        cwd: payload.cwd,
+        state: payload.state,
+        limit: payload.limit,
+        search: payload.search,
+        author: payload.author,
+        reviewRequested: payload.reviewRequested,
+        baseBranch: payload.baseBranch,
+        headBranch: payload.headBranch,
+        columns: payload.columns,
+        checks: payload.checks,
+      }),
       payload.data,
     );
     return;
@@ -82,13 +109,30 @@ export function applyReviewUpdatedPayload(
 export const reviewQueryKeys = {
   all: ["review"] as const,
   viewer: (cwd: string | null) => ["review", "viewer", "avatar-v2", cwd] as const,
-  pullRequests: (cwd: string | null, state?: ReviewListState, limit?: number) =>
+  pullRequestLists: (cwd: string | null) => ["review", "pull-requests", cwd] as const,
+  pullRequests: (input: {
+    cwd: string | null;
+    state?: ReviewListState;
+    limit?: number;
+    search?: string;
+    author?: string;
+    reviewRequested?: string;
+    baseBranch?: string;
+    headBranch?: string;
+    columns?: ReadonlyArray<ReviewListColumn>;
+    checks?: ReadonlyArray<ReviewListChecksStatus>;
+  }) =>
     [
-      "review",
-      "pull-requests",
-      cwd,
-      reviewPullRequestListState(state),
-      reviewPullRequestListLimit(limit),
+      ...reviewQueryKeys.pullRequestLists(input.cwd),
+      reviewPullRequestListState(input.state),
+      reviewPullRequestListLimit(input.limit),
+      reviewPullRequestListText(input.search),
+      reviewPullRequestListText(input.author),
+      reviewPullRequestListText(input.reviewRequested),
+      reviewPullRequestListText(input.baseBranch),
+      reviewPullRequestListText(input.headBranch),
+      reviewPullRequestListValues(input.columns),
+      reviewPullRequestListValues(input.checks),
     ] as const,
   changeset: (cwd: string | null, sourceKey: string | null) =>
     ["review", "changeset", cwd, sourceKey] as const,
@@ -110,17 +154,22 @@ export function reviewListPullRequestsQueryOptions(input: {
   cwd: string | null;
   state?: ReviewListState;
   limit?: number;
+  search?: string;
+  author?: string;
+  reviewRequested?: string;
+  baseBranch?: string;
+  headBranch?: string;
+  columns?: ReadonlyArray<ReviewListColumn>;
+  checks?: ReadonlyArray<ReviewListChecksStatus>;
 }) {
   return queryOptions({
-    queryKey: reviewQueryKeys.pullRequests(input.cwd, input.state, input.limit),
+    queryKey: reviewQueryKeys.pullRequests(input),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd) throw new Error("Pull request list is unavailable.");
-      return api.review.listPullRequests({
-        cwd: input.cwd,
-        ...(input.state !== undefined ? { state: input.state } : {}),
-        ...(input.limit !== undefined ? { limit: input.limit } : {}),
-      });
+      return api.review.listPullRequests(
+        buildReviewListPullRequestsRequest({ ...input, cwd: input.cwd }),
+      );
     },
     enabled: input.cwd !== null,
     staleTime: REVIEW_LIST_STALE_TIME_MS,
@@ -128,6 +177,39 @@ export function reviewListPullRequestsQueryOptions(input: {
     refetchOnReconnect: true,
     refetchInterval: REVIEW_LIST_REFETCH_INTERVAL_MS,
   });
+}
+
+export function buildReviewListPullRequestsRequest(input: {
+  cwd: string;
+  state?: ReviewListState;
+  limit?: number;
+  search?: string;
+  author?: string;
+  reviewRequested?: string;
+  baseBranch?: string;
+  headBranch?: string;
+  columns?: ReadonlyArray<ReviewListColumn>;
+  checks?: ReadonlyArray<ReviewListChecksStatus>;
+}): ReviewListPullRequestsInput {
+  const search = reviewPullRequestListText(input.search);
+  const author = reviewPullRequestListText(input.author);
+  const reviewRequested = reviewPullRequestListText(input.reviewRequested);
+  const baseBranch = reviewPullRequestListText(input.baseBranch);
+  const headBranch = reviewPullRequestListText(input.headBranch);
+  const columns = reviewPullRequestListValues(input.columns);
+  const checks = reviewPullRequestListValues(input.checks);
+  return {
+    cwd: input.cwd,
+    ...(input.state !== undefined ? { state: input.state } : {}),
+    ...(input.limit !== undefined ? { limit: input.limit } : {}),
+    ...(search !== null ? { search } : {}),
+    ...(author !== null ? { author } : {}),
+    ...(reviewRequested !== null ? { reviewRequested } : {}),
+    ...(baseBranch !== null ? { baseBranch } : {}),
+    ...(headBranch !== null ? { headBranch } : {}),
+    ...(columns.length > 0 ? { columns } : {}),
+    ...(checks.length > 0 ? { checks } : {}),
+  };
 }
 
 export function reviewViewerQueryOptions(input: { cwd: string | null }) {
