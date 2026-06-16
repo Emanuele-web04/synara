@@ -315,6 +315,21 @@ export function useAutomations(onRunStarted?: (threadId: ThreadId) => void) {
   });
   const updateMutation = useMutation({
     mutationFn: (input: AutomationUpdateInput) => ensureNativeApi().automation.update(input),
+    // Optimistically merge the patch so inline edits on the detail page feel instant; the
+    // server's authoritative definition (with recomputed nextRunAt) arrives via the stream.
+    onMutate: (input) => {
+      queryClient.setQueryData<AutomationListResult>(automationQueryKey, (prev) => {
+        const base = prev ?? EMPTY_AUTOMATION_LIST;
+        return {
+          definitions: base.definitions.map((definition) =>
+            definition.id === input.id
+              ? ({ ...definition, ...input } as AutomationDefinition)
+              : definition,
+          ),
+          runs: base.runs,
+        };
+      });
+    },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: automationQueryKey }),
     onError: (error) => toastManager.add({ type: "error", title: error.message }),
   });

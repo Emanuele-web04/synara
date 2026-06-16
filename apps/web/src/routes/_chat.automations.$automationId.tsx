@@ -1,17 +1,23 @@
-import { type AutomationRun } from "@t3tools/contracts";
+import {
+  MODEL_OPTIONS_BY_PROVIDER,
+  type AutomationDefinition,
+  type AutomationRun,
+  type AutomationSchedule,
+  type AutomationUpdateInput,
+  type AutomationWorktreeMode,
+} from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { Button } from "~/components/ui/button";
-import { PencilIcon, PlayIcon, StopFilledIcon, Trash2 } from "~/lib/icons";
+import { ChevronDownIcon, PencilIcon, PlayIcon, StopFilledIcon, Trash2 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
 import {
   type AutomationFormState,
   AutomationDialog,
-  formatCadence,
   formatDateTime,
   formatRelativeTime,
   formFromDefinition,
@@ -19,6 +25,7 @@ import {
   runStatusVariant,
   updateInputFromForm,
   useAutomations,
+  weekdayLabel,
 } from "./-automations.shared";
 import { resolveThreadPickerTitle } from "./-chatThreadRoute.logic";
 
@@ -26,12 +33,76 @@ export const Route = createFileRoute("/_chat/automations/$automationId")({
   component: AutomationDetailView,
 });
 
-function capitalize(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
 function lastFinishedRun(runs: readonly AutomationRun[]): AutomationRun | null {
   return runs.find((run) => run.finishedAt != null || run.startedAt != null) ?? null;
+}
+
+type SelectOption = { readonly value: string; readonly label: string };
+
+const WORKTREE_OPTIONS: readonly SelectOption[] = [
+  { value: "auto", label: "Auto" },
+  { value: "local", label: "Local" },
+  { value: "worktree", label: "Worktree" },
+];
+
+const SCHEDULE_TYPE_OPTIONS: readonly SelectOption[] = [
+  { value: "manual", label: "Manual" },
+  { value: "interval", label: "Interval" },
+  { value: "daily", label: "Daily" },
+  { value: "weekly", label: "Weekly" },
+];
+
+const INTERVAL_PRESETS: readonly SelectOption[] = [
+  { value: "900", label: "Every 15 min" },
+  { value: "1800", label: "Every 30 min" },
+  { value: "3600", label: "Every hour" },
+  { value: "7200", label: "Every 2 hours" },
+  { value: "21600", label: "Every 6 hours" },
+  { value: "43200", label: "Every 12 hours" },
+  { value: "86400", label: "Every 24 hours" },
+];
+
+const MAX_ITERATION_OPTIONS: readonly SelectOption[] = [
+  { value: "", label: "Unlimited" },
+  { value: "10", label: "10 runs" },
+  { value: "25", label: "25 runs" },
+  { value: "50", label: "50 runs" },
+  { value: "100", label: "100 runs" },
+  { value: "250", label: "250 runs" },
+];
+
+// Preserve params across schedule-type switches where they still apply.
+function scheduleForType(
+  type: AutomationSchedule["type"],
+  current: AutomationSchedule,
+): AutomationSchedule {
+  const timeOfDay =
+    current.type === "daily" || current.type === "weekly" ? current.timeOfDay : "09:00";
+  switch (type) {
+    case "manual":
+      return { type: "manual" };
+    case "interval":
+      return {
+        type: "interval",
+        everySeconds: current.type === "interval" ? current.everySeconds : 3600,
+      };
+    case "daily":
+      return { type: "daily", timeOfDay };
+    case "weekly":
+      return {
+        type: "weekly",
+        dayOfWeek: current.type === "weekly" ? current.dayOfWeek : 1,
+        timeOfDay,
+      };
+  }
+}
+
+function intervalOptions(current: number): readonly SelectOption[] {
+  if (INTERVAL_PRESETS.some((option) => option.value === String(current))) {
+    return INTERVAL_PRESETS;
+  }
+  const minutes = Math.max(1, Math.round(current / 60));
+  return [{ value: String(current), label: `Every ${minutes} min` }, ...INTERVAL_PRESETS];
 }
 
 function AutomationDetailView() {
@@ -82,6 +153,20 @@ function AutomationDetailView() {
   const project = projects.find((candidate) => candidate.id === definition.projectId);
   const targetThread = threads.find((candidate) => candidate.id === definition.targetThreadId);
   const lastRun = lastFinishedRun(runs);
+  const schedule = definition.schedule;
+
+  const patch = (input: Omit<AutomationUpdateInput, "id">) =>
+    updateMutation.mutate({ id: definition.id, ...input });
+
+  const modelOptions: SelectOption[] = (
+    MODEL_OPTIONS_BY_PROVIDER[definition.modelSelection.provider] ?? []
+  ).map((option) => ({ value: option.slug, label: option.name }));
+  if (!modelOptions.some((option) => option.value === definition.modelSelection.model)) {
+    modelOptions.unshift({
+      value: definition.modelSelection.model,
+      label: definition.modelSelection.model,
+    });
+  }
 
   const openEditDialog = () => {
     setForm(formFromDefinition(definition, project?.id ?? projects[0]?.id ?? ""));
@@ -187,20 +272,126 @@ function AutomationDetailView() {
             </DetailGroup>
 
             <DetailGroup title="Details">
-              <DetailRow label="Runs in">
-                {definition.mode === "heartbeat" ? "Thread" : capitalize(definition.worktreeMode)}
-              </DetailRow>
-              <DetailRow label="Project">{project?.name ?? "Unknown project"}</DetailRow>
-              <DetailRow label="Repeats">{formatCadence(definition.schedule)}</DetailRow>
+              {definition.mode === "heartbeat" ? (
+                <DetailRow label="Runs in">Thread</DetailRow>
+              ) : (
+                <EditRow label="Runs in">
+                  <InlineSelect
+                    value={definition.worktreeMode}
+                    options={WORKTREE_OPTIONS}
+                    onChange={(value) => patch({ worktreeMode: value as AutomationWorktreeMode })}
+                  />
+                </EditRow>
+              )}
+              <EditRow label="Project">
+                <InlineSelect
+                  value={definition.projectId}
+                  options={projects.map((entry) => ({ value: entry.id, label: entry.name }))}
+                  onChange={(value) =>
+                    patch({ projectId: value as AutomationDefinition["projectId"] })
+                  }
+                />
+              </EditRow>
+              <EditRow label="Repeats">
+                <InlineSelect
+                  value={schedule.type}
+                  options={SCHEDULE_TYPE_OPTIONS}
+                  onChange={(value) =>
+                    patch({
+                      schedule: scheduleForType(value as AutomationSchedule["type"], schedule),
+                    })
+                  }
+                />
+              </EditRow>
+              {schedule.type === "interval" ? (
+                <EditRow label="Every">
+                  <InlineSelect
+                    value={String(schedule.everySeconds)}
+                    options={intervalOptions(schedule.everySeconds)}
+                    onChange={(value) =>
+                      patch({
+                        schedule: { type: "interval", everySeconds: Number.parseInt(value, 10) },
+                      })
+                    }
+                  />
+                </EditRow>
+              ) : null}
+              {schedule.type === "daily" ? (
+                <EditRow label="Time (UTC)">
+                  <InlineTime
+                    value={schedule.timeOfDay}
+                    onChange={(value) =>
+                      value ? patch({ schedule: { type: "daily", timeOfDay: value } }) : undefined
+                    }
+                  />
+                </EditRow>
+              ) : null}
+              {schedule.type === "weekly" ? (
+                <>
+                  <EditRow label="Day">
+                    <InlineSelect
+                      value={String(schedule.dayOfWeek)}
+                      options={[0, 1, 2, 3, 4, 5, 6].map((day) => ({
+                        value: String(day),
+                        label: weekdayLabel(day),
+                      }))}
+                      onChange={(value) =>
+                        patch({
+                          schedule: {
+                            type: "weekly",
+                            dayOfWeek: Number.parseInt(value, 10),
+                            timeOfDay: schedule.timeOfDay,
+                          },
+                        })
+                      }
+                    />
+                  </EditRow>
+                  <EditRow label="Time (UTC)">
+                    <InlineTime
+                      value={schedule.timeOfDay}
+                      onChange={(value) =>
+                        value
+                          ? patch({
+                              schedule: {
+                                type: "weekly",
+                                dayOfWeek: schedule.dayOfWeek,
+                                timeOfDay: value,
+                              },
+                            })
+                          : undefined
+                      }
+                    />
+                  </EditRow>
+                </>
+              ) : null}
+              <EditRow label="Model">
+                <InlineSelect
+                  value={definition.modelSelection.model}
+                  options={modelOptions}
+                  onChange={(value) =>
+                    patch({
+                      modelSelection: {
+                        provider: definition.modelSelection.provider,
+                        model: value,
+                      },
+                    })
+                  }
+                />
+              </EditRow>
               <DetailRow label="Mode">
                 {definition.mode === "heartbeat" ? "Heartbeat" : "Standalone"}
               </DetailRow>
-              <DetailRow label="Model">{definition.modelSelection.model}</DetailRow>
-              <DetailRow label="Max iterations">
-                {definition.maxIterations != null
-                  ? `${definition.iterationCount}/${definition.maxIterations}`
-                  : "Unlimited"}
-              </DetailRow>
+              {definition.mode === "heartbeat" ? (
+                <EditRow label="Max iterations">
+                  <InlineSelect
+                    value={definition.maxIterations == null ? "" : String(definition.maxIterations)}
+                    options={MAX_ITERATION_OPTIONS}
+                    onChange={(value) =>
+                      patch({ maxIterations: value === "" ? null : Number.parseInt(value, 10) })
+                    }
+                  />
+                </EditRow>
+              ) : null}
               {definition.mode === "heartbeat" && targetThread ? (
                 <DetailRow label="Thread">{resolveThreadPickerTitle(targetThread.title)}</DetailRow>
               ) : null}
@@ -274,6 +465,68 @@ function DetailRow({
       <span className="shrink-0 text-muted-foreground">{label}</span>
       <span className="min-w-0 truncate text-right font-medium text-foreground">{children}</span>
     </div>
+  );
+}
+
+function EditRow({
+  label,
+  children,
+}: {
+  readonly label: string;
+  readonly children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2 border-b border-border/60 pl-3 pr-1.5 text-xs last:border-b-0">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+const INLINE_CONTROL_CLASS =
+  "cursor-pointer rounded-md bg-transparent px-2 py-1.5 text-right text-xs font-medium text-foreground outline-none transition-colors hover:bg-[var(--color-background-elevated-secondary)] focus-visible:bg-[var(--color-background-elevated-secondary)]";
+
+function InlineSelect({
+  value,
+  options,
+  onChange,
+}: {
+  readonly value: string;
+  readonly options: readonly SelectOption[];
+  readonly onChange: (value: string) => void;
+}) {
+  return (
+    <div className="relative flex min-w-0 items-center">
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className={cn(INLINE_CONTROL_CLASS, "max-w-[12rem] appearance-none truncate pr-6")}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDownIcon className="pointer-events-none absolute right-1.5 size-3 text-muted-foreground" />
+    </div>
+  );
+}
+
+function InlineTime({
+  value,
+  onChange,
+}: {
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+}) {
+  return (
+    <input
+      type="time"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className={INLINE_CONTROL_CLASS}
+    />
   );
 }
 
