@@ -461,9 +461,9 @@ function DetailRow({
   readonly children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-border/60 px-3 py-2 text-xs last:border-b-0">
-      <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate text-right font-medium text-foreground">{children}</span>
+    <div className="flex items-center gap-3 border-b border-border/60 px-3 py-2 text-xs last:border-b-0">
+      <span className="w-28 shrink-0 text-muted-foreground">{label}</span>
+      <span className="min-w-0 flex-1 truncate font-medium text-foreground">{children}</span>
     </div>
   );
 }
@@ -476,15 +476,15 @@ function EditRow({
   readonly children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 border-b border-border/60 pl-3 pr-1.5 text-xs transition-colors last:border-b-0 hover:bg-foreground/[0.03]">
-      <span className="shrink-0 text-muted-foreground">{label}</span>
-      {children}
+    <div className="flex items-center gap-3 border-b border-border/60 py-px pl-3 pr-1.5 text-xs transition-colors last:border-b-0 hover:bg-foreground/[0.03]">
+      <span className="w-28 shrink-0 text-muted-foreground">{label}</span>
+      <div className="flex min-w-0 flex-1">{children}</div>
     </div>
   );
 }
 
 const INLINE_CONTROL_CLASS =
-  "cursor-pointer rounded-md bg-transparent px-2 py-1.5 text-right text-xs font-medium text-foreground outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring";
+  "cursor-pointer rounded-md bg-transparent px-2 py-1.5 text-left text-xs font-medium text-foreground outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring";
 
 function InlineSelect({
   value,
