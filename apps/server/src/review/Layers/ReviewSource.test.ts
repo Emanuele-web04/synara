@@ -110,9 +110,11 @@ function makeLayer(options: {
         };
       }),
     listRepositoryPullRequests: (input) => {
-      recorded.listCalls.push(input);
-      const limit = input.limit ?? options.pullRequests.length;
-      return Effect.succeed(options.pullRequests.slice(0, limit));
+      return Effect.sync(() => {
+        recorded.listCalls.push(input);
+        const limit = input.limit ?? options.pullRequests.length;
+        return options.pullRequests.slice(0, limit);
+      });
     },
     execute: () => unexpected("GitHubCli.execute"),
     listOpenPullRequests: () => unexpected("GitHubCli.listOpenPullRequests"),
@@ -717,7 +719,6 @@ it.effect("keeps a larger bounded candidate window when status still needs local
     ]);
     expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
       state: "open",
-      limit: 200,
       search: null,
       author: null,
       authors: [],
@@ -799,10 +800,49 @@ it.effect("sorts expanded server candidates before slicing bounded list results"
     expect(recorded.listCalls).toEqual([{ cwd: "/repo", state: "open", limit: 5000 }]);
     expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toMatchObject({
       state: "open",
-      limit: 50,
       sort: "title",
     });
+    expect(recorded.cacheWrites[0]?.data.pullRequests).toHaveLength(100);
   });
+});
+
+it.effect("reuses expanded list candidates when load more only increases the result limit", () => {
+  const pullRequests = Array.from({ length: 100 }, (_, index) =>
+    ghPr({
+      number: index + 1,
+      title: index === 89 ? "AAA outside first page" : `ZZZ review ${String(index + 1)}`,
+    }),
+  );
+  const { layer, recorded } = makeLayer({ pullRequests });
+
+  return Effect.gen(function* () {
+    const reviewSource = yield* ReviewSource;
+    const firstPage = yield* reviewSource.listPullRequests({
+      cwd: "/repo",
+      sort: "title",
+    });
+    const secondPage = yield* reviewSource.listPullRequests({
+      cwd: "/repo",
+      limit: 100,
+      sort: "title",
+    });
+
+    expect(firstPage.pullRequests).toHaveLength(50);
+    expect(secondPage.pullRequests).toHaveLength(100);
+    expect(numbers(firstPage).at(0)).toBe(90);
+    expect(numbers(secondPage).at(0)).toBe(90);
+    expect(secondPage.meta).toEqual({
+      requestedLimit: 100,
+      resultLimit: 100,
+      candidateLimit: 5000,
+      candidateCount: 100,
+      candidateLimitReached: false,
+      matchedCount: 100,
+      returnedCount: 100,
+      bounded: true,
+    });
+    expect(recorded.listCalls).toEqual([{ cwd: "/repo", state: "open", limit: 5000 }]);
+  }).pipe(Effect.provide(layer));
 });
 
 it.effect("pushes a single changes-requested status to GitHub", () => {

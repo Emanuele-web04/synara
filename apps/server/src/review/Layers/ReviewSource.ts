@@ -493,6 +493,7 @@ function pullRequestListFilter(
     readonly sort?: ReviewListSort | undefined;
   },
   viewerLogin: string,
+  options: { readonly includeLimit: boolean } = { includeLimit: true },
 ): string {
   const authors = [...resolvedAliasMergedSet(input.author, input.authors, viewerLogin)].sort();
   const baseBranches = [...mergedSet(input.baseBranch, input.baseBranches)].sort();
@@ -503,7 +504,7 @@ function pullRequestListFilter(
   ].sort();
   return JSON.stringify({
     state: input.state ?? "open",
-    limit: normalizedResultListLimit(input.limit),
+    ...(options.includeLimit ? { limit: normalizedResultListLimit(input.limit) } : {}),
     search: normalizeOptionalText(input.search),
     author: authors.length === 1 ? authors[0] : null,
     authors: authors.length > 1 ? authors : [],
@@ -521,6 +522,48 @@ function pullRequestListFilter(
     checks: [...normalizedSet(input.checks)].sort(),
     ...(input.sort !== undefined ? { sort: normalizedReviewListSort(input.sort) } : {}),
   });
+}
+
+function usesExpandedPullRequestListCache(
+  input: ReviewListPullRequestsInput,
+  viewerLogin: string,
+): boolean {
+  return hasLocalListFilters(input, viewerLogin) || sortNeedsExpandedCandidates(input);
+}
+
+function pullRequestListCacheFilter(
+  input: ReviewListPullRequestsInput,
+  viewerLogin: string,
+): string {
+  return pullRequestListFilter(input, viewerLogin, {
+    includeLimit: !usesExpandedPullRequestListCache(input, viewerLogin),
+  });
+}
+
+function slicePullRequestListResult(
+  data: ReviewListPullRequestsResult,
+  input: ReviewListPullRequestsInput,
+): ReviewListPullRequestsResult {
+  const resultLimit = resultListLimit(input);
+  const pullRequests = data.pullRequests.slice(0, resultLimit);
+  if (data.meta === undefined) {
+    return { pullRequests };
+  }
+  const {
+    requestedLimit: _requestedLimit,
+    resultLimit: _resultLimit,
+    returnedCount: _returnedCount,
+    ...restMeta
+  } = data.meta;
+  return {
+    pullRequests,
+    meta: {
+      ...restMeta,
+      ...(input.limit !== undefined ? { requestedLimit: input.limit } : {}),
+      resultLimit,
+      returnedCount: pullRequests.length,
+    },
+  };
 }
 
 function isUsableCacheEnvelope<T>(
@@ -617,7 +660,11 @@ const makeReviewSource = Effect.gen(function* () {
       return repositoryId;
     });
 
-  const listPullRequestsUncached = (input: ReviewListPullRequestsInput, viewerLogin: string) => {
+  const listPullRequestsUncached = (
+    input: ReviewListPullRequestsInput,
+    viewerLogin: string,
+    options: { readonly sliceExpandedResults: boolean } = { sliceExpandedResults: true },
+  ) => {
     const listLimit = githubListLimit(input, viewerLogin);
     const authors = nativeListSearchValues([
       ...resolvedAliasMergedSet(input.author, input.authors, viewerLogin),
@@ -665,11 +712,10 @@ const makeReviewSource = Effect.gen(function* () {
           const sortedSummaries = [...summaries].sort(
             compareReviewPullRequestSummaries(normalizedReviewListSort(input.sort)),
           );
-          const usesLocalCandidateWindow =
-            hasLocalListFilters(input, viewerLogin) || sortNeedsExpandedCandidates(input);
+          const usesLocalCandidateWindow = usesExpandedPullRequestListCache(input, viewerLogin);
           const candidateLimit = listLimit ?? resultListLimit(input);
           const resultLimit = resultListLimit(input);
-          const returnedPullRequests = usesLocalCandidateWindow
+          const returnedPullRequests = usesLocalCandidateWindow && options.sliceExpandedResults
             ? sortedSummaries.slice(0, resultLimit)
             : sortedSummaries;
           return {
@@ -721,19 +767,25 @@ const makeReviewSource = Effect.gen(function* () {
         [resolveRepositoryId(input.cwd), readCacheIdentity(input.cwd)],
         { concurrency: "unbounded" },
       );
-      const listFilter = pullRequestListFilter(input, cacheIdentity.login);
+      const useExpandedCache = usesExpandedPullRequestListCache(input, cacheIdentity.login);
+      const listFilter = pullRequestListCacheFilter(input, cacheIdentity.login);
       const cached = yield* cacheStore
         .getPullRequestList({ repositoryId, listFilter })
         .pipe(Effect.catch(() => Effect.succeed(Option.none())));
       if (Option.isSome(cached) && isUsableCacheEnvelope(cached.value, cacheIdentity.tokenIdentity)) {
+        const data = useExpandedCache
+          ? slicePullRequestListResult(cached.value.data, input)
+          : cached.value.data;
         yield* forkRefreshIfStale(
           `pr-list:${repositoryId}:${listFilter}`,
           cached.value,
           refreshPullRequestList(input, repositoryId, listFilter, cacheIdentity),
         );
-        return cached.value.data;
+        return data;
       }
-      const data = yield* listPullRequestsUncached(input, cacheIdentity.login).pipe(
+      const cacheData = yield* listPullRequestsUncached(input, cacheIdentity.login, {
+        sliceExpandedResults: !useExpandedCache,
+      }).pipe(
         Effect.mapError((error) =>
           reviewError("listPullRequests", `Could not list pull requests: ${error.message}`, error),
         ),
@@ -743,13 +795,13 @@ const makeReviewSource = Effect.gen(function* () {
         .upsertPullRequestList({
           repositoryId,
           listFilter,
-          data,
+          data: cacheData,
           fetchedAt,
           ttlMs: REVIEW_CACHE_TTL_MS,
           tokenIdentity: cacheIdentity.tokenIdentity,
         })
         .pipe(Effect.ignore);
-      return data;
+      return useExpandedCache ? slicePullRequestListResult(cacheData, input) : cacheData;
     });
 
   const getViewer: ReviewSourceShape["getViewer"] = (input) =>
@@ -1068,15 +1120,17 @@ const makeReviewSource = Effect.gen(function* () {
     listFilter: string,
     cacheIdentity: { readonly login: string; readonly tokenIdentity: string },
   ) =>
-    listPullRequestsUncached(input, cacheIdentity.login).pipe(
-      Effect.flatMap((data) =>
+    listPullRequestsUncached(input, cacheIdentity.login, {
+      sliceExpandedResults: !usesExpandedPullRequestListCache(input, cacheIdentity.login),
+    }).pipe(
+      Effect.flatMap((cacheData) =>
         cacheWriteClock.pipe(
           Effect.flatMap((fetchedAt) =>
             cacheStore
               .upsertPullRequestList({
                 repositoryId,
                 listFilter,
-                data,
+                data: cacheData,
                 fetchedAt,
                 ttlMs: REVIEW_CACHE_TTL_MS,
                 tokenIdentity: cacheIdentity.tokenIdentity,
@@ -1111,7 +1165,9 @@ const makeReviewSource = Effect.gen(function* () {
                     ...(input.columns !== undefined ? { columns: input.columns } : {}),
                     ...(input.checks !== undefined ? { checks: input.checks } : {}),
                     ...(input.sort !== undefined ? { sort: input.sort } : {}),
-                    data,
+                    data: usesExpandedPullRequestListCache(input, cacheIdentity.login)
+                      ? slicePullRequestListResult(cacheData, input)
+                      : cacheData,
                     fetchedAt,
                   }),
                 ),
