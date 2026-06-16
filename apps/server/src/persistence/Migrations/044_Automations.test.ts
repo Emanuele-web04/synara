@@ -46,6 +46,8 @@ layer("automation migration", (it) => {
         "idx_automation_definitions_due",
         "idx_automation_runs_history",
         "idx_automation_runs_recovery",
+        "idx_automation_runs_project",
+        "idx_automation_runs_thread",
       ]);
     }),
   );

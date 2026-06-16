@@ -17,9 +17,15 @@ export const makeAutomationSchedulerLive = (options?: AutomationSchedulerLiveOpt
     AutomationScheduler,
     Effect.gen(function* () {
       const automationService = yield* AutomationService;
-      const intervalMs = Math.max(1, options?.intervalMs ?? DEFAULT_AUTOMATION_SCHEDULER_INTERVAL_MS);
+      const intervalMs = Math.max(
+        1,
+        options?.intervalMs ?? DEFAULT_AUTOMATION_SCHEDULER_INTERVAL_MS,
+      );
 
-      const runPassSafely = automationService.runDueOnce().pipe(
+      // Each pass first reconciles in-flight runs against their thread state (a backstop for
+      // any completion the event reactor missed), then starts newly-due runs.
+      const runPassSafely = automationService.reconcileActiveRuns().pipe(
+        Effect.flatMap(() => automationService.runDueOnce()),
         Effect.catchCause((cause) =>
           Effect.logWarning("automation scheduler pass failed", {
             cause: Cause.pretty(cause),

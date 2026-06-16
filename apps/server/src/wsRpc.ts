@@ -1151,7 +1151,7 @@ export const makeWsRpcLayer = () =>
               ),
             ),
             automationService.streamEvents,
-          ),
+          ).pipe(Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed"))),
       });
     }),
   );

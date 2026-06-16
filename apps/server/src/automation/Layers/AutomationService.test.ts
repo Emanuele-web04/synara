@@ -2,14 +2,18 @@ import { assert, it } from "@effect/vitest";
 import {
   AutomationId,
   ProjectId,
+  ThreadId,
+  TurnId,
   type AutomationCreateInput,
   type GitCreateWorktreeInput,
   type OrchestrationCommand,
   type OrchestrationProjectShell,
+  type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import { Effect, Layer, Option, Stream } from "effect";
 
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
+import { OrchestrationCommandInternalError } from "../../orchestration/Errors.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import type { OrchestrationEngineShape } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -40,11 +44,47 @@ const project: OrchestrationProjectShell = {
 const dispatchedCommands: OrchestrationCommand[] = [];
 const createdWorktrees: GitCreateWorktreeInput[] = [];
 let gitMode: "nonRepo" | "worktree" = "nonRepo";
+// Configurable thread shell returned by the ProjectionSnapshotQuery mock; reconcile
+// tests set it to drive the run's latest-turn outcome.
+let threadShell: Option.Option<OrchestrationThreadShell> = Option.none();
+// When set, the orchestration dispatch mock fails on the matching command type so we
+// can exercise the failed-run / advance-after-dispatch paths.
+let failDispatchType: OrchestrationCommand["type"] | null = null;
 
 function resetHarness() {
   dispatchedCommands.length = 0;
   createdWorktrees.length = 0;
   gitMode = "nonRepo";
+  threadShell = Option.none();
+  failDispatchType = null;
+}
+
+// Build a partial thread shell; only the fields reconcileThread reads are populated.
+function makeThreadShell(overrides: {
+  readonly latestTurn?: OrchestrationThreadShell["latestTurn"];
+  readonly hasPendingApprovals?: boolean;
+  readonly hasPendingUserInput?: boolean;
+  readonly lastError?: string | null;
+}): OrchestrationThreadShell {
+  return {
+    latestTurn: overrides.latestTurn ?? null,
+    hasPendingApprovals: overrides.hasPendingApprovals,
+    hasPendingUserInput: overrides.hasPendingUserInput,
+    session: overrides.lastError !== undefined ? { lastError: overrides.lastError } : null,
+  } as unknown as OrchestrationThreadShell;
+}
+
+function makeLatestTurn(
+  state: "running" | "completed" | "error" | "interrupted",
+): OrchestrationThreadShell["latestTurn"] {
+  return {
+    turnId: TurnId.makeUnsafe("turn-reconcile"),
+    state,
+    requestedAt: now,
+    startedAt: now,
+    completedAt: state === "completed" ? now : null,
+    assistantMessageId: null,
+  } as unknown as OrchestrationThreadShell["latestTurn"];
 }
 
 const createInput = (
@@ -71,10 +111,18 @@ const orchestrationEngine = {
       updatedAt: now,
     }),
   dispatch: (command: OrchestrationCommand) =>
-    Effect.sync(() => {
-      dispatchedCommands.push(command);
-      return { sequence: dispatchedCommands.length };
-    }),
+    failDispatchType !== null && command.type === failDispatchType
+      ? Effect.fail(
+          new OrchestrationCommandInternalError({
+            commandId: command.commandId,
+            commandType: command.type,
+            detail: "dispatch rejected by test harness",
+          }),
+        )
+      : Effect.sync(() => {
+          dispatchedCommands.push(command);
+          return { sequence: dispatchedCommands.length };
+        }),
   repairState: () =>
     Effect.succeed({
       snapshotSequence: 0,
@@ -114,7 +162,7 @@ const projectionSnapshotQuery = {
   getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
   getThreadCheckpointContext: () => Effect.succeed(Option.none()),
   getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-  getThreadShellById: () => Effect.succeed(Option.none()),
+  getThreadShellById: () => Effect.succeed(threadShell),
   findSyntheticSubagentParentThread: () => Effect.succeed(Option.none()),
   getThreadDetailById: () => Effect.succeed(Option.none()),
   getThreadDetailSnapshotById: () => Effect.succeed(Option.none()),
@@ -252,6 +300,328 @@ layer("AutomationService", (it) => {
         listed.definitions.find((definition) => definition.id === automationId)?.nextRunAt,
         "2026-06-16T10:05:00.000Z",
       );
+    }),
+  );
+
+  it.effect("reconciles a completed turn into a succeeded run", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const created = yield* service.create(createInput("local"));
+      const { run } = yield* service.runNow({ automationId: created.id });
+      const threadId = run.threadId;
+      assert.isNotNull(threadId);
+
+      threadShell = Option.some(makeThreadShell({ latestTurn: makeLatestTurn("completed") }));
+      yield* service.reconcileThread({ threadId: threadId! });
+
+      const reloaded = yield* service.list({ projectId });
+      const reconciled = reloaded.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(reconciled?.status, "succeeded");
+      assert.strictEqual(reconciled?.turnId, TurnId.makeUnsafe("turn-reconcile"));
+    }),
+  );
+
+  it.effect("reconciles an error turn into a failed run with the session error", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const created = yield* service.create(createInput("local"));
+      const { run } = yield* service.runNow({ automationId: created.id });
+      const threadId = run.threadId!;
+
+      threadShell = Option.some(
+        makeThreadShell({
+          latestTurn: makeLatestTurn("error"),
+          lastError: "provider exploded",
+        }),
+      );
+      yield* service.reconcileThread({ threadId });
+
+      const reloaded = yield* service.list({ projectId });
+      const reconciled = reloaded.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(reconciled?.status, "failed");
+      assert.strictEqual(reconciled?.error, "provider exploded");
+    }),
+  );
+
+  it.effect("reconciles an interrupted turn into an interrupted run", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const created = yield* service.create(createInput("local"));
+      const { run } = yield* service.runNow({ automationId: created.id });
+      const threadId = run.threadId!;
+
+      threadShell = Option.some(makeThreadShell({ latestTurn: makeLatestTurn("interrupted") }));
+      yield* service.reconcileThread({ threadId });
+
+      const reloaded = yield* service.list({ projectId });
+      assert.strictEqual(reloaded.runs.find((entry) => entry.id === run.id)?.status, "interrupted");
+    }),
+  );
+
+  it.effect("reconciles pending approvals into waiting-for-approval", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const created = yield* service.create(createInput("local"));
+      const { run } = yield* service.runNow({ automationId: created.id });
+      const threadId = run.threadId!;
+
+      threadShell = Option.some(
+        makeThreadShell({
+          latestTurn: makeLatestTurn("running"),
+          hasPendingApprovals: true,
+        }),
+      );
+      yield* service.reconcileThread({ threadId });
+
+      const reloaded = yield* service.list({ projectId });
+      assert.strictEqual(
+        reloaded.runs.find((entry) => entry.id === run.id)?.status,
+        "waiting-for-approval",
+      );
+    }),
+  );
+
+  it.effect("leaves a still-running turn untouched on reconcile", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const created = yield* service.create(createInput("local"));
+      const { run } = yield* service.runNow({ automationId: created.id });
+      const threadId = run.threadId!;
+      assert.strictEqual(run.status, "running");
+
+      threadShell = Option.some(makeThreadShell({ latestTurn: makeLatestTurn("running") }));
+      yield* service.reconcileThread({ threadId });
+
+      const reloaded = yield* service.list({ projectId });
+      assert.strictEqual(reloaded.runs.find((entry) => entry.id === run.id)?.status, "running");
+    }),
+  );
+
+  it.effect("runs a heartbeat automation by continuing the target thread", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-target-thread");
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+      });
+
+      const { run } = yield* service.runNow({ automationId: created.id });
+
+      // Heartbeat continues an existing thread: exactly one turn start, no thread create.
+      assert.strictEqual(dispatchedCommands.length, 1);
+      const command = dispatchedCommands[0];
+      assert.strictEqual(command?.type, "thread.turn.start");
+      if (command?.type !== "thread.turn.start") {
+        assert.fail("Expected a thread.turn.start command.");
+      }
+      assert.strictEqual(command.threadId, targetThreadId);
+      assert.isUndefined(dispatchedCommands.find((entry) => entry.type === "thread.create"));
+      assert.strictEqual(run.threadId, targetThreadId);
+      assert.strictEqual(run.status, "running");
+    }),
+  );
+
+  it.effect("rejects creating a heartbeat automation without a target thread", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const exit = yield* service
+        .create({ ...createInput("local"), mode: "heartbeat" })
+        .pipe(Effect.exit);
+      assert.isTrue(exit._tag === "Failure");
+    }),
+  );
+
+  it.effect("rejects updating an automation into heartbeat without a target thread", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create(createInput("local"));
+
+      const exit = yield* service.update({ id: created.id, mode: "heartbeat" }).pipe(Effect.exit);
+      assert.isTrue(exit._tag === "Failure");
+    }),
+  );
+
+  it.effect("disables a scheduled automation that has reached its iteration cap", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-max-iters");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+          maxIterations: 1,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      // Push iterationCount up to the cap so the next due run must stop.
+      yield* repository.incrementDefinitionIterationCount({
+        id: automationId,
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const results = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      assert.strictEqual(results.length, 0);
+      assert.strictEqual(dispatchedCommands.length, 0);
+      const reloaded = yield* service.list({ projectId });
+      const definition = reloaded.definitions.find((entry) => entry.id === automationId);
+      assert.strictEqual(definition?.enabled, false);
+      // No run row was created for the capped occurrence.
+      assert.strictEqual(
+        reloaded.runs.filter((entry) => entry.automationId === automationId).length,
+        0,
+      );
+    }),
+  );
+
+  it.effect("disables a stopOnError automation when its run reconciles to failed", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-stop-on-error");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+          stopOnError: true,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const results = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const run = results[0]?.run;
+      assert.isDefined(run);
+      const threadId = run!.threadId!;
+
+      threadShell = Option.some(
+        makeThreadShell({
+          latestTurn: makeLatestTurn("error"),
+          lastError: "loop failure",
+        }),
+      );
+      yield* service.reconcileThread({ threadId });
+
+      const reloaded = yield* service.list({ projectId });
+      const definition = reloaded.definitions.find((entry) => entry.id === automationId);
+      assert.strictEqual(definition?.enabled, false);
+      assert.strictEqual(reloaded.runs.find((entry) => entry.id === run!.id)?.status, "failed");
+    }),
+  );
+
+  it.effect("skips a due run while a prior run is in flight but advances the schedule", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-in-flight");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      // First due tick creates + dispatches a run that stays running (no reconcile).
+      const first = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      assert.strictEqual(first.length, 1);
+      assert.strictEqual(dispatchedCommands.length, 2);
+      const dispatchedBefore = dispatchedCommands.length;
+
+      // Second due tick: the prior run is still active, so no new run is dispatched,
+      // but the schedule still advances past this occurrence.
+      const second = yield* service.runDueOnce({
+        now: "2026-06-16T10:05:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      assert.strictEqual(second.length, 0);
+      assert.strictEqual(dispatchedCommands.length, dispatchedBefore);
+      const reloaded = yield* service.list({ projectId });
+      const definition = reloaded.definitions.find((entry) => entry.id === automationId);
+      assert.strictEqual(definition?.nextRunAt, "2026-06-16T10:10:00.000Z");
+      // Only the first occurrence produced a run row.
+      assert.strictEqual(
+        reloaded.runs.filter((entry) => entry.automationId === automationId).length,
+        1,
+      );
+    }),
+  );
+
+  it.effect("records a failed run and still advances the schedule when dispatch fails", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-dispatch-fail");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+          // No stopOnError so the failure does not also disable the automation here.
+          stopOnError: false,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      failDispatchType = "thread.create";
+      const results = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      // The run was created durably and surfaces as failed despite dispatch blowing up.
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0]?.run.status, "failed");
+
+      const reloaded = yield* service.list({ projectId });
+      const runs = reloaded.runs.filter((entry) => entry.automationId === automationId);
+      assert.strictEqual(runs.length, 1);
+      assert.strictEqual(runs[0]?.status, "failed");
+      // The occurrence is not silently lost: the schedule advanced to the next slot.
+      const definition = reloaded.definitions.find((entry) => entry.id === automationId);
+      assert.strictEqual(definition?.nextRunAt, "2026-06-16T10:05:00.000Z");
     }),
   );
 });

@@ -3,7 +3,6 @@ import { Schema } from "effect";
 import {
   AutomationId,
   AutomationRunId,
-  AuthSessionId,
   CommandId,
   IsoDateTime,
   MessageId,
@@ -50,6 +49,14 @@ export type AutomationSchedule = typeof AutomationSchedule.Type;
 export const AutomationWorktreeMode = Schema.Literals(["auto", "local", "worktree"]);
 export type AutomationWorktreeMode = typeof AutomationWorktreeMode.Type;
 
+/**
+ * Automation execution model.
+ * - `standalone`: every run creates a fresh thread + turn (project task on a schedule).
+ * - `heartbeat`: every run continues an existing target thread (a self-resuming loop).
+ */
+export const AutomationMode = Schema.Literals(["standalone", "heartbeat"]);
+export type AutomationMode = typeof AutomationMode.Type;
+
 export const AutomationTrigger = Schema.Union([
   Schema.Struct({ type: Schema.Literal("manual") }),
   Schema.Struct({ type: Schema.Literal("scheduled") }),
@@ -78,13 +85,12 @@ export type AutomationAllowedCapability = typeof AutomationAllowedCapability.Typ
 
 export const AutomationPermissionSnapshot = Schema.Struct({
   provider: ProviderKind,
-  modelSelection: Schema.NullOr(ModelSelection),
+  modelSelection: ModelSelection,
   providerOptions: Schema.optional(ProviderStartOptions),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   worktreeMode: AutomationWorktreeMode,
   allowedCapabilities: Schema.Array(AutomationAllowedCapability),
-  creatorSessionId: Schema.optional(Schema.NullOr(AuthSessionId)),
   createdAt: IsoDateTime,
 });
 export type AutomationPermissionSnapshot = typeof AutomationPermissionSnapshot.Type;
@@ -103,6 +109,15 @@ export const AutomationDefinition = Schema.Struct({
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   worktreeMode: AutomationWorktreeMode,
+  mode: AutomationMode,
+  /** Heartbeat target thread continued on each wake. Null for standalone automations. */
+  targetThreadId: Schema.NullOr(ThreadId),
+  /** Hard cap on total runs before the automation auto-disables. Null = unbounded. */
+  maxIterations: Schema.NullOr(PositiveInt),
+  /** When true, a failed run disables the automation (stops a runaway loop). */
+  stopOnError: Schema.Boolean,
+  /** Number of runs created so far; used to enforce maxIterations. */
+  iterationCount: NonNegativeInt,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime),
@@ -129,6 +144,16 @@ const AutomationDefinitionConfig = Schema.Struct({
   worktreeMode: Schema.optional(AutomationWorktreeMode).pipe(
     Schema.withDecodingDefault(() => "auto" as const),
   ),
+  mode: Schema.optional(AutomationMode).pipe(
+    Schema.withDecodingDefault(() => "standalone" as const),
+  ),
+  targetThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  maxIterations: Schema.optional(Schema.NullOr(PositiveInt)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  stopOnError: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => true)),
 });
 
 export const AutomationCreateInput = AutomationDefinitionConfig;
@@ -147,6 +172,10 @@ export const AutomationUpdateInput = Schema.Struct({
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
   worktreeMode: Schema.optional(AutomationWorktreeMode),
+  mode: Schema.optional(AutomationMode),
+  targetThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  maxIterations: Schema.optional(Schema.NullOr(PositiveInt)),
+  stopOnError: Schema.optional(Schema.Boolean),
 });
 export type AutomationUpdateInput = typeof AutomationUpdateInput.Type;
 

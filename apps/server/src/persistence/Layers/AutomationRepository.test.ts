@@ -6,6 +6,7 @@ import {
   MessageId,
   ProjectId,
   ThreadId,
+  TurnId,
   type AutomationCreateInput,
 } from "@t3tools/contracts";
 import { Effect, Layer, Option } from "effect";
@@ -15,9 +16,7 @@ import { AutomationRepositoryLive } from "./AutomationRepository.ts";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { AutomationRepository } from "../Services/AutomationRepository.ts";
 
-const layer = it.layer(
-  AutomationRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
-);
+const layer = it.layer(AutomationRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)));
 
 const createInput = {
   name: "Nightly maintenance",
@@ -167,7 +166,10 @@ layer("AutomationRepository", (it) => {
       assert.strictEqual(started.status, "running");
       assert.strictEqual(started.threadId, ThreadId.makeUnsafe("thread-3"));
       assert.strictEqual(started.messageId, MessageId.makeUnsafe("message-3"));
-      assert.strictEqual(started.threadCreateCommandId, CommandId.makeUnsafe("cmd-thread-create-3"));
+      assert.strictEqual(
+        started.threadCreateCommandId,
+        CommandId.makeUnsafe("cmd-thread-create-3"),
+      );
       assert.strictEqual(started.turnStartCommandId, CommandId.makeUnsafe("cmd-turn-start-3"));
     }),
   );
@@ -209,6 +211,347 @@ layer("AutomationRepository", (it) => {
         due.map((definition) => definition.id),
         [AutomationId.makeUnsafe("automation-4-due")],
       );
+    }),
+  );
+
+  it.effect("transitions a run through the terminal mark helpers", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-marks"),
+        input: createInputForProject("project-marks"),
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const seedRun = (suffix: string) =>
+        repository.createRun({
+          id: AutomationRunId.makeUnsafe(`run-marks-${suffix}`),
+          automationId: AutomationId.makeUnsafe("automation-marks"),
+          projectId: ProjectId.makeUnsafe("project-marks"),
+          threadId: ThreadId.makeUnsafe(`thread-marks-${suffix}`),
+          trigger: { type: "manual" },
+          scheduledFor: "2026-06-16T10:05:00.000Z",
+          permissionSnapshot,
+          now: "2026-06-16T10:00:00.000Z",
+        });
+
+      yield* seedRun("succeeded");
+      const succeeded = yield* repository.markRunSucceeded({
+        id: AutomationRunId.makeUnsafe("run-marks-succeeded"),
+        turnId: TurnId.makeUnsafe("turn-succeeded"),
+        result: null,
+        finishedAt: "2026-06-16T10:10:00.000Z",
+      });
+      assert.strictEqual(succeeded.status, "succeeded");
+      assert.strictEqual(succeeded.turnId, TurnId.makeUnsafe("turn-succeeded"));
+      assert.strictEqual(succeeded.finishedAt, "2026-06-16T10:10:00.000Z");
+
+      yield* seedRun("interrupted");
+      const interrupted = yield* repository.markRunInterrupted({
+        id: AutomationRunId.makeUnsafe("run-marks-interrupted"),
+        turnId: TurnId.makeUnsafe("turn-interrupted"),
+        finishedAt: "2026-06-16T10:11:00.000Z",
+      });
+      assert.strictEqual(interrupted.status, "interrupted");
+      assert.strictEqual(interrupted.turnId, TurnId.makeUnsafe("turn-interrupted"));
+      assert.strictEqual(interrupted.finishedAt, "2026-06-16T10:11:00.000Z");
+
+      yield* seedRun("waiting");
+      const waiting = yield* repository.markRunWaitingForApproval({
+        id: AutomationRunId.makeUnsafe("run-marks-waiting"),
+        turnId: TurnId.makeUnsafe("turn-waiting"),
+        updatedAt: "2026-06-16T10:12:00.000Z",
+      });
+      assert.strictEqual(waiting.status, "waiting-for-approval");
+      assert.strictEqual(waiting.turnId, TurnId.makeUnsafe("turn-waiting"));
+      // waiting-for-approval is non-terminal: no finished_at is recorded.
+      assert.strictEqual(waiting.finishedAt, null);
+
+      yield* seedRun("failed");
+      const claimed = yield* repository.markRunStarted({
+        id: AutomationRunId.makeUnsafe("run-marks-failed"),
+        threadId: ThreadId.makeUnsafe("thread-marks-failed"),
+        messageId: MessageId.makeUnsafe("message-marks-failed"),
+        threadCreateCommandId: CommandId.makeUnsafe("cmd-create-failed"),
+        turnStartCommandId: CommandId.makeUnsafe("cmd-turn-failed"),
+        startedAt: "2026-06-16T10:00:01.000Z",
+      });
+      assert.strictEqual(claimed.status, "running");
+      const failed = yield* repository.markRunFailed({
+        id: AutomationRunId.makeUnsafe("run-marks-failed"),
+        error: "boom",
+        finishedAt: "2026-06-16T10:13:00.000Z",
+      });
+      assert.strictEqual(failed.status, "failed");
+      assert.strictEqual(failed.error, "boom");
+      assert.strictEqual(failed.finishedAt, "2026-06-16T10:13:00.000Z");
+      // The lease is released so the run is no longer claimed by anyone.
+      assert.strictEqual(failed.claimedBy, null);
+      assert.strictEqual(failed.leaseExpiresAt, null);
+    }),
+  );
+
+  it.effect("returns the most recent run for a thread", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-by-thread"),
+        input: createInputForProject("project-by-thread"),
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      const threadId = ThreadId.makeUnsafe("thread-shared");
+
+      yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-by-thread-old"),
+        automationId: AutomationId.makeUnsafe("automation-by-thread"),
+        projectId: ProjectId.makeUnsafe("project-by-thread"),
+        threadId,
+        trigger: { type: "manual" },
+        scheduledFor: "2026-06-16T10:05:00.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-by-thread-new"),
+        automationId: AutomationId.makeUnsafe("automation-by-thread"),
+        projectId: ProjectId.makeUnsafe("project-by-thread"),
+        threadId,
+        trigger: { type: "manual" },
+        scheduledFor: "2026-06-16T10:05:00.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:01:00.000Z",
+      });
+
+      const found = yield* repository.getRunByThreadId({ threadId });
+      assert.isTrue(Option.isSome(found));
+      assert.strictEqual(
+        Option.getOrThrow(found).id,
+        AutomationRunId.makeUnsafe("run-by-thread-new"),
+      );
+
+      const missing = yield* repository.getRunByThreadId({
+        threadId: ThreadId.makeUnsafe("thread-none"),
+      });
+      assert.isTrue(Option.isNone(missing));
+    }),
+  );
+
+  it.effect("counts only active runs for a definition", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-active-count"),
+        input: createInputForProject("project-active-count"),
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const makeRun = (suffix: string, now: string) =>
+        repository.createRun({
+          id: AutomationRunId.makeUnsafe(`run-count-${suffix}`),
+          automationId: AutomationId.makeUnsafe("automation-active-count"),
+          projectId: ProjectId.makeUnsafe("project-active-count"),
+          threadId: ThreadId.makeUnsafe(`thread-count-${suffix}`),
+          trigger: { type: "manual" },
+          scheduledFor: now,
+          permissionSnapshot,
+          now,
+        });
+
+      // pending
+      yield* makeRun("pending", "2026-06-16T10:00:00.000Z");
+      // running
+      yield* makeRun("running", "2026-06-16T10:00:01.000Z");
+      yield* repository.markRunStarted({
+        id: AutomationRunId.makeUnsafe("run-count-running"),
+        threadId: ThreadId.makeUnsafe("thread-count-running"),
+        messageId: MessageId.makeUnsafe("message-count-running"),
+        threadCreateCommandId: null,
+        turnStartCommandId: CommandId.makeUnsafe("cmd-count-running"),
+        startedAt: "2026-06-16T10:00:02.000Z",
+      });
+      // waiting-for-approval
+      yield* makeRun("waiting", "2026-06-16T10:00:03.000Z");
+      yield* repository.markRunWaitingForApproval({
+        id: AutomationRunId.makeUnsafe("run-count-waiting"),
+        turnId: null,
+        updatedAt: "2026-06-16T10:00:04.000Z",
+      });
+      // succeeded (NOT active)
+      yield* makeRun("done", "2026-06-16T10:00:05.000Z");
+      yield* repository.markRunSucceeded({
+        id: AutomationRunId.makeUnsafe("run-count-done"),
+        turnId: null,
+        result: null,
+        finishedAt: "2026-06-16T10:00:06.000Z",
+      });
+
+      const count = yield* repository.countActiveRunsForDefinition({
+        automationId: AutomationId.makeUnsafe("automation-active-count"),
+      });
+      assert.strictEqual(count, 3);
+    }),
+  );
+
+  it.effect("disables a definition and clears its next run", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-disable"),
+        input: {
+          ...createInputForProject("project-disable"),
+          schedule: { type: "interval", everySeconds: 300 },
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      yield* repository.disableDefinition({
+        id: AutomationId.makeUnsafe("automation-disable"),
+        now: "2026-06-16T10:30:00.000Z",
+      });
+
+      const reloaded = yield* repository.getDefinitionById({
+        id: AutomationId.makeUnsafe("automation-disable"),
+      });
+      const definition = Option.getOrThrow(reloaded);
+      assert.strictEqual(definition.enabled, false);
+      assert.strictEqual(definition.nextRunAt, null);
+    }),
+  );
+
+  it.effect("increments the iteration count", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-iteration"),
+        input: createInputForProject("project-iteration"),
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      yield* repository.incrementDefinitionIterationCount({
+        id: AutomationId.makeUnsafe("automation-iteration"),
+        now: "2026-06-16T10:01:00.000Z",
+      });
+      yield* repository.incrementDefinitionIterationCount({
+        id: AutomationId.makeUnsafe("automation-iteration"),
+        now: "2026-06-16T10:02:00.000Z",
+      });
+
+      const reloaded = yield* repository.getDefinitionById({
+        id: AutomationId.makeUnsafe("automation-iteration"),
+      });
+      assert.strictEqual(Option.getOrThrow(reloaded).iterationCount, 2);
+    }),
+  );
+
+  it.effect("never dedupes manual runs sharing a scheduledFor", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-manual-dup"),
+        input: createInputForProject("project-manual-dup"),
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const first = yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-manual-1"),
+        automationId: AutomationId.makeUnsafe("automation-manual-dup"),
+        projectId: ProjectId.makeUnsafe("project-manual-dup"),
+        threadId: null,
+        trigger: { type: "manual" },
+        scheduledFor: "2026-06-16T10:05:00.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      const second = yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-manual-2"),
+        automationId: AutomationId.makeUnsafe("automation-manual-dup"),
+        projectId: ProjectId.makeUnsafe("project-manual-dup"),
+        threadId: null,
+        trigger: { type: "manual" },
+        scheduledFor: "2026-06-16T10:05:00.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:00:01.000Z",
+      });
+
+      // Two distinct rows survive even though they share automation + scheduledFor.
+      assert.notStrictEqual(first.id, second.id);
+      assert.strictEqual(first.id, AutomationRunId.makeUnsafe("run-manual-1"));
+      assert.strictEqual(second.id, AutomationRunId.makeUnsafe("run-manual-2"));
+      assert.isTrue(Option.isSome(yield* repository.getRunById({ id: first.id })));
+      assert.isTrue(Option.isSome(yield* repository.getRunById({ id: second.id })));
+    }),
+  );
+
+  it.effect("persists the new definition fields with defaults", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      const created = yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-defaults"),
+        input: createInputForProject("project-defaults"),
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      // Defaults applied at create time.
+      assert.strictEqual(created.mode, "standalone");
+      assert.strictEqual(created.targetThreadId, null);
+      assert.strictEqual(created.maxIterations, null);
+      assert.strictEqual(created.stopOnError, true);
+      assert.strictEqual(created.iterationCount, 0);
+
+      // And they survive a round trip through the DB row decoder.
+      const reloaded = Option.getOrThrow(
+        yield* repository.getDefinitionById({
+          id: AutomationId.makeUnsafe("automation-defaults"),
+        }),
+      );
+      assert.strictEqual(reloaded.mode, "standalone");
+      assert.strictEqual(reloaded.targetThreadId, null);
+      assert.strictEqual(reloaded.maxIterations, null);
+      assert.strictEqual(reloaded.stopOnError, true);
+      assert.strictEqual(reloaded.iterationCount, 0);
+    }),
+  );
+
+  it.effect("persists explicit heartbeat definition fields", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      const created = yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-heartbeat"),
+        input: {
+          ...createInputForProject("project-heartbeat"),
+          mode: "heartbeat",
+          targetThreadId: ThreadId.makeUnsafe("thread-target"),
+          maxIterations: 5,
+          stopOnError: false,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const reloaded = Option.getOrThrow(
+        yield* repository.getDefinitionById({
+          id: AutomationId.makeUnsafe("automation-heartbeat"),
+        }),
+      );
+      assert.strictEqual(reloaded.mode, "heartbeat");
+      assert.strictEqual(reloaded.targetThreadId, ThreadId.makeUnsafe("thread-target"));
+      assert.strictEqual(reloaded.maxIterations, 5);
+      assert.strictEqual(reloaded.stopOnError, false);
     }),
   );
 });

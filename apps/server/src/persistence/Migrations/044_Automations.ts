@@ -19,6 +19,11 @@ export default Effect.gen(function* () {
       runtime_mode TEXT NOT NULL,
       interaction_mode TEXT NOT NULL,
       worktree_mode TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      target_thread_id TEXT,
+      max_iterations INTEGER,
+      stop_on_error INTEGER NOT NULL,
+      iteration_count INTEGER NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       archived_at TEXT
@@ -67,9 +72,11 @@ export default Effect.gen(function* () {
     ON automation_definitions (enabled, archived_at, next_run_at, automation_id)
   `;
 
+  // Dedupe only scheduled occurrences; manual "run now" runs are never deduped.
   yield* sql`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_runs_unique_occurrence
     ON automation_runs (automation_id, scheduled_for)
+    WHERE trigger_type = 'scheduled'
   `;
 
   yield* sql`
@@ -80,5 +87,17 @@ export default Effect.gen(function* () {
   yield* sql`
     CREATE INDEX IF NOT EXISTS idx_automation_runs_history
     ON automation_runs (automation_id, scheduled_for DESC, run_id DESC)
+  `;
+
+  // Backs the run-list query, which filters by project and orders by recency.
+  yield* sql`
+    CREATE INDEX IF NOT EXISTS idx_automation_runs_project
+    ON automation_runs (project_id, scheduled_for DESC, run_id DESC)
+  `;
+
+  // Backs reactor lookups that resolve a run from its orchestration thread.
+  yield* sql`
+    CREATE INDEX IF NOT EXISTS idx_automation_runs_thread
+    ON automation_runs (thread_id, created_at DESC)
   `;
 });

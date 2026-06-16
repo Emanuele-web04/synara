@@ -47,3 +47,38 @@ export function computeNextAutomationRunAt(
   }
   return candidate.toISOString();
 }
+
+/**
+ * Compute the next run that is strictly after `notBeforeIso`, coalescing any missed
+ * occurrences after downtime into a single future slot instead of replaying every one.
+ * For interval schedules this fast-forwards past all elapsed intervals; daily/weekly
+ * schedules are naturally coalesced because they resolve to the next wall-clock slot.
+ */
+export function computeNextAutomationRunAtAfter(
+  schedule: AutomationSchedule,
+  fromIso: string,
+  notBeforeIso: string,
+): string | null {
+  if (schedule.type === "manual") {
+    return null;
+  }
+
+  if (schedule.type === "interval") {
+    const from = new Date(fromIso);
+    if (Number.isNaN(from.getTime())) {
+      throw new Error(`Invalid automation schedule timestamp: ${fromIso}`);
+    }
+    const notBefore = Date.parse(notBeforeIso);
+    const floor = Number.isFinite(notBefore) ? notBefore : from.getTime();
+    const stepMs = schedule.everySeconds * 1000;
+    let next = from.getTime() + stepMs;
+    if (next <= floor) {
+      // Jump straight to the first slot after the floor rather than looping per interval.
+      const missed = Math.ceil((floor - next + 1) / stepMs);
+      next += missed * stepMs;
+    }
+    return new Date(next).toISOString();
+  }
+
+  return computeNextAutomationRunAt(schedule, notBeforeIso);
+}

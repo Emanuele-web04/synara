@@ -13,6 +13,7 @@ import {
   MessageId,
   ProjectId,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
@@ -72,7 +73,7 @@ export const MarkAutomationRunStartedInput = Schema.Struct({
   id: AutomationRunId,
   threadId: ThreadId,
   messageId: MessageId,
-  threadCreateCommandId: CommandId,
+  threadCreateCommandId: Schema.NullOr(CommandId),
   turnStartCommandId: CommandId,
   startedAt: Schema.String,
 });
@@ -84,6 +85,56 @@ export const MarkAutomationRunFailedInput = Schema.Struct({
   finishedAt: Schema.String,
 });
 export type MarkAutomationRunFailedInput = typeof MarkAutomationRunFailedInput.Type;
+
+export const MarkAutomationRunSucceededInput = Schema.Struct({
+  id: AutomationRunId,
+  turnId: Schema.NullOr(TurnId),
+  result: Schema.NullOr(Schema.Unknown),
+  finishedAt: Schema.String,
+});
+export type MarkAutomationRunSucceededInput = typeof MarkAutomationRunSucceededInput.Type;
+
+export const MarkAutomationRunInterruptedInput = Schema.Struct({
+  id: AutomationRunId,
+  turnId: Schema.NullOr(TurnId),
+  finishedAt: Schema.String,
+});
+export type MarkAutomationRunInterruptedInput = typeof MarkAutomationRunInterruptedInput.Type;
+
+export const MarkAutomationRunWaitingForApprovalInput = Schema.Struct({
+  id: AutomationRunId,
+  turnId: Schema.NullOr(TurnId),
+  updatedAt: Schema.String,
+});
+export type MarkAutomationRunWaitingForApprovalInput =
+  typeof MarkAutomationRunWaitingForApprovalInput.Type;
+
+export const GetAutomationRunByThreadInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type GetAutomationRunByThreadInput = typeof GetAutomationRunByThreadInput.Type;
+
+export const ListRecoverableAutomationRunsInput = Schema.Struct({
+  limit: Schema.Number,
+});
+export type ListRecoverableAutomationRunsInput = typeof ListRecoverableAutomationRunsInput.Type;
+
+export const CountActiveAutomationRunsInput = Schema.Struct({
+  automationId: AutomationId,
+});
+export type CountActiveAutomationRunsInput = typeof CountActiveAutomationRunsInput.Type;
+
+export const DisableAutomationDefinitionInput = Schema.Struct({
+  id: AutomationId,
+  now: Schema.String,
+});
+export type DisableAutomationDefinitionInput = typeof DisableAutomationDefinitionInput.Type;
+
+export const IncrementAutomationIterationInput = Schema.Struct({
+  id: AutomationId,
+  now: Schema.String,
+});
+export type IncrementAutomationIterationInput = typeof IncrementAutomationIterationInput.Type;
 
 export const AcquireAutomationSchedulerLeaseInput = Schema.Struct({
   leaseKey: Schema.String,
@@ -127,9 +178,33 @@ export interface AutomationRepositoryShape {
   readonly markRunFailed: (
     input: MarkAutomationRunFailedInput,
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
+  readonly markRunSucceeded: (
+    input: MarkAutomationRunSucceededInput,
+  ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
+  readonly markRunInterrupted: (
+    input: MarkAutomationRunInterruptedInput,
+  ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
+  readonly markRunWaitingForApproval: (
+    input: MarkAutomationRunWaitingForApprovalInput,
+  ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
   readonly cancelRun: (
     input: AutomationCancelRunInput & { readonly now: string },
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
+  readonly getRunByThreadId: (
+    input: GetAutomationRunByThreadInput,
+  ) => Effect.Effect<Option.Option<AutomationRun>, AutomationRepositoryError>;
+  readonly listRecoverableRuns: (
+    input: ListRecoverableAutomationRunsInput,
+  ) => Effect.Effect<ReadonlyArray<AutomationRun>, AutomationRepositoryError>;
+  readonly countActiveRunsForDefinition: (
+    input: CountActiveAutomationRunsInput,
+  ) => Effect.Effect<number, AutomationRepositoryError>;
+  readonly disableDefinition: (
+    input: DisableAutomationDefinitionInput,
+  ) => Effect.Effect<void, AutomationRepositoryError>;
+  readonly incrementDefinitionIterationCount: (
+    input: IncrementAutomationIterationInput,
+  ) => Effect.Effect<void, AutomationRepositoryError>;
   readonly tryAcquireSchedulerLease: (
     input: AcquireAutomationSchedulerLeaseInput,
   ) => Effect.Effect<boolean, AutomationRepositoryError>;

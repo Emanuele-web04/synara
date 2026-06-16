@@ -2,12 +2,15 @@ import {
   type AutomationCreateInput,
   type AutomationDefinition,
   type AutomationListResult,
+  type AutomationMode,
   type AutomationRun,
   type AutomationSchedule,
+  type AutomationStreamEvent,
   type AutomationUpdateInput,
   type AutomationWorktreeMode,
   type ProjectId,
   type RuntimeMode,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -39,6 +42,7 @@ import {
 import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
+import { resolveThreadPickerTitle } from "./-chatThreadRoute.logic";
 
 export const Route = createFileRoute("/_chat/automations")({
   component: AutomationsRouteView,
@@ -61,18 +65,23 @@ type AutomationFormState = {
   readonly dayOfWeek: string;
   readonly runtimeMode: RuntimeMode;
   readonly worktreeMode: AutomationWorktreeMode;
+  readonly mode: AutomationMode;
+  readonly targetThreadId: string;
+  readonly maxIterations: string;
+  readonly stopOnError: boolean;
 };
 
 function formatDateTime(value: string | null): string {
   if (!value) return "Not scheduled";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, {
+  return `${new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
-  }).format(date);
+    timeZone: "UTC",
+  }).format(date)} UTC`;
 }
 
 function formatSchedule(schedule: AutomationSchedule): string {
@@ -92,7 +101,9 @@ function weekdayLabel(value: number): string {
   return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][value] ?? "Sun";
 }
 
-function runStatusVariant(status: AutomationRun["status"]): "success" | "warning" | "error" | "info" | "outline" {
+function runStatusVariant(
+  status: AutomationRun["status"],
+): "success" | "warning" | "error" | "info" | "outline" {
   switch (status) {
     case "succeeded":
       return "success";
@@ -131,11 +142,18 @@ function formFromDefinition(
     enabled: definition?.enabled ?? true,
     scheduleType: schedule.type,
     intervalMinutes:
-      schedule.type === "interval" ? String(Math.max(1, Math.round(schedule.everySeconds / 60))) : "60",
-    timeOfDay: schedule.type === "daily" || schedule.type === "weekly" ? schedule.timeOfDay : "09:00",
+      schedule.type === "interval"
+        ? String(Math.max(1, Math.round(schedule.everySeconds / 60)))
+        : "60",
+    timeOfDay:
+      schedule.type === "daily" || schedule.type === "weekly" ? schedule.timeOfDay : "09:00",
     dayOfWeek: schedule.type === "weekly" ? String(schedule.dayOfWeek) : "1",
     runtimeMode: definition?.runtimeMode ?? "approval-required",
     worktreeMode: definition?.worktreeMode ?? "auto",
+    mode: definition?.mode ?? "standalone",
+    targetThreadId: definition?.targetThreadId ?? "",
+    maxIterations: definition?.maxIterations != null ? String(definition.maxIterations) : "",
+    stopOnError: definition?.stopOnError ?? true,
   };
 }
 
@@ -154,7 +172,10 @@ function scheduleFromForm(form: AutomationFormState): AutomationSchedule {
   return { type: "manual" };
 }
 
-function projectModelSelection(projects: ReturnType<typeof useStore.getState>["projects"], projectId: string) {
+function projectModelSelection(
+  projects: ReturnType<typeof useStore.getState>["projects"],
+  projectId: string,
+) {
   return (
     projects.find((project) => project.id === projectId)?.defaultModelSelection ??
     defaultModelSelection
@@ -165,6 +186,7 @@ function createInputFromForm(
   form: AutomationFormState,
   projects: ReturnType<typeof useStore.getState>["projects"],
 ): AutomationCreateInput {
+  const maxIterations = form.maxIterations.trim() ? Number.parseInt(form.maxIterations, 10) : null;
   return {
     name: form.name.trim(),
     projectId: form.projectId as ProjectId,
@@ -175,6 +197,9 @@ function createInputFromForm(
     runtimeMode: form.runtimeMode,
     interactionMode: "default",
     worktreeMode: form.worktreeMode,
+    mode: form.mode,
+    targetThreadId: form.mode === "heartbeat" ? (form.targetThreadId as ThreadId) : null,
+    ...(form.mode === "heartbeat" ? { maxIterations, stopOnError: form.stopOnError } : {}),
   };
 }
 
@@ -189,10 +214,59 @@ function updateInputFromForm(
   };
 }
 
+const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function isFormSubmittable(form: AutomationFormState): boolean {
+  if (!form.name.trim() || !form.prompt.trim() || !form.projectId) return false;
+  if (form.mode === "heartbeat" && !form.targetThreadId) return false;
+  if (
+    (form.scheduleType === "daily" || form.scheduleType === "weekly") &&
+    !TIME_OF_DAY_PATTERN.test(form.timeOfDay)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+const EMPTY_AUTOMATION_LIST: AutomationListResult = { definitions: [], runs: [] };
+
+function applyAutomationEvent(
+  prev: AutomationListResult | undefined,
+  event: AutomationStreamEvent,
+): AutomationListResult {
+  const base = prev ?? EMPTY_AUTOMATION_LIST;
+  switch (event.type) {
+    case "snapshot":
+      return { definitions: event.definitions, runs: event.runs };
+    case "definition-upserted": {
+      const exists = base.definitions.some((definition) => definition.id === event.definition.id);
+      const definitions = exists
+        ? base.definitions.map((definition) =>
+            definition.id === event.definition.id ? event.definition : definition,
+          )
+        : [event.definition, ...base.definitions];
+      return { definitions, runs: base.runs };
+    }
+    case "definition-deleted":
+      return {
+        definitions: base.definitions.filter((definition) => definition.id !== event.automationId),
+        runs: base.runs.filter((run) => run.automationId !== event.automationId),
+      };
+    case "run-upserted": {
+      const exists = base.runs.some((run) => run.id === event.run.id);
+      const runs = exists
+        ? base.runs.map((run) => (run.id === event.run.id ? event.run : run))
+        : [event.run, ...base.runs];
+      return { definitions: base.definitions, runs };
+    }
+  }
+}
+
 function AutomationsRouteView() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const projects = useStore((state) => state.projects);
+  const threads = useStore((state) => state.threads);
   const [filter, setFilter] = useState<AutomationFilter>("all");
   const [editingDefinition, setEditingDefinition] = useState<AutomationDefinition | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -210,14 +284,9 @@ function AutomationsRouteView() {
   useEffect(() => {
     const api = ensureNativeApi();
     return api.automation.onEvent((event) => {
-      if (event.type === "snapshot") {
-        queryClient.setQueryData<AutomationListResult>(automationQueryKey, {
-          definitions: event.definitions,
-          runs: event.runs,
-        });
-        return;
-      }
-      void queryClient.invalidateQueries({ queryKey: automationQueryKey });
+      queryClient.setQueryData<AutomationListResult>(automationQueryKey, (prev) =>
+        applyAutomationEvent(prev, event),
+      );
     });
   }, [queryClient]);
 
@@ -248,7 +317,8 @@ function AutomationsRouteView() {
       ensureNativeApi().automation.runNow({ automationId: definition.id }),
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: automationQueryKey });
-      if (result.run.threadId) void navigate({ to: "/$threadId", params: { threadId: result.run.threadId } });
+      if (result.run.threadId)
+        void navigate({ to: "/$threadId", params: { threadId: result.run.threadId } });
     },
     onError: (error) => toastManager.add({ type: "error", title: error.message }),
   });
@@ -291,7 +361,7 @@ function AutomationsRouteView() {
   };
 
   const submitForm = () => {
-    if (!form.name.trim() || !form.prompt.trim() || !form.projectId) return;
+    if (!isFormSubmittable(form)) return;
     if (editingDefinition) {
       updateMutation.mutate(updateInputFromForm(editingDefinition, form, projects));
       return;
@@ -321,7 +391,12 @@ function AutomationsRouteView() {
             <RefreshCwIcon className="size-4" />
             Refresh
           </Button>
-          <Button type="button" size="sm" onClick={openCreateDialog} disabled={projects.length === 0}>
+          <Button
+            type="button"
+            size="sm"
+            onClick={openCreateDialog}
+            disabled={projects.length === 0}
+          >
             <PlusIcon className="size-4" />
             New
           </Button>
@@ -336,6 +411,7 @@ function AutomationsRouteView() {
                 <button
                   key={value}
                   type="button"
+                  aria-pressed={filter === value}
                   className={cn(
                     "h-7 rounded-sm px-3 text-xs font-medium text-muted-foreground transition-colors",
                     filter === value && "bg-muted text-foreground",
@@ -366,16 +442,22 @@ function AutomationsRouteView() {
                   key={definition.id}
                   definition={definition}
                   projectTitle={
-                    projects.find((project) => project.id === definition.projectId)?.title ??
+                    projects.find((project) => project.id === definition.projectId)?.name ??
                     "Unknown project"
                   }
                   runs={runsByAutomationId.get(definition.id) ?? []}
                   onEdit={() => openEditDialog(definition)}
                   onDelete={() => void deleteDefinition(definition)}
                   onRunNow={() => runNowMutation.mutate(definition)}
-                  onOpenThread={(threadId) => void navigate({ to: "/$threadId", params: { threadId } })}
+                  onOpenThread={(threadId) =>
+                    void navigate({ to: "/$threadId", params: { threadId } })
+                  }
                   onCancelRun={(run) => cancelRunMutation.mutate(run)}
-                  busy={runNowMutation.isPending || deleteMutation.isPending || cancelRunMutation.isPending}
+                  busy={
+                    runNowMutation.isPending ||
+                    deleteMutation.isPending ||
+                    cancelRunMutation.isPending
+                  }
                 />
               ))}
             </div>
@@ -388,6 +470,7 @@ function AutomationsRouteView() {
         editing={editingDefinition !== null}
         form={form}
         projects={projects}
+        threads={threads}
         onOpenChange={setDialogOpen}
         onFormChange={setForm}
         onSubmit={submitForm}
@@ -428,6 +511,7 @@ function AutomationDefinitionRow({
             <Badge variant={definition.enabled ? "success" : "outline"}>
               {definition.enabled ? "Enabled" : "Paused"}
             </Badge>
+            {definition.mode === "heartbeat" ? <Badge variant="info">Loop</Badge> : null}
             <Badge variant="outline">{definition.runtimeMode}</Badge>
             <Badge variant="outline">{definition.worktreeMode}</Badge>
           </div>
@@ -435,8 +519,15 @@ function AutomationDefinitionRow({
             <span>{projectTitle}</span>
             <span>{formatSchedule(definition.schedule)}</span>
             <span>Next: {formatDateTime(definition.nextRunAt)}</span>
+            {definition.maxIterations != null ? (
+              <span>
+                {definition.iterationCount}/{definition.maxIterations} runs
+              </span>
+            ) : null}
           </div>
-          <p className="line-clamp-2 max-w-3xl text-sm text-muted-foreground">{definition.prompt}</p>
+          <p className="line-clamp-2 max-w-3xl text-sm text-muted-foreground">
+            {definition.prompt}
+          </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onRunNow}>
@@ -446,7 +537,13 @@ function AutomationDefinitionRow({
           <Button type="button" size="icon-sm" variant="ghost" aria-label="Edit" onClick={onEdit}>
             <PencilIcon className="size-4" />
           </Button>
-          <Button type="button" size="icon-sm" variant="ghost" aria-label="Delete" onClick={onDelete}>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Delete"
+            onClick={onDelete}
+          >
             <Trash2 className="size-4" />
           </Button>
         </div>
@@ -468,20 +565,29 @@ function AutomationDefinitionRow({
                       {formatDateTime(run.scheduledFor)}
                     </span>
                   </div>
-                  {run.error ? <div className="mt-1 truncate text-destructive">{run.error}</div> : null}
+                  {run.error ? (
+                    <div className="mt-1 truncate text-destructive">{run.error}</div>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-1">
-                  {run.threadId ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => onOpenThread(run.threadId)}
-                    >
-                      Open
-                    </Button>
-                  ) : null}
-                  {run.status === "running" || run.status === "pending" || run.status === "claimed" ? (
+                  {run.threadId
+                    ? (() => {
+                        const threadId = run.threadId;
+                        return (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => onOpenThread(threadId)}
+                          >
+                            Open
+                          </Button>
+                        );
+                      })()
+                    : null}
+                  {run.status === "running" ||
+                  run.status === "pending" ||
+                  run.status === "claimed" ? (
                     <Button
                       type="button"
                       size="icon-sm"
@@ -509,6 +615,7 @@ function AutomationDialog({
   editing,
   form,
   projects,
+  threads,
   onOpenChange,
   onFormChange,
   onSubmit,
@@ -518,6 +625,7 @@ function AutomationDialog({
   readonly editing: boolean;
   readonly form: AutomationFormState;
   readonly projects: ReturnType<typeof useStore.getState>["projects"];
+  readonly threads: ReturnType<typeof useStore.getState>["threads"];
   readonly onOpenChange: (open: boolean) => void;
   readonly onFormChange: (form: AutomationFormState) => void;
   readonly onSubmit: () => void;
@@ -525,6 +633,7 @@ function AutomationDialog({
 }) {
   const setField = <K extends keyof AutomationFormState>(key: K, value: AutomationFormState[K]) =>
     onFormChange({ ...form, [key]: value });
+  const projectThreads = threads.filter((thread) => thread.projectId === form.projectId);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -546,7 +655,7 @@ function AutomationDialog({
             >
               {projects.map((project) => (
                 <option key={project.id} value={project.id}>
-                  {project.title}
+                  {project.name}
                 </option>
               ))}
             </select>
@@ -558,13 +667,26 @@ function AutomationDialog({
               onChange={(event) => setField("prompt", event.target.value)}
             />
           </label>
+          <label className="grid gap-1.5 text-xs font-medium">
+            Mode
+            <select
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+              value={form.mode}
+              onChange={(event) => setField("mode", event.target.value as AutomationMode)}
+            >
+              <option value="standalone">Standalone</option>
+              <option value="heartbeat">Heartbeat</option>
+            </select>
+          </label>
           <div className="grid gap-3 md:grid-cols-2">
             <label className="grid gap-1.5 text-xs font-medium">
               Schedule
               <select
                 className="h-9 rounded-md border border-input bg-background px-3 text-sm"
                 value={form.scheduleType}
-                onChange={(event) => setField("scheduleType", event.target.value as FormScheduleType)}
+                onChange={(event) =>
+                  setField("scheduleType", event.target.value as FormScheduleType)
+                }
               >
                 <option value="manual">Manual</option>
                 <option value="interval">Interval</option>
@@ -620,21 +742,61 @@ function AutomationDialog({
                 <option value="full-access">Full access</option>
               </select>
             </label>
-            <label className="grid gap-1.5 text-xs font-medium">
-              Workspace
-              <select
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                value={form.worktreeMode}
-                onChange={(event) =>
-                  setField("worktreeMode", event.target.value as AutomationWorktreeMode)
-                }
-              >
-                <option value="auto">Auto</option>
-                <option value="worktree">Worktree</option>
-                <option value="local">Local</option>
-              </select>
-            </label>
+            {form.mode === "standalone" ? (
+              <label className="grid gap-1.5 text-xs font-medium">
+                Workspace
+                <select
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  value={form.worktreeMode}
+                  onChange={(event) =>
+                    setField("worktreeMode", event.target.value as AutomationWorktreeMode)
+                  }
+                >
+                  <option value="auto">Auto</option>
+                  <option value="worktree">Worktree</option>
+                  <option value="local">Local</option>
+                </select>
+              </label>
+            ) : null}
+            {form.mode === "heartbeat" ? (
+              <>
+                <label className="grid gap-1.5 text-xs font-medium">
+                  Target thread
+                  <select
+                    className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                    value={form.targetThreadId}
+                    onChange={(event) => setField("targetThreadId", event.target.value)}
+                  >
+                    <option value="">Select a thread</option>
+                    {projectThreads.map((thread) => (
+                      <option key={thread.id} value={thread.id}>
+                        {resolveThreadPickerTitle(thread.title)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1.5 text-xs font-medium">
+                  Max iterations
+                  <Input
+                    type="number"
+                    min={1}
+                    value={form.maxIterations}
+                    onChange={(event) => setField("maxIterations", event.target.value)}
+                  />
+                </label>
+              </>
+            ) : null}
           </div>
+          {form.mode === "heartbeat" ? (
+            <label className="flex items-center gap-2 text-xs font-medium">
+              <input
+                type="checkbox"
+                checked={form.stopOnError}
+                onChange={(event) => setField("stopOnError", event.target.checked)}
+              />
+              Stop on error
+            </label>
+          ) : null}
           <label className="flex items-center gap-2 text-xs font-medium">
             <input
               type="checkbox"
@@ -648,11 +810,7 @@ function AutomationDialog({
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button
-            type="button"
-            onClick={onSubmit}
-            disabled={busy || !form.name.trim() || !form.prompt.trim() || !form.projectId}
-          >
+          <Button type="button" onClick={onSubmit} disabled={busy || !isFormSubmittable(form)}>
             {editing ? "Save" : "Create"}
           </Button>
         </DialogFooter>
