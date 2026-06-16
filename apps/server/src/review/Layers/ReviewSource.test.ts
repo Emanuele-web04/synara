@@ -408,8 +408,8 @@ it.effect("pushes native review status and check filters without the local candi
     expect(numbers(result)).toEqual([1, 3]);
     expect(result.meta).toEqual({
       requestedLimit: 200,
-      resultLimit: 100,
-      candidateLimit: 100,
+      resultLimit: 200,
+      candidateLimit: 200,
       candidateCount: 4,
       candidateLimitReached: false,
       matchedCount: 2,
@@ -420,14 +420,14 @@ it.effect("pushes native review status and check filters without the local candi
       {
         cwd: "/repo",
         state: "open",
-        limit: 100,
+        limit: 200,
         reviewStatus: "approved",
         checksStatuses: ["failing"],
       },
     ]);
     expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
       state: "open",
-      limit: 100,
+      limit: 200,
       search: null,
       author: null,
       authors: [],
@@ -468,7 +468,7 @@ it.effect("keeps a larger bounded candidate window when status still needs local
     expect(numbers(result)).toHaveLength(60);
     expect(result.meta).toEqual({
       requestedLimit: 200,
-      resultLimit: 100,
+      resultLimit: 200,
       candidateLimit: 1000,
       candidateCount: 120,
       candidateLimitReached: false,
@@ -481,7 +481,7 @@ it.effect("keeps a larger bounded candidate window when status still needs local
     ]);
     expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
       state: "open",
-      limit: 100,
+      limit: 200,
       search: null,
       author: null,
       authors: [],
@@ -546,8 +546,8 @@ it.effect("pushes a single check filter to GitHub without the local candidate wi
     expect(numbers(result)).toEqual([1]);
     expect(result.meta).toEqual({
       requestedLimit: 200,
-      resultLimit: 100,
-      candidateLimit: 100,
+      resultLimit: 200,
+      candidateLimit: 200,
       candidateCount: 2,
       candidateLimitReached: false,
       matchedCount: 1,
@@ -558,13 +558,13 @@ it.effect("pushes a single check filter to GitHub without the local candidate wi
       {
         cwd: "/repo",
         state: "open",
-        limit: 100,
+        limit: 200,
         checksStatuses: ["passing"],
       },
     ]);
     expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
       state: "open",
-      limit: 100,
+      limit: 200,
       search: null,
       author: null,
       authors: [],
@@ -871,8 +871,8 @@ it.effect("pushes a single draft status to GitHub without the local candidate wi
     expect(numbers(result)).toEqual([1]);
     expect(result.meta).toEqual({
       requestedLimit: 200,
-      resultLimit: 100,
-      candidateLimit: 100,
+      resultLimit: 200,
+      candidateLimit: 200,
       candidateCount: 2,
       candidateLimitReached: false,
       matchedCount: 1,
@@ -883,13 +883,13 @@ it.effect("pushes a single draft status to GitHub without the local candidate wi
       {
         cwd: "/repo",
         state: "open",
-        limit: 100,
+        limit: 200,
         draft: true,
       },
     ]);
     expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
       state: "open",
-      limit: 100,
+      limit: 200,
       search: null,
       author: null,
       authors: [],

@@ -1,6 +1,6 @@
 import "../../index.css";
 
-import type { ReviewPullRequestSummary } from "@t3tools/contracts";
+import type { ReviewListPullRequestsResult, ReviewPullRequestSummary } from "@t3tools/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -110,13 +110,82 @@ describe("PullRequestList filters", () => {
         });
       });
 
-      await page.getByRole("button", { name: /Label/ }).click();
       await page.getByText("feature", { exact: true }).click();
       await vi.waitFor(() => {
         expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
           cwd: "/repo",
           labels: ["bug", "feature"],
         });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("loads a larger review window when the list scrolls near the bottom", async () => {
+    let resolveNextWindow:
+      | ((value: ReviewListPullRequestsResult) => void)
+      | null = null;
+    nativeApiMock.listPullRequests.mockResolvedValueOnce({
+      pullRequests: Array.from({ length: 50 }, (_, index) =>
+        pullRequest({
+          number: index + 1,
+          title: `Scrollable PR ${String(index + 1)}`,
+          labels: [],
+        }),
+      ),
+      meta: {
+        resultLimit: 50,
+        candidateLimit: 50,
+        candidateCount: 50,
+        candidateLimitReached: true,
+        matchedCount: 50,
+        returnedCount: 50,
+        bounded: true,
+      },
+    });
+    const mounted = await mountList([]);
+
+    try {
+      await expect.element(page.getByText("Scrollable PR 1", { exact: true })).toBeVisible();
+      nativeApiMock.listPullRequests.mockImplementationOnce(
+        () =>
+          new Promise<ReviewListPullRequestsResult>((resolve) => {
+            resolveNextWindow = resolve;
+          }),
+      );
+
+      const list = document.querySelector<HTMLElement>('[role="list"]');
+      expect(list).not.toBeNull();
+      list!.scrollTop = list!.scrollHeight - list!.clientHeight;
+      list!.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+      await vi.waitFor(() => {
+        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+          cwd: "/repo",
+          limit: 100,
+        });
+      });
+      await expect.element(page.getByText("Scrollable PR 1", { exact: true })).toBeVisible();
+
+      resolveNextWindow?.({
+        pullRequests: Array.from({ length: 100 }, (_, index) =>
+          pullRequest({
+            number: index + 1,
+            title: `Scrollable PR ${String(index + 1)}`,
+            labels: [],
+          }),
+        ),
+        meta: {
+          requestedLimit: 100,
+          resultLimit: 100,
+          candidateLimit: 100,
+          candidateCount: 100,
+          candidateLimitReached: false,
+          matchedCount: 100,
+          returnedCount: 100,
+          bounded: true,
+        },
       });
     } finally {
       await mounted.cleanup();

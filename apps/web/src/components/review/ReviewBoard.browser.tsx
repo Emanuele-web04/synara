@@ -169,6 +169,64 @@ describe("ReviewBoard performance", () => {
     }
   });
 
+  it("loads a larger review window when a board column scrolls near the bottom", async () => {
+    const firstWindow = makePullRequests(50);
+    let resolveNextWindow:
+      | ((value: ReviewListPullRequestsResult) => void)
+      | null = null;
+    const mounted = await mountBoard({
+      pullRequests: firstWindow,
+      meta: {
+        resultLimit: 50,
+        candidateLimit: 50,
+        candidateCount: 50,
+        candidateLimitReached: true,
+        matchedCount: 50,
+        returnedCount: 50,
+        bounded: true,
+      },
+    });
+
+    try {
+      await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
+      nativeApiMock.listPullRequests.mockImplementationOnce(
+        () =>
+          new Promise<ReviewListPullRequestsResult>((resolve) => {
+            resolveNextWindow = resolve;
+          }),
+      );
+
+      const list = document.querySelector<HTMLElement>('[role="list"]');
+      expect(list).not.toBeNull();
+      list!.scrollTop = list!.scrollHeight - list!.clientHeight;
+      list!.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+      await vi.waitFor(() => {
+        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+          cwd: "/repo",
+          limit: 100,
+        });
+      });
+      await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
+
+      resolveNextWindow?.({
+        pullRequests: makePullRequests(100),
+        meta: {
+          requestedLimit: 100,
+          resultLimit: 100,
+          candidateLimit: 100,
+          candidateCount: 100,
+          candidateLimitReached: false,
+          matchedCount: 100,
+          returnedCount: 100,
+          bounded: true,
+        },
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("trusts server search results after the debounced query catches up", async () => {
     const pullRequests = [
       {

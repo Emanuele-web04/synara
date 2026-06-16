@@ -1,6 +1,6 @@
 import type { ReviewPullRequestSummary } from "@t3tools/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { ReactNode } from "react";
+import type { ReactNode, UIEvent } from "react";
 import { useRef } from "react";
 
 import { cn } from "~/lib/utils";
@@ -13,10 +13,21 @@ export function VirtualizedPullRequestRows(props: {
   rowClassName?: string;
   overscan?: number;
   threshold?: number;
+  onEndReached?: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const threshold = props.threshold ?? 0;
   const shouldVirtualize = props.pullRequests.length > threshold;
+  const handleScroll = (event: UIEvent<HTMLDivElement | HTMLUListElement>) => {
+    if (!props.onEndReached) {
+      return;
+    }
+    const element = event.currentTarget;
+    const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    if (distanceToBottom <= props.estimateSize * 3) {
+      props.onEndReached();
+    }
+  };
   const virtualizer = useVirtualizer({
     count: props.pullRequests.length,
     estimateSize: () => props.estimateSize,
@@ -31,7 +42,7 @@ export function VirtualizedPullRequestRows(props: {
 
   if (!shouldVirtualize) {
     return (
-      <ul className={cn("overflow-y-auto", props.className)}>
+      <ul className={cn("overflow-y-auto", props.className)} onScroll={handleScroll}>
         {props.pullRequests.map((pullRequest) => (
           <li key={pullRequest.number} className={props.rowClassName}>
             {props.renderPullRequest(pullRequest)}
@@ -44,7 +55,12 @@ export function VirtualizedPullRequestRows(props: {
   const virtualItems = virtualizer.getVirtualItems();
 
   return (
-    <div ref={scrollRef} role="list" className={cn("overflow-y-auto", props.className)}>
+    <div
+      ref={scrollRef}
+      role="list"
+      className={cn("overflow-y-auto", props.className)}
+      onScroll={handleScroll}
+    >
       <div
         className="relative w-full"
         style={{ height: virtualizer.getTotalSize() }}

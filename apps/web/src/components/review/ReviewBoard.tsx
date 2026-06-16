@@ -40,6 +40,8 @@ import {
 } from "./reviewBoardColumns";
 
 const REVIEW_BOARD_CARD_ROW_HEIGHT = 128;
+const REVIEW_LIST_PAGE_SIZE = 50;
+const REVIEW_LIST_MAX_LIMIT = 500;
 
 function viewNeedsViewer(view: ReviewBoardView): boolean {
   return view === "mine" || view === "needs-my-review";
@@ -53,6 +55,10 @@ export function ReviewBoard(props: { cwd: string | null }) {
   const [search, setSearch] = useState("");
   const [serverSearch] = useDebouncedValue(search, { wait: 250 });
   const [activeFilters, setActiveFilters] = useState<ActiveReviewFilter[]>([]);
+  const [resultLimitState, setResultLimitState] = useState<{
+    scopeKey: string;
+    limit: number;
+  } | null>(null);
 
   const shouldLoadViewer = cwd !== null && viewNeedsViewer(view);
   const viewerQuery = useQuery({
@@ -78,11 +84,18 @@ export function ReviewBoard(props: { cwd: string | null }) {
     () => ({ ...toReviewServerListFilters(activeFilters), ...viewServerFilters }),
     [activeFilters, viewServerFilters],
   );
+  const listScopeKey = useMemo(
+    () => JSON.stringify([cwd, listState, serverSearch.trim(), serverFilters]),
+    [cwd, listState, serverSearch, serverFilters],
+  );
+  const resultLimit =
+    resultLimitState?.scopeKey === listScopeKey ? resultLimitState.limit : null;
   const pullRequestsQuery = useQuery(
     {
       ...reviewListPullRequestsQueryOptions({
         cwd: viewerFilterReady ? cwd : null,
         ...(listState === "merged" ? { state: listState } : {}),
+        ...(resultLimit !== null ? { limit: resultLimit } : {}),
         search: serverSearch,
         ...serverFilters,
       }),
@@ -127,6 +140,26 @@ export function ReviewBoard(props: { cwd: string | null }) {
     !hasPullRequestListData &&
     (pullRequestsQuery.isFetching || (shouldLoadViewer && viewerQuery.isFetching));
   const isRefreshing = hasPullRequestListData && pullRequestsQuery.isFetching;
+  const listMeta = pullRequestsQuery.data?.meta;
+  const canLoadMore =
+    listMeta !== undefined &&
+    (listMeta.candidateLimitReached || listMeta.matchedCount > listMeta.returnedCount) &&
+    (resultLimit ?? listMeta.resultLimit) < REVIEW_LIST_MAX_LIMIT;
+  const loadMore = () => {
+    if (!canLoadMore || pullRequestsQuery.isFetching) {
+      return;
+    }
+    setResultLimitState((current) => {
+      const currentLimit = current?.scopeKey === listScopeKey ? current.limit : null;
+      return {
+        scopeKey: listScopeKey,
+        limit: Math.min(
+          (currentLimit ?? listMeta?.resultLimit ?? 0) + REVIEW_LIST_PAGE_SIZE,
+          REVIEW_LIST_MAX_LIMIT,
+        ),
+      };
+    });
+  };
 
   if (cwd === null) {
     return (
@@ -237,6 +270,7 @@ export function ReviewBoard(props: { cwd: string | null }) {
                   column={column}
                   pullRequests={grouped[column.id]}
                   cwd={cwd}
+                  onEndReached={loadMore}
                 />
               ))}
             </div>
@@ -251,8 +285,9 @@ function ReviewBoardColumn(props: {
   column: (typeof REVIEW_BOARD_COLUMNS)[number];
   pullRequests: readonly ReviewPullRequestSummary[];
   cwd: string;
+  onEndReached: () => void;
 }) {
-  const { column, pullRequests, cwd } = props;
+  const { column, pullRequests, cwd, onEndReached } = props;
   const isEmpty = pullRequests.length === 0;
   return (
     <section className="flex h-full w-full shrink-0 flex-col gap-2 rounded-[1.5rem] border border-border/60 bg-card/55 p-2.5 shadow-sm md:w-72">
@@ -277,6 +312,7 @@ function ReviewBoardColumn(props: {
           threshold={30}
           className="min-h-0 flex-1"
           rowClassName="h-32 pb-2"
+          onEndReached={onEndReached}
           renderPullRequest={(pullRequest) => (
             <ReviewBoardCard pullRequest={pullRequest} cwd={cwd} />
           )}
