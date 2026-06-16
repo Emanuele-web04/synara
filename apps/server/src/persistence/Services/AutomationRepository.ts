@@ -83,6 +83,9 @@ export interface AutomationRepositoryShape {
   readonly createDefinition: (
     input: CreateAutomationDefinitionInput,
   ) => Effect.Effect<AutomationDefinition, AutomationRepositoryError>;
+  readonly saveDefinition: (
+    input: AutomationDefinition,
+  ) => Effect.Effect<AutomationDefinition, AutomationRepositoryError>;
   readonly getDefinitionById: (
     input: GetAutomationDefinitionInput,
   ) => Effect.Effect<Option.Option<AutomationDefinition>, AutomationRepositoryError>;

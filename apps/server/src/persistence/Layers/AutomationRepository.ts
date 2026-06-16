@@ -170,6 +170,29 @@ const makeAutomationRepository = Effect.gen(function* () {
       `,
   });
 
+  const updateDefinitionRow = SqlSchema.void({
+    Request: AutomationDefinitionDbRow,
+    execute: (definition) =>
+      sql`
+        UPDATE automation_definitions
+        SET project_id = ${definition.projectId},
+            source_thread_id = ${definition.sourceThreadId},
+            name = ${definition.name},
+            prompt = ${definition.prompt},
+            schedule_json = ${definition.schedule},
+            enabled = ${definition.enabled},
+            next_run_at = ${definition.nextRunAt},
+            model_selection_json = ${definition.modelSelection},
+            provider_options_json = ${definition.providerOptions},
+            runtime_mode = ${definition.runtimeMode},
+            interaction_mode = ${definition.interactionMode},
+            worktree_mode = ${definition.worktreeMode},
+            updated_at = ${definition.updatedAt},
+            archived_at = ${definition.archivedAt}
+        WHERE automation_id = ${definition.id}
+      `,
+  });
+
   const listDefinitionRows = SqlSchema.findAll({
     Request: Schema.Struct({
       projectId: Schema.optional(ProjectId),
@@ -476,6 +499,16 @@ const makeAutomationRepository = Effect.gen(function* () {
     );
   };
 
+  const saveDefinition: AutomationRepositoryShape["saveDefinition"] = (definition) =>
+    updateDefinitionRow({
+      ...definition,
+      enabled: definition.enabled ? 1 : 0,
+      providerOptions: definition.providerOptions ?? null,
+    }).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.saveDefinition:update")),
+      Effect.as(definition),
+    );
+
   const getDefinitionById: AutomationRepositoryShape["getDefinitionById"] = (input) =>
     getDefinitionRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("AutomationRepository.getDefinitionById:query")),
@@ -612,6 +645,7 @@ const makeAutomationRepository = Effect.gen(function* () {
 
   return {
     createDefinition,
+    saveDefinition,
     getDefinitionById,
     archiveDefinition,
     list,
