@@ -353,37 +353,23 @@ it.effect("keeps owner-qualified head selectors distinct for fork pull requests"
   });
 });
 
-it.effect("keeps branch, URL, and reviewer matches returned by GitHub search", () => {
+it.effect("trusts pull requests returned by GitHub search", () => {
   const { layer, recorded } = makeLayer({
     pullRequests: [
-      ghPr({ number: 1, title: "Branch match", headRefName: "feature/search-panel" }),
-      ghPr({ number: 2, title: "URL match", url: "https://github.com/acme/demo/pull/221" }),
-      ghPr({ number: 3, title: "Reviewer match", reviewRequests: ["tyler"] }),
-      ghPr({ number: 4, title: "Unrelated" }),
+      ghPr({ number: 1, title: "Returned by GitHub title search" }),
+      ghPr({ number: 2, title: "No local substring match" }),
     ],
   });
 
   return Effect.gen(function* () {
-    const branchResult = yield* runList(layer, {
+    const result = yield* runList(layer, {
       cwd: "/repo",
-      search: "search-panel",
-    });
-    const urlResult = yield* runList(layer, {
-      cwd: "/repo",
-      search: "pull/221",
-    });
-    const reviewerResult = yield* runList(layer, {
-      cwd: "/repo",
-      search: "tyler",
+      search: "body-only-match",
     });
 
-    expect(numbers(branchResult)).toEqual([1]);
-    expect(numbers(urlResult)).toEqual([2]);
-    expect(numbers(reviewerResult)).toEqual([3]);
+    expect(numbers(result)).toEqual([1, 2]);
     expect(recorded.listCalls).toEqual([
-      { cwd: "/repo", state: "open", limit: 50, search: "search-panel" },
-      { cwd: "/repo", state: "open", limit: 50, search: "pull/221" },
-      { cwd: "/repo", state: "open", limit: 50, search: "tyler" },
+      { cwd: "/repo", state: "open", limit: 50, search: "body-only-match" },
     ]);
   });
 });

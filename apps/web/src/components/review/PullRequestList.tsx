@@ -39,16 +39,17 @@ export function PullRequestList(props: {
       ...serverFilters,
     }),
   );
+  const clientSearch = search.trim() === serverSearch.trim() ? "" : search;
 
   const allPullRequests = pullRequestsQuery.data?.pullRequests ?? [];
   const visible = useMemo(
     () =>
       sortReviewItems(
-        filterReviewPullRequests(allPullRequests, search, activeFilters),
+        filterReviewPullRequests(allPullRequests, clientSearch, activeFilters),
         sortId,
         reviewPullSortOptions,
       ),
-    [allPullRequests, search, activeFilters, sortId],
+    [allPullRequests, clientSearch, activeFilters, sortId],
   );
   const resultCountIsIncomplete =
     pullRequestsQuery.data?.meta?.candidateLimitReached === true &&

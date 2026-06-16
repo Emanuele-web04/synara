@@ -66,14 +66,15 @@ export function ReviewBoard(props: { cwd: string | null }) {
       ...serverFilters,
     }),
   );
+  const clientSearch = search.trim() === serverSearch.trim() ? "" : search;
 
   const byView = useMemo(() => {
     const all = pullRequestsQuery.data?.pullRequests ?? [];
     return filterByView(all, view, viewerLogin);
   }, [pullRequestsQuery.data, view, viewerLogin]);
   const visiblePullRequests = useMemo(
-    () => filterReviewPullRequests(byView, search, activeFilters),
-    [byView, search, activeFilters],
+    () => filterReviewPullRequests(byView, clientSearch, activeFilters),
+    [byView, clientSearch, activeFilters],
   );
   const grouped = useMemo(() => groupByColumn(visiblePullRequests), [visiblePullRequests]);
   const resultCountIsIncomplete =

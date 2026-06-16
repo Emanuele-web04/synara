@@ -113,6 +113,34 @@ describe("ReviewBoard performance", () => {
     }
   });
 
+  it("trusts server search results after the debounced query catches up", async () => {
+    const pullRequests = [
+      {
+        ...makePullRequests(1)[0],
+        number: 31,
+        title: "Returned by GitHub body search",
+      },
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+      await page.getByPlaceholder("Search PRs, #7870, or a GitHub URL").fill("body-only-match");
+
+      await vi.waitFor(() => {
+        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+          cwd: "/repo",
+          search: "body-only-match",
+        });
+      });
+      await expect.element(page.getByText("Returned by GitHub body search")).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("pushes the needs-my-review view to the server without emptying local results", async () => {
     const pullRequests = [
       {

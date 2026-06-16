@@ -169,26 +169,6 @@ function reviewColumn(summary: ReviewPullRequestSummary): string {
   return "needs-review";
 }
 
-function matchesSearch(summary: ReviewPullRequestSummary, search: string | null): boolean {
-  if (!search) {
-    return true;
-  }
-  const query = search.toLowerCase();
-  return (
-    summary.title.toLowerCase().includes(query) ||
-    String(summary.number).includes(query) ||
-    `#${String(summary.number)}`.includes(query) ||
-    summary.author.toLowerCase().includes(query) ||
-    summary.baseBranch.toLowerCase().includes(query) ||
-    summary.headBranch.toLowerCase().includes(query) ||
-    (summary.headSelector?.toLowerCase().includes(query) ?? false) ||
-    summary.url.toLowerCase().includes(query) ||
-    summary.labels.some((label) => label.toLowerCase().includes(query)) ||
-    summary.assignees.some((assignee) => assignee.toLowerCase().includes(query)) ||
-    summary.reviewRequests.some((reviewer) => reviewer.toLowerCase().includes(query))
-  );
-}
-
 function matchesListFilters(
   summary: ReviewPullRequestSummary,
   input: ReviewListPullRequestsInput,
@@ -206,7 +186,6 @@ function matchesListFilters(
   const columns = normalizedSet(input.columns);
   const checks = normalizedSet(input.checks);
   return (
-    matchesSearch(summary, normalizeOptionalText(input.search)) &&
     (!author || summary.author === author) &&
     (!reviewRequested || summary.reviewRequests.includes(reviewRequested)) &&
     (!baseBranch || summary.baseBranch === baseBranch) &&
