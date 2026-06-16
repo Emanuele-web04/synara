@@ -476,7 +476,7 @@ function EditRow({
   readonly children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 border-b border-border/60 pl-3 pr-1.5 text-xs last:border-b-0">
+    <div className="flex items-center justify-between gap-2 border-b border-border/60 pl-3 pr-1.5 text-xs transition-colors last:border-b-0 hover:bg-foreground/[0.03]">
       <span className="shrink-0 text-muted-foreground">{label}</span>
       {children}
     </div>
@@ -484,7 +484,7 @@ function EditRow({
 }
 
 const INLINE_CONTROL_CLASS =
-  "cursor-pointer rounded-md bg-transparent px-2 py-1.5 text-right text-xs font-medium text-foreground outline-none transition-colors hover:bg-[var(--color-background-elevated-secondary)] focus-visible:bg-[var(--color-background-elevated-secondary)]";
+  "cursor-pointer rounded-md bg-transparent px-2 py-1.5 text-right text-xs font-medium text-foreground outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring";
 
 function InlineSelect({
   value,
