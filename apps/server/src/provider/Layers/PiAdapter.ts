@@ -1,27 +1,17 @@
 import crypto from "node:crypto";
 import path from "node:path";
 
-import {
+import type {
   AuthStorage,
   ModelRegistry,
   SessionManager,
-  createAgentSessionFromServices,
-  createAgentSessionRuntime,
-  createAgentSessionServices,
-  getAgentDir,
-  type AgentSession as PiAgentSession,
-  type AgentSessionEvent,
-  type CreateAgentSessionRuntimeFactory,
-  type ExtensionUIContext,
+  AgentSession as PiAgentSession,
+  AgentSessionEvent,
+  CreateAgentSessionRuntimeFactory,
+  ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import {
-  getSupportedThinkingLevels,
-  type Api,
-  type ImageContent,
-  type Model,
-  type TextContent,
-} from "@earendil-works/pi-ai";
+import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import {
   ApprovalRequestId,
   type ChatAttachment,
@@ -72,11 +62,22 @@ const PI_THINKING_OPTIONS: ReadonlyArray<{
   { value: "high", label: "High", description: "Deeper reasoning" },
   { value: "xhigh", label: "Extra High", description: "Maximum reasoning" },
 ];
+const PI_DEFAULT_SUPPORTED_THINKING_LEVELS = new Set<ThinkingLevel>([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+]);
 
 type PiModelRegistry = Pick<ModelRegistry, "find" | "getAll" | "getAvailable">;
+type PiCodingAgentModule = typeof import("@earendil-works/pi-coding-agent");
+type PiAgentRuntime = Awaited<ReturnType<PiCodingAgentModule["createAgentSessionRuntime"]>>;
+
+let piCodingAgentModulePromise: Promise<PiCodingAgentModule> | undefined;
 
 interface PiSessionContext {
-  runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>>;
+  runtime: PiAgentRuntime;
   modelRegistry: PiModelRegistry;
   session: ProviderSession;
   turns: PiStoredTurn[];
@@ -145,6 +146,37 @@ function normalizePiThinkingLevel(value: string | null | undefined): ThinkingLev
   return isPiThinkingLevel(value) ? value : undefined;
 }
 
+// Loads the Pi SDK only when the Pi provider is actually used. The SDK brings in
+// a native clipboard module, so importing it during Synara startup can bloat the
+// desktop backend before any Pi session exists.
+async function loadPiCodingAgentModule(): Promise<PiCodingAgentModule> {
+  piCodingAgentModulePromise ??= import("@earendil-works/pi-coding-agent");
+  return piCodingAgentModulePromise;
+}
+
+function getLocalSupportedThinkingLevels(
+  model: Pick<Model<Api>, "reasoning" | "thinkingLevelMap">,
+): Set<ThinkingLevel> {
+  if (!model.reasoning) {
+    return new Set();
+  }
+
+  const thinkingLevelMap = model.thinkingLevelMap;
+  if (thinkingLevelMap && Object.keys(thinkingLevelMap).length > 0) {
+    return new Set(
+      PI_THINKING_OPTIONS.filter((option) => {
+        const mapped = thinkingLevelMap[option.value as keyof typeof thinkingLevelMap];
+        if (mapped === null) {
+          return false;
+        }
+        return mapped !== undefined || PI_DEFAULT_SUPPORTED_THINKING_LEVELS.has(option.value);
+      }).map((option) => option.value),
+    );
+  }
+
+  return new Set(PI_DEFAULT_SUPPORTED_THINKING_LEVELS);
+}
+
 // Mirrors Pi SDK clamping so model discovery does not advertise levels that will be ignored.
 export function getPiSupportedThinkingOptions(
   model: Pick<Model<Api>, "reasoning" | "thinkingLevelMap">,
@@ -152,7 +184,7 @@ export function getPiSupportedThinkingOptions(
   if (!model.reasoning) {
     return [];
   }
-  const supportedLevels = new Set(getSupportedThinkingLevels(model as Model<Api>));
+  const supportedLevels = getLocalSupportedThinkingLevels(model);
   return PI_THINKING_OPTIONS.filter((option) => supportedLevels.has(option.value));
 }
 
@@ -710,20 +742,26 @@ function mapMessageHistory(session: PiAgentSession): unknown[] {
   return items;
 }
 
-function makeAgentDir(agentDir: string | undefined): string {
-  return trimToUndefined(agentDir) ?? getAgentDir();
+function makeAgentDir(
+  agentDir: string | undefined,
+  piSdk: Pick<PiCodingAgentModule, "getAgentDir">,
+): string {
+  return trimToUndefined(agentDir) ?? piSdk.getAgentDir();
 }
 
 // Keep discovery registries isolated so extension provider registrations reflect
 // the current agent dir + project cwd instead of stale state from prior listings.
-function createPiModelRegistry(agentDir: string): {
+function createPiModelRegistry(
+  agentDir: string,
+  piSdk: Pick<PiCodingAgentModule, "AuthStorage" | "ModelRegistry">,
+): {
   readonly authStorage: AuthStorage;
   readonly registry: ModelRegistry;
 } {
-  const authStorage = AuthStorage.create(path.join(agentDir, "auth.json"));
+  const authStorage = piSdk.AuthStorage.create(path.join(agentDir, "auth.json"));
   return {
     authStorage,
-    registry: ModelRegistry.create(authStorage, path.join(agentDir, "models.json")),
+    registry: piSdk.ModelRegistry.create(authStorage, path.join(agentDir, "models.json")),
   };
 }
 
@@ -825,10 +863,25 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         ? yield* makeEventNdjsonLogger(options.nativeEventLogPath, { stream: "native" })
         : undefined);
 
-    const getModelRegistry = (agentDir: string): ModelRegistry => {
+    const loadPiSdk = (method: string) =>
+      Effect.tryPromise({
+        try: () => loadPiCodingAgentModule(),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method,
+            detail: toMessage(cause, "Failed to load Pi SDK."),
+            cause,
+          }),
+      });
+
+    const getModelRegistry = async (
+      agentDir: string,
+      piSdk: Pick<PiCodingAgentModule, "AuthStorage" | "ModelRegistry">,
+    ): Promise<ModelRegistry> => {
       const existing = modelRegistries.get(agentDir);
       if (existing) return existing;
-      const { registry } = createPiModelRegistry(agentDir);
+      const { registry } = createPiModelRegistry(agentDir, piSdk);
       modelRegistries.set(agentDir, registry);
       return registry;
     };
@@ -1510,20 +1563,21 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     };
 
     const createSdkRuntime = async (input: {
+      sdk: PiCodingAgentModule;
       cwd: string;
       agentDir: string;
       sessionManager: SessionManager;
       modelId?: string;
       thinkingLevel?: ThinkingLevel;
     }) => {
-      const registry = getModelRegistry(input.agentDir);
+      const registry = await getModelRegistry(input.agentDir, input.sdk);
       const createRuntime: CreateAgentSessionRuntimeFactory = async ({
         cwd,
         agentDir,
         sessionManager,
         sessionStartEvent,
       }) => {
-        const services = await createAgentSessionServices({
+        const services = await input.sdk.createAgentSessionServices({
           cwd,
           agentDir,
           modelRegistry: registry,
@@ -1535,7 +1589,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           );
         }
         return {
-          ...(await createAgentSessionFromServices({
+          ...(await input.sdk.createAgentSessionFromServices({
             services,
             sessionManager,
             ...(sessionStartEvent ? { sessionStartEvent } : {}),
@@ -1546,7 +1600,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           diagnostics: services.diagnostics,
         };
       };
-      const runtime = await createAgentSessionRuntime(createRuntime, {
+      const runtime = await input.sdk.createAgentSessionRuntime(createRuntime, {
         cwd: input.sessionManager.getCwd(),
         agentDir: input.agentDir,
         sessionManager: input.sessionManager,
@@ -1557,11 +1611,12 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const startSession: PiAdapterShape["startSession"] = (input) =>
       Effect.gen(function* () {
         const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
-        const agentDir = makeAgentDir(input.providerOptions?.pi?.agentDir);
+        const piSdk = yield* loadPiSdk("session/start");
+        const agentDir = makeAgentDir(input.providerOptions?.pi?.agentDir, piSdk);
         const sessionFile = extractResumeSessionFile(input.resumeCursor);
         const sessionManager = sessionFile
-          ? SessionManager.open(sessionFile, undefined, cwd)
-          : SessionManager.create(cwd);
+          ? piSdk.SessionManager.open(sessionFile, undefined, cwd)
+          : piSdk.SessionManager.create(cwd);
         const modelId =
           input.modelSelection?.provider === "pi" ? input.modelSelection.model : undefined;
         const thinkingLevel =
@@ -1585,6 +1640,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const { runtime, modelRegistry } = yield* Effect.tryPromise({
           try: () =>
             createSdkRuntime({
+              sdk: piSdk,
               cwd,
               agentDir,
               sessionManager,
@@ -2047,10 +2103,11 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const listModels: NonNullable<PiAdapterShape["listModels"]> = (input) =>
       Effect.tryPromise({
         try: async () => {
-          const agentDir = makeAgentDir(input.agentDir);
+          const piSdk = await loadPiCodingAgentModule();
+          const agentDir = makeAgentDir(input.agentDir, piSdk);
           const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
-          const { authStorage, registry } = createPiModelRegistry(agentDir);
-          const services = await createAgentSessionServices({
+          const { authStorage, registry } = createPiModelRegistry(agentDir, piSdk);
+          const services = await piSdk.createAgentSessionServices({
             cwd,
             agentDir,
             authStorage,
@@ -2105,16 +2162,24 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           if (active && input.forceReload) {
             await active.runtime.session.reload();
           }
-          const services = loader
-            ? undefined
-            : await createAgentSessionServices({
-                cwd: input.cwd,
-                agentDir: makeAgentDir(input.agentDir),
-              });
+          let services:
+            | Awaited<ReturnType<PiCodingAgentModule["createAgentSessionServices"]>>
+            | undefined;
+          if (!loader) {
+            const piSdk = await loadPiCodingAgentModule();
+            services = await piSdk.createAgentSessionServices({
+              cwd: input.cwd,
+              agentDir: makeAgentDir(input.agentDir, piSdk),
+            });
+          }
           if (services && input.forceReload) {
             await services.resourceLoader.reload();
           }
-          const result = (loader ?? services!.resourceLoader).getSkills();
+          const resourceLoader = loader ?? services?.resourceLoader;
+          if (!resourceLoader) {
+            throw new Error("Failed to create Pi resource loader.");
+          }
+          const result = resourceLoader.getSkills();
           return {
             skills: result.skills.map((skill) => {
               const description = trimToUndefined(skill.description);
@@ -2175,9 +2240,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               cached: false,
             } satisfies ProviderListCommandsResult;
           }
-          const services = await createAgentSessionServices({
+          const piSdk = await loadPiCodingAgentModule();
+          const services = await piSdk.createAgentSessionServices({
             cwd: input.cwd,
-            agentDir: makeAgentDir(input.agentDir),
+            agentDir: makeAgentDir(input.agentDir, piSdk),
           });
           if (input.forceReload) {
             await services.resourceLoader.reload();

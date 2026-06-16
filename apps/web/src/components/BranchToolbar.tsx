@@ -2,8 +2,13 @@
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
 import type { ThreadId, RuntimeMode } from "@t3tools/contracts";
-import { LuSplit } from "react-icons/lu";
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, HandoffIcon } from "~/lib/icons";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  HandoffIcon,
+  WorktreeIcon,
+} from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
@@ -59,7 +64,7 @@ import {
 import type { ThreadWorkspacePatch } from "../types";
 
 function WorktreeGlyph({ className }: { className?: string }) {
-  return <LuSplit className={cn("rotate-90", className)} />;
+  return <WorktreeIcon className={className} />;
 }
 
 /** Leading glyph treatment shared by every "Continue in" menu row (16px, muted). */

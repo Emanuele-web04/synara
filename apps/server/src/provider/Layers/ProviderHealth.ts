@@ -9,7 +9,6 @@
  * @module ProviderHealthLive
  */
 import * as OS from "node:os";
-import * as nodePath from "node:path";
 import type {
   ProviderKind,
   ServerSettings,
@@ -22,7 +21,6 @@ import { ServerProviderUpdateError } from "@t3tools/contracts";
 import { parseCodexConfigModelProvider } from "@t3tools/shared/codexConfig";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { query as claudeQuery, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import {
   Array,
   Cache,
@@ -92,6 +90,7 @@ const KILO_PROVIDER = "kilo" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
+const DISABLED_PROVIDER_STATUS_MESSAGE = "Provider is disabled in Synara settings.";
 
 const PROVIDERS = [
   CODEX_PROVIDER,
@@ -1502,54 +1501,68 @@ export const checkPiProviderStatus = (
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "pi";
+
     const versionProbe = yield* runPiCommand(["--version"], executable).pipe(
       Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
       Effect.result,
     );
-    const version =
-      Result.isSuccess(versionProbe) && Option.isSome(versionProbe.success)
-        ? versionProbe.success.value
-        : null;
-    const parsedVersion =
-      version && version.code === 0
-        ? parseGenericCliVersion(`${version.stdout}\n${version.stderr}`)
-        : null;
 
-    try {
-      const trimmedAgentDir = nonEmptyTrimmed(agentDir);
-      const authStorage = trimmedAgentDir
-        ? AuthStorage.create(nodePath.join(trimmedAgentDir, "auth.json"))
-        : AuthStorage.create();
-      const registry = trimmedAgentDir
-        ? ModelRegistry.create(authStorage, nodePath.join(trimmedAgentDir, "models.json"))
-        : ModelRegistry.create(authStorage);
-      registry.refresh();
-      const modelCount = registry.getAvailable().length;
-      const authPath = trimmedAgentDir
-        ? nodePath.join(trimmedAgentDir, "auth.json")
-        : "~/.pi/agent/auth.json";
+    // Pi itself is SDK-backed in Synara. Keep this CLI probe advisory so health
+    // refreshes do not import the SDK and initialize its native clipboard module.
+    if (Result.isFailure(versionProbe)) {
+      const error = versionProbe.failure;
       return {
         provider: PI_PROVIDER,
-        status: modelCount > 0 ? "ready" : "warning",
-        available: modelCount > 0,
-        authStatus: modelCount > 0 ? "authenticated" : "unknown",
-        version: parsedVersion,
-        checkedAt,
-        message:
-          modelCount > 0
-            ? `Pi SDK is available with ${modelCount} authenticated model${modelCount === 1 ? "" : "s"}.`
-            : `Pi SDK is available, but no authenticated models were found in ${authPath}.`,
-      } satisfies ServerProviderStatus;
-    } catch (cause) {
-      return {
-        provider: PI_PROVIDER,
-        status: "error" as const,
-        available: false,
+        status: "warning" as const,
+        available: true,
         authStatus: "unknown" as const,
         checkedAt,
-        message: `Failed to read Pi auth/model registry: ${cause instanceof Error ? cause.message : String(cause)}.`,
+        message: isCommandMissingCause(error)
+          ? "Pi SDK is bundled, but the Pi CLI (`pi`) is not on PATH, so Synara could not verify the installed CLI version."
+          : `Pi SDK is bundled, but the CLI health check failed: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
     }
+
+    if (Option.isNone(versionProbe.success)) {
+      return {
+        provider: PI_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message:
+          "Pi SDK is bundled, but the CLI health check timed out before Synara could verify the installed version.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const version = versionProbe.success.value;
+    if (version.code !== 0) {
+      const detail = detailFromResult(version);
+      return {
+        provider: PI_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Pi SDK is bundled, but the CLI health check failed. ${detail}`
+          : "Pi SDK is bundled, but the CLI health check failed.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+    const configuredAgentDir = nonEmptyTrimmed(agentDir);
+    return {
+      provider: PI_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      version: parsedVersion,
+      checkedAt,
+      message: configuredAgentDir
+        ? `Pi CLI is installed. Synara will use Pi agent dir ${configuredAgentDir}.`
+        : "Pi CLI is installed. Configure provider credentials inside Pi as needed.",
+    } satisfies ServerProviderStatus;
   });
 
 // ── Cursor health check ─────────────────────────────────────────────
@@ -1704,6 +1717,86 @@ export function stabilizeProviderStatusesAgainstTransientTimeouts(
   });
 }
 
+export function isProviderEnabledForSettings(
+  provider: ProviderKind,
+  settings: ServerSettings,
+): boolean {
+  return settings.providers[provider].enabled !== false;
+}
+
+export function makeDisabledProviderStatus(
+  provider: ProviderKind,
+  checkedAt = new Date().toISOString(),
+): ServerProviderStatus {
+  return {
+    provider,
+    status: "warning" as const,
+    available: false,
+    authStatus: "unknown" as const,
+    checkedAt,
+    message: DISABLED_PROVIDER_STATUS_MESSAGE,
+  } satisfies ServerProviderStatus;
+}
+
+function isDisabledProviderStatusOverlay(status: ServerProviderStatus): boolean {
+  return status.message === DISABLED_PROVIDER_STATUS_MESSAGE && status.available === false;
+}
+
+function mergeProviderStatusUpdates(
+  previousStatuses: ReadonlyArray<ServerProviderStatus>,
+  updatedStatuses: ReadonlyArray<ServerProviderStatus>,
+): ProviderStatuses {
+  const statusByProvider = new Map(
+    previousStatuses.map((status) => [status.provider, status] as const),
+  );
+  for (const status of updatedStatuses) {
+    statusByProvider.set(status.provider, status);
+  }
+  return orderProviderStatuses([...statusByProvider.values()]);
+}
+
+// Disabled providers are a settings overlay, not a probe result. Keep the raw
+// cached/probed status intact so re-enabling a provider can reuse it immediately.
+export function projectProviderStatusesForSettings(
+  statuses: ReadonlyArray<ServerProviderStatus>,
+  settings: ServerSettings,
+  checkedAt = new Date().toISOString(),
+): ProviderStatuses {
+  const statusByProvider = new Map(statuses.map((status) => [status.provider, status] as const));
+  const projected: ServerProviderStatus[] = [];
+
+  for (const provider of PROVIDERS) {
+    const status = statusByProvider.get(provider);
+    if (!isProviderEnabledForSettings(provider, settings)) {
+      const disabledStatus = makeDisabledProviderStatus(provider, status?.checkedAt ?? checkedAt);
+      const disabledStatusWithAdvisory = {
+        ...disabledStatus,
+        versionAdvisory: {
+          status: "unknown" as const,
+          currentVersion: status?.version ?? null,
+          latestVersion: null,
+          updateCommand: null,
+          canUpdate: false,
+          checkedAt: disabledStatus.checkedAt,
+          message: null,
+        },
+      } satisfies ServerProviderStatus;
+      projected.push(
+        status?.updateState
+          ? { ...disabledStatusWithAdvisory, updateState: status.updateState }
+          : disabledStatusWithAdvisory,
+      );
+      continue;
+    }
+
+    if (status && !isDisabledProviderStatusOverlay(status)) {
+      projected.push(status);
+    }
+  }
+
+  return orderProviderStatuses(projected);
+}
+
 // ── Layer ───────────────────────────────────────────────────────────
 
 export const ProviderHealthLive = Layer.effect(
@@ -1744,7 +1837,10 @@ export const ProviderHealthLive = Layer.effect(
     ).pipe(
       Effect.map((statuses) =>
         orderProviderStatuses(
-          statuses.filter((status): status is ServerProviderStatus => status !== undefined),
+          statuses.filter(
+            (status): status is ServerProviderStatus =>
+              status !== undefined && !isDisabledProviderStatusOverlay(status),
+          ),
         ),
       ),
     );
@@ -1799,6 +1895,16 @@ export const ProviderHealthLive = Layer.effect(
     const getProviderMaintenanceCapabilities = Effect.fn("getProviderMaintenanceCapabilities")(
       function* (provider: ProviderKind) {
         const settings = yield* serverSettings.getSettings;
+        if (!isProviderEnabledForSettings(provider, settings)) {
+          return makeProviderMaintenanceCapabilities({
+            provider,
+            packageName: null,
+            latestVersionSource: null,
+            updateExecutable: null,
+            updateArgs: [],
+            updateLockKey: null,
+          });
+        }
         if (provider === "cursor") {
           return makeProviderMaintenanceCapabilities({
             provider,
@@ -1843,6 +1949,27 @@ export const ProviderHealthLive = Layer.effect(
       };
     });
 
+    const projectStatusesForCurrentSettings = Effect.fn(
+      "projectProviderStatusesForCurrentSettings",
+    )(function* (statuses: ReadonlyArray<ServerProviderStatus>) {
+      return yield* serverSettings.getSettings.pipe(
+        Effect.map((settings) => projectProviderStatusesForSettings(statuses, settings)),
+        Effect.catch(() => Effect.succeed(statuses)),
+        Effect.flatMap((projected) =>
+          Effect.forEach(projected, applyVolatileProviderState, {
+            concurrency: "unbounded",
+          }),
+        ),
+      );
+    });
+
+    const publishProjectedStatuses = Effect.fn("publishProjectedProviderStatuses")(function* () {
+      const rawStatuses = yield* Ref.get(statusesRef);
+      const projectedStatuses = yield* projectStatusesForCurrentSettings(rawStatuses);
+      yield* PubSub.publish(changesPubSub, projectedStatuses);
+      return projectedStatuses;
+    });
+
     const setProviderUpdateState = Effect.fn("setProviderUpdateState")(function* (
       provider: ProviderKind,
       state: ServerProviderUpdateState | null,
@@ -1857,13 +1984,7 @@ export const ProviderHealthLive = Layer.effect(
         return next;
       });
 
-      const current = yield* Ref.get(statusesRef);
-      const next = yield* Effect.forEach(current, applyVolatileProviderState, {
-        concurrency: "unbounded",
-      });
-      yield* Ref.set(statusesRef, next);
-      yield* PubSub.publish(changesPubSub, next);
-      return next;
+      return yield* publishProjectedStatuses();
     });
 
     const enrichStatuses = Effect.fn("enrichProviderStatuses")(function* (
@@ -1898,27 +2019,68 @@ export const ProviderHealthLive = Layer.effect(
       });
     });
 
+    const checkProviderWhenEnabled = <R>(
+      settings: ServerSettings,
+      provider: ProviderKind,
+      check: Effect.Effect<ServerProviderStatus, never, R>,
+    ): Effect.Effect<Option.Option<ServerProviderStatus>, never, R> =>
+      isProviderEnabledForSettings(provider, settings)
+        ? check.pipe(Effect.map(Option.some))
+        : Effect.succeed(Option.none());
+
     const loadProviderStatuses = serverSettings.getSettings
       .pipe(
         Effect.flatMap((settings) =>
           Effect.all(
             [
-              makeCheckCodexProviderStatus(
-                settings.providers.codex.binaryPath,
-                settings.providers.codex.homePath,
+              checkProviderWhenEnabled(
+                settings,
+                CODEX_PROVIDER,
+                makeCheckCodexProviderStatus(
+                  settings.providers.codex.binaryPath,
+                  settings.providers.codex.homePath,
+                ),
               ),
-              makeCheckClaudeProviderStatus(
-                resolveClaudeSubscription,
-                settings.providers.claudeAgent.binaryPath,
+              checkProviderWhenEnabled(
+                settings,
+                CLAUDE_AGENT_PROVIDER,
+                makeCheckClaudeProviderStatus(
+                  resolveClaudeSubscription,
+                  settings.providers.claudeAgent.binaryPath,
+                ),
               ),
-              makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
-              makeCheckGeminiProviderStatus(settings.providers.gemini.binaryPath),
-              makeCheckGrokProviderStatus(settings.providers.grok.binaryPath),
-              makeCheckKiloProviderStatus(settings.providers.kilo.binaryPath),
-              makeCheckOpenCodeProviderStatus(settings.providers.opencode.binaryPath),
-              checkPiProviderStatus(
-                settings.providers.pi.agentDir,
-                settings.providers.pi.binaryPath,
+              checkProviderWhenEnabled(
+                settings,
+                CURSOR_PROVIDER,
+                makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
+              ),
+              checkProviderWhenEnabled(
+                settings,
+                GEMINI_PROVIDER,
+                makeCheckGeminiProviderStatus(settings.providers.gemini.binaryPath),
+              ),
+              checkProviderWhenEnabled(
+                settings,
+                GROK_PROVIDER,
+                makeCheckGrokProviderStatus(settings.providers.grok.binaryPath),
+              ),
+              checkProviderWhenEnabled(
+                settings,
+                KILO_PROVIDER,
+                makeCheckKiloProviderStatus(settings.providers.kilo.binaryPath),
+              ),
+              checkProviderWhenEnabled(
+                settings,
+                OPENCODE_PROVIDER,
+                makeCheckOpenCodeProviderStatus(settings.providers.opencode.binaryPath),
+              ),
+              checkProviderWhenEnabled(
+                settings,
+                PI_PROVIDER,
+                checkPiProviderStatus(
+                  settings.providers.pi.agentDir,
+                  settings.providers.pi.binaryPath,
+                ),
               ),
             ],
             {
@@ -1931,7 +2093,11 @@ export const ProviderHealthLive = Layer.effect(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
-        Effect.map(orderProviderStatuses),
+        Effect.map((statuses) =>
+          orderProviderStatuses(
+            statuses.flatMap((status) => (Option.isSome(status) ? [status.value] : [])),
+          ),
+        ),
         Effect.flatMap(enrichStatuses),
       );
 
@@ -1959,17 +2125,22 @@ export const ProviderHealthLive = Layer.effect(
       // refresh instead of being pinned to the old account for up to 5 minutes.
       yield* Cache.invalidate(claudeSubscriptionCache, "claude");
       const loadedStatuses = yield* loadProviderStatuses;
-      const previousStatuses = yield* Ref.get(statusesRef);
-      const nextStatuses = stabilizeProviderStatusesAgainstTransientTimeouts(
-        previousStatuses,
+      const previousRawStatuses = yield* Ref.get(statusesRef);
+      const previousStatuses = yield* projectStatusesForCurrentSettings(previousRawStatuses);
+      const stabilizedLoadedStatuses = stabilizeProviderStatusesAgainstTransientTimeouts(
+        previousRawStatuses,
         loadedStatuses,
       );
+      const nextRawStatuses = mergeProviderStatusUpdates(
+        previousRawStatuses,
+        stabilizedLoadedStatuses,
+      );
+      const nextStatuses = yield* projectStatusesForCurrentSettings(nextRawStatuses);
+      yield* Ref.set(statusesRef, nextRawStatuses);
       if (providerStatusesEqual(previousStatuses, nextStatuses)) {
-        yield* Ref.set(statusesRef, nextStatuses);
         return nextStatuses;
       }
-      yield* Ref.set(statusesRef, nextStatuses);
-      yield* persistStatuses(nextStatuses);
+      yield* persistStatuses(nextRawStatuses);
       yield* PubSub.publish(changesPubSub, nextStatuses);
       return nextStatuses;
     });
@@ -1989,7 +2160,8 @@ export const ProviderHealthLive = Layer.effect(
           }
           // Keep the current in-memory snapshot as the source of truth if a
           // foreground refresh fails after startup.
-          return yield* Ref.get(statusesRef);
+          const rawStatuses = yield* Ref.get(statusesRef);
+          return yield* projectStatusesForCurrentSettings(rawStatuses);
         }).pipe(Effect.ensuring(Ref.set(refreshFiberRef, null)), Effect.forkIn(refreshScope));
         yield* Ref.set(refreshFiberRef, refreshFiber);
         return refreshFiber;
@@ -1997,6 +2169,11 @@ export const ProviderHealthLive = Layer.effect(
     );
 
     yield* ensureRefreshFiber;
+
+    yield* serverSettings.streamChanges.pipe(
+      Stream.runForEach(() => publishProjectedStatuses().pipe(Effect.asVoid)),
+      Effect.forkIn(refreshScope),
+    );
 
     const refresh: Effect.Effect<ProviderStatuses> = ensureRefreshFiber.pipe(
       Effect.flatMap(Fiber.join),
@@ -2074,6 +2251,13 @@ export const ProviderHealthLive = Layer.effect(
           provider,
           reason: reason instanceof Error ? reason.message : String(reason),
         });
+      const settings = yield* serverSettings.getSettings.pipe(Effect.mapError(toUpdateError));
+      if (!isProviderEnabledForSettings(provider, settings)) {
+        return yield* new ServerProviderUpdateError({
+          provider,
+          reason: "Provider is disabled in Synara settings.",
+        });
+      }
       const capabilities = yield* getProviderMaintenanceCapabilities(provider).pipe(
         Effect.mapError(toUpdateError),
       );
@@ -2177,7 +2361,7 @@ export const ProviderHealthLive = Layer.effect(
     return {
       // Mirror upstream's behavior here: reads consume the latest stable
       // snapshot, while refreshes happen explicitly or from provider streams.
-      getStatuses: Ref.get(statusesRef),
+      getStatuses: Ref.get(statusesRef).pipe(Effect.flatMap(projectStatusesForCurrentSettings)),
       refresh,
       updateProvider,
       get streamChanges() {

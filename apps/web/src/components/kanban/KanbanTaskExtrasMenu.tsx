@@ -4,7 +4,6 @@
 // Exports: KanbanTaskExtrasMenu
 
 import type { ProviderInteractionMode } from "@t3tools/contracts";
-import { LuSplit } from "react-icons/lu";
 
 import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
 import { Button } from "~/components/ui/button";
@@ -17,7 +16,7 @@ import {
   MenuTrigger,
 } from "~/components/ui/menu";
 import { CentralIcon } from "~/lib/central-icons";
-import { ListTodoIcon, PlusIcon } from "~/lib/icons";
+import { ListTodoIcon, PlusIcon, WorktreeIcon } from "~/lib/icons";
 import type { DraftThreadEnvMode } from "../../composerDraftStore";
 
 interface KanbanTaskExtrasMenuProps {
@@ -82,7 +81,7 @@ export function KanbanTaskExtrasMenu({
           </MenuRadioItem>
           <MenuRadioItem value="worktree">
             <span className="inline-flex items-center gap-2">
-              <LuSplit className="size-4 shrink-0 rotate-90" aria-hidden />
+              <WorktreeIcon className="size-4 shrink-0" aria-hidden />
               Worktree
             </span>
           </MenuRadioItem>

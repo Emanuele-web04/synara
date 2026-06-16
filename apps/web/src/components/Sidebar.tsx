@@ -25,6 +25,7 @@ import {
   TerminalIcon,
   Trash2,
   TriangleAlertIcon,
+  WorktreeIcon,
   XIcon,
 } from "~/lib/icons";
 import { autoAnimate } from "@formkit/auto-animate";
@@ -34,7 +35,6 @@ import { HiOutlineArchiveBox, HiOutlineCheckCircle } from "react-icons/hi2";
 import { BsChat } from "react-icons/bs";
 import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2, TbCursorText } from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
-import { LuSplit } from "react-icons/lu";
 import {
   useCallback,
   useEffect,
@@ -481,9 +481,7 @@ function buildThreadJumpLabelMap(input: {
   return mapping.size > 0 ? mapping : EMPTY_THREAD_JUMP_LABELS;
 }
 function WorktreeBadgeGlyph({ className }: { className?: string }) {
-  return (
-    <LuSplit aria-hidden="true" className={cn("rotate-90", sidebarGlyphClass("meta", className))} />
-  );
+  return <WorktreeIcon aria-hidden="true" className={sidebarGlyphClass("meta", className)} />;
 }
 
 // Trailing status indicator shown in the timestamp slot: spinner while working,
