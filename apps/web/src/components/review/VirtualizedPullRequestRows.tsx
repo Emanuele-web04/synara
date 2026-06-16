@@ -53,38 +53,41 @@ export function VirtualizedPullRequestRows(props: {
   }
 
   const virtualItems = virtualizer.getVirtualItems();
+  const firstVirtualItem = virtualItems[0];
+  const lastVirtualItem = virtualItems.at(-1);
+  const paddingTop = firstVirtualItem?.start ?? 0;
+  const paddingBottom =
+    lastVirtualItem === undefined
+      ? 0
+      : Math.max(virtualizer.getTotalSize() - lastVirtualItem.end, 0);
 
   return (
-    <div
+    <ul
       ref={scrollRef}
       role="list"
       className={cn("overflow-y-auto", props.className)}
       onScroll={handleScroll}
     >
-      <div
-        className="relative w-full"
-        style={{ height: virtualizer.getTotalSize() }}
-      >
-        {virtualItems.map((virtualItem) => {
-          const pullRequest = props.pullRequests[virtualItem.index];
-          if (!pullRequest) {
-            return null;
-          }
-          return (
-            <div
-              key={pullRequest.number}
-              ref={virtualizer.measureElement}
-              data-index={virtualItem.index}
-              role="listitem"
-              className={cn("absolute start-0 top-0 w-full", props.rowClassName)}
-              style={{ transform: `translateY(${String(virtualItem.start)}px)` }}
-            >
-              {props.renderPullRequest(pullRequest)}
-            </div>
-          );
-        })}
-      </div>
-    </div>
+      {paddingTop > 0 ? <li aria-hidden="true" style={{ height: paddingTop }} /> : null}
+      {virtualItems.map((virtualItem) => {
+        const pullRequest = props.pullRequests[virtualItem.index];
+        if (!pullRequest) {
+          return null;
+        }
+        return (
+          <li
+            key={pullRequest.number}
+            ref={virtualizer.measureElement}
+            data-index={virtualItem.index}
+            role="listitem"
+            className={props.rowClassName}
+          >
+            {props.renderPullRequest(pullRequest)}
+          </li>
+        );
+      })}
+      {paddingBottom > 0 ? <li aria-hidden="true" style={{ height: paddingBottom }} /> : null}
+    </ul>
   );
 }
 

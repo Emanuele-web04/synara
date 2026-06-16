@@ -95,4 +95,29 @@ describe("VirtualizedPullRequestRows", () => {
       await mounted.cleanup();
     }
   });
+
+  it("does not leave a blank spacer above rows after scrolling back up", async () => {
+    const pullRequests = makePullRequests(80);
+    const mounted = await renderRows({ pullRequests, threshold: 10 });
+
+    try {
+      const list = page.getByRole("list").element();
+      await expect.element(page.getByRole("button", { name: "Open PR 1" })).toBeVisible();
+
+      list.scrollTop = 800;
+      list.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await expect.poll(() => list.scrollTop).toBeGreaterThan(0);
+
+      list.scrollTop = 0;
+      list.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await expect.element(page.getByRole("button", { name: "Open PR 1" })).toBeVisible();
+
+      const firstRow = document.querySelector<HTMLElement>('[role="listitem"]');
+      expect(firstRow).not.toBeNull();
+      const listTop = list.getBoundingClientRect().top;
+      expect(firstRow!.getBoundingClientRect().top - listTop).toBeLessThanOrEqual(4);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
 });
