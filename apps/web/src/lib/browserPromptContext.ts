@@ -86,7 +86,9 @@ function fileFromBrowserScreenshot(
   if (screenshot.bytes.byteLength === 0) {
     throw new Error("Browser screenshot is empty.");
   }
-  return new File([screenshot.bytes], name, {
+  const bytesCopy = new Uint8Array(screenshot.bytes.byteLength);
+  bytesCopy.set(screenshot.bytes);
+  return new File([bytesCopy.buffer], name, {
     type: screenshot.mimeType,
   });
 }

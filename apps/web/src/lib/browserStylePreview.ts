@@ -15,35 +15,38 @@ const PREVIEW_TARGET_VALUE = "active";
 const BROWSER_STYLE_PREVIEW_RUNTIME_KEY = "__synaraBrowserStylePreviewRuntime";
 const BROWSER_STYLE_PREVIEW_RUNTIME_VERSION = "1";
 
-const BROWSER_STYLE_PATCH_CSS_PROPERTIES: Partial<Record<keyof BrowserElementStylePatch, string>> = {
-  color: "color",
-  backgroundColor: "background-color",
-  backgroundImage: "background-image",
-  backgroundPosition: "background-position",
-  backgroundSize: "background-size",
-  fontFamily: "font-family",
-  fontSize: "font-size",
-  fontWeight: "font-weight",
-  fontStyle: "font-style",
-  lineHeight: "line-height",
-  letterSpacing: "letter-spacing",
-  textAlign: "text-align",
-  opacity: "opacity",
-  padding: "padding",
-  margin: "margin",
-  borderWidth: "border-width",
-  borderColor: "border-color",
-  borderRadius: "border-radius",
-  boxShadow: "box-shadow",
-  filter: "filter",
-  animationName: "animation-name",
-  animationDuration: "animation-duration",
-  animationTimingFunction: "animation-timing-function",
-  animationIterationCount: "animation-iteration-count",
-};
+const BROWSER_STYLE_PATCH_CSS_PROPERTIES: Partial<Record<keyof BrowserElementStylePatch, string>> =
+  {
+    color: "color",
+    backgroundColor: "background-color",
+    backgroundImage: "background-image",
+    backgroundPosition: "background-position",
+    backgroundSize: "background-size",
+    fontFamily: "font-family",
+    fontSize: "font-size",
+    fontWeight: "font-weight",
+    fontStyle: "font-style",
+    lineHeight: "line-height",
+    letterSpacing: "letter-spacing",
+    textAlign: "text-align",
+    opacity: "opacity",
+    padding: "padding",
+    margin: "margin",
+    borderWidth: "border-width",
+    borderColor: "border-color",
+    borderRadius: "border-radius",
+    boxShadow: "box-shadow",
+    filter: "filter",
+    animationName: "animation-name",
+    animationDuration: "animation-duration",
+    animationTimingFunction: "animation-timing-function",
+    animationIterationCount: "animation-iteration-count",
+  };
 
 function restorePreviewTargets(document: Document): void {
-  for (const element of Array.from(document.querySelectorAll(`[${PREVIEW_ORIGINAL_TARGET_ATTR}]`))) {
+  for (const element of Array.from(
+    document.querySelectorAll(`[${PREVIEW_ORIGINAL_TARGET_ATTR}]`),
+  )) {
     const hadTarget = element.getAttribute(PREVIEW_HAD_TARGET_ATTR) === "true";
     const originalTarget = element.getAttribute(PREVIEW_ORIGINAL_TARGET_ATTR) ?? "";
     if (hadTarget) {

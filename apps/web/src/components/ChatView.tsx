@@ -142,10 +142,7 @@ import {
   ensureLeadingSpaceForReplacement,
   extendReplacementRangeForTrailingSpace,
 } from "../composerTriggerInsertion";
-import {
-  parseLiveEditAppSkillArgs,
-  type ComposerAppSkillId,
-} from "../composerAppSkills";
+import { parseLiveEditAppSkillArgs, type ComposerAppSkillId } from "../composerAppSkills";
 import {
   closeLiveEditPreviewTabs,
   hasLiveEditPreviewForThread,
@@ -1134,10 +1131,8 @@ export default function ChatView({
   const promptRef = useRef(prompt);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
-  const [expandedImagePane, setExpandedImagePane] =
-    useState<ExpandedBrowserContextPane>("image");
-  const [expandedImageZoomMode, setExpandedImageZoomMode] =
-    useState<ExpandedImageZoomMode>("fit");
+  const [expandedImagePane, setExpandedImagePane] = useState<ExpandedBrowserContextPane>("image");
+  const [expandedImageZoomMode, setExpandedImageZoomMode] = useState<ExpandedImageZoomMode>("fit");
   const [expandedImageZoom, setExpandedImageZoom] = useState(1);
   const [expandedImageNaturalSize, setExpandedImageNaturalSize] = useState<{
     width: number;
@@ -1263,8 +1258,7 @@ export default function ChatView({
   const expandedImageZoomAnimatingRef = useRef(false);
   const expandedImageWheelZoomFrameRef = useRef<number | null>(null);
   const expandedImageWheelZoomTargetRef = useRef<number | null>(null);
-  const pendingExpandedImageWheelZoomAnchorRef =
-    useRef<ExpandedImageWheelZoomAnchor | null>(null);
+  const pendingExpandedImageWheelZoomAnchorRef = useRef<ExpandedImageWheelZoomAnchor | null>(null);
   const expandedImageWheelZoomEndTimerRef = useRef<number | null>(null);
   const expandedImagePanRef = useRef<{
     pointerId: number;
@@ -3193,22 +3187,32 @@ export default function ChatView({
           return;
         }
 
+        const liveEditCwd = cwd;
+        if (!liveEditCwd) {
+          toastManager.add({
+            type: "warning",
+            title: "Live Edit is unavailable",
+            description: "Open a project or worktree before using Live Edit.",
+          });
+          return;
+        }
+
         if (parsedArgs.action === "stop") {
           const runningPreviewState = await api.preview
             .getState({
               threadId,
-              cwd,
+              cwd: liveEditCwd,
               ...(activeProjectId ? { projectId: activeProjectId } : {}),
             })
             .catch(() => null);
           await api.preview.stop({
             threadId,
-            cwd,
+            cwd: liveEditCwd,
             ...(activeProjectId ? { projectId: activeProjectId } : {}),
           });
           const closedStates = await closeLiveEditPreviewTabs(api, {
             threadId,
-            cwd,
+            cwd: liveEditCwd,
             projectId: activeProjectId,
             urls: runningPreviewState?.url ? [runningPreviewState.url] : [],
             fallbackThreadIds: [threadId],
@@ -3228,7 +3232,7 @@ export default function ChatView({
 
         const previewState = await api.preview.start({
           threadId,
-          cwd,
+          cwd: liveEditCwd,
           ...(activeProjectId ? { projectId: activeProjectId } : {}),
           ...(parsedArgs.target ? { target: parsedArgs.target } : {}),
           ...(parsedArgs.url ? { url: parsedArgs.url } : {}),
@@ -3240,7 +3244,7 @@ export default function ChatView({
         }
         await openLiveEditPreviewTab(api, {
           threadId,
-          cwd,
+          cwd: liveEditCwd,
           projectId: activeProjectId,
           targetCwd: previewState.targetCwd ?? null,
           url: previewState.url,
@@ -4783,9 +4787,7 @@ export default function ChatView({
                 sizeBytes: image.sizeBytes,
                 dataUrl,
                 ...(image.source ? { source: image.source } : {}),
-                ...(image.browserAnnotation
-                  ? { browserAnnotation: image.browserAnnotation }
-                  : {}),
+                ...(image.browserAnnotation ? { browserAnnotation: image.browserAnnotation } : {}),
               });
             } catch {
               const existingPersisted = existingPersistedById.get(image.id);
@@ -5876,8 +5878,7 @@ export default function ChatView({
       const nextPrompt = queuedTurn.kind === "chat" ? queuedTurn.prompt : queuedTurn.text;
       const restoredImages =
         queuedTurn.kind === "chat" ? queuedTurn.images.map(cloneComposerImageForRetry) : [];
-      const restoredBrowserContexts =
-        queuedTurn.kind === "chat" ? queuedTurn.browserContexts : [];
+      const restoredBrowserContexts = queuedTurn.kind === "chat" ? queuedTurn.browserContexts : [];
       const restoredAssistantSelections =
         queuedTurn.kind === "chat" ? queuedTurn.assistantSelections : [];
       promptRef.current = nextPrompt;
@@ -8078,11 +8079,7 @@ export default function ChatView({
     ? extractBrowserAnnotationSelectedCode(expandedImageAnnotation.promptBlock)
     : null;
   const expandedImagePaneOptions: ExpandedBrowserContextPane[] = expandedImageAnnotation
-    ? [
-        ...(expandedImageItem?.src ? (["image"] as const) : []),
-        "code",
-        "payload",
-      ]
+    ? [...(expandedImageItem?.src ? (["image"] as const) : []), "code", "payload"]
     : ["image"];
   const expandedImageActivePane = expandedImagePaneOptions.includes(expandedImagePane)
     ? expandedImagePane
@@ -9239,7 +9236,9 @@ export default function ChatView({
                     {expandedImageContextTitle}
                   </p>
                   <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                    {expandedImageAnnotation.title || expandedImageAnnotation.url || "Browser context"}
+                    {expandedImageAnnotation.title ||
+                      expandedImageAnnotation.url ||
+                      "Browser context"}
                   </p>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {expandedImageAnnotation.strokeCount > 0 ? (

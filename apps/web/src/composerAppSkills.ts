@@ -35,9 +35,7 @@ function normalizeAppSkillName(value: string): string {
   return value.trim().replace(/^\/+/, "").toLowerCase();
 }
 
-export function parseComposerAppSkillInvocation(
-  text: string,
-): ComposerAppSkillInvocation | null {
+export function parseComposerAppSkillInvocation(text: string): ComposerAppSkillInvocation | null {
   const match = /^\/([a-z-]+)(?:\s+(.*))?$/i.exec(text.trim());
   if (!match) {
     return null;
@@ -94,6 +92,7 @@ export function parseLiveEditAppSkillArgs(args: string): LiveEditAppSkillArgs {
   }
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
+    if (!token) continue;
     if (token === "--url") {
       const value = tokens[index + 1];
       if (value) parsed.url = value;
@@ -107,7 +106,8 @@ export function parseLiveEditAppSkillArgs(args: string): LiveEditAppSkillArgs {
       continue;
     }
     if (token === "--port") {
-      parsed.preferredPort = parsePort(tokens[index + 1]);
+      const preferredPort = parsePort(tokens[index + 1]);
+      if (preferredPort !== undefined) parsed.preferredPort = preferredPort;
       index += 1;
       continue;
     }

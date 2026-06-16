@@ -14,10 +14,7 @@ export interface ExpandedImagePreview {
   index: number;
 }
 
-function expandedImageDisplayName(image: {
-  name: string;
-  source?: string;
-}): string {
+function expandedImageDisplayName(image: { name: string; source?: string }): string {
   return image.source === "browser-annotation" ? "Live Editor Context" : image.name;
 }
 
@@ -80,7 +77,9 @@ export function buildExpandedBrowserContextPreview(
   if (previewableContexts.length === 0) {
     return null;
   }
-  const selectedIndex = previewableContexts.findIndex((context) => context.id === selectedContextId);
+  const selectedIndex = previewableContexts.findIndex(
+    (context) => context.id === selectedContextId,
+  );
   if (selectedIndex < 0) {
     return null;
   }
@@ -109,6 +108,7 @@ export function buildExpandedLiveEditorContextPreview(input: {
   );
   const firstAnnotation = input.images.find((image) => image.browserAnnotation)?.browserAnnotation;
   const firstContext = input.contexts[0];
+  const selectedSelector = firstAnnotation?.selectedSelector || firstContext?.selectedSelector;
   const context = {
     promptBlock: input.promptBlock,
     title:
@@ -120,10 +120,7 @@ export function buildExpandedLiveEditorContextPreview(input: {
     strokeCount: firstAnnotation?.strokeCount ?? 0,
     textCount: firstAnnotation?.textCount ?? 0,
     arrowCount: firstAnnotation?.arrowCount ?? 0,
-    selectedSelector:
-      firstAnnotation?.selectedSelector ||
-      firstContext?.selectedSelector ||
-      undefined,
+    ...(selectedSelector ? { selectedSelector } : {}),
   } satisfies ComposerBrowserAnnotationContext;
   return {
     images: [

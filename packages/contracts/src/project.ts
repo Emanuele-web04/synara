@@ -105,7 +105,9 @@ export type ProjectWriteFileResult = typeof ProjectWriteFileResult.Type;
 
 const ProjectEditableElement = Schema.Struct({
   tagName: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
-  text: Schema.optional(Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_TEXT_MAX_LENGTH))),
+  text: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_TEXT_MAX_LENGTH)),
+  ),
   outerHTML: Schema.optional(
     Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_HTML_MAX_LENGTH)),
   ),
@@ -127,7 +129,9 @@ export const ProjectApplyTextEditResult = Schema.Struct({
 export type ProjectApplyTextEditResult = typeof ProjectApplyTextEditResult.Type;
 
 export const ProjectElementStylePatch = Schema.Struct({
-  color: Schema.optional(Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH))),
+  color: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
+  ),
   backgroundColor: Schema.optional(
     Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
   ),
@@ -143,7 +147,9 @@ export const ProjectElementStylePatch = Schema.Struct({
   fontFamily: Schema.optional(
     Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
   ),
-  fontSize: Schema.optional(Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH))),
+  fontSize: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
+  ),
   fontWeight: Schema.optional(
     Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
   ),
@@ -159,9 +165,15 @@ export const ProjectElementStylePatch = Schema.Struct({
   textAlign: Schema.optional(
     Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
   ),
-  opacity: Schema.optional(Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH))),
-  padding: Schema.optional(Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH))),
-  margin: Schema.optional(Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH))),
+  opacity: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
+  ),
+  padding: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
+  ),
+  margin: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
+  ),
   borderWidth: Schema.optional(
     Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
   ),
@@ -174,7 +186,9 @@ export const ProjectElementStylePatch = Schema.Struct({
   boxShadow: Schema.optional(
     Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
   ),
-  filter: Schema.optional(Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH))),
+  filter: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
+  ),
   animationName: Schema.optional(
     Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
   ),

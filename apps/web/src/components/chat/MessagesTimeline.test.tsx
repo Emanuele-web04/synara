@@ -479,7 +479,7 @@ describe("MessagesTimeline", () => {
       "selectedSelector: main > section.hero",
       "tag: section",
       "outerHTML:",
-      "    <section class=\"hero\"><h1>Launch experiments</h1></section>",
+      '    <section class="hero"><h1>Launch experiments</h1></section>',
       "</browser-selection-selection>",
     ].join("\n");
     const markup = renderToStaticMarkup(

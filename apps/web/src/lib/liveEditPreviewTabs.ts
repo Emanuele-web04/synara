@@ -43,18 +43,21 @@ export function liveEditPreviewScopeKey(target: LiveEditPreviewTabTarget): strin
   return `${target.projectId ?? "projectless"}:${normalizedScopePath(target)}`;
 }
 
-function liveEditPreviewRecordKey(target: Pick<LiveEditPreviewTabTarget, "threadId"> & {
-  projectId?: ProjectId | null;
-  targetCwd?: string | null;
-  cwd: string;
-}): string {
-  return `${target.threadId}:${liveEditPreviewScopeKey({
+function liveEditPreviewRecordKey(
+  target: Pick<LiveEditPreviewTabTarget, "threadId"> & {
+    projectId?: ProjectId | null;
+    targetCwd?: string | null;
+    cwd: string;
+  },
+): string {
+  const scopeTarget: LiveEditPreviewTabTarget = {
     threadId: target.threadId,
     cwd: target.cwd,
-    projectId: target.projectId,
-    targetCwd: target.targetCwd,
     url: "",
-  })}`;
+    ...(target.projectId !== undefined ? { projectId: target.projectId } : {}),
+    ...(target.targetCwd !== undefined ? { targetCwd: target.targetCwd } : {}),
+  };
+  return `${target.threadId}:${liveEditPreviewScopeKey(scopeTarget)}`;
 }
 
 export function liveEditPreviewRouteKey(target: LiveEditPreviewTabTarget): string {
@@ -153,7 +156,7 @@ export async function openLiveEditPreviewTab(
   const initialState = await api.browser.open({ threadId: target.threadId });
   const mappedRecord = previewTabRecordsByKey.get(recordKey) ?? null;
   const mappedTab = mappedRecord
-    ? initialState.tabs.find((tab) => tab.id === mappedRecord.tabId) ?? null
+    ? (initialState.tabs.find((tab) => tab.id === mappedRecord.tabId) ?? null)
     : null;
   if (mappedTab) {
     return selectAndNavigatePreviewTab(api, initialState, target, mappedTab);

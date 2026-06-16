@@ -592,9 +592,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         row.message.role === "user" &&
         (() => {
           const rawUserImages = (row.message.attachments ?? []).filter(
-            (
-              attachment,
-            ): attachment is TimelineImageAttachment => attachment.type === "image",
+            (attachment): attachment is TimelineImageAttachment => attachment.type === "image",
           );
           const browserContexts = extractBrowserEditorContextPromptBlocks(row.message.text);
           const visibleMessageText =

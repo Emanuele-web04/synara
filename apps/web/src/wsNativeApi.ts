@@ -477,8 +477,7 @@ export function createWsNativeApi(): NativeApi {
       start: (input) => transport.request(WS_METHODS.previewStart, input, { timeoutMs: null }),
       stop: (input) => transport.request(WS_METHODS.previewStop, input),
       stopAll: (input) => transport.request(WS_METHODS.previewStopAll, input),
-      restart: (input) =>
-        transport.request(WS_METHODS.previewRestart, input, { timeoutMs: null }),
+      restart: (input) => transport.request(WS_METHODS.previewRestart, input, { timeoutMs: null }),
       onState: (callback) => {
         previewEventListeners.add(callback);
         return () => {

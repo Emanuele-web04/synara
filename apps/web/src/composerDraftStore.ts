@@ -460,10 +460,7 @@ export interface ComposerDraftStoreState {
   addImages: (threadId: ThreadId, images: ComposerImageAttachment[]) => void;
   removeImage: (threadId: ThreadId, imageId: string) => void;
   addBrowserContext: (threadId: ThreadId, context: ComposerBrowserContextAttachment) => void;
-  setBrowserContexts: (
-    threadId: ThreadId,
-    contexts: ComposerBrowserContextAttachment[],
-  ) => void;
+  setBrowserContexts: (threadId: ThreadId, contexts: ComposerBrowserContextAttachment[]) => void;
   removeBrowserContext: (threadId: ThreadId, contextId: string) => void;
   clearBrowserContexts: (threadId: ThreadId) => void;
   addAssistantSelection: (
@@ -1415,7 +1412,9 @@ function normalizePersistedAttachment(value: unknown): PersistedComposerImageAtt
   };
 }
 
-function normalizeBrowserAnnotationContext(value: unknown): ComposerBrowserAnnotationContext | null {
+function normalizeBrowserAnnotationContext(
+  value: unknown,
+): ComposerBrowserAnnotationContext | null {
   if (!value || typeof value !== "object") {
     return null;
   }
@@ -3335,7 +3334,10 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
           const existingIds = new Set(existing.browserContexts.map((entry) => entry.id));
           const existingDedupKeys = new Set(existing.browserContexts.map(browserContextDedupKey));
-          if (existingIds.has(context.id) || existingDedupKeys.has(browserContextDedupKey(context))) {
+          if (
+            existingIds.has(context.id) ||
+            existingDedupKeys.has(browserContextDedupKey(context))
+          ) {
             return state;
           }
           return {

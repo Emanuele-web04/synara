@@ -16,10 +16,7 @@ import { readNativeApi } from "../nativeApi";
 import type { Project, Thread } from "../types";
 import type { ComposerTrigger } from "../composer-logic";
 import { extendReplacementRangeForTrailingSpace } from "../composerTriggerInsertion";
-import {
-  parseComposerAppSkillInvocation,
-  type ComposerAppSkillId,
-} from "../composerAppSkills";
+import { parseComposerAppSkillInvocation, type ComposerAppSkillId } from "../composerAppSkills";
 import {
   buildSlashReviewComposerPrompt,
   buildSubagentsPrompt,

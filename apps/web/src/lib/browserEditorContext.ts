@@ -5,7 +5,7 @@ interface BrowserRect {
   height: number;
 }
 
-interface BrowserViewport {
+export interface BrowserViewport {
   width: number;
   height: number;
   devicePixelRatio?: number;
@@ -278,13 +278,14 @@ function selectorForElement(target: Element): string {
     if (current.classList.length > 0) {
       part += `.${Array.from(current.classList).slice(0, 3).map(escapeCssIdentifier).join(".")}`;
     }
-    const parent = current.parentElement;
+    const currentElement: Element = current;
+    const parent: Element | null = currentElement.parentElement;
     if (parent) {
       const siblings = Array.from(parent.children).filter(
-        (child) => child.localName === current?.localName,
+        (child: Element) => child.localName === currentElement.localName,
       );
       if (siblings.length > 1) {
-        part += `:nth-of-type(${siblings.indexOf(current) + 1})`;
+        part += `:nth-of-type(${siblings.indexOf(currentElement) + 1})`;
       }
     }
     parts.unshift(part);
@@ -339,12 +340,7 @@ function readElementAttributes(element: Element): Record<string, string> {
   return attributes;
 }
 
-function fourPartStyleValue(
-  top: string,
-  right: string,
-  bottom: string,
-  left: string,
-): string {
+function fourPartStyleValue(top: string, right: string, bottom: string, left: string): string {
   if (top === right && right === bottom && bottom === left) {
     return top;
   }
@@ -368,7 +364,11 @@ function unquoteFontFamily(value: string): string {
 function quoteFontFamilyIfNeeded(value: string): string {
   const trimmed = unquoteFontFamily(value);
   if (!trimmed) return "";
-  if (/^(serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-serif|ui-sans-serif|ui-monospace|emoji|math|fangsong)$/i.test(trimmed)) {
+  if (
+    /^(serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-serif|ui-sans-serif|ui-monospace|emoji|math|fangsong)$/i.test(
+      trimmed,
+    )
+  ) {
     return trimmed;
   }
   return /[\s"'(),]/.test(trimmed) ? JSON.stringify(trimmed) : trimmed;
@@ -381,7 +381,7 @@ export function splitFontFamilyList(value: string): string[] {
   for (let index = 0; index < value.length; index += 1) {
     const char = value[index];
     if ((char === '"' || char === "'") && value[index - 1] !== "\\") {
-      quote = quote === char ? null : quote ?? char;
+      quote = quote === char ? null : (quote ?? char);
       current += char;
       continue;
     }
@@ -508,7 +508,10 @@ export function normalizeBrowserElementFontOptions(input: {
 }): BrowserElementFontOption[] {
   const options: BrowserElementFontOption[] = [];
   const seen = new Set<string>();
-  const addOption = (option: Partial<BrowserElementFontOption>, fallbackSource: BrowserElementFontSource) => {
+  const addOption = (
+    option: Partial<BrowserElementFontOption>,
+    fallbackSource: BrowserElementFontSource,
+  ) => {
     const value = option.value?.trim();
     if (!value) return;
     const key = fontOptionKey(value);
@@ -704,17 +707,20 @@ function readEffectSnapshot(
   const hasTransform = Boolean(style.transform && style.transform !== "none");
   const hasVisualBackground =
     Boolean(backgroundImage && backgroundImage !== "none") ||
-    Boolean(style.backgroundColor && !/rgba?\(0,\s*0,\s*0(?:,\s*0)?\)/i.test(style.backgroundColor));
+    Boolean(
+      style.backgroundColor && !/rgba?\(0,\s*0,\s*0(?:,\s*0)?\)/i.test(style.backgroundColor),
+    );
   if (!hasGradient && !hasAnimation && !hasFilter && !hasTransform && !hasVisualBackground) {
     return null;
   }
-  const kind: BrowserElementEffectKind = hasGradient && hasAnimation
-    ? "shimmer"
-    : hasGradient
-      ? "gradient"
-      : hasAnimation
-        ? "animation"
-        : "visual";
+  const kind: BrowserElementEffectKind =
+    hasGradient && hasAnimation
+      ? "shimmer"
+      : hasGradient
+        ? "gradient"
+        : hasAnimation
+          ? "animation"
+          : "visual";
   return {
     source,
     label: source === "element" ? "Element" : source,
@@ -742,7 +748,9 @@ function readElementEffectSnapshots(
   return (["element", "::before", "::after"] as const)
     .map((source) =>
       readEffectSnapshot(
-        source === "element" ? win.getComputedStyle(element) : win.getComputedStyle(element, source),
+        source === "element"
+          ? win.getComputedStyle(element)
+          : win.getComputedStyle(element, source),
         source,
       ),
     )
@@ -819,7 +827,7 @@ export function readBrowserElementContextFromDocumentAtPoint(input: {
       ({
         width: ownerWindow?.innerWidth ?? input.document.documentElement.clientWidth,
         height: ownerWindow?.innerHeight ?? input.document.documentElement.clientHeight,
-        devicePixelRatio: ownerWindow?.devicePixelRatio,
+        ...(ownerWindow ? { devicePixelRatio: ownerWindow.devicePixelRatio } : {}),
       } satisfies BrowserViewport),
     outerHTML,
     payload,
@@ -853,7 +861,7 @@ export function readBrowserElementHoverContextFromDocumentAtPoint(input: {
     viewport: {
       width: ownerWindow?.innerWidth ?? input.document.documentElement.clientWidth,
       height: ownerWindow?.innerHeight ?? input.document.documentElement.clientHeight,
-      devicePixelRatio: ownerWindow?.devicePixelRatio,
+      ...(ownerWindow ? { devicePixelRatio: ownerWindow.devicePixelRatio } : {}),
     },
   };
 }
@@ -1250,9 +1258,7 @@ export function cdpElementContextExpression(
   })()`;
 }
 
-export function isBrowserElementHoverContext(
-  value: unknown,
-): value is BrowserElementHoverContext {
+export function isBrowserElementHoverContext(value: unknown): value is BrowserElementHoverContext {
   if (!value || typeof value !== "object") {
     return false;
   }
@@ -1377,7 +1383,9 @@ function formatTextAnnotation(annotation: BrowserTextAnnotation): string {
       ? `, box: x=${Math.round(annotation.boxX)}, y=${Math.round(annotation.boxY)}`
       : "";
   const fontSize =
-    typeof annotation.fontSize === "number" ? `, fontSize: ${Math.round(annotation.fontSize)}px` : "";
+    typeof annotation.fontSize === "number"
+      ? `, fontSize: ${Math.round(annotation.fontSize)}px`
+      : "";
   return `x=${Math.round(annotation.x)}, y=${Math.round(annotation.y)}${boxPosition}${fontSize}, text: ${text || "(empty)"}`;
 }
 
@@ -1390,11 +1398,15 @@ function formatArrowSummary(arrow: BrowserAnnotationArrow): string {
     ? `; sourceTextAnnotationId: ${arrow.sourceTextAnnotationId}`
     : "";
   const handle = arrow.sourceHandle ? `; sourceHandle: ${arrow.sourceHandle}` : "";
-  return [
-    `from: ${formatPoint(arrow.from)}`,
-    `to: ${formatPoint(arrow.to)}`,
-    `bounds: x=${Math.round(minX)}, y=${Math.round(minY)}, width=${Math.round(maxX - minX)}, height=${Math.round(maxY - minY)}`,
-  ].join("; ") + source + handle;
+  return (
+    [
+      `from: ${formatPoint(arrow.from)}`,
+      `to: ${formatPoint(arrow.to)}`,
+      `bounds: x=${Math.round(minX)}, y=${Math.round(minY)}, width=${Math.round(maxX - minX)}, height=${Math.round(maxY - minY)}`,
+    ].join("; ") +
+    source +
+    handle
+  );
 }
 
 function formatStyleEntries(
@@ -1424,7 +1436,9 @@ function formatFontOptions(value: readonly BrowserElementFontOption[] | null | u
     .join("\n");
 }
 
-function formatEffectEntries(value: readonly BrowserElementEffectSnapshot[] | null | undefined): string {
+function formatEffectEntries(
+  value: readonly BrowserElementEffectSnapshot[] | null | undefined,
+): string {
   if (!value || value.length === 0) {
     return "none";
   }
@@ -1456,7 +1470,9 @@ function formatRequestedFont(
     return "none";
   }
   const requestedKey = fontOptionKey(requestedFont);
-  const match = element.availableFonts?.find((option) => fontOptionKey(option.value) === requestedKey);
+  const match = element.availableFonts?.find(
+    (option) => fontOptionKey(option.value) === requestedKey,
+  );
   if (!match) {
     return `value: ${requestedFont}\nsource: custom\nloaded: unknown`;
   }
@@ -1548,11 +1564,16 @@ export function summarizeBrowserEditorPromptBlock(
       label: "Live Editor Context",
       detail: compactPromptBlockText(
         [
-          sections && sections !== "0" ? `${sections} context section${sections === "1" ? "" : "s"}` : "",
+          sections && sections !== "0"
+            ? `${sections} context section${sections === "1" ? "" : "s"}`
+            : "",
           selector && selector !== "(none)" ? selector : "",
         ]
           .filter(Boolean)
-          .join(" · ") || title || url || "Live editor context",
+          .join(" · ") ||
+          title ||
+          url ||
+          "Live editor context",
       ),
     };
   }
@@ -1592,9 +1613,15 @@ export function summarizeBrowserEditorPromptBlock(
       url,
       label: "Live Editor Context: style edit",
       detail: compactPromptBlockText(
-        [changed && changed !== "0" ? `${changed} style change${changed === "1" ? "" : "s"}` : "", selector]
+        [
+          changed && changed !== "0" ? `${changed} style change${changed === "1" ? "" : "s"}` : "",
+          selector,
+        ]
           .filter(Boolean)
-          .join(" · ") || title || url || "Style edit context",
+          .join(" · ") ||
+          title ||
+          url ||
+          "Style edit context",
       ),
     };
   }
@@ -1614,7 +1641,8 @@ export function summarizeBrowserEditorPromptBlock(
     block,
     title,
     url,
-    label: details.length > 0 ? `Live Editor Context: ${details.join(", ")}` : "Live Editor Context",
+    label:
+      details.length > 0 ? `Live Editor Context: ${details.join(", ")}` : "Live Editor Context",
     detail: compactPromptBlockText(title || url || "Live editor context"),
   };
 }
@@ -1644,8 +1672,7 @@ export function buildUnifiedBrowserEditorPromptBlock(
     return null;
   }
   const title =
-    uniqueBlocks.map((block) => readPromptBlockField(block, "title")).find(Boolean) ??
-    "(untitled)";
+    uniqueBlocks.map((block) => readPromptBlockField(block, "title")).find(Boolean) ?? "(untitled)";
   const url = uniqueBlocks.map((block) => readPromptBlockField(block, "url")).find(Boolean) ?? "";
   const selectedSelector =
     uniqueBlocks
@@ -1659,10 +1686,7 @@ export function buildUnifiedBrowserEditorPromptBlock(
     `selectedSelector: ${selectedSelector}`,
     `sectionCount: ${uniqueBlocks.length}`,
     "sections:",
-    ...uniqueBlocks.flatMap((block, index) => [
-      `--- section ${index + 1} ---`,
-      block,
-    ]),
+    ...uniqueBlocks.flatMap((block, index) => [`--- section ${index + 1} ---`, block]),
     "</browser-live-editor-selection>",
   ].join("\n");
 }
@@ -1783,8 +1807,7 @@ export function buildBrowserDrawingPromptBlock(context: BrowserDrawingEditorCont
     `strokeCount: ${context.strokes.length}`,
     "strokes:",
     ...context.strokes.map(
-      (stroke, index) =>
-        `- stroke ${index + 1}: ${formatStrokeSummary(stroke)}`,
+      (stroke, index) => `- stroke ${index + 1}: ${formatStrokeSummary(stroke)}`,
     ),
     `textCount: ${textAnnotations.length}`,
     "textAnnotations:",

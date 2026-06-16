@@ -20,10 +20,7 @@ import type {
 } from "~/lib/browserEditorContext";
 import { cn } from "~/lib/utils";
 
-type BoxProperty = Extract<
-  keyof BrowserElementStylePatch,
-  "margin" | "padding" | "borderWidth"
->;
+type BoxProperty = Extract<keyof BrowserElementStylePatch, "margin" | "padding" | "borderWidth">;
 type BoxSide = "top" | "right" | "bottom" | "left";
 
 const BOX_SIDES: readonly BoxSide[] = ["top", "right", "bottom", "left"];
@@ -108,7 +105,10 @@ function expandBoxShorthand(value: string | undefined): ParsedBoxValue {
     };
   }
 
-  const [top, right = top, bottom = top, left = right] = tokens;
+  const top = tokens[0] ?? raw;
+  const right = tokens[1] ?? top;
+  const bottom = tokens[2] ?? top;
+  const left = tokens[3] ?? right;
   return {
     supported: true,
     raw,
@@ -355,12 +355,9 @@ function BoxLayerRect({
   onSelect: () => void;
 }) {
   const layerClassName = {
-    margin:
-      "border-black/8 bg-white/[0.16] dark:border-white/10 dark:bg-white/[0.028]",
-    border:
-      "border-black/8 bg-white/[0.18] dark:border-white/10 dark:bg-white/[0.032]",
-    padding:
-      "border-black/8 bg-white/[0.2] dark:border-white/10 dark:bg-white/[0.036]",
+    margin: "border-black/8 bg-white/[0.16] dark:border-white/10 dark:bg-white/[0.028]",
+    border: "border-black/8 bg-white/[0.18] dark:border-white/10 dark:bg-white/[0.032]",
+    padding: "border-black/8 bg-white/[0.2] dark:border-white/10 dark:bg-white/[0.036]",
   }[tone];
 
   return (
@@ -372,8 +369,7 @@ function BoxLayerRect({
         layerClassName,
         active &&
           "border-cyan-400/28 shadow-[inset_0_1px_0_rgba(255,255,255,0.42),0_0_0_1px_rgba(34,211,238,0.08)] dark:border-cyan-200/18",
-        selected &&
-          "shadow-[inset_0_1px_0_rgba(255,255,255,0.44),0_0_0_1px_rgba(34,211,238,0.22)]",
+        selected && "shadow-[inset_0_1px_0_rgba(255,255,255,0.44),0_0_0_1px_rgba(34,211,238,0.22)]",
         previewed &&
           "border-cyan-300/22 shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_0_0_1px_rgba(34,211,238,0.06)] dark:border-cyan-200/14",
         dimmed && "opacity-55",
@@ -505,16 +501,14 @@ function BoxAreaCue({
   const bandMaskStyle = {
     inset: outerInset,
     padding: bandSize,
-    WebkitMask:
-      "linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)",
+    WebkitMask: "linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)",
     WebkitMaskComposite: "xor",
     mask: "linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)",
     maskComposite: "exclude",
   } as const;
   const borderEdgeMaskStyle = {
     padding: 1.6,
-    WebkitMask:
-      "linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)",
+    WebkitMask: "linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)",
     WebkitMaskComposite: "xor",
     mask: "linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)",
     maskComposite: "exclude",
@@ -530,9 +524,7 @@ function BoxAreaCue({
       <div
         className={cn(
           "absolute rounded-lg transition-colors duration-150",
-          selected
-            ? selectedFillClassName
-            : "bg-cyan-200/[0.105] dark:bg-cyan-100/[0.055]",
+          selected ? selectedFillClassName : "bg-cyan-200/[0.105] dark:bg-cyan-100/[0.055]",
         )}
         style={bandMaskStyle}
       />
@@ -701,7 +693,7 @@ export const BoxModelVisualizer = memo(function BoxModelVisualizer({
   const padding = expandBoxShorthand(patch.padding ?? style?.padding);
   const [hoveredProperty, setHoveredProperty] = useState<BoxProperty | null>(null);
   const [selectedProperty, setSelectedProperty] = useState<BoxProperty | null>(null);
-  const models: BoxLayerModel[] = [
+  const models = [
     {
       property: "margin",
       label: "Margin",
@@ -720,7 +712,7 @@ export const BoxModelVisualizer = memo(function BoxModelVisualizer({
       description: "Inner space between content and border.",
       parsed: padding,
     },
-  ];
+  ] as const satisfies readonly BoxLayerModel[];
   const activeProperty = selectedProperty ?? hoveredProperty;
   const activeModel = activeProperty
     ? (models.find((model) => model.property === activeProperty) ?? null)

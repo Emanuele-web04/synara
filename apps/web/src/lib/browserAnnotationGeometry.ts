@@ -25,9 +25,11 @@ function safeScale(numerator: number, denominator: number): number {
   return numerator / denominator;
 }
 
-export function browserAnnotationCoordinateScale(
-  geometry: BrowserAnnotationCoordinateGeometry,
-): { x: number; y: number; average: number } {
+export function browserAnnotationCoordinateScale(geometry: BrowserAnnotationCoordinateGeometry): {
+  x: number;
+  y: number;
+  average: number;
+} {
   const x = safeScale(geometry.viewportWidth, geometry.overlayWidth);
   const y = safeScale(geometry.viewportHeight, geometry.overlayHeight);
   return {

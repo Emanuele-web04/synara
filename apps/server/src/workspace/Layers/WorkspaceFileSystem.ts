@@ -112,11 +112,20 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function normalizedStylePatchEntries(patch: ProjectStylePatch): Array<[keyof ProjectStylePatch, string]> {
-  return (Object.entries(patch) as Array<[keyof ProjectStylePatch, string | undefined]>)
-    .filter(([key]) => key !== "effectTarget")
-    .map(([key, value]) => [key, value?.trim() ?? ""])
-    .filter((entry): entry is [keyof ProjectStylePatch, string] => entry[1].length > 0);
+function normalizedStylePatchEntries(
+  patch: ProjectStylePatch,
+): Array<[keyof ProjectStylePatch, string]> {
+  const entries: Array<[keyof ProjectStylePatch, string]> = [];
+  for (const [key, value] of Object.entries(patch) as Array<
+    [keyof ProjectStylePatch, string | undefined]
+  >) {
+    if (key === "effectTarget") continue;
+    const trimmed = value?.trim();
+    if (trimmed) {
+      entries.push([key, trimmed]);
+    }
+  }
+  return entries;
 }
 
 function stylePatchCssDeclarations(patch: ProjectStylePatch): Array<[string, string]> {
@@ -169,7 +178,11 @@ function insertAttributeIntoOpeningTag(openingTag: string, attribute: string): s
   return `${openingTag.slice(0, insertIndex)} ${attribute}${openingTag.slice(insertIndex)}`;
 }
 
-function patchOpeningTagStyle(openingTag: string, patch: ProjectStylePatch, extension: string): string {
+function patchOpeningTagStyle(
+  openingTag: string,
+  patch: ProjectStylePatch,
+  extension: string,
+): string {
   const isJsx = JSX_STYLE_EXTENSIONS.has(extension);
   if (isJsx) {
     const jsxStyleMatch = openingTag.match(/\sstyle\s*=\s*\{\{([\s\S]*?)\}\}/);
@@ -180,7 +193,9 @@ function patchOpeningTagStyle(openingTag: string, patch: ProjectStylePatch, exte
       );
     }
     if (/\sstyle\s*=\s*\{/.test(openingTag)) {
-      throw new Error("Selected element uses a dynamic style expression that cannot be edited safely.");
+      throw new Error(
+        "Selected element uses a dynamic style expression that cannot be edited safely.",
+      );
     }
     return insertAttributeIntoOpeningTag(
       openingTag,
@@ -213,7 +228,10 @@ function attributeValuePattern(name: string, value: string): RegExp {
   return new RegExp(`\\s${escapeRegExp(name)}\\s*=\\s*(["'])${escapeRegExp(value)}\\1`, "i");
 }
 
-function scoreOpeningTagByAttributes(openingTag: string, attributes: Record<string, string>): number {
+function scoreOpeningTagByAttributes(
+  openingTag: string,
+  attributes: Record<string, string>,
+): number {
   let score = 0;
   for (const name of STYLE_EDIT_ATTRIBUTE_PRIORITY) {
     const value = attributes[name]?.trim();

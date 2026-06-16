@@ -206,7 +206,7 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
         yield* writeTextFile(
           cwd,
           "src/App.tsx",
-          "export function App() { return <h1 id=\"hero-title\">Original title</h1>; }\n",
+          'export function App() { return <h1 id="hero-title">Original title</h1>; }\n',
         );
 
         const result = yield* workspaceFileSystem.applyStyleEdit({
@@ -243,7 +243,9 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
           })
           .pipe(Effect.flip);
 
-        expect(error.message).toContain("Selected element maps to multiple possible source locations.");
+        expect(error.message).toContain(
+          "Selected element maps to multiple possible source locations.",
+        );
       }),
     );
   });

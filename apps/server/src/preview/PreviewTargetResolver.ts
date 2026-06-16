@@ -2,7 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const PREVIEW_SCRIPT_PRIORITY = ["dev", "start", "serve", "preview", "storybook"] as const;
-const KNOWN_FRONTEND_DIRS = ["apps", "packages", "web", "app", "client", "frontend", "site", "ui", "www"];
+const KNOWN_FRONTEND_DIRS = [
+  "apps",
+  "packages",
+  "web",
+  "app",
+  "client",
+  "frontend",
+  "site",
+  "ui",
+  "www",
+];
 const MAX_CANDIDATE_DIRS = 80;
 
 export type PreviewPackageManager = "bun" | "pnpm" | "yarn" | "npm";
@@ -193,7 +203,14 @@ async function detectFramework(input: {
   const script = input.scriptCommand.toLowerCase();
   const has = (name: string) => packages.has(name) || script.includes(name);
 
-  if (await anyFileExists(input.cwd, ["vite.config.ts", "vite.config.js", "vite.config.mjs", "vite.config.cjs"])) {
+  if (
+    await anyFileExists(input.cwd, [
+      "vite.config.ts",
+      "vite.config.js",
+      "vite.config.mjs",
+      "vite.config.cjs",
+    ])
+  ) {
     return "vite";
   }
   if (await anyFileExists(input.cwd, ["next.config.ts", "next.config.js", "next.config.mjs"])) {
@@ -277,9 +294,10 @@ async function describeCandidate(cwd: string, root: string): Promise<PreviewCand
   }
 
   const scriptCommand = scriptName ? (scripts[scriptName] ?? "") : "";
-  const framework = hasIndexHtml && !packageJson
-    ? "static"
-    : await detectFramework({ cwd, packageJson, scriptCommand });
+  const framework =
+    hasIndexHtml && !packageJson
+      ? "static"
+      : await detectFramework({ cwd, packageJson, scriptCommand });
   let score = cwd === root ? 8 : 16;
   const diagnostics: string[] = [];
 
@@ -346,9 +364,7 @@ export async function resolvePreviewTarget(input: {
   }
 
   const runRoot =
-    input.target && input.target.trim().length > 0
-      ? path.resolve(root, input.target.trim())
-      : root;
+    input.target && input.target.trim().length > 0 ? path.resolve(root, input.target.trim()) : root;
   if (!(await directoryExists(runRoot))) {
     throw new Error(
       `Live Edit target path does not exist: ${runRoot}. Check the /live-edit path argument, or omit it to auto-detect the frontend.`,
@@ -367,14 +383,14 @@ export async function resolvePreviewTarget(input: {
   }
 
   const candidateDirs = input.target ? [runRoot] : await collectCandidateDirs(root);
-  const candidates = (
-    await Promise.all(candidateDirs.map((dir) => describeCandidate(dir, root)))
-  )
+  const candidates = (await Promise.all(candidateDirs.map((dir) => describeCandidate(dir, root))))
     .filter((candidate): candidate is PreviewCandidate => candidate !== null)
     .sort((a, b) => b.score - a.score);
   const best = candidates[0];
   if (!best) {
-    throw new Error("No frontend preview target found. Expected a package.json dev/start/serve/preview script or an index.html file.");
+    throw new Error(
+      "No frontend preview target found. Expected a package.json dev/start/serve/preview script or an index.html file.",
+    );
   }
 
   const command = await commandForCandidate(best, input.port);

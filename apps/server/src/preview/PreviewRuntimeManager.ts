@@ -326,12 +326,14 @@ export class PreviewRuntimeManager {
           resolvePreviewTarget({
             cwd,
             port: previewPort,
-            command: input.command,
-            target: input.target,
-            url: input.url,
+            ...(input.command ? { command: input.command } : {}),
+            ...(input.target ? { target: input.target } : {}),
+            ...(input.url ? { url: input.url } : {}),
           }),
         catch: (cause) =>
-          cause instanceof Error ? cause : new Error("Unable to resolve preview target.", { cause }),
+          cause instanceof Error
+            ? cause
+            : new Error("Unable to resolve preview target.", { cause }),
       });
       const terminalId = target.command ? terminalIdForCwd(cwd) : null;
       const startedAt = nowIso();

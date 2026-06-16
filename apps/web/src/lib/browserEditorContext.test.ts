@@ -57,7 +57,8 @@ function annotationBlock(strokeCount: number): string {
         height: 600,
         devicePixelRatio: 2,
       },
-      outerHTML: '<section class="hero" data-component="landing-hero"><h1>Launch experiments without losing the plot.</h1></section>',
+      outerHTML:
+        '<section class="hero" data-component="landing-hero"><h1>Launch experiments without losing the plot.</h1></section>',
     },
     strokes: Array.from({ length: strokeCount }, (_, index) => ({
       id: `stroke-${index}`,
@@ -117,7 +118,7 @@ describe("browser editor annotation prompt blocks", () => {
     expect(prompt).toContain("  bounds: x=40, y=120, width=720, height=420");
     expect(prompt).toContain("    - data-component: landing-hero");
     expect(prompt).toContain(
-      "    <section class=\"hero\" data-component=\"landing-hero\"><h1>Launch experiments without losing the plot.</h1></section>",
+      '    <section class="hero" data-component="landing-hero"><h1>Launch experiments without losing the plot.</h1></section>',
     );
     expect(prompt).not.toContain("strokeCount: 1");
     expect(prompt.match(/<browser-drawing-selection>/g)).toHaveLength(1);
@@ -146,7 +147,8 @@ describe("browser editor annotation prompt blocks", () => {
         height: 600,
         devicePixelRatio: 2,
       },
-      outerHTML: '<section class="hero"><h1>Launch experiments without losing the plot.</h1></section>',
+      outerHTML:
+        '<section class="hero"><h1>Launch experiments without losing the plot.</h1></section>',
     });
 
     expect(block).toContain("<browser-selection-selection>");
@@ -328,7 +330,8 @@ describe("browser editor annotation prompt blocks", () => {
       attributes: { class: "hero" },
       rect: { x: 40, y: 120, width: 720, height: 420 },
       viewport: { width: 800, height: 600, devicePixelRatio: 2 },
-      outerHTML: '<section class="hero"><h1>Launch experiments without losing the plot.</h1></section>',
+      outerHTML:
+        '<section class="hero"><h1>Launch experiments without losing the plot.</h1></section>',
     });
     const block = buildUnifiedBrowserEditorPromptBlock([selectionBlock, annotationBlock(1)]);
     if (!block) {
@@ -389,7 +392,8 @@ describe("browser editor annotation prompt blocks", () => {
       attributes: { class: "hero" },
       rect: { x: 40, y: 120, width: 720, height: 420 },
       viewport: { width: 800, height: 600, devicePixelRatio: 2 },
-      outerHTML: '<section class="hero"><h1>Launch experiments without losing the plot.</h1></section>',
+      outerHTML:
+        '<section class="hero"><h1>Launch experiments without losing the plot.</h1></section>',
     });
     const prompt = `Please update this hero.\n\n${selectionBlock}\n\nThanks.`;
 

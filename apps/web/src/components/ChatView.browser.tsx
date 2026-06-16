@@ -2841,6 +2841,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         [draftThreadId]: {
           prompt: "",
           images: [],
+          browserContexts: [],
           nonPersistedImageIds: [],
           persistedAttachments: [],
           assistantSelections: [],

@@ -45,13 +45,13 @@ type EffectPatchKey = Extract<
 
 interface ElementPropertiesPanelProps {
   element: BrowserElementEditorContext;
-  initialPatch?: BrowserElementStylePatch;
+  initialPatch?: BrowserElementStylePatch | undefined;
   onPreviewPatch: (patch: BrowserElementStylePatch) => void;
   onAttachContext: (patch: BrowserElementStylePatch, manualOverride: boolean) => void;
   onApplySourceEdit: (patch: BrowserElementStylePatch) => void;
   onResetPreview: () => void;
   onClose: () => void;
-  onDragHandlePointerDown?: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onDragHandlePointerDown?: ((event: ReactPointerEvent<HTMLDivElement>) => void) | undefined;
 }
 
 interface OptionItem {
@@ -209,7 +209,8 @@ function patchValue(
   patch: BrowserElementStylePatch,
   key: StylePatchKey,
 ): string {
-  return patch[key] ?? element.style?.[key] ?? "";
+  const style = element.style as Partial<Record<StylePatchKey, string>> | undefined;
+  return patch[key] ?? style?.[key] ?? "";
 }
 
 function unquoteFontFamilyName(value: string): string {
@@ -217,7 +218,10 @@ function unquoteFontFamilyName(value: string): string {
 }
 
 function fontOptionDisplayName(value: string, label?: string): string {
-  const cleanLabel = label?.replace(/^Current:\s*/i, "").replace(/\s+stack$/i, "").trim();
+  const cleanLabel = label
+    ?.replace(/^Current:\s*/i, "")
+    .replace(/\s+stack$/i, "")
+    .trim();
   if (cleanLabel) {
     return cleanLabel;
   }
@@ -258,7 +262,10 @@ function formatNumber(value: number, precision: number): string {
 }
 
 function clampNumber(value: number, min?: number, max?: number): number {
-  return Math.min(max ?? Number.POSITIVE_INFINITY, Math.max(min ?? Number.NEGATIVE_INFINITY, value));
+  return Math.min(
+    max ?? Number.POSITIVE_INFINITY,
+    Math.max(min ?? Number.NEGATIVE_INFINITY, value),
+  );
 }
 
 function snapNumber(value: number, step: number): number {
@@ -339,8 +346,8 @@ function SearchableOptions({
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const direction = event.key === "ArrowDown" ? 1 : -1;
-      setHighlightedIndex((current) =>
-        (current + direction + filteredOptions.length) % filteredOptions.length,
+      setHighlightedIndex(
+        (current) => (current + direction + filteredOptions.length) % filteredOptions.length,
       );
       return;
     }
@@ -685,9 +692,7 @@ function ColorField({
   const changed = patch[name]?.trim().length ? true : false;
   return (
     <label className="space-y-1">
-      <span className="block text-[10px] font-medium uppercase text-muted-foreground">
-        {label}
-      </span>
+      <span className="block text-[10px] font-medium uppercase text-muted-foreground">{label}</span>
       <div className={cn("flex h-8 items-center gap-2 px-2", controlClassName(changed))}>
         <input
           type="color"
@@ -822,7 +827,8 @@ export const ElementPropertiesPanel = memo(function ElementPropertiesPanel({
   );
   const changedCount = Object.keys(normalizedPatch).length;
   const effects = element.effects ?? EMPTY_BROWSER_EFFECTS;
-  const activeEffect = effects[Math.min(activeEffectIndex, Math.max(0, effects.length - 1))] ?? null;
+  const activeEffect =
+    effects[Math.min(activeEffectIndex, Math.max(0, effects.length - 1))] ?? null;
   const activeEffectGradient = useMemo(
     () => (activeEffect ? effectValue(activeEffect, draftPatch, "backgroundImage") : ""),
     [activeEffect, draftPatch],
@@ -846,14 +852,17 @@ export const ElementPropertiesPanel = memo(function ElementPropertiesPanel({
     }));
   }, []);
 
-  const setEffectPatchValue = useCallback((name: EffectPatchKey, value: string) => {
-    if (!activeEffect) return;
-    setDraftPatch((current) => ({
-      ...current,
-      effectTarget: activeEffect.source,
-      [name]: value,
-    }));
-  }, [activeEffect]);
+  const setEffectPatchValue = useCallback(
+    (name: EffectPatchKey, value: string) => {
+      if (!activeEffect) return;
+      setDraftPatch((current) => ({
+        ...current,
+        effectTarget: activeEffect.source,
+        [name]: value,
+      }));
+    },
+    [activeEffect],
+  );
 
   useEffect(() => {
     setDraftPatch(initialPatch ?? {});
@@ -900,7 +909,8 @@ export const ElementPropertiesPanel = memo(function ElementPropertiesPanel({
             type="button"
             className={cn(
               "h-6 rounded-[5px] text-[10px] font-medium capitalize text-muted-foreground transition",
-              activeTab === tab && "bg-white/66 text-slate-950 shadow-sm dark:bg-white/[0.08] dark:text-foreground",
+              activeTab === tab &&
+                "bg-white/66 text-slate-950 shadow-sm dark:bg-white/[0.08] dark:text-foreground",
             )}
             onClick={() => setActiveTab(tab)}
           >
@@ -929,7 +939,9 @@ export const ElementPropertiesPanel = memo(function ElementPropertiesPanel({
           </div>
 
           <div className="mt-3 space-y-2">
-            <div className="text-[10px] font-medium uppercase text-muted-foreground">Typography</div>
+            <div className="text-[10px] font-medium uppercase text-muted-foreground">
+              Typography
+            </div>
             <SelectRow
               element={element}
               patch={draftPatch}
@@ -990,11 +1002,7 @@ export const ElementPropertiesPanel = memo(function ElementPropertiesPanel({
 
           <div className="mt-3 space-y-2">
             <div className="text-[10px] font-medium uppercase text-muted-foreground">Box</div>
-            <BoxModelVisualizer
-              element={element}
-              patch={draftPatch}
-              onChange={setPatchValue}
-            />
+            <BoxModelVisualizer element={element} patch={draftPatch} onChange={setPatchValue} />
             <ColorField
               element={element}
               patch={draftPatch}
@@ -1127,7 +1135,9 @@ export const ElementPropertiesPanel = memo(function ElementPropertiesPanel({
               ) : null}
 
               <div className="space-y-2">
-                <div className="text-[10px] font-medium uppercase text-muted-foreground">Motion</div>
+                <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                  Motion
+                </div>
                 <EffectNumericRow
                   label="Speed"
                   value={effectValue(activeEffect, draftPatch, "animationDuration")}
@@ -1152,7 +1162,9 @@ export const ElementPropertiesPanel = memo(function ElementPropertiesPanel({
               </div>
 
               <div className="space-y-2">
-                <div className="text-[10px] font-medium uppercase text-muted-foreground">Surface</div>
+                <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                  Surface
+                </div>
                 <EffectTextRow
                   label="Gradient"
                   value={activeEffectGradient}

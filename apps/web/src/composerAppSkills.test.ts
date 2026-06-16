@@ -27,7 +27,7 @@ describe("composer app skills", () => {
     expect(parseLiveEditAppSkillArgs("--url http://localhost:3000")).toEqual({
       url: "http://localhost:3000",
     });
-    expect(parseLiveEditAppSkillArgs("--command \"pnpm dev\" --port 4173 apps/site")).toEqual({
+    expect(parseLiveEditAppSkillArgs('--command "pnpm dev" --port 4173 apps/site')).toEqual({
       command: "pnpm dev",
       preferredPort: 4173,
       target: "apps/site",

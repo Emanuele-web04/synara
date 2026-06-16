@@ -460,7 +460,9 @@ export class DesktopBrowserManager {
   }
 
   listStates(): ThreadBrowserState[] {
-    return Array.from(this.states, ([threadId, state]) => this.snapshotThreadState(threadId, state));
+    return Array.from(this.states, ([threadId, state]) =>
+      this.snapshotThreadState(threadId, state),
+    );
   }
 
   setPanelBounds(input: BrowserSetPanelBoundsInput): void {
