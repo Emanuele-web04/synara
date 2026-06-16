@@ -1,4 +1,4 @@
-import type { ReviewPullRequestSummary } from "@t3tools/contracts";
+import type { ReviewListSort, ReviewPullRequestSummary } from "@t3tools/contracts";
 import { useMemo } from "react";
 
 import { CheckIcon, ChevronDownIcon, SearchIcon, XIcon } from "~/lib/icons";
@@ -127,8 +127,8 @@ export function ReviewFilterBar(props: {
   resultCount?: number;
   resultCountIsIncomplete?: boolean;
   sortOptions?: ReadonlyArray<ReviewSortOption>;
-  sortId?: string;
-  onSortChange?: (id: string) => void;
+  sortId?: ReviewListSort;
+  onSortChange?: (id: ReviewListSort) => void;
   onOpenReference?: (reference: string) => void;
   className?: string;
   searchClassName?: string;

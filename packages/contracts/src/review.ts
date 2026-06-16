@@ -18,6 +18,8 @@ const ReviewListColumn = Schema.Literals([
   "merged",
 ]);
 const ReviewChecksStatus = Schema.Literals(["passing", "failing", "pending", "none"]);
+const ReviewListSort = Schema.Literals(["updated", "title", "size"]);
+export type ReviewListSort = typeof ReviewListSort.Type;
 
 export const ReviewSourceRef = Schema.Union([
   Schema.TaggedStruct("pullRequest", {
@@ -96,6 +98,7 @@ export const ReviewListPullRequestsInput = Schema.Struct({
   draft: Schema.optional(Schema.Boolean),
   columns: Schema.optional(Schema.Array(ReviewListColumn)),
   checks: Schema.optional(Schema.Array(ReviewChecksStatus)),
+  sort: Schema.optional(ReviewListSort),
 });
 export type ReviewListPullRequestsInput = typeof ReviewListPullRequestsInput.Type;
 
@@ -654,6 +657,7 @@ export const ReviewUpdatedPayload = Schema.Union([
     draft: Schema.optional(Schema.Boolean),
     columns: Schema.optional(Schema.Array(ReviewListColumn)),
     checks: Schema.optional(Schema.Array(ReviewChecksStatus)),
+    sort: Schema.optional(ReviewListSort),
     data: ReviewListPullRequestsResult,
     fetchedAt: NonNegativeInt,
   }),

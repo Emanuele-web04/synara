@@ -114,6 +114,15 @@ describe("reviewQueryKeys.pullRequests", () => {
       reviewQueryKeys.pullRequests({ cwd: "/repo", search: "body-only-match" }),
     ).not.toEqual(reviewQueryKeys.pullRequests({ cwd: "/repo", search: "other" }));
   });
+
+  it("separates non-default sort modes into distinct list cache keys", () => {
+    expect(reviewQueryKeys.pullRequests({ cwd: "/repo" })).not.toEqual(
+      reviewQueryKeys.pullRequests({ cwd: "/repo", sort: "title" }),
+    );
+    expect(reviewQueryKeys.pullRequests({ cwd: "/repo", sort: "title" })).not.toEqual(
+      reviewQueryKeys.pullRequests({ cwd: "/repo", sort: "size" }),
+    );
+  });
 });
 
 describe("reviewQueryKeys.pullRequestSurface", () => {
@@ -195,6 +204,7 @@ describe("buildReviewListPullRequestsRequest", () => {
         draft: true,
         columns: ["approved", "needs-review", "approved"],
         checks: ["pending", "passing", "pending"],
+        sort: "size",
       }),
     ).toEqual({
       cwd: "/repo",
@@ -212,6 +222,7 @@ describe("buildReviewListPullRequestsRequest", () => {
       draft: true,
       columns: ["approved", "needs-review"],
       checks: ["passing", "pending"],
+      sort: "size",
     });
   });
 });

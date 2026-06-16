@@ -1,4 +1,5 @@
 import type {
+  ReviewListSort,
   ReviewListPullRequestsResult,
   ReviewPullRequestSummary,
   ReviewSourceRef,
@@ -45,7 +46,7 @@ export function PullRequestList(props: {
   const [search, setSearch] = useState("");
   const [serverSearch] = useDebouncedValue(search, { wait: 250 });
   const [activeFilters, setActiveFilters] = useState<ActiveReviewFilter[]>([]);
-  const [sortId, setSortId] = useState("updated");
+  const [sortId, setSortId] = useState<ReviewListSort>("updated");
   const [resultLimitState, setResultLimitState] = useState<{
     scopeKey: string;
     limit: number;
@@ -54,9 +55,10 @@ export function PullRequestList(props: {
     () => toReviewServerListFilters(activeFilters),
     [activeFilters],
   );
+  const serverSort = sortId === "updated" ? undefined : sortId;
   const listScopeKey = useMemo(
-    () => JSON.stringify([props.cwd, serverSearch.trim(), serverFilters]),
-    [props.cwd, serverSearch, serverFilters],
+    () => JSON.stringify([props.cwd, serverSearch.trim(), serverFilters, serverSort]),
+    [props.cwd, serverSearch, serverFilters, serverSort],
   );
   const resultLimit =
     resultLimitState?.scopeKey === listScopeKey ? resultLimitState.limit : null;
@@ -66,6 +68,7 @@ export function PullRequestList(props: {
       ...(resultLimit !== null ? { limit: resultLimit } : {}),
       search: serverSearch,
       ...serverFilters,
+      ...(serverSort !== undefined ? { sort: serverSort } : {}),
     }),
     placeholderData: (previousData: ReviewListPullRequestsResult | undefined) => previousData,
   });

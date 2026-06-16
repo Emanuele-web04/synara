@@ -1,4 +1,4 @@
-import type { ReviewPullRequestSummary } from "@t3tools/contracts";
+import type { ReviewListSort, ReviewPullRequestSummary } from "@t3tools/contracts";
 
 import { type ReviewColumnId, deriveReviewColumn, filterBySearch } from "./reviewBoardColumns";
 
@@ -18,7 +18,7 @@ export interface ReviewFilterDefinition {
 }
 
 export interface ReviewSortOption {
-  id: string;
+  id: ReviewListSort;
   label: string;
   compare: (a: ReviewPullRequestSummary, b: ReviewPullRequestSummary) => number;
 }

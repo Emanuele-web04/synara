@@ -163,6 +163,32 @@ describe("PullRequestList filters", () => {
     }
   });
 
+  it("requests server-backed sorting when the sort mode changes", async () => {
+    const mounted = await mountList([
+      pullRequest({
+        number: 92,
+        title: "Initial sorted pull request",
+        labels: [],
+      }),
+    ]);
+
+    try {
+      await expect.element(page.getByText("Initial sorted pull request")).toBeVisible();
+
+      await page.getByRole("button", { name: /Sort.*Recently updated/ }).click();
+      await page.getByText("Title (A–Z)", { exact: true }).click();
+
+      await vi.waitFor(() => {
+        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+          cwd: "/repo",
+          sort: "title",
+        });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("loads a larger review window when the list scrolls near the bottom", async () => {
     let resolveNextWindow:
       | ((value: ReviewListPullRequestsResult) => void)

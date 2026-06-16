@@ -8,6 +8,7 @@ import {
   type ReviewFinding,
   type ReviewListPullRequestsInput,
   type ReviewListPullRequestsResult,
+  type ReviewListSort,
   type ReviewProjectCard,
   type ReviewProjectColumn,
   type ReviewProjectSummary,
@@ -48,6 +49,7 @@ const DEFAULT_REVIEW_LIST_RESULT_LIMIT = 50;
 const MAX_REVIEW_LIST_RESULT_LIMIT = 500;
 const FILTERED_REVIEW_LIST_CANDIDATE_LIMIT = 1_000;
 const FILTERED_REVIEW_LIST_CANDIDATE_MULTIPLIER = 10;
+const SORTED_REVIEW_LIST_CANDIDATE_LIMIT = 5_000;
 const inFlightRefreshKeys = new Set<string>();
 
 interface ReviewCacheIdentity {
@@ -291,6 +293,27 @@ function hasLocalListFilters(input: ReviewListPullRequestsInput, viewerLogin: st
   );
 }
 
+function normalizedReviewListSort(sort: ReviewListPullRequestsInput["sort"]): ReviewListSort {
+  return sort ?? "updated";
+}
+
+function sortNeedsExpandedCandidates(input: ReviewListPullRequestsInput): boolean {
+  return normalizedReviewListSort(input.sort) !== "updated";
+}
+
+function compareReviewPullRequestSummaries(
+  sort: ReviewListSort,
+): (a: ReviewPullRequestSummary, b: ReviewPullRequestSummary) => number {
+  switch (sort) {
+    case "title":
+      return (a, b) => a.title.localeCompare(b.title);
+    case "size":
+      return (a, b) => b.additions + b.deletions - (a.additions + a.deletions);
+    case "updated":
+      return (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+  }
+}
+
 function nativeListSearchValues(
   values: ReadonlyArray<string> | undefined,
 ): ReadonlyArray<string> {
@@ -364,13 +387,18 @@ function githubListLimit(
   input: ReviewListPullRequestsInput,
   viewerLogin: string,
 ): number | undefined {
-  if (!hasLocalListFilters(input, viewerLogin)) {
+  const needsLocalWindow =
+    hasLocalListFilters(input, viewerLogin) || sortNeedsExpandedCandidates(input);
+  if (!needsLocalWindow) {
     return resultListLimit(input);
   }
-  return Math.max(
+  const localFilterCandidateLimit = Math.max(
     resultListLimit(input) * FILTERED_REVIEW_LIST_CANDIDATE_MULTIPLIER,
     FILTERED_REVIEW_LIST_CANDIDATE_LIMIT,
   );
+  return sortNeedsExpandedCandidates(input)
+    ? Math.max(localFilterCandidateLimit, SORTED_REVIEW_LIST_CANDIDATE_LIMIT)
+    : localFilterCandidateLimit;
 }
 
 function toChangedFiles(patch: string): ReadonlyArray<ReviewChangedFile> {
@@ -462,6 +490,7 @@ function pullRequestListFilter(
     readonly draft?: boolean | undefined;
     readonly columns?: ReadonlyArray<string> | undefined;
     readonly checks?: ReadonlyArray<string> | undefined;
+    readonly sort?: ReviewListSort | undefined;
   },
   viewerLogin: string,
 ): string {
@@ -490,6 +519,7 @@ function pullRequestListFilter(
     draft: input.draft === true ? true : null,
     columns: [...normalizedSet(input.columns)].sort(),
     checks: [...normalizedSet(input.checks)].sort(),
+    ...(input.sort !== undefined ? { sort: normalizedReviewListSort(input.sort) } : {}),
   });
 }
 
@@ -632,12 +662,16 @@ const makeReviewSource = Effect.gen(function* () {
             .map(toPullRequestSummary)
             .filter((summary): summary is ReviewPullRequestSummary => summary !== null)
             .filter(matchesListFilters);
-          const usesLocalCandidateWindow = hasLocalListFilters(input, viewerLogin);
+          const sortedSummaries = [...summaries].sort(
+            compareReviewPullRequestSummaries(normalizedReviewListSort(input.sort)),
+          );
+          const usesLocalCandidateWindow =
+            hasLocalListFilters(input, viewerLogin) || sortNeedsExpandedCandidates(input);
           const candidateLimit = listLimit ?? resultListLimit(input);
           const resultLimit = resultListLimit(input);
           const returnedPullRequests = usesLocalCandidateWindow
-            ? summaries.slice(0, resultLimit)
-            : summaries;
+            ? sortedSummaries.slice(0, resultLimit)
+            : sortedSummaries;
           return {
             pullRequests: returnedPullRequests,
             ...(candidateLimit !== undefined
@@ -1009,9 +1043,9 @@ const makeReviewSource = Effect.gen(function* () {
 
   const loadPullRequestSurface: ReviewSourceShape["loadPullRequestSurface"] = (input) =>
     Effect.gen(function* () {
-      const overview = yield* loadPullRequest({ cwd: input.cwd, reference: input.reference });
-      const [conversation, changeset] = yield* Effect.all(
+      const [overview, conversation, changeset] = yield* Effect.all(
         [
+          loadPullRequest({ cwd: input.cwd, reference: input.reference }),
           input.includeConversation === true
             ? loadConversation({ cwd: input.cwd, reference: input.reference })
             : Effect.succeed<ReviewConversationResult | undefined>(undefined),
@@ -1076,6 +1110,7 @@ const makeReviewSource = Effect.gen(function* () {
                     ...(input.draft === true ? { draft: true } : {}),
                     ...(input.columns !== undefined ? { columns: input.columns } : {}),
                     ...(input.checks !== undefined ? { checks: input.checks } : {}),
+                    ...(input.sort !== undefined ? { sort: input.sort } : {}),
                     data,
                     fetchedAt,
                   }),

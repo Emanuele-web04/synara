@@ -2,6 +2,7 @@ import type {
   ReviewAddCommentInput,
   ReviewInlineComment,
   ReviewListPullRequestsInput,
+  ReviewListSort,
   ReviewLocalComment,
   ReviewMoveProjectCardInput,
   ReviewProjectBoard,
@@ -35,6 +36,7 @@ const REVIEW_PROJECT_BOARD_STALE_TIME_MS = 30_000;
 type ReviewListState = NonNullable<ReviewListPullRequestsInput["state"]>;
 type ReviewListColumn = NonNullable<ReviewListPullRequestsInput["columns"]>[number];
 type ReviewListChecksStatus = NonNullable<ReviewListPullRequestsInput["checks"]>[number];
+type ReviewListSortId = ReviewListSort;
 
 export function reviewSourceKey(source: ReviewSourceRef): string {
   return source._tag === "pullRequest"
@@ -73,6 +75,10 @@ function reviewPullRequestListTextValues(values?: ReadonlyArray<string>): Readon
   ].sort();
 }
 
+function reviewPullRequestListSort(sort?: ReviewListSortId): ReviewListSortId | null {
+  return sort ?? null;
+}
+
 export function applyReviewUpdatedPayload(
   queryClient: QueryClient,
   payload: ReviewUpdatedPayload,
@@ -98,6 +104,7 @@ export function applyReviewUpdatedPayload(
         draft: payload.draft,
         columns: payload.columns,
         checks: payload.checks,
+        sort: payload.sort,
       }),
       payload.data,
     );
@@ -172,6 +179,7 @@ export const reviewQueryKeys = {
     draft?: boolean;
     columns?: ReadonlyArray<ReviewListColumn>;
     checks?: ReadonlyArray<ReviewListChecksStatus>;
+    sort?: ReviewListSortId;
   }) =>
     [
       ...reviewQueryKeys.pullRequestLists(input.cwd),
@@ -192,6 +200,7 @@ export const reviewQueryKeys = {
       input.draft === true ? true : null,
       reviewPullRequestListValues(input.columns),
       reviewPullRequestListValues(input.checks),
+      reviewPullRequestListSort(input.sort),
     ] as const,
   changeset: (cwd: string | null, sourceKey: string | null) =>
     ["review", "changeset", cwd, sourceKey] as const,
@@ -246,6 +255,7 @@ export function reviewListPullRequestsQueryOptions(input: {
   draft?: boolean;
   columns?: ReadonlyArray<ReviewListColumn>;
   checks?: ReadonlyArray<ReviewListChecksStatus>;
+  sort?: ReviewListSortId;
 }) {
   return queryOptions({
     queryKey: reviewQueryKeys.pullRequests(input),
@@ -283,6 +293,7 @@ export function buildReviewListPullRequestsRequest(input: {
   draft?: boolean;
   columns?: ReadonlyArray<ReviewListColumn>;
   checks?: ReadonlyArray<ReviewListChecksStatus>;
+  sort?: ReviewListSortId;
 }): ReviewListPullRequestsInput {
   const search = reviewPullRequestListText(input.search);
   const author = reviewPullRequestListText(input.author);
@@ -317,6 +328,7 @@ export function buildReviewListPullRequestsRequest(input: {
     ...(input.draft === true ? { draft: true } : {}),
     ...(columns.length > 0 ? { columns } : {}),
     ...(checks.length > 0 ? { checks } : {}),
+    ...(input.sort !== undefined ? { sort: input.sort } : {}),
   };
 }
 

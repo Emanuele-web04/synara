@@ -11,8 +11,10 @@ import { GitHubCliError } from "../../git/Errors.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
 import {
   GitHubCli,
+  type GitHubReviewPullRequestOverview,
   type GitHubCliShape,
   type GitHubReviewPullRequest,
+  type GitHubReviewTimelineEvent,
 } from "../../git/Services/GitHubCli.ts";
 import { GitManager, type GitManagerShape } from "../../git/Services/GitManager.ts";
 import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
@@ -278,6 +280,191 @@ function numbers(result: ReviewListPullRequestsResult): number[] {
   return result.pullRequests.map((pullRequest: ReviewPullRequestSummary) => pullRequest.number);
 }
 
+function makeSurfaceLayer() {
+  const recorded = {
+    activeGitHubCalls: 0,
+    maxActiveGitHubCalls: 0,
+    started: [] as string[],
+    finished: [] as string[],
+  };
+
+  const trackGitHubCall = <T>(label: string, value: T) =>
+    Effect.promise<T>(() => {
+      recorded.started.push(label);
+      recorded.activeGitHubCalls += 1;
+      recorded.maxActiveGitHubCalls = Math.max(
+        recorded.maxActiveGitHubCalls,
+        recorded.activeGitHubCalls,
+      );
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          recorded.activeGitHubCalls -= 1;
+          recorded.finished.push(label);
+          resolve(value);
+        }, 20);
+      });
+    });
+
+  const overview = {
+    detail: {
+      number: 42,
+      title: "Parallel review surface",
+      url: "https://github.com/acme/demo/pull/42",
+      state: "open",
+      isDraft: false,
+      author: "alice",
+      baseBranch: "main",
+      headBranch: "feature/review-surface",
+      body: "Review body",
+      createdAt: "2026-06-16T00:00:00.000Z",
+      updatedAt: "2026-06-16T00:00:00.000Z",
+      additions: 10,
+      deletions: 2,
+      changedFiles: 3,
+      commitsCount: 1,
+      reviewDecision: null,
+      mergeable: "MERGEABLE",
+      checksStatus: "passing",
+      milestone: null,
+      labels: [],
+      assignees: [],
+      reviewers: [],
+    },
+    commits: [],
+    checks: [],
+  } satisfies GitHubReviewPullRequestOverview;
+  const conversation = [
+    {
+      kind: "comment",
+      id: "comment-1",
+      author: "alice",
+      body: "Looks good.",
+      createdAt: "2026-06-16T00:00:00.000Z",
+    },
+  ] satisfies ReadonlyArray<GitHubReviewTimelineEvent>;
+
+  const gitHubCli: GitHubCliShape = {
+    getAuthenticatedUser: () =>
+      Effect.succeed({
+        login: "tyler",
+        avatarUrl: "https://avatar.test",
+      }),
+    getReviewPullRequestOverview: () => trackGitHubCall("overview", overview),
+    getReviewConversation: () => trackGitHubCall("conversation", conversation),
+    execute: () => unexpected("GitHubCli.execute"),
+    listRepositoryPullRequests: () => unexpected("GitHubCli.listRepositoryPullRequests"),
+    listOpenPullRequests: () => unexpected("GitHubCli.listOpenPullRequests"),
+    getPullRequest: () => unexpected("GitHubCli.getPullRequest"),
+    getReviewPullRequestHeader: () =>
+      Effect.fail(new GitHubCliError({ operation: "test", detail: "unexpected header" })),
+    getPullRequestDiff: () => unexpected("GitHubCli.getPullRequestDiff"),
+    getPullRequestHeadSha: () => unexpected("GitHubCli.getPullRequestHeadSha"),
+    submitPullRequestReview: () => unexpected("GitHubCli.submitPullRequestReview"),
+    createPullRequestReviewWithComments: () =>
+      unexpected("GitHubCli.createPullRequestReviewWithComments"),
+    getPullRequestThreads: () => unexpected("GitHubCli.getPullRequestThreads"),
+    getRepositoryCloneUrls: () => unexpected("GitHubCli.getRepositoryCloneUrls"),
+    createPullRequest: () => unexpected("GitHubCli.createPullRequest"),
+    getDefaultBranch: () => unexpected("GitHubCli.getDefaultBranch"),
+    checkoutPullRequest: () => unexpected("GitHubCli.checkoutPullRequest"),
+    projectScopeAvailable: () => unexpected("GitHubCli.projectScopeAvailable"),
+    listProjects: () => unexpected("GitHubCli.listProjects"),
+    getProjectBoard: () => unexpected("GitHubCli.getProjectBoard"),
+    moveProjectCard: () => unexpected("GitHubCli.moveProjectCard"),
+    getRepositoryOwner: () => unexpected("GitHubCli.getRepositoryOwner"),
+  };
+
+  const gitCore: GitCoreShape = {
+    execute: () =>
+      Effect.succeed({
+        code: 0,
+        stdout: "/repo\n",
+        stderr: "",
+      }),
+    status: () => unexpectedEffect("GitCore.status"),
+    statusDetails: () => unexpectedEffect("GitCore.statusDetails"),
+    readWorkingTreePatch: () => unexpectedEffect("GitCore.readWorkingTreePatch"),
+    readUnstagedPatch: () => unexpectedEffect("GitCore.readUnstagedPatch"),
+    readStagedPatch: () => unexpectedEffect("GitCore.readStagedPatch"),
+    readBranchPatch: () => unexpectedEffect("GitCore.readBranchPatch"),
+    prepareCommitContext: () => unexpectedEffect("GitCore.prepareCommitContext"),
+    commit: () => unexpectedEffect("GitCore.commit"),
+    pushCurrentBranch: () => unexpectedEffect("GitCore.pushCurrentBranch"),
+    readRangeContext: () => unexpectedEffect("GitCore.readRangeContext"),
+    readRangeDiff: () => unexpectedEffect("GitCore.readRangeDiff"),
+    readConfigValue: () => unexpectedEffect("GitCore.readConfigValue"),
+    listBranches: () => unexpectedEffect("GitCore.listBranches"),
+    pullCurrentBranch: () => unexpectedEffect("GitCore.pullCurrentBranch"),
+    createWorktree: () => unexpectedEffect("GitCore.createWorktree"),
+    createDetachedWorktree: () => unexpectedEffect("GitCore.createDetachedWorktree"),
+    fetchPullRequestBranch: () => unexpectedEffect("GitCore.fetchPullRequestBranch"),
+    ensureRemote: () => unexpectedEffect("GitCore.ensureRemote"),
+    fetchRemoteBranch: () => unexpectedEffect("GitCore.fetchRemoteBranch"),
+    setBranchUpstream: () => unexpectedEffect("GitCore.setBranchUpstream"),
+    removeWorktree: () => unexpectedEffect("GitCore.removeWorktree"),
+    renameBranch: () => unexpectedEffect("GitCore.renameBranch"),
+    createBranch: () => unexpectedEffect("GitCore.createBranch"),
+    publishBranch: () => unexpectedEffect("GitCore.publishBranch"),
+    checkoutBranch: () => unexpectedEffect("GitCore.checkoutBranch"),
+    stashAndCheckout: () => unexpectedEffect("GitCore.stashAndCheckout"),
+    stashDrop: () => unexpectedEffect("GitCore.stashDrop"),
+    stashInfo: () => unexpectedEffect("GitCore.stashInfo"),
+    removeIndexLock: () => unexpectedEffect("GitCore.removeIndexLock"),
+    initRepo: () => unexpectedEffect("GitCore.initRepo"),
+    listLocalBranchNames: () => unexpectedEffect("GitCore.listLocalBranchNames"),
+    stageFiles: () => unexpectedEffect("GitCore.stageFiles"),
+    unstageFiles: () => unexpectedEffect("GitCore.unstageFiles"),
+  };
+
+  const cacheStore: ReviewCacheStoreShape = {
+    getPullRequestList: () => unexpected("ReviewCacheStore.getPullRequestList"),
+    upsertPullRequestList: () => unexpected("ReviewCacheStore.upsertPullRequestList"),
+    getPullRequestOverview: () => Effect.succeed(Option.none()),
+    upsertPullRequestOverview: () => Effect.void,
+    getPullRequestConversation: () => Effect.succeed(Option.none()),
+    upsertPullRequestConversation: () => Effect.void,
+    getPullRequestChangeset: () => unexpected("ReviewCacheStore.getPullRequestChangeset"),
+    upsertPullRequestChangeset: () => unexpected("ReviewCacheStore.upsertPullRequestChangeset"),
+  };
+
+  const gitManager: GitManagerShape = {
+    status: () => unexpectedEffect("GitManager.status"),
+    readWorkingTreeDiff: () => unexpectedEffect("GitManager.readWorkingTreeDiff"),
+    summarizeDiff: () => unexpectedEffect("GitManager.summarizeDiff"),
+    resolvePullRequest: () => unexpectedEffect("GitManager.resolvePullRequest"),
+    preparePullRequestThread: () => unexpectedEffect("GitManager.preparePullRequestThread"),
+    handoffThread: () => unexpectedEffect("GitManager.handoffThread"),
+    runStackedAction: () => unexpectedEffect("GitManager.runStackedAction"),
+  };
+
+  const textGeneration: TextGenerationShape = {
+    generateCommitMessage: () => unexpectedEffect("TextGeneration.generateCommitMessage"),
+    generatePrContent: () => unexpectedEffect("TextGeneration.generatePrContent"),
+    generateDiffSummary: () => unexpectedEffect("TextGeneration.generateDiffSummary"),
+    generateReviewFindings: () => unexpectedEffect("TextGeneration.generateReviewFindings"),
+    generateBranchName: () => unexpectedEffect("TextGeneration.generateBranchName"),
+    generateThreadTitle: () => unexpectedEffect("TextGeneration.generateThreadTitle"),
+    generateThreadRecap: () => unexpectedEffect("TextGeneration.generateThreadRecap"),
+  };
+
+  const depsLayer = Layer.mergeAll(
+    Layer.succeed(GitHubCli, gitHubCli),
+    Layer.succeed(GitCore, gitCore),
+    Layer.succeed(GitManager, gitManager),
+    Layer.succeed(TextGeneration, textGeneration),
+    Layer.succeed(ReviewCacheStore, cacheStore),
+    Layer.succeed(ReviewUpdateBus, {
+      publish: () => Effect.void,
+      stream: Stream.empty,
+    }),
+  );
+
+  return {
+    layer: ReviewSourceLive.pipe(Layer.provide(depsLayer)),
+    recorded,
+  };
+}
+
 it.effect("memoizes repository and auth preflight across repeated list requests", () => {
   const { layer, recorded } = makeLayer({
     pullRequests: [ghPr({ number: 1 }), ghPr({ number: 2 })],
@@ -292,6 +479,27 @@ it.effect("memoizes repository and auth preflight across repeated list requests"
     expect(second).toEqual(first);
     expect(recorded.repositoryIdCalls).toBe(1);
     expect(recorded.authenticatedUserCalls).toBe(1);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("loads aggregate overview and conversation concurrently", () => {
+  const { layer, recorded } = makeSurfaceLayer();
+
+  return Effect.gen(function* () {
+    const reviewSource = yield* ReviewSource;
+    const result = yield* reviewSource.loadPullRequestSurface({
+      cwd: "/repo",
+      reference: "42",
+      source: { _tag: "pullRequest", reference: "42" },
+      includeConversation: true,
+    });
+
+    expect(result.overview.detail.number).toBe(42);
+    expect(result.conversation?.events).toHaveLength(1);
+    expect(result.changeset).toBeUndefined();
+    expect(recorded.started).toEqual(["overview", "conversation"]);
+    expect(recorded.finished).toEqual(["overview", "conversation"]);
+    expect(recorded.maxActiveGitHubCalls).toBe(2);
   }).pipe(Effect.provide(layer));
 });
 
@@ -559,6 +767,41 @@ it.effect("finds sparse local-filter matches beyond the first candidate page", (
       bounded: true,
     });
     expect(recorded.listCalls).toEqual([{ cwd: "/repo", state: "open", limit: 5000 }]);
+  });
+});
+
+it.effect("sorts expanded server candidates before slicing bounded list results", () => {
+  const pullRequests = Array.from({ length: 100 }, (_, index) =>
+    ghPr({
+      number: index + 1,
+      title: index === 89 ? "AAA outside first page" : `ZZZ review ${String(index + 1)}`,
+    }),
+  );
+  const { layer, recorded } = makeLayer({ pullRequests });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      sort: "title",
+    });
+
+    expect(result.pullRequests).toHaveLength(50);
+    expect(numbers(result).at(0)).toBe(90);
+    expect(result.meta).toEqual({
+      resultLimit: 50,
+      candidateLimit: 5000,
+      candidateCount: 100,
+      candidateLimitReached: false,
+      matchedCount: 100,
+      returnedCount: 50,
+      bounded: true,
+    });
+    expect(recorded.listCalls).toEqual([{ cwd: "/repo", state: "open", limit: 5000 }]);
+    expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toMatchObject({
+      state: "open",
+      limit: 50,
+      sort: "title",
+    });
   });
 });
 
