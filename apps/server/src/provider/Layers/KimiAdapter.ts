@@ -159,45 +159,45 @@ function makeKimiAcpRuntimeLoggers(
   base: Pick<AcpSessionRuntimeOptions, "requestLogger" | "protocolLogging">,
 ): Pick<AcpSessionRuntimeOptions, "requestLogger" | "protocolLogging"> {
   const debugEnabled = isKimiAcpDebugEnabled();
-  const requestLogger: AcpSessionRuntimeOptions["requestLogger"] =
-    base.requestLogger || debugEnabled
-      ? (event) =>
+  const wantRequestLogger = base.requestLogger !== undefined || debugEnabled;
+  const requestLogger: AcpSessionRuntimeOptions["requestLogger"] = wantRequestLogger
+    ? (event) =>
+        Effect.gen(function* () {
+          if (base.requestLogger) {
+            yield* base.requestLogger(event);
+          }
+          if (debugEnabled && event.status === "failed") {
+            yield* Effect.logWarning("kimi.acp.request_failed", {
+              marker: KIMI_ACP_TRANSPORT_DEBUG_MARKER,
+              method: event.method,
+              payload: summarizeKimiAcpRequestPayload(event.method, event.payload),
+              cause: event.cause ? Cause.pretty(event.cause) : undefined,
+            });
+          }
+        })
+    : undefined;
+  const wantProtocolLogging = base.protocolLogging !== undefined || debugEnabled;
+  const protocolLogging: AcpSessionRuntimeOptions["protocolLogging"] = wantProtocolLogging
+    ? {
+        logIncoming: base.protocolLogging?.logIncoming ?? debugEnabled,
+        logOutgoing: base.protocolLogging?.logOutgoing ?? false,
+        logger: (event) =>
           Effect.gen(function* () {
-            if (base.requestLogger) {
-              yield* base.requestLogger(event);
+            if (base.protocolLogging?.logger) {
+              yield* base.protocolLogging.logger(event);
             }
-            if (debugEnabled && event.status === "failed") {
-              yield* Effect.logWarning("kimi.acp.request_failed", {
-                marker: KIMI_ACP_TRANSPORT_DEBUG_MARKER,
-                method: event.method,
-                payload: summarizeKimiAcpRequestPayload(event.method, event.payload),
-                cause: event.cause ? Cause.pretty(event.cause) : undefined,
-              });
+            if (!debugEnabled || !shouldMirrorKimiAcpProtocolLog(event)) {
+              return;
             }
-          })
-      : undefined;
-  const protocolLogging: AcpSessionRuntimeOptions["protocolLogging"] =
-    base.protocolLogging || debugEnabled
-      ? {
-          logIncoming: base.protocolLogging?.logIncoming ?? debugEnabled,
-          logOutgoing: base.protocolLogging?.logOutgoing ?? false,
-          logger: (event) =>
-            Effect.gen(function* () {
-              if (base.protocolLogging?.logger) {
-                yield* base.protocolLogging.logger(event);
-              }
-              if (!debugEnabled || !shouldMirrorKimiAcpProtocolLog(event)) {
-                return;
-              }
-              yield* Effect.logWarning("kimi.acp.protocol", {
-                marker: KIMI_ACP_TRANSPORT_DEBUG_MARKER,
-                direction: event.direction,
-                stage: event.stage,
-                payload: summarizeKimiAcpLogPayload(event.payload),
-              });
-            }),
-        }
-      : undefined;
+            yield* Effect.logWarning("kimi.acp.protocol", {
+              marker: KIMI_ACP_TRANSPORT_DEBUG_MARKER,
+              direction: event.direction,
+              stage: event.stage,
+              payload: summarizeKimiAcpLogPayload(event.payload),
+            });
+          }),
+      }
+    : undefined;
 
   return {
     ...(requestLogger ? { requestLogger } : {}),

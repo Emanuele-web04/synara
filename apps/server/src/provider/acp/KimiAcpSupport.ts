@@ -97,13 +97,18 @@ export const makeKimiAcpRuntime = (
     return ServiceMap.getUnsafe(acpContext, AcpSessionRuntime);
   });
 
-// Kimi reports its current model(s) in the `model` config option returned by
-// `session/new` (e.g. value `kimi-code/kimi-for-coding`, name "K2.7 Code"). The
-// backend behind the managed alias auto-updates, so this is the authoritative,
-// always-live source for the picker's model name.
-export function buildKimiModelDescriptorsFromConfigOptions(
+// Kimi reports managed model values as `<provider>/<model>` (e.g.
+// `kimi-code/kimi-for-coding`); the bare model id is used as the Synara slug.
+function kimiBareModelSlug(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.includes("/") ? trimmed.slice(trimmed.lastIndexOf("/") + 1).trim() : trimmed;
+}
+
+// Flattens Kimi's `model` config option (returned by `session/new`) into its raw
+// {value, name} entries (e.g. value `kimi-code/kimi-for-coding`, name "K2.7 Code").
+function flattenKimiModelConfigEntries(
   configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
-): ReadonlyArray<ProviderModelDescriptor> {
+): ReadonlyArray<{ readonly value: string; readonly name: string }> {
   const modelOption = configOptions.find(
     (option) =>
       option.type === "select" &&
@@ -112,31 +117,73 @@ export function buildKimiModelDescriptorsFromConfigOptions(
   if (!modelOption || modelOption.type !== "select") {
     return [];
   }
-
-  const seen = new Set<string>();
-  const descriptors: Array<ProviderModelDescriptor> = [];
+  const entries: Array<{ value: string; name: string }> = [];
   for (const entry of modelOption.options) {
     const flattened = "value" in entry ? [entry] : entry.options;
     for (const option of flattened) {
       const value = option.value.trim();
-      if (!value) {
-        continue;
+      if (value) {
+        entries.push({ value, name: option.name?.trim() ?? "" });
       }
-      // Kimi reports managed model values as `<provider>/<model>`; keep the bare
-      // model id as the Synara slug so it stays consistent with the configured
-      // default (`kimi-for-coding`) and dedupes against the built-in fallback.
-      const slug = value.includes("/") ? value.slice(value.lastIndexOf("/") + 1).trim() : value;
-      if (!slug || seen.has(slug)) {
-        continue;
-      }
-      seen.add(slug);
-      const name = option.name?.trim();
-      descriptors.push({ slug, name: name && name.length > 0 ? name : slug });
     }
+  }
+  return entries;
+}
+
+// The backend behind Kimi's managed alias auto-updates, so the live `model`
+// config option is the authoritative source for the picker's model name.
+export function buildKimiModelDescriptorsFromConfigOptions(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+): ReadonlyArray<ProviderModelDescriptor> {
+  const seen = new Set<string>();
+  const descriptors: Array<ProviderModelDescriptor> = [];
+  for (const entry of flattenKimiModelConfigEntries(configOptions)) {
+    // Keep the bare model id as the Synara slug so it stays consistent with the
+    // configured default (`kimi-for-coding`) and dedupes against the built-in.
+    const slug = kimiBareModelSlug(entry.value);
+    if (!slug || seen.has(slug)) {
+      continue;
+    }
+    seen.add(slug);
+    descriptors.push({ slug, name: entry.name.length > 0 ? entry.name : slug });
   }
   return descriptors;
 }
 
+// Resolves a Synara model slug (bare `kimi-for-coding`, the full ACP value, or a
+// custom value) to the exact value Kimi's `model` config option expects. Unmatched
+// values are returned unchanged so the runtime's local validation rejects them
+// (-32602) instead of silently honoring a different model. Returns undefined when
+// the session exposes no model picker (nothing to apply).
+export function resolveKimiAcpModelValue(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+  requestedModel: string | null | undefined,
+): string | undefined {
+  const requested = requestedModel?.trim();
+  if (!requested) {
+    return undefined;
+  }
+  const entries = flattenKimiModelConfigEntries(configOptions);
+  if (entries.length === 0) {
+    return undefined;
+  }
+  const requestedLower = requested.toLowerCase();
+  const exact = entries.find((entry) => entry.value.toLowerCase() === requestedLower);
+  if (exact) {
+    return exact.value;
+  }
+  const byBareSlug = entries.find(
+    (entry) => kimiBareModelSlug(entry.value).toLowerCase() === requestedLower,
+  );
+  return byBareSlug?.value ?? requested;
+}
+
+// Applies the requested model to the running Kimi ACP session through the unified
+// `session/set_config_option` model picker. The selection is resolved to Kimi's
+// exact config value first; the shared AcpSessionRuntime no-ops when it already
+// matches the current value and rejects unsupported values locally, so a
+// selection is always either honored or surfaced as an error — never silently
+// dropped.
 export function applyKimiAcpModelSelection<E>(input: {
   readonly runtime: Pick<
     AcpSessionRuntimeShape,
@@ -145,8 +192,16 @@ export function applyKimiAcpModelSelection<E>(input: {
   readonly model: string;
   readonly mapError: (context: KimiAcpModelSelectionErrorContext) => E;
 }): Effect.Effect<void, E> {
-  void input;
-  // Kimi Code exposes a single managed model (`kimi-for-coding`) selected by the
-  // CLI; there are no client-tunable model/effort knobs to push over ACP today.
-  return Effect.void;
+  return Effect.gen(function* () {
+    const configOptions = yield* input.runtime.getConfigOptions;
+    const value = resolveKimiAcpModelValue(configOptions, input.model);
+    if (value === undefined) {
+      return;
+    }
+    yield* input.runtime
+      .setModel(value)
+      .pipe(
+        Effect.mapError((cause) => input.mapError({ cause, method: "session/set_config_option" })),
+      );
+  });
 }
