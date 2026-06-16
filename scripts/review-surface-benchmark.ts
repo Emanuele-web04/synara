@@ -15,6 +15,7 @@ interface ReviewBenchmarkMetrics {
   readonly naiveElapsedMs: number;
   readonly optimizedElapsedMs: number;
   readonly listCalls: number;
+  readonly viewerCalls: number;
 }
 
 interface MetricSummary {
@@ -94,7 +95,7 @@ for (let index = 1; index <= iterations; index += 1) {
   const metrics = runBenchmarkOnce(index);
   runs.push(metrics);
   console.log(
-    `run ${String(index)}/${String(iterations)}: ${round(metrics.mountedRowReduction)}x rows, ${String(metrics.optimizedRows)} mounted, ${String(metrics.listCalls)} list call`,
+    `run ${String(index)}/${String(iterations)}: ${round(metrics.mountedRowReduction)}x rows, ${String(metrics.optimizedRows)} mounted, ${String(metrics.listCalls)} list call, ${String(metrics.viewerCalls)} viewer calls`,
   );
 }
 
@@ -107,6 +108,7 @@ const summary = {
   naiveElapsedMs: summarize(runs.map((run) => run.naiveElapsedMs)),
   optimizedElapsedMs: summarize(runs.map((run) => run.optimizedElapsedMs)),
   listCalls: summarize(runs.map((run) => run.listCalls)),
+  viewerCalls: summarize(runs.map((run) => run.viewerCalls)),
 };
 
 console.log(JSON.stringify(summary, null, 2));

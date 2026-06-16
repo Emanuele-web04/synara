@@ -102,6 +102,7 @@ describe("ReviewBoard performance", () => {
         .toBeVisible();
       await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
 
+      expect(nativeApiMock.getViewer).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.listPullRequests).toHaveBeenCalledTimes(1);
       expect(nativeApiMock.listPullRequests).toHaveBeenCalledWith({ cwd: "/repo" });
       expect(document.querySelectorAll('[role="listitem"]').length).toBeLessThanOrEqual(
@@ -214,6 +215,12 @@ describe("ReviewBoard performance", () => {
       await page.getByRole("tab", { name: "Needs my review" }).click();
       await expect.element(page.getByText("Needs reviewer attention")).toBeVisible();
 
+      expect(nativeApiMock.getViewer).toHaveBeenCalledTimes(1);
+      expect(nativeApiMock.listPullRequests).toHaveBeenCalledTimes(2);
+      expect(nativeApiMock.listPullRequests.mock.calls).toEqual([
+        [{ cwd: "/repo" }],
+        [{ cwd: "/repo", reviewRequested: "tyler" }],
+      ]);
       expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
         cwd: "/repo",
         reviewRequested: "tyler",

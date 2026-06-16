@@ -41,6 +41,10 @@ import {
 
 const REVIEW_BOARD_CARD_ROW_HEIGHT = 128;
 
+function viewNeedsViewer(view: ReviewBoardView): boolean {
+  return view === "mine" || view === "needs-my-review";
+}
+
 export function ReviewBoard(props: { cwd: string | null }) {
   const { cwd } = props;
   const navigate = useNavigate();
@@ -50,8 +54,13 @@ export function ReviewBoard(props: { cwd: string | null }) {
   const [serverSearch] = useDebouncedValue(search, { wait: 250 });
   const [activeFilters, setActiveFilters] = useState<ActiveReviewFilter[]>([]);
 
-  const viewerQuery = useQuery(reviewViewerQueryOptions({ cwd }));
+  const shouldLoadViewer = cwd !== null && viewNeedsViewer(view);
+  const viewerQuery = useQuery({
+    ...reviewViewerQueryOptions({ cwd }),
+    enabled: shouldLoadViewer,
+  });
   const viewerLogin = viewerQuery.data?.login ?? null;
+  const viewerFilterReady = !shouldLoadViewer || viewerLogin !== null;
   const listState = view === "merged" ? "merged" : "open";
   const viewServerFilters = useMemo(() => {
     if (!viewerLogin || view === "all" || view === "merged") {
@@ -70,12 +79,15 @@ export function ReviewBoard(props: { cwd: string | null }) {
     [activeFilters, viewServerFilters],
   );
   const pullRequestsQuery = useQuery(
-    reviewListPullRequestsQueryOptions({
-      cwd,
-      ...(listState === "merged" ? { state: listState } : {}),
-      search: serverSearch,
-      ...serverFilters,
-    }),
+    {
+      ...reviewListPullRequestsQueryOptions({
+        cwd: viewerFilterReady ? cwd : null,
+        ...(listState === "merged" ? { state: listState } : {}),
+        search: serverSearch,
+        ...serverFilters,
+      }),
+      placeholderData: (previousData: ReviewListPullRequestsResult | undefined) => previousData,
+    },
   );
   const clientSearch = search.trim() === serverSearch.trim() ? "" : search;
   const facetBasePullRequests = useMemo(() => {
@@ -111,7 +123,9 @@ export function ReviewBoard(props: { cwd: string | null }) {
     pullRequestsQuery.data?.meta?.candidateLimitReached === true &&
     visiblePullRequests.length >= (pullRequestsQuery.data.meta.returnedCount ?? 0);
   const hasPullRequestListData = pullRequestsQuery.data !== undefined;
-  const isColdSyncing = !hasPullRequestListData && pullRequestsQuery.isFetching;
+  const isColdSyncing =
+    !hasPullRequestListData &&
+    (pullRequestsQuery.isFetching || (shouldLoadViewer && viewerQuery.isFetching));
   const isRefreshing = hasPullRequestListData && pullRequestsQuery.isFetching;
 
   if (cwd === null) {

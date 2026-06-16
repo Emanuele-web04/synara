@@ -150,9 +150,11 @@ describe("review surface performance benchmark", () => {
         naiveElapsedMs: Math.round(naive.elapsedMs),
         optimizedElapsedMs: Math.round(optimized.elapsedMs),
         listCalls: nativeApiMock.listPullRequests.mock.calls.length,
+        viewerCalls: nativeApiMock.getViewer.mock.calls.length,
       };
       console.info("[benchmark] review surface board", JSON.stringify(benchmark));
 
+      expect(nativeApiMock.getViewer).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.listPullRequests).toHaveBeenCalledTimes(1);
       expect(naive.rows).toBe(pullRequests.length);
       expect(optimized.rows).toBeGreaterThan(0);
