@@ -26,12 +26,28 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     date: "Jun 16",
     features: [
       {
+        id: "smarter-profile-stats",
+        title: "Your profile understands more of your work",
+        description:
+          "Synara now tracks richer local profile stats, including your most worked project, skill and agent usage, active hours, provider/model mix, and prompt activity.",
+        details:
+          "Profile stats now derive more signal from Synara's local projection database: most-worked project, prompt/thread activity, skill and agent usage, provider/model usage, reasoning patterns, active-hour windows, and token heatmap data are all represented in the profile contract and settings panel.",
+      },
+      {
+        id: "pasted-text-cards",
+        title: "Large pastes become cleaner composer cards",
+        description:
+          "Big pasted blocks now collapse into tidy attachment-style cards, keeping the composer readable while still letting you restore or remove the full text.",
+        details:
+          "Large pasted text blocks are serialized separately from the visible prompt, shown as compact cards in the composer, expandable in sent messages, and counted with line/character metadata so long prompts are easier to review.",
+      },
+      {
         id: "pasted-text-editing",
         title: "Pasted text survives message edits",
         description:
           "Editing a message now preserves pasted text blocks instead of dropping or flattening them, so larger prompts stay intact when you refine them.",
         details:
-          "The composer edit path now keeps pasted text block structure during message editing, with focused coverage around composer pasted-text handling and the full release battery passing after the fix.",
+          "The composer draft, edit, assistant-selection, terminal-context, and WebSocket send paths now preserve structured pasted text blocks instead of folding them into fragile plain text. Focused tests cover pasted text, draft persistence, terminal context, timeline height, and edit behavior.",
       },
     ],
   },

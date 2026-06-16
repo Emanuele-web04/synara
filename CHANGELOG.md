@@ -4,15 +4,21 @@
 
 ### Added
 
-- Added a focused in-app What's New entry for the pasted-text editing fix.
+- Added richer local profile statistics, including most-worked project, skill/agent usage, active hours, provider/model mix, reasoning usage, and token/activity heatmap data.
+- Added compact pasted-text cards for large composer pastes, with line/character metadata, remove controls, restore-to-editor behavior, and expandable sent-message echoes.
+- Added shared pasted-text parsing/serialization helpers and focused coverage for composer drafts, pasted text, assistant selections, terminal context, and transcript height handling.
 
 ### Changed
 
 - Bumped Synara release package versions to `0.2.3` across the server, desktop, web, and contracts packages.
+- Improved profile skill usage counting by combining structured skill references, mentions, agent references, and legacy text-token backfill while filtering obvious non-skill slash/dollar tokens.
+- Kept large pasted prompt content out of the visible composer body by storing it as structured prompt context, making long prompts easier to scan and refine.
 
 ### Fixed
 
 - Fixed message editing so pasted text blocks remain intact when a user edits a previous message.
+- Fixed draft/edit preservation for structured prompt context so pasted text, terminal context, and assistant selections are less likely to be dropped or flattened across composer lifecycle changes.
+- Fixed profile stats so prompt-block markup like pasted text, file comments, terminal context, and assistant selections does not pollute skill counting.
 
 ### Verification
 
