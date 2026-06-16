@@ -9,6 +9,8 @@ import {
   AutomationRun,
   AutomationRunId,
   AutomationTrigger,
+  CommandId,
+  MessageId,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -52,6 +54,23 @@ export const GetAutomationRunInput = Schema.Struct({
 });
 export type GetAutomationRunInput = typeof GetAutomationRunInput.Type;
 
+export const MarkAutomationRunStartedInput = Schema.Struct({
+  id: AutomationRunId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  threadCreateCommandId: CommandId,
+  turnStartCommandId: CommandId,
+  startedAt: Schema.String,
+});
+export type MarkAutomationRunStartedInput = typeof MarkAutomationRunStartedInput.Type;
+
+export const MarkAutomationRunFailedInput = Schema.Struct({
+  id: AutomationRunId,
+  error: Schema.String,
+  finishedAt: Schema.String,
+});
+export type MarkAutomationRunFailedInput = typeof MarkAutomationRunFailedInput.Type;
+
 export const AcquireAutomationSchedulerLeaseInput = Schema.Struct({
   leaseKey: Schema.String,
   ownerId: Schema.String,
@@ -79,6 +98,12 @@ export interface AutomationRepositoryShape {
   readonly getRunById: (
     input: GetAutomationRunInput,
   ) => Effect.Effect<Option.Option<AutomationRun>, AutomationRepositoryError>;
+  readonly markRunStarted: (
+    input: MarkAutomationRunStartedInput,
+  ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
+  readonly markRunFailed: (
+    input: MarkAutomationRunFailedInput,
+  ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
   readonly cancelRun: (
     input: AutomationCancelRunInput & { readonly now: string },
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;

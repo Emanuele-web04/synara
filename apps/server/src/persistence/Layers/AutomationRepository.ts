@@ -27,6 +27,8 @@ import {
   CreateAutomationRunInput,
   GetAutomationDefinitionInput,
   GetAutomationRunInput,
+  MarkAutomationRunFailedInput,
+  MarkAutomationRunStartedInput,
 } from "../Services/AutomationRepository.ts";
 
 const AutomationDefinitionDbRow = Schema.Struct({
@@ -387,6 +389,39 @@ const makeAutomationRepository = Effect.gen(function* () {
       `,
   });
 
+  const markRunStartedRow = SqlSchema.void({
+    Request: MarkAutomationRunStartedInput,
+    execute: ({ id, threadId, messageId, threadCreateCommandId, turnStartCommandId, startedAt }) =>
+      sql`
+        UPDATE automation_runs
+        SET status = 'running',
+            thread_id = ${threadId},
+            message_id = ${messageId},
+            thread_create_command_id = ${threadCreateCommandId},
+            turn_start_command_id = ${turnStartCommandId},
+            started_at = ${startedAt},
+            updated_at = ${startedAt}
+        WHERE run_id = ${id}
+          AND status IN ('pending', 'claimed')
+      `,
+  });
+
+  const markRunFailedRow = SqlSchema.void({
+    Request: MarkAutomationRunFailedInput,
+    execute: ({ id, error, finishedAt }) =>
+      sql`
+        UPDATE automation_runs
+        SET status = 'failed',
+            error = ${error},
+            finished_at = ${finishedAt},
+            updated_at = ${finishedAt},
+            lease_expires_at = NULL,
+            claimed_by = NULL
+        WHERE run_id = ${id}
+          AND status NOT IN ('succeeded', 'cancelled')
+      `,
+  });
+
   const acquireLease = SqlSchema.findAll({
     Request: AcquireAutomationSchedulerLeaseInput,
     Result: Schema.Struct({ changed: Schema.Number }),
@@ -534,21 +569,37 @@ const makeAutomationRepository = Effect.gen(function* () {
       ),
     );
 
-  const cancelRun: AutomationRepositoryShape["cancelRun"] = ({ runId, now }) =>
-    cancelRunRow({ id: runId, now }).pipe(
-      Effect.mapError(toPersistenceSqlError("AutomationRepository.cancelRun:update")),
-      Effect.flatMap(() => getRunById({ id: runId })),
+  const requireRunById = (id: AutomationRunDbRow["id"], operation: string) =>
+    getRunById({ id }).pipe(
       Effect.flatMap((runOption) =>
         Option.match(runOption, {
           onNone: () =>
             Effect.fail(
-              toPersistenceSqlError("AutomationRepository.cancelRun:missingRow")(
-                new Error("Automation run was not found after cancellation."),
+              toPersistenceSqlError(`${operation}:missingRow`)(
+                new Error("Automation run was not found after update."),
               ),
             ),
           onSome: Effect.succeed,
         }),
       ),
+    );
+
+  const markRunStarted: AutomationRepositoryShape["markRunStarted"] = (input) =>
+    markRunStartedRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.markRunStarted:update")),
+      Effect.flatMap(() => requireRunById(input.id, "AutomationRepository.markRunStarted")),
+    );
+
+  const markRunFailed: AutomationRepositoryShape["markRunFailed"] = (input) =>
+    markRunFailedRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.markRunFailed:update")),
+      Effect.flatMap(() => requireRunById(input.id, "AutomationRepository.markRunFailed")),
+    );
+
+  const cancelRun: AutomationRepositoryShape["cancelRun"] = ({ runId, now }) =>
+    cancelRunRow({ id: runId, now }).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.cancelRun:update")),
+      Effect.flatMap(() => requireRunById(runId, "AutomationRepository.cancelRun")),
     );
 
   const tryAcquireSchedulerLease: AutomationRepositoryShape["tryAcquireSchedulerLease"] = (
@@ -566,6 +617,8 @@ const makeAutomationRepository = Effect.gen(function* () {
     list,
     createRun,
     getRunById,
+    markRunStarted,
+    markRunFailed,
     cancelRun,
     tryAcquireSchedulerLease,
   } satisfies AutomationRepositoryShape;
