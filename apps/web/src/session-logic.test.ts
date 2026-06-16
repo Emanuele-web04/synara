@@ -2965,6 +2965,7 @@ describe("PROVIDER_OPTIONS", () => {
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
     const gemini = PROVIDER_OPTIONS.find((option) => option.value === "gemini");
     const grok = PROVIDER_OPTIONS.find((option) => option.value === "grok");
+    const kimi = PROVIDER_OPTIONS.find((option) => option.value === "kimi");
     const kilo = PROVIDER_OPTIONS.find((option) => option.value === "kilo");
     const opencode = PROVIDER_OPTIONS.find((option) => option.value === "opencode");
     const pi = PROVIDER_OPTIONS.find((option) => option.value === "pi");
@@ -2974,6 +2975,7 @@ describe("PROVIDER_OPTIONS", () => {
       { value: "cursor", label: "Cursor", available: true },
       { value: "gemini", label: "Gemini", available: true },
       { value: "grok", label: "Grok", available: true },
+      { value: "kimi", label: "Kimi Code", available: true },
       { value: "kilo", label: "Kilo", available: true },
       { value: "opencode", label: "OpenCode", available: true },
       { value: "pi", label: "Pi", available: true },
@@ -2996,6 +2998,11 @@ describe("PROVIDER_OPTIONS", () => {
     expect(grok).toEqual({
       value: "grok",
       label: "Grok",
+      available: true,
+    });
+    expect(kimi).toEqual({
+      value: "kimi",
+      label: "Kimi Code",
       available: true,
     });
     expect(kilo).toEqual({

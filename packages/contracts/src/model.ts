@@ -127,12 +127,18 @@ export const GrokModelOptions = Schema.Struct({
 });
 export type GrokModelOptions = typeof GrokModelOptions.Type;
 
+// Kimi Code exposes a single managed model (`kimi-for-coding`) over ACP and no
+// client-tunable model knobs today, so its options struct is intentionally empty.
+export const KimiModelOptions = Schema.Struct({});
+export type KimiModelOptions = typeof KimiModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
   cursor: Schema.optional(CursorModelOptions),
   gemini: Schema.optional(GeminiModelOptions),
   grok: Schema.optional(GrokModelOptions),
+  kimi: Schema.optional(KimiModelOptions),
   kilo: Schema.optional(OpenCodeModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
@@ -204,6 +210,16 @@ const GROK_BUILD_CAPABILITIES: ModelCapabilities = {
     { value: "medium", label: "Medium" },
     { value: "high", label: "High" },
   ],
+  supportsFastMode: false,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
+};
+
+// Kimi Code drives its managed `kimi-for-coding` model with no client-tunable
+// knobs over ACP today (thinking effort is governed by the CLI's own config).
+const KIMI_FOR_CODING_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [],
   supportsFastMode: false,
   supportsThinkingToggle: false,
   promptInjectedEffortLevels: [],
@@ -454,6 +470,16 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: GROK_BUILD_CAPABILITIES,
     },
   ],
+  kimi: [
+    {
+      // `kimi-for-coding` is Kimi Code's stable managed alias; the backend model
+      // auto-updates behind it. The display name mirrors what Kimi's own ACP
+      // model picker reports for the current backend (e.g. "K2.7 Code").
+      slug: "kimi-for-coding",
+      name: "K2.7 Code",
+      capabilities: KIMI_FOR_CODING_CAPABILITIES,
+    },
+  ],
   opencode: [
     {
       slug: "openai/gpt-5",
@@ -551,6 +577,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   cursor: "auto",
   gemini: "auto-gemini-3",
   grok: "grok-build",
+  kimi: "kimi-for-coding",
   kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
 };
@@ -632,6 +659,12 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "grok-code-fast-1-0825": "grok-build-0.1",
     "code-fast": "grok-build-0.1",
   },
+  kimi: {
+    kimi: "kimi-for-coding",
+    "kimi-code": "kimi-for-coding",
+    "kimi-for-coding": "kimi-for-coding",
+    coding: "kimi-for-coding",
+  },
   kilo: {},
   opencode: {},
   pi: {},
@@ -667,6 +700,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   cursor: "Cursor",
   gemini: "Gemini",
   grok: "Grok",
+  kimi: "Kimi Code",
   kilo: "Kilo",
   opencode: "OpenCode",
   pi: "Pi",

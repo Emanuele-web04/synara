@@ -15,6 +15,8 @@ import type {
   GeminiModelSelection,
   GrokModelOptions,
   GrokModelSelection,
+  KimiModelOptions,
+  KimiModelSelection,
   KiloModelSelection,
   ModelSelection,
   OpenCodeModelOptions,
@@ -135,15 +137,22 @@ export function mergeDynamicModelOptions(input: {
       continue;
     }
     dynamicNormalizedSlugs.add(normalizedSlug);
+    const meaningfulDynamicName =
+      rawName.length > 0 &&
+      rawName.toLowerCase() !== rawSlug &&
+      rawName.toLowerCase() !== normalizedSlug.toLowerCase()
+        ? rawName
+        : undefined;
+    const staticName = staticNameBySlug.get(normalizedSlug);
     normalizedDynamicOptions.push({
       slug: normalizedSlug,
+      // Curated built-in names are authoritative for every provider EXCEPT Kimi:
+      // its single model is a managed alias whose backend display name updates
+      // server-side, so Kimi's live ACP-reported name wins over the static label.
       name:
-        staticNameBySlug.get(normalizedSlug) ??
-        (rawName.length > 0 &&
-        rawName.toLowerCase() !== rawSlug &&
-        rawName.toLowerCase() !== normalizedSlug.toLowerCase()
-          ? rawName
-          : displayNameFallback),
+        input.provider === "kimi"
+          ? (meaningfulDynamicName ?? staticName ?? displayNameFallback)
+          : (staticName ?? meaningfulDynamicName ?? displayNameFallback),
       ...(dynamicModel.upstreamProviderId?.trim()
         ? { upstreamProviderId: dynamicModel.upstreamProviderId.trim() }
         : {}),
@@ -160,7 +169,10 @@ export function mergeDynamicModelOptions(input: {
     (model) => !("isCustom" in model) || model.isCustom !== true,
   );
   const missingStaticBuiltIns =
-    (input.provider === "kilo" || input.provider === "opencode" || input.provider === "cursor") &&
+    (input.provider === "kilo" ||
+      input.provider === "opencode" ||
+      input.provider === "cursor" ||
+      input.provider === "kimi") &&
     normalizedDynamicOptions.length > 0
       ? []
       : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
@@ -286,6 +298,9 @@ export function buildNextProviderOptions(
       ...patch,
     } as GrokModelOptions;
   }
+  if (provider === "kimi") {
+    return {} as KimiModelOptions;
+  }
   if (provider === "opencode") {
     return {
       ...(modelOptions as OpenCodeModelOptions | undefined),
@@ -338,6 +353,11 @@ export function buildModelSelection(
   model: string,
   options?: GrokModelOptions | null | undefined,
 ): GrokModelSelection;
+export function buildModelSelection(
+  provider: "kimi",
+  model: string,
+  options?: KimiModelOptions | null | undefined,
+): KimiModelSelection;
 export function buildModelSelection(
   provider: "opencode",
   model: string,
@@ -404,6 +424,8 @@ export function buildModelSelection(
             options: options as GrokModelOptions,
           }
         : { provider, model };
+    case "kimi":
+      return { provider, model };
     case "kilo":
       return options
         ? {

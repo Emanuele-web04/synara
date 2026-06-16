@@ -72,6 +72,7 @@ const COMPOSER_PROVIDER_KINDS = [
   "cursor",
   "gemini",
   "grok",
+  "kimi",
   "kilo",
   "opencode",
   "pi",
@@ -876,6 +877,11 @@ function makeModelSelection(
         ...(options
           ? { options: options as Extract<ModelSelection, { provider: "grok" }>["options"] }
           : {}),
+      };
+    case "kimi":
+      return {
+        provider,
+        model,
       };
     case "kilo":
       return {

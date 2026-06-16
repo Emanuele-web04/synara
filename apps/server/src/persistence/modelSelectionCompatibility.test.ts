@@ -21,3 +21,26 @@ it("infers Pi from persisted instance labels", () => {
     },
   );
 });
+
+it("preserves canonical Kimi model selections", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({ provider: "kimi", model: "kimi-for-coding" }),
+    {
+      provider: "kimi",
+      model: "kimi-for-coding",
+    },
+  );
+});
+
+it("infers Kimi from persisted instance labels", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      instanceId: "local-kimi-runtime-instance",
+      model: "kimi-for-coding",
+    }),
+    {
+      provider: "kimi",
+      model: "kimi-for-coding",
+    },
+  );
+});
