@@ -674,6 +674,22 @@ export const AutomationServiceLive = Layer.effect(
     const runNow: AutomationServiceShape["runNow"] = (input) =>
       Effect.gen(function* () {
         const definition = yield* requireDefinition(input.automationId);
+        // Heartbeat automations continue a single shared thread, so a manual run must not
+        // race a scheduled (or earlier manual) run that is still in flight. Standalone
+        // automations spawn independent threads, so concurrent manual runs are fine.
+        if (definition.mode === "heartbeat") {
+          const activeRuns = yield* automationRepository
+            .countActiveRunsForDefinition({ automationId: definition.id })
+            .pipe(Effect.mapError(toServiceError("Failed to count active automation runs.")));
+          if (activeRuns > 0) {
+            return yield* Effect.fail(
+              new AutomationServiceError({
+                message:
+                  "This loop already has a run in progress. Wait for it to finish before running again.",
+              }),
+            );
+          }
+        }
         const now = isoNow();
         const run = yield* createPendingRun(definition, { type: "manual" }, now, now);
         return yield* dispatchRun(definition, run, now);

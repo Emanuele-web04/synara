@@ -554,4 +554,87 @@ layer("AutomationRepository", (it) => {
       assert.strictEqual(reloaded.stopOnError, false);
     }),
   );
+
+  it.effect("dedupes a scheduled occurrence past a manual run sharing its scheduledFor", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-occurrence"),
+        input: createInputForProject("project-occurrence"),
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const sharedSlot = "2026-06-16T10:05:00.000Z";
+
+      // A manual run lands first, sharing the slot the scheduled occurrence will use.
+      const manual = yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-occurrence-manual"),
+        automationId: AutomationId.makeUnsafe("automation-occurrence"),
+        projectId: ProjectId.makeUnsafe("project-occurrence"),
+        threadId: null,
+        trigger: { type: "manual" },
+        scheduledFor: sharedSlot,
+        permissionSnapshot,
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      // The scheduled occurrence must read back its OWN row, not the manual one, so the
+      // scheduler does not mistake the manual run for a completed scheduled occurrence.
+      const scheduled = yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-occurrence-scheduled"),
+        automationId: AutomationId.makeUnsafe("automation-occurrence"),
+        projectId: ProjectId.makeUnsafe("project-occurrence"),
+        threadId: null,
+        trigger: { type: "scheduled" },
+        scheduledFor: sharedSlot,
+        permissionSnapshot,
+        now: "2026-06-16T10:00:01.000Z",
+      });
+
+      assert.strictEqual(scheduled.id, AutomationRunId.makeUnsafe("run-occurrence-scheduled"));
+      assert.strictEqual(scheduled.trigger.type, "scheduled");
+      assert.notStrictEqual(scheduled.id, manual.id);
+    }),
+  );
+
+  it.effect("leaves a terminal run untouched when cancel is requested", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-cancel"),
+        input: createInputForProject("project-cancel"),
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-cancel-done"),
+        automationId: AutomationId.makeUnsafe("automation-cancel"),
+        projectId: ProjectId.makeUnsafe("project-cancel"),
+        threadId: ThreadId.makeUnsafe("thread-cancel-done"),
+        trigger: { type: "manual" },
+        scheduledFor: "2026-06-16T10:00:00.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      yield* repository.markRunSucceeded({
+        id: AutomationRunId.makeUnsafe("run-cancel-done"),
+        turnId: null,
+        result: null,
+        finishedAt: "2026-06-16T10:01:00.000Z",
+      });
+
+      // Cancelling an already-succeeded run is a no-op, not a clobber of its outcome.
+      const cancelled = yield* repository.cancelRun({
+        runId: AutomationRunId.makeUnsafe("run-cancel-done"),
+        now: "2026-06-16T10:05:00.000Z",
+      });
+
+      assert.strictEqual(cancelled.status, "succeeded");
+      assert.strictEqual(cancelled.finishedAt, "2026-06-16T10:01:00.000Z");
+    }),
+  );
 });

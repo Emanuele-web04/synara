@@ -96,6 +96,7 @@ export function makeServerRuntimeServicesLayer() {
   );
   const automationServiceLayer = AutomationServiceLive.pipe(
     Layer.provideMerge(AutomationRepositoryLive),
+    Layer.provideMerge(GitCoreLive),
     Layer.provideMerge(runtimeServicesLayer),
   );
   const automationSchedulerLayer = AutomationSchedulerLive.pipe(

@@ -624,4 +624,46 @@ layer("AutomationService", (it) => {
       assert.strictEqual(definition?.nextRunAt, "2026-06-16T10:05:00.000Z");
     }),
   );
+
+  it.effect("refuses a manual heartbeat run while a prior run is still in flight", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId: ThreadId.makeUnsafe("thread-heartbeat-target"),
+      });
+
+      // First manual run starts and stays in flight (the harness never reconciles it).
+      const first = yield* service.runNow({ automationId: created.id });
+      assert.strictEqual(first.run.status, "running");
+
+      // A second manual run must be rejected rather than racing the same thread.
+      const second = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
+      assert.match(second.message, /already has a run in progress/);
+
+      // No second turn was dispatched: only the first run's turn.start reached the engine.
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type === "thread.turn.start").length,
+        1,
+      );
+    }),
+  );
+
+  it.effect("allows concurrent manual runs for standalone automations", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create(createInput("local"));
+
+      // Standalone runs spawn independent threads, so a second manual run is fine.
+      const first = yield* service.runNow({ automationId: created.id });
+      const second = yield* service.runNow({ automationId: created.id });
+
+      assert.strictEqual(first.run.status, "running");
+      assert.strictEqual(second.run.status, "running");
+      assert.notStrictEqual(first.run.id, second.run.id);
+    }),
+  );
 });

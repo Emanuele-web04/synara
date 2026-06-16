@@ -440,6 +440,7 @@ const makeAutomationRepository = Effect.gen(function* () {
         FROM automation_runs
         WHERE automation_id = ${automationId}
           AND scheduled_for = ${scheduledFor}
+          AND trigger_type = 'scheduled'
       `,
   });
 
@@ -497,6 +498,7 @@ const makeAutomationRepository = Effect.gen(function* () {
             lease_expires_at = NULL,
             claimed_by = NULL
         WHERE run_id = ${id}
+          AND status IN ('pending', 'claimed', 'running', 'waiting-for-approval')
       `,
   });
 
