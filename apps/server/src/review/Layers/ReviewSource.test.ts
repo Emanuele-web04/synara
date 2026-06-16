@@ -72,6 +72,7 @@ function ghPr(
     checksStatus: "pending",
     reviewRequests: [],
     labels: [],
+    assignees: [],
     ...overrides,
   };
 }
@@ -303,6 +304,7 @@ it.effect("pushes text search to GitHub and caches the normalized filter key", (
       baseBranch: "main",
       headBranch: "branch-1",
       label: null,
+      assignee: null,
       columns: [],
       checks: [],
     });
@@ -420,6 +422,7 @@ it.effect("uses a larger bounded candidate window for local-only status and chec
       baseBranch: null,
       headBranch: null,
       label: null,
+      assignee: null,
       columns: ["approved"],
       checks: ["failing"],
     });
@@ -458,6 +461,46 @@ it.effect("pushes a single label filter to GitHub and keeps it in the cache key"
       baseBranch: null,
       headBranch: null,
       label: "bug",
+      assignee: null,
+      columns: [],
+      checks: [],
+    });
+  });
+});
+
+it.effect("pushes a single assignee filter to GitHub and keeps it in the cache key", () => {
+  const { layer, recorded } = makeLayer({
+    pullRequests: [
+      ghPr({ number: 1, title: "Assigned work", assignees: ["alice"] }),
+      ghPr({ number: 2, title: "Unassigned work", assignees: [] }),
+    ],
+  });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      assignee: "alice",
+    });
+
+    expect(numbers(result)).toEqual([1]);
+    expect(recorded.listCalls).toEqual([
+      {
+        cwd: "/repo",
+        state: "open",
+        limit: 50,
+        assignee: "alice",
+      },
+    ]);
+    expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
+      state: "open",
+      limit: 50,
+      search: null,
+      author: null,
+      reviewRequested: null,
+      baseBranch: null,
+      headBranch: null,
+      label: null,
+      assignee: "alice",
       columns: [],
       checks: [],
     });

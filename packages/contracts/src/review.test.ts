@@ -41,6 +41,7 @@ it.effect("accepts review list server-side filter fields", () =>
       baseBranch: "main",
       headBranch: "feature/review-board",
       label: "bug",
+      assignee: "alice",
       columns: ["needs-review", "approved"],
       checks: ["passing", "pending"],
     });
@@ -55,6 +56,7 @@ it.effect("accepts review list server-side filter fields", () =>
       baseBranch: "main",
       headBranch: "feature/review-board",
       label: "bug",
+      assignee: "alice",
       columns: ["needs-review", "approved"],
       checks: ["passing", "pending"],
     });
@@ -82,6 +84,7 @@ it.effect("accepts review list completeness metadata", () =>
           checksStatus: "pending",
           reviewRequests: [],
           labels: ["bug"],
+          assignees: ["alice"],
         },
       ],
       meta: {
@@ -114,6 +117,7 @@ it.effect("accepts review list completeness metadata", () =>
           checksStatus: "pending",
           reviewRequests: [],
           labels: ["bug"],
+          assignees: ["alice"],
         },
       ],
       meta: {
@@ -170,6 +174,7 @@ it.effect("accepts legacy review list results without metadata", () =>
           checksStatus: "pending",
           reviewRequests: [],
           labels: [],
+          assignees: [],
         },
       ],
     });

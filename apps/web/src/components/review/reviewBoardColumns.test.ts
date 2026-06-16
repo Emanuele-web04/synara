@@ -25,6 +25,7 @@ function makeSummary(overrides: Partial<ReviewPullRequestSummary> = {}): ReviewP
     checksStatus: "passing",
     reviewRequests: [],
     labels: [],
+    assignees: [],
     ...overrides,
   };
 }

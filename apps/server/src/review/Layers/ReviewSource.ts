@@ -137,6 +137,7 @@ function toPullRequestSummary(pr: GitHubReviewPullRequest): ReviewPullRequestSum
     checksStatus: pr.checksStatus,
     reviewRequests: pr.reviewRequests,
     labels: pr.labels,
+    assignees: pr.assignees,
   };
 }
 
@@ -183,6 +184,7 @@ function matchesSearch(summary: ReviewPullRequestSummary, search: string | null)
     (summary.headSelector?.toLowerCase().includes(query) ?? false) ||
     summary.url.toLowerCase().includes(query) ||
     summary.labels.some((label) => label.toLowerCase().includes(query)) ||
+    summary.assignees.some((assignee) => assignee.toLowerCase().includes(query)) ||
     summary.reviewRequests.some((reviewer) => reviewer.toLowerCase().includes(query))
   );
 }
@@ -200,6 +202,7 @@ function matchesListFilters(
   const baseBranch = normalizeOptionalText(input.baseBranch);
   const headBranch = normalizeOptionalText(input.headBranch);
   const label = normalizeOptionalText(input.label);
+  const assignee = resolveViewerAlias(normalizeOptionalText(input.assignee), viewerLogin);
   const columns = normalizedSet(input.columns);
   const checks = normalizedSet(input.checks);
   return (
@@ -209,6 +212,7 @@ function matchesListFilters(
     (!baseBranch || summary.baseBranch === baseBranch) &&
     (!headBranch || summary.headBranch === headBranch || summary.headSelector === headBranch) &&
     (!label || summary.labels.includes(label)) &&
+    (!assignee || summary.assignees.includes(assignee)) &&
     (columns.size === 0 || columns.has(reviewColumn(summary))) &&
     (checks.size === 0 || checks.has(summary.checksStatus))
   );
@@ -319,6 +323,7 @@ function pullRequestListFilter(input: {
   readonly baseBranch?: string | undefined;
   readonly headBranch?: string | undefined;
   readonly label?: string | undefined;
+  readonly assignee?: string | undefined;
   readonly columns?: ReadonlyArray<string> | undefined;
   readonly checks?: ReadonlyArray<string> | undefined;
 }): string {
@@ -331,6 +336,7 @@ function pullRequestListFilter(input: {
     baseBranch: normalizeOptionalText(input.baseBranch),
     headBranch: normalizeOptionalText(input.headBranch),
     label: normalizeOptionalText(input.label),
+    assignee: normalizeOptionalText(input.assignee),
     columns: [...normalizedSet(input.columns)].sort(),
     checks: [...normalizedSet(input.checks)].sort(),
   });
@@ -406,6 +412,7 @@ const makeReviewSource = Effect.gen(function* () {
         ...(input.baseBranch !== undefined ? { baseBranch: input.baseBranch } : {}),
         ...(input.headBranch !== undefined ? { headBranch: input.headBranch } : {}),
         ...(input.label !== undefined ? { label: input.label } : {}),
+        ...(input.assignee !== undefined ? { assignee: input.assignee } : {}),
       })
       .pipe(
         Effect.map((pullRequests): ReviewListPullRequestsResult => {
@@ -803,6 +810,7 @@ const makeReviewSource = Effect.gen(function* () {
                     ...(input.baseBranch !== undefined ? { baseBranch: input.baseBranch } : {}),
                     ...(input.headBranch !== undefined ? { headBranch: input.headBranch } : {}),
                     ...(input.label !== undefined ? { label: input.label } : {}),
+                    ...(input.assignee !== undefined ? { assignee: input.assignee } : {}),
                     ...(input.columns !== undefined ? { columns: input.columns } : {}),
                     ...(input.checks !== undefined ? { checks: input.checks } : {}),
                     data,

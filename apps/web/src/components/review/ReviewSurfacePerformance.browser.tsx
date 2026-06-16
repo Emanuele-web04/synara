@@ -48,6 +48,7 @@ function makePullRequests(count: number): ReviewPullRequestSummary[] {
     checksStatus: "pending",
     reviewRequests: [],
     labels: [],
+    assignees: [],
   }));
 }
 

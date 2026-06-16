@@ -225,6 +225,21 @@ function normalizeReviewLabelNames(
   return labels;
 }
 
+function normalizeReviewUserLogins(
+  rawUsers: ReadonlyArray<Schema.Schema.Type<typeof RawReviewUserSchema>>,
+): ReadonlyArray<string> {
+  const seen = new Set<string>();
+  const logins: string[] = [];
+  for (const raw of rawUsers) {
+    const login = (raw.login ?? raw.name ?? "").trim();
+    if (login.length > 0 && !seen.has(login)) {
+      seen.add(login);
+      logins.push(login);
+    }
+  }
+  return logins;
+}
+
 export function normalizeReviewPullRequest(
   raw: Schema.Schema.Type<typeof RawGitHubReviewPullRequestSchema>,
 ): GitHubReviewPullRequest {
@@ -250,6 +265,7 @@ export function normalizeReviewPullRequest(
     checksStatus: rollupChecksStatus(raw.statusCheckRollup ?? []),
     reviewRequests: normalizeReviewRequests(raw.reviewRequests ?? []),
     labels: normalizeReviewLabelNames(raw.labels ?? []),
+    assignees: normalizeReviewUserLogins(raw.assignees ?? []),
   };
 }
 

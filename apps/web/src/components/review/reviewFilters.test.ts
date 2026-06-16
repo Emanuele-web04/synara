@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   type ActiveReviewFilter,
   applyReviewFilters,
+  assigneeFilterDef,
   authorFilterDef,
   baseBranchFilterDef,
   checksFilterDef,
@@ -34,6 +35,7 @@ function pr(overrides: Partial<ReviewPullRequestSummary>): ReviewPullRequestSumm
     checksStatus: "none",
     reviewRequests: [],
     labels: [],
+    assignees: [],
     ...overrides,
   };
 }
@@ -79,6 +81,14 @@ describe("review filter definitions", () => {
       pr({ labels: ["feature", "bug"] }),
     ]);
     expect(options.map((option) => option.value)).toEqual(["bug", "feature", "priority 1"]);
+  });
+
+  it("derives unique, sorted assignee options from the items present", () => {
+    const options = assigneeFilterDef.extractOptions([
+      pr({ assignees: ["bob", "alice"] }),
+      pr({ assignees: ["alice", "carol"] }),
+    ]);
+    expect(options.map((option) => option.value)).toEqual(["alice", "bob", "carol"]);
   });
 
   it("only offers check statuses that actually occur (never 'none')", () => {
@@ -165,9 +175,10 @@ describe("filterReviewPullRequests", () => {
         headBranch: "feature/search-panel",
         headSelector: "octocat:feature/search-panel",
         labels: ["performance"],
+        assignees: ["tyler"],
       }),
       pr({ number: 2, title: "Fix logout", url: "https://github.com/acme/repo/pull/221" }),
-      pr({ number: 3, title: "Improve review", reviewRequests: ["tyler"] }),
+      pr({ number: 3, title: "Improve review", reviewRequests: ["reviewer"] }),
       pr({ number: 4, title: "Unrelated" }),
     ];
 
@@ -178,10 +189,11 @@ describe("filterReviewPullRequests", () => {
     expect(filterReviewPullRequests(items, "performance", []).map((item) => item.number)).toEqual([
       1,
     ]);
+    expect(filterReviewPullRequests(items, "tyler", []).map((item) => item.number)).toEqual([1]);
     expect(filterReviewPullRequests(items, "pull/221", []).map((item) => item.number)).toEqual([
       2,
     ]);
-    expect(filterReviewPullRequests(items, "tyler", []).map((item) => item.number)).toEqual([3]);
+    expect(filterReviewPullRequests(items, "reviewer", []).map((item) => item.number)).toEqual([3]);
   });
 });
 
@@ -193,6 +205,7 @@ describe("toReviewServerListFilters", () => {
         filter("base", ["main"]),
         filter("head", ["feature/review-board"]),
         filter("label", ["bug"]),
+        filter("assignee", ["tyler"]),
         filter("status", ["approved", "needs-review"]),
         filter("checks", ["pending", "passing"]),
       ]),
@@ -201,6 +214,7 @@ describe("toReviewServerListFilters", () => {
       baseBranch: "main",
       headBranch: "feature/review-board",
       label: "bug",
+      assignee: "tyler",
       columns: ["approved", "needs-review"],
       checks: ["passing", "pending"],
     });
@@ -213,6 +227,7 @@ describe("toReviewServerListFilters", () => {
         filter("base", ["main", "dev"]),
         filter("head", ["feature/review-board", "bugfix/search"]),
         filter("label", ["bug", "feature"]),
+        filter("assignee", ["alice", "bob"]),
       ]),
     ).toEqual({});
   });

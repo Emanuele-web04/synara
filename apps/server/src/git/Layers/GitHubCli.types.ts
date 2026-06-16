@@ -78,6 +78,12 @@ export const RawReviewLabelSchema = Schema.Struct({
   color: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
+export const RawReviewUserSchema = Schema.Struct({
+  login: Schema.optional(Schema.NullOr(Schema.String)),
+  name: Schema.optional(Schema.NullOr(Schema.String)),
+  avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
 export const RawGitHubReviewPullRequestSchema = Schema.Struct({
   number: PositiveInt,
   title: Schema.String,
@@ -102,6 +108,7 @@ export const RawGitHubReviewPullRequestSchema = Schema.Struct({
   statusCheckRollup: Schema.optional(Schema.NullOr(Schema.Array(RawStatusCheckRollupEntrySchema))),
   reviewRequests: Schema.optional(Schema.NullOr(Schema.Array(RawReviewRequestSchema))),
   labels: Schema.optional(Schema.NullOr(Schema.Array(RawReviewLabelSchema))),
+  assignees: Schema.optional(Schema.NullOr(Schema.Array(RawReviewUserSchema))),
 });
 
 export const FAILING_CHECK_STATES = new Set([
@@ -136,12 +143,6 @@ export const RawReviewCommitSchema = Schema.Struct({
   authoredDate: Schema.optional(Schema.NullOr(Schema.String)),
   committedDate: Schema.optional(Schema.NullOr(Schema.String)),
   authors: Schema.optional(Schema.NullOr(Schema.Array(RawReviewCommitAuthorSchema))),
-});
-
-export const RawReviewUserSchema = Schema.Struct({
-  login: Schema.optional(Schema.NullOr(Schema.String)),
-  name: Schema.optional(Schema.NullOr(Schema.String)),
-  avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 export const RawReviewLatestReviewSchema = Schema.Struct({

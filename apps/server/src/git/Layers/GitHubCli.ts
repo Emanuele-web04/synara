@@ -83,6 +83,7 @@ function repositoryPullRequestListArgs(input: {
   readonly baseBranch?: string;
   readonly headBranch?: string;
   readonly label?: string;
+  readonly assignee?: string;
 }): string[] {
   const args = [
     "pr",
@@ -95,6 +96,10 @@ function repositoryPullRequestListArgs(input: {
   const author = optionalTrimmed(input.author);
   if (author) {
     args.push("--author", author);
+  }
+  const assignee = optionalTrimmed(input.assignee);
+  if (assignee) {
+    args.push("--assignee", assignee);
   }
   const baseBranch = optionalTrimmed(input.baseBranch);
   if (baseBranch) {
@@ -129,6 +134,7 @@ function repositoryPullRequestListArgs(input: {
     "deletions",
     "statusCheckRollup",
     "labels",
+    "assignees",
     ...(optionalTrimmed(input.reviewRequested) ? ["reviewRequests"] : []),
   ];
   args.push(

@@ -128,6 +128,7 @@ layer("GitHubCliLive", (it) => {
             statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
             reviewRequests: [{ login: "tyler", avatarUrl: "https://avatars.example/tyler.png" }],
             labels: [{ name: "bug", color: "d73a4a" }],
+            assignees: [{ login: "alice", avatarUrl: "https://avatars.example/alice.png" }],
           },
         ]),
         stderr: "",
@@ -144,6 +145,7 @@ layer("GitHubCliLive", (it) => {
           limit: 25,
           search: "review board",
           author: "alice",
+          assignee: "alice",
           baseBranch: "main",
           headBranch: "review-perf",
           label: "bug",
@@ -170,6 +172,7 @@ layer("GitHubCliLive", (it) => {
           checksStatus: "passing",
           reviewRequests: ["tyler"],
           labels: ["bug"],
+          assignees: ["alice"],
         },
       ]);
       expect(mockedRunProcess).toHaveBeenCalledWith(
@@ -183,6 +186,8 @@ layer("GitHubCliLive", (it) => {
           "25",
           "--author",
           "alice",
+          "--assignee",
+          "alice",
           "--base",
           "main",
           "--head",
@@ -192,7 +197,7 @@ layer("GitHubCliLive", (it) => {
           "--search",
           "review board review-requested:tyler",
           "--json",
-          "number,title,author,updatedAt,state,mergedAt,reviewDecision,baseRefName,headRefName,headRepositoryOwner,url,isDraft,additions,deletions,statusCheckRollup,labels,reviewRequests",
+          "number,title,author,updatedAt,state,mergedAt,reviewDecision,baseRefName,headRefName,headRepositoryOwner,url,isDraft,additions,deletions,statusCheckRollup,labels,assignees,reviewRequests",
         ],
         expect.objectContaining({ cwd: "/repo" }),
       );
@@ -231,7 +236,7 @@ layer("GitHubCliLive", (it) => {
           "--search",
           "head:octocat:review-perf",
           "--json",
-          "number,title,author,updatedAt,state,mergedAt,reviewDecision,baseRefName,headRefName,headRepositoryOwner,url,isDraft,additions,deletions,statusCheckRollup,labels",
+          "number,title,author,updatedAt,state,mergedAt,reviewDecision,baseRefName,headRefName,headRepositoryOwner,url,isDraft,additions,deletions,statusCheckRollup,labels,assignees",
         ],
         expect.objectContaining({ cwd: "/repo" }),
       );
@@ -278,6 +283,7 @@ layer("GitHubCliLive", (it) => {
 
       assert.deepStrictEqual(result[0]?.reviewRequests, []);
       assert.deepStrictEqual(result[0]?.labels, []);
+      assert.deepStrictEqual(result[0]?.assignees, []);
       const jsonFieldsArg = mockedRunProcess.mock.calls[0]?.[1]?.at(-1);
       expect(jsonFieldsArg).not.toContain("reviewRequests");
       expect(jsonFieldsArg).not.toContain("body");
@@ -285,7 +291,6 @@ layer("GitHubCliLive", (it) => {
       expect(jsonFieldsArg).not.toContain("reviews");
       expect(jsonFieldsArg).not.toContain("commits");
       expect(jsonFieldsArg).not.toContain("latestReviews");
-      expect(jsonFieldsArg).not.toContain("assignees");
       expect(jsonFieldsArg).not.toContain("milestone");
       expect(jsonFieldsArg).not.toContain("changedFiles");
       expect(mockedRunProcess).toHaveBeenCalledWith(
@@ -302,7 +307,7 @@ layer("GitHubCliLive", (it) => {
           "--search",
           "review",
           "--json",
-          "number,title,author,updatedAt,state,mergedAt,reviewDecision,baseRefName,headRefName,headRepositoryOwner,url,isDraft,additions,deletions,statusCheckRollup,labels",
+          "number,title,author,updatedAt,state,mergedAt,reviewDecision,baseRefName,headRefName,headRepositoryOwner,url,isDraft,additions,deletions,statusCheckRollup,labels,assignees",
         ],
         expect.objectContaining({ cwd: "/repo" }),
       );

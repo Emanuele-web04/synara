@@ -48,6 +48,7 @@ function makePullRequests(count: number): ReviewPullRequestSummary[] {
     checksStatus: "pending",
     reviewRequests: index % 7 === 0 ? ["tyler"] : [],
     labels: [],
+    assignees: [],
   }));
 }
 
@@ -312,6 +313,41 @@ describe("ReviewBoard performance", () => {
         expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
           cwd: "/repo",
           label: "bug",
+        });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("pushes a single assignee facet into the server list request", async () => {
+    const pullRequests = [
+      {
+        ...makePullRequests(1)[0],
+        number: 59,
+        title: "Assigned review work",
+        assignees: ["alice"],
+      },
+      {
+        ...makePullRequests(1)[0],
+        number: 60,
+        title: "Other assigned work",
+        assignees: ["bob"],
+      },
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+
+      await page.getByRole("button", { name: "Assignee", exact: true }).click();
+      await page.getByRole("button", { name: "alice", exact: true }).click();
+      await vi.waitFor(() => {
+        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+          cwd: "/repo",
+          assignee: "alice",
         });
       });
     } finally {

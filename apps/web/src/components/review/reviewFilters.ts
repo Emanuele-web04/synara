@@ -33,6 +33,7 @@ export interface ReviewServerListFilters {
   readonly baseBranch?: string;
   readonly headBranch?: string;
   readonly label?: string;
+  readonly assignee?: string;
   readonly columns?: ReadonlyArray<ReviewColumnId>;
   readonly checks?: ReadonlyArray<ReviewPullRequestSummary["checksStatus"]>;
 }
@@ -142,6 +143,26 @@ export const labelFilterDef: ReviewFilterDefinition = {
   match: (item, values) => item.labels.some((label) => values.has(label.trim())),
 };
 
+export const assigneeFilterDef: ReviewFilterDefinition = {
+  id: "assignee",
+  label: "Assignee",
+  extractOptions: (items) => {
+    const seen = new Set<string>();
+    const options: ReviewFilterOption[] = [];
+    for (const item of items) {
+      for (const rawAssignee of item.assignees) {
+        const assignee = rawAssignee.trim();
+        if (assignee.length > 0 && !seen.has(assignee)) {
+          seen.add(assignee);
+          options.push({ value: assignee, label: assignee });
+        }
+      }
+    }
+    return options.sort((a, b) => a.label.localeCompare(b.label));
+  },
+  match: (item, values) => item.assignees.some((assignee) => values.has(assignee.trim())),
+};
+
 export const statusFilterDef: ReviewFilterDefinition = {
   id: "status",
   label: "Status",
@@ -181,6 +202,7 @@ export const reviewPullFilterDefs: ReadonlyArray<ReviewFilterDefinition> = [
   baseBranchFilterDef,
   headBranchFilterDef,
   labelFilterDef,
+  assigneeFilterDef,
   statusFilterDef,
   checksFilterDef,
 ];
@@ -259,6 +281,7 @@ export function toReviewServerListFilters(
   const baseBranches = valuesForFilter(activeFilters, baseBranchFilterDef.id);
   const headBranches = valuesForFilter(activeFilters, headBranchFilterDef.id);
   const labels = valuesForFilter(activeFilters, labelFilterDef.id);
+  const assignees = valuesForFilter(activeFilters, assigneeFilterDef.id);
   const columns = valuesForFilter(activeFilters, statusFilterDef.id).filter(isReviewColumnId);
   const checks = valuesForFilter(activeFilters, checksFilterDef.id).filter(isReviewChecksStatus);
   return {
@@ -266,6 +289,7 @@ export function toReviewServerListFilters(
     ...(baseBranches.length === 1 ? { baseBranch: baseBranches[0] } : {}),
     ...(headBranches.length === 1 ? { headBranch: headBranches[0] } : {}),
     ...(labels.length === 1 ? { label: labels[0] } : {}),
+    ...(assignees.length === 1 ? { assignee: assignees[0] } : {}),
     ...(columns.length > 0 ? { columns } : {}),
     ...(checks.length > 0 ? { checks } : {}),
   };

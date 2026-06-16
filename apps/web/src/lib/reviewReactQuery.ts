@@ -77,6 +77,7 @@ export function applyReviewUpdatedPayload(
         baseBranch: payload.baseBranch,
         headBranch: payload.headBranch,
         label: payload.label,
+        assignee: payload.assignee,
         columns: payload.columns,
         checks: payload.checks,
       }),
@@ -121,6 +122,7 @@ export const reviewQueryKeys = {
     baseBranch?: string;
     headBranch?: string;
     label?: string;
+    assignee?: string;
     columns?: ReadonlyArray<ReviewListColumn>;
     checks?: ReadonlyArray<ReviewListChecksStatus>;
   }) =>
@@ -134,6 +136,7 @@ export const reviewQueryKeys = {
       reviewPullRequestListText(input.baseBranch),
       reviewPullRequestListText(input.headBranch),
       reviewPullRequestListText(input.label),
+      reviewPullRequestListText(input.assignee),
       reviewPullRequestListValues(input.columns),
       reviewPullRequestListValues(input.checks),
     ] as const,
@@ -163,6 +166,7 @@ export function reviewListPullRequestsQueryOptions(input: {
   baseBranch?: string;
   headBranch?: string;
   label?: string;
+  assignee?: string;
   columns?: ReadonlyArray<ReviewListColumn>;
   checks?: ReadonlyArray<ReviewListChecksStatus>;
 }) {
@@ -193,6 +197,7 @@ export function buildReviewListPullRequestsRequest(input: {
   baseBranch?: string;
   headBranch?: string;
   label?: string;
+  assignee?: string;
   columns?: ReadonlyArray<ReviewListColumn>;
   checks?: ReadonlyArray<ReviewListChecksStatus>;
 }): ReviewListPullRequestsInput {
@@ -202,6 +207,7 @@ export function buildReviewListPullRequestsRequest(input: {
   const baseBranch = reviewPullRequestListText(input.baseBranch);
   const headBranch = reviewPullRequestListText(input.headBranch);
   const label = reviewPullRequestListText(input.label);
+  const assignee = reviewPullRequestListText(input.assignee);
   const columns = reviewPullRequestListValues(input.columns);
   const checks = reviewPullRequestListValues(input.checks);
   return {
@@ -214,6 +220,7 @@ export function buildReviewListPullRequestsRequest(input: {
     ...(baseBranch !== null ? { baseBranch } : {}),
     ...(headBranch !== null ? { headBranch } : {}),
     ...(label !== null ? { label } : {}),
+    ...(assignee !== null ? { assignee } : {}),
     ...(columns.length > 0 ? { columns } : {}),
     ...(checks.length > 0 ? { checks } : {}),
   };
