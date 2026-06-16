@@ -81,21 +81,38 @@ function AutomationsRouteView() {
             params: { automationId: definition.id },
           })
         }
-        className="flex h-12 w-full items-center gap-3 border-b border-border/60 px-3 text-left transition-colors last:border-b-0 hover:bg-[var(--color-background-elevated-secondary)]"
+        className="group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[var(--color-background-elevated-secondary)]"
       >
-        <span className={cn("shrink-0", automationStatusDotClass(definition, latestRun))}>
-          <span className="block size-2 rounded-full bg-current" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium text-foreground">{definition.name}</div>
-          <div className="truncate text-xs text-muted-foreground">{subtitle(definition)}</div>
+        <span
+          className={cn(
+            "size-2 shrink-0 rounded-full bg-current",
+            automationStatusDotClass(definition, latestRun),
+          )}
+        />
+        <div className="flex min-w-0 flex-1 items-baseline gap-2">
+          <span className="shrink-0 truncate text-[0.8125rem] font-medium text-foreground">
+            {definition.name}
+          </span>
+          <span className="min-w-0 truncate text-xs text-muted-foreground">
+            {subtitle(definition)}
+          </span>
         </div>
-        <span className="shrink-0 text-xs text-muted-foreground">
+        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
           {definition.enabled ? formatCadence(definition.schedule) : "Paused"}
         </span>
       </button>
     );
   };
+
+  const renderSection = (title: string, defs: readonly AutomationDefinition[]) =>
+    defs.length > 0 ? (
+      <section className="flex flex-col">
+        <h2 className="border-b border-border/60 px-3 pb-2 text-[0.8125rem] font-semibold text-foreground">
+          {title}
+        </h2>
+        <div className="flex flex-col py-1">{defs.map(renderRow)}</div>
+      </section>
+    ) : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
@@ -122,33 +139,22 @@ function AutomationsRouteView() {
       </header>
 
       <main className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-6 py-8">
           {isLoading ? (
-            <div className="rounded-lg border border-border bg-muted/20 px-4 py-8 text-center text-sm text-muted-foreground">
+            <div className="py-16 text-center text-sm text-muted-foreground">
               Loading automations...
             </div>
           ) : data.definitions.length === 0 ? (
-            <div className="rounded-lg border border-border bg-muted/20 px-4 py-8 text-center text-sm text-muted-foreground">
-              No automations yet.
+            <div className="flex flex-col items-center gap-1 py-16 text-center">
+              <p className="text-sm font-medium text-foreground">No automations yet</p>
+              <p className="max-w-xs text-xs text-muted-foreground">
+                Schedule a prompt to run on its own, or wake an existing thread on a loop.
+              </p>
             </div>
           ) : (
             <>
-              {active.length > 0 ? (
-                <section className="flex flex-col gap-1">
-                  <h2 className="px-3 text-xs font-medium text-muted-foreground">Current</h2>
-                  <div className="overflow-hidden rounded-lg border border-border">
-                    {active.map(renderRow)}
-                  </div>
-                </section>
-              ) : null}
-              {paused.length > 0 ? (
-                <section className="flex flex-col gap-1">
-                  <h2 className="px-3 text-xs font-medium text-muted-foreground">Paused</h2>
-                  <div className="overflow-hidden rounded-lg border border-border">
-                    {paused.map(renderRow)}
-                  </div>
-                </section>
-              ) : null}
+              {renderSection("Current", active)}
+              {renderSection("Paused", paused)}
             </>
           )}
         </div>

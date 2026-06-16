@@ -3,7 +3,6 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
-import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { PencilIcon, PlayIcon, StopFilledIcon, Trash2 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -158,18 +157,26 @@ function AutomationDetailView() {
       </header>
 
       <main className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6 md:flex-row">
-          <div className="min-w-0 flex-1 space-y-4">
-            <h1 className="font-heading text-lg font-semibold">{definition.name}</h1>
-            <p className="whitespace-pre-wrap text-sm text-muted-foreground">{definition.prompt}</p>
+        <div className="mx-auto flex w-full max-w-5xl flex-col gap-10 px-6 py-8 md:flex-row">
+          <div className="min-w-0 flex-1 space-y-3">
+            <h1 className="font-heading text-xl font-semibold tracking-tight">{definition.name}</h1>
+            <p className="max-w-2xl whitespace-pre-wrap text-sm leading-relaxed text-foreground/80">
+              {definition.prompt}
+            </p>
           </div>
 
           <aside className="flex w-full shrink-0 flex-col gap-6 md:w-72">
             <DetailGroup title="Status">
               <DetailRow label="Status">
-                <Badge variant={definition.enabled ? "success" : "outline"}>
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    className={cn(
+                      "size-2 rounded-full",
+                      definition.enabled ? "bg-emerald-500" : "bg-muted-foreground/40",
+                    )}
+                  />
                   {definition.enabled ? "Active" : "Paused"}
-                </Badge>
+                </span>
               </DetailRow>
               <DetailRow label="Next run">{formatDateTime(definition.nextRunAt)}</DetailRow>
               <DetailRow label="Last ran">
