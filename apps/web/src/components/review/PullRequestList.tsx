@@ -1,10 +1,17 @@
-import type { ReviewSourceRef } from "@t3tools/contracts";
-import { useQuery } from "@tanstack/react-query";
+import type {
+  ReviewListPullRequestsResult,
+  ReviewPullRequestSummary,
+  ReviewSourceRef,
+} from "@t3tools/contracts";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useMemo, useState } from "react";
 
 import { GitPullRequestIcon } from "~/lib/icons";
-import { reviewListPullRequestsQueryOptions } from "~/lib/reviewReactQuery";
+import {
+  reviewListPullRequestsQueryOptions,
+  reviewQueryKeys,
+} from "~/lib/reviewReactQuery";
 import { rpcErrorMessage } from "~/lib/rpcErrorMessage";
 import { EmptyState } from "./reviewPrimitives";
 import { Skeleton } from "../ui/skeleton";
@@ -13,17 +20,22 @@ import { ReviewFilterBar } from "./ReviewFilterBar";
 import { VirtualizedPullRequestRows } from "./VirtualizedPullRequestRows";
 import {
   type ActiveReviewFilter,
+  buildReviewPullFilterOptions,
   filterReviewPullRequests,
   reviewPullFilterDefs,
   reviewPullSortOptions,
   sortReviewItems,
   toReviewServerListFilters,
+  uniqueReviewPullRequests,
 } from "./reviewFilters";
+
+const EMPTY_PULL_REQUESTS: ReadonlyArray<ReviewPullRequestSummary> = [];
 
 export function PullRequestList(props: {
   cwd: string | null;
   onSelectSource: (source: ReviewSourceRef) => void;
 }) {
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [serverSearch] = useDebouncedValue(search, { wait: 250 });
   const [activeFilters, setActiveFilters] = useState<ActiveReviewFilter[]>([]);
@@ -41,7 +53,19 @@ export function PullRequestList(props: {
   );
   const clientSearch = search.trim() === serverSearch.trim() ? "" : search;
 
-  const allPullRequests = pullRequestsQuery.data?.pullRequests ?? [];
+  const allPullRequests = pullRequestsQuery.data?.pullRequests ?? EMPTY_PULL_REQUESTS;
+  const facetItems = useMemo(() => {
+    const cachedPullRequests = queryClient
+      .getQueriesData<ReviewListPullRequestsResult>({
+        queryKey: reviewQueryKeys.pullRequestLists(props.cwd),
+      })
+      .flatMap(([, data]) => data?.pullRequests ?? []);
+    return uniqueReviewPullRequests([...cachedPullRequests, ...allPullRequests]);
+  }, [queryClient, props.cwd, allPullRequests]);
+  const filterOptionsByFieldId = useMemo(
+    () => buildReviewPullFilterOptions(facetItems),
+    [facetItems],
+  );
   const visible = useMemo(
     () =>
       sortReviewItems(
@@ -77,7 +101,7 @@ export function PullRequestList(props: {
   return (
     <div className="flex flex-col gap-2">
       <ReviewFilterBar
-        items={allPullRequests}
+        items={facetItems}
         defs={reviewPullFilterDefs}
         resultCount={visible.length}
         resultCountIsIncomplete={resultCountIsIncomplete}
@@ -85,6 +109,7 @@ export function PullRequestList(props: {
         onSearchChange={setSearch}
         activeFilters={activeFilters}
         onActiveFiltersChange={setActiveFilters}
+        optionsByFieldId={filterOptionsByFieldId}
         sortOptions={reviewPullSortOptions}
         sortId={sortId}
         onSortChange={setSortId}

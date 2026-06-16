@@ -11,6 +11,8 @@ import { CountChip } from "./reviewPrimitives";
 import {
   type ActiveReviewFilter,
   type ReviewFilterDefinition,
+  type ReviewFilterOption,
+  type ReviewFilterOptionsById,
   type ReviewSortOption,
   hasActiveReviewFilters,
 } from "./reviewFilters";
@@ -48,10 +50,14 @@ function referenceLabel(reference: string): string {
 function FacetChip(props: {
   def: ReviewFilterDefinition;
   items: ReadonlyArray<ReviewPullRequestSummary>;
+  options?: ReadonlyArray<ReviewFilterOption>;
   activeFilters: ReadonlyArray<ActiveReviewFilter>;
   onChange: (next: ActiveReviewFilter[]) => void;
 }) {
-  const options = useMemo(() => props.def.extractOptions(props.items), [props.def, props.items]);
+  const options = useMemo(
+    () => props.options ?? props.def.extractOptions(props.items),
+    [props.options, props.def, props.items],
+  );
   const selected = valuesFor(props.activeFilters, props.def.id);
 
   if (options.length === 0) {
@@ -117,6 +123,7 @@ export function ReviewFilterBar(props: {
   onSearchChange: (value: string) => void;
   activeFilters: ReadonlyArray<ActiveReviewFilter>;
   onActiveFiltersChange: (next: ActiveReviewFilter[]) => void;
+  optionsByFieldId?: ReviewFilterOptionsById;
   resultCount?: number;
   resultCountIsIncomplete?: boolean;
   sortOptions?: ReadonlyArray<ReviewSortOption>;
@@ -176,6 +183,7 @@ export function ReviewFilterBar(props: {
           key={def.id}
           def={def}
           items={props.items}
+          options={props.optionsByFieldId?.get(def.id)}
           activeFilters={props.activeFilters}
           onChange={props.onActiveFiltersChange}
         />

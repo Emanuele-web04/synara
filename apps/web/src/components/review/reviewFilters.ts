@@ -23,6 +23,8 @@ export interface ReviewSortOption {
   compare: (a: ReviewPullRequestSummary, b: ReviewPullRequestSummary) => number;
 }
 
+export type ReviewFilterOptionsById = ReadonlyMap<string, ReadonlyArray<ReviewFilterOption>>;
+
 export interface ActiveReviewFilter {
   fieldId: string;
   values: ReadonlySet<string>;
@@ -227,6 +229,83 @@ export const reviewPullSortOptions: ReadonlyArray<ReviewSortOption> = [
   },
 ];
 
+export function buildReviewPullFilterOptions(
+  items: ReadonlyArray<ReviewPullRequestSummary>,
+): ReviewFilterOptionsById {
+  const authors = new Set<string>();
+  const baseBranches = new Set<string>();
+  const headBranches = new Set<string>();
+  const labels = new Set<string>();
+  const assignees = new Set<string>();
+  const statuses = new Set<ReviewColumnId>();
+  const checks = new Set<ReviewPullRequestSummary["checksStatus"]>();
+
+  for (const item of items) {
+    const author = item.author.trim();
+    if (author.length > 0) {
+      authors.add(author);
+    }
+
+    const baseBranch = item.baseBranch.trim();
+    if (baseBranch.length > 0) {
+      baseBranches.add(baseBranch);
+    }
+
+    const headBranch = item.headBranch.trim();
+    const headSelector = item.headSelector?.trim() || headBranch;
+    if (headSelector.length > 0) {
+      headBranches.add(headSelector);
+    }
+
+    for (const rawLabel of item.labels) {
+      const label = rawLabel.trim();
+      if (label.length > 0) {
+        labels.add(label);
+      }
+    }
+
+    for (const rawAssignee of item.assignees) {
+      const assignee = rawAssignee.trim();
+      if (assignee.length > 0) {
+        assignees.add(assignee);
+      }
+    }
+
+    statuses.add(deriveReviewColumn(item));
+    if (item.checksStatus !== "none") {
+      checks.add(item.checksStatus);
+    }
+  }
+
+  return new Map([
+    [authorFilterDef.id, sortedTextOptions(authors)],
+    [baseBranchFilterDef.id, sortedTextOptions(baseBranches)],
+    [headBranchFilterDef.id, sortedTextOptions(headBranches)],
+    [labelFilterDef.id, sortedTextOptions(labels)],
+    [assigneeFilterDef.id, sortedTextOptions(assignees)],
+    [
+      statusFilterDef.id,
+      STATUS_ORDER.filter((status) => statuses.has(status)).map((status) => ({
+        value: status,
+        label: STATUS_LABEL[status],
+      })),
+    ],
+    [
+      checksFilterDef.id,
+      CHECKS_ORDER.filter((status) => checks.has(status)).map((status) => ({
+        value: status,
+        label: CHECKS_LABEL[status] ?? status,
+      })),
+    ],
+  ]);
+}
+
+function sortedTextOptions(values: ReadonlySet<string>): ReadonlyArray<ReviewFilterOption> {
+  return [...values]
+    .sort((a, b) => a.localeCompare(b))
+    .map((value) => ({ value, label: value }));
+}
+
 export function applyReviewFilters(
   items: ReadonlyArray<ReviewPullRequestSummary>,
   activeFilters: ReadonlyArray<ActiveReviewFilter>,
@@ -259,6 +338,16 @@ export function sortReviewItems(
 
 export function hasActiveReviewFilters(activeFilters: ReadonlyArray<ActiveReviewFilter>): boolean {
   return activeFilters.some((filter) => filter.values.size > 0);
+}
+
+export function uniqueReviewPullRequests(
+  pullRequests: ReadonlyArray<ReviewPullRequestSummary>,
+): ReadonlyArray<ReviewPullRequestSummary> {
+  const byKey = new Map<string, ReviewPullRequestSummary>();
+  for (const pullRequest of pullRequests) {
+    byKey.set(`${String(pullRequest.number)}:${pullRequest.url}`, pullRequest);
+  }
+  return [...byKey.values()];
 }
 
 function valuesForFilter(

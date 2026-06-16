@@ -21,9 +21,11 @@ import { ReviewFilterBar } from "./ReviewFilterBar";
 import { VirtualizedPullRequestRows } from "./VirtualizedPullRequestRows";
 import {
   type ActiveReviewFilter,
+  buildReviewPullFilterOptions,
   filterReviewPullRequests,
   reviewPullFilterDefs,
   toReviewServerListFilters,
+  uniqueReviewPullRequests,
 } from "./reviewFilters";
 import {
   REVIEW_BOARD_COLUMNS,
@@ -70,15 +72,17 @@ export function ReviewBoard(props: { cwd: string | null }) {
     }),
   );
   const clientSearch = search.trim() === serverSearch.trim() ? "" : search;
-  const cachedPullRequests = queryClient
-    .getQueriesData<ReviewListPullRequestsResult>({
-      queryKey: reviewQueryKeys.pullRequestLists(cwd),
-    })
-    .flatMap(([, data]) => data?.pullRequests ?? []);
-  const facetBasePullRequests = uniquePullRequests([
-    ...cachedPullRequests,
-    ...(pullRequestsQuery.data?.pullRequests ?? []),
-  ]);
+  const facetBasePullRequests = useMemo(() => {
+    const cachedPullRequests = queryClient
+      .getQueriesData<ReviewListPullRequestsResult>({
+        queryKey: reviewQueryKeys.pullRequestLists(cwd),
+      })
+      .flatMap(([, data]) => data?.pullRequests ?? []);
+    return uniqueReviewPullRequests([
+      ...cachedPullRequests,
+      ...(pullRequestsQuery.data?.pullRequests ?? []),
+    ]);
+  }, [queryClient, cwd, pullRequestsQuery.data]);
 
   const byView = useMemo(() => {
     const all = pullRequestsQuery.data?.pullRequests ?? [];
@@ -87,6 +91,10 @@ export function ReviewBoard(props: { cwd: string | null }) {
   const facetItems = useMemo(
     () => filterByView(facetBasePullRequests, view, viewerLogin),
     [facetBasePullRequests, view, viewerLogin],
+  );
+  const filterOptionsByFieldId = useMemo(
+    () => buildReviewPullFilterOptions(facetItems),
+    [facetItems],
   );
   const visiblePullRequests = useMemo(
     () => filterReviewPullRequests(byView, clientSearch, activeFilters),
@@ -165,6 +173,7 @@ export function ReviewBoard(props: { cwd: string | null }) {
             onSearchChange={setSearch}
             activeFilters={activeFilters}
             onActiveFiltersChange={setActiveFilters}
+            optionsByFieldId={filterOptionsByFieldId}
             onOpenReference={openReference}
             className="min-w-[18rem]"
             searchClassName="lg:max-w-[40rem]"
@@ -207,16 +216,6 @@ export function ReviewBoard(props: { cwd: string | null }) {
       )}
     </div>
   );
-}
-
-function uniquePullRequests(
-  pullRequests: ReadonlyArray<ReviewPullRequestSummary>,
-): ReadonlyArray<ReviewPullRequestSummary> {
-  const byKey = new Map<string, ReviewPullRequestSummary>();
-  for (const pullRequest of pullRequests) {
-    byKey.set(`${String(pullRequest.number)}:${pullRequest.url}`, pullRequest);
-  }
-  return [...byKey.values()];
 }
 
 function ReviewBoardColumn(props: {

@@ -7,6 +7,7 @@ import {
   assigneeFilterDef,
   authorFilterDef,
   baseBranchFilterDef,
+  buildReviewPullFilterOptions,
   checksFilterDef,
   filterReviewPullRequests,
   headBranchFilterDef,
@@ -16,6 +17,7 @@ import {
   reviewPullSortOptions,
   statusFilterDef,
   toReviewServerListFilters,
+  uniqueReviewPullRequests,
 } from "./reviewFilters";
 
 function pr(overrides: Partial<ReviewPullRequestSummary>): ReviewPullRequestSummary {
@@ -103,6 +105,61 @@ describe("review filter definitions", () => {
     const draft = pr({ isDraft: true });
     expect(statusFilterDef.match(draft, new Set(["draft"]))).toBe(true);
     expect(statusFilterDef.match(draft, new Set(["needs-review"]))).toBe(false);
+  });
+});
+
+describe("buildReviewPullFilterOptions", () => {
+  it("derives all PR filter options in one pass", () => {
+    const options = buildReviewPullFilterOptions([
+      pr({
+        author: "bob",
+        baseBranch: "release",
+        headBranch: "feature/review-board",
+        headSelector: "octocat:feature/review-board",
+        labels: ["bug", "priority 1"],
+        assignees: ["carol"],
+        checksStatus: "failing",
+      }),
+      pr({
+        author: "alice",
+        baseBranch: "main",
+        headBranch: "bugfix/search",
+        labels: ["feature", "bug"],
+        assignees: ["alice"],
+        isDraft: true,
+        checksStatus: "passing",
+      }),
+    ]);
+
+    expect(options.get("author")?.map((option) => option.value)).toEqual(["alice", "bob"]);
+    expect(options.get("base")?.map((option) => option.value)).toEqual(["main", "release"]);
+    expect(options.get("head")?.map((option) => option.value)).toEqual([
+      "bugfix/search",
+      "octocat:feature/review-board",
+    ]);
+    expect(options.get("label")?.map((option) => option.value)).toEqual([
+      "bug",
+      "feature",
+      "priority 1",
+    ]);
+    expect(options.get("assignee")?.map((option) => option.value)).toEqual(["alice", "carol"]);
+    expect(options.get("status")?.map((option) => option.value)).toEqual([
+      "needs-review",
+      "draft",
+    ]);
+    expect(options.get("checks")?.map((option) => option.value)).toEqual(["passing", "failing"]);
+  });
+});
+
+describe("uniqueReviewPullRequests", () => {
+  it("dedupes cached PR summaries by number and URL", () => {
+    expect(
+      uniqueReviewPullRequests([
+        pr({ number: 1, url: "https://github.com/acme/repo/pull/1", title: "old" }),
+        pr({ number: 1, url: "https://github.com/acme/repo/pull/1", title: "new" }),
+        pr({ number: 2, url: "https://github.com/acme/repo/pull/2", title: "other" }),
+      ]).map((item) => item.title),
+    ).toEqual(["new", "other"]);
   });
 });
 
