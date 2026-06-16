@@ -61,20 +61,21 @@ function pullRequestListSearch(input: {
   readonly search?: string;
   readonly reviewRequested?: string;
   readonly headBranch?: string;
-  readonly checksStatus?: "passing" | "failing" | "pending" | "none";
+  readonly checksStatuses?: ReadonlyArray<"passing" | "failing">;
   readonly reviewStatus?: "approved" | "changes-requested";
 }): string | null {
   const search = optionalTrimmed(input.search);
   const reviewRequested = optionalTrimmed(input.reviewRequested);
   const headBranch = optionalTrimmed(input.headBranch);
+  const checksStatusTerms = [...new Set(input.checksStatuses ?? [])]
+    .map((status) => (status === "passing" ? "status:success" : "status:failure"))
+    .sort();
   const checksStatusSearch =
-    input.checksStatus === "passing"
-      ? "status:success"
-      : input.checksStatus === "failing"
-        ? "status:failure"
-        : input.checksStatus === "pending"
-          ? "status:pending"
-          : null;
+    checksStatusTerms.length === 0
+      ? null
+      : checksStatusTerms.length === 1
+        ? checksStatusTerms[0]
+        : `(${checksStatusTerms.join(" OR ")})`;
   const reviewStatusSearch =
     input.reviewStatus === "approved"
       ? "review:approved"
@@ -103,7 +104,7 @@ function repositoryPullRequestListArgs(input: {
   readonly label?: string;
   readonly assignee?: string;
   readonly draft?: boolean;
-  readonly checksStatus?: "passing" | "failing" | "pending" | "none";
+  readonly checksStatuses?: ReadonlyArray<"passing" | "failing">;
   readonly reviewStatus?: "approved" | "changes-requested";
 }): string[] {
   const args = [

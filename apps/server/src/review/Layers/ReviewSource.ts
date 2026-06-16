@@ -204,9 +204,9 @@ function hasLocalListFilters(input: ReviewListPullRequestsInput): boolean {
     (column) =>
       (column !== "draft" || input.draft !== true) && column !== nativeReviewStatus,
   );
-  const nativeChecksStatus = nativeListChecksStatus(input.checks);
+  const nativeChecksStatuses = nativeListChecksStatuses(input.checks);
   const localChecks = [...normalizedSet(input.checks)].filter(
-    (check) => check !== nativeChecksStatus,
+    (check) => !nativeChecksStatuses.includes(check as "passing" | "failing"),
   );
   return localColumns.length > 0 || localChecks.length > 0;
 }
@@ -224,15 +224,19 @@ function nativeListReviewStatus(
   return column === "approved" || column === "changes-requested" ? column : undefined;
 }
 
-function nativeListChecksStatus(
+function nativeListChecksStatuses(
   checks: ReadonlyArray<"passing" | "failing" | "pending" | "none"> | undefined,
-): "passing" | "failing" | "pending" | undefined {
+): ReadonlyArray<"passing" | "failing"> {
   const normalized = [...normalizedSet(checks)];
-  if (normalized.length !== 1) {
-    return undefined;
+  const nativeStatuses: Array<"passing" | "failing"> = [];
+  for (const check of normalized) {
+    if (check === "passing" || check === "failing") {
+      nativeStatuses.push(check);
+      continue;
+    }
+    return [];
   }
-  const [check] = normalized;
-  return check === "passing" || check === "failing" || check === "pending" ? check : undefined;
+  return nativeStatuses.sort();
 }
 
 function resolveViewerAlias(value: string | null, viewerLogin: string): string | null {
@@ -417,7 +421,7 @@ const makeReviewSource = Effect.gen(function* () {
   const listPullRequestsUncached = (input: ReviewListPullRequestsInput, viewerLogin: string) => {
     const listLimit = githubListLimit(input);
     const reviewStatus = nativeListReviewStatus(input.columns);
-    const checksStatus = nativeListChecksStatus(input.checks);
+    const checksStatuses = nativeListChecksStatuses(input.checks);
     return gitHubCli
       .listRepositoryPullRequests({
         cwd: input.cwd,
@@ -432,7 +436,7 @@ const makeReviewSource = Effect.gen(function* () {
         ...(input.assignee !== undefined ? { assignee: input.assignee } : {}),
         ...(input.draft === true ? { draft: true } : {}),
         ...(reviewStatus !== undefined ? { reviewStatus } : {}),
-        ...(checksStatus !== undefined ? { checksStatus } : {}),
+        ...(checksStatuses.length > 0 ? { checksStatuses } : {}),
       })
       .pipe(
         Effect.map((pullRequests): ReviewListPullRequestsResult => {

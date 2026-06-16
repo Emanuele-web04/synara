@@ -38,7 +38,7 @@ interface RecordedListCall {
   readonly label?: string;
   readonly assignee?: string;
   readonly draft?: boolean;
-  readonly checksStatus?: "passing" | "failing" | "pending" | "none";
+  readonly checksStatuses?: ReadonlyArray<"passing" | "failing">;
   readonly reviewStatus?: "approved" | "changes-requested";
 }
 
@@ -409,7 +409,7 @@ it.effect("pushes native review status and check filters without the local candi
         state: "open",
         limit: 100,
         reviewStatus: "approved",
-        checksStatus: "failing",
+        checksStatuses: ["failing"],
       },
     ]);
     expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
@@ -459,7 +459,7 @@ it.effect("keeps a larger bounded candidate window when status still needs local
       bounded: true,
     });
     expect(recorded.listCalls).toEqual([
-      { cwd: "/repo", state: "open", limit: 1000, checksStatus: "failing" },
+      { cwd: "/repo", state: "open", limit: 1000, checksStatuses: ["failing"] },
     ]);
     expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
       state: "open",
@@ -536,7 +536,7 @@ it.effect("pushes a single check filter to GitHub without the local candidate wi
         cwd: "/repo",
         state: "open",
         limit: 100,
-        checksStatus: "passing",
+        checksStatuses: ["passing"],
       },
     ]);
     expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
@@ -738,14 +738,14 @@ it.effect("pushes native draft and native checks without the local candidate win
         state: "open",
         limit: 50,
         draft: true,
-        checksStatus: "passing",
+        checksStatuses: ["passing"],
       },
     ]);
     expect(result.meta?.candidateLimit).toBe(50);
   });
 });
 
-it.effect("keeps multi-check OR filters on the local candidate window", () => {
+it.effect("pushes precise multi-check OR filters to GitHub", () => {
   const { layer, recorded } = makeLayer({
     pullRequests: [
       ghPr({ number: 1, checksStatus: "passing" }),
@@ -758,6 +758,61 @@ it.effect("keeps multi-check OR filters on the local candidate window", () => {
     const result = yield* runList(layer, {
       cwd: "/repo",
       checks: ["passing", "failing"],
+    });
+
+    expect(numbers(result)).toEqual([1, 2]);
+    expect(recorded.listCalls).toEqual([
+      {
+        cwd: "/repo",
+        state: "open",
+        limit: 50,
+        checksStatuses: ["failing", "passing"],
+      },
+    ]);
+    expect(result.meta?.candidateLimit).toBe(50);
+  });
+});
+
+it.effect("keeps pending and none check filters on the local candidate window", () => {
+  const { layer, recorded } = makeLayer({
+    pullRequests: [
+      ghPr({ number: 1, checksStatus: "pending" }),
+      ghPr({ number: 2, checksStatus: "none" }),
+      ghPr({ number: 3, checksStatus: "failing" }),
+    ],
+  });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      checks: ["pending", "none"],
+    });
+
+    expect(numbers(result)).toEqual([1, 2]);
+    expect(recorded.listCalls).toEqual([
+      {
+        cwd: "/repo",
+        state: "open",
+        limit: 1000,
+      },
+    ]);
+    expect(result.meta?.candidateLimit).toBe(1000);
+  });
+});
+
+it.effect("keeps mixed precise and imprecise check filters on the local candidate window", () => {
+  const { layer, recorded } = makeLayer({
+    pullRequests: [
+      ghPr({ number: 1, checksStatus: "passing" }),
+      ghPr({ number: 2, checksStatus: "pending" }),
+      ghPr({ number: 3, checksStatus: "failing" }),
+    ],
+  });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      checks: ["passing", "pending"],
     });
 
     expect(numbers(result)).toEqual([1, 2]);
@@ -836,7 +891,7 @@ it.effect("bounds GitHub candidate fetches by 10x for large locally filtered lis
     );
 
     expect(recorded.listCalls).toEqual([
-      { cwd: "/repo", state: "open", limit: 1000, checksStatus: "failing" },
+      { cwd: "/repo", state: "open", limit: 1000, checksStatuses: ["failing"] },
     ]);
     expect(result.pullRequests).toHaveLength(50);
     expect(result.meta).toEqual({
