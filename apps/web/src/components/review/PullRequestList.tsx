@@ -5,7 +5,7 @@ import type {
 } from "@t3tools/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { GitPullRequestIcon } from "~/lib/icons";
 import {
@@ -103,7 +103,7 @@ export function PullRequestList(props: {
     listMeta !== undefined &&
     (listMeta.candidateLimitReached || listMeta.matchedCount > listMeta.returnedCount) &&
     (resultLimit ?? listMeta.resultLimit) < REVIEW_LIST_MAX_LIMIT;
-  const loadMore = () => {
+  const loadMore = useCallback(() => {
     if (!canLoadMore || pullRequestsQuery.isFetching) {
       return;
     }
@@ -117,7 +117,7 @@ export function PullRequestList(props: {
         ),
       };
     });
-  };
+  }, [canLoadMore, listMeta?.resultLimit, listScopeKey, pullRequestsQuery.isFetching]);
 
   const handleSync = () => {
     if (!props.cwd) {

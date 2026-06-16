@@ -227,6 +227,83 @@ describe("ReviewBoard performance", () => {
     }
   });
 
+  it("loads more when the board bottom comes into view", async () => {
+    const originalIntersectionObserver = window.IntersectionObserver;
+    let callback: IntersectionObserverCallback | null = null;
+    class TestIntersectionObserver implements IntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = "0px";
+      readonly thresholds = [];
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+      takeRecords = () => [];
+
+      constructor(nextCallback: IntersectionObserverCallback) {
+        callback = nextCallback;
+      }
+    }
+    window.IntersectionObserver = TestIntersectionObserver;
+
+    let resolveNextWindow:
+      | ((value: ReviewListPullRequestsResult) => void)
+      | null = null;
+    const mounted = await mountBoard({
+      pullRequests: makePullRequests(50),
+      meta: {
+        resultLimit: 50,
+        candidateLimit: 50,
+        candidateCount: 50,
+        candidateLimitReached: true,
+        matchedCount: 50,
+        returnedCount: 50,
+        bounded: true,
+      },
+    });
+
+    try {
+      await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
+      await vi.waitFor(() => {
+        expect(callback).not.toBeNull();
+      });
+      nativeApiMock.listPullRequests.mockImplementationOnce(
+        () =>
+          new Promise<ReviewListPullRequestsResult>((resolve) => {
+            resolveNextWindow = resolve;
+          }),
+      );
+
+      callback?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+
+      await vi.waitFor(() => {
+        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+          cwd: "/repo",
+          limit: 100,
+        });
+      });
+
+      resolveNextWindow?.({
+        pullRequests: makePullRequests(100),
+        meta: {
+          requestedLimit: 100,
+          resultLimit: 100,
+          candidateLimit: 100,
+          candidateCount: 100,
+          candidateLimitReached: false,
+          matchedCount: 100,
+          returnedCount: 100,
+          bounded: true,
+        },
+      });
+    } finally {
+      window.IntersectionObserver = originalIntersectionObserver;
+      await mounted.cleanup();
+    }
+  });
+
   it("trusts server search results after the debounced query catches up", async () => {
     const pullRequests = [
       {

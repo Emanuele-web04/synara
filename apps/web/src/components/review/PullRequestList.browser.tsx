@@ -45,8 +45,11 @@ function pullRequest(input: {
   };
 }
 
-async function mountList(pullRequests: ReadonlyArray<ReviewPullRequestSummary>) {
-  nativeApiMock.listPullRequests.mockResolvedValue({ pullRequests });
+async function mountList(
+  result: ReviewListPullRequestsResult | ReadonlyArray<ReviewPullRequestSummary>,
+) {
+  const listResult = Array.isArray(result) ? { pullRequests: result } : result;
+  nativeApiMock.listPullRequests.mockResolvedValue(listResult);
   const host = document.createElement("div");
   host.className = "h-[700px] bg-background text-foreground";
   document.body.append(host);
@@ -126,7 +129,7 @@ describe("PullRequestList filters", () => {
     let resolveNextWindow:
       | ((value: ReviewListPullRequestsResult) => void)
       | null = null;
-    nativeApiMock.listPullRequests.mockResolvedValueOnce({
+    const mounted = await mountList({
       pullRequests: Array.from({ length: 50 }, (_, index) =>
         pullRequest({
           number: index + 1,
@@ -144,7 +147,6 @@ describe("PullRequestList filters", () => {
         bounded: true,
       },
     });
-    const mounted = await mountList([]);
 
     try {
       await expect.element(page.getByText("Scrollable PR 1", { exact: true })).toBeVisible();

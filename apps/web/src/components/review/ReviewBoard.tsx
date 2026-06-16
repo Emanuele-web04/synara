@@ -2,7 +2,7 @@ import type { ReviewListPullRequestsResult, ReviewPullRequestSummary } from "@t3
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import {
   reviewListPullRequestsQueryOptions,
@@ -22,7 +22,7 @@ import {
 } from "./ReviewInitialSync";
 import { ReviewBoardCard } from "./ReviewBoardCard";
 import { ReviewFilterBar } from "./ReviewFilterBar";
-import { VirtualizedPullRequestRows } from "./VirtualizedPullRequestRows";
+import { EndReachedSentinel, VirtualizedPullRequestRows } from "./VirtualizedPullRequestRows";
 import {
   type ActiveReviewFilter,
   buildReviewPullFilterOptions,
@@ -147,7 +147,7 @@ export function ReviewBoard(props: { cwd: string | null }) {
     listMeta !== undefined &&
     (listMeta.candidateLimitReached || listMeta.matchedCount > listMeta.returnedCount) &&
     (resultLimit ?? listMeta.resultLimit) < REVIEW_LIST_MAX_LIMIT;
-  const loadMore = () => {
+  const loadMore = useCallback(() => {
     if (!canLoadMore || pullRequestsQuery.isFetching) {
       return;
     }
@@ -161,7 +161,7 @@ export function ReviewBoard(props: { cwd: string | null }) {
         ),
       };
     });
-  };
+  }, [canLoadMore, listMeta?.resultLimit, listScopeKey, pullRequestsQuery.isFetching]);
 
   if (cwd === null) {
     return (
@@ -276,6 +276,10 @@ export function ReviewBoard(props: { cwd: string | null }) {
                 />
               ))}
             </div>
+            <EndReachedSentinel
+              disabled={!canLoadMore || pullRequestsQuery.isFetching}
+              onEndReached={loadMore}
+            />
           </div>
         </ScrollArea>
       )}

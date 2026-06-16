@@ -1,7 +1,7 @@
 import type { ReviewPullRequestSummary } from "@t3tools/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ReactNode, UIEvent } from "react";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { cn } from "~/lib/utils";
 
@@ -84,6 +84,47 @@ export function VirtualizedPullRequestRows(props: {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+export function EndReachedSentinel(props: {
+  disabled: boolean;
+  onEndReached: () => void;
+  className?: string;
+  label?: string;
+}) {
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const element = sentinelRef.current;
+    if (!element || props.disabled) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          props.onEndReached();
+        }
+      },
+      { root: null, rootMargin: "320px 0px" },
+    );
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  }, [props.disabled, props.onEndReached]);
+
+  return (
+    <div
+      ref={sentinelRef}
+      className={cn("flex h-8 shrink-0 items-center justify-center", props.className)}
+      aria-hidden={props.disabled ? true : undefined}
+    >
+      {!props.disabled && props.label ? (
+        <span className="text-[11px] text-muted-foreground">{props.label}</span>
+      ) : null}
     </div>
   );
 }
