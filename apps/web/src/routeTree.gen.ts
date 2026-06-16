@@ -18,6 +18,7 @@ import { Route as ChatAutomationsRouteImport } from './routes/_chat.automations'
 import { Route as ChatThreadIdRouteImport } from './routes/_chat.$threadId'
 import { Route as ChatWorkspaceIndexRouteImport } from './routes/_chat.workspace.index'
 import { Route as ChatKanbanIndexRouteImport } from './routes/_chat.kanban.index'
+import { Route as ChatAutomationsIndexRouteImport } from './routes/_chat.automations.index'
 import { Route as ChatWorkspaceWorkspaceIdRouteImport } from './routes/_chat.workspace.$workspaceId'
 import { Route as ChatKanbanProjectIdRouteImport } from './routes/_chat.kanban.$projectId'
 import { Route as ChatAutomationsAutomationIdRouteImport } from './routes/_chat.automations.$automationId'
@@ -66,6 +67,11 @@ const ChatKanbanIndexRoute = ChatKanbanIndexRouteImport.update({
   path: '/kanban/',
   getParentRoute: () => ChatRoute,
 } as any)
+const ChatAutomationsIndexRoute = ChatAutomationsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ChatAutomationsRoute,
+} as any)
 const ChatWorkspaceWorkspaceIdRoute =
   ChatWorkspaceWorkspaceIdRouteImport.update({
     id: '/workspace/$workspaceId',
@@ -94,12 +100,12 @@ export interface FileRoutesByFullPath {
   '/automations/$automationId': typeof ChatAutomationsAutomationIdRoute
   '/kanban/$projectId': typeof ChatKanbanProjectIdRoute
   '/workspace/$workspaceId': typeof ChatWorkspaceWorkspaceIdRoute
+  '/automations/': typeof ChatAutomationsIndexRoute
   '/kanban/': typeof ChatKanbanIndexRoute
   '/workspace/': typeof ChatWorkspaceIndexRoute
 }
 export interface FileRoutesByTo {
   '/$threadId': typeof ChatThreadIdRoute
-  '/automations': typeof ChatAutomationsRouteWithChildren
   '/plugins': typeof ChatPluginsRoute
   '/settings': typeof ChatSettingsRoute
   '/worldcup': typeof ChatWorldcupRoute
@@ -107,6 +113,7 @@ export interface FileRoutesByTo {
   '/automations/$automationId': typeof ChatAutomationsAutomationIdRoute
   '/kanban/$projectId': typeof ChatKanbanProjectIdRoute
   '/workspace/$workspaceId': typeof ChatWorkspaceWorkspaceIdRoute
+  '/automations': typeof ChatAutomationsIndexRoute
   '/kanban': typeof ChatKanbanIndexRoute
   '/workspace': typeof ChatWorkspaceIndexRoute
 }
@@ -122,6 +129,7 @@ export interface FileRoutesById {
   '/_chat/automations/$automationId': typeof ChatAutomationsAutomationIdRoute
   '/_chat/kanban/$projectId': typeof ChatKanbanProjectIdRoute
   '/_chat/workspace/$workspaceId': typeof ChatWorkspaceWorkspaceIdRoute
+  '/_chat/automations/': typeof ChatAutomationsIndexRoute
   '/_chat/kanban/': typeof ChatKanbanIndexRoute
   '/_chat/workspace/': typeof ChatWorkspaceIndexRoute
 }
@@ -137,12 +145,12 @@ export interface FileRouteTypes {
     | '/automations/$automationId'
     | '/kanban/$projectId'
     | '/workspace/$workspaceId'
+    | '/automations/'
     | '/kanban/'
     | '/workspace/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/$threadId'
-    | '/automations'
     | '/plugins'
     | '/settings'
     | '/worldcup'
@@ -150,6 +158,7 @@ export interface FileRouteTypes {
     | '/automations/$automationId'
     | '/kanban/$projectId'
     | '/workspace/$workspaceId'
+    | '/automations'
     | '/kanban'
     | '/workspace'
   id:
@@ -164,6 +173,7 @@ export interface FileRouteTypes {
     | '/_chat/automations/$automationId'
     | '/_chat/kanban/$projectId'
     | '/_chat/workspace/$workspaceId'
+    | '/_chat/automations/'
     | '/_chat/kanban/'
     | '/_chat/workspace/'
   fileRoutesById: FileRoutesById
@@ -237,6 +247,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatKanbanIndexRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/automations/': {
+      id: '/_chat/automations/'
+      path: '/'
+      fullPath: '/automations/'
+      preLoaderRoute: typeof ChatAutomationsIndexRouteImport
+      parentRoute: typeof ChatAutomationsRoute
+    }
     '/_chat/workspace/$workspaceId': {
       id: '/_chat/workspace/$workspaceId'
       path: '/workspace/$workspaceId'
@@ -263,10 +280,12 @@ declare module '@tanstack/react-router' {
 
 interface ChatAutomationsRouteChildren {
   ChatAutomationsAutomationIdRoute: typeof ChatAutomationsAutomationIdRoute
+  ChatAutomationsIndexRoute: typeof ChatAutomationsIndexRoute
 }
 
 const ChatAutomationsRouteChildren: ChatAutomationsRouteChildren = {
   ChatAutomationsAutomationIdRoute: ChatAutomationsAutomationIdRoute,
+  ChatAutomationsIndexRoute: ChatAutomationsIndexRoute,
 }
 
 const ChatAutomationsRouteWithChildren = ChatAutomationsRoute._addFileChildren(
