@@ -1102,6 +1102,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                                 text={item.message.text}
                                 cwd={markdownCwd}
                                 isStreaming={false}
+                                variant="subtle"
                                 style={chatTypographyStyle}
                                 onImageExpand={onImageExpand}
                               />
@@ -2288,6 +2289,21 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
 
   // Use the text font size (matching the UI settings) for tool call rows
   const rowFontSizePx = textFontSizePx;
+  const processTextFontSizePx = Math.max(11, rowFontSizePx - (compact ? 2 : 1));
+  const supportingTextFontSizePx = Math.max(10, rowFontSizePx - 2);
+  const processLineHeightPx = compact ? 18 : 19;
+  const processTextClassName =
+    workEntry.tone === "error"
+      ? "text-muted-foreground/66"
+      : workEntry.tone === "thinking"
+        ? "text-muted-foreground/34"
+        : "text-muted-foreground/44";
+  const processIconClassName =
+    workEntry.tone === "error"
+      ? "text-muted-foreground/52"
+      : workEntry.tone === "thinking"
+        ? "text-muted-foreground/30"
+        : "text-muted-foreground/38";
 
   return (
     <div className={cn(compact ? "py-0.5" : "rounded-lg py-1")}>
@@ -2316,13 +2332,13 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 }}
               >
                 <span
-                  className="font-system-ui shrink-0 font-medium text-muted-foreground/72"
-                  style={{ fontSize: `${rowFontSizePx}px` }}
+                  className="font-system-ui shrink-0 font-medium text-muted-foreground/62"
+                  style={{ fontSize: `${Math.max(11, rowFontSizePx - 1)}px` }}
                 >
                   Edited
                 </span>
                 <span
-                  className="font-system-ui max-w-[28rem] truncate text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
+                  className="font-system-ui max-w-[28rem] truncate text-foreground/86 underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
                   style={{
                     fontSize: `${rowFontSizePx}px`,
                   }}
@@ -2354,7 +2370,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           >
             <span
               className={cn(
-                "flex shrink-0 items-center justify-center text-muted-foreground/40",
+                "flex shrink-0 items-center justify-center",
+                processIconClassName,
                 compact ? "size-4" : "size-5",
               )}
             >
@@ -2364,17 +2381,17 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
               <p
                 className={cn(
                   compact ? "truncate leading-5" : "truncate leading-6",
-                  "font-medium text-foreground/72",
+                  "font-medium text-foreground/62",
                 )}
-                style={{ fontSize: `${rowFontSizePx}px` }}
+                style={{ fontSize: `${processTextFontSizePx}px` }}
                 title={hoverText}
               >
                 <span>{subagentSummary}</span>
               </p>
               {subagentMeta ? (
                 <p
-                  className="truncate leading-4 text-muted-foreground/32"
-                  style={{ fontSize: `${Math.max(11, rowFontSizePx - 1)}px` }}
+                  className="truncate leading-4 text-muted-foreground/34"
+                  style={{ fontSize: `${supportingTextFontSizePx}px` }}
                   title={subagentMeta}
                 >
                   {subagentMeta}
@@ -2411,7 +2428,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                     <div className="min-w-0 flex-1">
                       <div
                         className="truncate font-semibold leading-[18px] text-foreground/90"
-                        style={{ fontSize: `${rowFontSizePx}px` }}
+                        style={{ fontSize: `${processTextFontSizePx}px` }}
                         title={presentation.fullLabel}
                       >
                         <span style={{ color: presentation.accentColor }}>
@@ -2426,7 +2443,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                       {secondaryLabel ? (
                         <div
                           className="truncate pt-0.5 leading-4 text-muted-foreground/56"
-                          style={{ fontSize: `${Math.max(11, rowFontSizePx - 1)}px` }}
+                          style={{ fontSize: `${supportingTextFontSizePx}px` }}
                           title={secondaryLabel}
                         >
                           {secondaryLabel}
@@ -2435,7 +2452,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                       {subagent.latestUpdate ? (
                         <div
                           className="flex items-baseline gap-1.5 pt-1 text-muted-foreground/42"
-                          style={{ fontSize: `${Math.max(10, rowFontSizePx - 2)}px` }}
+                          style={{ fontSize: `${supportingTextFontSizePx}px` }}
                           title={subagent.latestUpdate}
                         >
                           <span className="shrink-0 uppercase tracking-[0.14em] text-muted-foreground/30">
@@ -2495,7 +2512,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             <>
               <span
                 className={cn(
-                  "flex shrink-0 items-center justify-center text-muted-foreground/40",
+                  "flex shrink-0 items-center justify-center",
+                  processIconClassName,
                   compact ? "size-4" : "size-5",
                 )}
                 data-tool-icon={leftIconKind}
@@ -2506,8 +2524,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 {showInlineAgentTaskPreview ? (
                   <div className={cn(compact ? "space-y-[1px]" : "space-y-0.5")}>
                     <p
-                      className="truncate font-medium leading-5 text-muted-foreground/72"
-                      style={{ fontSize: `${rowFontSizePx}px` }}
+                      className="truncate font-medium leading-5 text-muted-foreground/58"
+                      style={{ fontSize: `${processTextFontSizePx}px` }}
                     >
                       {heading}
                     </p>
@@ -2515,11 +2533,11 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                       text={preview ?? ""}
                       cwd={markdownCwd}
                       isStreaming={false}
+                      variant="process"
                       className="leading-relaxed"
                       style={{
-                        color: "color-mix(in srgb, var(--muted-foreground) 72%, transparent)",
-                        fontSize: `${Math.max(11, rowFontSizePx - 1)}px`,
-                        lineHeight: compact ? "18px" : "19px",
+                        fontSize: `${processTextFontSizePx}px`,
+                        lineHeight: `${processLineHeightPx}px`,
                       }}
                       onImageExpand={onImageExpand}
                     />
@@ -2528,10 +2546,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   <p
                     className={cn(
                       compact ? "truncate leading-5" : "truncate leading-6",
-                      // Match the leading icon's tone so the row reads as one muted unit.
-                      "text-muted-foreground/40",
+                      processTextClassName,
                     )}
-                    style={{ fontSize: `${rowFontSizePx}px` }}
+                    style={{ fontSize: `${processTextFontSizePx}px` }}
                   >
                     <span data-work-entry-display-text="true">{displayText}</span>
                   </p>

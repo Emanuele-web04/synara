@@ -83,6 +83,7 @@ interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
   isStreaming?: boolean;
+  variant?: ChatMarkdownVariant | undefined;
   className?: string | undefined;
   style?: CSSProperties | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
@@ -120,6 +121,12 @@ function MarkdownTaskCheckbox(props: {
 }
 
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
+type ChatMarkdownVariant = "primary" | "subtle" | "process";
+const CHAT_MARKDOWN_VARIANT_CLASS_NAMES: Record<ChatMarkdownVariant, string> = {
+  primary: "",
+  subtle: "chat-markdown--subtle",
+  process: "chat-markdown--process",
+};
 type MarkdownRemarkPlugins = NonNullable<
   React.ComponentProps<typeof ReactMarkdown>["remarkPlugins"]
 >;
@@ -784,7 +791,7 @@ function MarkdownCodeBlock({
   children: ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
-  const [wrap, setWrap] = useState(false);
+  const [wrap, setWrap] = useState(true);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleCopy = useCallback(() => {
     void copyTextToClipboard(code)
@@ -950,6 +957,7 @@ function ChatMarkdown({
   text,
   cwd,
   isStreaming = false,
+  variant = "primary",
   className = "text-sm leading-relaxed",
   style,
   onImageExpand,
@@ -1102,9 +1110,17 @@ function ChatMarkdown({
     }),
     [cwd, diffThemeName, isStreaming, onImageExpand, onTaskToggle, resolvedTheme],
   );
+  const rootClassName = [
+    "chat-markdown w-full min-w-0",
+    CHAT_MARKDOWN_VARIANT_CLASS_NAMES[variant],
+    className,
+    "text-foreground",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <div className={`chat-markdown w-full min-w-0 ${className} text-foreground`} style={style}>
+    <div className={rootClassName} style={style}>
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
