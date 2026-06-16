@@ -711,6 +711,15 @@ const runGrokCommand = (args: ReadonlyArray<string>, executable = "grok") =>
     ),
   );
 
+const runKimiCommand = (args: ReadonlyArray<string>, executable = "kimi") =>
+  runProviderCommand(executable, args).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
+
 const runOpenCodeCommand = (args: ReadonlyArray<string>, executable = "opencode") =>
   runProviderCommand(executable, args, providerCommandEnv(OPENCODE_PROVIDER)).pipe(
     Effect.flatMap((result) =>

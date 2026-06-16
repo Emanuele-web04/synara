@@ -9,6 +9,7 @@ import { CodexAdapter, CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { CursorAdapter, CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { DroidAdapter, DroidAdapterShape } from "../Services/DroidAdapter.ts";
 import { GrokAdapter, GrokAdapterShape } from "../Services/GrokAdapter.ts";
+import { KimiAdapter, KimiAdapterShape } from "../Services/KimiAdapter.ts";
 import { KiloAdapter, KiloAdapterShape } from "../Services/KiloAdapter.ts";
 import { OpenCodeAdapter, OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import { PiAdapter, PiAdapterShape } from "../Services/PiAdapter.ts";
@@ -88,6 +89,23 @@ const fakeGrokAdapter: GrokAdapterShape = {
 
 const fakeDroidAdapter: DroidAdapterShape = {
   provider: "droid",
+  capabilities: { sessionModelSwitch: "restart-session" },
+  startSession: vi.fn(),
+  sendTurn: vi.fn(),
+  interruptTurn: vi.fn(),
+  respondToRequest: vi.fn(),
+  respondToUserInput: vi.fn(),
+  stopSession: vi.fn(),
+  listSessions: vi.fn(),
+  hasSession: vi.fn(),
+  readThread: vi.fn(),
+  rollbackThread: vi.fn(),
+  stopAll: vi.fn(),
+  streamEvents: Stream.empty,
+};
+
+const fakeKimiAdapter: KimiAdapterShape = {
+  provider: "kimi",
   capabilities: { sessionModelSwitch: "restart-session" },
   startSession: vi.fn(),
   sendTurn: vi.fn(),

@@ -2786,6 +2786,7 @@ function SettingsRouteView() {
                     customCursorModels: defaults.customCursorModels,
                     customAntigravityModels: defaults.customAntigravityModels,
                     customGrokModels: defaults.customGrokModels,
+                    customKimiModels: defaults.customKimiModels,
                     customKiloModels: defaults.customKiloModels,
                     customOpenCodeModels: defaults.customOpenCodeModels,
                     customPiModels: defaults.customPiModels,

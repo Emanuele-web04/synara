@@ -20,6 +20,7 @@ import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { CursorAdapter } from "../Services/CursorAdapter.ts";
 import { DroidAdapter } from "../Services/DroidAdapter.ts";
 import { GrokAdapter } from "../Services/GrokAdapter.ts";
+import { KimiAdapter } from "../Services/KimiAdapter.ts";
 import { KiloAdapter } from "../Services/KiloAdapter.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import { PiAdapter } from "../Services/PiAdapter.ts";

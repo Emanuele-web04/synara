@@ -265,6 +265,16 @@ export const GrokIcon: Icon = (props) => (
   </svg>
 );
 
+// Kimi Code (Moonshot AI) — a crescent "moonshot" mark, tinted via currentColor.
+export const KimiIcon: Icon = (props) => (
+  <svg {...props} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      fill="currentColor"
+      d="M12 2c.46 0 .91.03 1.36.08a.9.9 0 0 1 .26 1.72 7.5 7.5 0 0 0 6.58 13.45.9.9 0 0 1 1.1 1.32A10 10 0 1 1 12 2Zm-1.78 2.28a8 8 0 1 0 9.32 13.6 9.3 9.3 0 0 1-9.32-13.6Z"
+    />
+  </svg>
+);
+
 export const PiIcon: Icon = (props) => (
   <svg {...props} viewBox="0 0 800 800" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path

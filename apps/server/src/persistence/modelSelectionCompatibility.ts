@@ -57,6 +57,9 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   if (lowerLabel.includes("kilo")) {
     return "kilo";
   }
+  if (lowerLabel.includes("kimi") || lowerLabel.includes("moonshot")) {
+    return "kimi";
+  }
   if (lowerLabel.includes("cursor")) {
     return "cursor";
   }
@@ -118,6 +121,9 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
   }
   if (lowerModel.includes("grok")) {
     return "grok";
+  }
+  if (lowerModel.includes("kimi")) {
+    return "kimi";
   }
   return "codex";
 }

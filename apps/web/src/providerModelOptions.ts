@@ -16,6 +16,8 @@ import type {
   DroidModelSelection,
   GrokModelOptions,
   GrokModelSelection,
+  KimiModelOptions,
+  KimiModelSelection,
   KiloModelSelection,
   ModelSelection,
   OpenCodeModelOptions,
@@ -142,8 +144,18 @@ export function mergeDynamicModelOptions(input: {
       continue;
     }
     dynamicNormalizedSlugs.add(normalizedSlug);
+    const meaningfulDynamicName =
+      rawName.length > 0 &&
+      rawName.toLowerCase() !== rawSlug &&
+      rawName.toLowerCase() !== normalizedSlug.toLowerCase()
+        ? rawName
+        : undefined;
+    const staticName = staticNameBySlug.get(normalizedSlug);
     normalizedDynamicOptions.push({
       slug: normalizedSlug,
+      // Curated built-in names are authoritative for every provider EXCEPT Kimi:
+      // its single model is a managed alias whose backend display name updates
+      // server-side, so Kimi's live ACP-reported name wins over the static label.
       name:
         staticNameBySlug.get(normalizedSlug) ??
         (rawName.length > 0 &&

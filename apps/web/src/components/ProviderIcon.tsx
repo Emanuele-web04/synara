@@ -16,6 +16,7 @@ import {
   DroidIcon,
   GrokIcon,
   type Icon,
+  KimiIcon,
   KiloIcon,
   OpenAI,
   OpenCodeIcon,

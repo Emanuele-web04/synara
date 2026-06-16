@@ -23,6 +23,7 @@ import {
   checkCodexProviderStatus,
   checkCursorProviderStatus,
   checkGrokProviderStatus,
+  checkKimiProviderStatus,
   checkOpenCodeProviderStatus,
   checkPiProviderStatus,
   hasCustomModelProvider,
@@ -31,6 +32,7 @@ import {
   makeCheckCodexProviderStatus,
   makeCheckCursorProviderStatus,
   makeCheckGrokProviderStatus,
+  makeCheckKimiProviderStatus,
   makeCheckKiloProviderStatus,
   makeCheckOpenCodeProviderStatus,
   makeProviderHealthLive,
@@ -1964,6 +1966,57 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "unknown");
         assert.strictEqual(status.message, "Grok CLI (`grok`) is not installed or not on PATH.");
       }).pipe(Effect.provide(failingSpawnerLayer("spawn grok ENOENT"))),
+    );
+  });
+
+  describe("checkKimiProviderStatus", () => {
+    it.effect("returns ready when Kimi Code CLI is installed", () =>
+      Effect.gen(function* () {
+        const status = yield* checkKimiProviderStatus;
+        assert.strictEqual(status.provider, "kimi");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(status.version, "0.15.0");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "kimi 0.15.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("uses configured Kimi binary for version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckKimiProviderStatus("/custom/bin/kimi");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/kimi");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "kimi 0.15.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("returns unavailable when Kimi Code CLI is missing", () =>
+      Effect.gen(function* () {
+        const status = yield* checkKimiProviderStatus;
+        assert.strictEqual(status.provider, "kimi");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, false);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(
+          status.message,
+          "Kimi Code CLI (`kimi`) is not installed or not on PATH.",
+        );
+      }).pipe(Effect.provide(failingSpawnerLayer("spawn kimi ENOENT"))),
     );
   });
 

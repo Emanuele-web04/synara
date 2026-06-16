@@ -6,6 +6,7 @@ import {
   CursorModelOptions,
   DroidModelOptions,
   GrokModelOptions,
+  KimiModelOptions,
   OpenCodeModelOptions,
   PiModelOptions,
 } from "./model";
