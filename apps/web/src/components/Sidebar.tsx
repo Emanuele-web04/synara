@@ -6,6 +6,7 @@ import {
   ArchiveIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  ClockIcon,
   CopyIcon,
   DisposableThreadIcon,
   ExternalLinkIcon,
@@ -27,6 +28,7 @@ import {
   TriangleAlertIcon,
   XIcon,
 } from "~/lib/icons";
+import { ensureNativeApi } from "~/nativeApi";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch, FiPlus } from "react-icons/fi";
 import { GoRepoForked } from "react-icons/go";
@@ -1007,6 +1009,7 @@ function SidebarPrimaryAction({
   active = false,
   disabled = false,
   shortcutLabel,
+  badgeCount,
 }: {
   icon: LucideIcon;
   label: string;
@@ -1014,8 +1017,10 @@ function SidebarPrimaryAction({
   active?: boolean;
   disabled?: boolean;
   shortcutLabel?: string | null;
+  badgeCount?: number | null;
 }) {
   const shortcutParts = shortcutLabel ? splitShortcutLabel(shortcutLabel) : [];
+  const showBadge = typeof badgeCount === "number" && badgeCount > 0;
 
   return (
     <SidebarMenuItem>
@@ -1038,7 +1043,11 @@ function SidebarPrimaryAction({
           <SidebarGlyph icon={Icon} variant="leading" />
         </SidebarLeadingIcon>
         <span className="truncate">{label}</span>
-        {shortcutParts.length > 0 ? (
+        {showBadge ? (
+          <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-md bg-muted px-1 text-[10px] font-medium text-muted-foreground">
+            {badgeCount}
+          </span>
+        ) : shortcutParts.length > 0 ? (
           <span className="ml-auto opacity-0 transition-opacity group-hover/sidebar-primary-action:opacity-100 group-focus-visible/sidebar-primary-action:opacity-100">
             <KbdGroup>
               {shortcutParts.map((part) => (
@@ -1220,6 +1229,29 @@ export default function Sidebar() {
   });
   const isOnWorkspace = pathname.startsWith("/workspace");
   const isOnKanban = pathname.startsWith("/kanban");
+  const isOnAutomations = pathname.startsWith("/automations");
+  // Lightweight read of automations to drive the sidebar attention badge. Shares the
+  // ["automations"] query cache with the Automations route (and its live stream updates).
+  const automationListQuery = useQuery({
+    queryKey: ["automations"],
+    queryFn: () => ensureNativeApi().automation.list({}),
+  });
+  const automationAttentionCount = useMemo(() => {
+    const data = automationListQuery.data;
+    if (!data) return 0;
+    const flagged = new Set<string>();
+    for (const run of data.runs) {
+      if (
+        run.status === "failed" ||
+        run.status === "cancelled" ||
+        run.status === "interrupted" ||
+        run.status === "waiting-for-approval"
+      ) {
+        flagged.add(run.automationId);
+      }
+    }
+    return flagged.size;
+  }, [automationListQuery.data]);
   const { settings: appSettings, updateSettings } = useAppSettings();
   // The Threads/Projects tab is always available; only the optional Workspace tab
   // and the standalone Chats footer list can be hidden from Settings.
@@ -6054,6 +6086,15 @@ export default function Sidebar() {
                       active={isOnKanban}
                       onClick={() => {
                         void navigate({ to: "/kanban" });
+                      }}
+                    />
+                    <SidebarPrimaryAction
+                      icon={ClockIcon}
+                      label="Automations"
+                      active={isOnAutomations}
+                      badgeCount={automationAttentionCount}
+                      onClick={() => {
+                        void navigate({ to: "/automations" });
                       }}
                     />
                   </>

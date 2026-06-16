@@ -10,7 +10,6 @@ import { AppNavigationButtons } from "./AppNavigationButtons";
 import { Button } from "./ui/button";
 import { SidebarTrigger, useSidebar } from "./ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
-import { ClockIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 /** Quick entry to the World Cup 2026 ball-physics playground, sat beside the route arrows. */
@@ -37,29 +36,6 @@ function WorldCupButton() {
   );
 }
 
-function AutomationsButton() {
-  const navigate = useNavigate();
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="size-7 shrink-0 rounded-lg text-muted-foreground/75 hover:text-foreground"
-            aria-label="Automations"
-            onClick={() => void navigate({ to: "/automations" })}
-          />
-        }
-      >
-        <ClockIcon className="size-4" />
-      </TooltipTrigger>
-      <TooltipPopup side="bottom">Automations</TooltipPopup>
-    </Tooltip>
-  );
-}
-
 /**
  * The leading chrome cluster: the sidebar toggle followed by the route nav arrows.
  *
@@ -79,7 +55,6 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
         aria-label="Toggle thread sidebar"
       />
       <AppNavigationButtons className="ms-0" />
-      <AutomationsButton />
       <WorldCupButton />
     </div>
   );
