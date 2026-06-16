@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Layer } from "effect";
 
+import { AutomationServiceLive } from "./automation/Layers/AutomationService";
 import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQuery";
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
@@ -29,6 +30,7 @@ import { ServerSettingsLive } from "./serverSettings";
 import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
+import { AutomationRepositoryLive } from "./persistence/Layers/AutomationRepository";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -90,8 +92,13 @@ export function makeServerRuntimeServicesLayer() {
     authControlPlaneLayer,
     serverAuthLayer,
   );
+  const automationServiceLayer = AutomationServiceLive.pipe(
+    Layer.provideMerge(AutomationRepositoryLive),
+    Layer.provideMerge(runtimeServicesLayer),
+  );
 
   return Layer.mergeAll(
+    automationServiceLayer,
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
     devServerManagerLayer,

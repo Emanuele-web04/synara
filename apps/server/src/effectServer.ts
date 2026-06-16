@@ -5,6 +5,7 @@ import type { ServerSettingsError } from "@t3tools/contracts";
 import { Effect, Exit, FileSystem, Layer, Path, Schema, Scope, ServiceMap } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 
+import { AutomationService } from "./automation/Services/AutomationService";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -36,6 +37,7 @@ export interface ServerShape {
     | FileSystem.FileSystem
     | Path.Path
     | Keybindings
+    | AutomationService
     | ServerLifecycleEvents
     | OrchestrationEngineService
     | OrchestrationReactor
