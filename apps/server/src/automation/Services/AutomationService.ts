@@ -33,6 +33,11 @@ export interface AutomationServiceShape {
   readonly cancelRun: (
     input: AutomationCancelRunInput,
   ) => Effect.Effect<AutomationCancelRunResult, AutomationServiceError>;
+  readonly runDueOnce: (input?: {
+    readonly now?: string;
+    readonly limit?: number;
+    readonly leaseOwnerId?: string;
+  }) => Effect.Effect<ReadonlyArray<AutomationRunNowResult>, AutomationServiceError>;
   readonly streamEvents: Stream.Stream<AutomationStreamEvent, never, never>;
 }
 

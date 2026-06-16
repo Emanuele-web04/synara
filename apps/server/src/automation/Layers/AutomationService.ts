@@ -26,6 +26,7 @@ import {
   AutomationService,
   type AutomationServiceShape,
 } from "../Services/AutomationService.ts";
+import { computeNextAutomationRunAt } from "../schedule.ts";
 
 const AUTOMATION_ERROR_MAX_CHARS = 4_000;
 
@@ -98,9 +99,9 @@ function mergeDefinitionUpdate(
   const nextRunAt =
     schedule.type === "manual"
       ? null
-      : input.schedule && current.schedule.type === "manual"
-        ? now
-        : current.nextRunAt;
+      : input.schedule
+        ? computeNextAutomationRunAt(schedule, now)
+        : current.nextRunAt ?? computeNextAutomationRunAt(schedule, now);
   const providerOptions = input.providerOptions ?? current.providerOptions;
   const nextDefinition: AutomationDefinition = {
     ...current,
@@ -318,6 +319,42 @@ export const AutomationServiceLive = Layer.effect(
       );
     };
 
+    const normalizeCreatedDefinitionSchedule = (definition: AutomationDefinition, now: string) => {
+      const nextRunAt = computeNextAutomationRunAt(definition.schedule, now);
+      if (definition.nextRunAt === nextRunAt) {
+        return Effect.succeed(definition);
+      }
+      return automationRepository.saveDefinition({
+        ...definition,
+        nextRunAt,
+        updatedAt: now,
+      });
+    };
+
+    const createRunForDefinition = (
+      definition: AutomationDefinition,
+      trigger: AutomationRun["trigger"],
+      scheduledFor: string,
+      now: string,
+    ) =>
+      Effect.gen(function* () {
+        const run = yield* automationRepository
+          .createRun({
+            id: makeAutomationRunId(),
+            automationId: definition.id,
+            projectId: definition.projectId,
+            threadId: null,
+            trigger,
+            scheduledFor,
+            permissionSnapshot: makePermissionSnapshot(definition, now),
+            now,
+          })
+          .pipe(Effect.mapError(toServiceError("Failed to create automation run.")));
+        yield* publish({ type: "run-upserted", run });
+        const project = yield* requireProject(definition.projectId);
+        return yield* dispatchRun(definition, run, project, now);
+      });
+
     const list: AutomationServiceShape["list"] = (input = {}) =>
       automationRepository
         .list(input)
@@ -329,6 +366,11 @@ export const AutomationServiceLive = Layer.effect(
         .createDefinition({ id: makeAutomationId(), input, now })
         .pipe(
           Effect.mapError(toServiceError("Failed to create automation.")),
+          Effect.flatMap((definition) =>
+            normalizeCreatedDefinitionSchedule(definition, now).pipe(
+              Effect.mapError(toServiceError("Failed to initialize automation schedule.")),
+            ),
+          ),
           Effect.tap((definition) => publish({ type: "definition-upserted", definition })),
         );
     };
@@ -356,21 +398,7 @@ export const AutomationServiceLive = Layer.effect(
       Effect.gen(function* () {
         const definition = yield* requireDefinition(input.automationId);
         const now = new Date().toISOString();
-        const run = yield* automationRepository
-          .createRun({
-            id: makeAutomationRunId(),
-            automationId: definition.id,
-            projectId: definition.projectId,
-            threadId: null,
-            trigger: { type: "manual" },
-            scheduledFor: now,
-            permissionSnapshot: makePermissionSnapshot(definition, now),
-            now,
-          })
-          .pipe(Effect.mapError(toServiceError("Failed to create automation run.")));
-        yield* publish({ type: "run-upserted", run });
-        const project = yield* requireProject(definition.projectId);
-        return yield* dispatchRun(definition, run, project, now);
+        return yield* createRunForDefinition(definition, { type: "manual" }, now, now);
       });
 
     const cancelRun: AutomationServiceShape["cancelRun"] = (input) =>
@@ -382,6 +410,60 @@ export const AutomationServiceLive = Layer.effect(
           Effect.map((run) => ({ run })),
         );
 
+    const runDueOnce: AutomationServiceShape["runDueOnce"] = (input = {}) =>
+      Effect.gen(function* () {
+        const now = input.now ?? new Date().toISOString();
+        const ownerId = input.leaseOwnerId ?? `automation-scheduler:${process.pid}`;
+        const nowMs = Date.parse(now);
+        const leaseExpiresAt = new Date(
+          (Number.isFinite(nowMs) ? nowMs : Date.now()) + 55_000,
+        ).toISOString();
+        const acquired = yield* automationRepository
+          .tryAcquireSchedulerLease({
+            leaseKey: "automation-scheduler",
+            ownerId,
+            now,
+            leaseExpiresAt,
+          })
+          .pipe(Effect.mapError(toServiceError("Failed to acquire automation scheduler lease.")));
+        if (!acquired) {
+          return [];
+        }
+
+        const definitions = yield* automationRepository
+          .listDueDefinitions({
+            now,
+            limit: input.limit ?? 5,
+          })
+          .pipe(Effect.mapError(toServiceError("Failed to list due automations.")));
+
+        const results = yield* Effect.forEach(
+          definitions,
+          (definition) =>
+            Effect.gen(function* () {
+              const scheduledFor = definition.nextRunAt ?? now;
+              const nextRunAt = computeNextAutomationRunAt(definition.schedule, scheduledFor);
+              yield* automationRepository
+                .setDefinitionNextRunAt({
+                  id: definition.id,
+                  nextRunAt,
+                  updatedAt: now,
+                })
+                .pipe(Effect.mapError(toServiceError("Failed to advance automation schedule.")));
+              const result = yield* createRunForDefinition(
+                definition,
+                { type: "scheduled" },
+                scheduledFor,
+                now,
+              );
+              return Option.some(result);
+            }).pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+          { concurrency: 1 },
+        );
+
+        return results.filter(Option.isSome).map((result) => result.value);
+      });
+
     return {
       list,
       create,
@@ -389,6 +471,7 @@ export const AutomationServiceLive = Layer.effect(
       delete: deleteAutomation,
       runNow,
       cancelRun,
+      runDueOnce,
       streamEvents: Stream.fromPubSub(events),
     } satisfies AutomationServiceShape;
   }),

@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Layer } from "effect";
 
+import { AutomationSchedulerLive } from "./automation/Layers/AutomationScheduler";
 import { AutomationServiceLive } from "./automation/Layers/AutomationService";
 import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQuery";
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore";
@@ -96,9 +97,13 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(AutomationRepositoryLive),
     Layer.provideMerge(runtimeServicesLayer),
   );
+  const automationSchedulerLayer = AutomationSchedulerLive.pipe(
+    Layer.provideMerge(automationServiceLayer),
+  );
 
   return Layer.mergeAll(
     automationServiceLayer,
+    automationSchedulerLayer,
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
     devServerManagerLayer,

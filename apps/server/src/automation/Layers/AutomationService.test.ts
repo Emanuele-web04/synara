@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  AutomationId,
   ProjectId,
   type AutomationCreateInput,
   type GitCreateWorktreeInput,
@@ -15,6 +16,7 @@ import { ProjectionSnapshotQuery } from "../../orchestration/Services/Projection
 import type { ProjectionSnapshotQueryShape } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AutomationRepositoryLive } from "../../persistence/Layers/AutomationRepository.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { AutomationRepository } from "../../persistence/Services/AutomationRepository.ts";
 import { AutomationService } from "../Services/AutomationService.ts";
 import { AutomationServiceLive } from "./AutomationService.ts";
 
@@ -216,6 +218,40 @@ layer("AutomationService", (it) => {
       assert.strictEqual(threadCreate.envMode, "worktree");
       assert.strictEqual(threadCreate.worktreePath, "/tmp/automation-worktree");
       assert.strictEqual(threadCreate.associatedWorktreeBranch, createdWorktrees[0]?.newBranch);
+    }),
+  );
+
+  it.effect("runs due scheduled automations once and advances the next run", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-due-service");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const results = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const listed = yield* service.list({ projectId });
+
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0]?.run.trigger.type, "scheduled");
+      assert.strictEqual(results[0]?.run.scheduledFor, "2026-06-16T10:00:00.000Z");
+      assert.strictEqual(dispatchedCommands.length, 2);
+      assert.strictEqual(
+        listed.definitions.find((definition) => definition.id === automationId)?.nextRunAt,
+        "2026-06-16T10:05:00.000Z",
+      );
     }),
   );
 });

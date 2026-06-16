@@ -171,4 +171,44 @@ layer("AutomationRepository", (it) => {
       assert.strictEqual(started.turnStartCommandId, CommandId.makeUnsafe("cmd-turn-start-3"));
     }),
   );
+
+  it.effect("lists only enabled due definitions", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-4-due"),
+        input: {
+          ...createInputForProject("project-4"),
+          schedule: { type: "interval", everySeconds: 300 },
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      const notDue = yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-4-not-due"),
+        input: {
+          ...createInputForProject("project-4"),
+          name: "Later maintenance",
+          schedule: { type: "interval", everySeconds: 300 },
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      yield* repository.setDefinitionNextRunAt({
+        id: notDue.id,
+        nextRunAt: "2026-06-16T10:10:00.000Z",
+        updatedAt: "2026-06-16T10:00:00.000Z",
+      });
+
+      const due = yield* repository.listDueDefinitions({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+      });
+
+      assert.deepStrictEqual(
+        due.map((definition) => definition.id),
+        [AutomationId.makeUnsafe("automation-4-due")],
+      );
+    }),
+  );
 });

@@ -31,6 +31,20 @@ export const GetAutomationDefinitionInput = Schema.Struct({
 });
 export type GetAutomationDefinitionInput = typeof GetAutomationDefinitionInput.Type;
 
+export const ListDueAutomationDefinitionsInput = Schema.Struct({
+  now: Schema.String,
+  limit: Schema.Number,
+});
+export type ListDueAutomationDefinitionsInput = typeof ListDueAutomationDefinitionsInput.Type;
+
+export const SetAutomationDefinitionNextRunAtInput = Schema.Struct({
+  id: AutomationId,
+  nextRunAt: Schema.NullOr(Schema.String),
+  updatedAt: Schema.String,
+});
+export type SetAutomationDefinitionNextRunAtInput =
+  typeof SetAutomationDefinitionNextRunAtInput.Type;
+
 export const ArchiveAutomationDefinitionInput = Schema.Struct({
   id: AutomationId,
   archivedAt: Schema.String,
@@ -89,6 +103,12 @@ export interface AutomationRepositoryShape {
   readonly getDefinitionById: (
     input: GetAutomationDefinitionInput,
   ) => Effect.Effect<Option.Option<AutomationDefinition>, AutomationRepositoryError>;
+  readonly listDueDefinitions: (
+    input: ListDueAutomationDefinitionsInput,
+  ) => Effect.Effect<ReadonlyArray<AutomationDefinition>, AutomationRepositoryError>;
+  readonly setDefinitionNextRunAt: (
+    input: SetAutomationDefinitionNextRunAtInput,
+  ) => Effect.Effect<void, AutomationRepositoryError>;
   readonly archiveDefinition: (
     input: ArchiveAutomationDefinitionInput,
   ) => Effect.Effect<void, AutomationRepositoryError>;

@@ -27,8 +27,10 @@ import {
   CreateAutomationRunInput,
   GetAutomationDefinitionInput,
   GetAutomationRunInput,
+  ListDueAutomationDefinitionsInput,
   MarkAutomationRunFailedInput,
   MarkAutomationRunStartedInput,
+  SetAutomationDefinitionNextRunAtInput,
 } from "../Services/AutomationRepository.ts";
 
 const AutomationDefinitionDbRow = Schema.Struct({
@@ -222,6 +224,49 @@ const makeAutomationRepository = Effect.gen(function* () {
         WHERE (${projectId ?? null} IS NULL OR project_id = ${projectId ?? null})
           AND (${includeArchived ? 1 : 0} = 1 OR archived_at IS NULL)
         ORDER BY updated_at DESC, automation_id ASC
+      `,
+  });
+
+  const listDueDefinitionRows = SqlSchema.findAll({
+    Request: ListDueAutomationDefinitionsInput,
+    Result: AutomationDefinitionDbRow,
+    execute: ({ now, limit }) =>
+      sql`
+        SELECT
+          automation_id AS "id",
+          project_id AS "projectId",
+          source_thread_id AS "sourceThreadId",
+          name,
+          prompt,
+          schedule_json AS "schedule",
+          enabled,
+          next_run_at AS "nextRunAt",
+          model_selection_json AS "modelSelection",
+          provider_options_json AS "providerOptions",
+          runtime_mode AS "runtimeMode",
+          interaction_mode AS "interactionMode",
+          worktree_mode AS "worktreeMode",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          archived_at AS "archivedAt"
+        FROM automation_definitions
+        WHERE enabled = 1
+          AND archived_at IS NULL
+          AND next_run_at IS NOT NULL
+          AND next_run_at <= ${now}
+        ORDER BY next_run_at ASC, automation_id ASC
+        LIMIT ${limit}
+      `,
+  });
+
+  const setDefinitionNextRunAtRow = SqlSchema.void({
+    Request: SetAutomationDefinitionNextRunAtInput,
+    execute: ({ id, nextRunAt, updatedAt }) =>
+      sql`
+        UPDATE automation_definitions
+        SET next_run_at = ${nextRunAt},
+            updated_at = ${updatedAt}
+        WHERE automation_id = ${id}
       `,
   });
 
@@ -520,6 +565,17 @@ const makeAutomationRepository = Effect.gen(function* () {
       ),
     );
 
+  const listDueDefinitions: AutomationRepositoryShape["listDueDefinitions"] = (input) =>
+    listDueDefinitionRows(input).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.listDueDefinitions:query")),
+      Effect.flatMap((rows) => Effect.forEach(rows, toDefinition, { concurrency: "unbounded" })),
+    );
+
+  const setDefinitionNextRunAt: AutomationRepositoryShape["setDefinitionNextRunAt"] = (input) =>
+    setDefinitionNextRunAtRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.setDefinitionNextRunAt:update")),
+    );
+
   const archiveDefinition: AutomationRepositoryShape["archiveDefinition"] = (input) =>
     archiveDefinitionRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("AutomationRepository.archiveDefinition:query")),
@@ -647,6 +703,8 @@ const makeAutomationRepository = Effect.gen(function* () {
     createDefinition,
     saveDefinition,
     getDefinitionById,
+    listDueDefinitions,
+    setDefinitionNextRunAt,
     archiveDefinition,
     list,
     createRun,

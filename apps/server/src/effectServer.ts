@@ -5,6 +5,7 @@ import type { ServerSettingsError } from "@t3tools/contracts";
 import { Effect, Exit, FileSystem, Layer, Path, Schema, Scope, ServiceMap } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 
+import { AutomationScheduler } from "./automation/Services/AutomationScheduler";
 import { AutomationService } from "./automation/Services/AutomationService";
 import {
   clearPersistedServerRuntimeState,
@@ -37,6 +38,7 @@ export interface ServerShape {
     | FileSystem.FileSystem
     | Path.Path
     | Keybindings
+    | AutomationScheduler
     | AutomationService
     | ServerLifecycleEvents
     | OrchestrationEngineService
@@ -62,6 +64,7 @@ export class ServerLifecycleError extends Schema.TaggedErrorClass<ServerLifecycl
 
 export const createEffectServer = Effect.fn(function* () {
   const config = yield* ServerConfig;
+  const automationScheduler = yield* AutomationScheduler;
   const keybindings = yield* Keybindings;
   const lifecycleEvents = yield* ServerLifecycleEvents;
   const orchestrationReactor = yield* OrchestrationReactor;
@@ -124,6 +127,7 @@ export const createEffectServer = Effect.fn(function* () {
   const subscriptionsScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(subscriptionsScope, Exit.void));
   yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
+  yield* Scope.provide(automationScheduler.start(), subscriptionsScope);
   yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);
   yield* Scope.provide(providerSessionReaper.start(), subscriptionsScope);
   yield* readiness.markOrchestrationSubscriptionsReady;
