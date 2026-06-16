@@ -63,9 +63,7 @@ export function shouldStartMissingThreadRouteRecovery(input: {
   recoveryState: EmptyRouteRestoreRecoveryState;
   routeThreadExists: boolean;
 }): boolean {
-  return (
-    !input.routeThreadExists && !input.hasKnownServerThreads && input.recoveryState === "idle"
-  );
+  return !input.routeThreadExists && !input.hasKnownServerThreads && input.recoveryState === "idle";
 }
 
 export function shouldHoldMissingThreadRouteFallback(input: {
@@ -73,7 +71,5 @@ export function shouldHoldMissingThreadRouteFallback(input: {
   recoveryState: EmptyRouteRestoreRecoveryState;
   routeThreadExists: boolean;
 }): boolean {
-  return (
-    !input.routeThreadExists && !input.hasKnownServerThreads && input.recoveryState !== "done"
-  );
+  return !input.routeThreadExists && !input.hasKnownServerThreads && input.recoveryState !== "done";
 }

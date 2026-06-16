@@ -1,6 +1,6 @@
 {
   "name": "@t3tools/desktop",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "main": "dist-electron/main.js",
   "scripts": {

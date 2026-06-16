@@ -22,6 +22,36 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.2.4",
+    date: "Jun 17",
+    features: [
+      {
+        id: "restart-chat-restore",
+        title: "Restarts bring you back to the right chat",
+        description:
+          "Synara now waits for one fresh server snapshot before giving up on a remembered chat route, so app restarts are less likely to dump you onto an empty fallback screen.",
+        details:
+          "Chat route restore now validates remembered thread/split routes against refreshed orchestration state, holds fallback while startup data is still empty, and has focused coverage for missing-thread and empty-startup recovery paths.",
+      },
+      {
+        id: "provider-reenable-health",
+        title: "Disabled providers recover more predictably",
+        description:
+          "Provider health refreshes now have regression coverage around re-enabling disabled providers, making settings changes less likely to leave stale unavailable states behind.",
+        details:
+          "Provider health and Pi adapter paths were tightened with coverage for disabled-provider re-enable behavior, while provider badges and menu icons were kept aligned with the refreshed availability state.",
+      },
+      {
+        id: "cleaner-chat-header",
+        title: "The chat header is quieter",
+        description:
+          "The old handoff shortcut has been removed from the chat header, leaving the main conversation controls easier to scan during active work.",
+        details:
+          "The chat header no longer renders the handoff action path, reducing duplicate top-bar controls and keeping project/thread actions focused on the surfaces that still own them.",
+      },
+    ],
+  },
+  {
     version: "0.2.3",
     date: "Jun 16",
     features: [

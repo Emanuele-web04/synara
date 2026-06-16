@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.4 - 2026-06-17
+
+### Added
+
+- Added focused route-restore recovery coverage so remembered chat routes wait for a fresh snapshot before falling back after restart.
+- Added disabled-provider re-enable regression coverage for provider health refreshes.
+
+### Changed
+
+- Bumped Synara release package versions to `0.2.4` across the server, desktop, web, and contracts packages.
+- Improved remembered chat route restore so stale empty startup snapshots do not immediately send users to the empty chat route.
+- Removed the old handoff shortcut from the chat header to keep primary conversation controls quieter.
+
+### Fixed
+
+- Fixed app restart/chat restore behavior where a valid remembered thread could briefly appear missing while orchestration state was still loading.
+- Fixed provider health refresh behavior around re-enabling disabled providers so availability state is less likely to remain stale.
+- Fixed formatting drift in `apps/web/src/chatRouteRestore.ts` caught by `bun run fmt:check`.
+
+### Verification
+
+- `bun run fmt:check` initially failed on `apps/web/src/chatRouteRestore.ts`; after formatting that file, `bun run fmt:check` passed.
+- `bun run lint` passed with 149 warnings, 0 errors.
+- `bun run typecheck` passed with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed and refreshed release install/lockfile state.
+- `bun run build` passed. Vite still warns about large web chunks and plugin timings; desktop build still reports the existing typeless `tsdown.config.ts` module warning.
+- `bun run test` passed: 10 tasks successful, including `@t3tools/web` 169 files / 1954 tests and `t3` 129 files passed / 1 skipped with 1255 passed / 6 skipped.
+- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.2.4`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+
 ## 0.2.3 - 2026-06-16
 
 ### Added
