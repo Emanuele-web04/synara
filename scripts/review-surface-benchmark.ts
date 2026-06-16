@@ -10,7 +10,9 @@ import { fileURLToPath } from "node:url";
 interface ReviewBenchmarkMetrics {
   readonly inputRows: number;
   readonly naiveRows: number;
+  readonly optimizedResultRows: number;
   readonly optimizedRows: number;
+  readonly dataReadyReduction: number;
   readonly mountedRowReduction: number;
   readonly naiveElapsedMs: number;
   readonly optimizedElapsedMs: number;
@@ -95,7 +97,7 @@ for (let index = 1; index <= iterations; index += 1) {
   const metrics = runBenchmarkOnce(index);
   runs.push(metrics);
   console.log(
-    `run ${String(index)}/${String(iterations)}: ${round(metrics.mountedRowReduction)}x rows, ${String(metrics.optimizedRows)} mounted, ${String(metrics.listCalls)} list call, ${String(metrics.viewerCalls)} viewer calls`,
+    `run ${String(index)}/${String(iterations)}: ${round(metrics.dataReadyReduction)}x data-ready, ${round(metrics.mountedRowReduction)}x mounted, ${String(metrics.optimizedRows)} rows mounted, ${String(metrics.listCalls)} list call, ${String(metrics.viewerCalls)} viewer calls`,
   );
 }
 
@@ -103,7 +105,9 @@ const summary = {
   iterations,
   inputRows: runs[0]?.inputRows ?? 0,
   naiveRows: summarize(runs.map((run) => run.naiveRows)),
+  optimizedResultRows: summarize(runs.map((run) => run.optimizedResultRows)),
   optimizedRows: summarize(runs.map((run) => run.optimizedRows)),
+  dataReadyReduction: summarize(runs.map((run) => run.dataReadyReduction)),
   mountedRowReduction: summarize(runs.map((run) => run.mountedRowReduction)),
   naiveElapsedMs: summarize(runs.map((run) => run.naiveElapsedMs)),
   optimizedElapsedMs: summarize(runs.map((run) => run.optimizedElapsedMs)),

@@ -7,12 +7,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { ReviewBoard } from "./ReviewBoard";
+import { ReviewBoardCard } from "./ReviewBoardCard";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const nativeApiMock = vi.hoisted(() => ({
   getViewer: vi.fn(async () => ({ login: "tyler" })),
   listPullRequests: vi.fn(async () => ({ pullRequests: [] as ReviewPullRequestSummary[] })),
 }));
+const REVIEW_BENCHMARK_INITIAL_LIMIT = 50;
 
 vi.mock("@tanstack/react-router", async (importActual) => {
   const actual = await importActual<typeof import("@tanstack/react-router")>();
@@ -54,14 +56,17 @@ function makePullRequests(count: number): ReviewPullRequestSummary[] {
 
 function NaiveReviewBoard(props: { pullRequests: ReadonlyArray<ReviewPullRequestSummary> }) {
   return (
-    <section aria-label="Naive pull request board">
-      <h2>Needs Review</h2>
-      <ul>
+    <section
+      aria-label="Naive pull request board"
+      className="flex h-[900px] w-72 flex-col gap-2 overflow-y-auto rounded-[1.5rem] border border-border/60 bg-card/55 p-2.5"
+    >
+      <h2 className="shrink-0 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+        Needs Review
+      </h2>
+      <ul className="flex flex-col gap-2">
         {props.pullRequests.map((pullRequest) => (
-          <li key={pullRequest.number}>
-            <button type="button">
-              {pullRequest.title} #{pullRequest.number}
-            </button>
+          <li key={pullRequest.number} className="h-32 shrink-0">
+            <ReviewBoardCard pullRequest={pullRequest} cwd="/repo" />
           </li>
         ))}
       </ul>
@@ -91,7 +96,24 @@ async function mountNaiveBoard(pullRequests: ReadonlyArray<ReviewPullRequestSumm
 async function mountOptimizedBoard(pullRequests: ReadonlyArray<ReviewPullRequestSummary>) {
   await page.viewport(1440, 900);
   nativeApiMock.getViewer.mockResolvedValue({ login: "tyler" });
-  nativeApiMock.listPullRequests.mockResolvedValue({ pullRequests });
+  let optimizedResultRows = 0;
+  nativeApiMock.listPullRequests.mockImplementation(async (input?: { readonly limit?: number }) => {
+    const resultLimit = input?.limit ?? REVIEW_BENCHMARK_INITIAL_LIMIT;
+    const boundedPullRequests = pullRequests.slice(0, resultLimit);
+    optimizedResultRows = boundedPullRequests.length;
+    return {
+      pullRequests: boundedPullRequests,
+      meta: {
+        resultLimit,
+        candidateLimit: resultLimit,
+        candidateCount: boundedPullRequests.length,
+        candidateLimitReached: pullRequests.length > resultLimit,
+        matchedCount: boundedPullRequests.length,
+        returnedCount: boundedPullRequests.length,
+        bounded: true,
+      },
+    };
+  });
   const host = document.createElement("div");
   host.className = "h-[900px] bg-background text-foreground";
   document.body.append(host);
@@ -117,6 +139,7 @@ async function mountOptimizedBoard(pullRequests: ReadonlyArray<ReviewPullRequest
 
   return {
     elapsedMs,
+    resultRows: optimizedResultRows,
     rows: host.querySelectorAll('[role="listitem"]').length,
     cleanup: async () => {
       await screen.unmount();
@@ -143,10 +166,13 @@ describe("review surface performance benchmark", () => {
     const optimized = await mountOptimizedBoard(pullRequests);
     try {
       const mountedRowReduction = naive.rows / Math.max(optimized.rows, 1);
+      const dataReadyReduction = pullRequests.length / Math.max(optimized.resultRows, 1);
       const benchmark = {
         inputRows: pullRequests.length,
         naiveRows: naive.rows,
+        optimizedResultRows: optimized.resultRows,
         optimizedRows: optimized.rows,
+        dataReadyReduction,
         mountedRowReduction,
         naiveElapsedMs: Math.round(naive.elapsedMs),
         optimizedElapsedMs: Math.round(optimized.elapsedMs),
@@ -157,8 +183,11 @@ describe("review surface performance benchmark", () => {
 
       expect(nativeApiMock.getViewer).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.listPullRequests).toHaveBeenCalledTimes(1);
+      expect(nativeApiMock.listPullRequests).toHaveBeenCalledWith({ cwd: "/repo" });
       expect(naive.rows).toBe(pullRequests.length);
+      expect(optimized.resultRows).toBe(REVIEW_BENCHMARK_INITIAL_LIMIT);
       expect(optimized.rows).toBeGreaterThan(0);
+      expect(dataReadyReduction).toBeGreaterThanOrEqual(10);
       expect(mountedRowReduction).toBeGreaterThanOrEqual(10);
       expect(document.body.textContent).toContain("Review benchmark PR 1");
       expect(document.body.textContent).not.toContain("Review benchmark PR 5000");
