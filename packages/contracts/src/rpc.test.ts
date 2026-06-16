@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   WsProjectsDiscoverScriptsRpc,
+  WsReviewLoadPullRequestHeaderRpc,
   WsReviewLoadPullRequestSurfaceRpc,
   WsRpcError,
   WsRpcGroup,
@@ -22,5 +23,9 @@ describe("WS RPC contracts", () => {
 
   it("exports the aggregate review pull request surface RPC", () => {
     expect(WsReviewLoadPullRequestSurfaceRpc).toBeDefined();
+  });
+
+  it("exports the lightweight review pull request header RPC", () => {
+    expect(WsReviewLoadPullRequestHeaderRpc).toBeDefined();
   });
 });

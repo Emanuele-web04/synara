@@ -69,6 +69,7 @@ import type {
   ReviewLoadRemoteThreadsInput,
   ReviewLocalComment,
   ReviewPullRequestOverview,
+  ReviewPullRequestHeader,
   ReviewPullRequestQueryInput,
   ReviewPullRequestSurfaceInput,
   ReviewPullRequestSurfaceResult,
@@ -484,6 +485,7 @@ export interface NativeApi {
     listPullRequests: (input: ReviewListPullRequestsInput) => Promise<ReviewListPullRequestsResult>;
     getViewer: (input: ReviewGetViewerInput) => Promise<ReviewViewerResult>;
     loadChangeset: (input: ReviewLoadChangesetInput) => Promise<ReviewChangesetResult>;
+    loadPullRequestHeader: (input: ReviewPullRequestQueryInput) => Promise<ReviewPullRequestHeader>;
     loadPullRequest: (input: ReviewPullRequestQueryInput) => Promise<ReviewPullRequestOverview>;
     loadConversation: (input: ReviewPullRequestQueryInput) => Promise<ReviewConversationResult>;
     loadPullRequestSurface: (

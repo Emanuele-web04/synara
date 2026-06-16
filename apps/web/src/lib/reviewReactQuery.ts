@@ -6,6 +6,7 @@ import type {
   ReviewMoveProjectCardInput,
   ReviewProjectBoard,
   ReviewRemoveCommentInput,
+  ReviewPullRequestHeader,
   ReviewPullRequestSurfaceInput,
   ReviewPullRequestSurfaceResult,
   ReviewRunAgentInput,
@@ -196,6 +197,8 @@ export const reviewQueryKeys = {
     ["review", "changeset", cwd, sourceKey] as const,
   pullRequest: (cwd: string | null, reference: string | null) =>
     ["review", "pull-request", cwd, reference] as const,
+  pullRequestHeader: (cwd: string | null, reference: string | null) =>
+    ["review", "pull-request-header", cwd, reference] as const,
   pullRequestSurface: (
     cwd: string | null,
     reference: string | null,
@@ -365,6 +368,26 @@ export function reviewLoadPullRequestQueryOptions(input: {
         throw new Error("Pull request overview is unavailable.");
       }
       return api.review.loadPullRequest({ cwd: input.cwd, reference: input.reference });
+    },
+    enabled: input.cwd !== null && input.reference !== null,
+    staleTime: REVIEW_PULL_REQUEST_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
+export function reviewLoadPullRequestHeaderQueryOptions(input: {
+  cwd: string | null;
+  reference: string | null;
+}) {
+  return queryOptions({
+    queryKey: reviewQueryKeys.pullRequestHeader(input.cwd, input.reference),
+    queryFn: async (): Promise<ReviewPullRequestHeader> => {
+      const api = ensureNativeApi();
+      if (!input.cwd || !input.reference) {
+        throw new Error("Pull request header is unavailable.");
+      }
+      return api.review.loadPullRequestHeader({ cwd: input.cwd, reference: input.reference });
     },
     enabled: input.cwd !== null && input.reference !== null,
     staleTime: REVIEW_PULL_REQUEST_STALE_TIME_MS,

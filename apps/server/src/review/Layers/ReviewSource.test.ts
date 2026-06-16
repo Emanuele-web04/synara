@@ -109,6 +109,8 @@ function makeLayer(options: {
     getPullRequest: () => unexpected("GitHubCli.getPullRequest"),
     getReviewPullRequestOverview: () =>
       Effect.fail(new GitHubCliError({ operation: "test", detail: "unexpected overview" })),
+    getReviewPullRequestHeader: () =>
+      Effect.fail(new GitHubCliError({ operation: "test", detail: "unexpected header" })),
     getReviewConversation: () =>
       Effect.fail(new GitHubCliError({ operation: "test", detail: "unexpected conversation" })),
     getPullRequestDiff: () => unexpected("GitHubCli.getPullRequestDiff"),

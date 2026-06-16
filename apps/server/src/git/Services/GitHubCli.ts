@@ -130,6 +130,37 @@ export interface GitHubReviewPullRequestDetail {
   readonly reviewers: ReadonlyArray<GitHubReviewer>;
 }
 
+export interface GitHubReviewPullRequestHeaderDetail {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly state: "open" | "closed" | "merged";
+  readonly isDraft: boolean;
+  readonly author: string;
+  readonly authorAvatarUrl?: string;
+  readonly baseBranch: string;
+  readonly headBranch: string;
+  readonly body: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changedFiles: number;
+  readonly commitsCount?: number;
+  readonly reviewDecision: string | null;
+  readonly mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+  readonly mergeStateStatus?: string;
+  readonly checksStatus?: GitHubChecksStatus;
+  readonly milestone: string | null;
+  readonly labels: ReadonlyArray<GitHubReviewLabel>;
+  readonly assignees: ReadonlyArray<GitHubReviewUserRef>;
+  readonly reviewers?: ReadonlyArray<GitHubReviewer>;
+}
+
+export interface GitHubReviewPullRequestHeader {
+  readonly detail: GitHubReviewPullRequestHeaderDetail;
+}
+
 export interface GitHubReviewPullRequestOverview {
   readonly detail: GitHubReviewPullRequestDetail;
   readonly commits: ReadonlyArray<GitHubReviewCommit>;
@@ -295,8 +326,16 @@ export interface GitHubCliShape {
   }) => Effect.Effect<ReadonlyArray<GitHubReviewPullRequest>, GitHubCliError>;
 
   /**
-   * Load the full PR overview — detail, commits, and per-check status — from a
-   * single `gh pr view` call for the review surface.
+   * Load the lightweight PR detail needed to paint the review header quickly.
+   */
+  readonly getReviewPullRequestHeader: (input: {
+    readonly cwd: string;
+    readonly reference: string;
+  }) => Effect.Effect<GitHubReviewPullRequestHeader, GitHubCliError>;
+
+  /**
+   * Load the full PR overview — detail, commits, reviews, and per-check status —
+   * from a single `gh pr view` call for hydrated review surfaces.
    */
   readonly getReviewPullRequestOverview: (input: {
     readonly cwd: string;

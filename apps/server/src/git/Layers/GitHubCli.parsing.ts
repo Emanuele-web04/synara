@@ -22,6 +22,7 @@ import type {
   GitHubReviewEvent,
   GitHubReviewPullRequest,
   GitHubReviewPullRequestDetail,
+  GitHubReviewPullRequestHeaderDetail,
   GitHubReviewThread,
   GitHubReviewTimelineEvent,
 } from "../Services/GitHubCli.ts";
@@ -446,6 +447,50 @@ export function normalizeReviewDetail(
   };
 }
 
+export function normalizeReviewHeaderDetail(
+  raw: Schema.Schema.Type<typeof RawGitHubReviewDetailSchema>,
+): GitHubReviewPullRequestHeaderDetail {
+  const reviewDecision = (raw.reviewDecision ?? "").trim();
+  const milestone = (raw.milestone?.title ?? "").trim();
+  const mergeStateStatus = (raw.mergeStateStatus ?? "").trim();
+  const authorAvatarUrl = normalizeAvatarUrl(raw.author?.avatarUrl);
+  const reviewers = normalizeReviewers([], raw.reviewRequests ?? []);
+  return {
+    number: raw.number,
+    title: raw.title,
+    url: raw.url,
+    state: normalizePullRequestState({
+      state: raw.state,
+      mergedAt: raw.mergedAt,
+    }),
+    isDraft: raw.isDraft ?? false,
+    author: (raw.author?.login ?? "").trim(),
+    ...(authorAvatarUrl ? { authorAvatarUrl } : {}),
+    baseBranch: raw.baseRefName,
+    headBranch: raw.headRefName,
+    body: raw.body ?? "",
+    createdAt: raw.createdAt ?? "",
+    updatedAt: raw.updatedAt ?? "",
+    additions: nonNegativeInt(raw.additions),
+    deletions: nonNegativeInt(raw.deletions),
+    changedFiles: nonNegativeInt(raw.changedFiles),
+    reviewDecision: reviewDecision.length > 0 ? reviewDecision : null,
+    mergeable: normalizeReviewMergeable(raw.mergeable),
+    ...(mergeStateStatus.length > 0 ? { mergeStateStatus } : {}),
+    milestone: milestone.length > 0 ? milestone : null,
+    labels: (raw.labels ?? [])
+      .map((label) => ({
+        name: (label.name ?? "").trim(),
+        color: (label.color ?? "").trim(),
+      }))
+      .filter((label) => label.name.length > 0),
+    assignees: (raw.assignees ?? [])
+      .map(normalizeReviewUserRef)
+      .filter((user): user is NonNullable<typeof user> => user !== null),
+    ...(reviewers.length > 0 ? { reviewers } : {}),
+  };
+}
+
 export function normalizeConversation(
   raw: Schema.Schema.Type<typeof RawGitHubConversationSchema>,
 ): ReadonlyArray<GitHubReviewTimelineEvent> {
@@ -697,6 +742,7 @@ export function decodeGitHubJson<S extends Schema.Top>(
     | "getPullRequest"
     | "getRepositoryCloneUrls"
     | "listRepositoryPullRequests"
+    | "getReviewPullRequestHeader"
     | "getReviewPullRequestOverview"
     | "getReviewConversation"
     | "createPullRequestReviewWithComments"

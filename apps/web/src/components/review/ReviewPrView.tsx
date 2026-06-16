@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   reviewLoadChangesetQueryOptions,
   reviewLoadConversationQueryOptions,
+  reviewLoadPullRequestHeaderQueryOptions,
   reviewLoadPullRequestQueryOptions,
   reviewLoadPullRequestSurfaceQueryOptions,
   reviewSourceKey,
@@ -193,10 +194,17 @@ export function ReviewPrView(props: {
   useEffect(() => {
     setReadyConversationHydrationKey(null);
   }, [conversationHydrationKey]);
-  const overviewQuery = useQuery(
-    reviewLoadPullRequestQueryOptions({ cwd: props.cwd, reference: props.reference }),
-  );
-  const detail = overviewQuery.data?.detail ?? null;
+  const overviewQuery = useQuery({
+    ...reviewLoadPullRequestQueryOptions({ cwd: props.cwd, reference: props.reference }),
+    enabled: false,
+  });
+  const headerQuery = useQuery({
+    ...reviewLoadPullRequestHeaderQueryOptions({ cwd: props.cwd, reference: props.reference }),
+    enabled: overviewQuery.data === undefined && props.cwd !== null,
+  });
+  const headerDetail = headerQuery.data?.detail ?? null;
+  const fullDetail = overviewQuery.data?.detail ?? null;
+  const detail = fullDetail ?? headerDetail;
   useEffect(() => {
     if (conversationHydrationKey === null || detail === null || tab !== "conversation") {
       setReadyConversationHydrationKey(null);
@@ -260,13 +268,13 @@ export function ReviewPrView(props: {
   const checks = overviewQuery.data?.checks ?? EMPTY_CHECKS;
   const events = conversationQuery.data?.events ?? EMPTY_EVENTS;
   const sidechatContext = useMemo(() => {
-    if (!detail) {
+    if (!fullDetail) {
       return null;
     }
     return buildReviewSidechatContextPayload({
       cwd: props.cwd,
       reference: props.reference,
-      detail,
+      detail: fullDetail,
       checks,
       events,
       files: changesetState.data?.files ?? [],
@@ -281,7 +289,7 @@ export function ReviewPrView(props: {
     changesetState.data?.headSha,
     changesetState.data?.target,
     checks,
-    detail,
+    fullDetail,
     events,
     props.cwd,
     props.reference,
@@ -438,9 +446,9 @@ export function ReviewPrView(props: {
                 </main>
               )}
             </div>
-            {sidechatContext ? (
+            {sidechatContext && fullDetail ? (
               <ReviewPrSidebar
-                detail={detail}
+                detail={fullDetail}
                 checks={checks}
                 events={events}
                 mode={tab}
@@ -455,7 +463,7 @@ export function ReviewPrView(props: {
               />
             ) : null}
           </div>
-        ) : overviewQuery.isLoading ? (
+        ) : headerQuery.isLoading ? (
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="shrink-0">
               <ReviewPrHeaderSkeleton />
@@ -467,10 +475,10 @@ export function ReviewPrView(props: {
               <ReviewPrSidebarSkeleton />
             </div>
           </div>
-        ) : overviewQuery.isError ? (
+        ) : headerQuery.isError ? (
           <div className="min-w-0 flex-1 overflow-y-auto">
             <EmptyState icon={<GitPullRequestIcon />} title="Unavailable">
-              {rpcErrorMessage(overviewQuery.error) ?? "Could not load this pull request."}
+              {rpcErrorMessage(headerQuery.error) ?? "Could not load this pull request."}
             </EmptyState>
           </div>
         ) : (

@@ -1,4 +1,4 @@
-import type { ReviewPullRequestDetail } from "@t3tools/contracts";
+import type { ReviewPullRequestDetail, ReviewPullRequestHeaderDetail } from "@t3tools/contracts";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
@@ -83,7 +83,7 @@ function BranchChip(props: { name: string; compact?: boolean }) {
   );
 }
 
-function mergeReadiness(detail: ReviewPullRequestDetail): {
+function mergeReadiness(detail: ReviewPullRequestDetail | ReviewPullRequestHeaderDetail): {
   label: string;
   tone: "success" | "warning" | "danger" | "muted";
 } {
@@ -98,6 +98,9 @@ function mergeReadiness(detail: ReviewPullRequestDetail): {
   }
   if (detail.mergeable === "CONFLICTING") {
     return { label: "Conflicts must be resolved", tone: "danger" };
+  }
+  if (detail.checksStatus === undefined) {
+    return { label: "Checks loading", tone: "warning" };
   }
   if (detail.checksStatus === "failing") {
     return { label: "Checks are failing", tone: "danger" };
@@ -122,7 +125,7 @@ function MergeReadinessIcon(props: { tone: ReturnType<typeof mergeReadiness>["to
 }
 
 export function ReviewPrHeader(props: {
-  detail: ReviewPullRequestDetail;
+  detail: ReviewPullRequestDetail | ReviewPullRequestHeaderDetail;
   variant?: "full" | "compact";
   reviewMode?: "conversation" | "files";
   contentClassName?: string;
@@ -326,8 +329,16 @@ export function ReviewPrHeader(props: {
         >
           <span className="inline-flex items-center gap-1.5">
             <GitCommitIcon className="size-3.5 opacity-75" />
-            <span className="font-medium text-foreground tabular-nums">{detail.commitsCount}</span>
-            commit{detail.commitsCount === 1 ? "" : "s"}
+            {detail.commitsCount === undefined ? (
+              <span className="font-medium text-foreground">Loading commits</span>
+            ) : (
+              <>
+                <span className="font-medium text-foreground tabular-nums">
+                  {detail.commitsCount}
+                </span>
+                commit{detail.commitsCount === 1 ? "" : "s"}
+              </>
+            )}
           </span>
           <span className="text-muted-foreground/70" aria-hidden="true">
             ·

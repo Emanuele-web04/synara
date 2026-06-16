@@ -1,4 +1,8 @@
-import type { ReviewPullRequestDetail, ReviewTimelineEvent } from "@t3tools/contracts";
+import type {
+  ReviewPullRequestDetail,
+  ReviewPullRequestHeaderDetail,
+  ReviewTimelineEvent,
+} from "@t3tools/contracts";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
@@ -294,7 +298,7 @@ function ConversationCommentComposer(props: {
 }
 
 export function ReviewConversation(props: {
-  detail: ReviewPullRequestDetail;
+  detail: ReviewPullRequestDetail | ReviewPullRequestHeaderDetail;
   cwd: string | null;
   reference: string;
   events: ReadonlyArray<ReviewTimelineEvent>;

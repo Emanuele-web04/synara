@@ -14,6 +14,7 @@ import {
   ReviewProjectAccessResult,
   ReviewConversationResult,
   ReviewProjectBoard,
+  ReviewPullRequestHeader,
   ReviewPullRequestOverview,
   ReviewPullRequestQueryInput,
   ReviewPullRequestSurfaceInput,
@@ -42,6 +43,10 @@ export interface ReviewSourceShape {
   readonly loadPullRequest: (
     input: ReviewPullRequestQueryInput,
   ) => Effect.Effect<ReviewPullRequestOverview, ReviewServiceError>;
+
+  readonly loadPullRequestHeader: (
+    input: ReviewPullRequestQueryInput,
+  ) => Effect.Effect<ReviewPullRequestHeader, ReviewServiceError>;
 
   readonly loadConversation: (
     input: ReviewPullRequestQueryInput,

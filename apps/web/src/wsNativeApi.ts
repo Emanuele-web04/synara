@@ -584,6 +584,8 @@ export function createWsNativeApi(): NativeApi {
       listPullRequests: (input) => transport.request(WS_METHODS.reviewListPullRequests, input),
       getViewer: (input) => transport.request(WS_METHODS.reviewGetViewer, input),
       loadChangeset: (input) => transport.request(WS_METHODS.reviewLoadChangeset, input),
+      loadPullRequestHeader: (input) =>
+        transport.request(WS_METHODS.reviewLoadPullRequestHeader, input),
       loadPullRequest: (input) => transport.request(WS_METHODS.reviewLoadPullRequest, input),
       loadConversation: (input) => transport.request(WS_METHODS.reviewLoadConversation, input),
       loadPullRequestSurface: (input) =>

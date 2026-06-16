@@ -129,6 +129,14 @@ describe("reviewQueryKeys.pullRequestSurface", () => {
   });
 });
 
+describe("reviewQueryKeys.pullRequestHeader", () => {
+  it("keeps lightweight header cache separate from the full overview cache", () => {
+    expect(reviewQueryKeys.pullRequestHeader("/repo", "42")).not.toEqual(
+      reviewQueryKeys.pullRequest("/repo", "42"),
+    );
+  });
+});
+
 describe("applyReviewPullRequestSurfacePayload", () => {
   it("primes the existing overview conversation and changeset cache entries", () => {
     const queryClient = new QueryClient();

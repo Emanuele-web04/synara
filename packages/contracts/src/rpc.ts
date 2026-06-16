@@ -61,6 +61,7 @@ import {
   ReviewLoadRemoteThreadsInput,
   ReviewLocalComment,
   ReviewPullRequestOverview,
+  ReviewPullRequestHeader,
   ReviewPullRequestQueryInput,
   ReviewPullRequestSurfaceInput,
   ReviewPullRequestSurfaceResult,
@@ -508,6 +509,15 @@ export const WsReviewLoadChangesetRpc = Rpc.make(WS_METHODS.reviewLoadChangeset,
   error: WsRpcError,
 });
 
+export const WsReviewLoadPullRequestHeaderRpc = Rpc.make(
+  WS_METHODS.reviewLoadPullRequestHeader,
+  {
+    payload: ReviewPullRequestQueryInput,
+    success: ReviewPullRequestHeader,
+    error: WsRpcError,
+  },
+);
+
 export const WsReviewLoadPullRequestRpc = Rpc.make(WS_METHODS.reviewLoadPullRequest, {
   payload: ReviewPullRequestQueryInput,
   success: ReviewPullRequestOverview,
@@ -895,6 +905,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsReviewListPullRequestsRpc,
   WsReviewGetViewerRpc,
   WsReviewLoadChangesetRpc,
+  WsReviewLoadPullRequestHeaderRpc,
   WsReviewLoadPullRequestRpc,
   WsReviewLoadConversationRpc,
   WsReviewLoadPullRequestSurfaceRpc,

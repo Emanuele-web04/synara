@@ -4,6 +4,7 @@ import { Effect, Schema } from "effect";
 
 import {
   ReviewChangesetResult,
+  ReviewPullRequestHeader,
   ReviewPullRequestSurfaceInput,
   ReviewPullRequestSurfaceResult,
   ReviewListPullRequestsInput,
@@ -11,6 +12,7 @@ import {
 } from "./review";
 
 const decodeChangeset = Schema.decodeUnknownEffect(ReviewChangesetResult);
+const decodeHeader = Schema.decodeUnknownEffect(ReviewPullRequestHeader);
 const decodeSurfaceInput = Schema.decodeUnknownEffect(ReviewPullRequestSurfaceInput);
 const decodeSurfaceResult = Schema.decodeUnknownEffect(ReviewPullRequestSurfaceResult);
 const decodeListInput = Schema.decodeUnknownEffect(ReviewListPullRequestsInput);
@@ -76,6 +78,38 @@ it.effect("accepts review list server-side filter fields", () =>
       columns: ["needs-review", "approved"],
       checks: ["passing", "pending"],
     });
+  }),
+);
+
+it.effect("accepts lightweight pull request headers without heavy overview fields", () =>
+  Effect.gen(function* () {
+    const header = yield* decodeHeader({
+      detail: {
+        number: 42,
+        title: "Fast PR header",
+        url: "https://github.com/acme/demo/pull/42",
+        state: "open",
+        isDraft: false,
+        author: "alice",
+        baseBranch: "main",
+        headBranch: "feature/review-loading",
+        body: "Body",
+        createdAt: "2026-06-16T12:00:00Z",
+        updatedAt: "2026-06-16T12:00:00Z",
+        additions: 1,
+        deletions: 0,
+        changedFiles: 1,
+        reviewDecision: null,
+        mergeable: "MERGEABLE",
+        milestone: null,
+        labels: [],
+        assignees: [],
+      },
+    });
+
+    assert.equal(header.detail.commitsCount, undefined);
+    assert.equal(header.detail.checksStatus, undefined);
+    assert.equal(header.detail.reviewers, undefined);
   }),
 );
 

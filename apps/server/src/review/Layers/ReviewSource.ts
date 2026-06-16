@@ -11,6 +11,7 @@ import {
   type ReviewProjectCard,
   type ReviewProjectColumn,
   type ReviewProjectSummary,
+  type ReviewPullRequestHeader,
   type ReviewPullRequestOverview,
   type ReviewPullRequestSurfaceResult,
   type ReviewPullRequestSummary,
@@ -862,6 +863,26 @@ const makeReviewSource = Effect.gen(function* () {
       return data;
     });
 
+  const loadPullRequestHeader: ReviewSourceShape["loadPullRequestHeader"] = (input) =>
+    Effect.gen(function* () {
+      const repositoryId = yield* resolveRepositoryId(input.cwd);
+      const tokenIdentity = yield* readCacheTokenIdentity(input.cwd);
+      const cached = yield* cacheStore
+        .getPullRequestOverview({ repositoryId, reference: input.reference })
+        .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+      if (Option.isSome(cached) && isUsableCacheEnvelope(cached.value, tokenIdentity)) {
+        yield* forkRefreshIfStale(
+          `pr-overview:${repositoryId}:${input.reference}`,
+          cached.value,
+          refreshPullRequestOverview(input, repositoryId, tokenIdentity),
+        );
+        return { detail: cached.value.data.detail } satisfies ReviewPullRequestHeader;
+      }
+      return yield* gitHubCli
+        .getReviewPullRequestHeader({ cwd: input.cwd, reference: input.reference })
+        .pipe(Effect.map((header): ReviewPullRequestHeader => header));
+    });
+
   const loadConversationUncached: ReviewSourceShape["loadConversation"] = (input) =>
     gitHubCli.getReviewConversation({ cwd: input.cwd, reference: input.reference }).pipe(
       Effect.map((events) => ({
@@ -1290,6 +1311,7 @@ const makeReviewSource = Effect.gen(function* () {
     getViewer,
     loadChangeset,
     loadPullRequest,
+    loadPullRequestHeader,
     loadConversation,
     loadPullRequestSurface,
     runAgentReview,

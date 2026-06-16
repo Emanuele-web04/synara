@@ -540,6 +540,44 @@ describe("wsNativeApi", () => {
     });
   });
 
+  it("forwards lightweight review pull request header requests to the websocket review method", async () => {
+    requestMock.mockResolvedValue({
+      detail: {
+        number: 42,
+        title: "Review loading",
+        url: "https://github.com/acme/demo/pull/42",
+        state: "open",
+        isDraft: false,
+        author: "alice",
+        baseBranch: "main",
+        headBranch: "feature/review-loading",
+        body: "Body",
+        createdAt: "2026-06-16T12:00:00Z",
+        updatedAt: "2026-06-16T12:00:00Z",
+        additions: 1,
+        deletions: 0,
+        changedFiles: 1,
+        reviewDecision: null,
+        mergeable: "MERGEABLE",
+        milestone: null,
+        labels: [],
+        assignees: [],
+      },
+    });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.review.loadPullRequestHeader({
+      cwd: "/repo",
+      reference: "42",
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.reviewLoadPullRequestHeader, {
+      cwd: "/repo",
+      reference: "42",
+    });
+  });
+
   it("fetches auth session state over HTTP", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

@@ -466,6 +466,39 @@ export const ReviewPullRequestDetail = Schema.Struct({
 });
 export type ReviewPullRequestDetail = typeof ReviewPullRequestDetail.Type;
 
+export const ReviewPullRequestHeaderDetail = Schema.Struct({
+  number: PositiveInt,
+  title: TrimmedNonEmptyStringSchema,
+  url: Schema.String,
+  state: ReviewPullRequestState,
+  isDraft: Schema.Boolean,
+  author: Schema.String,
+  authorAvatarUrl: Schema.optional(Schema.String),
+  baseBranch: TrimmedNonEmptyStringSchema,
+  headBranch: TrimmedNonEmptyStringSchema,
+  body: Schema.String,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  additions: NonNegativeInt,
+  deletions: NonNegativeInt,
+  changedFiles: NonNegativeInt,
+  commitsCount: Schema.optional(NonNegativeInt),
+  reviewDecision: Schema.NullOr(Schema.String),
+  mergeable: ReviewMergeableState,
+  mergeStateStatus: Schema.optional(Schema.String),
+  checksStatus: Schema.optional(Schema.Literals(["passing", "failing", "pending", "none"])),
+  milestone: Schema.NullOr(Schema.String),
+  labels: Schema.Array(ReviewLabel),
+  assignees: Schema.Array(ReviewUserRef),
+  reviewers: Schema.optional(Schema.Array(ReviewReviewer)),
+});
+export type ReviewPullRequestHeaderDetail = typeof ReviewPullRequestHeaderDetail.Type;
+
+export const ReviewPullRequestHeader = Schema.Struct({
+  detail: ReviewPullRequestHeaderDetail,
+});
+export type ReviewPullRequestHeader = typeof ReviewPullRequestHeader.Type;
+
 export const ReviewCommit = Schema.Struct({
   oid: TrimmedNonEmptyStringSchema,
   abbreviatedOid: TrimmedNonEmptyStringSchema,

@@ -96,6 +96,20 @@ it.effect("accepts aggregate review pull request surface requests", () =>
   }),
 );
 
+it.effect("accepts lightweight review pull request header requests", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WebSocketRequest, {
+      id: "req-review-header-1",
+      body: {
+        _tag: WS_METHODS.reviewLoadPullRequestHeader,
+        cwd: "/repo",
+        reference: "42",
+      },
+    });
+    assert.strictEqual(parsed.body._tag, WS_METHODS.reviewLoadPullRequestHeader);
+  }),
+);
+
 it.effect("accepts project script discovery requests", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(WebSocketRequest, {

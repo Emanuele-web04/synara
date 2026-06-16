@@ -31,6 +31,7 @@ import {
   normalizeReviewChecks,
   normalizeReviewCommit,
   normalizeReviewDetail,
+  normalizeReviewHeaderDetail,
   normalizeReviewPullRequest,
   reviewEventFlag,
   reviewEventName,
@@ -329,6 +330,30 @@ const makeGitHubCli = Effect.sync(() => {
               ),
         ),
         Effect.map((pullRequests) => pullRequests.map(normalizeReviewPullRequest)),
+      ),
+    getReviewPullRequestHeader: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: [
+          "pr",
+          "view",
+          input.reference,
+          "--json",
+          "number,title,url,state,isDraft,author,body,baseRefName,headRefName,createdAt,updatedAt,mergedAt,additions,deletions,changedFiles,reviewDecision,mergeable,mergeStateStatus,milestone,labels,assignees,reviewRequests",
+        ],
+      }).pipe(
+        Effect.map((result) => result.stdout.trim()),
+        Effect.flatMap((raw) =>
+          decodeGitHubJson(
+            raw,
+            RawGitHubReviewDetailSchema,
+            "getReviewPullRequestHeader",
+            "GitHub CLI returned invalid pull request header JSON.",
+          ),
+        ),
+        Effect.map((raw) => ({
+          detail: normalizeReviewHeaderDetail(raw),
+        })),
       ),
     getReviewPullRequestOverview: (input) =>
       execute({

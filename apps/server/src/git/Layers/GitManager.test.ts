@@ -492,6 +492,13 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             detail: "getReviewPullRequestOverview not stubbed in test",
           }),
         ),
+      getReviewPullRequestHeader: () =>
+        Effect.fail(
+          new GitHubCliError({
+            operation: "execute",
+            detail: "getReviewPullRequestHeader not stubbed in test",
+          }),
+        ),
       getReviewConversation: () =>
         Effect.fail(
           new GitHubCliError({

@@ -1,15 +1,42 @@
 import "../../index.css";
 
-import type { ReviewPullRequestDetail, ReviewSourceRef } from "@t3tools/contracts";
+import type {
+  ReviewPullRequestDetail,
+  ReviewPullRequestHeaderDetail,
+  ReviewSourceRef,
+} from "@t3tools/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
-import { reviewQueryKeys } from "~/lib/reviewReactQuery";
 import { ReviewPrView } from "./ReviewPrView";
 
 const nativeApiMock = vi.hoisted(() => ({
+  loadPullRequestHeader: vi.fn(async () => ({
+    detail: {
+      number: 42,
+      title: "Speed up review loading",
+      url: "https://github.com/acme/repo/pull/42",
+      state: "open" as const,
+      isDraft: false,
+      author: "alice",
+      baseBranch: "main",
+      headBranch: "feature/review-loading",
+      body: "Review body",
+      createdAt: "2026-06-16T00:00:00.000Z",
+      updatedAt: "2026-06-16T00:00:00.000Z",
+      additions: 12,
+      deletions: 3,
+      changedFiles: 2,
+      reviewDecision: null,
+      mergeable: "MERGEABLE" as const,
+      milestone: null,
+      labels: [],
+      assignees: [],
+      reviewers: [],
+    },
+  })),
   loadPullRequestSurface: vi.fn(async () => ({
     overview: {
       detail: {
@@ -76,11 +103,13 @@ const reviewChatThreadMock = vi.hoisted(() => ({
 vi.mock("~/nativeApi", () => ({
   ensureNativeApi: () => ({
     review: {
+      loadPullRequestHeader: nativeApiMock.loadPullRequestHeader,
       loadPullRequestSurface: nativeApiMock.loadPullRequestSurface,
     },
   }),
   readNativeApi: () => ({
     review: {
+      loadPullRequestHeader: nativeApiMock.loadPullRequestHeader,
       loadPullRequestSurface: nativeApiMock.loadPullRequestSurface,
     },
   }),
@@ -117,8 +146,32 @@ const DETAIL = {
   reviewers: [],
 } satisfies ReviewPullRequestDetail;
 
+const HEADER_DETAIL = {
+  number: DETAIL.number,
+  title: DETAIL.title,
+  url: DETAIL.url,
+  state: DETAIL.state,
+  isDraft: DETAIL.isDraft,
+  author: DETAIL.author,
+  baseBranch: DETAIL.baseBranch,
+  headBranch: DETAIL.headBranch,
+  body: DETAIL.body,
+  createdAt: DETAIL.createdAt,
+  updatedAt: DETAIL.updatedAt,
+  additions: DETAIL.additions,
+  deletions: DETAIL.deletions,
+  changedFiles: DETAIL.changedFiles,
+  reviewDecision: DETAIL.reviewDecision,
+  mergeable: DETAIL.mergeable,
+  milestone: DETAIL.milestone,
+  labels: DETAIL.labels,
+  assignees: DETAIL.assignees,
+  reviewers: DETAIL.reviewers,
+} satisfies ReviewPullRequestHeaderDetail;
+
 describe("ReviewPrView performance", () => {
   afterEach(() => {
+    nativeApiMock.loadPullRequestHeader.mockClear();
     nativeApiMock.loadPullRequestSurface.mockClear();
     reviewChatThreadMock.buildReviewChatTarget.mockClear();
     reviewChatThreadMock.defaultReviewChatModelSelection.mockClear();
@@ -149,11 +202,7 @@ describe("ReviewPrView performance", () => {
         mutations: { retry: false },
       },
     });
-    queryClient.setQueryData(reviewQueryKeys.pullRequest(CWD, REFERENCE), {
-      detail: DETAIL,
-      commits: [],
-      checks: [],
-    });
+    nativeApiMock.loadPullRequestHeader.mockResolvedValueOnce({ detail: HEADER_DETAIL });
 
     const host = document.createElement("div");
     host.className = "flex h-[800px] bg-background text-foreground";
@@ -167,6 +216,11 @@ describe("ReviewPrView performance", () => {
 
     try {
       await expect.element(page.getByRole("heading", { name: DETAIL.title })).toBeVisible();
+      expect(nativeApiMock.loadPullRequestHeader).toHaveBeenCalledTimes(1);
+      expect(nativeApiMock.loadPullRequestHeader).toHaveBeenCalledWith({
+        cwd: CWD,
+        reference: REFERENCE,
+      });
       expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledTimes(0);
       expect(queuedFrame).not.toBeNull();
 

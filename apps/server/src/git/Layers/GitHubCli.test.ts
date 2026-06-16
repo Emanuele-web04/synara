@@ -490,6 +490,55 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  it.effect("loads lightweight review headers without commits reviews or checks", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          number: 42,
+          title: "Fast PR header",
+          url: "https://github.com/octocat/demo/pull/42",
+          state: "OPEN",
+          isDraft: false,
+          author: { login: "alice", avatarUrl: "https://avatars.example/alice.png" },
+          body: "Header body",
+          baseRefName: "main",
+          headRefName: "feature/review-header",
+          createdAt: "2026-06-07T11:00:00Z",
+          updatedAt: "2026-06-07T12:00:00Z",
+          mergedAt: null,
+          additions: 10,
+          deletions: 2,
+          changedFiles: 3,
+          reviewDecision: null,
+          mergeable: "MERGEABLE",
+          mergeStateStatus: "CLEAN",
+          milestone: null,
+          labels: [],
+          assignees: [],
+          reviewRequests: [{ login: "bob" }],
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.getReviewPullRequestHeader({ cwd: "/repo", reference: "42" });
+      });
+
+      const jsonFieldsArg = mockedRunProcess.mock.calls[0]?.[1]?.at(-1);
+      expect(jsonFieldsArg).not.toContain("latestReviews");
+      expect(jsonFieldsArg).not.toContain("commits");
+      expect(jsonFieldsArg).not.toContain("statusCheckRollup");
+      expect(result.detail.title).toBe("Fast PR header");
+      expect(result.detail.commitsCount).toBeUndefined();
+      expect(result.detail.checksStatus).toBeUndefined();
+      expect(result.detail.reviewers).toEqual([{ login: "bob", state: "REVIEW_REQUIRED" }]);
+    }),
+  );
+
   it.effect("enriches review conversation authors with GitHub avatars", () =>
     Effect.gen(function* () {
       mockedRunProcess
