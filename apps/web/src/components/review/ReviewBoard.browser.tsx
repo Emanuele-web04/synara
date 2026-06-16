@@ -113,6 +113,43 @@ describe("ReviewBoard performance", () => {
     }
   });
 
+  it("keeps virtualized board cards equal-height without vertical overlap", async () => {
+    const pullRequests = makePullRequests(80).map((pullRequest) => ({
+      ...pullRequest,
+      title: `${pullRequest.title} with a long title that should truncate instead of resizing the card`,
+      headBranch: `very-long-owner/very-long-branch-name-${String(pullRequest.number)}-with-extra-context`,
+      additions: 1000 + pullRequest.number,
+      deletions: 900 + pullRequest.number,
+    }));
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+
+      const cards = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-slot="review-card-shell"]'),
+      );
+      expect(cards.length).toBeGreaterThan(3);
+
+      const heights = cards
+        .slice(0, 8)
+        .map((card) => Math.round(card.getBoundingClientRect().height));
+      expect(new Set(heights)).toEqual(new Set([120]));
+
+      const orderedRects = cards
+        .slice(0, 8)
+        .map((card) => card.getBoundingClientRect())
+        .sort((a, b) => a.top - b.top);
+      for (let index = 1; index < orderedRects.length; index += 1) {
+        expect(orderedRects[index]!.top).toBeGreaterThanOrEqual(orderedRects[index - 1]!.bottom);
+      }
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps cards visible while a manual sync refreshes GitHub data", async () => {
     const mounted = await mountBoard(makePullRequests(3));
 

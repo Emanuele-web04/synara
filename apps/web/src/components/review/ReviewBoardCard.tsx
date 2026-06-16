@@ -11,8 +11,9 @@ export function ReviewBoardCard(props: { pullRequest: ReviewPullRequestSummary; 
   const reference = String(pullRequest.number);
 
   return (
-    <div className="group/cardwrap relative">
+    <div className="group/cardwrap relative h-full min-h-0">
       <ReviewCardShell
+        className="h-full min-h-0 overflow-hidden"
         onClick={() => {
           void navigate({ to: "/review/$reference", params: { reference }, search: { cwd } });
         }}
@@ -28,8 +29,11 @@ export function ReviewBoardCard(props: { pullRequest: ReviewPullRequestSummary; 
             #{pullRequest.number}
           </span>
         </div>
-        <ReviewPullRequestMeta pullRequest={pullRequest} />
-        <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+        <ReviewPullRequestMeta
+          pullRequest={pullRequest}
+          className="min-h-0 flex-1 overflow-hidden"
+        />
+        <div className="flex min-w-0 shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
           <ChecksStatusIcon status={pullRequest.checksStatus} />
           {pullRequest.checksStatus !== "none" ? (
             <span className="capitalize">{pullRequest.checksStatus} checks</span>

@@ -39,6 +39,8 @@ import {
   groupByColumn,
 } from "./reviewBoardColumns";
 
+const REVIEW_BOARD_CARD_ROW_HEIGHT = 128;
+
 export function ReviewBoard(props: { cwd: string | null }) {
   const { cwd } = props;
   const navigate = useNavigate();
@@ -256,11 +258,11 @@ function ReviewBoardColumn(props: {
       ) : (
         <VirtualizedPullRequestRows
           pullRequests={pullRequests}
-          estimateSize={116}
+          estimateSize={REVIEW_BOARD_CARD_ROW_HEIGHT}
           overscan={8}
           threshold={30}
           className="min-h-0 flex-1"
-          rowClassName="pb-2"
+          rowClassName="h-32 pb-2"
           renderPullRequest={(pullRequest) => (
             <ReviewBoardCard pullRequest={pullRequest} cwd={cwd} />
           )}
