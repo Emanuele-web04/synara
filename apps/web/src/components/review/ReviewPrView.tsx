@@ -11,7 +11,6 @@ import {
   reviewLoadChangesetQueryOptions,
   reviewLoadConversationQueryOptions,
   reviewLoadPullRequestHeaderQueryOptions,
-  reviewLoadPullRequestQueryOptions,
   reviewSourceKey,
 } from "~/lib/reviewReactQuery";
 import {
@@ -137,17 +136,12 @@ export function ReviewPrView(props: {
   useEffect(() => {
     setReadyConversationHydrationKey(null);
   }, [conversationHydrationKey]);
-  const overviewQuery = useQuery({
-    ...reviewLoadPullRequestQueryOptions({ cwd: props.cwd, reference: props.reference }),
-    enabled: false,
-  });
   const headerQuery = useQuery({
     ...reviewLoadPullRequestHeaderQueryOptions({ cwd: props.cwd, reference: props.reference }),
-    enabled: overviewQuery.data === undefined && props.cwd !== null,
+    enabled: props.cwd !== null,
   });
   const headerDetail = headerQuery.data?.detail ?? null;
-  const fullDetail = overviewQuery.data?.detail ?? null;
-  const detail = fullDetail ?? headerDetail;
+  const detail = headerDetail;
   useEffect(() => {
     if (conversationHydrationKey === null || detail === null || tab !== "conversation") {
       setReadyConversationHydrationKey(null);
@@ -179,22 +173,6 @@ export function ReviewPrView(props: {
     }),
     enabled: props.cwd !== null && detail !== null && tab === "files",
   });
-  useEffect(() => {
-    if (fullDetail !== null || overviewQuery.isFetching || overviewQuery.isError) {
-      return;
-    }
-    if (conversationQuery.data === undefined && changesetQuery.data === undefined) {
-      return;
-    }
-    void overviewQuery.refetch();
-  }, [
-    changesetQuery.data,
-    conversationQuery.data,
-    fullDetail,
-    overviewQuery.isError,
-    overviewQuery.isFetching,
-    overviewQuery.refetch,
-  ]);
   const changesetState = useMemo(
     () => ({
       data: changesetQuery.data,
@@ -203,16 +181,16 @@ export function ReviewPrView(props: {
     }),
     [changesetQuery.data, changesetQuery.error, changesetQuery.isLoading],
   );
-  const checks = overviewQuery.data?.checks ?? EMPTY_CHECKS;
+  const checks = EMPTY_CHECKS;
   const events = conversationQuery.data?.events ?? EMPTY_EVENTS;
   const sidechatContext = useMemo(() => {
-    if (!fullDetail) {
+    if (!detail) {
       return null;
     }
     return buildReviewSidechatContextPayload({
       cwd: props.cwd,
       reference: props.reference,
-      detail: fullDetail,
+      detail,
       checks,
       events,
       files: changesetState.data?.files ?? [],
@@ -227,7 +205,7 @@ export function ReviewPrView(props: {
     changesetState.data?.headSha,
     changesetState.data?.target,
     checks,
-    fullDetail,
+    detail,
     events,
     props.cwd,
     props.reference,
@@ -372,9 +350,9 @@ export function ReviewPrView(props: {
                 </main>
               )}
             </div>
-            {sidechatContext && fullDetail ? (
+            {sidechatContext && detail ? (
               <ReviewPrSidebar
-                detail={fullDetail}
+                detail={detail}
                 checks={checks}
                 events={events}
                 mode={tab}

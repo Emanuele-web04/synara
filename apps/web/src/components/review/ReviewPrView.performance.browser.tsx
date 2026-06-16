@@ -267,7 +267,8 @@ describe("ReviewPrView performance", () => {
       });
       expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadConversation).toHaveBeenCalledTimes(0);
-      expect(reviewChatThreadMock.prewarmReviewChatThread).toHaveBeenCalledTimes(0);
+      expect(nativeApiMock.loadPullRequest).toHaveBeenCalledTimes(0);
+      expect(reviewChatThreadMock.prewarmReviewChatThread.mock.calls.length).toBeGreaterThan(0);
       expect(queuedFrame).not.toBeNull();
 
       queuedFrame?.(performance.now());
@@ -278,10 +279,7 @@ describe("ReviewPrView performance", () => {
         reference: REFERENCE,
       });
       expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledTimes(0);
-      await expect.poll(() => nativeApiMock.loadPullRequest.mock.calls.length).toBe(1);
-      await expect
-        .poll(() => reviewChatThreadMock.prewarmReviewChatThread.mock.calls.length)
-        .toBeGreaterThan(0);
+      expect(nativeApiMock.loadPullRequest).toHaveBeenCalledTimes(0);
     } finally {
       await screen.unmount();
       queryClient.clear();
@@ -329,7 +327,7 @@ describe("ReviewPrView performance", () => {
       });
       expect(nativeApiMock.loadConversation).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledTimes(0);
-      await expect.poll(() => nativeApiMock.loadPullRequest.mock.calls.length).toBe(1);
+      expect(nativeApiMock.loadPullRequest).toHaveBeenCalledTimes(0);
     } finally {
       await screen.unmount();
       queryClient.clear();

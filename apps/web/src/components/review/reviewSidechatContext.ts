@@ -2,6 +2,7 @@ import type {
   ReviewChangedFile,
   ReviewCheck,
   ReviewPullRequestDetail,
+  ReviewPullRequestHeaderDetail,
   ReviewSourceRef,
   ReviewTargetKey,
   ReviewTimelineEvent,
@@ -21,7 +22,7 @@ export interface ReviewSidechatContextPayload {
   readonly headSha: string | null;
   readonly reviewDecision: string | null;
   readonly mergeable: ReviewPullRequestDetail["mergeable"];
-  readonly checksStatus: ReviewPullRequestDetail["checksStatus"];
+  readonly checksStatus: ReviewPullRequestDetail["checksStatus"] | "unknown";
   readonly repositoryId: string | null;
   readonly source: ReviewSourceRef | null;
   readonly target: ReviewTargetKey | null;
@@ -29,7 +30,7 @@ export interface ReviewSidechatContextPayload {
     readonly files: number;
     readonly additions: number;
     readonly deletions: number;
-    readonly commits: number;
+    readonly commits: number | null;
   };
   readonly body: string;
   readonly labels: ReadonlyArray<string>;
@@ -172,7 +173,9 @@ function promptBaseLines(payload: ReviewSidechatContextPayload): string[] {
     `Repository: ${payload.repositoryId ?? "unknown"}`,
     `URL: ${payload.url}`,
     `Branch: ${payload.headBranch} -> ${payload.baseBranch}`,
-    `Stats: ${payload.stats.files} files, +${payload.stats.additions} -${payload.stats.deletions}, ${payload.stats.commits} commits`,
+    `Stats: ${payload.stats.files} files, +${payload.stats.additions} -${payload.stats.deletions}, ${
+      payload.stats.commits === null ? "unknown" : String(payload.stats.commits)
+    } commits`,
     `Checks status: ${payload.checksStatus}`,
     payload.selectedFilePath ? `Focused file: ${payload.selectedFilePath}` : null,
   ].filter((line): line is string => line !== null);
@@ -186,7 +189,7 @@ function compactReviewBody(payload: ReviewSidechatContextPayload, limit: number)
 export interface BuildReviewSidechatContextInput {
   readonly cwd: string | null;
   readonly reference: string;
-  readonly detail: ReviewPullRequestDetail;
+  readonly detail: ReviewPullRequestDetail | ReviewPullRequestHeaderDetail;
   readonly checks: ReadonlyArray<ReviewCheck>;
   readonly events: ReadonlyArray<ReviewTimelineEvent>;
   readonly files: ReadonlyArray<ReviewChangedFile>;
@@ -215,7 +218,7 @@ export function buildReviewSidechatContextPayload(
     headSha: input.headSha,
     reviewDecision: input.detail.reviewDecision,
     mergeable: input.detail.mergeable,
-    checksStatus: input.detail.checksStatus,
+    checksStatus: input.detail.checksStatus ?? "unknown",
     repositoryId,
     source: input.source,
     target: input.target,
@@ -223,11 +226,11 @@ export function buildReviewSidechatContextPayload(
       files: input.detail.changedFiles,
       additions: input.detail.additions,
       deletions: input.detail.deletions,
-      commits: input.detail.commitsCount,
+      commits: input.detail.commitsCount ?? null,
     },
     body: input.detail.body,
     labels: input.detail.labels.map((label) => label.name),
-    reviewers: input.detail.reviewers.map((reviewer) => ({
+    reviewers: (input.detail.reviewers ?? []).map((reviewer) => ({
       login: reviewer.login,
       state: reviewer.state,
     })),

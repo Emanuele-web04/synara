@@ -1,6 +1,7 @@
 import type {
   ReviewCheck,
   ReviewPullRequestDetail,
+  ReviewPullRequestHeaderDetail,
   ReviewSourceRef,
   ReviewTargetKey,
   ReviewTimelineEvent,
@@ -30,6 +31,7 @@ import type { ReviewSidechatContextPayload } from "./reviewSidechatContext";
 import { useResizableReviewSidebar } from "./useResizableReviewSidebar";
 
 type ReviewSidebarTab = "info" | "chat";
+type ReviewSidebarDetail = ReviewPullRequestDetail | ReviewPullRequestHeaderDetail;
 
 const REVIEW_AGENT_SIDEBAR_WIDTH_BY_MODE = {
   conversation: { min: 288, max: 520, default: 360 },
@@ -83,7 +85,7 @@ function EmptyLine(props: { children: ReactNode }) {
   return <p className="text-[12px] leading-relaxed text-muted-foreground/80">{props.children}</p>;
 }
 
-const MERGEABLE_LABEL: Record<ReviewPullRequestDetail["mergeable"], string> = {
+const MERGEABLE_LABEL: Record<ReviewSidebarDetail["mergeable"], string> = {
   MERGEABLE: "No conflicts",
   CONFLICTING: "Has conflicts",
   UNKNOWN: "Mergeability unknown",
@@ -92,11 +94,15 @@ const MERGEABLE_LABEL: Record<ReviewPullRequestDetail["mergeable"], string> = {
 const PASSING_CHECK_STATES = new Set(["success", "skipped", "neutral"]);
 const FAILING_CHECK_STATES = new Set(["failure", "cancelled"]);
 
-function ChecksSection(props: { checks: ReadonlyArray<ReviewCheck>; compact?: boolean }) {
+function ChecksSection(props: {
+  checks: ReadonlyArray<ReviewCheck>;
+  compact?: boolean;
+  emptyLabel?: string;
+}) {
   if (props.checks.length === 0) {
     return (
       <SidebarSection title="Checks">
-        <EmptyLine>No CI checks</EmptyLine>
+        <EmptyLine>{props.emptyLabel ?? "No CI checks"}</EmptyLine>
       </SidebarSection>
     );
   }
@@ -160,13 +166,13 @@ function ChecksSection(props: { checks: ReadonlyArray<ReviewCheck>; compact?: bo
   );
 }
 
-function ParticipantsSection(props: { detail: ReviewPullRequestDetail }) {
+function ParticipantsSection(props: { detail: ReviewSidebarDetail }) {
   const { detail } = props;
   const avatarByLogin = new Map<string, string | undefined>();
   if (detail.author.length > 0) {
     avatarByLogin.set(detail.author, detail.authorAvatarUrl);
   }
-  for (const reviewer of detail.reviewers) {
+  for (const reviewer of detail.reviewers ?? []) {
     if (reviewer.login.length > 0 && !avatarByLogin.has(reviewer.login)) {
       avatarByLogin.set(reviewer.login, reviewer.avatarUrl);
     }
@@ -212,7 +218,7 @@ function DetailRow(props: { label: string; value: string; icon?: ReactNode }) {
 }
 
 function DetailsSection(props: {
-  detail: ReviewPullRequestDetail;
+  detail: ReviewSidebarDetail;
   events: ReadonlyArray<ReviewTimelineEvent>;
 }) {
   const { detail } = props;
@@ -225,7 +231,11 @@ function DetailsSection(props: {
       <dl className="flex flex-col gap-1.5 text-[12px]">
         {created ? <DetailRow label="Created" value={created} /> : null}
         {updated ? <DetailRow label="Updated" value={updated} /> : null}
-        <DetailRow label="Commits" value={String(detail.commitsCount)} icon={<GitCommitIcon />} />
+        <DetailRow
+          label="Commits"
+          value={detail.commitsCount === undefined ? "Loading" : String(detail.commitsCount)}
+          icon={<GitCommitIcon />}
+        />
         <DetailRow label="Comments" value={String(comments)} icon={<MessageCircleIcon />} />
         <DetailRow label="Reviews" value={String(reviews)} icon={<MessageCircleIcon />} />
       </dl>
@@ -234,7 +244,7 @@ function DetailsSection(props: {
 }
 
 function SidebarUtilityStack(props: {
-  detail: ReviewPullRequestDetail;
+  detail: ReviewSidebarDetail;
   events: ReadonlyArray<ReviewTimelineEvent>;
 }) {
   const { detail } = props;
@@ -273,10 +283,10 @@ function SidebarUtilityStack(props: {
 
       <DetailsSection detail={detail} events={props.events} />
 
-      {detail.reviewers.length > 0 ? (
+      {(detail.reviewers ?? []).length > 0 ? (
         <SidebarSection title="Reviewers" framed>
           <ul className="flex flex-col gap-2">
-            {detail.reviewers.map((reviewer) => {
+            {(detail.reviewers ?? []).map((reviewer) => {
               const pill = reviewerStatePill(reviewer.state);
               return (
                 <li
@@ -335,13 +345,16 @@ function SidebarUtilityStack(props: {
   );
 }
 
-function FilesAnalysisStack(props: { checks: ReadonlyArray<ReviewCheck> }) {
+function FilesAnalysisStack(props: {
+  checks: ReadonlyArray<ReviewCheck>;
+  emptyLabel?: string;
+}) {
   const total = props.checks.length;
   const passed = props.checks.filter((check) => PASSING_CHECK_STATES.has(check.state)).length;
   const failing = props.checks.filter((check) => FAILING_CHECK_STATES.has(check.state)).length;
   const summary =
     total === 0
-      ? "No checks"
+      ? (props.emptyLabel ?? "No checks")
       : failing > 0
         ? `${failing} failing`
         : passed === total
@@ -372,7 +385,9 @@ function FilesAnalysisStack(props: { checks: ReadonlyArray<ReviewCheck> }) {
       </div>
       <div className="min-h-0 overflow-y-auto px-2.5 pb-2">
         {props.checks.length === 0 ? (
-          <p className="px-1.5 py-1 text-[12px] text-muted-foreground/80">No CI checks</p>
+          <p className="px-1.5 py-1 text-[12px] text-muted-foreground/80">
+            {props.emptyLabel ?? "No CI checks"}
+          </p>
         ) : (
           <ul className="flex flex-col gap-0.5">
             {props.checks.map((check) => {
@@ -521,15 +536,17 @@ function SidebarTabbedHeader(props: {
 }
 
 function SidebarInfoPanel(props: {
-  detail: ReviewPullRequestDetail;
+  detail: ReviewSidebarDetail;
   checks: ReadonlyArray<ReviewCheck>;
   events: ReadonlyArray<ReviewTimelineEvent>;
   mode: "conversation" | "files";
 }) {
+  const checksEmptyLabel =
+    props.detail.checksStatus === undefined ? "Checks loading" : "No CI checks";
   if (props.mode === "files") {
     return (
       <div role="tabpanel" className="flex min-h-0 flex-1 flex-col">
-        <FilesAnalysisStack checks={props.checks} />
+        <FilesAnalysisStack checks={props.checks} emptyLabel={checksEmptyLabel} />
         <SidebarUtilityStack detail={props.detail} events={props.events} />
       </div>
     );
@@ -537,7 +554,7 @@ function SidebarInfoPanel(props: {
   return (
     <div role="tabpanel" className="min-h-0 flex-1 overflow-y-auto">
       <div className="px-3.5 py-3">
-        <ChecksSection checks={props.checks} compact />
+        <ChecksSection checks={props.checks} compact emptyLabel={checksEmptyLabel} />
       </div>
       <SidebarUtilityStack detail={props.detail} events={props.events} />
     </div>
@@ -562,7 +579,7 @@ function ChatPanelHeader(props: { mode: "conversation" | "files" }) {
 }
 
 export function ReviewPrSidebar(props: {
-  detail: ReviewPullRequestDetail;
+  detail: ReviewSidebarDetail;
   checks: ReadonlyArray<ReviewCheck>;
   events?: ReadonlyArray<ReviewTimelineEvent>;
   mode?: "conversation" | "files";

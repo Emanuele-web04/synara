@@ -66,6 +66,37 @@ const nativeApiMock = vi.hoisted(() => ({
     source: "mock",
     cached: false,
   })),
+  loadPullRequestHeader: vi.fn(async () => ({
+    detail: {
+      number: 7866,
+      title: "docs(test): dashboard vitest harness research",
+      url: "https://github.com/enzo-health/bonaparte/pull/7866",
+      state: "open" as const,
+      isDraft: false,
+      author: "Tbsheff",
+      baseBranch: "main",
+      headBranch: "test-speed/06-harness-docs",
+      body: "",
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-07T00:00:00.000Z",
+      additions: 251,
+      deletions: 0,
+      changedFiles: 2,
+      reviewDecision: null,
+      mergeable: "MERGEABLE" as const,
+      milestone: null,
+      labels: [],
+      assignees: [],
+      reviewers: [],
+    },
+  })),
+  loadConversation: vi.fn(async () => ({ events: [] })),
+  loadChangeset: vi.fn(async () => ({
+    files: [],
+    target: null,
+    headSha: null,
+    patch: "",
+  })),
 }));
 
 vi.mock("~/nativeApi", () => ({
@@ -73,10 +104,20 @@ vi.mock("~/nativeApi", () => ({
     provider: {
       listSkills: nativeApiMock.listSkills,
     },
+    review: {
+      loadPullRequestHeader: nativeApiMock.loadPullRequestHeader,
+      loadConversation: nativeApiMock.loadConversation,
+      loadChangeset: nativeApiMock.loadChangeset,
+    },
   }),
   readNativeApi: () => ({
     provider: {
       listSkills: nativeApiMock.listSkills,
+    },
+    review: {
+      loadPullRequestHeader: nativeApiMock.loadPullRequestHeader,
+      loadConversation: nativeApiMock.loadConversation,
+      loadChangeset: nativeApiMock.loadChangeset,
     },
   }),
 }));
@@ -967,9 +1008,8 @@ async function mountReviewViewWithNormalizedReviewThread() {
     />,
     host,
     (queryClient) => {
-      queryClient.setQueryData(reviewQueryKeys.pullRequest("/repo", "7866"), {
+      queryClient.setQueryData(reviewQueryKeys.pullRequestHeader("/repo", "7866"), {
         detail: DETAIL,
-        checks: CHECKS,
       });
       queryClient.setQueryData(reviewQueryKeys.conversation("/repo", "7866"), {
         events: [],
