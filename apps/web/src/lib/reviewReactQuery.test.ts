@@ -105,6 +105,15 @@ describe("reviewQueryKeys.pullRequests", () => {
     });
     expect(key.slice(0, 3)).toEqual(reviewQueryKeys.pullRequestLists("/repo"));
   });
+
+  it("separates distinct search terms into distinct list cache keys", () => {
+    expect(reviewQueryKeys.pullRequests({ cwd: "/repo" })).not.toEqual(
+      reviewQueryKeys.pullRequests({ cwd: "/repo", search: "body-only-match" }),
+    );
+    expect(
+      reviewQueryKeys.pullRequests({ cwd: "/repo", search: "body-only-match" }),
+    ).not.toEqual(reviewQueryKeys.pullRequests({ cwd: "/repo", search: "other" }));
+  });
 });
 
 describe("reviewQueryKeys.pullRequestSurface", () => {

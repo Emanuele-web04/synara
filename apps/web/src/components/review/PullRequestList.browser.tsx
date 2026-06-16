@@ -125,6 +125,44 @@ describe("PullRequestList filters", () => {
     }
   });
 
+  it("trusts server search results after the debounced query catches up", async () => {
+    const mounted = await mountList([
+      pullRequest({
+        number: 90,
+        title: "Initial unfiltered pull request",
+        labels: [],
+      }),
+    ]);
+
+    try {
+      await expect.element(page.getByText("Initial unfiltered pull request")).toBeVisible();
+      nativeApiMock.listPullRequests.mockResolvedValueOnce({
+        pullRequests: [
+          pullRequest({
+            number: 91,
+            title: "Returned by GitHub body search",
+            labels: [],
+          }),
+        ],
+      });
+      await page.getByPlaceholder("Search PRs, #7870, or a GitHub URL").fill("body-only-match");
+
+      await vi.waitFor(() => {
+        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+          cwd: "/repo",
+          search: "body-only-match",
+        });
+      });
+      expect(nativeApiMock.listPullRequests.mock.calls).toEqual([
+        [{ cwd: "/repo" }],
+        [{ cwd: "/repo", search: "body-only-match" }],
+      ]);
+      await expect.element(page.getByText("Returned by GitHub body search")).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("loads a larger review window when the list scrolls near the bottom", async () => {
     let resolveNextWindow:
       | ((value: ReviewListPullRequestsResult) => void)
