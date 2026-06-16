@@ -637,8 +637,10 @@ const makeReviewSource = Effect.gen(function* () {
 
   const listPullRequests: ReviewSourceShape["listPullRequests"] = (input) =>
     Effect.gen(function* () {
-      const repositoryId = yield* resolveRepositoryId(input.cwd);
-      const cacheIdentity = yield* readCacheIdentity(input.cwd);
+      const [repositoryId, cacheIdentity] = yield* Effect.all(
+        [resolveRepositoryId(input.cwd), readCacheIdentity(input.cwd)],
+        { concurrency: "unbounded" },
+      );
       const listFilter = pullRequestListFilter(input, cacheIdentity.login);
       const cached = yield* cacheStore
         .getPullRequestList({ repositoryId, listFilter })
