@@ -220,10 +220,40 @@ function matchesListFilters(
 }
 
 function hasLocalListFilters(input: ReviewListPullRequestsInput): boolean {
+  const nativeReviewStatus = nativeListReviewStatus(input.columns);
   const localColumns = [...normalizedSet(input.columns)].filter(
-    (column) => column !== "draft" || input.draft !== true,
+    (column) =>
+      (column !== "draft" || input.draft !== true) && column !== nativeReviewStatus,
   );
-  return localColumns.length > 0 || normalizedSet(input.checks).size > 0;
+  const nativeChecksStatus = nativeListChecksStatus(input.checks);
+  const localChecks = [...normalizedSet(input.checks)].filter(
+    (check) => check !== nativeChecksStatus,
+  );
+  return localColumns.length > 0 || localChecks.length > 0;
+}
+
+function nativeListReviewStatus(
+  columns:
+    | ReadonlyArray<"draft" | "needs-review" | "changes-requested" | "approved" | "merged">
+    | undefined,
+): "approved" | "changes-requested" | undefined {
+  const normalized = [...normalizedSet(columns)];
+  if (normalized.length !== 1) {
+    return undefined;
+  }
+  const [column] = normalized;
+  return column === "approved" || column === "changes-requested" ? column : undefined;
+}
+
+function nativeListChecksStatus(
+  checks: ReadonlyArray<"passing" | "failing" | "pending" | "none"> | undefined,
+): "passing" | "failing" | "pending" | undefined {
+  const normalized = [...normalizedSet(checks)];
+  if (normalized.length !== 1) {
+    return undefined;
+  }
+  const [check] = normalized;
+  return check === "passing" || check === "failing" || check === "pending" ? check : undefined;
 }
 
 function resolveViewerAlias(value: string | null, viewerLogin: string): string | null {
@@ -407,6 +437,8 @@ const makeReviewSource = Effect.gen(function* () {
 
   const listPullRequestsUncached = (input: ReviewListPullRequestsInput, viewerLogin: string) => {
     const listLimit = githubListLimit(input);
+    const reviewStatus = nativeListReviewStatus(input.columns);
+    const checksStatus = nativeListChecksStatus(input.checks);
     return gitHubCli
       .listRepositoryPullRequests({
         cwd: input.cwd,
@@ -420,6 +452,8 @@ const makeReviewSource = Effect.gen(function* () {
         ...(input.label !== undefined ? { label: input.label } : {}),
         ...(input.assignee !== undefined ? { assignee: input.assignee } : {}),
         ...(input.draft === true ? { draft: true } : {}),
+        ...(reviewStatus !== undefined ? { reviewStatus } : {}),
+        ...(checksStatus !== undefined ? { checksStatus } : {}),
       })
       .pipe(
         Effect.map((pullRequests): ReviewListPullRequestsResult => {

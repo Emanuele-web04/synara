@@ -61,14 +61,32 @@ function pullRequestListSearch(input: {
   readonly search?: string;
   readonly reviewRequested?: string;
   readonly headBranch?: string;
+  readonly checksStatus?: "passing" | "failing" | "pending" | "none";
+  readonly reviewStatus?: "approved" | "changes-requested";
 }): string | null {
   const search = optionalTrimmed(input.search);
   const reviewRequested = optionalTrimmed(input.reviewRequested);
   const headBranch = optionalTrimmed(input.headBranch);
+  const checksStatusSearch =
+    input.checksStatus === "passing"
+      ? "status:success"
+      : input.checksStatus === "failing"
+        ? "status:failure"
+        : input.checksStatus === "pending"
+          ? "status:pending"
+          : null;
+  const reviewStatusSearch =
+    input.reviewStatus === "approved"
+      ? "review:approved"
+      : input.reviewStatus === "changes-requested"
+        ? "review:changes_requested"
+        : null;
   return [
     search,
     reviewRequested ? `review-requested:${reviewRequested}` : null,
     headBranch?.includes(":") ? `head:${headBranch}` : null,
+    checksStatusSearch,
+    reviewStatusSearch,
   ]
     .filter((value): value is string => value !== null)
     .join(" ") || null;
@@ -85,6 +103,8 @@ function repositoryPullRequestListArgs(input: {
   readonly label?: string;
   readonly assignee?: string;
   readonly draft?: boolean;
+  readonly checksStatus?: "passing" | "failing" | "pending" | "none";
+  readonly reviewStatus?: "approved" | "changes-requested";
 }): string[] {
   const args = [
     "pr",

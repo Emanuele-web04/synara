@@ -283,6 +283,8 @@ export interface GitHubCliShape {
     readonly label?: string;
     readonly assignee?: string;
     readonly draft?: boolean;
+    readonly checksStatus?: GitHubChecksStatus;
+    readonly reviewStatus?: "approved" | "changes-requested";
   }) => Effect.Effect<ReadonlyArray<GitHubReviewPullRequest>, GitHubCliError>;
 
   /**

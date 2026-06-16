@@ -151,6 +151,8 @@ layer("GitHubCliLive", (it) => {
           label: "bug",
           reviewRequested: "tyler",
           draft: true,
+          checksStatus: "passing",
+          reviewStatus: "changes-requested",
         });
       });
 
@@ -197,7 +199,7 @@ layer("GitHubCliLive", (it) => {
           "bug",
           "--draft",
           "--search",
-          "review board review-requested:tyler",
+          "review board review-requested:tyler status:success review:changes_requested",
           "--json",
           "number,title,author,updatedAt,state,mergedAt,reviewDecision,baseRefName,headRefName,headRepositoryOwner,url,isDraft,additions,deletions,statusCheckRollup,labels,assignees,reviewRequests",
         ],

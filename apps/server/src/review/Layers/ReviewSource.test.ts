@@ -38,6 +38,8 @@ interface RecordedListCall {
   readonly label?: string;
   readonly assignee?: string;
   readonly draft?: boolean;
+  readonly checksStatus?: "passing" | "failing" | "pending" | "none";
+  readonly reviewStatus?: "approved" | "changes-requested";
 }
 
 interface RecordedCacheWrite {
@@ -386,8 +388,8 @@ it.effect("keeps branch, URL, and reviewer matches returned by GitHub search", (
   });
 });
 
-it.effect("uses a larger bounded candidate window for local-only status and check filters", () => {
-  const pullRequests = Array.from({ length: 120 }, (_, index) =>
+it.effect("pushes native review status and check filters without the local candidate window", () => {
+  const pullRequests = Array.from({ length: 4 }, (_, index) =>
     ghPr({
       number: index + 1,
       reviewDecision: index % 2 === 0 ? "APPROVED" : null,
@@ -404,18 +406,26 @@ it.effect("uses a larger bounded candidate window for local-only status and chec
       checks: ["failing"],
     });
 
-    expect(numbers(result)).toHaveLength(60);
+    expect(numbers(result)).toEqual([1, 3]);
     expect(result.meta).toEqual({
       requestedLimit: 200,
       resultLimit: 100,
-      candidateLimit: 1000,
-      candidateCount: 120,
+      candidateLimit: 100,
+      candidateCount: 4,
       candidateLimitReached: false,
-      matchedCount: 60,
-      returnedCount: 60,
+      matchedCount: 2,
+      returnedCount: 2,
       bounded: true,
     });
-    expect(recorded.listCalls).toEqual([{ cwd: "/repo", state: "open", limit: 1000 }]);
+    expect(recorded.listCalls).toEqual([
+      {
+        cwd: "/repo",
+        state: "open",
+        limit: 100,
+        reviewStatus: "approved",
+        checksStatus: "failing",
+      },
+    ]);
     expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
       state: "open",
       limit: 100,
@@ -429,6 +439,133 @@ it.effect("uses a larger bounded candidate window for local-only status and chec
       draft: null,
       columns: ["approved"],
       checks: ["failing"],
+    });
+  });
+});
+
+it.effect("keeps a larger bounded candidate window when status still needs local filtering", () => {
+  const pullRequests = Array.from({ length: 120 }, (_, index) =>
+    ghPr({
+      number: index + 1,
+      reviewDecision: index % 2 === 0 ? null : "APPROVED",
+      checksStatus: "failing",
+    }),
+  );
+  const { layer, recorded } = makeLayer({ pullRequests });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      limit: 200,
+      columns: ["needs-review"],
+      checks: ["failing"],
+    });
+
+    expect(numbers(result)).toHaveLength(60);
+    expect(result.meta).toEqual({
+      requestedLimit: 200,
+      resultLimit: 100,
+      candidateLimit: 1000,
+      candidateCount: 120,
+      candidateLimitReached: false,
+      matchedCount: 60,
+      returnedCount: 60,
+      bounded: true,
+    });
+    expect(recorded.listCalls).toEqual([
+      { cwd: "/repo", state: "open", limit: 1000, checksStatus: "failing" },
+    ]);
+    expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
+      state: "open",
+      limit: 100,
+      search: null,
+      author: null,
+      reviewRequested: null,
+      baseBranch: null,
+      headBranch: null,
+      label: null,
+      assignee: null,
+      draft: null,
+      columns: ["needs-review"],
+      checks: ["failing"],
+    });
+  });
+});
+
+it.effect("pushes a single changes-requested status to GitHub", () => {
+  const { layer, recorded } = makeLayer({
+    pullRequests: [
+      ghPr({ number: 1, reviewDecision: "CHANGES_REQUESTED" }),
+      ghPr({ number: 2, reviewDecision: "APPROVED" }),
+    ],
+  });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      columns: ["changes-requested"],
+    });
+
+    expect(numbers(result)).toEqual([1]);
+    expect(recorded.listCalls).toEqual([
+      {
+        cwd: "/repo",
+        state: "open",
+        limit: 50,
+        reviewStatus: "changes-requested",
+      },
+    ]);
+    expect(result.meta?.candidateLimit).toBe(50);
+  });
+});
+
+it.effect("pushes a single check filter to GitHub without the local candidate window", () => {
+  const { layer, recorded } = makeLayer({
+    pullRequests: [
+      ghPr({ number: 1, checksStatus: "passing" }),
+      ghPr({ number: 2, checksStatus: "failing" }),
+    ],
+  });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      limit: 200,
+      checks: ["passing"],
+    });
+
+    expect(numbers(result)).toEqual([1]);
+    expect(result.meta).toEqual({
+      requestedLimit: 200,
+      resultLimit: 100,
+      candidateLimit: 100,
+      candidateCount: 2,
+      candidateLimitReached: false,
+      matchedCount: 1,
+      returnedCount: 1,
+      bounded: true,
+    });
+    expect(recorded.listCalls).toEqual([
+      {
+        cwd: "/repo",
+        state: "open",
+        limit: 100,
+        checksStatus: "passing",
+      },
+    ]);
+    expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
+      state: "open",
+      limit: 100,
+      search: null,
+      author: null,
+      reviewRequested: null,
+      baseBranch: null,
+      headBranch: null,
+      label: null,
+      assignee: null,
+      draft: null,
+      columns: [],
+      checks: ["passing"],
     });
   });
 });
@@ -592,7 +729,7 @@ it.effect("keeps mixed draft status filters on the local candidate window", () =
   });
 });
 
-it.effect("uses the local candidate window when native draft combines with local checks", () => {
+it.effect("pushes native draft and native checks without the local candidate window", () => {
   const { layer, recorded } = makeLayer({
     pullRequests: [
       ghPr({ number: 1, isDraft: true, checksStatus: "passing" }),
@@ -613,8 +750,36 @@ it.effect("uses the local candidate window when native draft combines with local
       {
         cwd: "/repo",
         state: "open",
-        limit: 1000,
+        limit: 50,
         draft: true,
+        checksStatus: "passing",
+      },
+    ]);
+    expect(result.meta?.candidateLimit).toBe(50);
+  });
+});
+
+it.effect("keeps multi-check OR filters on the local candidate window", () => {
+  const { layer, recorded } = makeLayer({
+    pullRequests: [
+      ghPr({ number: 1, checksStatus: "passing" }),
+      ghPr({ number: 2, checksStatus: "failing" }),
+      ghPr({ number: 3, checksStatus: "pending" }),
+    ],
+  });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      checks: ["passing", "failing"],
+    });
+
+    expect(numbers(result)).toEqual([1, 2]);
+    expect(recorded.listCalls).toEqual([
+      {
+        cwd: "/repo",
+        state: "open",
+        limit: 1000,
       },
     ]);
     expect(result.meta?.candidateLimit).toBe(1000);
@@ -625,7 +790,7 @@ it.effect("marks locally filtered lists incomplete when the candidate window is 
   const pullRequests = Array.from({ length: 1000 }, (_, index) =>
     ghPr({
       number: index + 1,
-      reviewDecision: "APPROVED",
+      reviewDecision: null,
       checksStatus: "failing",
     }),
   );
@@ -634,7 +799,7 @@ it.effect("marks locally filtered lists incomplete when the candidate window is 
   return Effect.gen(function* () {
     const result = yield* runList(layer, {
       cwd: "/repo",
-      columns: ["approved"],
+      columns: ["needs-review"],
       checks: ["failing"],
     });
 
@@ -656,7 +821,7 @@ it.effect("bounds GitHub candidate fetches by 10x for large locally filtered lis
   const pullRequests = Array.from({ length: repositoryPullRequestCount }, (_, index) =>
     ghPr({
       number: index + 1,
-      reviewDecision: "APPROVED",
+      reviewDecision: null,
       checksStatus: "failing",
     }),
   );
@@ -666,7 +831,7 @@ it.effect("bounds GitHub candidate fetches by 10x for large locally filtered lis
     const startedAt = performance.now();
     const result = yield* runList(layer, {
       cwd: "/repo",
-      columns: ["approved"],
+      columns: ["needs-review"],
       checks: ["failing"],
     });
     const elapsedMs = performance.now() - startedAt;
@@ -684,7 +849,9 @@ it.effect("bounds GitHub candidate fetches by 10x for large locally filtered lis
       }),
     );
 
-    expect(recorded.listCalls).toEqual([{ cwd: "/repo", state: "open", limit: 1000 }]);
+    expect(recorded.listCalls).toEqual([
+      { cwd: "/repo", state: "open", limit: 1000, checksStatus: "failing" },
+    ]);
     expect(result.pullRequests).toHaveLength(50);
     expect(result.meta).toEqual({
       resultLimit: 50,
