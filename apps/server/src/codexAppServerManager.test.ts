@@ -999,6 +999,14 @@ describe("sendTurn", () => {
 
   it("adds selected skills as structured turn/start input items", async () => {
     const { manager, context, sendRequest } = createSendTurnHarness();
+    const registerSynaraSkillsRoot = vi
+      .spyOn(
+        manager as unknown as {
+          registerSynaraSkillsRoot: (...args: unknown[]) => Promise<void>;
+        },
+        "registerSynaraSkillsRoot",
+      )
+      .mockResolvedValue();
 
     await manager.sendTurn({
       threadId: asThreadId("thread_1"),
@@ -1028,6 +1036,10 @@ describe("sendTurn", () => {
       ],
       model: "gpt-5.3-codex",
     });
+    expect(registerSynaraSkillsRoot).toHaveBeenCalledWith(context);
+    expect(registerSynaraSkillsRoot.mock.invocationCallOrder[0]).toBeLessThan(
+      sendRequest.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
   it("adds selected plugin mentions as structured turn/start input items", async () => {
@@ -3037,6 +3049,70 @@ describe("Codex protocol over an in-memory transport", () => {
       expect(methods.indexOf("thread/start")).toBeLessThan(
         harness.outboundFrames.findIndex((frame) => frame.method === "skills/extraRoots/set"),
       );
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("registers the Synara skills root before skill-bearing review chat turns", async () => {
+    const harness = createInMemoryCodexHarness({
+      synaraSkillsDir: "/tmp/synara-skills",
+      responders: {
+        "turn/start": () => ({ turn: { id: "turn_review_skill_1" } }),
+      },
+    });
+    try {
+      await harness.manager.startSession({
+        threadId: asThreadId("thread_mem_review_skill_turn"),
+        provider: "codex",
+        cwd: "/tmp/mem-workspace",
+        reviewProfile: "review-chat",
+        approvalPolicy: "never",
+        sandboxMode: "read-only",
+        runtimeMode: "approval-required",
+      });
+
+      expect(
+        harness.outboundFrames.some((frame) => frame.method === "skills/extraRoots/set"),
+      ).toBe(false);
+
+      const turn = await harness.manager.sendTurn({
+        threadId: asThreadId("thread_mem_review_skill_turn"),
+        input: "Use $hallmark while reviewing this PR",
+        skills: [{ name: "hallmark", path: "/tmp/synara-skills/hallmark/SKILL.md" }],
+      });
+
+      expect(turn.turnId).toBe("turn_review_skill_1");
+      const skillsRootIndex = harness.outboundFrames.findIndex(
+        (frame) => frame.method === "skills/extraRoots/set",
+      );
+      const threadStartIndex = harness.outboundFrames.findIndex(
+        (frame) => frame.method === "thread/start",
+      );
+      const turnStartIndex = harness.outboundFrames.findIndex(
+        (frame) => frame.method === "turn/start",
+      );
+      expect(skillsRootIndex).toBeGreaterThan(threadStartIndex);
+      expect(skillsRootIndex).toBeLessThan(turnStartIndex);
+
+      const skillsRootFrame = harness.outboundFrames[skillsRootIndex];
+      expect(skillsRootFrame?.params).toEqual({ extraRoots: ["/tmp/synara-skills"] });
+      const turnStartFrame = harness.outboundFrames[turnStartIndex];
+      expect(turnStartFrame?.params).toMatchObject({
+        threadId: "provider_thread_1",
+        input: [
+          {
+            type: "text",
+            text: "Use $hallmark while reviewing this PR",
+            text_elements: [],
+          },
+          {
+            type: "skill",
+            name: "hallmark",
+            path: "/tmp/synara-skills/hallmark/SKILL.md",
+          },
+        ],
+      });
     } finally {
       await harness.stop();
     }

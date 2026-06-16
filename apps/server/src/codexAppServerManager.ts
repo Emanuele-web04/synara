@@ -236,6 +236,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       requireSession: (...args) => this.requireSession(...args),
       sendRequest: (...args) => this.sendRequest(...args),
       updateSession: (...args) => this.updateSession(...args),
+      registerSynaraSkillsRoot: (...args) => this.registerSynaraSkillsRoot(...args),
       sendTurn: (...args) => this.sendTurn(...args),
     };
     this.discoveryQueryDeps = {
