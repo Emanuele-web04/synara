@@ -13,6 +13,34 @@ import { render } from "vitest-browser-react";
 import { ReviewPrView } from "./ReviewPrView";
 
 const nativeApiMock = vi.hoisted(() => ({
+  loadPullRequest: vi.fn(async () => ({
+    detail: {
+      number: 42,
+      title: "Speed up review loading",
+      url: "https://github.com/acme/repo/pull/42",
+      state: "open" as const,
+      isDraft: false,
+      author: "alice",
+      baseBranch: "main",
+      headBranch: "feature/review-loading",
+      body: "Review body",
+      createdAt: "2026-06-16T00:00:00.000Z",
+      updatedAt: "2026-06-16T00:00:00.000Z",
+      additions: 12,
+      deletions: 3,
+      changedFiles: 2,
+      commitsCount: 1,
+      reviewDecision: null,
+      mergeable: "MERGEABLE" as const,
+      checksStatus: "passing" as const,
+      milestone: null,
+      labels: [],
+      assignees: [],
+      reviewers: [],
+    },
+    commits: [],
+    checks: [],
+  })),
   loadPullRequestHeader: vi.fn(async () => ({
     detail: {
       number: 42,
@@ -36,6 +64,13 @@ const nativeApiMock = vi.hoisted(() => ({
       assignees: [],
       reviewers: [],
     },
+  })),
+  loadConversation: vi.fn(async () => ({ events: [] })),
+  loadChangeset: vi.fn(async () => ({
+    files: [],
+    headSha: "abc123",
+    patch: "",
+    target: null,
   })),
   loadPullRequestSurface: vi.fn(async () => ({
     overview: {
@@ -103,13 +138,19 @@ const reviewChatThreadMock = vi.hoisted(() => ({
 vi.mock("~/nativeApi", () => ({
   ensureNativeApi: () => ({
     review: {
+      loadPullRequest: nativeApiMock.loadPullRequest,
       loadPullRequestHeader: nativeApiMock.loadPullRequestHeader,
+      loadConversation: nativeApiMock.loadConversation,
+      loadChangeset: nativeApiMock.loadChangeset,
       loadPullRequestSurface: nativeApiMock.loadPullRequestSurface,
     },
   }),
   readNativeApi: () => ({
     review: {
+      loadPullRequest: nativeApiMock.loadPullRequest,
       loadPullRequestHeader: nativeApiMock.loadPullRequestHeader,
+      loadConversation: nativeApiMock.loadConversation,
+      loadChangeset: nativeApiMock.loadChangeset,
       loadPullRequestSurface: nativeApiMock.loadPullRequestSurface,
     },
   }),
@@ -171,7 +212,10 @@ const HEADER_DETAIL = {
 
 describe("ReviewPrView performance", () => {
   afterEach(() => {
+    nativeApiMock.loadPullRequest.mockClear();
     nativeApiMock.loadPullRequestHeader.mockClear();
+    nativeApiMock.loadConversation.mockClear();
+    nativeApiMock.loadChangeset.mockClear();
     nativeApiMock.loadPullRequestSurface.mockClear();
     reviewChatThreadMock.buildReviewChatTarget.mockClear();
     reviewChatThreadMock.defaultReviewChatModelSelection.mockClear();
@@ -222,17 +266,70 @@ describe("ReviewPrView performance", () => {
         reference: REFERENCE,
       });
       expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledTimes(0);
+      expect(nativeApiMock.loadConversation).toHaveBeenCalledTimes(0);
+      expect(reviewChatThreadMock.prewarmReviewChatThread).toHaveBeenCalledTimes(0);
       expect(queuedFrame).not.toBeNull();
 
       queuedFrame?.(performance.now());
 
-      await expect.poll(() => nativeApiMock.loadPullRequestSurface.mock.calls.length).toBe(1);
-      expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledWith({
+      await expect.poll(() => nativeApiMock.loadConversation.mock.calls.length).toBe(1);
+      expect(nativeApiMock.loadConversation).toHaveBeenCalledWith({
         cwd: CWD,
         reference: REFERENCE,
-        source: SOURCE,
-        includeConversation: true,
       });
+      expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledTimes(0);
+      await expect.poll(() => nativeApiMock.loadPullRequest.mock.calls.length).toBe(1);
+      await expect
+        .poll(() => reviewChatThreadMock.prewarmReviewChatThread.mock.calls.length)
+        .toBeGreaterThan(0);
+    } finally {
+      await screen.unmount();
+      queryClient.clear();
+      host.remove();
+    }
+  });
+
+  it("loads files through the direct changeset query without aggregate surface hydration", async () => {
+    await page.viewport(1200, 800);
+    let queuedFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      queuedFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    nativeApiMock.loadPullRequestHeader.mockResolvedValueOnce({ detail: HEADER_DETAIL });
+
+    const host = document.createElement("div");
+    host.className = "flex h-[800px] bg-background text-foreground";
+    document.body.append(host);
+    const screen = await render(
+      <QueryClientProvider client={queryClient}>
+        <ReviewPrView cwd={CWD} reference={REFERENCE} source={SOURCE} />
+      </QueryClientProvider>,
+      { container: host },
+    );
+
+    try {
+      await expect.element(page.getByRole("heading", { name: DETAIL.title })).toBeVisible();
+      expect(queuedFrame).not.toBeNull();
+
+      await page.getByRole("button", { name: "Review changes" }).click();
+
+      await expect.poll(() => nativeApiMock.loadChangeset.mock.calls.length).toBe(1);
+      expect(nativeApiMock.loadChangeset).toHaveBeenCalledWith({
+        cwd: CWD,
+        source: SOURCE,
+      });
+      expect(nativeApiMock.loadConversation).toHaveBeenCalledTimes(0);
+      expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledTimes(0);
+      await expect.poll(() => nativeApiMock.loadPullRequest.mock.calls.length).toBe(1);
     } finally {
       await screen.unmount();
       queryClient.clear();

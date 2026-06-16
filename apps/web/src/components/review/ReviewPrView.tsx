@@ -4,7 +4,7 @@ import type {
   ReviewTimelineEvent,
   ThreadId,
 } from "@t3tools/contracts";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -12,7 +12,6 @@ import {
   reviewLoadConversationQueryOptions,
   reviewLoadPullRequestHeaderQueryOptions,
   reviewLoadPullRequestQueryOptions,
-  reviewLoadPullRequestSurfaceQueryOptions,
   reviewSourceKey,
 } from "~/lib/reviewReactQuery";
 import {
@@ -109,68 +108,12 @@ function reviewChatPrewarmContextKey(
   ].join("\u001f");
 }
 
-function reviewNumberFromReference(reference: string): number | null {
-  const parsed = Number(reference.trim());
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-function buildEarlyReviewSidechatContextPayload(input: {
-  readonly cwd: string | null;
-  readonly reference: string;
-  readonly source: ReviewSourceRef;
-  readonly currentView: "conversation" | "files";
-  readonly selectedFilePath: string | null;
-}): ReviewSidechatContextPayload | null {
-  if (input.cwd === null || input.source._tag !== "pullRequest") {
-    return null;
-  }
-  const number =
-    reviewNumberFromReference(input.source.reference) ?? reviewNumberFromReference(input.reference);
-  if (number === null) {
-    return null;
-  }
-  return {
-    cwd: input.cwd,
-    reference: input.reference,
-    url: "",
-    number,
-    title: `PR #${String(number)}`,
-    author: "unknown",
-    state: "open",
-    isDraft: false,
-    baseBranch: "main",
-    headBranch: "unknown",
-    headSha: null,
-    reviewDecision: null,
-    mergeable: "UNKNOWN",
-    checksStatus: "none",
-    repositoryId: null,
-    source: input.source,
-    target: null,
-    stats: {
-      files: 0,
-      additions: 0,
-      deletions: 0,
-      commits: 0,
-    },
-    body: "",
-    labels: [],
-    reviewers: [],
-    checks: [],
-    files: [],
-    recentConversation: [],
-    currentView: input.currentView,
-    selectedFilePath: input.selectedFilePath,
-  };
-}
-
 export function ReviewPrView(props: {
   cwd: string | null;
   reference: string;
   source: ReviewSourceRef;
   hostThreadId?: ThreadId | null;
 }) {
-  const queryClient = useQueryClient();
   const [tab, setTab] = useState<PrTab>("conversation");
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
@@ -223,47 +166,42 @@ export function ReviewPrView(props: {
       cwd: props.cwd,
       reference: detail ? props.reference : null,
     }),
-    enabled: false,
+    enabled:
+      props.cwd !== null &&
+      detail !== null &&
+      tab === "conversation" &&
+      isConversationHydrationReady,
   });
   const changesetQuery = useQuery({
     ...reviewLoadChangesetQueryOptions({
       cwd: props.cwd,
       source: props.source,
     }),
-    enabled: false,
+    enabled: props.cwd !== null && detail !== null && tab === "files",
   });
-  const shouldLoadConversation =
-    props.cwd !== null &&
-    detail !== null &&
-    tab === "conversation" &&
-    isConversationHydrationReady &&
-    conversationQuery.data === undefined;
-  const shouldLoadChangeset =
-    props.cwd !== null && detail !== null && tab === "files" && changesetQuery.data === undefined;
-  const surfaceQuery = useQuery(
-    reviewLoadPullRequestSurfaceQueryOptions({
-      cwd: props.cwd,
-      reference: detail ? props.reference : null,
-      source: props.source,
-      includeConversation: shouldLoadConversation,
-      includeChangeset: shouldLoadChangeset,
-      queryClient,
-    }),
-  );
+  useEffect(() => {
+    if (fullDetail !== null || overviewQuery.isFetching || overviewQuery.isError) {
+      return;
+    }
+    if (conversationQuery.data === undefined && changesetQuery.data === undefined) {
+      return;
+    }
+    void overviewQuery.refetch();
+  }, [
+    changesetQuery.data,
+    conversationQuery.data,
+    fullDetail,
+    overviewQuery.isError,
+    overviewQuery.isFetching,
+    overviewQuery.refetch,
+  ]);
   const changesetState = useMemo(
     () => ({
       data: changesetQuery.data,
-      isLoading: changesetQuery.isLoading || (shouldLoadChangeset && surfaceQuery.isLoading),
-      error: changesetQuery.error ?? (shouldLoadChangeset ? surfaceQuery.error : null),
+      isLoading: changesetQuery.isLoading,
+      error: changesetQuery.error,
     }),
-    [
-      changesetQuery.data,
-      changesetQuery.error,
-      changesetQuery.isLoading,
-      shouldLoadChangeset,
-      surfaceQuery.error,
-      surfaceQuery.isLoading,
-    ],
+    [changesetQuery.data, changesetQuery.error, changesetQuery.isLoading],
   );
   const checks = overviewQuery.data?.checks ?? EMPTY_CHECKS;
   const events = conversationQuery.data?.events ?? EMPTY_EVENTS;
@@ -297,18 +235,7 @@ export function ReviewPrView(props: {
     selectedFilePath,
     tab,
   ]);
-  const earlySidechatContext = useMemo(
-    () =>
-      buildEarlyReviewSidechatContextPayload({
-        cwd: props.cwd,
-        reference: props.reference,
-        source: props.source,
-        currentView: tab,
-        selectedFilePath,
-      }),
-    [props.cwd, props.reference, props.source, selectedFilePath, tab],
-  );
-  const prewarmSidechatContext = sidechatContext ?? earlySidechatContext;
+  const prewarmSidechatContext = sidechatContext;
   const reviewChatTarget = useMemo(() => {
     if (!sidechatContext) {
       return null;
@@ -438,7 +365,6 @@ export function ReviewPrView(props: {
                     events={conversationQuery.data?.events ?? []}
                     isLoading={
                       conversationQuery.isLoading ||
-                      (shouldLoadConversation && surfaceQuery.isLoading) ||
                       (detail !== null && tab === "conversation" && !isConversationHydrationReady)
                     }
                     className={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}
