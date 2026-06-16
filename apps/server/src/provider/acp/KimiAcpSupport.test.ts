@@ -7,7 +7,20 @@ import {
   buildKimiAcpSpawnInput,
   buildKimiModelDescriptorsFromConfigOptions,
   resolveKimiAcpAuthMethodId,
+  resolveKimiAcpModelValue,
 } from "./KimiAcpSupport.ts";
+
+// Model config shape captured verbatim from a live `kimi acp` session/new response.
+const KIMI_MODEL_CONFIG = [
+  {
+    type: "select",
+    id: "model",
+    name: "Model",
+    category: "model",
+    currentValue: "kimi-code/kimi-for-coding",
+    options: [{ value: "kimi-code/kimi-for-coding", name: "K2.7 Code" }],
+  },
+] as unknown as ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
 
 function initializeWithAuthMethods(ids: ReadonlyArray<string>): EffectAcpSchema.InitializeResponse {
   return {
@@ -104,30 +117,69 @@ describe("buildKimiModelDescriptorsFromConfigOptions", () => {
   });
 });
 
-describe("applyKimiAcpModelSelection", () => {
-  it("is a no-op for Kimi's single managed model", async () => {
-    const calls: Array<string> = [];
-    const runtime = {
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push(`model:${value}`);
-        }),
-      getConfigOptions: Effect.succeed([] as ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
-      setConfigOption: (id: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push(`config:${id}=${String(value)}`);
-          return { configOptions: [] };
-        }),
-    };
+describe("resolveKimiAcpModelValue", () => {
+  it("maps a bare slug to Kimi's full ACP model value", () => {
+    expect(resolveKimiAcpModelValue(KIMI_MODEL_CONFIG, "kimi-for-coding")).toBe(
+      "kimi-code/kimi-for-coding",
+    );
+  });
 
+  it("returns an exact ACP value unchanged", () => {
+    expect(resolveKimiAcpModelValue(KIMI_MODEL_CONFIG, "kimi-code/kimi-for-coding")).toBe(
+      "kimi-code/kimi-for-coding",
+    );
+  });
+
+  it("passes an unsupported value through so the runtime can reject it", () => {
+    expect(resolveKimiAcpModelValue(KIMI_MODEL_CONFIG, "made-up-model")).toBe("made-up-model");
+  });
+
+  it("returns undefined when the session exposes no model picker", () => {
+    expect(
+      resolveKimiAcpModelValue([] as ReadonlyArray<EffectAcpSchema.SessionConfigOption>, "kimi"),
+    ).toBeUndefined();
+  });
+});
+
+describe("applyKimiAcpModelSelection", () => {
+  const makeRuntime = (
+    configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+    calls: Array<string>,
+  ) => ({
+    getConfigOptions: Effect.succeed(configOptions),
+    setModel: (value: string) =>
+      Effect.sync(() => {
+        calls.push(`model:${value}`);
+      }),
+    setConfigOption: (id: string, value: string | boolean) =>
+      Effect.sync(() => {
+        calls.push(`config:${id}=${String(value)}`);
+        return { configOptions: [] };
+      }),
+  });
+
+  it("applies the resolved managed-model value via setModel", async () => {
+    const calls: Array<string> = [];
     await Effect.runPromise(
       applyKimiAcpModelSelection({
-        runtime,
+        runtime: makeRuntime(KIMI_MODEL_CONFIG, calls),
         model: "kimi-for-coding",
         mapError: (context) => context,
       }),
     );
+    // The bare Synara slug is resolved to Kimi's full ACP value before applying.
+    expect(calls).toEqual(["model:kimi-code/kimi-for-coding"]);
+  });
 
+  it("does nothing when the session exposes no model picker", async () => {
+    const calls: Array<string> = [];
+    await Effect.runPromise(
+      applyKimiAcpModelSelection({
+        runtime: makeRuntime([], calls),
+        model: "kimi-for-coding",
+        mapError: (context) => context,
+      }),
+    );
     expect(calls).toEqual([]);
   });
 });
