@@ -97,6 +97,7 @@ export function filterBySearch(
       summary.headBranch.toLowerCase().includes(normalized) ||
       (summary.headSelector?.toLowerCase().includes(normalized) ?? false) ||
       summary.url.toLowerCase().includes(normalized) ||
+      summary.labels.some((label) => label.toLowerCase().includes(normalized)) ||
       summary.reviewRequests.some((reviewer) => reviewer.toLowerCase().includes(normalized)),
   );
 }

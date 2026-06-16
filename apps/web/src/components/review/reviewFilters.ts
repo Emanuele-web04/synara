@@ -32,6 +32,7 @@ export interface ReviewServerListFilters {
   readonly author?: string;
   readonly baseBranch?: string;
   readonly headBranch?: string;
+  readonly label?: string;
   readonly columns?: ReadonlyArray<ReviewColumnId>;
   readonly checks?: ReadonlyArray<ReviewPullRequestSummary["checksStatus"]>;
 }
@@ -121,6 +122,26 @@ export const headBranchFilterDef: ReviewFilterDefinition = {
   match: (item, values) => values.has(item.headSelector?.trim() || item.headBranch.trim()),
 };
 
+export const labelFilterDef: ReviewFilterDefinition = {
+  id: "label",
+  label: "Label",
+  extractOptions: (items) => {
+    const seen = new Set<string>();
+    const options: ReviewFilterOption[] = [];
+    for (const item of items) {
+      for (const rawLabel of item.labels) {
+        const label = rawLabel.trim();
+        if (label.length > 0 && !seen.has(label)) {
+          seen.add(label);
+          options.push({ value: label, label });
+        }
+      }
+    }
+    return options.sort((a, b) => a.label.localeCompare(b.label));
+  },
+  match: (item, values) => item.labels.some((label) => values.has(label.trim())),
+};
+
 export const statusFilterDef: ReviewFilterDefinition = {
   id: "status",
   label: "Status",
@@ -159,6 +180,7 @@ export const reviewPullFilterDefs: ReadonlyArray<ReviewFilterDefinition> = [
   authorFilterDef,
   baseBranchFilterDef,
   headBranchFilterDef,
+  labelFilterDef,
   statusFilterDef,
   checksFilterDef,
 ];
@@ -236,12 +258,14 @@ export function toReviewServerListFilters(
   const authors = valuesForFilter(activeFilters, authorFilterDef.id);
   const baseBranches = valuesForFilter(activeFilters, baseBranchFilterDef.id);
   const headBranches = valuesForFilter(activeFilters, headBranchFilterDef.id);
+  const labels = valuesForFilter(activeFilters, labelFilterDef.id);
   const columns = valuesForFilter(activeFilters, statusFilterDef.id).filter(isReviewColumnId);
   const checks = valuesForFilter(activeFilters, checksFilterDef.id).filter(isReviewChecksStatus);
   return {
     ...(authors.length === 1 ? { author: authors[0] } : {}),
     ...(baseBranches.length === 1 ? { baseBranch: baseBranches[0] } : {}),
     ...(headBranches.length === 1 ? { headBranch: headBranches[0] } : {}),
+    ...(labels.length === 1 ? { label: labels[0] } : {}),
     ...(columns.length > 0 ? { columns } : {}),
     ...(checks.length > 0 ? { checks } : {}),
   };

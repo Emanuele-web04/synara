@@ -9,6 +9,7 @@ import {
   checksFilterDef,
   filterReviewPullRequests,
   headBranchFilterDef,
+  labelFilterDef,
   reviewPullFilterDefs,
   sortReviewItems,
   reviewPullSortOptions,
@@ -32,6 +33,7 @@ function pr(overrides: Partial<ReviewPullRequestSummary>): ReviewPullRequestSumm
     deletions: 1,
     checksStatus: "none",
     reviewRequests: [],
+    labels: [],
     ...overrides,
   };
 }
@@ -69,6 +71,14 @@ describe("review filter definitions", () => {
       "bugfix/search",
       "octocat:feature/review-board",
     ]);
+  });
+
+  it("derives unique, sorted label options from the items present", () => {
+    const options = labelFilterDef.extractOptions([
+      pr({ labels: ["bug", "priority 1"] }),
+      pr({ labels: ["feature", "bug"] }),
+    ]);
+    expect(options.map((option) => option.value)).toEqual(["bug", "feature", "priority 1"]);
   });
 
   it("only offers check statuses that actually occur (never 'none')", () => {
@@ -154,6 +164,7 @@ describe("filterReviewPullRequests", () => {
         title: "Add login",
         headBranch: "feature/search-panel",
         headSelector: "octocat:feature/search-panel",
+        labels: ["performance"],
       }),
       pr({ number: 2, title: "Fix logout", url: "https://github.com/acme/repo/pull/221" }),
       pr({ number: 3, title: "Improve review", reviewRequests: ["tyler"] }),
@@ -164,6 +175,9 @@ describe("filterReviewPullRequests", () => {
       1,
     ]);
     expect(filterReviewPullRequests(items, "octocat:", []).map((item) => item.number)).toEqual([1]);
+    expect(filterReviewPullRequests(items, "performance", []).map((item) => item.number)).toEqual([
+      1,
+    ]);
     expect(filterReviewPullRequests(items, "pull/221", []).map((item) => item.number)).toEqual([
       2,
     ]);
@@ -178,6 +192,7 @@ describe("toReviewServerListFilters", () => {
         filter("author", ["alice"]),
         filter("base", ["main"]),
         filter("head", ["feature/review-board"]),
+        filter("label", ["bug"]),
         filter("status", ["approved", "needs-review"]),
         filter("checks", ["pending", "passing"]),
       ]),
@@ -185,6 +200,7 @@ describe("toReviewServerListFilters", () => {
       author: "alice",
       baseBranch: "main",
       headBranch: "feature/review-board",
+      label: "bug",
       columns: ["approved", "needs-review"],
       checks: ["passing", "pending"],
     });
@@ -196,6 +212,7 @@ describe("toReviewServerListFilters", () => {
         filter("author", ["alice", "bob"]),
         filter("base", ["main", "dev"]),
         filter("head", ["feature/review-board", "bugfix/search"]),
+        filter("label", ["bug", "feature"]),
       ]),
     ).toEqual({});
   });

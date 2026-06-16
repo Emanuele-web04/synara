@@ -73,6 +73,11 @@ export const RawReviewAuthorSchema = Schema.Struct({
   avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
+export const RawReviewLabelSchema = Schema.Struct({
+  name: Schema.optional(Schema.NullOr(Schema.String)),
+  color: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
 export const RawGitHubReviewPullRequestSchema = Schema.Struct({
   number: PositiveInt,
   title: Schema.String,
@@ -96,6 +101,7 @@ export const RawGitHubReviewPullRequestSchema = Schema.Struct({
   deletions: Schema.optional(Schema.NullOr(Schema.Number)),
   statusCheckRollup: Schema.optional(Schema.NullOr(Schema.Array(RawStatusCheckRollupEntrySchema))),
   reviewRequests: Schema.optional(Schema.NullOr(Schema.Array(RawReviewRequestSchema))),
+  labels: Schema.optional(Schema.NullOr(Schema.Array(RawReviewLabelSchema))),
 });
 
 export const FAILING_CHECK_STATES = new Set([
@@ -130,11 +136,6 @@ export const RawReviewCommitSchema = Schema.Struct({
   authoredDate: Schema.optional(Schema.NullOr(Schema.String)),
   committedDate: Schema.optional(Schema.NullOr(Schema.String)),
   authors: Schema.optional(Schema.NullOr(Schema.Array(RawReviewCommitAuthorSchema))),
-});
-
-export const RawReviewLabelSchema = Schema.Struct({
-  name: Schema.optional(Schema.NullOr(Schema.String)),
-  color: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 export const RawReviewUserSchema = Schema.Struct({

@@ -48,6 +48,7 @@ export interface GitHubReviewPullRequest {
   readonly deletions: number;
   readonly checksStatus: GitHubChecksStatus;
   readonly reviewRequests: ReadonlyArray<string>;
+  readonly labels: ReadonlyArray<string>;
 }
 
 export type GitHubReviewerState =
@@ -278,6 +279,7 @@ export interface GitHubCliShape {
     readonly reviewRequested?: string;
     readonly baseBranch?: string;
     readonly headBranch?: string;
+    readonly label?: string;
   }) => Effect.Effect<ReadonlyArray<GitHubReviewPullRequest>, GitHubCliError>;
 
   /**

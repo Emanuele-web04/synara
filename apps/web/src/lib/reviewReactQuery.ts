@@ -76,6 +76,7 @@ export function applyReviewUpdatedPayload(
         reviewRequested: payload.reviewRequested,
         baseBranch: payload.baseBranch,
         headBranch: payload.headBranch,
+        label: payload.label,
         columns: payload.columns,
         checks: payload.checks,
       }),
@@ -119,6 +120,7 @@ export const reviewQueryKeys = {
     reviewRequested?: string;
     baseBranch?: string;
     headBranch?: string;
+    label?: string;
     columns?: ReadonlyArray<ReviewListColumn>;
     checks?: ReadonlyArray<ReviewListChecksStatus>;
   }) =>
@@ -131,6 +133,7 @@ export const reviewQueryKeys = {
       reviewPullRequestListText(input.reviewRequested),
       reviewPullRequestListText(input.baseBranch),
       reviewPullRequestListText(input.headBranch),
+      reviewPullRequestListText(input.label),
       reviewPullRequestListValues(input.columns),
       reviewPullRequestListValues(input.checks),
     ] as const,
@@ -159,6 +162,7 @@ export function reviewListPullRequestsQueryOptions(input: {
   reviewRequested?: string;
   baseBranch?: string;
   headBranch?: string;
+  label?: string;
   columns?: ReadonlyArray<ReviewListColumn>;
   checks?: ReadonlyArray<ReviewListChecksStatus>;
 }) {
@@ -188,6 +192,7 @@ export function buildReviewListPullRequestsRequest(input: {
   reviewRequested?: string;
   baseBranch?: string;
   headBranch?: string;
+  label?: string;
   columns?: ReadonlyArray<ReviewListColumn>;
   checks?: ReadonlyArray<ReviewListChecksStatus>;
 }): ReviewListPullRequestsInput {
@@ -196,6 +201,7 @@ export function buildReviewListPullRequestsRequest(input: {
   const reviewRequested = reviewPullRequestListText(input.reviewRequested);
   const baseBranch = reviewPullRequestListText(input.baseBranch);
   const headBranch = reviewPullRequestListText(input.headBranch);
+  const label = reviewPullRequestListText(input.label);
   const columns = reviewPullRequestListValues(input.columns);
   const checks = reviewPullRequestListValues(input.checks);
   return {
@@ -207,6 +213,7 @@ export function buildReviewListPullRequestsRequest(input: {
     ...(reviewRequested !== null ? { reviewRequested } : {}),
     ...(baseBranch !== null ? { baseBranch } : {}),
     ...(headBranch !== null ? { headBranch } : {}),
+    ...(label !== null ? { label } : {}),
     ...(columns.length > 0 ? { columns } : {}),
     ...(checks.length > 0 ? { checks } : {}),
   };

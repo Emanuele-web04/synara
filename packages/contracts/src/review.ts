@@ -60,6 +60,7 @@ export const ReviewPullRequestSummary = Schema.Struct({
   deletions: NonNegativeInt,
   checksStatus: ReviewChecksStatus,
   reviewRequests: Schema.Array(Schema.String),
+  labels: Schema.optional(Schema.Array(Schema.String)).pipe(Schema.withDecodingDefault(() => [])),
 });
 export type ReviewPullRequestSummary = typeof ReviewPullRequestSummary.Type;
 
@@ -82,6 +83,7 @@ export const ReviewListPullRequestsInput = Schema.Struct({
   reviewRequested: Schema.optional(TrimmedNonEmptyStringSchema),
   baseBranch: Schema.optional(TrimmedNonEmptyStringSchema),
   headBranch: Schema.optional(TrimmedNonEmptyStringSchema),
+  label: Schema.optional(TrimmedNonEmptyStringSchema),
   columns: Schema.optional(Schema.Array(ReviewListColumn)),
   checks: Schema.optional(Schema.Array(ReviewChecksStatus)),
 });
@@ -583,6 +585,7 @@ export const ReviewUpdatedPayload = Schema.Union([
     reviewRequested: Schema.optional(TrimmedNonEmptyStringSchema),
     baseBranch: Schema.optional(TrimmedNonEmptyStringSchema),
     headBranch: Schema.optional(TrimmedNonEmptyStringSchema),
+    label: Schema.optional(TrimmedNonEmptyStringSchema),
     columns: Schema.optional(Schema.Array(ReviewListColumn)),
     checks: Schema.optional(Schema.Array(ReviewChecksStatus)),
     data: ReviewListPullRequestsResult,

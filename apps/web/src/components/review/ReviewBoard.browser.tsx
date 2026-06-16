@@ -47,6 +47,7 @@ function makePullRequests(count: number): ReviewPullRequestSummary[] {
     deletions: 0,
     checksStatus: "pending",
     reviewRequests: index % 7 === 0 ? ["tyler"] : [],
+    labels: [],
   }));
 }
 
@@ -276,6 +277,41 @@ describe("ReviewBoard performance", () => {
         expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
           cwd: "/repo",
           headBranch: "octocat:feature/review-board",
+        });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("pushes a single label facet into the server list request", async () => {
+    const pullRequests = [
+      {
+        ...makePullRequests(1)[0],
+        number: 57,
+        title: "Bug labeled work",
+        labels: ["bug"],
+      },
+      {
+        ...makePullRequests(1)[0],
+        number: 58,
+        title: "Feature labeled work",
+        labels: ["feature"],
+      },
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+
+      await page.getByRole("button", { name: "Label", exact: true }).click();
+      await page.getByRole("button", { name: "bug", exact: true }).click();
+      await vi.waitFor(() => {
+        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+          cwd: "/repo",
+          label: "bug",
         });
       });
     } finally {

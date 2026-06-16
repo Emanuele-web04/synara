@@ -40,6 +40,7 @@ it.effect("accepts review list server-side filter fields", () =>
       reviewRequested: "tyler",
       baseBranch: "main",
       headBranch: "feature/review-board",
+      label: "bug",
       columns: ["needs-review", "approved"],
       checks: ["passing", "pending"],
     });
@@ -53,6 +54,7 @@ it.effect("accepts review list server-side filter fields", () =>
       reviewRequested: "tyler",
       baseBranch: "main",
       headBranch: "feature/review-board",
+      label: "bug",
       columns: ["needs-review", "approved"],
       checks: ["passing", "pending"],
     });
@@ -79,6 +81,7 @@ it.effect("accepts review list completeness metadata", () =>
           deletions: 0,
           checksStatus: "pending",
           reviewRequests: [],
+          labels: ["bug"],
         },
       ],
       meta: {
@@ -110,6 +113,7 @@ it.effect("accepts review list completeness metadata", () =>
           deletions: 0,
           checksStatus: "pending",
           reviewRequests: [],
+          labels: ["bug"],
         },
       ],
       meta: {
@@ -128,11 +132,46 @@ it.effect("accepts review list completeness metadata", () =>
 it.effect("accepts legacy review list results without metadata", () =>
   Effect.gen(function* () {
     const result = yield* decodeListResult({
-      pullRequests: [],
+      pullRequests: [
+        {
+          number: 43,
+          title: "Legacy review",
+          url: "https://github.com/acme/demo/pull/43",
+          baseBranch: "main",
+          headBranch: "feature/legacy",
+          author: "alice",
+          updatedAt: "2026-06-16T12:00:00Z",
+          state: "open",
+          reviewDecision: null,
+          isDraft: false,
+          additions: 1,
+          deletions: 0,
+          checksStatus: "pending",
+          reviewRequests: [],
+        },
+      ],
     });
 
     assert.deepEqual(result, {
-      pullRequests: [],
+      pullRequests: [
+        {
+          number: 43,
+          title: "Legacy review",
+          url: "https://github.com/acme/demo/pull/43",
+          baseBranch: "main",
+          headBranch: "feature/legacy",
+          author: "alice",
+          updatedAt: "2026-06-16T12:00:00Z",
+          state: "open",
+          reviewDecision: null,
+          isDraft: false,
+          additions: 1,
+          deletions: 0,
+          checksStatus: "pending",
+          reviewRequests: [],
+          labels: [],
+        },
+      ],
     });
   }),
 );

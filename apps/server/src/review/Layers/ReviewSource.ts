@@ -136,6 +136,7 @@ function toPullRequestSummary(pr: GitHubReviewPullRequest): ReviewPullRequestSum
     deletions: pr.deletions,
     checksStatus: pr.checksStatus,
     reviewRequests: pr.reviewRequests,
+    labels: pr.labels,
   };
 }
 
@@ -181,6 +182,7 @@ function matchesSearch(summary: ReviewPullRequestSummary, search: string | null)
     summary.headBranch.toLowerCase().includes(query) ||
     (summary.headSelector?.toLowerCase().includes(query) ?? false) ||
     summary.url.toLowerCase().includes(query) ||
+    summary.labels.some((label) => label.toLowerCase().includes(query)) ||
     summary.reviewRequests.some((reviewer) => reviewer.toLowerCase().includes(query))
   );
 }
@@ -197,6 +199,7 @@ function matchesListFilters(
   );
   const baseBranch = normalizeOptionalText(input.baseBranch);
   const headBranch = normalizeOptionalText(input.headBranch);
+  const label = normalizeOptionalText(input.label);
   const columns = normalizedSet(input.columns);
   const checks = normalizedSet(input.checks);
   return (
@@ -205,6 +208,7 @@ function matchesListFilters(
     (!reviewRequested || summary.reviewRequests.includes(reviewRequested)) &&
     (!baseBranch || summary.baseBranch === baseBranch) &&
     (!headBranch || summary.headBranch === headBranch || summary.headSelector === headBranch) &&
+    (!label || summary.labels.includes(label)) &&
     (columns.size === 0 || columns.has(reviewColumn(summary))) &&
     (checks.size === 0 || checks.has(summary.checksStatus))
   );
@@ -314,6 +318,7 @@ function pullRequestListFilter(input: {
   readonly reviewRequested?: string | undefined;
   readonly baseBranch?: string | undefined;
   readonly headBranch?: string | undefined;
+  readonly label?: string | undefined;
   readonly columns?: ReadonlyArray<string> | undefined;
   readonly checks?: ReadonlyArray<string> | undefined;
 }): string {
@@ -325,6 +330,7 @@ function pullRequestListFilter(input: {
     reviewRequested: normalizeOptionalText(input.reviewRequested),
     baseBranch: normalizeOptionalText(input.baseBranch),
     headBranch: normalizeOptionalText(input.headBranch),
+    label: normalizeOptionalText(input.label),
     columns: [...normalizedSet(input.columns)].sort(),
     checks: [...normalizedSet(input.checks)].sort(),
   });
@@ -399,6 +405,7 @@ const makeReviewSource = Effect.gen(function* () {
         ...(input.reviewRequested !== undefined ? { reviewRequested: input.reviewRequested } : {}),
         ...(input.baseBranch !== undefined ? { baseBranch: input.baseBranch } : {}),
         ...(input.headBranch !== undefined ? { headBranch: input.headBranch } : {}),
+        ...(input.label !== undefined ? { label: input.label } : {}),
       })
       .pipe(
         Effect.map((pullRequests): ReviewListPullRequestsResult => {
@@ -795,6 +802,7 @@ const makeReviewSource = Effect.gen(function* () {
                       : {}),
                     ...(input.baseBranch !== undefined ? { baseBranch: input.baseBranch } : {}),
                     ...(input.headBranch !== undefined ? { headBranch: input.headBranch } : {}),
+                    ...(input.label !== undefined ? { label: input.label } : {}),
                     ...(input.columns !== undefined ? { columns: input.columns } : {}),
                     ...(input.checks !== undefined ? { checks: input.checks } : {}),
                     data,

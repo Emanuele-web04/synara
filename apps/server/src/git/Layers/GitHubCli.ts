@@ -60,10 +60,16 @@ function optionalTrimmed(value: string | undefined): string | null {
 function pullRequestListSearch(input: {
   readonly search?: string;
   readonly reviewRequested?: string;
+  readonly headBranch?: string;
 }): string | null {
   const search = optionalTrimmed(input.search);
   const reviewRequested = optionalTrimmed(input.reviewRequested);
-  return [search, reviewRequested ? `review-requested:${reviewRequested}` : null]
+  const headBranch = optionalTrimmed(input.headBranch);
+  return [
+    search,
+    reviewRequested ? `review-requested:${reviewRequested}` : null,
+    headBranch?.includes(":") ? `head:${headBranch}` : null,
+  ]
     .filter((value): value is string => value !== null)
     .join(" ") || null;
 }
@@ -76,6 +82,7 @@ function repositoryPullRequestListArgs(input: {
   readonly reviewRequested?: string;
   readonly baseBranch?: string;
   readonly headBranch?: string;
+  readonly label?: string;
 }): string[] {
   const args = [
     "pr",
@@ -94,8 +101,12 @@ function repositoryPullRequestListArgs(input: {
     args.push("--base", baseBranch);
   }
   const headBranch = optionalTrimmed(input.headBranch);
-  if (headBranch) {
+  if (headBranch && !headBranch.includes(":")) {
     args.push("--head", headBranch);
+  }
+  const label = optionalTrimmed(input.label);
+  if (label) {
+    args.push("--label", label);
   }
   const search = pullRequestListSearch(input);
   if (search) {
@@ -117,6 +128,7 @@ function repositoryPullRequestListArgs(input: {
     "additions",
     "deletions",
     "statusCheckRollup",
+    "labels",
     ...(optionalTrimmed(input.reviewRequested) ? ["reviewRequests"] : []),
   ];
   args.push(

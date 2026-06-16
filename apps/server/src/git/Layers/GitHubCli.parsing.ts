@@ -41,6 +41,7 @@ import {
   RawProjectSummarySchema,
   RawReviewAuthorSchema,
   RawReviewCommitSchema,
+  RawReviewLabelSchema,
   RawReviewLatestReviewSchema,
   RawReviewRequestSchema,
   RawReviewThreadCommentSchema,
@@ -209,6 +210,21 @@ function normalizeReviewUserRef(
   return { login, ...(avatarUrl ? { avatarUrl } : {}) };
 }
 
+function normalizeReviewLabelNames(
+  rawLabels: ReadonlyArray<Schema.Schema.Type<typeof RawReviewLabelSchema>>,
+): ReadonlyArray<string> {
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const raw of rawLabels) {
+    const name = (raw.name ?? "").trim();
+    if (name.length > 0 && !seen.has(name)) {
+      seen.add(name);
+      labels.push(name);
+    }
+  }
+  return labels;
+}
+
 export function normalizeReviewPullRequest(
   raw: Schema.Schema.Type<typeof RawGitHubReviewPullRequestSchema>,
 ): GitHubReviewPullRequest {
@@ -233,6 +249,7 @@ export function normalizeReviewPullRequest(
     deletions: nonNegativeInt(raw.deletions),
     checksStatus: rollupChecksStatus(raw.statusCheckRollup ?? []),
     reviewRequests: normalizeReviewRequests(raw.reviewRequests ?? []),
+    labels: normalizeReviewLabelNames(raw.labels ?? []),
   };
 }
 

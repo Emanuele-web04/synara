@@ -35,6 +35,7 @@ interface RecordedListCall {
   readonly reviewRequested?: string;
   readonly baseBranch?: string;
   readonly headBranch?: string;
+  readonly label?: string;
 }
 
 interface RecordedCacheWrite {
@@ -70,6 +71,7 @@ function ghPr(
     deletions: 0,
     checksStatus: "pending",
     reviewRequests: [],
+    labels: [],
     ...overrides,
   };
 }
@@ -300,6 +302,7 @@ it.effect("pushes text search to GitHub and caches the normalized filter key", (
       reviewRequested: null,
       baseBranch: "main",
       headBranch: "branch-1",
+      label: null,
       columns: [],
       checks: [],
     });
@@ -416,8 +419,47 @@ it.effect("uses a larger bounded candidate window for local-only status and chec
       reviewRequested: null,
       baseBranch: null,
       headBranch: null,
+      label: null,
       columns: ["approved"],
       checks: ["failing"],
+    });
+  });
+});
+
+it.effect("pushes a single label filter to GitHub and keeps it in the cache key", () => {
+  const { layer, recorded } = makeLayer({
+    pullRequests: [
+      ghPr({ number: 1, title: "Bug fix", labels: ["bug"] }),
+      ghPr({ number: 2, title: "Feature work", labels: ["feature"] }),
+    ],
+  });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      label: "bug",
+    });
+
+    expect(numbers(result)).toEqual([1]);
+    expect(recorded.listCalls).toEqual([
+      {
+        cwd: "/repo",
+        state: "open",
+        limit: 50,
+        label: "bug",
+      },
+    ]);
+    expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
+      state: "open",
+      limit: 50,
+      search: null,
+      author: null,
+      reviewRequested: null,
+      baseBranch: null,
+      headBranch: null,
+      label: "bug",
+      columns: [],
+      checks: [],
     });
   });
 });
