@@ -94,11 +94,19 @@ function makeLayer(options: {
     listCalls: [] as RecordedListCall[],
     cacheWrites: [] as RecordedCacheWrite[],
     published: [] as ReviewUpdatedPayload[],
+    authenticatedUserCalls: 0,
+    repositoryIdCalls: 0,
   };
 
   const gitHubCli: GitHubCliShape = {
     getAuthenticatedUser: () =>
-      Effect.succeed({ login: options.viewerLogin ?? "tyler", avatarUrl: "https://avatar.test" }),
+      Effect.sync(() => {
+        recorded.authenticatedUserCalls += 1;
+        return {
+          login: options.viewerLogin ?? "tyler",
+          avatarUrl: "https://avatar.test",
+        };
+      }),
     listRepositoryPullRequests: (input) => {
       recorded.listCalls.push(input);
       const limit = input.limit ?? options.pullRequests.length;
@@ -132,10 +140,13 @@ function makeLayer(options: {
 
   const gitCore: GitCoreShape = {
     execute: () =>
-      Effect.succeed({
-        code: 0,
-        stdout: "/repo\n",
-        stderr: "",
+      Effect.sync(() => {
+        recorded.repositoryIdCalls += 1;
+        return {
+          code: 0,
+          stdout: "/repo\n",
+          stderr: "",
+        };
       }),
     status: () => unexpectedEffect("GitCore.status"),
     statusDetails: () => unexpectedEffect("GitCore.statusDetails"),
@@ -266,6 +277,23 @@ const runList = (
 function numbers(result: ReviewListPullRequestsResult): number[] {
   return result.pullRequests.map((pullRequest: ReviewPullRequestSummary) => pullRequest.number);
 }
+
+it.effect("memoizes repository and auth preflight across repeated list requests", () => {
+  const { layer, recorded } = makeLayer({
+    pullRequests: [ghPr({ number: 1 }), ghPr({ number: 2 })],
+  });
+
+  return Effect.gen(function* () {
+    const reviewSource = yield* ReviewSource;
+    const first = yield* reviewSource.listPullRequests({ cwd: "/repo" });
+    const second = yield* reviewSource.listPullRequests({ cwd: "/repo" });
+
+    expect(numbers(first)).toEqual([1, 2]);
+    expect(second).toEqual(first);
+    expect(recorded.repositoryIdCalls).toBe(1);
+    expect(recorded.authenticatedUserCalls).toBe(1);
+  }).pipe(Effect.provide(layer));
+});
 
 it.effect("pushes text search to GitHub and caches the normalized filter key", () => {
   const { layer, recorded } = makeLayer({

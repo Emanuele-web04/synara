@@ -42,12 +42,23 @@ const PROJECT_ACCESS_DETAIL =
   "GitHub Projects access is not granted. Run `gh auth refresh -s project` and retry.";
 const REVIEW_CACHE_TTL_MS = 30_000;
 const REVIEW_CACHE_TOKEN_IDENTITY_PREFIX = "gh-user-v1";
+const REVIEW_PREFLIGHT_CACHE_TTL_MS = 2_000;
 const REVIEW_ANCHOR_KEY_SEPARATOR = "\u0000";
 const DEFAULT_REVIEW_LIST_RESULT_LIMIT = 50;
 const MAX_REVIEW_LIST_RESULT_LIMIT = 500;
 const FILTERED_REVIEW_LIST_CANDIDATE_LIMIT = 1_000;
 const FILTERED_REVIEW_LIST_CANDIDATE_MULTIPLIER = 10;
 const inFlightRefreshKeys = new Set<string>();
+
+interface ReviewCacheIdentity {
+  readonly login: string;
+  readonly tokenIdentity: string;
+}
+
+interface ReviewPreflightCacheEntry<T> {
+  readonly value: T;
+  readonly expiresAt: number;
+}
 
 function reviewError(operation: string, detail: string, cause?: unknown): ReviewError {
   return new ReviewError({
@@ -496,8 +507,11 @@ const makeReviewSource = Effect.gen(function* () {
   const gitManager = yield* GitManager;
   const reviewUpdateBus = yield* ReviewUpdateBus;
   const textGeneration = yield* TextGeneration;
+  const cacheWriteClock = Clock.currentTimeMillis;
+  const cacheIdentityByCwd = new Map<string, ReviewPreflightCacheEntry<ReviewCacheIdentity>>();
+  const repositoryIdByCwd = new Map<string, ReviewPreflightCacheEntry<string>>();
 
-  const readCacheIdentity = (cwd: string) =>
+  const readCacheIdentityUncached = (cwd: string) =>
     gitHubCli.getAuthenticatedUser({ cwd }).pipe(
       Effect.map((viewer) => {
         const login = viewer.login.trim();
@@ -514,10 +528,27 @@ const makeReviewSource = Effect.gen(function* () {
       ),
     );
 
+  const readCacheIdentity = (cwd: string) =>
+    Effect.gen(function* () {
+      const cacheKey = canonicalizePath(cwd);
+      const now = yield* cacheWriteClock;
+      const cached = cacheIdentityByCwd.get(cacheKey);
+      if (cached && cached.expiresAt > now) {
+        return cached.value;
+      }
+      const identity = yield* readCacheIdentityUncached(cwd);
+      const fetchedAt = yield* cacheWriteClock;
+      cacheIdentityByCwd.set(cacheKey, {
+        value: identity,
+        expiresAt: fetchedAt + REVIEW_PREFLIGHT_CACHE_TTL_MS,
+      });
+      return identity;
+    });
+
   const readCacheTokenIdentity = (cwd: string) =>
     readCacheIdentity(cwd).pipe(Effect.map((identity) => identity.tokenIdentity));
 
-  const resolveRepositoryId = (cwd: string) =>
+  const resolveRepositoryIdUncached = (cwd: string) =>
     gitCore
       .execute({
         operation: "ReviewSource.repositoryId",
@@ -538,6 +569,23 @@ const makeReviewSource = Effect.gen(function* () {
           ),
         ),
       );
+
+  const resolveRepositoryId = (cwd: string) =>
+    Effect.gen(function* () {
+      const cacheKey = canonicalizePath(cwd);
+      const now = yield* cacheWriteClock;
+      const cached = repositoryIdByCwd.get(cacheKey);
+      if (cached && cached.expiresAt > now) {
+        return cached.value;
+      }
+      const repositoryId = yield* resolveRepositoryIdUncached(cwd);
+      const fetchedAt = yield* cacheWriteClock;
+      repositoryIdByCwd.set(cacheKey, {
+        value: repositoryId,
+        expiresAt: fetchedAt + REVIEW_PREFLIGHT_CACHE_TTL_MS,
+      });
+      return repositoryId;
+    });
 
   const listPullRequestsUncached = (input: ReviewListPullRequestsInput, viewerLogin: string) => {
     const listLimit = githubListLimit(input, viewerLogin);
@@ -610,8 +658,6 @@ const makeReviewSource = Effect.gen(function* () {
         }),
       );
   };
-
-  const cacheWriteClock = Clock.currentTimeMillis;
 
   const forkRefreshIfStale = <T>(
     key: string,
