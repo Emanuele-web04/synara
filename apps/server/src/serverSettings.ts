@@ -84,6 +84,7 @@ const PROVIDER_ORDER: readonly ProviderWithDefaultModel[] = [
   "claudeAgent",
   "gemini",
   "kilo",
+  "kimi",
   "opencode",
 ];
 

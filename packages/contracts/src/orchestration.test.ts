@@ -159,6 +159,20 @@ it.effect("preserves Pi model selections through the JSON codec", () =>
   }),
 );
 
+it.effect("preserves Kimi model selections when decoding model selections", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      provider: "kimi",
+      model: "kimi-for-coding",
+    });
+
+    assert.deepStrictEqual(parsed, {
+      provider: "kimi",
+      model: "kimi-for-coding",
+    });
+  }),
+);
+
 it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeTurnDiffInput({

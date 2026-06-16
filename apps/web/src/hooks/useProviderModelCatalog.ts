@@ -90,6 +90,13 @@ export function useProviderModelCatalog(input: {
       enabled: selectedProvider === "grok" || discoveryEnabled,
     }),
   );
+  const kimiDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "kimi",
+      binaryPath: settings.kimiBinaryPath || null,
+      enabled: selectedProvider === "kimi" || discoveryEnabled,
+    }),
+  );
   const openCodeDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "opencode",
@@ -191,6 +198,7 @@ export function useProviderModelCatalog(input: {
         modelHintByProvider?.gemini,
       ),
       grok: getAppModelOptions("grok", customModelsByProvider.grok, modelHintByProvider?.grok),
+      kimi: getAppModelOptions("kimi", customModelsByProvider.kimi, modelHintByProvider?.kimi),
       kilo: getAppModelOptions("kilo", customModelsByProvider.kilo, modelHintByProvider?.kilo),
       opencode: getAppModelOptions(
         "opencode",
@@ -213,6 +221,7 @@ export function useProviderModelCatalog(input: {
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
       gemini: geminiModelsQuery.data,
       grok: grokDynamicModelsQuery.data,
+      kimi: kimiDynamicModelsQuery.data,
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
@@ -224,6 +233,7 @@ export function useProviderModelCatalog(input: {
       "cursor",
       "gemini",
       "grok",
+      "kimi",
       "kilo",
       "opencode",
       "pi",
@@ -247,6 +257,7 @@ export function useProviderModelCatalog(input: {
     customModelsByProvider,
     geminiModelsQuery.data,
     grokDynamicModelsQuery.data,
+    kimiDynamicModelsQuery.data,
     kiloDynamicModelsQuery.data,
     modelHintByProvider,
     openCodeDynamicModelsQuery.data,
@@ -271,6 +282,7 @@ export function useProviderModelCatalog(input: {
       cursor: cursorRuntimeModels,
       gemini: geminiModelsQuery.data?.models ?? [],
       grok: grokDynamicModelsQuery.data?.models ?? [],
+      kimi: kimiDynamicModelsQuery.data?.models ?? [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
@@ -281,6 +293,7 @@ export function useProviderModelCatalog(input: {
       cursorRuntimeModels,
       geminiModelsQuery.data?.models,
       grokDynamicModelsQuery.data?.models,
+      kimiDynamicModelsQuery.data?.models,
       kiloDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
       piDynamicModelsQuery.data?.models,

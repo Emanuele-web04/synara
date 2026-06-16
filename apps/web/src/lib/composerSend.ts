@@ -136,6 +136,7 @@ export function resolvePromptEffortFromModelSelection(
       return modelSelection.options?.reasoningEffort ?? null;
     case "pi":
       return modelSelection.options?.thinkingLevel ?? null;
+    case "kimi":
     case "kilo":
     case "opencode":
       return null;

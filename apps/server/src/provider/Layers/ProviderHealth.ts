@@ -88,6 +88,7 @@ const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 const CURSOR_PROVIDER = "cursor" as const;
 const GEMINI_PROVIDER = "gemini" as const;
 const GROK_PROVIDER = "grok" as const;
+const KIMI_PROVIDER = "kimi" as const;
 const KILO_PROVIDER = "kilo" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
@@ -99,6 +100,7 @@ const PROVIDERS = [
   CURSOR_PROVIDER,
   GEMINI_PROVIDER,
   GROK_PROVIDER,
+  KIMI_PROVIDER,
   KILO_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
@@ -768,6 +770,15 @@ const runGrokCommand = (args: ReadonlyArray<string>, executable = "grok") =>
     ),
   );
 
+const runKimiCommand = (args: ReadonlyArray<string>, executable = "kimi") =>
+  runProviderCommand(executable, args).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
+
 const runOpenCodeCommand = (args: ReadonlyArray<string>, executable = "opencode") =>
   runProviderCommand(executable, args).pipe(
     Effect.flatMap((result) =>
@@ -1356,6 +1367,77 @@ export const makeCheckGrokProviderStatus = (
 
 export const checkGrokProviderStatus = makeCheckGrokProviderStatus();
 
+// ── Kimi health check ───────────────────────────────────────────────
+
+export const makeCheckKimiProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "kimi";
+
+    const versionProbe = yield* runKimiCommand(["--version"], executable).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(versionProbe)) {
+      const error = versionProbe.failure;
+      return {
+        provider: KIMI_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: isCommandMissingCause(error)
+          ? "Kimi Code CLI (`kimi`) is not installed or not on PATH."
+          : `Failed to execute Kimi Code CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(versionProbe.success)) {
+      return {
+        provider: KIMI_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Kimi Code CLI is installed but failed to run. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const version = versionProbe.success.value;
+    if (version.code !== 0) {
+      const detail = detailFromResult(version);
+      return {
+        provider: KIMI_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Kimi Code CLI is installed but failed to run. ${detail}`
+          : "Kimi Code CLI is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+
+    // Kimi reads credentials from its on-disk store (populated by `kimi login`),
+    // not from the shell environment, so we cannot detect auth from here.
+    return {
+      provider: KIMI_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      version: parsedVersion,
+      checkedAt,
+      message:
+        "Kimi Code CLI is installed. Run `kimi login` to authenticate before starting a session.",
+    } satisfies ServerProviderStatus;
+  });
+
+export const checkKimiProviderStatus = makeCheckKimiProviderStatus();
+
 // ── OpenCode health check ───────────────────────────────────────────
 
 export const makeCheckOpenCodeProviderStatus = (
@@ -1787,6 +1869,8 @@ export const ProviderHealthLive = Layer.effect(
           return settings.providers.gemini.binaryPath;
         case "grok":
           return settings.providers.grok.binaryPath;
+        case "kimi":
+          return settings.providers.kimi.binaryPath;
         case "kilo":
           return settings.providers.kilo.binaryPath;
         case "opencode":
@@ -1914,6 +1998,7 @@ export const ProviderHealthLive = Layer.effect(
               makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
               makeCheckGeminiProviderStatus(settings.providers.gemini.binaryPath),
               makeCheckGrokProviderStatus(settings.providers.grok.binaryPath),
+              makeCheckKimiProviderStatus(settings.providers.kimi.binaryPath),
               makeCheckKiloProviderStatus(settings.providers.kilo.binaryPath),
               makeCheckOpenCodeProviderStatus(settings.providers.opencode.binaryPath),
               checkPiProviderStatus(

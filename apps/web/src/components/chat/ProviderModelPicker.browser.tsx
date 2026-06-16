@@ -28,6 +28,7 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "grok-build-0.1", name: "Grok Build 0.1" },
     { slug: "grok-build", name: "Grok 4.3" },
   ],
+  kimi: [{ slug: "kimi-for-coding", name: "K2.7 Code" }],
   kilo: [
     {
       slug: "kilo/kilo-auto/free",
