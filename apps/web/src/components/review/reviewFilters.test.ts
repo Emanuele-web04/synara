@@ -277,7 +277,7 @@ describe("toReviewServerListFilters", () => {
     });
   });
 
-  it("leaves multi-value OR filters on the client when GitHub has no native OR flag", () => {
+  it("projects multi-value OR filters into plural server filters", () => {
     expect(
       toReviewServerListFilters([
         filter("author", ["alice", "bob"]),
@@ -285,7 +285,12 @@ describe("toReviewServerListFilters", () => {
         filter("head", ["feature/review-board", "bugfix/search"]),
         filter("assignee", ["alice", "bob"]),
       ]),
-    ).toEqual({});
+    ).toEqual({
+      authors: ["alice", "bob"],
+      baseBranches: ["dev", "main"],
+      headBranches: ["bugfix/search", "feature/review-board"],
+      assignees: ["alice", "bob"],
+    });
   });
 
   it("projects multi-label OR filters into stable server filters", () => {

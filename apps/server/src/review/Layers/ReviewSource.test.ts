@@ -32,12 +32,16 @@ interface RecordedListCall {
   readonly limit?: number;
   readonly search?: string;
   readonly author?: string;
+  readonly authors?: ReadonlyArray<string>;
   readonly reviewRequested?: string;
   readonly baseBranch?: string;
+  readonly baseBranches?: ReadonlyArray<string>;
   readonly headBranch?: string;
+  readonly headBranches?: ReadonlyArray<string>;
   readonly label?: string;
   readonly labels?: ReadonlyArray<string>;
   readonly assignee?: string;
+  readonly assignees?: ReadonlyArray<string>;
   readonly draft?: boolean;
   readonly checksStatuses?: ReadonlyArray<"passing" | "failing">;
   readonly reviewStatus?: "approved" | "changes-requested";
@@ -275,6 +279,7 @@ it.effect("pushes text search to GitHub and caches the normalized filter key", (
       cwd: "/repo",
       search: "review board",
       baseBranch: "main",
+      baseBranches: [],
       headBranch: "branch-1",
       limit: 25,
     });
@@ -305,12 +310,16 @@ it.effect("pushes text search to GitHub and caches the normalized filter key", (
       limit: 25,
       search: "review board",
       author: null,
+      authors: [],
       reviewRequested: null,
       baseBranch: "main",
+      baseBranches: [],
       headBranch: "branch-1",
+      headBranches: [],
       label: null,
       labels: [],
       assignee: null,
+      assignees: [],
       draft: null,
       columns: [],
       checks: [],
@@ -419,12 +428,16 @@ it.effect("pushes native review status and check filters without the local candi
       limit: 100,
       search: null,
       author: null,
+      authors: [],
       reviewRequested: null,
       baseBranch: null,
+      baseBranches: [],
       headBranch: null,
+      headBranches: [],
       label: null,
       labels: [],
       assignee: null,
+      assignees: [],
       draft: null,
       columns: ["approved"],
       checks: ["failing"],
@@ -469,12 +482,16 @@ it.effect("keeps a larger bounded candidate window when status still needs local
       limit: 100,
       search: null,
       author: null,
+      authors: [],
       reviewRequested: null,
       baseBranch: null,
+      baseBranches: [],
       headBranch: null,
+      headBranches: [],
       label: null,
       labels: [],
       assignee: null,
+      assignees: [],
       draft: null,
       columns: ["needs-review"],
       checks: ["failing"],
@@ -548,12 +565,16 @@ it.effect("pushes a single check filter to GitHub without the local candidate wi
       limit: 100,
       search: null,
       author: null,
+      authors: [],
       reviewRequested: null,
       baseBranch: null,
+      baseBranches: [],
       headBranch: null,
+      headBranches: [],
       label: null,
       labels: [],
       assignee: null,
+      assignees: [],
       draft: null,
       columns: [],
       checks: ["passing"],
@@ -589,12 +610,16 @@ it.effect("pushes a single label filter to GitHub and keeps it in the cache key"
       limit: 50,
       search: null,
       author: null,
+      authors: [],
       reviewRequested: null,
       baseBranch: null,
+      baseBranches: [],
       headBranch: null,
+      headBranches: [],
       label: "bug",
       labels: [],
       assignee: null,
+      assignees: [],
       draft: null,
       columns: [],
       checks: [],
@@ -631,12 +656,16 @@ it.effect("pushes safe multi-label OR filters to GitHub and keeps them in the ca
       limit: 50,
       search: null,
       author: null,
+      authors: [],
       reviewRequested: null,
       baseBranch: null,
+      baseBranches: [],
       headBranch: null,
+      headBranches: [],
       label: null,
       labels: ["bug", "feature"],
       assignee: null,
+      assignees: [],
       draft: null,
       columns: [],
       checks: [],
@@ -699,16 +728,125 @@ it.effect("pushes a single assignee filter to GitHub and keeps it in the cache k
       limit: 50,
       search: null,
       author: null,
+      authors: [],
       reviewRequested: null,
       baseBranch: null,
+      baseBranches: [],
       headBranch: null,
+      headBranches: [],
       label: null,
       labels: [],
       assignee: "alice",
+      assignees: [],
       draft: null,
       columns: [],
       checks: [],
     });
+  });
+});
+
+it.effect("pushes safe plural OR filters to GitHub and merges singular values", () => {
+  const { layer, recorded } = makeLayer({
+    viewerLogin: "tyler",
+    pullRequests: [
+      ghPr({
+        number: 1,
+        title: "Alice assigned work",
+        author: "alice",
+        baseRefName: "main",
+        headRefName: "feature/shared",
+        assignees: ["bob"],
+      }),
+      ghPr({
+        number: 2,
+        title: "Viewer assigned fork work",
+        author: "tyler",
+        baseRefName: "release",
+        headRefName: "feature/shared",
+        headRepositoryOwnerLogin: "octocat",
+        assignees: ["tyler"],
+      }),
+      ghPr({
+        number: 3,
+        title: "Wrong author",
+        author: "carol",
+        baseRefName: "main",
+        headRefName: "feature/shared",
+        assignees: ["bob"],
+      }),
+    ],
+  });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      author: "@me",
+      authors: ["alice"],
+      baseBranch: "main",
+      baseBranches: ["release"],
+      headBranch: "feature/shared",
+      headBranches: ["octocat:feature/shared"],
+      assignee: "@me",
+      assignees: ["bob"],
+    });
+
+    expect(numbers(result)).toEqual([1, 2]);
+    expect(recorded.listCalls).toEqual([
+      {
+        cwd: "/repo",
+        state: "open",
+        limit: 50,
+        authors: ["alice", "tyler"],
+        baseBranches: ["main", "release"],
+        headBranches: ["feature/shared", "octocat:feature/shared"],
+        assignees: ["bob", "tyler"],
+      },
+    ]);
+    expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
+      state: "open",
+      limit: 50,
+      search: null,
+      author: null,
+      authors: ["alice", "tyler"],
+      reviewRequested: null,
+      baseBranch: null,
+      baseBranches: ["main", "release"],
+      headBranch: null,
+      headBranches: ["feature/shared", "octocat:feature/shared"],
+      label: null,
+      labels: [],
+      assignee: null,
+      assignees: ["bob", "tyler"],
+      draft: null,
+      columns: [],
+      checks: [],
+    });
+  });
+});
+
+it.effect("keeps unsafe plural OR filters on the local candidate window", () => {
+  const { layer, recorded } = makeLayer({
+    pullRequests: [
+      ghPr({ number: 1, title: "Alice work", author: "alice" }),
+      ghPr({ number: 2, title: "Bob work", author: "bob" }),
+    ],
+  });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      authors: ["alice", "bad user"],
+    });
+
+    expect(numbers(result)).toEqual([1]);
+    expect(recorded.listCalls).toEqual([
+      {
+        cwd: "/repo",
+        state: "open",
+        limit: 1000,
+      },
+    ]);
+    expect(result.meta?.candidateLimit).toBe(1000);
   });
 });
 
@@ -752,12 +890,16 @@ it.effect("pushes a single draft status to GitHub without the local candidate wi
       limit: 100,
       search: null,
       author: null,
+      authors: [],
       reviewRequested: null,
       baseBranch: null,
+      baseBranches: [],
       headBranch: null,
+      headBranches: [],
       label: null,
       labels: [],
       assignee: null,
+      assignees: [],
       draft: true,
       columns: ["draft"],
       checks: [],
@@ -998,6 +1140,7 @@ it.effect("keeps GitHub @me author and reviewer filters after local re-filtering
     const result = yield* runList(layer, {
       cwd: "/repo",
       author: "@me",
+      authors: [],
       reviewRequested: "@me",
     });
 
@@ -1007,7 +1150,7 @@ it.effect("keeps GitHub @me author and reviewer filters after local re-filtering
         cwd: "/repo",
         state: "open",
         limit: 50,
-        author: "@me",
+        author: "tyler",
         reviewRequested: "@me",
       },
     ]);

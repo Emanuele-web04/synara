@@ -153,6 +153,35 @@ function normalizedSet(values: ReadonlyArray<string> | undefined): ReadonlySet<s
   return new Set(values.map((value) => value.trim()).filter((value) => value.length > 0));
 }
 
+function mergedSet(
+  value: string | undefined,
+  values: ReadonlyArray<string> | undefined,
+): ReadonlySet<string> {
+  return normalizedSet([...(value !== undefined ? [value] : []), ...(values ?? [])]);
+}
+
+function resolvedAliasSet(
+  values: ReadonlyArray<string> | undefined,
+  viewerLogin: string,
+): ReadonlySet<string> {
+  return new Set(
+    [...normalizedSet(values)]
+      .map((value) => resolveViewerAlias(value, viewerLogin))
+      .filter((value): value is string => value !== null && value.length > 0),
+  );
+}
+
+function resolvedAliasMergedSet(
+  value: string | undefined,
+  values: ReadonlyArray<string> | undefined,
+  viewerLogin: string,
+): ReadonlySet<string> {
+  return resolvedAliasSet(
+    [...(value !== undefined ? [value] : []), ...(values ?? [])],
+    viewerLogin,
+  );
+}
+
 function reviewColumn(summary: ReviewPullRequestSummary): string {
   if (summary.isDraft) {
     return "draft";
@@ -174,37 +203,61 @@ function matchesListFilters(
   input: ReviewListPullRequestsInput,
   viewerLogin: string,
 ): boolean {
-  const author = resolveViewerAlias(normalizeOptionalText(input.author), viewerLogin);
+  const authors = resolvedAliasMergedSet(input.author, input.authors, viewerLogin);
   const reviewRequested = resolveViewerAlias(
     normalizeOptionalText(input.reviewRequested),
     viewerLogin,
   );
-  const baseBranch = normalizeOptionalText(input.baseBranch);
-  const headBranch = normalizeOptionalText(input.headBranch);
-  const label = normalizeOptionalText(input.label);
-  const labels = normalizedSet(input.labels);
-  const assignee = resolveViewerAlias(normalizeOptionalText(input.assignee), viewerLogin);
+  const baseBranches = mergedSet(input.baseBranch, input.baseBranches);
+  const headBranches = mergedSet(input.headBranch, input.headBranches);
+  const labels = mergedSet(input.label, input.labels);
+  const assignees = resolvedAliasMergedSet(input.assignee, input.assignees, viewerLogin);
   const columns = normalizedSet(input.columns);
   const checks = normalizedSet(input.checks);
   return (
-    (!author || summary.author === author) &&
+    (authors.size === 0 || authors.has(summary.author)) &&
     (!reviewRequested || summary.reviewRequests.includes(reviewRequested)) &&
-    (!baseBranch || summary.baseBranch === baseBranch) &&
-    (!headBranch || summary.headBranch === headBranch || summary.headSelector === headBranch) &&
-    (!label || summary.labels.includes(label)) &&
+    (baseBranches.size === 0 || baseBranches.has(summary.baseBranch)) &&
+    (headBranches.size === 0 ||
+      headBranches.has(summary.headBranch) ||
+      (summary.headSelector ? headBranches.has(summary.headSelector) : false)) &&
     (labels.size === 0 || summary.labels.some((summaryLabel) => labels.has(summaryLabel))) &&
-    (!assignee || summary.assignees.includes(assignee)) &&
+    (assignees.size === 0 ||
+      summary.assignees.some((summaryAssignee) => assignees.has(summaryAssignee))) &&
     (input.draft !== true || summary.isDraft) &&
     (columns.size === 0 || columns.has(reviewColumn(summary))) &&
     (checks.size === 0 || checks.has(summary.checksStatus))
   );
 }
 
-function hasLocalListFilters(input: ReviewListPullRequestsInput): boolean {
+function hasLocalListFilters(input: ReviewListPullRequestsInput, viewerLogin: string): boolean {
   const nativeReviewStatus = nativeListReviewStatus(input.columns);
-  const nativeLabels = nativeListLabels(input.labels);
-  const localLabels = [...normalizedSet(input.labels)].filter(
+  const allAuthors = [...resolvedAliasMergedSet(input.author, input.authors, viewerLogin)];
+  const nativeAuthors = nativeListSearchValues(allAuthors);
+  const localAuthors = allAuthors.filter(
+    (author) => !nativeAuthors.includes(author),
+  );
+  const allBaseBranches = [...mergedSet(input.baseBranch, input.baseBranches)];
+  const nativeBaseBranches = nativeListSearchValues(allBaseBranches);
+  const localBaseBranches = allBaseBranches.filter(
+    (branch) => !nativeBaseBranches.includes(branch),
+  );
+  const allHeadBranches = [...mergedSet(input.headBranch, input.headBranches)];
+  const nativeHeadBranches = nativeListSearchValues(allHeadBranches);
+  const localHeadBranches = allHeadBranches.filter(
+    (branch) => !nativeHeadBranches.includes(branch),
+  );
+  const allLabels = [...mergedSet(input.label, input.labels)];
+  const nativeLabels = nativeListLabels(allLabels);
+  const localLabels = allLabels.filter(
     (label) => !nativeLabels.includes(label),
+  );
+  const allAssignees = [
+    ...resolvedAliasMergedSet(input.assignee, input.assignees, viewerLogin),
+  ];
+  const nativeAssignees = nativeListSearchValues(allAssignees);
+  const localAssignees = allAssignees.filter(
+    (assignee) => !nativeAssignees.includes(assignee),
   );
   const localColumns = [...normalizedSet(input.columns)].filter(
     (column) =>
@@ -214,7 +267,28 @@ function hasLocalListFilters(input: ReviewListPullRequestsInput): boolean {
   const localChecks = [...normalizedSet(input.checks)].filter(
     (check) => !nativeChecksStatuses.includes(check as "passing" | "failing"),
   );
-  return localLabels.length > 0 || localColumns.length > 0 || localChecks.length > 0;
+  return (
+    localAuthors.length > 0 ||
+    localBaseBranches.length > 0 ||
+    localHeadBranches.length > 0 ||
+    localLabels.length > 0 ||
+    localAssignees.length > 0 ||
+    localColumns.length > 0 ||
+    localChecks.length > 0
+  );
+}
+
+function nativeListSearchValues(
+  values: ReadonlyArray<string> | undefined,
+): ReadonlyArray<string> {
+  const normalized = [...normalizedSet(values)].sort();
+  if (
+    normalized.length === 0 ||
+    normalized.some((value) => /[\s,"\\()]/.test(value) || /^(AND|OR|NOT)$/i.test(value))
+  ) {
+    return [];
+  }
+  return normalized;
 }
 
 function nativeListLabels(labels: ReadonlyArray<string> | undefined): ReadonlyArray<string> {
@@ -273,8 +347,11 @@ function normalizedResultListLimit(limit: number | undefined): number {
   return Math.min(limit ?? DEFAULT_REVIEW_LIST_RESULT_LIMIT, MAX_REVIEW_LIST_RESULT_LIMIT);
 }
 
-function githubListLimit(input: ReviewListPullRequestsInput): number | undefined {
-  if (!hasLocalListFilters(input)) {
+function githubListLimit(
+  input: ReviewListPullRequestsInput,
+  viewerLogin: string,
+): number | undefined {
+  if (!hasLocalListFilters(input, viewerLogin)) {
     return resultListLimit(input);
   }
   return Math.max(resultListLimit(input), FILTERED_REVIEW_LIST_CANDIDATE_LIMIT);
@@ -350,32 +427,50 @@ function reviewAnchorKey(path: string, line: number, side: string): string {
   return [path, String(line), side].join(REVIEW_ANCHOR_KEY_SEPARATOR);
 }
 
-function pullRequestListFilter(input: {
-  readonly state?: string | undefined;
-  readonly limit?: number | undefined;
-  readonly search?: string | undefined;
-  readonly author?: string | undefined;
-  readonly reviewRequested?: string | undefined;
-  readonly baseBranch?: string | undefined;
-  readonly headBranch?: string | undefined;
-  readonly label?: string | undefined;
-  readonly labels?: ReadonlyArray<string> | undefined;
-  readonly assignee?: string | undefined;
-  readonly draft?: boolean | undefined;
-  readonly columns?: ReadonlyArray<string> | undefined;
-  readonly checks?: ReadonlyArray<string> | undefined;
-}): string {
+function pullRequestListFilter(
+  input: {
+    readonly state?: string | undefined;
+    readonly limit?: number | undefined;
+    readonly search?: string | undefined;
+    readonly author?: string | undefined;
+    readonly authors?: ReadonlyArray<string> | undefined;
+    readonly reviewRequested?: string | undefined;
+    readonly baseBranch?: string | undefined;
+    readonly baseBranches?: ReadonlyArray<string> | undefined;
+    readonly headBranch?: string | undefined;
+    readonly headBranches?: ReadonlyArray<string> | undefined;
+    readonly label?: string | undefined;
+    readonly labels?: ReadonlyArray<string> | undefined;
+    readonly assignee?: string | undefined;
+    readonly assignees?: ReadonlyArray<string> | undefined;
+    readonly draft?: boolean | undefined;
+    readonly columns?: ReadonlyArray<string> | undefined;
+    readonly checks?: ReadonlyArray<string> | undefined;
+  },
+  viewerLogin: string,
+): string {
+  const authors = [...resolvedAliasMergedSet(input.author, input.authors, viewerLogin)].sort();
+  const baseBranches = [...mergedSet(input.baseBranch, input.baseBranches)].sort();
+  const headBranches = [...mergedSet(input.headBranch, input.headBranches)].sort();
+  const labels = [...mergedSet(input.label, input.labels)].sort();
+  const assignees = [
+    ...resolvedAliasMergedSet(input.assignee, input.assignees, viewerLogin),
+  ].sort();
   return JSON.stringify({
     state: input.state ?? "open",
     limit: normalizedResultListLimit(input.limit),
     search: normalizeOptionalText(input.search),
-    author: normalizeOptionalText(input.author),
+    author: authors.length === 1 ? authors[0] : null,
+    authors: authors.length > 1 ? authors : [],
     reviewRequested: normalizeOptionalText(input.reviewRequested),
-    baseBranch: normalizeOptionalText(input.baseBranch),
-    headBranch: normalizeOptionalText(input.headBranch),
-    label: normalizeOptionalText(input.label),
-    labels: [...normalizedSet(input.labels)].sort(),
-    assignee: normalizeOptionalText(input.assignee),
+    baseBranch: baseBranches.length === 1 ? baseBranches[0] : null,
+    baseBranches: baseBranches.length > 1 ? baseBranches : [],
+    headBranch: headBranches.length === 1 ? headBranches[0] : null,
+    headBranches: headBranches.length > 1 ? headBranches : [],
+    label: labels.length === 1 ? labels[0] : null,
+    labels: labels.length > 1 ? labels : [],
+    assignee: assignees.length === 1 ? assignees[0] : null,
+    assignees: assignees.length > 1 ? assignees : [],
     draft: input.draft === true ? true : null,
     columns: [...normalizedSet(input.columns)].sort(),
     checks: [...normalizedSet(input.checks)].sort(),
@@ -440,8 +535,20 @@ const makeReviewSource = Effect.gen(function* () {
       );
 
   const listPullRequestsUncached = (input: ReviewListPullRequestsInput, viewerLogin: string) => {
-    const listLimit = githubListLimit(input);
-    const labels = nativeListLabels(input.labels);
+    const listLimit = githubListLimit(input, viewerLogin);
+    const authors = nativeListSearchValues([
+      ...resolvedAliasMergedSet(input.author, input.authors, viewerLogin),
+    ]);
+    const baseBranches = nativeListSearchValues([
+      ...mergedSet(input.baseBranch, input.baseBranches),
+    ]);
+    const headBranches = nativeListSearchValues([
+      ...mergedSet(input.headBranch, input.headBranches),
+    ]);
+    const labels = nativeListLabels([...mergedSet(input.label, input.labels)]);
+    const assignees = nativeListSearchValues([
+      ...resolvedAliasMergedSet(input.assignee, input.assignees, viewerLogin),
+    ]);
     const reviewStatus = nativeListReviewStatus(input.columns);
     const checksStatuses = nativeListChecksStatuses(input.checks);
     return gitHubCli
@@ -450,13 +557,17 @@ const makeReviewSource = Effect.gen(function* () {
         state: input.state ?? "open",
         ...(listLimit !== undefined ? { limit: listLimit } : {}),
         ...(input.search !== undefined ? { search: input.search } : {}),
-        ...(input.author !== undefined ? { author: input.author } : {}),
+        ...(authors.length === 1 ? { author: authors[0] } : {}),
+        ...(authors.length > 1 ? { authors } : {}),
         ...(input.reviewRequested !== undefined ? { reviewRequested: input.reviewRequested } : {}),
-        ...(input.baseBranch !== undefined ? { baseBranch: input.baseBranch } : {}),
-        ...(input.headBranch !== undefined ? { headBranch: input.headBranch } : {}),
-        ...(input.label !== undefined ? { label: input.label } : {}),
-        ...(labels.length > 0 ? { labels } : {}),
-        ...(input.assignee !== undefined ? { assignee: input.assignee } : {}),
+        ...(baseBranches.length === 1 ? { baseBranch: baseBranches[0] } : {}),
+        ...(baseBranches.length > 1 ? { baseBranches } : {}),
+        ...(headBranches.length === 1 ? { headBranch: headBranches[0] } : {}),
+        ...(headBranches.length > 1 ? { headBranches } : {}),
+        ...(labels.length === 1 ? { label: labels[0] } : {}),
+        ...(labels.length > 1 ? { labels } : {}),
+        ...(assignees.length === 1 ? { assignee: assignees[0] } : {}),
+        ...(assignees.length > 1 ? { assignees } : {}),
         ...(input.draft === true ? { draft: true } : {}),
         ...(reviewStatus !== undefined ? { reviewStatus } : {}),
         ...(checksStatuses.length > 0 ? { checksStatuses } : {}),
@@ -467,7 +578,7 @@ const makeReviewSource = Effect.gen(function* () {
             .map(toPullRequestSummary)
             .filter((summary): summary is ReviewPullRequestSummary => summary !== null)
             .filter((summary) => matchesListFilters(summary, input, viewerLogin));
-          const usesLocalCandidateWindow = hasLocalListFilters(input);
+          const usesLocalCandidateWindow = hasLocalListFilters(input, viewerLogin);
           const candidateLimit = listLimit ?? resultListLimit(input);
           const resultLimit = resultListLimit(input);
           const returnedPullRequests = usesLocalCandidateWindow
@@ -522,7 +633,7 @@ const makeReviewSource = Effect.gen(function* () {
     Effect.gen(function* () {
       const repositoryId = yield* resolveRepositoryId(input.cwd);
       const cacheIdentity = yield* readCacheIdentity(input.cwd);
-      const listFilter = pullRequestListFilter(input);
+      const listFilter = pullRequestListFilter(input, cacheIdentity.login);
       const cached = yield* cacheStore
         .getPullRequestList({ repositoryId, listFilter })
         .pipe(Effect.catch(() => Effect.succeed(Option.none())));
@@ -851,14 +962,22 @@ const makeReviewSource = Effect.gen(function* () {
                     ...(input.limit !== undefined ? { limit: input.limit } : {}),
                     ...(input.search !== undefined ? { search: input.search } : {}),
                     ...(input.author !== undefined ? { author: input.author } : {}),
+                    ...(input.authors !== undefined ? { authors: input.authors } : {}),
                     ...(input.reviewRequested !== undefined
                       ? { reviewRequested: input.reviewRequested }
                       : {}),
                     ...(input.baseBranch !== undefined ? { baseBranch: input.baseBranch } : {}),
+                    ...(input.baseBranches !== undefined
+                      ? { baseBranches: input.baseBranches }
+                      : {}),
                     ...(input.headBranch !== undefined ? { headBranch: input.headBranch } : {}),
+                    ...(input.headBranches !== undefined
+                      ? { headBranches: input.headBranches }
+                      : {}),
                     ...(input.label !== undefined ? { label: input.label } : {}),
                     ...(input.labels !== undefined ? { labels: input.labels } : {}),
                     ...(input.assignee !== undefined ? { assignee: input.assignee } : {}),
+                    ...(input.assignees !== undefined ? { assignees: input.assignees } : {}),
                     ...(input.draft === true ? { draft: true } : {}),
                     ...(input.columns !== undefined ? { columns: input.columns } : {}),
                     ...(input.checks !== undefined ? { checks: input.checks } : {}),

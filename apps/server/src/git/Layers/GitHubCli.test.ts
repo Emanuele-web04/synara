@@ -288,6 +288,98 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  it.effect("routes plural author/base/head/assignee filters through grouped search syntax", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: "[]",
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.listRepositoryPullRequests({
+          cwd: "/repo",
+          state: "open",
+          limit: 50,
+          search: "review board",
+          authors: ["bob", "alice"],
+          baseBranches: ["release", "main"],
+          headBranches: ["octocat:feature/shared", "feature/shared"],
+          assignees: ["bob", "alice"],
+          checksStatuses: ["passing", "failing"],
+          reviewStatus: "approved",
+        });
+      });
+
+      assert.deepStrictEqual(result, []);
+      expect(mockedRunProcess).toHaveBeenCalledWith(
+        "gh",
+        [
+          "pr",
+          "list",
+          "--state",
+          "open",
+          "--limit",
+          "50",
+          "--search",
+          "review board (author:alice OR author:bob) (base:main OR base:release) (head:feature/shared OR head:octocat:feature/shared) (assignee:alice OR assignee:bob) (status:failure OR status:success) review:approved",
+          "--json",
+          "number,title,author,updatedAt,state,mergedAt,reviewDecision,baseRefName,headRefName,headRepositoryOwner,url,isDraft,additions,deletions,statusCheckRollup,labels,assignees",
+        ],
+        expect.objectContaining({ cwd: "/repo" }),
+      );
+    }),
+  );
+
+  it.effect("merges singular and plural list filters before choosing flags or search", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: "[]",
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.listRepositoryPullRequests({
+          cwd: "/repo",
+          state: "open",
+          author: "alice",
+          authors: ["bob", "alice"],
+          baseBranch: "main",
+          baseBranches: ["release"],
+          headBranch: "feature/shared",
+          headBranches: ["octocat:feature/shared"],
+          assignee: "alice",
+          assignees: ["bob"],
+        });
+      });
+
+      assert.deepStrictEqual(result, []);
+      expect(mockedRunProcess).toHaveBeenCalledWith(
+        "gh",
+        [
+          "pr",
+          "list",
+          "--state",
+          "open",
+          "--limit",
+          "50",
+          "--search",
+          "(author:alice OR author:bob) (base:main OR base:release) (head:feature/shared OR head:octocat:feature/shared) (assignee:alice OR assignee:bob)",
+          "--json",
+          "number,title,author,updatedAt,state,mergedAt,reviewDecision,baseRefName,headRefName,headRepositoryOwner,url,isDraft,additions,deletions,statusCheckRollup,labels,assignees",
+        ],
+        expect.objectContaining({ cwd: "/repo" }),
+      );
+    }),
+  );
+
   it.effect("omits review request payloads unless reviewer filtering needs them", () =>
     Effect.gen(function* () {
       mockedRunProcess.mockResolvedValueOnce({

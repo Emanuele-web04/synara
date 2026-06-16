@@ -429,6 +429,51 @@ describe("ReviewBoard performance", () => {
     }
   });
 
+  it("pushes multi-author facets into the server list request", async () => {
+    const pullRequests = [
+      {
+        ...makePullRequests(1)[0],
+        number: 59,
+        title: "Alice authored work",
+        author: "alice",
+      },
+      {
+        ...makePullRequests(1)[0],
+        number: 60,
+        title: "Bob authored work",
+        author: "bob",
+      },
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+      await expect.element(page.getByText("Alice authored work")).toBeVisible();
+      await expect.element(page.getByText("Bob authored work")).toBeVisible();
+
+      await page.getByRole("button", { name: "Author", exact: true }).click();
+      await page.getByRole("button", { name: "alice", exact: true }).click();
+      await vi.waitFor(() => {
+        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+          cwd: "/repo",
+          author: "alice",
+        });
+      });
+
+      await page.getByRole("button", { name: "bob", exact: true }).click();
+      await vi.waitFor(() => {
+        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+          cwd: "/repo",
+          authors: ["alice", "bob"],
+        });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("pushes a single assignee facet into the server list request", async () => {
     const pullRequests = [
       {

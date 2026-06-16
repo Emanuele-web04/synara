@@ -32,11 +32,15 @@ export interface ActiveReviewFilter {
 
 export interface ReviewServerListFilters {
   readonly author?: string;
+  readonly authors?: ReadonlyArray<string>;
   readonly baseBranch?: string;
+  readonly baseBranches?: ReadonlyArray<string>;
   readonly headBranch?: string;
+  readonly headBranches?: ReadonlyArray<string>;
   readonly label?: string;
   readonly labels?: ReadonlyArray<string>;
   readonly assignee?: string;
+  readonly assignees?: ReadonlyArray<string>;
   readonly draft?: boolean;
   readonly columns?: ReadonlyArray<ReviewColumnId>;
   readonly checks?: ReadonlyArray<ReviewPullRequestSummary["checksStatus"]>;
@@ -377,11 +381,15 @@ export function toReviewServerListFilters(
   const checks = valuesForFilter(activeFilters, checksFilterDef.id).filter(isReviewChecksStatus);
   return {
     ...(authors.length === 1 ? { author: authors[0] } : {}),
+    ...(authors.length > 1 ? { authors } : {}),
     ...(baseBranches.length === 1 ? { baseBranch: baseBranches[0] } : {}),
+    ...(baseBranches.length > 1 ? { baseBranches } : {}),
     ...(headBranches.length === 1 ? { headBranch: headBranches[0] } : {}),
+    ...(headBranches.length > 1 ? { headBranches } : {}),
     ...(labels.length === 1 ? { label: labels[0] } : {}),
     ...(labels.length > 1 ? { labels } : {}),
     ...(assignees.length === 1 ? { assignee: assignees[0] } : {}),
+    ...(assignees.length > 1 ? { assignees } : {}),
     ...(columns.length === 1 && columns[0] === "draft" ? { draft: true } : {}),
     ...(columns.length > 0 ? { columns } : {}),
     ...(checks.length > 0 ? { checks } : {}),

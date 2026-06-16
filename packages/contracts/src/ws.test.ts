@@ -159,7 +159,11 @@ it.effect("accepts review.updated push envelopes and subscription requests", () 
         cwd: "/repo",
         repositoryId: "repo-1",
         state: "open",
+        authors: ["alice", "bob"],
+        baseBranches: ["main", "release"],
+        headBranches: ["feature/review-board", "octocat:feature/review-board"],
         labels: ["bug", "feature"],
+        assignees: ["alice", "bob"],
         draft: true,
         data: {
           pullRequests: [],

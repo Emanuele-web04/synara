@@ -57,18 +57,56 @@ function optionalTrimmed(value: string | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function normalizedSearchValues(values: ReadonlyArray<string> | undefined): ReadonlyArray<string> {
+  return [...new Set((values ?? []).map((value) => value.trim()))]
+    .filter((value) => value.length > 0)
+    .sort();
+}
+
+function isSafeSearchQualifierValue(value: string): boolean {
+  return !/[\s,"\\()]/.test(value) && !/^(AND|OR|NOT)$/i.test(value);
+}
+
+function mergedSearchValues(
+  value: string | undefined,
+  values: ReadonlyArray<string> | undefined,
+): ReadonlyArray<string> {
+  return normalizedSearchValues([...(value !== undefined ? [value] : []), ...(values ?? [])]);
+}
+
+function searchQualifierOrGroup(
+  qualifier: string,
+  values: ReadonlyArray<string> | undefined,
+): string | null {
+  const normalized = normalizedSearchValues(values);
+  if (
+    normalized.length === 0 ||
+    normalized.some((value) => !isSafeSearchQualifierValue(value))
+  ) {
+    return null;
+  }
+  const terms = normalized.map((value) => `${qualifier}:${value}`);
+  return terms.length === 1 ? terms[0] : `(${terms.join(" OR ")})`;
+}
+
 function pullRequestListSearch(input: {
   readonly search?: string;
+  readonly authors?: ReadonlyArray<string>;
   readonly reviewRequested?: string;
-  readonly headBranch?: string;
+  readonly baseBranches?: ReadonlyArray<string>;
+  readonly headBranches?: ReadonlyArray<string>;
   readonly labels?: ReadonlyArray<string>;
+  readonly assignees?: ReadonlyArray<string>;
   readonly checksStatuses?: ReadonlyArray<"passing" | "failing">;
   readonly reviewStatus?: "approved" | "changes-requested";
 }): string | null {
   const search = optionalTrimmed(input.search);
   const reviewRequested = optionalTrimmed(input.reviewRequested);
-  const headBranch = optionalTrimmed(input.headBranch);
+  const authorsSearch = searchQualifierOrGroup("author", input.authors);
+  const baseBranchesSearch = searchQualifierOrGroup("base", input.baseBranches);
+  const headBranchesSearch = searchQualifierOrGroup("head", input.headBranches);
   const labelSearch = pullRequestLabelSearch(input.labels);
+  const assigneesSearch = searchQualifierOrGroup("assignee", input.assignees);
   const checksStatusTerms = [...new Set(input.checksStatuses ?? [])]
     .map((status) => (status === "passing" ? "status:success" : "status:failure"))
     .sort();
@@ -86,9 +124,12 @@ function pullRequestListSearch(input: {
         : null;
   return [
     search,
+    authorsSearch,
     reviewRequested ? `review-requested:${reviewRequested}` : null,
-    headBranch?.includes(":") ? `head:${headBranch}` : null,
+    baseBranchesSearch,
+    headBranchesSearch,
     labelSearch,
+    assigneesSearch,
     checksStatusSearch,
     reviewStatusSearch,
   ]
@@ -97,9 +138,7 @@ function pullRequestListSearch(input: {
 }
 
 function pullRequestLabelSearch(labels: ReadonlyArray<string> | undefined): string | null {
-  const normalized = [...new Set((labels ?? []).map((label) => label.trim()))]
-    .filter((label) => label.length > 0)
-    .sort();
+  const normalized = normalizedSearchValues(labels);
   if (
     normalized.length === 0 ||
     normalized.some(
@@ -116,12 +155,16 @@ function repositoryPullRequestListArgs(input: {
   readonly limit?: number;
   readonly search?: string;
   readonly author?: string;
+  readonly authors?: ReadonlyArray<string>;
   readonly reviewRequested?: string;
   readonly baseBranch?: string;
+  readonly baseBranches?: ReadonlyArray<string>;
   readonly headBranch?: string;
+  readonly headBranches?: ReadonlyArray<string>;
   readonly label?: string;
   readonly labels?: ReadonlyArray<string>;
   readonly assignee?: string;
+  readonly assignees?: ReadonlyArray<string>;
   readonly draft?: boolean;
   readonly checksStatuses?: ReadonlyArray<"passing" | "failing">;
   readonly reviewStatus?: "approved" | "changes-requested";
@@ -134,30 +177,40 @@ function repositoryPullRequestListArgs(input: {
     "--limit",
     String(input.limit ?? DEFAULT_REVIEW_PULL_REQUEST_LIST_LIMIT),
   ];
-  const author = optionalTrimmed(input.author);
-  if (author) {
-    args.push("--author", author);
+  const authors = mergedSearchValues(input.author, input.authors);
+  const baseBranches = mergedSearchValues(input.baseBranch, input.baseBranches);
+  const headBranches = mergedSearchValues(input.headBranch, input.headBranches);
+  const labels = mergedSearchValues(input.label, input.labels);
+  const assignees = mergedSearchValues(input.assignee, input.assignees);
+  if (authors.length === 1) {
+    args.push("--author", authors[0]);
   }
-  const assignee = optionalTrimmed(input.assignee);
-  if (assignee) {
-    args.push("--assignee", assignee);
+  if (assignees.length === 1) {
+    args.push("--assignee", assignees[0]);
   }
-  const baseBranch = optionalTrimmed(input.baseBranch);
-  if (baseBranch) {
-    args.push("--base", baseBranch);
+  if (baseBranches.length === 1) {
+    args.push("--base", baseBranches[0]);
   }
-  const headBranch = optionalTrimmed(input.headBranch);
-  if (headBranch && !headBranch.includes(":")) {
-    args.push("--head", headBranch);
+  if (headBranches.length === 1 && !headBranches[0].includes(":")) {
+    args.push("--head", headBranches[0]);
   }
-  const label = optionalTrimmed(input.label);
-  if (label) {
-    args.push("--label", label);
+  if (labels.length === 1) {
+    args.push("--label", labels[0]);
   }
   if (input.draft === true) {
     args.push("--draft");
   }
-  const search = pullRequestListSearch(input);
+  const search = pullRequestListSearch({
+    search: input.search,
+    reviewRequested: input.reviewRequested,
+    ...(authors.length > 1 ? { authors } : {}),
+    ...(baseBranches.length > 1 ? { baseBranches } : {}),
+    ...(headBranches.length > 1 || headBranches[0]?.includes(":") ? { headBranches } : {}),
+    ...(labels.length > 1 ? { labels } : {}),
+    ...(assignees.length > 1 ? { assignees } : {}),
+    checksStatuses: input.checksStatuses,
+    reviewStatus: input.reviewStatus,
+  });
   if (search) {
     args.push("--search", search);
   }

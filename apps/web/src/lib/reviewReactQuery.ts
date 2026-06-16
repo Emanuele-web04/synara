@@ -82,12 +82,16 @@ export function applyReviewUpdatedPayload(
         limit: payload.limit,
         search: payload.search,
         author: payload.author,
+        authors: payload.authors,
         reviewRequested: payload.reviewRequested,
         baseBranch: payload.baseBranch,
+        baseBranches: payload.baseBranches,
         headBranch: payload.headBranch,
+        headBranches: payload.headBranches,
         label: payload.label,
         labels: payload.labels,
         assignee: payload.assignee,
+        assignees: payload.assignees,
         draft: payload.draft,
         columns: payload.columns,
         checks: payload.checks,
@@ -129,12 +133,16 @@ export const reviewQueryKeys = {
     limit?: number;
     search?: string;
     author?: string;
+    authors?: ReadonlyArray<string>;
     reviewRequested?: string;
     baseBranch?: string;
+    baseBranches?: ReadonlyArray<string>;
     headBranch?: string;
+    headBranches?: ReadonlyArray<string>;
     label?: string;
     labels?: ReadonlyArray<string>;
     assignee?: string;
+    assignees?: ReadonlyArray<string>;
     draft?: boolean;
     columns?: ReadonlyArray<ReviewListColumn>;
     checks?: ReadonlyArray<ReviewListChecksStatus>;
@@ -145,12 +153,16 @@ export const reviewQueryKeys = {
       reviewPullRequestListLimit(input.limit),
       reviewPullRequestListText(input.search),
       reviewPullRequestListText(input.author),
+      reviewPullRequestListTextValues(input.authors),
       reviewPullRequestListText(input.reviewRequested),
       reviewPullRequestListText(input.baseBranch),
+      reviewPullRequestListTextValues(input.baseBranches),
       reviewPullRequestListText(input.headBranch),
+      reviewPullRequestListTextValues(input.headBranches),
       reviewPullRequestListText(input.label),
       reviewPullRequestListTextValues(input.labels),
       reviewPullRequestListText(input.assignee),
+      reviewPullRequestListTextValues(input.assignees),
       input.draft === true ? true : null,
       reviewPullRequestListValues(input.columns),
       reviewPullRequestListValues(input.checks),
@@ -177,12 +189,16 @@ export function reviewListPullRequestsQueryOptions(input: {
   limit?: number;
   search?: string;
   author?: string;
+  authors?: ReadonlyArray<string>;
   reviewRequested?: string;
   baseBranch?: string;
+  baseBranches?: ReadonlyArray<string>;
   headBranch?: string;
+  headBranches?: ReadonlyArray<string>;
   label?: string;
   labels?: ReadonlyArray<string>;
   assignee?: string;
+  assignees?: ReadonlyArray<string>;
   draft?: boolean;
   columns?: ReadonlyArray<ReviewListColumn>;
   checks?: ReadonlyArray<ReviewListChecksStatus>;
@@ -210,24 +226,32 @@ export function buildReviewListPullRequestsRequest(input: {
   limit?: number;
   search?: string;
   author?: string;
+  authors?: ReadonlyArray<string>;
   reviewRequested?: string;
   baseBranch?: string;
+  baseBranches?: ReadonlyArray<string>;
   headBranch?: string;
+  headBranches?: ReadonlyArray<string>;
   label?: string;
   labels?: ReadonlyArray<string>;
   assignee?: string;
+  assignees?: ReadonlyArray<string>;
   draft?: boolean;
   columns?: ReadonlyArray<ReviewListColumn>;
   checks?: ReadonlyArray<ReviewListChecksStatus>;
 }): ReviewListPullRequestsInput {
   const search = reviewPullRequestListText(input.search);
   const author = reviewPullRequestListText(input.author);
+  const authors = reviewPullRequestListTextValues(input.authors);
   const reviewRequested = reviewPullRequestListText(input.reviewRequested);
   const baseBranch = reviewPullRequestListText(input.baseBranch);
+  const baseBranches = reviewPullRequestListTextValues(input.baseBranches);
   const headBranch = reviewPullRequestListText(input.headBranch);
+  const headBranches = reviewPullRequestListTextValues(input.headBranches);
   const label = reviewPullRequestListText(input.label);
   const labels = reviewPullRequestListTextValues(input.labels);
   const assignee = reviewPullRequestListText(input.assignee);
+  const assignees = reviewPullRequestListTextValues(input.assignees);
   const columns = reviewPullRequestListValues(input.columns);
   const checks = reviewPullRequestListValues(input.checks);
   return {
@@ -236,12 +260,16 @@ export function buildReviewListPullRequestsRequest(input: {
     ...(input.limit !== undefined ? { limit: input.limit } : {}),
     ...(search !== null ? { search } : {}),
     ...(author !== null ? { author } : {}),
+    ...(authors.length > 0 ? { authors } : {}),
     ...(reviewRequested !== null ? { reviewRequested } : {}),
     ...(baseBranch !== null ? { baseBranch } : {}),
+    ...(baseBranches.length > 0 ? { baseBranches } : {}),
     ...(headBranch !== null ? { headBranch } : {}),
+    ...(headBranches.length > 0 ? { headBranches } : {}),
     ...(label !== null ? { label } : {}),
     ...(labels.length > 0 ? { labels } : {}),
     ...(assignee !== null ? { assignee } : {}),
+    ...(assignees.length > 0 ? { assignees } : {}),
     ...(input.draft === true ? { draft: true } : {}),
     ...(columns.length > 0 ? { columns } : {}),
     ...(checks.length > 0 ? { checks } : {}),

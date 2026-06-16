@@ -277,12 +277,16 @@ export interface GitHubCliShape {
     readonly limit?: number;
     readonly search?: string;
     readonly author?: string;
+    readonly authors?: ReadonlyArray<string>;
     readonly reviewRequested?: string;
     readonly baseBranch?: string;
+    readonly baseBranches?: ReadonlyArray<string>;
     readonly headBranch?: string;
+    readonly headBranches?: ReadonlyArray<string>;
     readonly label?: string;
     readonly labels?: ReadonlyArray<string>;
     readonly assignee?: string;
+    readonly assignees?: ReadonlyArray<string>;
     readonly draft?: boolean;
     readonly checksStatuses?: ReadonlyArray<Extract<GitHubChecksStatus, "passing" | "failing">>;
     readonly reviewStatus?: "approved" | "changes-requested";
