@@ -2,6 +2,8 @@ import { assert, it } from "@effect/vitest";
 import {
   AutomationId,
   AutomationRunId,
+  CommandId,
+  MessageId,
   ProjectId,
   ThreadId,
   type AutomationCreateInput,
@@ -129,6 +131,44 @@ layer("AutomationRepository", (it) => {
 
       assert.strictEqual(second.id, first.id);
       assert.isTrue(Option.isSome(yield* repository.getRunById({ id: first.id })));
+    }),
+  );
+
+  it.effect("marks a run started with thread and command references", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-3"),
+        input: createInputForProject("project-3"),
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      const pending = yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-3"),
+        automationId: AutomationId.makeUnsafe("automation-3"),
+        projectId: ProjectId.makeUnsafe("project-3"),
+        threadId: null,
+        trigger: { type: "manual" },
+        scheduledFor: "2026-06-16T10:05:00.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const started = yield* repository.markRunStarted({
+        id: pending.id,
+        threadId: ThreadId.makeUnsafe("thread-3"),
+        messageId: MessageId.makeUnsafe("message-3"),
+        threadCreateCommandId: CommandId.makeUnsafe("cmd-thread-create-3"),
+        turnStartCommandId: CommandId.makeUnsafe("cmd-turn-start-3"),
+        startedAt: "2026-06-16T10:00:02.000Z",
+      });
+
+      assert.strictEqual(started.status, "running");
+      assert.strictEqual(started.threadId, ThreadId.makeUnsafe("thread-3"));
+      assert.strictEqual(started.messageId, MessageId.makeUnsafe("message-3"));
+      assert.strictEqual(started.threadCreateCommandId, CommandId.makeUnsafe("cmd-thread-create-3"));
+      assert.strictEqual(started.turnStartCommandId, CommandId.makeUnsafe("cmd-turn-start-3"));
     }),
   );
 });
