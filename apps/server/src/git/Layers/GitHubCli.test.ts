@@ -247,6 +247,47 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  it.effect("routes multi-label OR filters through search syntax", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: "[]",
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.listRepositoryPullRequests({
+          cwd: "/repo",
+          state: "open",
+          limit: 50,
+          search: "review board",
+          labels: ["priority 1", "bug"],
+        });
+      });
+
+      assert.deepStrictEqual(result, []);
+      expect(mockedRunProcess).toHaveBeenCalledWith(
+        "gh",
+        [
+          "pr",
+          "list",
+          "--state",
+          "open",
+          "--limit",
+          "50",
+          "--search",
+          'review board label:"bug","priority 1"',
+          "--json",
+          "number,title,author,updatedAt,state,mergedAt,reviewDecision,baseRefName,headRefName,headRepositoryOwner,url,isDraft,additions,deletions,statusCheckRollup,labels,assignees",
+        ],
+        expect.objectContaining({ cwd: "/repo" }),
+      );
+    }),
+  );
+
   it.effect("omits review request payloads unless reviewer filtering needs them", () =>
     Effect.gen(function* () {
       mockedRunProcess.mockResolvedValueOnce({

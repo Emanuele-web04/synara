@@ -370,13 +370,58 @@ describe("ReviewBoard performance", () => {
       await expect
         .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
         .toBeVisible();
+      await expect.element(page.getByText("Bug labeled work")).toBeVisible();
+      await expect.element(page.getByText("Feature labeled work")).toBeVisible();
 
       await page.getByRole("button", { name: "Label", exact: true }).click();
-      await page.getByRole("button", { name: "bug", exact: true }).click();
+      await page.getByText("bug", { exact: true }).click();
       await vi.waitFor(() => {
         expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
           cwd: "/repo",
           label: "bug",
+        });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("pushes multi-label facets into the server list request", async () => {
+    const pullRequests = [
+      {
+        ...makePullRequests(1)[0],
+        number: 57,
+        title: "Bug labeled work",
+        labels: ["bug"],
+      },
+      {
+        ...makePullRequests(1)[0],
+        number: 58,
+        title: "Feature labeled work",
+        labels: ["feature"],
+      },
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+      await expect.element(page.getByText("Bug labeled work")).toBeVisible();
+
+      await page.getByRole("button", { name: "Label", exact: true }).click();
+      await page.getByText("bug", { exact: true }).click();
+      await vi.waitFor(() => {
+        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+          cwd: "/repo",
+          label: "bug",
+        });
+      });
+      await page.getByText("feature", { exact: true }).click();
+      await vi.waitFor(() => {
+        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+          cwd: "/repo",
+          labels: ["bug", "feature"],
         });
       });
     } finally {

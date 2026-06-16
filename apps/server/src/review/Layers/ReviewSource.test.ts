@@ -36,6 +36,7 @@ interface RecordedListCall {
   readonly baseBranch?: string;
   readonly headBranch?: string;
   readonly label?: string;
+  readonly labels?: ReadonlyArray<string>;
   readonly assignee?: string;
   readonly draft?: boolean;
   readonly checksStatuses?: ReadonlyArray<"passing" | "failing">;
@@ -308,6 +309,7 @@ it.effect("pushes text search to GitHub and caches the normalized filter key", (
       baseBranch: "main",
       headBranch: "branch-1",
       label: null,
+      labels: [],
       assignee: null,
       draft: null,
       columns: [],
@@ -421,6 +423,7 @@ it.effect("pushes native review status and check filters without the local candi
       baseBranch: null,
       headBranch: null,
       label: null,
+      labels: [],
       assignee: null,
       draft: null,
       columns: ["approved"],
@@ -470,6 +473,7 @@ it.effect("keeps a larger bounded candidate window when status still needs local
       baseBranch: null,
       headBranch: null,
       label: null,
+      labels: [],
       assignee: null,
       draft: null,
       columns: ["needs-review"],
@@ -548,6 +552,7 @@ it.effect("pushes a single check filter to GitHub without the local candidate wi
       baseBranch: null,
       headBranch: null,
       label: null,
+      labels: [],
       assignee: null,
       draft: null,
       columns: [],
@@ -588,11 +593,81 @@ it.effect("pushes a single label filter to GitHub and keeps it in the cache key"
       baseBranch: null,
       headBranch: null,
       label: "bug",
+      labels: [],
       assignee: null,
       draft: null,
       columns: [],
       checks: [],
     });
+  });
+});
+
+it.effect("pushes safe multi-label OR filters to GitHub and keeps them in the cache key", () => {
+  const { layer, recorded } = makeLayer({
+    pullRequests: [
+      ghPr({ number: 1, title: "Bug fix", labels: ["bug"] }),
+      ghPr({ number: 2, title: "Feature work", labels: ["feature"] }),
+      ghPr({ number: 3, title: "Docs work", labels: ["docs"] }),
+    ],
+  });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      labels: ["feature", "bug"],
+    });
+
+    expect(numbers(result)).toEqual([1, 2]);
+    expect(recorded.listCalls).toEqual([
+      {
+        cwd: "/repo",
+        state: "open",
+        limit: 50,
+        labels: ["bug", "feature"],
+      },
+    ]);
+    expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
+      state: "open",
+      limit: 50,
+      search: null,
+      author: null,
+      reviewRequested: null,
+      baseBranch: null,
+      headBranch: null,
+      label: null,
+      labels: ["bug", "feature"],
+      assignee: null,
+      draft: null,
+      columns: [],
+      checks: [],
+    });
+  });
+});
+
+it.effect("keeps unsafe multi-label OR filters on the local candidate window", () => {
+  const { layer, recorded } = makeLayer({
+    pullRequests: [
+      ghPr({ number: 1, title: "Comma label", labels: ["needs,qa"] }),
+      ghPr({ number: 2, title: "Bug fix", labels: ["bug"] }),
+      ghPr({ number: 3, title: "Docs work", labels: ["docs"] }),
+    ],
+  });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      labels: ["needs,qa", "bug"],
+    });
+
+    expect(numbers(result)).toEqual([1, 2]);
+    expect(recorded.listCalls).toEqual([
+      {
+        cwd: "/repo",
+        state: "open",
+        limit: 1000,
+      },
+    ]);
+    expect(result.meta?.candidateLimit).toBe(1000);
   });
 });
 
@@ -628,6 +703,7 @@ it.effect("pushes a single assignee filter to GitHub and keeps it in the cache k
       baseBranch: null,
       headBranch: null,
       label: null,
+      labels: [],
       assignee: "alice",
       draft: null,
       columns: [],
@@ -680,6 +756,7 @@ it.effect("pushes a single draft status to GitHub without the local candidate wi
       baseBranch: null,
       headBranch: null,
       label: null,
+      labels: [],
       assignee: null,
       draft: true,
       columns: ["draft"],

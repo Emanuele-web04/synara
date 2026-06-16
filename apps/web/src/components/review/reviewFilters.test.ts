@@ -226,10 +226,15 @@ describe("toReviewServerListFilters", () => {
         filter("author", ["alice", "bob"]),
         filter("base", ["main", "dev"]),
         filter("head", ["feature/review-board", "bugfix/search"]),
-        filter("label", ["bug", "feature"]),
         filter("assignee", ["alice", "bob"]),
       ]),
     ).toEqual({});
+  });
+
+  it("projects multi-label OR filters into stable server filters", () => {
+    expect(toReviewServerListFilters([filter("label", ["feature", "bug"])])).toEqual({
+      labels: ["bug", "feature"],
+    });
   });
 
   it("pushes single draft status natively without changing mixed-status OR semantics", () => {

@@ -33,6 +33,7 @@ export interface ReviewServerListFilters {
   readonly baseBranch?: string;
   readonly headBranch?: string;
   readonly label?: string;
+  readonly labels?: ReadonlyArray<string>;
   readonly assignee?: string;
   readonly draft?: boolean;
   readonly columns?: ReadonlyArray<ReviewColumnId>;
@@ -290,6 +291,7 @@ export function toReviewServerListFilters(
     ...(baseBranches.length === 1 ? { baseBranch: baseBranches[0] } : {}),
     ...(headBranches.length === 1 ? { headBranch: headBranches[0] } : {}),
     ...(labels.length === 1 ? { label: labels[0] } : {}),
+    ...(labels.length > 1 ? { labels } : {}),
     ...(assignees.length === 1 ? { assignee: assignees[0] } : {}),
     ...(columns.length === 1 && columns[0] === "draft" ? { draft: true } : {}),
     ...(columns.length > 0 ? { columns } : {}),

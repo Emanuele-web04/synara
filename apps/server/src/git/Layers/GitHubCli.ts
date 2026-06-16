@@ -61,12 +61,14 @@ function pullRequestListSearch(input: {
   readonly search?: string;
   readonly reviewRequested?: string;
   readonly headBranch?: string;
+  readonly labels?: ReadonlyArray<string>;
   readonly checksStatuses?: ReadonlyArray<"passing" | "failing">;
   readonly reviewStatus?: "approved" | "changes-requested";
 }): string | null {
   const search = optionalTrimmed(input.search);
   const reviewRequested = optionalTrimmed(input.reviewRequested);
   const headBranch = optionalTrimmed(input.headBranch);
+  const labelSearch = pullRequestLabelSearch(input.labels);
   const checksStatusTerms = [...new Set(input.checksStatuses ?? [])]
     .map((status) => (status === "passing" ? "status:success" : "status:failure"))
     .sort();
@@ -86,11 +88,27 @@ function pullRequestListSearch(input: {
     search,
     reviewRequested ? `review-requested:${reviewRequested}` : null,
     headBranch?.includes(":") ? `head:${headBranch}` : null,
+    labelSearch,
     checksStatusSearch,
     reviewStatusSearch,
   ]
     .filter((value): value is string => value !== null)
     .join(" ") || null;
+}
+
+function pullRequestLabelSearch(labels: ReadonlyArray<string> | undefined): string | null {
+  const normalized = [...new Set((labels ?? []).map((label) => label.trim()))]
+    .filter((label) => label.length > 0)
+    .sort();
+  if (
+    normalized.length === 0 ||
+    normalized.some(
+      (label) => label.includes(",") || label.includes("\"") || label.includes("\\"),
+    )
+  ) {
+    return null;
+  }
+  return `label:${normalized.map((label) => `"${label}"`).join(",")}`;
 }
 
 function repositoryPullRequestListArgs(input: {
@@ -102,6 +120,7 @@ function repositoryPullRequestListArgs(input: {
   readonly baseBranch?: string;
   readonly headBranch?: string;
   readonly label?: string;
+  readonly labels?: ReadonlyArray<string>;
   readonly assignee?: string;
   readonly draft?: boolean;
   readonly checksStatuses?: ReadonlyArray<"passing" | "failing">;

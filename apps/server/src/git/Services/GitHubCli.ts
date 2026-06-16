@@ -281,6 +281,7 @@ export interface GitHubCliShape {
     readonly baseBranch?: string;
     readonly headBranch?: string;
     readonly label?: string;
+    readonly labels?: ReadonlyArray<string>;
     readonly assignee?: string;
     readonly draft?: boolean;
     readonly checksStatuses?: ReadonlyArray<Extract<GitHubChecksStatus, "passing" | "failing">>;

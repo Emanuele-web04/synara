@@ -61,6 +61,15 @@ function reviewPullRequestListValues<T extends string>(
   return [...new Set(values)].sort();
 }
 
+function reviewPullRequestListTextValues(values?: ReadonlyArray<string>): ReadonlyArray<string> {
+  if (!values || values.length === 0) {
+    return [];
+  }
+  return [
+    ...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)),
+  ].sort();
+}
+
 export function applyReviewUpdatedPayload(
   queryClient: QueryClient,
   payload: ReviewUpdatedPayload,
@@ -77,6 +86,7 @@ export function applyReviewUpdatedPayload(
         baseBranch: payload.baseBranch,
         headBranch: payload.headBranch,
         label: payload.label,
+        labels: payload.labels,
         assignee: payload.assignee,
         draft: payload.draft,
         columns: payload.columns,
@@ -123,6 +133,7 @@ export const reviewQueryKeys = {
     baseBranch?: string;
     headBranch?: string;
     label?: string;
+    labels?: ReadonlyArray<string>;
     assignee?: string;
     draft?: boolean;
     columns?: ReadonlyArray<ReviewListColumn>;
@@ -138,6 +149,7 @@ export const reviewQueryKeys = {
       reviewPullRequestListText(input.baseBranch),
       reviewPullRequestListText(input.headBranch),
       reviewPullRequestListText(input.label),
+      reviewPullRequestListTextValues(input.labels),
       reviewPullRequestListText(input.assignee),
       input.draft === true ? true : null,
       reviewPullRequestListValues(input.columns),
@@ -169,6 +181,7 @@ export function reviewListPullRequestsQueryOptions(input: {
   baseBranch?: string;
   headBranch?: string;
   label?: string;
+  labels?: ReadonlyArray<string>;
   assignee?: string;
   draft?: boolean;
   columns?: ReadonlyArray<ReviewListColumn>;
@@ -201,6 +214,7 @@ export function buildReviewListPullRequestsRequest(input: {
   baseBranch?: string;
   headBranch?: string;
   label?: string;
+  labels?: ReadonlyArray<string>;
   assignee?: string;
   draft?: boolean;
   columns?: ReadonlyArray<ReviewListColumn>;
@@ -212,6 +226,7 @@ export function buildReviewListPullRequestsRequest(input: {
   const baseBranch = reviewPullRequestListText(input.baseBranch);
   const headBranch = reviewPullRequestListText(input.headBranch);
   const label = reviewPullRequestListText(input.label);
+  const labels = reviewPullRequestListTextValues(input.labels);
   const assignee = reviewPullRequestListText(input.assignee);
   const columns = reviewPullRequestListValues(input.columns);
   const checks = reviewPullRequestListValues(input.checks);
@@ -225,6 +240,7 @@ export function buildReviewListPullRequestsRequest(input: {
     ...(baseBranch !== null ? { baseBranch } : {}),
     ...(headBranch !== null ? { headBranch } : {}),
     ...(label !== null ? { label } : {}),
+    ...(labels.length > 0 ? { labels } : {}),
     ...(assignee !== null ? { assignee } : {}),
     ...(input.draft === true ? { draft: true } : {}),
     ...(columns.length > 0 ? { columns } : {}),

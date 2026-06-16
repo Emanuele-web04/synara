@@ -182,6 +182,7 @@ function matchesListFilters(
   const baseBranch = normalizeOptionalText(input.baseBranch);
   const headBranch = normalizeOptionalText(input.headBranch);
   const label = normalizeOptionalText(input.label);
+  const labels = normalizedSet(input.labels);
   const assignee = resolveViewerAlias(normalizeOptionalText(input.assignee), viewerLogin);
   const columns = normalizedSet(input.columns);
   const checks = normalizedSet(input.checks);
@@ -191,6 +192,7 @@ function matchesListFilters(
     (!baseBranch || summary.baseBranch === baseBranch) &&
     (!headBranch || summary.headBranch === headBranch || summary.headSelector === headBranch) &&
     (!label || summary.labels.includes(label)) &&
+    (labels.size === 0 || summary.labels.some((summaryLabel) => labels.has(summaryLabel))) &&
     (!assignee || summary.assignees.includes(assignee)) &&
     (input.draft !== true || summary.isDraft) &&
     (columns.size === 0 || columns.has(reviewColumn(summary))) &&
@@ -200,6 +202,10 @@ function matchesListFilters(
 
 function hasLocalListFilters(input: ReviewListPullRequestsInput): boolean {
   const nativeReviewStatus = nativeListReviewStatus(input.columns);
+  const nativeLabels = nativeListLabels(input.labels);
+  const localLabels = [...normalizedSet(input.labels)].filter(
+    (label) => !nativeLabels.includes(label),
+  );
   const localColumns = [...normalizedSet(input.columns)].filter(
     (column) =>
       (column !== "draft" || input.draft !== true) && column !== nativeReviewStatus,
@@ -208,7 +214,20 @@ function hasLocalListFilters(input: ReviewListPullRequestsInput): boolean {
   const localChecks = [...normalizedSet(input.checks)].filter(
     (check) => !nativeChecksStatuses.includes(check as "passing" | "failing"),
   );
-  return localColumns.length > 0 || localChecks.length > 0;
+  return localLabels.length > 0 || localColumns.length > 0 || localChecks.length > 0;
+}
+
+function nativeListLabels(labels: ReadonlyArray<string> | undefined): ReadonlyArray<string> {
+  const normalized = [...normalizedSet(labels)].sort();
+  if (
+    normalized.length === 0 ||
+    normalized.some(
+      (label) => label.includes(",") || label.includes("\"") || label.includes("\\"),
+    )
+  ) {
+    return [];
+  }
+  return normalized;
 }
 
 function nativeListReviewStatus(
@@ -340,6 +359,7 @@ function pullRequestListFilter(input: {
   readonly baseBranch?: string | undefined;
   readonly headBranch?: string | undefined;
   readonly label?: string | undefined;
+  readonly labels?: ReadonlyArray<string> | undefined;
   readonly assignee?: string | undefined;
   readonly draft?: boolean | undefined;
   readonly columns?: ReadonlyArray<string> | undefined;
@@ -354,6 +374,7 @@ function pullRequestListFilter(input: {
     baseBranch: normalizeOptionalText(input.baseBranch),
     headBranch: normalizeOptionalText(input.headBranch),
     label: normalizeOptionalText(input.label),
+    labels: [...normalizedSet(input.labels)].sort(),
     assignee: normalizeOptionalText(input.assignee),
     draft: input.draft === true ? true : null,
     columns: [...normalizedSet(input.columns)].sort(),
@@ -420,6 +441,7 @@ const makeReviewSource = Effect.gen(function* () {
 
   const listPullRequestsUncached = (input: ReviewListPullRequestsInput, viewerLogin: string) => {
     const listLimit = githubListLimit(input);
+    const labels = nativeListLabels(input.labels);
     const reviewStatus = nativeListReviewStatus(input.columns);
     const checksStatuses = nativeListChecksStatuses(input.checks);
     return gitHubCli
@@ -433,6 +455,7 @@ const makeReviewSource = Effect.gen(function* () {
         ...(input.baseBranch !== undefined ? { baseBranch: input.baseBranch } : {}),
         ...(input.headBranch !== undefined ? { headBranch: input.headBranch } : {}),
         ...(input.label !== undefined ? { label: input.label } : {}),
+        ...(labels.length > 0 ? { labels } : {}),
         ...(input.assignee !== undefined ? { assignee: input.assignee } : {}),
         ...(input.draft === true ? { draft: true } : {}),
         ...(reviewStatus !== undefined ? { reviewStatus } : {}),
@@ -834,6 +857,7 @@ const makeReviewSource = Effect.gen(function* () {
                     ...(input.baseBranch !== undefined ? { baseBranch: input.baseBranch } : {}),
                     ...(input.headBranch !== undefined ? { headBranch: input.headBranch } : {}),
                     ...(input.label !== undefined ? { label: input.label } : {}),
+                    ...(input.labels !== undefined ? { labels: input.labels } : {}),
                     ...(input.assignee !== undefined ? { assignee: input.assignee } : {}),
                     ...(input.draft === true ? { draft: true } : {}),
                     ...(input.columns !== undefined ? { columns: input.columns } : {}),

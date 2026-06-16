@@ -159,6 +159,7 @@ it.effect("accepts review.updated push envelopes and subscription requests", () 
         cwd: "/repo",
         repositoryId: "repo-1",
         state: "open",
+        labels: ["bug", "feature"],
         draft: true,
         data: {
           pullRequests: [],

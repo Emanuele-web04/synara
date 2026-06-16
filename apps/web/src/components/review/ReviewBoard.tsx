@@ -1,4 +1,4 @@
-import type { ReviewPullRequestSummary } from "@t3tools/contracts";
+import type { ReviewListPullRequestsResult, ReviewPullRequestSummary } from "@t3tools/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate } from "@tanstack/react-router";
@@ -45,19 +45,22 @@ export function ReviewBoard(props: { cwd: string | null }) {
   const viewerQuery = useQuery(reviewViewerQueryOptions({ cwd }));
   const viewerLogin = viewerQuery.data?.login ?? null;
   const listState = view === "merged" ? "merged" : "open";
-  const serverFilters = useMemo(() => {
-    const activeServerFilters = toReviewServerListFilters(activeFilters);
+  const viewServerFilters = useMemo(() => {
     if (!viewerLogin || view === "all" || view === "merged") {
-      return activeServerFilters;
+      return {};
     }
     if (view === "mine") {
-      return { ...activeServerFilters, author: viewerLogin };
+      return { author: viewerLogin };
     }
     if (view === "needs-my-review") {
-      return { ...activeServerFilters, reviewRequested: viewerLogin };
+      return { reviewRequested: viewerLogin };
     }
-    return activeServerFilters;
-  }, [activeFilters, view, viewerLogin]);
+    return {};
+  }, [view, viewerLogin]);
+  const serverFilters = useMemo(
+    () => ({ ...toReviewServerListFilters(activeFilters), ...viewServerFilters }),
+    [activeFilters, viewServerFilters],
+  );
   const pullRequestsQuery = useQuery(
     reviewListPullRequestsQueryOptions({
       cwd,
@@ -67,11 +70,24 @@ export function ReviewBoard(props: { cwd: string | null }) {
     }),
   );
   const clientSearch = search.trim() === serverSearch.trim() ? "" : search;
+  const cachedPullRequests = queryClient
+    .getQueriesData<ReviewListPullRequestsResult>({
+      queryKey: reviewQueryKeys.pullRequestLists(cwd),
+    })
+    .flatMap(([, data]) => data?.pullRequests ?? []);
+  const facetBasePullRequests = uniquePullRequests([
+    ...cachedPullRequests,
+    ...(pullRequestsQuery.data?.pullRequests ?? []),
+  ]);
 
   const byView = useMemo(() => {
     const all = pullRequestsQuery.data?.pullRequests ?? [];
     return filterByView(all, view, viewerLogin);
   }, [pullRequestsQuery.data, view, viewerLogin]);
+  const facetItems = useMemo(
+    () => filterByView(facetBasePullRequests, view, viewerLogin),
+    [facetBasePullRequests, view, viewerLogin],
+  );
   const visiblePullRequests = useMemo(
     () => filterReviewPullRequests(byView, clientSearch, activeFilters),
     [byView, clientSearch, activeFilters],
@@ -141,7 +157,7 @@ export function ReviewBoard(props: { cwd: string | null }) {
           </Tabs>
           <div className="hidden h-6 w-px shrink-0 bg-border/55 lg:block" aria-hidden="true" />
           <ReviewFilterBar
-            items={byView}
+            items={facetItems}
             defs={reviewPullFilterDefs}
             resultCount={visiblePullRequests.length}
             resultCountIsIncomplete={resultCountIsIncomplete}
@@ -191,6 +207,16 @@ export function ReviewBoard(props: { cwd: string | null }) {
       )}
     </div>
   );
+}
+
+function uniquePullRequests(
+  pullRequests: ReadonlyArray<ReviewPullRequestSummary>,
+): ReadonlyArray<ReviewPullRequestSummary> {
+  const byKey = new Map<string, ReviewPullRequestSummary>();
+  for (const pullRequest of pullRequests) {
+    byKey.set(`${String(pullRequest.number)}:${pullRequest.url}`, pullRequest);
+  }
+  return [...byKey.values()];
 }
 
 function ReviewBoardColumn(props: {
