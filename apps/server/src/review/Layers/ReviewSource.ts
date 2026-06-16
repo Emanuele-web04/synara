@@ -46,6 +46,7 @@ const REVIEW_ANCHOR_KEY_SEPARATOR = "\u0000";
 const DEFAULT_REVIEW_LIST_RESULT_LIMIT = 50;
 const MAX_REVIEW_LIST_RESULT_LIMIT = 500;
 const FILTERED_REVIEW_LIST_CANDIDATE_LIMIT = 1_000;
+const FILTERED_REVIEW_LIST_CANDIDATE_MULTIPLIER = 10;
 const inFlightRefreshKeys = new Set<string>();
 
 function reviewError(operation: string, detail: string, cause?: unknown): ReviewError {
@@ -355,7 +356,10 @@ function githubListLimit(
   if (!hasLocalListFilters(input, viewerLogin)) {
     return resultListLimit(input);
   }
-  return Math.max(resultListLimit(input), FILTERED_REVIEW_LIST_CANDIDATE_LIMIT);
+  return Math.max(
+    resultListLimit(input) * FILTERED_REVIEW_LIST_CANDIDATE_MULTIPLIER,
+    FILTERED_REVIEW_LIST_CANDIDATE_LIMIT,
+  );
 }
 
 function toChangedFiles(patch: string): ReadonlyArray<ReviewChangedFile> {

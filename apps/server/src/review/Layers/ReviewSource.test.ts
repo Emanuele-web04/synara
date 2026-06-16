@@ -469,7 +469,7 @@ it.effect("keeps a larger bounded candidate window when status still needs local
     expect(result.meta).toEqual({
       requestedLimit: 200,
       resultLimit: 200,
-      candidateLimit: 1000,
+      candidateLimit: 2000,
       candidateCount: 120,
       candidateLimitReached: false,
       matchedCount: 60,
@@ -477,7 +477,7 @@ it.effect("keeps a larger bounded candidate window when status still needs local
       bounded: true,
     });
     expect(recorded.listCalls).toEqual([
-      { cwd: "/repo", state: "open", limit: 1000, checksStatuses: ["failing"] },
+      { cwd: "/repo", state: "open", limit: 2000, checksStatuses: ["failing"] },
     ]);
     expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
       state: "open",
@@ -498,6 +498,39 @@ it.effect("keeps a larger bounded candidate window when status still needs local
       columns: ["needs-review"],
       checks: ["failing"],
     });
+  });
+});
+
+it.effect("finds sparse local-filter matches beyond the first candidate page", () => {
+  const pullRequests = Array.from({ length: 1_500 }, (_, index) =>
+    ghPr({
+      number: index + 1,
+      labels: index >= 1_000 ? ["needs,qa"] : ["routine"],
+    }),
+  );
+  const { layer, recorded } = makeLayer({ pullRequests });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      limit: 500,
+      labels: ["needs,qa"],
+    });
+
+    expect(numbers(result)).toHaveLength(500);
+    expect(numbers(result).at(0)).toBe(1_001);
+    expect(numbers(result).at(-1)).toBe(1_500);
+    expect(result.meta).toEqual({
+      requestedLimit: 500,
+      resultLimit: 500,
+      candidateLimit: 5000,
+      candidateCount: 1500,
+      candidateLimitReached: false,
+      matchedCount: 500,
+      returnedCount: 500,
+      bounded: true,
+    });
+    expect(recorded.listCalls).toEqual([{ cwd: "/repo", state: "open", limit: 5000 }]);
   });
 });
 
