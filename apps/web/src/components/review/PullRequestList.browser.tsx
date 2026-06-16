@@ -77,6 +77,20 @@ describe("PullRequestList filters", () => {
     document.body.innerHTML = "";
   });
 
+  it("shows initial sync progress instead of an empty state while the first list request is pending", async () => {
+    nativeApiMock.listPullRequests.mockImplementationOnce(
+      () => new Promise<{ pullRequests: ReviewPullRequestSummary[] }>(() => undefined),
+    );
+    const mounted = await mountList([]);
+
+    try {
+      await expect.element(page.getByText("Syncing repository pull requests")).toBeVisible();
+      expect(document.body.textContent).not.toContain("No open pull requests");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps cached label facet options available while composing server OR filters", async () => {
     const mounted = await mountList([
       pullRequest({ number: 57, title: "Bug labeled work", labels: ["bug"] }),

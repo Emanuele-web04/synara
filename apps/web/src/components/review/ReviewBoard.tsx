@@ -13,9 +13,13 @@ import { GitPullRequestIcon, RefreshCwIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
-import { Skeleton } from "../ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "../base-ui/tabs";
 import { CountChip, EmptyState } from "./reviewPrimitives";
+import {
+  ReviewInitialSyncPanel,
+  ReviewSyncRowsSkeleton,
+  ReviewSyncStatusStrip,
+} from "./ReviewInitialSync";
 import { ReviewBoardCard } from "./ReviewBoardCard";
 import { ReviewFilterBar } from "./ReviewFilterBar";
 import { VirtualizedPullRequestRows } from "./VirtualizedPullRequestRows";
@@ -104,6 +108,9 @@ export function ReviewBoard(props: { cwd: string | null }) {
   const resultCountIsIncomplete =
     pullRequestsQuery.data?.meta?.candidateLimitReached === true &&
     visiblePullRequests.length >= (pullRequestsQuery.data.meta.returnedCount ?? 0);
+  const hasPullRequestListData = pullRequestsQuery.data !== undefined;
+  const isColdSyncing = !hasPullRequestListData && pullRequestsQuery.isFetching;
+  const isRefreshing = hasPullRequestListData && pullRequestsQuery.isFetching;
 
   if (cwd === null) {
     return (
@@ -192,8 +199,11 @@ export function ReviewBoard(props: { cwd: string | null }) {
         </div>
       </div>
 
-      {pullRequestsQuery.isLoading ? (
-        <BoardLoadingSkeleton />
+      {isColdSyncing ? (
+        <BoardLoadingSkeleton
+          isFetching={pullRequestsQuery.isFetching}
+          onRetry={handleSync}
+        />
       ) : pullRequestsQuery.isError ? (
         <div className="flex flex-1 items-center justify-center px-6 text-center text-[12px] text-destructive">
           {pullRequestsQuery.error instanceof Error
@@ -202,15 +212,18 @@ export function ReviewBoard(props: { cwd: string | null }) {
         </div>
       ) : (
         <ScrollArea className="flex-1">
-          <div className="flex h-full min-w-0 flex-col gap-3 p-3 md:min-w-max md:flex-row">
-            {REVIEW_BOARD_COLUMNS.map((column) => (
-              <ReviewBoardColumn
-                key={column.id}
-                column={column}
-                pullRequests={grouped[column.id]}
-                cwd={cwd}
-              />
-            ))}
+          <div className="flex h-full min-w-0 flex-col gap-3 p-3">
+            {isRefreshing ? <ReviewSyncStatusStrip /> : null}
+            <div className="flex min-w-0 flex-col gap-3 md:min-w-max md:flex-row">
+              {REVIEW_BOARD_COLUMNS.map((column) => (
+                <ReviewBoardColumn
+                  key={column.id}
+                  column={column}
+                  pullRequests={grouped[column.id]}
+                  cwd={cwd}
+                />
+              ))}
+            </div>
           </div>
         </ScrollArea>
       )}
@@ -259,46 +272,33 @@ function ReviewBoardColumn(props: {
 
 // Mirror the loaded layout: column shells with placeholder cards, so data arrival
 // fills the columns in place instead of popping a centered spinner into a full board.
-function BoardLoadingSkeleton() {
+function BoardLoadingSkeleton(props: { isFetching: boolean; onRetry: () => void }) {
   return (
     <ScrollArea className="flex-1">
-      <div
-        className="flex h-full min-w-0 flex-col gap-3 p-3 md:min-w-max md:flex-row"
-        aria-busy="true"
-      >
-        {REVIEW_BOARD_COLUMNS.map((column) => (
-          <section
-            key={column.id}
-            className="flex h-full w-full shrink-0 flex-col gap-2 rounded-[1.5rem] border border-border/60 bg-card/55 p-2.5 shadow-sm md:w-72"
-          >
-            <header className="flex shrink-0 items-center gap-2 px-1">
-              <span
-                className="min-w-0 truncate font-medium text-[11px] text-muted-foreground uppercase tracking-wide"
-                title={column.label}
-              >
-                {column.label}
-              </span>
-            </header>
-            <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-              {[0, 1, 2].map((index) => (
-                <li key={index}>
-                  <div className="flex flex-col gap-2 rounded-[1.15rem] border border-border/70 bg-card/90 px-3.5 py-3 shadow-[0_8px_24px_-22px_var(--foreground)]">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <Skeleton className="size-4 rounded-full" />
-                      <Skeleton className="h-3.5 w-3/4" />
-                    </div>
-                    <div className="flex min-w-0 items-center gap-2">
-                      <Skeleton className="h-3 w-20" />
-                      <Skeleton className="h-3 w-14" />
-                      <Skeleton className="ms-auto h-4 w-12 rounded-full" />
-                    </div>
-                    <Skeleton className="h-3 w-11/12" />
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))}
+      <div className="flex h-full min-w-0 flex-col gap-3 p-3" aria-busy="true">
+        <ReviewInitialSyncPanel
+          onAction={props.onRetry}
+          actionLabel="Sync now"
+          actionDisabled={props.isFetching}
+        />
+        <div className="flex min-w-0 flex-col gap-3 md:min-w-max md:flex-row">
+          {REVIEW_BOARD_COLUMNS.map((column) => (
+            <section
+              key={column.id}
+              className="flex h-full w-full shrink-0 flex-col gap-2 rounded-[1.5rem] border border-border/60 bg-card/55 p-2.5 shadow-sm md:w-72"
+            >
+              <header className="flex shrink-0 items-center gap-2 px-1">
+                <span
+                  className="min-w-0 truncate font-medium text-[11px] text-muted-foreground uppercase tracking-wide"
+                  title={column.label}
+                >
+                  {column.label}
+                </span>
+              </header>
+              <ReviewSyncRowsSkeleton rows={3} compact />
+            </section>
+          ))}
+        </div>
       </div>
     </ScrollArea>
   );

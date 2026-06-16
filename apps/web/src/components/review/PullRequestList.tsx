@@ -14,9 +14,13 @@ import {
 } from "~/lib/reviewReactQuery";
 import { rpcErrorMessage } from "~/lib/rpcErrorMessage";
 import { EmptyState } from "./reviewPrimitives";
-import { Skeleton } from "../ui/skeleton";
 import { PullRequestRow } from "./PullRequestRow";
 import { ReviewFilterBar } from "./ReviewFilterBar";
+import {
+  ReviewInitialSyncPanel,
+  ReviewSyncRowsSkeleton,
+  ReviewSyncStatusStrip,
+} from "./ReviewInitialSync";
 import { VirtualizedPullRequestRows } from "./VirtualizedPullRequestRows";
 import {
   type ActiveReviewFilter,
@@ -78,6 +82,18 @@ export function PullRequestList(props: {
   const resultCountIsIncomplete =
     pullRequestsQuery.data?.meta?.candidateLimitReached === true &&
     visible.length >= (pullRequestsQuery.data.meta.returnedCount ?? 0);
+  const hasPullRequestListData = pullRequestsQuery.data !== undefined;
+  const isColdSyncing = !hasPullRequestListData && pullRequestsQuery.isFetching;
+  const isRefreshing = hasPullRequestListData && pullRequestsQuery.isFetching;
+
+  const handleSync = () => {
+    if (!props.cwd) {
+      return;
+    }
+    void queryClient.invalidateQueries({
+      queryKey: reviewQueryKeys.pullRequestLists(props.cwd),
+    });
+  };
 
   if (pullRequestsQuery.isError) {
     return (
@@ -88,8 +104,13 @@ export function PullRequestList(props: {
   }
 
   if (allPullRequests.length === 0) {
-    if (pullRequestsQuery.isLoading) {
-      return <PullRequestListLoadingSkeleton />;
+    if (isColdSyncing || pullRequestsQuery.isFetching) {
+      return (
+        <PullRequestListInitialSync
+          onRetry={handleSync}
+          isFetching={pullRequestsQuery.isFetching}
+        />
+      );
     }
     return (
       <EmptyState icon={<GitPullRequestIcon />} title="No open pull requests">
@@ -115,9 +136,7 @@ export function PullRequestList(props: {
         onSortChange={setSortId}
         onOpenReference={(reference) => props.onSelectSource({ _tag: "pullRequest", reference })}
       />
-      {pullRequestsQuery.isLoading ? (
-        <PullRequestListLoadingSkeleton includeFilter={false} />
-      ) : null}
+      {isRefreshing ? <ReviewSyncStatusStrip className="rounded-[1.15rem]" /> : null}
       {visible.length === 0 ? (
         <EmptyState icon={<GitPullRequestIcon />} title="No matches">
           No pull requests match your filters.
@@ -139,36 +158,17 @@ export function PullRequestList(props: {
   );
 }
 
-function PullRequestListLoadingSkeleton(props: { includeFilter?: boolean }) {
-  const includeFilter = props.includeFilter ?? true;
+function PullRequestListInitialSync(props: { onRetry: () => void; isFetching: boolean }) {
   return (
-    <div className="flex flex-col gap-2" aria-busy="true" aria-label="Loading pull requests">
-      {includeFilter ? (
-        <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-2xl border border-border/60 bg-card/64 p-1.5 shadow-sm">
-          <Skeleton className="h-8 w-72 rounded-2xl" />
-          <Skeleton className="h-8 w-24 rounded-xl" />
-          <Skeleton className="h-8 w-24 rounded-xl" />
-          <Skeleton className="h-8 w-20 rounded-xl" />
-        </div>
-      ) : null}
-      <ul className="flex flex-col gap-1.5">
-        {[0, 1, 2, 3, 4].map((index) => (
-          <li key={index}>
-            <div className="flex min-w-0 flex-col gap-2 rounded-[1.15rem] border border-border/70 bg-card/90 px-3.5 py-3 shadow-[0_8px_24px_-22px_var(--foreground)]">
-              <div className="flex min-w-0 items-center gap-2">
-                <Skeleton className="size-4 rounded-full" />
-                <Skeleton className="h-3.5 w-3/5" />
-                <Skeleton className="ms-auto h-4 w-14 rounded-full" />
-              </div>
-              <div className="flex min-w-0 items-center gap-2">
-                <Skeleton className="h-3 w-24" />
-                <Skeleton className="h-3 w-16" />
-                <Skeleton className="h-3 w-20" />
-              </div>
-            </div>
-          </li>
-        ))}
-      </ul>
+    <div className="flex flex-col gap-2" aria-busy="true">
+      <ReviewInitialSyncPanel
+        title="Syncing repository pull requests"
+        detail="Synara is loading the first review window before it decides whether this repository is empty."
+        onAction={props.onRetry}
+        actionLabel="Sync now"
+        actionDisabled={props.isFetching}
+      />
+      <ReviewSyncRowsSkeleton />
     </div>
   );
 }

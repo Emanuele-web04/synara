@@ -113,6 +113,24 @@ describe("ReviewBoard performance", () => {
     }
   });
 
+  it("keeps cards visible while a manual sync refreshes GitHub data", async () => {
+    const mounted = await mountBoard(makePullRequests(3));
+
+    try {
+      await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
+      nativeApiMock.listPullRequests.mockImplementationOnce(
+        () => new Promise<ReviewListPullRequestsResult>(() => undefined),
+      );
+
+      await page.getByRole("button", { name: "Sync" }).click();
+
+      await expect.element(page.getByText("Updating from GitHub")).toBeVisible();
+      await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("trusts server search results after the debounced query catches up", async () => {
     const pullRequests = [
       {
