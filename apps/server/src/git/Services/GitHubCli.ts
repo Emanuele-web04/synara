@@ -288,7 +288,9 @@ export interface GitHubCliShape {
     readonly assignee?: string;
     readonly assignees?: ReadonlyArray<string>;
     readonly draft?: boolean;
-    readonly checksStatuses?: ReadonlyArray<Extract<GitHubChecksStatus, "passing" | "failing">>;
+    readonly checksStatuses?: ReadonlyArray<
+      Extract<GitHubChecksStatus, "passing" | "failing" | "pending">
+    >;
     readonly reviewStatus?: "approved" | "changes-requested";
   }) => Effect.Effect<ReadonlyArray<GitHubReviewPullRequest>, GitHubCliError>;
 

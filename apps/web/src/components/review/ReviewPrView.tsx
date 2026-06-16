@@ -49,6 +49,17 @@ function reviewSourceKey(source: ReviewSourceRef): string {
   return `branchRange:${source.base}:${source.head}`;
 }
 
+function reviewConversationHydrationKey(input: {
+  readonly cwd: string | null;
+  readonly reference: string;
+  readonly sourceKey: string;
+}): string | null {
+  if (input.cwd === null) {
+    return null;
+  }
+  return [input.cwd, input.reference, input.sourceKey].join("\u001f");
+}
+
 function Centered(props: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center gap-2 px-6 text-center text-[12px] text-muted-foreground">
@@ -171,20 +182,49 @@ export function ReviewPrView(props: {
   const prewarmingReviewChatKeyRef = useRef<string | null>(null);
   const latestSidechatContextRef = useRef<ReviewSidechatContextPayload | null>(null);
   const sourceKey = reviewSourceKey(props.source);
+  const conversationHydrationKey = reviewConversationHydrationKey({
+    cwd: props.cwd,
+    reference: props.reference,
+    sourceKey,
+  });
   useEffect(() => {
     setTab("conversation");
     setSelectedFilePath(null);
   }, [props.reference, sourceKey]);
+  const [readyConversationHydrationKey, setReadyConversationHydrationKey] = useState<string | null>(
+    null,
+  );
+  useEffect(() => {
+    setReadyConversationHydrationKey(null);
+  }, [conversationHydrationKey]);
   const overviewQuery = useQuery(
     reviewLoadPullRequestQueryOptions({ cwd: props.cwd, reference: props.reference }),
   );
   const detail = overviewQuery.data?.detail ?? null;
-  const conversationQuery = useQuery(
-    reviewLoadConversationQueryOptions({
+  useEffect(() => {
+    if (conversationHydrationKey === null || detail === null || tab !== "conversation") {
+      setReadyConversationHydrationKey(null);
+      return;
+    }
+    const frame = window.requestAnimationFrame(() =>
+      setReadyConversationHydrationKey(conversationHydrationKey),
+    );
+    return () => window.cancelAnimationFrame(frame);
+  }, [conversationHydrationKey, detail, tab]);
+  const isConversationHydrationReady =
+    readyConversationHydrationKey !== null &&
+    readyConversationHydrationKey === conversationHydrationKey;
+  const conversationQuery = useQuery({
+    ...reviewLoadConversationQueryOptions({
       cwd: props.cwd,
       reference: detail ? props.reference : null,
     }),
-  );
+    enabled:
+      props.cwd !== null &&
+      detail !== null &&
+      tab === "conversation" &&
+      isConversationHydrationReady,
+  });
   const changesetQuery = useQuery({
     ...reviewLoadChangesetQueryOptions({
       cwd: props.cwd,
@@ -363,7 +403,10 @@ export function ReviewPrView(props: {
                     cwd={props.cwd}
                     reference={props.reference}
                     events={conversationQuery.data?.events ?? []}
-                    isLoading={conversationQuery.isLoading}
+                    isLoading={
+                      conversationQuery.isLoading ||
+                      (detail !== null && tab === "conversation" && !isConversationHydrationReady)
+                    }
                     className={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}
                   />
                 </main>

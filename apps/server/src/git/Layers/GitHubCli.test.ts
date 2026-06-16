@@ -288,6 +288,45 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  it.effect("routes pending check filters through search syntax", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: "[]",
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.listRepositoryPullRequests({
+          cwd: "/repo",
+          state: "open",
+          checksStatuses: ["pending", "passing"],
+        });
+      });
+
+      assert.deepStrictEqual(result, []);
+      expect(mockedRunProcess).toHaveBeenCalledWith(
+        "gh",
+        [
+          "pr",
+          "list",
+          "--state",
+          "open",
+          "--limit",
+          "50",
+          "--search",
+          "(status:pending OR status:success)",
+          "--json",
+          "number,title,author,updatedAt,state,mergedAt,reviewDecision,baseRefName,headRefName,headRepositoryOwner,url,isDraft,additions,deletions,statusCheckRollup,labels,assignees",
+        ],
+        expect.objectContaining({ cwd: "/repo" }),
+      );
+    }),
+  );
+
   it.effect("routes plural author/base/head/assignee filters through grouped search syntax", () =>
     Effect.gen(function* () {
       mockedRunProcess.mockResolvedValueOnce({

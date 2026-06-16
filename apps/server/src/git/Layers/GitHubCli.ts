@@ -97,7 +97,7 @@ function pullRequestListSearch(input: {
   readonly headBranches?: ReadonlyArray<string>;
   readonly labels?: ReadonlyArray<string>;
   readonly assignees?: ReadonlyArray<string>;
-  readonly checksStatuses?: ReadonlyArray<"passing" | "failing">;
+  readonly checksStatuses?: ReadonlyArray<"passing" | "failing" | "pending">;
   readonly reviewStatus?: "approved" | "changes-requested";
 }): string | null {
   const search = optionalTrimmed(input.search);
@@ -108,7 +108,13 @@ function pullRequestListSearch(input: {
   const labelSearch = pullRequestLabelSearch(input.labels);
   const assigneesSearch = searchQualifierOrGroup("assignee", input.assignees);
   const checksStatusTerms = [...new Set(input.checksStatuses ?? [])]
-    .map((status) => (status === "passing" ? "status:success" : "status:failure"))
+    .map((status) =>
+      status === "passing"
+        ? "status:success"
+        : status === "failing"
+          ? "status:failure"
+          : "status:pending",
+    )
     .sort();
   const checksStatusSearch =
     checksStatusTerms.length === 0

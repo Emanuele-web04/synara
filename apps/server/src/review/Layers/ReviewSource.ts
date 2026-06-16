@@ -265,7 +265,7 @@ function hasLocalListFilters(input: ReviewListPullRequestsInput, viewerLogin: st
   );
   const nativeChecksStatuses = nativeListChecksStatuses(input.checks);
   const localChecks = [...normalizedSet(input.checks)].filter(
-    (check) => !nativeChecksStatuses.includes(check as "passing" | "failing"),
+    (check) => !nativeChecksStatuses.includes(check as "passing" | "failing" | "pending"),
   );
   return (
     localAuthors.length > 0 ||
@@ -319,11 +319,11 @@ function nativeListReviewStatus(
 
 function nativeListChecksStatuses(
   checks: ReadonlyArray<"passing" | "failing" | "pending" | "none"> | undefined,
-): ReadonlyArray<"passing" | "failing"> {
+): ReadonlyArray<"passing" | "failing" | "pending"> {
   const normalized = [...normalizedSet(checks)];
-  const nativeStatuses: Array<"passing" | "failing"> = [];
+  const nativeStatuses: Array<"passing" | "failing" | "pending"> = [];
   for (const check of normalized) {
-    if (check === "passing" || check === "failing") {
+    if (check === "passing" || check === "failing" || check === "pending") {
       nativeStatuses.push(check);
       continue;
     }

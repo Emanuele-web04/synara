@@ -43,7 +43,7 @@ interface RecordedListCall {
   readonly assignee?: string;
   readonly assignees?: ReadonlyArray<string>;
   readonly draft?: boolean;
-  readonly checksStatuses?: ReadonlyArray<"passing" | "failing">;
+  readonly checksStatuses?: ReadonlyArray<"passing" | "failing" | "pending">;
   readonly reviewStatus?: "approved" | "changes-requested";
 }
 
@@ -1019,7 +1019,7 @@ it.effect("keeps pending and none check filters on the local candidate window", 
   });
 });
 
-it.effect("keeps mixed precise and imprecise check filters on the local candidate window", () => {
+it.effect("pushes pending check filters through GitHub search with precise checks", () => {
   const { layer, recorded } = makeLayer({
     pullRequests: [
       ghPr({ number: 1, checksStatus: "passing" }),
@@ -1039,10 +1039,11 @@ it.effect("keeps mixed precise and imprecise check filters on the local candidat
       {
         cwd: "/repo",
         state: "open",
-        limit: 1000,
+        limit: 50,
+        checksStatuses: ["passing", "pending"],
       },
     ]);
-    expect(result.meta?.candidateLimit).toBe(1000);
+    expect(result.meta?.candidateLimit).toBe(50);
   });
 });
 
