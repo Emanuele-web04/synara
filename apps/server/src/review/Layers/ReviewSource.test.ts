@@ -790,14 +790,14 @@ it.effect("sorts expanded server candidates before slicing bounded list results"
     expect(numbers(result).at(0)).toBe(90);
     expect(result.meta).toEqual({
       resultLimit: 50,
-      candidateLimit: 5000,
+      candidateLimit: 1000,
       candidateCount: 100,
       candidateLimitReached: false,
       matchedCount: 100,
       returnedCount: 50,
       bounded: true,
     });
-    expect(recorded.listCalls).toEqual([{ cwd: "/repo", state: "open", limit: 5000 }]);
+    expect(recorded.listCalls).toEqual([{ cwd: "/repo", state: "open", limit: 1000 }]);
     expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toMatchObject({
       state: "open",
       sort: "title",
@@ -834,15 +834,48 @@ it.effect("reuses expanded list candidates when load more only increases the res
     expect(secondPage.meta).toEqual({
       requestedLimit: 100,
       resultLimit: 100,
-      candidateLimit: 5000,
+      candidateLimit: 1000,
       candidateCount: 100,
       candidateLimitReached: false,
       matchedCount: 100,
       returnedCount: 100,
       bounded: true,
     });
-    expect(recorded.listCalls).toEqual([{ cwd: "/repo", state: "open", limit: 5000 }]);
+    expect(recorded.listCalls).toEqual([{ cwd: "/repo", state: "open", limit: 1000 }]);
   }).pipe(Effect.provide(layer));
+});
+
+it.effect("bounds sorted candidate fetches to the local filter window", () => {
+  const repositoryPullRequestCount = 10_000;
+  const pullRequests = Array.from({ length: repositoryPullRequestCount }, (_, index) =>
+    ghPr({
+      number: index + 1,
+      title: `Review ${String(index + 1).padStart(5, "0")}`,
+    }),
+  );
+  const { layer, recorded } = makeLayer({ pullRequests });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, {
+      cwd: "/repo",
+      sort: "title",
+    });
+    const candidateFetchReduction =
+      repositoryPullRequestCount / (result.meta?.candidateLimit ?? repositoryPullRequestCount);
+
+    expect(result.pullRequests).toHaveLength(50);
+    expect(candidateFetchReduction).toBeGreaterThanOrEqual(10);
+    expect(result.meta).toEqual({
+      resultLimit: 50,
+      candidateLimit: 1000,
+      candidateCount: 1000,
+      candidateLimitReached: true,
+      matchedCount: 1000,
+      returnedCount: 50,
+      bounded: true,
+    });
+    expect(recorded.listCalls).toEqual([{ cwd: "/repo", state: "open", limit: 1000 }]);
+  });
 });
 
 it.effect("pushes a single changes-requested status to GitHub", () => {

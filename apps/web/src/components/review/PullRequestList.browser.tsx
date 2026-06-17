@@ -189,6 +189,56 @@ describe("PullRequestList filters", () => {
     }
   });
 
+  it("keeps sorted list rendering bounded after server-backed sorting", async () => {
+    const sortedPullRequests = Array.from({ length: 50 }, (_, index) =>
+      pullRequest({
+        number: index + 1,
+        title: `Sorted PR ${String(index + 1)}`,
+        labels: [],
+      }),
+    );
+    const mounted = await mountList(
+      Array.from({ length: 50 }, (_, index) =>
+        pullRequest({
+          number: index + 101,
+          title: `Initial PR ${String(index + 1)}`,
+          labels: [],
+        }),
+      ),
+    );
+
+    try {
+      await expect.element(page.getByText("Initial PR 1", { exact: true })).toBeVisible();
+      nativeApiMock.listPullRequests.mockResolvedValueOnce({
+        pullRequests: sortedPullRequests,
+        meta: {
+          resultLimit: 50,
+          candidateLimit: 1000,
+          candidateCount: 1000,
+          candidateLimitReached: true,
+          matchedCount: 1000,
+          returnedCount: 50,
+          bounded: true,
+        },
+      });
+
+      await page.getByRole("button", { name: /Sort.*Recently updated/ }).click();
+      await page.getByText("Title (A–Z)", { exact: true }).click();
+
+      await vi.waitFor(() => {
+        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+          cwd: "/repo",
+          sort: "title",
+        });
+      });
+      await expect.element(page.getByText("Sorted PR 1", { exact: true })).toBeVisible();
+      expect(document.querySelectorAll('[role="listitem"]').length).toBeLessThanOrEqual(25);
+      expect(document.body.textContent).not.toContain("Sorted PR 50");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("loads a larger review window when the list scrolls near the bottom", async () => {
     let resolveNextWindow:
       | ((value: ReviewListPullRequestsResult) => void)

@@ -49,7 +49,6 @@ const DEFAULT_REVIEW_LIST_RESULT_LIMIT = 50;
 const MAX_REVIEW_LIST_RESULT_LIMIT = 500;
 const FILTERED_REVIEW_LIST_CANDIDATE_LIMIT = 1_000;
 const FILTERED_REVIEW_LIST_CANDIDATE_MULTIPLIER = 10;
-const SORTED_REVIEW_LIST_CANDIDATE_LIMIT = 5_000;
 const inFlightRefreshKeys = new Set<string>();
 
 interface ReviewCacheIdentity {
@@ -396,9 +395,7 @@ function githubListLimit(
     resultListLimit(input) * FILTERED_REVIEW_LIST_CANDIDATE_MULTIPLIER,
     FILTERED_REVIEW_LIST_CANDIDATE_LIMIT,
   );
-  return sortNeedsExpandedCandidates(input)
-    ? Math.max(localFilterCandidateLimit, SORTED_REVIEW_LIST_CANDIDATE_LIMIT)
-    : localFilterCandidateLimit;
+  return localFilterCandidateLimit;
 }
 
 function toChangedFiles(patch: string): ReadonlyArray<ReviewChangedFile> {
