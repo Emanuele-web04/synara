@@ -279,14 +279,12 @@ describe("ReviewPrView performance", () => {
 
       queuedFrame?.(performance.now());
 
-      await expect.poll(() => nativeApiMock.loadPullRequestSurface.mock.calls.length).toBe(1);
-      expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledWith({
+      await expect.poll(() => nativeApiMock.loadConversation.mock.calls.length).toBe(1);
+      expect(nativeApiMock.loadConversation).toHaveBeenCalledWith({
         cwd: CWD,
         reference: REFERENCE,
-        source: SOURCE,
-        includeConversation: true,
       });
-      expect(nativeApiMock.loadConversation).toHaveBeenCalledTimes(0);
+      expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadChangeset).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadPullRequest).toHaveBeenCalledTimes(0);
     } finally {
@@ -327,8 +325,9 @@ describe("ReviewPrView performance", () => {
       await expect.element(page.getByRole("heading", { name: DETAIL.title })).toBeVisible();
       expect(queuedFrame).not.toBeNull();
       queuedFrame?.(performance.now());
-      await expect.poll(() => nativeApiMock.loadPullRequestSurface.mock.calls.length).toBe(1);
+      await expect.poll(() => nativeApiMock.loadConversation.mock.calls.length).toBe(1);
       nativeApiMock.loadPullRequestSurface.mockClear();
+      nativeApiMock.loadConversation.mockClear();
 
       await page.getByRole("button", { name: "Review changes" }).click();
 

@@ -8,6 +8,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  reviewLoadConversationQueryOptions,
   reviewLoadPullRequestHeaderQueryOptions,
   reviewLoadPullRequestSurfaceQueryOptions,
   reviewSourceKey,
@@ -130,9 +131,7 @@ export function ReviewPrView(props: {
     setTab("conversation");
     setSelectedFilePath(null);
   }, [props.reference, sourceKey]);
-  const [readySurfaceHydrationKey, setReadySurfaceHydrationKey] = useState<string | null>(
-    null,
-  );
+  const [readySurfaceHydrationKey, setReadySurfaceHydrationKey] = useState<string | null>(null);
   useEffect(() => {
     setReadySurfaceHydrationKey(null);
   }, [conversationHydrationKey]);
@@ -158,11 +157,23 @@ export function ReviewPrView(props: {
       cwd: props.cwd,
       reference: headerDetail ? props.reference : null,
       source: props.source,
-      includeConversation: tab === "conversation",
+      includeConversation: false,
       includeChangeset: tab === "files",
       queryClient,
     }),
-    enabled: props.cwd !== null && headerDetail !== null && isSurfaceHydrationReady,
+    enabled:
+      props.cwd !== null && headerDetail !== null && isSurfaceHydrationReady && tab === "files",
+  });
+  const conversationQuery = useQuery({
+    ...reviewLoadConversationQueryOptions({
+      cwd: props.cwd,
+      reference: headerDetail ? props.reference : null,
+    }),
+    enabled:
+      props.cwd !== null &&
+      headerDetail !== null &&
+      isSurfaceHydrationReady &&
+      tab === "conversation",
   });
   const overview = surfaceQuery.data?.overview ?? null;
   const detail = overview?.detail ?? headerDetail;
@@ -187,7 +198,7 @@ export function ReviewPrView(props: {
     ],
   );
   const checks = overview?.checks ?? EMPTY_CHECKS;
-  const events = surfaceQuery.data?.conversation?.events ?? EMPTY_EVENTS;
+  const events = conversationQuery.data?.events ?? EMPTY_EVENTS;
   const sidechatContext = useMemo(() => {
     if (!detail) {
       return null;
@@ -351,8 +362,8 @@ export function ReviewPrView(props: {
                       (detail !== null &&
                         tab === "conversation" &&
                         isSurfaceHydrationReady &&
-                        surfaceQuery.isLoading &&
-                        surfaceQuery.data?.conversation === undefined)
+                        conversationQuery.isLoading &&
+                        conversationQuery.data === undefined)
                     }
                     className={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}
                   />
