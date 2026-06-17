@@ -112,6 +112,9 @@ export function PullRequestList(props: {
     }
     setResultLimitState((current) => {
       const currentLimit = current?.scopeKey === listScopeKey ? current.limit : null;
+      if (currentLimit !== null && currentLimit > (listMeta?.resultLimit ?? 0)) {
+        return current;
+      }
       return {
         scopeKey: listScopeKey,
         limit: Math.min(

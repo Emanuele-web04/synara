@@ -224,6 +224,8 @@ describe("ReviewBoard performance", () => {
       expect(list).not.toBeNull();
       list!.scrollTop = list!.scrollHeight - list!.clientHeight;
       list!.dispatchEvent(new Event("scroll", { bubbles: true }));
+      list!.dispatchEvent(new Event("scroll", { bubbles: true }));
+      list!.dispatchEvent(new Event("scroll", { bubbles: true }));
 
       await vi.waitFor(() => {
         expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
@@ -231,6 +233,10 @@ describe("ReviewBoard performance", () => {
           limit: 100,
         });
       });
+      expect(nativeApiMock.listPullRequests.mock.calls).toEqual([
+        [{ cwd: "/repo" }],
+        [{ cwd: "/repo", limit: 100 }],
+      ]);
 
       resolveNextWindow?.({
         pullRequests: makePullRequests(100),
