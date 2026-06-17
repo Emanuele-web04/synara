@@ -1,7 +1,8 @@
 import type { ReviewListPullRequestsResult, ReviewPullRequestSummary } from "@t3tools/contracts";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 
 import {
@@ -24,6 +25,7 @@ import { ReviewFilterBar } from "./ReviewFilterBar";
 import { VirtualizedPullRequestRows } from "./VirtualizedPullRequestRows";
 import {
   type ActiveReviewFilter,
+  type ReviewServerListFilters,
   buildReviewPullFilterOptions,
   filterReviewPullRequests,
   reviewPullFilterDefs,
@@ -34,16 +36,62 @@ import {
   REVIEW_BOARD_COLUMNS,
   REVIEW_BOARD_VIEWS,
   type ReviewBoardView,
+  type ReviewColumnId,
+  type ReviewColumnAccent,
+  deriveReviewColumn,
   filterByView,
-  groupByColumn,
 } from "./reviewBoardColumns";
 
 const REVIEW_BOARD_CARD_ROW_HEIGHT = 128;
+type ReviewBoardColumnQueryInput = Parameters<typeof reviewListPullRequestsQueryOptions>[0];
+
+const COLUMN_ACCENT_DOT: Record<ReviewColumnAccent, string> = {
+  attention: "bg-sky-500",
+  warning: "bg-amber-500",
+  success: "bg-emerald-500",
+  muted: "bg-muted-foreground/45",
+  merged: "bg-violet-500",
+};
+
+const COLUMN_ACCENT_CHIP: Record<ReviewColumnAccent, string> = {
+  attention: "bg-sky-500/14 text-sky-700 dark:bg-sky-400/16 dark:text-sky-300",
+  warning: "bg-amber-500/14 text-amber-700 dark:bg-amber-400/16 dark:text-amber-300",
+  success: "bg-emerald-500/14 text-emerald-700 dark:bg-emerald-400/16 dark:text-emerald-300",
+  muted: "bg-muted text-muted-foreground",
+  merged: "bg-violet-500/14 text-violet-700 dark:bg-violet-400/16 dark:text-violet-300",
+};
 const REVIEW_LIST_PAGE_SIZE = 50;
 const REVIEW_LIST_MAX_LIMIT = 500;
 
 function viewNeedsViewer(view: ReviewBoardView): boolean {
   return view === "mine" || view === "needs-my-review";
+}
+
+function boardColumnListState(columnId: ReviewColumnId): "open" | "merged" {
+  return columnId === "merged" ? "merged" : "open";
+}
+
+function isColumnAvailableForView(columnId: ReviewColumnId, view: ReviewBoardView): boolean {
+  return view === "merged" ? columnId === "merged" : columnId !== "merged";
+}
+
+function selectedColumnsAllow(
+  columnId: ReviewColumnId,
+  selectedColumns: ReadonlyArray<ReviewColumnId> | undefined,
+): boolean {
+  return selectedColumns === undefined || selectedColumns.includes(columnId);
+}
+
+function boardColumnServerFilters(
+  columnId: ReviewColumnId,
+  serverFilters: ReviewServerListFilters,
+): ReviewServerListFilters {
+  const { columns: _columns, draft: _draft, ...rest } = serverFilters;
+  return {
+    ...rest,
+    columns: [columnId],
+    ...(columnId === "draft" ? { draft: true } : {}),
+  };
 }
 
 export function ReviewBoard(props: { cwd: string | null }) {
@@ -66,7 +114,6 @@ export function ReviewBoard(props: { cwd: string | null }) {
   });
   const viewerLogin = viewerQuery.data?.login ?? null;
   const viewerFilterReady = !shouldLoadViewer || viewerLogin !== null;
-  const listState = view === "merged" ? "merged" : "open";
   const viewServerFilters = useMemo(() => {
     if (!viewerLogin || view === "all" || view === "merged") {
       return {};
@@ -83,43 +130,55 @@ export function ReviewBoard(props: { cwd: string | null }) {
     () => ({ ...toReviewServerListFilters(activeFilters), ...viewServerFilters }),
     [activeFilters, viewServerFilters],
   );
-  const listScopeKey = useMemo(
-    () => JSON.stringify([cwd, listState, serverSearch.trim(), serverFilters]),
-    [cwd, listState, serverSearch, serverFilters],
-  );
-  const resultLimit =
-    resultLimitState?.scopeKey === listScopeKey ? resultLimitState.limit : null;
-  const pullRequestsQuery = useQuery(
-    {
-      ...reviewListPullRequestsQueryOptions({
-        cwd: viewerFilterReady ? cwd : null,
-        ...(listState === "merged" ? { state: listState } : {}),
-        ...(resultLimit !== null ? { limit: resultLimit } : {}),
-        search: serverSearch,
-        ...serverFilters,
+  const columnQueryInputs = useMemo(
+    () =>
+      REVIEW_BOARD_COLUMNS.map((column): {
+        columnId: ReviewColumnId;
+        enabled: boolean;
+        scopeKey: string;
+        input: ReviewBoardColumnQueryInput;
+      } => {
+        const selectedColumns = serverFilters.columns;
+        const enabled =
+          isColumnAvailableForView(column.id, view) &&
+          selectedColumnsAllow(column.id, selectedColumns);
+        const columnFilters = boardColumnServerFilters(column.id, serverFilters);
+        const state = boardColumnListState(column.id);
+        const scopeKey = JSON.stringify([cwd, column.id, state, serverSearch.trim(), columnFilters]);
+        const resultLimitForColumn =
+          resultLimitState?.scopeKey === scopeKey ? resultLimitState.limit : null;
+        return {
+          columnId: column.id,
+          enabled,
+          scopeKey,
+          input: {
+            cwd: enabled && viewerFilterReady ? cwd : null,
+            state,
+            ...(resultLimitForColumn !== null ? { limit: resultLimitForColumn } : {}),
+            search: serverSearch,
+            ...columnFilters,
+          },
+        };
       }),
-      placeholderData: (previousData: ReviewListPullRequestsResult | undefined) => previousData,
-    },
+    [cwd, resultLimitState, serverFilters, serverSearch, view, viewerFilterReady],
   );
+  const columnQueries = useQueries({
+    queries: columnQueryInputs.map((columnInput) => ({
+      ...reviewListPullRequestsQueryOptions(columnInput.input),
+      placeholderData: (previousData: ReviewListPullRequestsResult | undefined) => previousData,
+    })),
+  });
   const clientSearch = search.trim() === serverSearch.trim() ? "" : search;
   const facetBasePullRequests = useMemo(() => {
-    const basePullRequests =
-      queryClient.getQueryData<ReviewListPullRequestsResult>(
-        reviewQueryKeys.pullRequests({
-          cwd,
-          ...(listState === "merged" ? { state: listState } : {}),
-        }),
-      )?.pullRequests ?? [];
-    return uniqueReviewPullRequests([
-      ...basePullRequests,
-      ...(pullRequestsQuery.data?.pullRequests ?? []),
-    ]);
-  }, [queryClient, cwd, listState, pullRequestsQuery.data]);
+    const cachedPullRequests = queryClient
+      .getQueriesData<ReviewListPullRequestsResult>({
+        queryKey: reviewQueryKeys.pullRequestLists(cwd),
+      })
+      .flatMap(([, data]) => data?.pullRequests ?? []);
+    const columnPullRequests = columnQueries.flatMap((query) => query.data?.pullRequests ?? []);
+    return uniqueReviewPullRequests([...cachedPullRequests, ...columnPullRequests]);
+  }, [columnQueries, queryClient, cwd]);
 
-  const byView = useMemo(() => {
-    const all = pullRequestsQuery.data?.pullRequests ?? [];
-    return filterByView(all, view, viewerLogin);
-  }, [pullRequestsQuery.data, view, viewerLogin]);
   const facetItems = useMemo(
     () => filterByView(facetBasePullRequests, view, viewerLogin),
     [facetBasePullRequests, view, viewerLogin],
@@ -128,42 +187,85 @@ export function ReviewBoard(props: { cwd: string | null }) {
     () => buildReviewPullFilterOptions(facetItems),
     [facetItems],
   );
-  const visiblePullRequests = useMemo(
-    () => filterReviewPullRequests(byView, clientSearch, activeFilters),
-    [byView, clientSearch, activeFilters],
+  const columnStates = useMemo(
+    () =>
+      REVIEW_BOARD_COLUMNS.map((column, index) => {
+        const columnInput = columnQueryInputs[index]!;
+        const query = columnQueries[index]!;
+        const pullRequests = filterReviewPullRequests(
+          filterByView(query.data?.pullRequests ?? [], view, viewerLogin).filter(
+            (summary) => deriveReviewColumn(summary) === column.id,
+          ),
+          clientSearch,
+          activeFilters,
+        );
+        const meta = query.data?.meta;
+        const resultLimitForColumn =
+          resultLimitState?.scopeKey === columnInput.scopeKey ? resultLimitState.limit : null;
+        const canLoadMore =
+          columnInput.enabled &&
+          meta !== undefined &&
+          (meta.candidateLimitReached || meta.matchedCount > meta.returnedCount) &&
+          (resultLimitForColumn ?? meta.resultLimit) < REVIEW_LIST_MAX_LIMIT;
+        return {
+          columnId: column.id,
+          enabled: columnInput.enabled,
+          scopeKey: columnInput.scopeKey,
+          pullRequests,
+          query,
+          meta,
+          canLoadMore,
+        };
+      }),
+    [
+      activeFilters,
+      clientSearch,
+      columnQueries,
+      columnQueryInputs,
+      resultLimitState,
+      view,
+      viewerLogin,
+    ],
   );
-  const grouped = useMemo(() => groupByColumn(visiblePullRequests), [visiblePullRequests]);
+  const visiblePullRequests = useMemo(
+    () => columnStates.flatMap((column) => column.pullRequests),
+    [columnStates],
+  );
   const resultCountIsIncomplete =
-    pullRequestsQuery.data?.meta?.candidateLimitReached === true &&
-    visiblePullRequests.length >= (pullRequestsQuery.data.meta.returnedCount ?? 0);
-  const hasPullRequestListData = pullRequestsQuery.data !== undefined;
+    columnStates.some((column) => column.meta?.candidateLimitReached === true) &&
+    columnStates.some(
+      (column) =>
+        column.meta !== undefined && column.pullRequests.length >= (column.meta.returnedCount ?? 0),
+    );
+  const enabledColumnStates = columnStates.filter((column) => column.enabled);
+  const hasPullRequestListData =
+    enabledColumnStates.length > 0 && enabledColumnStates.every((column) => column.query.data);
   const isColdSyncing =
     !hasPullRequestListData &&
-    (pullRequestsQuery.isFetching || (shouldLoadViewer && viewerQuery.isFetching));
-  const isRefreshing = hasPullRequestListData && pullRequestsQuery.isFetching;
-  const listMeta = pullRequestsQuery.data?.meta;
-  const canLoadMore =
-    listMeta !== undefined &&
-    (listMeta.candidateLimitReached || listMeta.matchedCount > listMeta.returnedCount) &&
-    (resultLimit ?? listMeta.resultLimit) < REVIEW_LIST_MAX_LIMIT;
-  const loadMore = useCallback(() => {
-    if (!canLoadMore || pullRequestsQuery.isFetching) {
+    (enabledColumnStates.some((column) => column.query.isFetching) ||
+      (shouldLoadViewer && viewerQuery.isFetching));
+  const isRefreshing =
+    hasPullRequestListData && enabledColumnStates.some((column) => column.query.isFetching);
+  const errorState = enabledColumnStates.find((column) => column.query.isError)?.query.error;
+  const loadMore = useCallback((columnId: ReviewColumnId) => {
+    const columnState = columnStates.find((column) => column.columnId === columnId);
+    if (!columnState?.canLoadMore || columnState.query.isFetching) {
       return;
     }
     setResultLimitState((current) => {
-      const currentLimit = current?.scopeKey === listScopeKey ? current.limit : null;
-      if (currentLimit !== null && currentLimit > (listMeta?.resultLimit ?? 0)) {
+      const currentLimit = current?.scopeKey === columnState.scopeKey ? current.limit : null;
+      if (currentLimit !== null && currentLimit > (columnState.meta?.resultLimit ?? 0)) {
         return current;
       }
       return {
-        scopeKey: listScopeKey,
+        scopeKey: columnState.scopeKey,
         limit: Math.min(
-          (currentLimit ?? listMeta?.resultLimit ?? 0) + REVIEW_LIST_PAGE_SIZE,
+          (currentLimit ?? columnState.meta?.resultLimit ?? 0) + REVIEW_LIST_PAGE_SIZE,
           REVIEW_LIST_MAX_LIMIT,
         ),
       };
     });
-  }, [canLoadMore, listMeta?.resultLimit, listScopeKey, pullRequestsQuery.isFetching]);
+  }, [columnStates]);
 
   if (cwd === null) {
     return (
@@ -244,9 +346,13 @@ export function ReviewBoard(props: { cwd: string | null }) {
             variant="outline"
             className="ms-auto h-8 shrink-0 rounded-full bg-background/72 px-3 text-[12px] shadow-none ring-border/55 transition-[background-color] hover:bg-background"
             onClick={handleSync}
-            disabled={pullRequestsQuery.isFetching}
+            disabled={enabledColumnStates.some((column) => column.query.isFetching)}
           >
-            <RefreshCwIcon className={cn(pullRequestsQuery.isFetching && "animate-spin")} />
+            <RefreshCwIcon
+              className={cn(
+                enabledColumnStates.some((column) => column.query.isFetching) && "animate-spin",
+              )}
+            />
             Sync
           </Button>
         </div>
@@ -254,13 +360,13 @@ export function ReviewBoard(props: { cwd: string | null }) {
 
       {isColdSyncing ? (
         <BoardLoadingSkeleton
-          isFetching={pullRequestsQuery.isFetching}
+          isFetching={enabledColumnStates.some((column) => column.query.isFetching)}
           onRetry={handleSync}
         />
-      ) : pullRequestsQuery.isError ? (
+      ) : errorState ? (
         <div className="flex flex-1 items-center justify-center px-6 text-center text-[12px] text-destructive">
-          {pullRequestsQuery.error instanceof Error
-            ? pullRequestsQuery.error.message
+          {errorState instanceof Error
+            ? errorState.message
             : "Failed to load pull requests."}
         </div>
       ) : (
@@ -271,15 +377,46 @@ export function ReviewBoard(props: { cwd: string | null }) {
               <ReviewBoardColumn
                 key={column.id}
                 column={column}
-                pullRequests={grouped[column.id]}
+                pullRequests={
+                  columnStates.find((columnState) => columnState.columnId === column.id)
+                    ?.pullRequests ?? []
+                }
                 cwd={cwd}
-                onEndReached={loadMore}
+                onEndReached={() => loadMore(column.id)}
               />
             ))}
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+function ReviewBoardColumnShell(props: {
+  column: (typeof REVIEW_BOARD_COLUMNS)[number];
+  count?: number;
+  children: ReactNode;
+}) {
+  const { column } = props;
+  return (
+    <section className="flex min-h-0 w-full shrink-0 flex-col gap-2 overflow-hidden rounded-[1.5rem] border border-border/60 bg-card/55 p-2.5 shadow-sm md:h-full md:w-72">
+      <header className="flex shrink-0 items-center gap-2 px-1">
+        <span
+          className={cn("size-1.5 shrink-0 rounded-full", COLUMN_ACCENT_DOT[column.accent])}
+          aria-hidden="true"
+        />
+        <span
+          className="min-w-0 truncate font-medium text-[11px] text-muted-foreground uppercase tracking-wide"
+          title={column.label}
+        >
+          {column.label}
+        </span>
+        {props.count !== undefined && props.count > 0 ? (
+          <CountChip count={props.count} className={COLUMN_ACCENT_CHIP[column.accent]} />
+        ) : null}
+      </header>
+      {props.children}
+    </section>
   );
 }
 
@@ -292,16 +429,7 @@ function ReviewBoardColumn(props: {
   const { column, pullRequests, cwd, onEndReached } = props;
   const isEmpty = pullRequests.length === 0;
   return (
-    <section className="flex min-h-0 w-full shrink-0 flex-col gap-2 overflow-hidden rounded-[1.5rem] border border-border/60 bg-card/55 p-2.5 shadow-sm md:h-full md:w-72">
-      <header className="flex shrink-0 items-center gap-2 px-1">
-        <span
-          className="min-w-0 truncate font-medium text-[11px] text-muted-foreground uppercase tracking-wide"
-          title={column.label}
-        >
-          {column.label}
-        </span>
-        {pullRequests.length > 0 ? <CountChip count={pullRequests.length} /> : null}
-      </header>
+    <ReviewBoardColumnShell column={column} count={pullRequests.length}>
       {isEmpty ? (
         <EmptyState icon={<GitPullRequestIcon />} title={column.emptyTitle}>
           {column.emptyHint}
@@ -320,7 +448,7 @@ function ReviewBoardColumn(props: {
           )}
         />
       )}
-    </section>
+    </ReviewBoardColumnShell>
   );
 }
 
@@ -336,20 +464,9 @@ function BoardLoadingSkeleton(props: { isFetching: boolean; onRetry: () => void 
       />
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-x-auto overflow-y-hidden md:flex-row">
         {REVIEW_BOARD_COLUMNS.map((column) => (
-          <section
-            key={column.id}
-            className="flex min-h-0 w-full shrink-0 flex-col gap-2 overflow-hidden rounded-[1.5rem] border border-border/60 bg-card/55 p-2.5 shadow-sm md:h-full md:w-72"
-          >
-            <header className="flex shrink-0 items-center gap-2 px-1">
-              <span
-                className="min-w-0 truncate font-medium text-[11px] text-muted-foreground uppercase tracking-wide"
-                title={column.label}
-              >
-                {column.label}
-              </span>
-            </header>
+          <ReviewBoardColumnShell key={column.id} column={column}>
             <ReviewSyncRowsSkeleton rows={3} compact />
-          </section>
+          </ReviewBoardColumnShell>
         ))}
       </div>
     </div>

@@ -1,6 +1,10 @@
 import "../../index.css";
 
-import type { ReviewListPullRequestsResult, ReviewPullRequestSummary } from "@t3tools/contracts";
+import type {
+  ReviewListPullRequestsInput,
+  ReviewListPullRequestsResult,
+  ReviewPullRequestSummary,
+} from "@t3tools/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +15,11 @@ import { ReviewBoard } from "./ReviewBoard";
 const navigateMock = vi.hoisted(() => vi.fn());
 const nativeApiMock = vi.hoisted(() => ({
   getViewer: vi.fn(async () => ({ login: "tyler" })),
-  listPullRequests: vi.fn(async () => ({ pullRequests: [] as ReviewPullRequestSummary[] })),
+  listPullRequests: vi.fn(
+    async (_input: ReviewListPullRequestsInput): Promise<ReviewListPullRequestsResult> => ({
+      pullRequests: [],
+    }),
+  ),
 }));
 
 vi.mock("@tanstack/react-router", async (importActual) => {
@@ -84,6 +92,25 @@ async function mountBoard(
   };
 }
 
+function listPullRequestCalls(): ReadonlyArray<ReviewListPullRequestsInput> {
+  return nativeApiMock.listPullRequests.mock.calls.map(([input]) => input);
+}
+
+function expectListPullRequestCall(input: ReviewListPullRequestsInput): void {
+  expect(listPullRequestCalls()).toContainEqual(input);
+}
+
+function expectInitialOpenColumnCalls(): void {
+  expect(listPullRequestCalls()).toEqual(
+    expect.arrayContaining([
+      { cwd: "/repo", state: "open", columns: ["needs-review"] },
+      { cwd: "/repo", state: "open", columns: ["changes-requested"] },
+      { cwd: "/repo", state: "open", columns: ["approved"] },
+      { cwd: "/repo", state: "open", columns: ["draft"], draft: true },
+    ]),
+  );
+}
+
 describe("ReviewBoard performance", () => {
   afterEach(() => {
     nativeApiMock.getViewer.mockClear();
@@ -103,8 +130,8 @@ describe("ReviewBoard performance", () => {
       await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
 
       expect(nativeApiMock.getViewer).toHaveBeenCalledTimes(0);
-      expect(nativeApiMock.listPullRequests).toHaveBeenCalledTimes(1);
-      expect(nativeApiMock.listPullRequests).toHaveBeenCalledWith({ cwd: "/repo" });
+      expect(nativeApiMock.listPullRequests).toHaveBeenCalledTimes(4);
+      expectInitialOpenColumnCalls();
       expect(document.querySelectorAll('[role="listitem"]').length).toBeLessThanOrEqual(
         Math.ceil(pullRequests.length / 10),
       );
@@ -195,9 +222,7 @@ describe("ReviewBoard performance", () => {
 
   it("loads a larger review window when a board column scrolls near the bottom", async () => {
     const firstWindow = makePullRequests(50);
-    let resolveNextWindow:
-      | ((value: ReviewListPullRequestsResult) => void)
-      | null = null;
+    let resolveNextWindow: ((value: ReviewListPullRequestsResult) => void) | null = null;
     const mounted = await mountBoard({
       pullRequests: firstWindow,
       meta: {
@@ -228,15 +253,14 @@ describe("ReviewBoard performance", () => {
       list!.dispatchEvent(new Event("scroll", { bubbles: true }));
 
       await vi.waitFor(() => {
-        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+        expectListPullRequestCall({
           cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
           limit: 100,
         });
       });
-      expect(nativeApiMock.listPullRequests.mock.calls).toEqual([
-        [{ cwd: "/repo" }],
-        [{ cwd: "/repo", limit: 100 }],
-      ]);
+      expect(nativeApiMock.listPullRequests.mock.calls).toHaveLength(5);
 
       resolveNextWindow?.({
         pullRequests: makePullRequests(100),
@@ -273,8 +297,10 @@ describe("ReviewBoard performance", () => {
       await page.getByPlaceholder("Search PRs, #7870, or a GitHub URL").fill("body-only-match");
 
       await vi.waitFor(() => {
-        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+        expectListPullRequestCall({
           cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
           search: "body-only-match",
         });
       });
@@ -303,13 +329,10 @@ describe("ReviewBoard performance", () => {
       await expect.element(page.getByText("Needs reviewer attention")).toBeVisible();
 
       expect(nativeApiMock.getViewer).toHaveBeenCalledTimes(1);
-      expect(nativeApiMock.listPullRequests).toHaveBeenCalledTimes(2);
-      expect(nativeApiMock.listPullRequests.mock.calls).toEqual([
-        [{ cwd: "/repo" }],
-        [{ cwd: "/repo", reviewRequested: "tyler" }],
-      ]);
-      expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+      expectListPullRequestCall({
         cwd: "/repo",
+        state: "open",
+        columns: ["needs-review"],
         reviewRequested: "tyler",
       });
     } finally {
@@ -335,9 +358,10 @@ describe("ReviewBoard performance", () => {
       await page.getByRole("tab", { name: "Merged" }).click();
       await expect.element(page.getByText("Merged review surface work")).toBeVisible();
 
-      expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+      expectListPullRequestCall({
         cwd: "/repo",
         state: "merged",
+        columns: ["merged"],
       });
     } finally {
       await mounted.cleanup();
@@ -371,8 +395,9 @@ describe("ReviewBoard performance", () => {
       await page.getByRole("button", { name: "Status", exact: true }).click();
       await page.getByRole("button", { name: "Approved", exact: true }).click();
       await vi.waitFor(() => {
-        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+        expectListPullRequestCall({
           cwd: "/repo",
+          state: "open",
           columns: ["approved"],
         });
       });
@@ -380,8 +405,9 @@ describe("ReviewBoard performance", () => {
       await page.getByRole("button", { name: "Checks", exact: true }).click();
       await page.getByRole("button", { name: "Passing", exact: true }).click();
       await vi.waitFor(() => {
-        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+        expectListPullRequestCall({
           cwd: "/repo",
+          state: "open",
           columns: ["approved"],
           checks: ["passing"],
         });
@@ -416,8 +442,9 @@ describe("ReviewBoard performance", () => {
       await page.getByRole("button", { name: "Status", exact: true }).click();
       await page.getByRole("button", { name: "Draft", exact: true }).click();
       await vi.waitFor(() => {
-        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+        expectListPullRequestCall({
           cwd: "/repo",
+          state: "open",
           draft: true,
           columns: ["draft"],
         });
@@ -452,8 +479,10 @@ describe("ReviewBoard performance", () => {
       await page.getByRole("button", { name: "Base", exact: true }).click();
       await page.getByRole("button", { name: "main", exact: true }).click();
       await vi.waitFor(() => {
-        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+        expectListPullRequestCall({
           cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
           baseBranch: "main",
         });
       });
@@ -488,8 +517,10 @@ describe("ReviewBoard performance", () => {
       await page.getByRole("button", { name: "Head", exact: true }).click();
       await page.getByRole("button", { name: "octocat:feature/review-board", exact: true }).click();
       await vi.waitFor(() => {
-        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+        expectListPullRequestCall({
           cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
           headBranch: "octocat:feature/review-board",
         });
       });
@@ -525,8 +556,10 @@ describe("ReviewBoard performance", () => {
       await page.getByRole("button", { name: "Label", exact: true }).click();
       await page.getByText("bug", { exact: true }).click();
       await vi.waitFor(() => {
-        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+        expectListPullRequestCall({
           cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
           label: "bug",
         });
       });
@@ -561,15 +594,19 @@ describe("ReviewBoard performance", () => {
       await page.getByRole("button", { name: "Label", exact: true }).click();
       await page.getByText("bug", { exact: true }).click();
       await vi.waitFor(() => {
-        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+        expectListPullRequestCall({
           cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
           label: "bug",
         });
       });
       await page.getByText("feature", { exact: true }).click();
       await vi.waitFor(() => {
-        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+        expectListPullRequestCall({
           cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
           labels: ["bug", "feature"],
         });
       });
@@ -605,16 +642,20 @@ describe("ReviewBoard performance", () => {
       await page.getByRole("button", { name: "Author", exact: true }).click();
       await page.getByRole("button", { name: "alice", exact: true }).click();
       await vi.waitFor(() => {
-        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+        expectListPullRequestCall({
           cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
           author: "alice",
         });
       });
 
       await page.getByRole("button", { name: "bob", exact: true }).click();
       await vi.waitFor(() => {
-        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+        expectListPullRequestCall({
           cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
           authors: ["alice", "bob"],
         });
       });
@@ -648,8 +689,10 @@ describe("ReviewBoard performance", () => {
       await page.getByRole("button", { name: "Assignee", exact: true }).click();
       await page.getByRole("button", { name: "alice", exact: true }).click();
       await vi.waitFor(() => {
-        expect(nativeApiMock.listPullRequests).toHaveBeenLastCalledWith({
+        expectListPullRequestCall({
           cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
           assignee: "alice",
         });
       });

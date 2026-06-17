@@ -1,6 +1,6 @@
 import "../../index.css";
 
-import type { ReviewPullRequestSummary } from "@t3tools/contracts";
+import type { ReviewListPullRequestsInput, ReviewPullRequestSummary } from "@t3tools/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -98,10 +98,12 @@ async function mountOptimizedBoard(pullRequests: ReadonlyArray<ReviewPullRequest
   await page.viewport(1440, 900);
   nativeApiMock.getViewer.mockResolvedValue({ login: "tyler" });
   let optimizedResultRows = 0;
-  nativeApiMock.listPullRequests.mockImplementation(async (input?: { readonly limit?: number }) => {
+  nativeApiMock.listPullRequests.mockImplementation(async (input?: ReviewListPullRequestsInput) => {
     const resultLimit = input?.limit ?? REVIEW_BENCHMARK_INITIAL_LIMIT;
-    const boundedPullRequests = pullRequests.slice(0, resultLimit);
-    optimizedResultRows = boundedPullRequests.length;
+    const requestedColumns = input?.columns ?? ["needs-review"];
+    const matchingPullRequests = requestedColumns.includes("needs-review") ? pullRequests : [];
+    const boundedPullRequests = matchingPullRequests.slice(0, resultLimit);
+    optimizedResultRows += boundedPullRequests.length;
     return {
       pullRequests: boundedPullRequests,
       meta: {
@@ -185,8 +187,15 @@ describe("review surface performance benchmark", () => {
       console.info("[benchmark] review surface board", JSON.stringify(benchmark));
 
       expect(nativeApiMock.getViewer).toHaveBeenCalledTimes(0);
-      expect(nativeApiMock.listPullRequests).toHaveBeenCalledTimes(1);
-      expect(nativeApiMock.listPullRequests).toHaveBeenCalledWith({ cwd: "/repo" });
+      expect(nativeApiMock.listPullRequests).toHaveBeenCalledTimes(4);
+      expect(nativeApiMock.listPullRequests.mock.calls.map(([input]) => input)).toEqual(
+        expect.arrayContaining([
+          { cwd: "/repo", state: "open", columns: ["needs-review"] },
+          { cwd: "/repo", state: "open", columns: ["changes-requested"] },
+          { cwd: "/repo", state: "open", columns: ["approved"] },
+          { cwd: "/repo", state: "open", columns: ["draft"], draft: true },
+        ]),
+      );
       expect(naive.rows).toBe(pullRequests.length);
       expect(optimized.resultRows).toBe(REVIEW_BENCHMARK_INITIAL_LIMIT);
       expect(optimized.rows).toBeGreaterThan(0);
