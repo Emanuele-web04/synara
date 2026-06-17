@@ -421,7 +421,19 @@ export function AutomationDialog({
             <select
               className="h-9 rounded-md border border-input bg-background px-3 text-sm"
               value={form.projectId}
-              onChange={(event) => setField("projectId", event.target.value)}
+              onChange={(event) => {
+                const projectId = event.target.value;
+                const targetStillMatches =
+                  form.targetThreadId.length > 0 &&
+                  threads.some(
+                    (thread) => thread.id === form.targetThreadId && thread.projectId === projectId,
+                  );
+                onFormChange({
+                  ...form,
+                  projectId,
+                  targetThreadId: targetStillMatches ? form.targetThreadId : "",
+                });
+              }}
             >
               {projects.map((project) => (
                 <option key={project.id} value={project.id}>

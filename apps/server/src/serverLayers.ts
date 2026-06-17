@@ -33,6 +33,7 @@ import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
 import { AutomationRepositoryLive } from "./persistence/Layers/AutomationRepository";
+import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -96,6 +97,7 @@ export function makeServerRuntimeServicesLayer() {
   );
   const automationServiceLayer = AutomationServiceLive.pipe(
     Layer.provideMerge(AutomationRepositoryLive),
+    Layer.provideMerge(ProjectionTurnRepositoryLive),
     Layer.provideMerge(GitCoreLive),
     Layer.provideMerge(runtimeServicesLayer),
   );

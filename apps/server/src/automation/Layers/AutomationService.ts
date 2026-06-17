@@ -14,6 +14,7 @@ import {
   type AutomationStreamEvent,
   type AutomationUpdateInput,
   type OrchestrationProjectShell,
+  type OrchestrationThreadShell,
   type ThreadEnvironmentMode,
 } from "@t3tools/contracts";
 import { Effect, Layer, Option, PubSub, Stream } from "effect";
@@ -22,6 +23,8 @@ import { GitCore } from "../../git/Services/GitCore.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AutomationRepository } from "../../persistence/Services/AutomationRepository.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import type { ProjectionTurn } from "../../persistence/Services/ProjectionTurns.ts";
 import { AutomationServiceError } from "../Errors.ts";
 import { AutomationService, type AutomationServiceShape } from "../Services/AutomationService.ts";
 import { computeNextAutomationRunAt, computeNextAutomationRunAtAfter } from "../schedule.ts";
@@ -195,6 +198,7 @@ export const AutomationServiceLive = Layer.effect(
     const git = yield* GitCore;
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const projectionTurnRepository = yield* ProjectionTurnRepository;
     // Unbounded so we never silently drop run/definition updates under a burst, matching
     // the rest of the server's PubSub usage.
     const events = yield* PubSub.unbounded<AutomationStreamEvent>();
@@ -242,6 +246,42 @@ export const AutomationServiceLive = Layer.effect(
               );
         }),
       );
+
+    const validateHeartbeatTarget = (input: {
+      readonly mode: AutomationDefinition["mode"];
+      readonly projectId: AutomationDefinition["projectId"];
+      readonly targetThreadId: AutomationDefinition["targetThreadId"];
+    }) => {
+      if (input.mode !== "heartbeat") {
+        return Effect.void;
+      }
+      if (!input.targetThreadId) {
+        return Effect.fail(
+          new AutomationServiceError({ message: "Heartbeat automations require a target thread." }),
+        );
+      }
+      return projectionSnapshotQuery.getThreadShellById(input.targetThreadId).pipe(
+        Effect.mapError(toServiceError("Failed to load heartbeat target thread.")),
+        Effect.flatMap((threadOption) =>
+          Option.match(threadOption, {
+            onNone: () =>
+              Effect.fail(
+                new AutomationServiceError({
+                  message: "Heartbeat target thread was not found.",
+                }),
+              ),
+            onSome: (thread) =>
+              thread.projectId === input.projectId
+                ? Effect.void
+                : Effect.fail(
+                    new AutomationServiceError({
+                      message: "Heartbeat target thread must belong to the automation project.",
+                    }),
+                  ),
+          }),
+        ),
+      );
+    };
 
     const resolveThreadEnvironment = (
       definition: AutomationDefinition,
@@ -295,6 +335,49 @@ export const AutomationServiceLive = Layer.effect(
         ),
       );
     };
+
+    const runUsesExistingThread = (run: AutomationRun) => run.threadCreateCommandId === null;
+
+    // Heartbeat runs reuse busy user threads, so reconcile only against the turn created
+    // from this run's stored message id; the shell's latest turn may belong to someone else.
+    const resolveRunTurn = (
+      run: AutomationRun,
+      shell: OrchestrationThreadShell,
+    ): Effect.Effect<ProjectionTurn | OrchestrationThreadShell["latestTurn"] | null> => {
+      if (!runUsesExistingThread(run)) {
+        return Effect.succeed(shell.latestTurn);
+      }
+      if (!run.threadId || !run.messageId) {
+        return Effect.succeed(null);
+      }
+      if (run.turnId) {
+        return projectionTurnRepository.getByTurnId({ threadId: run.threadId, turnId: run.turnId }).pipe(
+          Effect.mapError(toServiceError("Failed to load automation turn.")),
+          Effect.map((turnOption) =>
+            Option.match(turnOption, {
+              onNone: () => null,
+              onSome: (turn) => turn,
+            }),
+          ),
+        );
+      }
+      return projectionTurnRepository.listByThreadId({ threadId: run.threadId }).pipe(
+        Effect.mapError(toServiceError("Failed to list automation turns.")),
+        Effect.map(
+          (turns) => turns.find((turn) => turn.pendingMessageId === run.messageId) ?? null,
+        ),
+      );
+    };
+
+    const runTurnOwnsPendingInput = (
+      run: AutomationRun,
+      shell: OrchestrationThreadShell,
+      turn: ProjectionTurn | OrchestrationThreadShell["latestTurn"] | null,
+    ) =>
+      !runUsesExistingThread(run) ||
+      (turn?.turnId !== null &&
+        turn?.turnId !== undefined &&
+        shell.latestTurn?.turnId === turn.turnId);
 
     // Dispatch a run: standalone creates a fresh thread + turn; heartbeat continues the
     // configured target thread with a new turn. A failure marks the run failed before
@@ -511,10 +594,13 @@ export const AutomationServiceLive = Layer.effect(
           return;
         }
         const shell = shellOption.value;
-        const turn = shell.latestTurn;
+        const turn = yield* resolveRunTurn(run, shell);
         const now = isoNow();
 
-        if (shell.hasPendingApprovals === true || shell.hasPendingUserInput === true) {
+        if (
+          (shell.hasPendingApprovals === true || shell.hasPendingUserInput === true) &&
+          runTurnOwnsPendingInput(run, shell, turn)
+        ) {
           if (run.status !== "waiting-for-approval") {
             const updated = yield* automationRepository
               .markRunWaitingForApproval({
@@ -528,7 +614,7 @@ export const AutomationServiceLive = Layer.effect(
           return;
         }
 
-        if (!turn || turn.state === "running") {
+        if (!turn || turn.turnId === null || turn.state === "pending" || turn.state === "running") {
           return;
         }
 
@@ -629,13 +715,11 @@ export const AutomationServiceLive = Layer.effect(
 
     const create: AutomationServiceShape["create"] = (input) =>
       Effect.gen(function* () {
-        if ((input.mode ?? "standalone") === "heartbeat" && !input.targetThreadId) {
-          return yield* Effect.fail(
-            new AutomationServiceError({
-              message: "Heartbeat automations require a target thread.",
-            }),
-          );
-        }
+        yield* validateHeartbeatTarget({
+          mode: input.mode ?? "standalone",
+          projectId: input.projectId,
+          targetThreadId: input.targetThreadId ?? null,
+        });
         const now = isoNow();
         const definition = yield* automationRepository
           .createDefinition({ id: makeAutomationId(), input, now })
@@ -651,13 +735,7 @@ export const AutomationServiceLive = Layer.effect(
       Effect.gen(function* () {
         const current = yield* requireDefinition(input.id);
         const updated = mergeDefinitionUpdate(current, input, isoNow());
-        if (updated.mode === "heartbeat" && !updated.targetThreadId) {
-          return yield* Effect.fail(
-            new AutomationServiceError({
-              message: "Heartbeat automations require a target thread.",
-            }),
-          );
-        }
+        yield* validateHeartbeatTarget(updated);
         const saved = yield* automationRepository
           .saveDefinition(updated)
           .pipe(Effect.mapError(toServiceError("Failed to update automation.")));

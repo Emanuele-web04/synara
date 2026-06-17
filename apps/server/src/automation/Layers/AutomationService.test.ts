@@ -19,8 +19,10 @@ import type { OrchestrationEngineShape } from "../../orchestration/Services/Orch
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProjectionSnapshotQueryShape } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AutomationRepositoryLive } from "../../persistence/Layers/AutomationRepository.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { AutomationRepository } from "../../persistence/Services/AutomationRepository.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { AutomationService } from "../Services/AutomationService.ts";
 import { AutomationServiceLive } from "./AutomationService.ts";
 
@@ -61,12 +63,16 @@ function resetHarness() {
 
 // Build a partial thread shell; only the fields reconcileThread reads are populated.
 function makeThreadShell(overrides: {
+  readonly id?: ThreadId;
+  readonly projectId?: ProjectId;
   readonly latestTurn?: OrchestrationThreadShell["latestTurn"];
   readonly hasPendingApprovals?: boolean;
   readonly hasPendingUserInput?: boolean;
   readonly lastError?: string | null;
 }): OrchestrationThreadShell {
   return {
+    id: overrides.id ?? ThreadId.makeUnsafe("thread-shell"),
+    projectId: overrides.projectId ?? projectId,
     latestTurn: overrides.latestTurn ?? null,
     hasPendingApprovals: overrides.hasPendingApprovals,
     hasPendingUserInput: overrides.hasPendingUserInput,
@@ -76,9 +82,10 @@ function makeThreadShell(overrides: {
 
 function makeLatestTurn(
   state: "running" | "completed" | "error" | "interrupted",
+  turnId: TurnId = TurnId.makeUnsafe("turn-reconcile"),
 ): OrchestrationThreadShell["latestTurn"] {
   return {
-    turnId: TurnId.makeUnsafe("turn-reconcile"),
+    turnId,
     state,
     requestedAt: now,
     startedAt: now,
@@ -199,6 +206,7 @@ const gitCore = {
 const layer = it.layer(
   AutomationServiceLive.pipe(
     Layer.provideMerge(AutomationRepositoryLive),
+    Layer.provideMerge(ProjectionTurnRepositoryLive),
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provideMerge(Layer.succeed(OrchestrationEngineService, orchestrationEngine)),
     Layer.provideMerge(Layer.succeed(ProjectionSnapshotQuery, projectionSnapshotQuery)),
@@ -412,6 +420,7 @@ layer("AutomationService", (it) => {
       resetHarness();
       const service = yield* AutomationService;
       const targetThreadId = ThreadId.makeUnsafe("heartbeat-target-thread");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
 
       const created = yield* service.create({
         ...createInput("local"),
@@ -435,6 +444,66 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("does not complete a queued heartbeat run from an unrelated latest turn", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const projectionTurns = yield* ProjectionTurnRepository;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-queued-thread");
+      const unrelatedTurnId = TurnId.makeUnsafe("turn-unrelated");
+      const automationTurnId = TurnId.makeUnsafe("turn-automation");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      assert.isNotNull(run.messageId);
+
+      threadShell = Option.some(
+        makeThreadShell({
+          id: targetThreadId,
+          latestTurn: makeLatestTurn("completed", unrelatedTurnId),
+        }),
+      );
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      const queued = yield* service.list({ projectId });
+      assert.strictEqual(queued.runs.find((entry) => entry.id === run.id)?.status, "running");
+
+      yield* projectionTurns.upsertByTurnId({
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        pendingMessageId: run.messageId,
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId: null,
+        state: "completed",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: now,
+        checkpointTurnCount: null,
+        checkpointRef: null,
+        checkpointStatus: null,
+        checkpointFiles: [],
+      });
+      threadShell = Option.some(
+        makeThreadShell({
+          id: targetThreadId,
+          latestTurn: makeLatestTurn("completed", automationTurnId),
+        }),
+      );
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      const reconciled = yield* service.list({ projectId });
+      const updated = reconciled.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(updated?.status, "succeeded");
+      assert.strictEqual(updated?.turnId, automationTurnId);
+    }),
+  );
+
   it.effect("rejects creating a heartbeat automation without a target thread", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -443,6 +512,45 @@ layer("AutomationService", (it) => {
       const exit = yield* service
         .create({ ...createInput("local"), mode: "heartbeat" })
         .pipe(Effect.exit);
+      assert.isTrue(exit._tag === "Failure");
+    }),
+  );
+
+  it.effect("rejects a heartbeat target from a different project", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-foreign-thread");
+      threadShell = Option.some(
+        makeThreadShell({
+          id: targetThreadId,
+          projectId: ProjectId.makeUnsafe("other-project"),
+        }),
+      );
+
+      const exit = yield* service
+        .create({ ...createInput("local"), mode: "heartbeat", targetThreadId })
+        .pipe(Effect.exit);
+      assert.isTrue(exit._tag === "Failure");
+    }),
+  );
+
+  it.effect("rejects moving a heartbeat automation away from its target thread project", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-move-thread");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+      });
+      const exit = yield* service
+        .update({ id: created.id, projectId: ProjectId.makeUnsafe("other-project") })
+        .pipe(Effect.exit);
+
       assert.isTrue(exit._tag === "Failure");
     }),
   );
@@ -629,10 +737,12 @@ layer("AutomationService", (it) => {
     Effect.gen(function* () {
       resetHarness();
       const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("thread-heartbeat-target");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
       const created = yield* service.create({
         ...createInput("local"),
         mode: "heartbeat",
-        targetThreadId: ThreadId.makeUnsafe("thread-heartbeat-target"),
+        targetThreadId,
       });
 
       // First manual run starts and stays in flight (the harness never reconciles it).

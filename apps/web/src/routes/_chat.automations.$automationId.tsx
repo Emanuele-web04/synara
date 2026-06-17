@@ -283,15 +283,19 @@ function AutomationDetailView() {
                   />
                 </EditRow>
               )}
-              <EditRow label="Project">
-                <InlineSelect
-                  value={definition.projectId}
-                  options={projects.map((entry) => ({ value: entry.id, label: entry.name }))}
-                  onChange={(value) =>
-                    patch({ projectId: value as AutomationDefinition["projectId"] })
-                  }
-                />
-              </EditRow>
+              {definition.mode === "heartbeat" ? (
+                <DetailRow label="Project">{project?.name ?? "Unknown project"}</DetailRow>
+              ) : (
+                <EditRow label="Project">
+                  <InlineSelect
+                    value={definition.projectId}
+                    options={projects.map((entry) => ({ value: entry.id, label: entry.name }))}
+                    onChange={(value) =>
+                      patch({ projectId: value as AutomationDefinition["projectId"] })
+                    }
+                  />
+                </EditRow>
+              )}
               <EditRow label="Repeats">
                 <InlineSelect
                   value={schedule.type}
