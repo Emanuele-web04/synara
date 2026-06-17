@@ -3,11 +3,13 @@ import { realpathSync } from "node:fs";
 
 import {
   type ReviewChangedFile,
+  type ReviewBoardLanesResult,
   type ReviewChangesetResult,
   type ReviewConversationResult,
   type ReviewFinding,
   type ReviewListPullRequestsInput,
   type ReviewListPullRequestsResult,
+  type ReviewLoadBoardLanesInput,
   type ReviewListSort,
   type ReviewProjectCard,
   type ReviewProjectColumn,
@@ -49,6 +51,7 @@ const DEFAULT_REVIEW_LIST_RESULT_LIMIT = 50;
 const MAX_REVIEW_LIST_RESULT_LIMIT = 500;
 const FILTERED_REVIEW_LIST_CANDIDATE_LIMIT = 1_000;
 const FILTERED_REVIEW_LIST_CANDIDATE_MULTIPLIER = 10;
+const REVIEW_BOARD_LANE_IDS = ["needs-review", "changes-requested", "approved", "draft"] as const;
 const inFlightRefreshKeys = new Set<string>();
 
 interface ReviewCacheIdentity {
@@ -248,9 +251,7 @@ function hasLocalListFilters(input: ReviewListPullRequestsInput, viewerLogin: st
   const nativeReviewStatus = nativeListReviewStatus(input.columns);
   const allAuthors = [...resolvedAliasMergedSet(input.author, input.authors, viewerLogin)];
   const nativeAuthors = nativeListSearchValues(allAuthors);
-  const localAuthors = allAuthors.filter(
-    (author) => !nativeAuthors.includes(author),
-  );
+  const localAuthors = allAuthors.filter((author) => !nativeAuthors.includes(author));
   const allBaseBranches = [...mergedSet(input.baseBranch, input.baseBranches)];
   const nativeBaseBranches = nativeListSearchValues(allBaseBranches);
   const localBaseBranches = allBaseBranches.filter(
@@ -263,19 +264,12 @@ function hasLocalListFilters(input: ReviewListPullRequestsInput, viewerLogin: st
   );
   const allLabels = [...mergedSet(input.label, input.labels)];
   const nativeLabels = nativeListLabels(allLabels);
-  const localLabels = allLabels.filter(
-    (label) => !nativeLabels.includes(label),
-  );
-  const allAssignees = [
-    ...resolvedAliasMergedSet(input.assignee, input.assignees, viewerLogin),
-  ];
+  const localLabels = allLabels.filter((label) => !nativeLabels.includes(label));
+  const allAssignees = [...resolvedAliasMergedSet(input.assignee, input.assignees, viewerLogin)];
   const nativeAssignees = nativeListSearchValues(allAssignees);
-  const localAssignees = allAssignees.filter(
-    (assignee) => !nativeAssignees.includes(assignee),
-  );
+  const localAssignees = allAssignees.filter((assignee) => !nativeAssignees.includes(assignee));
   const localColumns = [...normalizedSet(input.columns)].filter(
-    (column) =>
-      (column !== "draft" || input.draft !== true) && column !== nativeReviewStatus,
+    (column) => (column !== "draft" || input.draft !== true) && column !== nativeReviewStatus,
   );
   const nativeChecksStatuses = nativeListChecksStatuses(input.checks);
   const localChecks = [...normalizedSet(input.checks)].filter(
@@ -313,9 +307,7 @@ function compareReviewPullRequestSummaries(
   }
 }
 
-function nativeListSearchValues(
-  values: ReadonlyArray<string> | undefined,
-): ReadonlyArray<string> {
+function nativeListSearchValues(values: ReadonlyArray<string> | undefined): ReadonlyArray<string> {
   const normalized = [...normalizedSet(values)].sort();
   if (
     normalized.length === 0 ||
@@ -330,9 +322,7 @@ function nativeListLabels(labels: ReadonlyArray<string> | undefined): ReadonlyAr
   const normalized = [...normalizedSet(labels)].sort();
   if (
     normalized.length === 0 ||
-    normalized.some(
-      (label) => label.includes(",") || label.includes("\"") || label.includes("\\"),
-    )
+    normalized.some((label) => label.includes(",") || label.includes('"') || label.includes("\\"))
   ) {
     return [];
   }
@@ -563,6 +553,29 @@ function slicePullRequestListResult(
   };
 }
 
+function boardLaneResult(
+  pullRequests: ReadonlyArray<ReviewPullRequestSummary>,
+  input: ReviewLoadBoardLanesInput,
+  candidateCount: number,
+  candidateLimit: number,
+): ReviewListPullRequestsResult {
+  const resultLimit = normalizedResultListLimit(input.limit);
+  const returnedPullRequests = pullRequests.slice(0, resultLimit);
+  return {
+    pullRequests: returnedPullRequests,
+    meta: {
+      ...(input.limit !== undefined ? { requestedLimit: input.limit } : {}),
+      resultLimit,
+      candidateLimit,
+      candidateCount,
+      candidateLimitReached: candidateCount >= candidateLimit,
+      matchedCount: pullRequests.length,
+      returnedCount: returnedPullRequests.length,
+      bounded: true,
+    },
+  };
+}
+
 function isUsableCacheEnvelope<T>(
   envelope: ReviewCacheEnvelope<T>,
   tokenIdentity: string,
@@ -712,9 +725,10 @@ const makeReviewSource = Effect.gen(function* () {
           const usesLocalCandidateWindow = usesExpandedPullRequestListCache(input, viewerLogin);
           const candidateLimit = listLimit ?? resultListLimit(input);
           const resultLimit = resultListLimit(input);
-          const returnedPullRequests = usesLocalCandidateWindow && options.sliceExpandedResults
-            ? sortedSummaries.slice(0, resultLimit)
-            : sortedSummaries;
+          const returnedPullRequests =
+            usesLocalCandidateWindow && options.sliceExpandedResults
+              ? sortedSummaries.slice(0, resultLimit)
+              : sortedSummaries;
           return {
             pullRequests: returnedPullRequests,
             ...(candidateLimit !== undefined
@@ -769,7 +783,10 @@ const makeReviewSource = Effect.gen(function* () {
       const cached = yield* cacheStore
         .getPullRequestList({ repositoryId, listFilter })
         .pipe(Effect.catch(() => Effect.succeed(Option.none())));
-      if (Option.isSome(cached) && isUsableCacheEnvelope(cached.value, cacheIdentity.tokenIdentity)) {
+      if (
+        Option.isSome(cached) &&
+        isUsableCacheEnvelope(cached.value, cacheIdentity.tokenIdentity)
+      ) {
         const data = useExpandedCache
           ? slicePullRequestListResult(cached.value.data, input)
           : cached.value.data;
@@ -800,6 +817,69 @@ const makeReviewSource = Effect.gen(function* () {
         .pipe(Effect.ignore);
       return useExpandedCache ? slicePullRequestListResult(cacheData, input) : cacheData;
     });
+
+  const loadBoardLanes: ReviewSourceShape["loadBoardLanes"] = (input) =>
+    gitHubCli
+      .listRepositoryPullRequests({
+        cwd: input.cwd,
+        state: "open",
+        limit: FILTERED_REVIEW_LIST_CANDIDATE_LIMIT,
+      })
+      .pipe(
+        Effect.map((pullRequests): ReviewBoardLanesResult => {
+          const lanes: Record<(typeof REVIEW_BOARD_LANE_IDS)[number], ReviewPullRequestSummary[]> =
+            {
+              "needs-review": [],
+              "changes-requested": [],
+              approved: [],
+              draft: [],
+            };
+          const summaries = pullRequests
+            .map(toPullRequestSummary)
+            .filter((summary): summary is ReviewPullRequestSummary => summary !== null)
+            .sort(compareReviewPullRequestSummaries("updated"));
+          for (const summary of summaries) {
+            const lane = reviewColumn(summary);
+            if (lane === "merged") {
+              continue;
+            }
+            lanes[lane].push(summary);
+          }
+          return {
+            "needs-review": boardLaneResult(
+              lanes["needs-review"],
+              input,
+              pullRequests.length,
+              FILTERED_REVIEW_LIST_CANDIDATE_LIMIT,
+            ),
+            "changes-requested": boardLaneResult(
+              lanes["changes-requested"],
+              input,
+              pullRequests.length,
+              FILTERED_REVIEW_LIST_CANDIDATE_LIMIT,
+            ),
+            approved: boardLaneResult(
+              lanes.approved,
+              input,
+              pullRequests.length,
+              FILTERED_REVIEW_LIST_CANDIDATE_LIMIT,
+            ),
+            draft: boardLaneResult(
+              lanes.draft,
+              input,
+              pullRequests.length,
+              FILTERED_REVIEW_LIST_CANDIDATE_LIMIT,
+            ),
+          };
+        }),
+        Effect.mapError((error) =>
+          reviewError(
+            "loadBoardLanes",
+            `Could not load review board lanes: ${error.message}`,
+            error,
+          ),
+        ),
+      );
 
   const getViewer: ReviewSourceShape["getViewer"] = (input) =>
     gitHubCli.getAuthenticatedUser({ cwd: input.cwd }).pipe(
@@ -1447,6 +1527,7 @@ const makeReviewSource = Effect.gen(function* () {
 
   return {
     listPullRequests,
+    loadBoardLanes,
     getViewer,
     loadChangeset,
     loadPullRequest,

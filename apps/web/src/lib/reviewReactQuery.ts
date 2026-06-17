@@ -1,5 +1,6 @@
 import type {
   ReviewAddCommentInput,
+  ReviewBoardLanesResult,
   ReviewInlineComment,
   ReviewListPullRequestsInput,
   ReviewListSort,
@@ -22,6 +23,7 @@ import { serializeReviewTargetKey } from "@t3tools/shared/reviewTargetKey";
 import { ensureNativeApi } from "../nativeApi";
 
 const REVIEW_LIST_STALE_TIME_MS = 30_000;
+const REVIEW_BOARD_LANES_STALE_TIME_MS = 30_000;
 const REVIEW_LIST_REFETCH_INTERVAL_MS = 300_000;
 const REVIEW_VIEWER_STALE_TIME_MS = 600_000;
 const REVIEW_CHANGESET_STALE_TIME_MS = 30_000;
@@ -160,6 +162,8 @@ export const reviewQueryKeys = {
   all: ["review"] as const,
   viewer: (cwd: string | null) => ["review", "viewer", "avatar-v2", cwd] as const,
   pullRequestLists: (cwd: string | null) => ["review", "pull-requests", cwd] as const,
+  boardLanes: (cwd: string | null, limit?: number) =>
+    ["review", "board-lanes", cwd, reviewPullRequestListLimit(limit)] as const,
   pullRequests: (input: {
     cwd: string | null;
     state?: ReviewListState;
@@ -268,6 +272,25 @@ export function reviewListPullRequestsQueryOptions(input: {
     },
     enabled: input.cwd !== null,
     staleTime: REVIEW_LIST_STALE_TIME_MS,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    refetchInterval: REVIEW_LIST_REFETCH_INTERVAL_MS,
+  });
+}
+
+export function reviewLoadBoardLanesQueryOptions(input: { cwd: string | null; limit?: number }) {
+  return queryOptions({
+    queryKey: reviewQueryKeys.boardLanes(input.cwd, input.limit),
+    queryFn: async (): Promise<ReviewBoardLanesResult> => {
+      const api = ensureNativeApi();
+      if (!input.cwd) throw new Error("Review board lanes are unavailable.");
+      return api.review.loadBoardLanes({
+        cwd: input.cwd,
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      });
+    },
+    enabled: input.cwd !== null,
+    staleTime: REVIEW_BOARD_LANES_STALE_TIME_MS,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     refetchInterval: REVIEW_LIST_REFETCH_INTERVAL_MS,

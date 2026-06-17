@@ -53,6 +53,7 @@ import {
   ReviewListCommentsInput,
   ReviewListProjectsInput,
   ReviewListPullRequestsInput,
+  ReviewLoadBoardLanesInput,
   ReviewLoadChangesetInput,
   ReviewLoadRemoteThreadsInput,
   ReviewUpdatedPayload,
@@ -164,6 +165,7 @@ export const WS_METHODS = {
 
   // Review methods
   reviewListPullRequests: "review.listPullRequests",
+  reviewLoadBoardLanes: "review.loadBoardLanes",
   reviewGetViewer: "review.getViewer",
   reviewLoadChangeset: "review.loadChangeset",
   reviewLoadPullRequestHeader: "review.loadPullRequestHeader",
@@ -320,6 +322,7 @@ const WebSocketRequestBody = Schema.Union([
 
   // Review methods
   tagRequestBody(WS_METHODS.reviewListPullRequests, ReviewListPullRequestsInput),
+  tagRequestBody(WS_METHODS.reviewLoadBoardLanes, ReviewLoadBoardLanesInput),
   tagRequestBody(WS_METHODS.reviewGetViewer, ReviewGetViewerInput),
   tagRequestBody(WS_METHODS.reviewLoadChangeset, ReviewLoadChangesetInput),
   tagRequestBody(WS_METHODS.reviewLoadPullRequestHeader, ReviewPullRequestQueryInput),

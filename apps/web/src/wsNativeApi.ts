@@ -582,6 +582,7 @@ export function createWsNativeApi(): NativeApi {
     },
     review: {
       listPullRequests: (input) => transport.request(WS_METHODS.reviewListPullRequests, input),
+      loadBoardLanes: (input) => transport.request(WS_METHODS.reviewLoadBoardLanes, input),
       getViewer: (input) => transport.request(WS_METHODS.reviewGetViewer, input),
       loadChangeset: (input) => transport.request(WS_METHODS.reviewLoadChangeset, input),
       loadPullRequestHeader: (input) =>

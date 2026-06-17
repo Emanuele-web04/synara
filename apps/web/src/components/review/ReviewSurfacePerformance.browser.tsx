@@ -1,6 +1,10 @@
 import "../../index.css";
 
-import type { ReviewListPullRequestsInput, ReviewPullRequestSummary } from "@t3tools/contracts";
+import type {
+  ReviewBoardLanesResult,
+  ReviewListPullRequestsInput,
+  ReviewPullRequestSummary,
+} from "@t3tools/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +16,14 @@ import { ReviewBoardCard } from "./ReviewBoardCard";
 const navigateMock = vi.hoisted(() => vi.fn());
 const nativeApiMock = vi.hoisted(() => ({
   getViewer: vi.fn(async () => ({ login: "tyler" })),
+  loadBoardLanes: vi.fn(
+    async (): Promise<ReviewBoardLanesResult> => ({
+      "needs-review": { pullRequests: [] },
+      "changes-requested": { pullRequests: [] },
+      approved: { pullRequests: [] },
+      draft: { pullRequests: [] },
+    }),
+  ),
   listPullRequests: vi.fn(async () => ({ pullRequests: [] as ReviewPullRequestSummary[] })),
 }));
 const REVIEW_BENCHMARK_INITIAL_LIMIT = 50;
@@ -29,6 +41,7 @@ vi.mock("~/nativeApi", () => ({
   ensureNativeApi: () => ({
     review: {
       getViewer: nativeApiMock.getViewer,
+      loadBoardLanes: nativeApiMock.loadBoardLanes,
       listPullRequests: nativeApiMock.listPullRequests,
     },
   }),
@@ -98,23 +111,26 @@ async function mountOptimizedBoard(pullRequests: ReadonlyArray<ReviewPullRequest
   await page.viewport(1440, 900);
   nativeApiMock.getViewer.mockResolvedValue({ login: "tyler" });
   let optimizedResultRows = 0;
-  nativeApiMock.listPullRequests.mockImplementation(async (input?: ReviewListPullRequestsInput) => {
-    const resultLimit = input?.limit ?? REVIEW_BENCHMARK_INITIAL_LIMIT;
-    const requestedColumns = input?.columns ?? ["needs-review"];
-    const matchingPullRequests = requestedColumns.includes("needs-review") ? pullRequests : [];
-    const boundedPullRequests = matchingPullRequests.slice(0, resultLimit);
+  nativeApiMock.loadBoardLanes.mockImplementation(async () => {
+    const resultLimit = REVIEW_BENCHMARK_INITIAL_LIMIT;
+    const boundedPullRequests = pullRequests.slice(0, resultLimit);
     optimizedResultRows += boundedPullRequests.length;
     return {
-      pullRequests: boundedPullRequests,
-      meta: {
-        resultLimit,
-        candidateLimit: resultLimit,
-        candidateCount: boundedPullRequests.length,
-        candidateLimitReached: pullRequests.length > resultLimit,
-        matchedCount: boundedPullRequests.length,
-        returnedCount: boundedPullRequests.length,
-        bounded: true,
+      "needs-review": {
+        pullRequests: boundedPullRequests,
+        meta: {
+          resultLimit,
+          candidateLimit: pullRequests.length,
+          candidateCount: pullRequests.length,
+          candidateLimitReached: false,
+          matchedCount: pullRequests.length,
+          returnedCount: boundedPullRequests.length,
+          bounded: true,
+        },
       },
+      "changes-requested": { pullRequests: [] },
+      approved: { pullRequests: [] },
+      draft: { pullRequests: [] },
     };
   });
   const host = document.createElement("div");
@@ -155,6 +171,7 @@ async function mountOptimizedBoard(pullRequests: ReadonlyArray<ReviewPullRequest
 describe("review surface performance benchmark", () => {
   afterEach(() => {
     nativeApiMock.getViewer.mockClear();
+    nativeApiMock.loadBoardLanes.mockClear();
     nativeApiMock.listPullRequests.mockClear();
     navigateMock.mockClear();
     document.body.innerHTML = "";
@@ -181,21 +198,16 @@ describe("review surface performance benchmark", () => {
         elapsedReduction,
         naiveElapsedMs: Math.round(naive.elapsedMs),
         optimizedElapsedMs: Math.round(optimized.elapsedMs),
+        boardLaneCalls: nativeApiMock.loadBoardLanes.mock.calls.length,
         listCalls: nativeApiMock.listPullRequests.mock.calls.length,
         viewerCalls: nativeApiMock.getViewer.mock.calls.length,
       };
       console.info("[benchmark] review surface board", JSON.stringify(benchmark));
 
       expect(nativeApiMock.getViewer).toHaveBeenCalledTimes(0);
-      expect(nativeApiMock.listPullRequests).toHaveBeenCalledTimes(4);
-      expect(nativeApiMock.listPullRequests.mock.calls.map(([input]) => input)).toEqual(
-        expect.arrayContaining([
-          { cwd: "/repo", state: "open", columns: ["needs-review"] },
-          { cwd: "/repo", state: "open", columns: ["changes-requested"] },
-          { cwd: "/repo", state: "open", columns: ["approved"] },
-          { cwd: "/repo", state: "open", columns: ["draft"], draft: true },
-        ]),
-      );
+      expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledTimes(1);
+      expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledWith({ cwd: "/repo" });
+      expect(nativeApiMock.listPullRequests).toHaveBeenCalledTimes(0);
       expect(naive.rows).toBe(pullRequests.length);
       expect(optimized.resultRows).toBe(REVIEW_BENCHMARK_INITIAL_LIMIT);
       expect(optimized.rows).toBeGreaterThan(0);

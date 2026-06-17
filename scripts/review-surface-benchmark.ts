@@ -17,6 +17,7 @@ interface ReviewBenchmarkMetrics {
   readonly elapsedReduction: number;
   readonly naiveElapsedMs: number;
   readonly optimizedElapsedMs: number;
+  readonly boardLaneCalls: number;
   readonly listCalls: number;
   readonly viewerCalls: number;
 }
@@ -36,9 +37,7 @@ const MIN_REVIEW_SURFACE_REDUCTION = 10;
 function parseIterations(args: ReadonlyArray<string>): number {
   const runsFlagIndex = args.findIndex((arg) => arg === "--runs" || arg === "-r");
   const raw =
-    runsFlagIndex >= 0
-      ? args[runsFlagIndex + 1]
-      : args.find((arg) => !arg.startsWith("-"));
+    runsFlagIndex >= 0 ? args[runsFlagIndex + 1] : args.find((arg) => !arg.startsWith("-"));
   if (!raw) return 7;
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed < 1) {
@@ -92,11 +91,7 @@ function round(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-function assertAtLeast(
-  label: string,
-  value: number,
-  minimum: number,
-): void {
+function assertAtLeast(label: string, value: number, minimum: number): void {
   if (value < minimum) {
     throw new Error(
       `${label} expected at least ${String(minimum)}x reduction, got ${String(round(value))}x.`,
@@ -111,7 +106,7 @@ for (let index = 1; index <= iterations; index += 1) {
   const metrics = runBenchmarkOnce(index);
   runs.push(metrics);
   console.log(
-    `run ${String(index)}/${String(iterations)}: ${round(metrics.dataReadyReduction)}x data-ready, ${round(metrics.mountedRowReduction)}x mounted, ${round(metrics.elapsedReduction)}x elapsed, ${String(metrics.optimizedRows)} rows mounted, ${String(metrics.listCalls)} list call, ${String(metrics.viewerCalls)} viewer calls`,
+    `run ${String(index)}/${String(iterations)}: ${round(metrics.dataReadyReduction)}x data-ready, ${round(metrics.mountedRowReduction)}x mounted, ${round(metrics.elapsedReduction)}x elapsed, ${String(metrics.optimizedRows)} rows mounted, ${String(metrics.boardLaneCalls)} board lane call, ${String(metrics.listCalls)} list call, ${String(metrics.viewerCalls)} viewer calls`,
   );
 }
 
@@ -126,12 +121,17 @@ const summary = {
   elapsedReduction: summarize(runs.map((run) => run.elapsedReduction)),
   naiveElapsedMs: summarize(runs.map((run) => run.naiveElapsedMs)),
   optimizedElapsedMs: summarize(runs.map((run) => run.optimizedElapsedMs)),
+  boardLaneCalls: summarize(runs.map((run) => run.boardLaneCalls)),
   listCalls: summarize(runs.map((run) => run.listCalls)),
   viewerCalls: summarize(runs.map((run) => run.viewerCalls)),
 };
 
 assertAtLeast("median data-ready", summary.dataReadyReduction.median, MIN_REVIEW_SURFACE_REDUCTION);
-assertAtLeast("median mounted-row", summary.mountedRowReduction.median, MIN_REVIEW_SURFACE_REDUCTION);
+assertAtLeast(
+  "median mounted-row",
+  summary.mountedRowReduction.median,
+  MIN_REVIEW_SURFACE_REDUCTION,
+);
 assertAtLeast("median elapsed", summary.elapsedReduction.median, MIN_REVIEW_SURFACE_REDUCTION);
 
 console.log(JSON.stringify(summary, null, 2));

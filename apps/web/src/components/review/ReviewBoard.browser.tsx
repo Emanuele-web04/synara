@@ -1,6 +1,7 @@
 import "../../index.css";
 
 import type {
+  ReviewBoardLanesResult,
   ReviewListPullRequestsInput,
   ReviewListPullRequestsResult,
   ReviewPullRequestSummary,
@@ -15,6 +16,14 @@ import { ReviewBoard } from "./ReviewBoard";
 const navigateMock = vi.hoisted(() => vi.fn());
 const nativeApiMock = vi.hoisted(() => ({
   getViewer: vi.fn(async () => ({ login: "tyler" })),
+  loadBoardLanes: vi.fn(
+    async (): Promise<ReviewBoardLanesResult> => ({
+      "needs-review": { pullRequests: [] },
+      "changes-requested": { pullRequests: [] },
+      approved: { pullRequests: [] },
+      draft: { pullRequests: [] },
+    }),
+  ),
   listPullRequests: vi.fn(
     async (_input: ReviewListPullRequestsInput): Promise<ReviewListPullRequestsResult> => ({
       pullRequests: [],
@@ -34,6 +43,7 @@ vi.mock("~/nativeApi", () => ({
   ensureNativeApi: () => ({
     review: {
       getViewer: nativeApiMock.getViewer,
+      loadBoardLanes: nativeApiMock.loadBoardLanes,
       listPullRequests: nativeApiMock.listPullRequests,
     },
   }),
@@ -66,6 +76,7 @@ async function mountBoard(
   const listResult = Array.isArray(result) ? { pullRequests: result } : result;
   await page.viewport(1440, 900);
   nativeApiMock.getViewer.mockResolvedValue({ login: "tyler" });
+  nativeApiMock.loadBoardLanes.mockResolvedValue(boardLanesResult(listResult));
   nativeApiMock.listPullRequests.mockResolvedValue(listResult);
   const host = document.createElement("div");
   host.className = "h-[900px] bg-background text-foreground";
@@ -111,9 +122,42 @@ function expectInitialOpenColumnCalls(): void {
   );
 }
 
+function boardLanesResult(result: ReviewListPullRequestsResult): ReviewBoardLanesResult {
+  const lanes: Record<keyof ReviewBoardLanesResult, ReviewPullRequestSummary[]> = {
+    "needs-review": [],
+    "changes-requested": [],
+    approved: [],
+    draft: [],
+  };
+  for (const pullRequest of result.pullRequests) {
+    if (pullRequest.isDraft) {
+      lanes.draft.push(pullRequest);
+    } else if (pullRequest.reviewDecision === "CHANGES_REQUESTED") {
+      lanes["changes-requested"].push(pullRequest);
+    } else if (pullRequest.reviewDecision === "APPROVED") {
+      lanes.approved.push(pullRequest);
+    } else {
+      lanes["needs-review"].push(pullRequest);
+    }
+  }
+  const laneResult = (
+    pullRequests: ReadonlyArray<ReviewPullRequestSummary>,
+  ): ReviewListPullRequestsResult => ({
+    pullRequests,
+    ...(result.meta ? { meta: { ...result.meta, returnedCount: pullRequests.length } } : {}),
+  });
+  return {
+    "needs-review": laneResult(lanes["needs-review"]),
+    "changes-requested": laneResult(lanes["changes-requested"]),
+    approved: laneResult(lanes.approved),
+    draft: laneResult(lanes.draft),
+  };
+}
+
 describe("ReviewBoard performance", () => {
   afterEach(() => {
     nativeApiMock.getViewer.mockClear();
+    nativeApiMock.loadBoardLanes.mockClear();
     nativeApiMock.listPullRequests.mockClear();
     navigateMock.mockClear();
     document.body.innerHTML = "";
@@ -130,8 +174,9 @@ describe("ReviewBoard performance", () => {
       await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
 
       expect(nativeApiMock.getViewer).toHaveBeenCalledTimes(0);
-      expect(nativeApiMock.listPullRequests).toHaveBeenCalledTimes(4);
-      expectInitialOpenColumnCalls();
+      expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledTimes(1);
+      expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledWith({ cwd: "/repo" });
+      expect(nativeApiMock.listPullRequests).toHaveBeenCalledTimes(0);
       expect(document.querySelectorAll('[role="listitem"]').length).toBeLessThanOrEqual(
         Math.ceil(pullRequests.length / 10),
       );
@@ -207,8 +252,8 @@ describe("ReviewBoard performance", () => {
 
     try {
       await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
-      nativeApiMock.listPullRequests.mockImplementationOnce(
-        () => new Promise<ReviewListPullRequestsResult>(() => undefined),
+      nativeApiMock.loadBoardLanes.mockImplementationOnce(
+        () => new Promise<ReviewBoardLanesResult>(() => undefined),
       );
 
       await page.getByRole("button", { name: "Sync" }).click();
@@ -260,7 +305,8 @@ describe("ReviewBoard performance", () => {
           limit: 100,
         });
       });
-      expect(nativeApiMock.listPullRequests.mock.calls).toHaveLength(5);
+      expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledTimes(1);
+      expect(nativeApiMock.listPullRequests.mock.calls).toHaveLength(1);
 
       resolveNextWindow?.({
         pullRequests: makePullRequests(100),
@@ -392,6 +438,7 @@ describe("ReviewBoard performance", () => {
         .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
         .toBeVisible();
 
+      await page.getByRole("button", { name: "Filter" }).click();
       await page.getByRole("button", { name: "Status", exact: true }).click();
       await page.getByRole("button", { name: "Approved", exact: true }).click();
       await vi.waitFor(() => {
@@ -439,6 +486,7 @@ describe("ReviewBoard performance", () => {
         .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
         .toBeVisible();
 
+      await page.getByRole("button", { name: "Filter" }).click();
       await page.getByRole("button", { name: "Status", exact: true }).click();
       await page.getByRole("button", { name: "Draft", exact: true }).click();
       await vi.waitFor(() => {
@@ -476,6 +524,7 @@ describe("ReviewBoard performance", () => {
         .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
         .toBeVisible();
 
+      await page.getByRole("button", { name: "Filter" }).click();
       await page.getByRole("button", { name: "Base", exact: true }).click();
       await page.getByRole("button", { name: "main", exact: true }).click();
       await vi.waitFor(() => {
@@ -514,6 +563,7 @@ describe("ReviewBoard performance", () => {
         .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
         .toBeVisible();
 
+      await page.getByRole("button", { name: "Filter" }).click();
       await page.getByRole("button", { name: "Head", exact: true }).click();
       await page.getByRole("button", { name: "octocat:feature/review-board", exact: true }).click();
       await vi.waitFor(() => {
@@ -553,6 +603,7 @@ describe("ReviewBoard performance", () => {
       await expect.element(page.getByText("Bug labeled work")).toBeVisible();
       await expect.element(page.getByText("Feature labeled work")).toBeVisible();
 
+      await page.getByRole("button", { name: "Filter" }).click();
       await page.getByRole("button", { name: "Label", exact: true }).click();
       await page.getByText("bug", { exact: true }).click();
       await vi.waitFor(() => {
@@ -591,6 +642,7 @@ describe("ReviewBoard performance", () => {
         .toBeVisible();
       await expect.element(page.getByText("Bug labeled work")).toBeVisible();
 
+      await page.getByRole("button", { name: "Filter" }).click();
       await page.getByRole("button", { name: "Label", exact: true }).click();
       await page.getByText("bug", { exact: true }).click();
       await vi.waitFor(() => {
@@ -639,6 +691,7 @@ describe("ReviewBoard performance", () => {
       await expect.element(page.getByText("Alice authored work")).toBeVisible();
       await expect.element(page.getByText("Bob authored work")).toBeVisible();
 
+      await page.getByRole("button", { name: "Filter" }).click();
       await page.getByRole("button", { name: "Author", exact: true }).click();
       await page.getByRole("button", { name: "alice", exact: true }).click();
       await vi.waitFor(() => {
@@ -686,6 +739,7 @@ describe("ReviewBoard performance", () => {
         .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
         .toBeVisible();
 
+      await page.getByRole("button", { name: "Filter" }).click();
       await page.getByRole("button", { name: "Assignee", exact: true }).click();
       await page.getByRole("button", { name: "alice", exact: true }).click();
       await vi.waitFor(() => {
@@ -728,6 +782,7 @@ describe("ReviewBoard performance", () => {
       await expect
         .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
         .toBeVisible();
+      await page.getByRole("button", { name: "Filter" }).click();
       await page.getByRole("button", { name: "Status", exact: true }).click();
       await page.getByRole("button", { name: "Approved", exact: true }).click();
 

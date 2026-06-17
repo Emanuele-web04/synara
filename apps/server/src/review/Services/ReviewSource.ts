@@ -1,5 +1,6 @@
 import {
   ReviewAgentResult,
+  ReviewBoardLanesResult,
   ReviewChangesetResult,
   ReviewCheckProjectAccessInput,
   ReviewGetProjectBoardInput,
@@ -8,6 +9,7 @@ import {
   ReviewListProjectsResult,
   ReviewListPullRequestsInput,
   ReviewListPullRequestsResult,
+  ReviewLoadBoardLanesInput,
   ReviewLoadChangesetInput,
   ReviewMoveProjectCardInput,
   ReviewMoveProjectCardResult,
@@ -31,6 +33,10 @@ export interface ReviewSourceShape {
   readonly listPullRequests: (
     input: ReviewListPullRequestsInput,
   ) => Effect.Effect<ReviewListPullRequestsResult, ReviewServiceError>;
+
+  readonly loadBoardLanes: (
+    input: ReviewLoadBoardLanesInput,
+  ) => Effect.Effect<ReviewBoardLanesResult, ReviewServiceError>;
 
   readonly getViewer: (
     input: ReviewGetViewerInput,

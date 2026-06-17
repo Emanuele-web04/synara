@@ -46,6 +46,7 @@ import {
 import {
   ReviewAddCommentInput,
   ReviewAgentResult,
+  ReviewBoardLanesResult,
   ReviewChangesetResult,
   ReviewCheckProjectAccessInput,
   ReviewCommentList,
@@ -57,6 +58,7 @@ import {
   ReviewListPullRequestsInput,
   ReviewListPullRequestsResult,
   ReviewConversationResult,
+  ReviewLoadBoardLanesInput,
   ReviewLoadChangesetInput,
   ReviewLoadRemoteThreadsInput,
   ReviewLocalComment,
@@ -497,6 +499,12 @@ export const WsReviewListPullRequestsRpc = Rpc.make(WS_METHODS.reviewListPullReq
   error: WsRpcError,
 });
 
+export const WsReviewLoadBoardLanesRpc = Rpc.make(WS_METHODS.reviewLoadBoardLanes, {
+  payload: ReviewLoadBoardLanesInput,
+  success: ReviewBoardLanesResult,
+  error: WsRpcError,
+});
+
 export const WsReviewGetViewerRpc = Rpc.make(WS_METHODS.reviewGetViewer, {
   payload: ReviewGetViewerInput,
   success: ReviewViewerResult,
@@ -509,14 +517,11 @@ export const WsReviewLoadChangesetRpc = Rpc.make(WS_METHODS.reviewLoadChangeset,
   error: WsRpcError,
 });
 
-export const WsReviewLoadPullRequestHeaderRpc = Rpc.make(
-  WS_METHODS.reviewLoadPullRequestHeader,
-  {
-    payload: ReviewPullRequestQueryInput,
-    success: ReviewPullRequestHeader,
-    error: WsRpcError,
-  },
-);
+export const WsReviewLoadPullRequestHeaderRpc = Rpc.make(WS_METHODS.reviewLoadPullRequestHeader, {
+  payload: ReviewPullRequestQueryInput,
+  success: ReviewPullRequestHeader,
+  error: WsRpcError,
+});
 
 export const WsReviewLoadPullRequestRpc = Rpc.make(WS_METHODS.reviewLoadPullRequest, {
   payload: ReviewPullRequestQueryInput,
@@ -530,14 +535,11 @@ export const WsReviewLoadConversationRpc = Rpc.make(WS_METHODS.reviewLoadConvers
   error: WsRpcError,
 });
 
-export const WsReviewLoadPullRequestSurfaceRpc = Rpc.make(
-  WS_METHODS.reviewLoadPullRequestSurface,
-  {
-    payload: ReviewPullRequestSurfaceInput,
-    success: ReviewPullRequestSurfaceResult,
-    error: WsRpcError,
-  },
-);
+export const WsReviewLoadPullRequestSurfaceRpc = Rpc.make(WS_METHODS.reviewLoadPullRequestSurface, {
+  payload: ReviewPullRequestSurfaceInput,
+  success: ReviewPullRequestSurfaceResult,
+  error: WsRpcError,
+});
 
 export const WsReviewListCommentsRpc = Rpc.make(WS_METHODS.reviewListComments, {
   payload: ReviewListCommentsInput,
@@ -903,6 +905,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitUnstageFilesRpc,
   WsGitHandoffThreadRpc,
   WsReviewListPullRequestsRpc,
+  WsReviewLoadBoardLanesRpc,
   WsReviewGetViewerRpc,
   WsReviewLoadChangesetRpc,
   WsReviewLoadPullRequestHeaderRpc,

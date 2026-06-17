@@ -854,6 +854,8 @@ export const makeWsRpcLayer = () =>
 
         [WS_METHODS.reviewListPullRequests]: (input) =>
           rpcEffect(reviewSource.listPullRequests(input), "Failed to list pull requests"),
+        [WS_METHODS.reviewLoadBoardLanes]: (input) =>
+          rpcEffect(reviewSource.loadBoardLanes(input), "Failed to load review board lanes"),
         [WS_METHODS.reviewGetViewer]: (input) =>
           rpcEffect(reviewSource.getViewer(input), "Failed to resolve GitHub viewer"),
         [WS_METHODS.reviewLoadChangeset]: (input) =>

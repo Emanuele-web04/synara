@@ -1,4 +1,8 @@
-import type { ReviewListPullRequestsResult, ReviewPullRequestSummary } from "@t3tools/contracts";
+import type {
+  ReviewBoardLanesResult,
+  ReviewListPullRequestsResult,
+  ReviewPullRequestSummary,
+} from "@t3tools/contracts";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate } from "@tanstack/react-router";
@@ -6,6 +10,7 @@ import type { ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 
 import {
+  reviewLoadBoardLanesQueryOptions,
   reviewListPullRequestsQueryOptions,
   reviewQueryKeys,
   reviewViewerQueryOptions,
@@ -45,20 +50,23 @@ import {
 const REVIEW_BOARD_CARD_ROW_HEIGHT = 128;
 type ReviewBoardColumnQueryInput = Parameters<typeof reviewListPullRequestsQueryOptions>[0];
 
+// Accents drawn from the app's own token palette (foreground / amber / emerald /
+// info), not new hues. Merged matches its blue state pill; needs-review uses the
+// strongest neutral to read as the live queue.
 const COLUMN_ACCENT_DOT: Record<ReviewColumnAccent, string> = {
-  attention: "bg-sky-500",
+  attention: "bg-foreground/70",
   warning: "bg-amber-500",
   success: "bg-emerald-500",
   muted: "bg-muted-foreground/45",
-  merged: "bg-violet-500",
+  merged: "bg-info",
 };
 
 const COLUMN_ACCENT_CHIP: Record<ReviewColumnAccent, string> = {
-  attention: "bg-sky-500/14 text-sky-700 dark:bg-sky-400/16 dark:text-sky-300",
+  attention: "bg-foreground/10 text-foreground",
   warning: "bg-amber-500/14 text-amber-700 dark:bg-amber-400/16 dark:text-amber-300",
   success: "bg-emerald-500/14 text-emerald-700 dark:bg-emerald-400/16 dark:text-emerald-300",
   muted: "bg-muted text-muted-foreground",
-  merged: "bg-violet-500/14 text-violet-700 dark:bg-violet-400/16 dark:text-violet-300",
+  merged: "bg-info/15 text-info-foreground dark:bg-info/20",
 };
 const REVIEW_LIST_PAGE_SIZE = 50;
 const REVIEW_LIST_MAX_LIMIT = 500;
@@ -92,6 +100,16 @@ function boardColumnServerFilters(
     columns: [columnId],
     ...(columnId === "draft" ? { draft: true } : {}),
   };
+}
+
+function boardLaneResultForColumn(
+  lanes: ReviewBoardLanesResult | undefined,
+  columnId: ReviewColumnId,
+): ReviewListPullRequestsResult | undefined {
+  if (!lanes || columnId === "merged") {
+    return undefined;
+  }
+  return lanes[columnId];
 }
 
 export function ReviewBoard(props: { cwd: string | null }) {
@@ -130,41 +148,65 @@ export function ReviewBoard(props: { cwd: string | null }) {
     () => ({ ...toReviewServerListFilters(activeFilters), ...viewServerFilters }),
     [activeFilters, viewServerFilters],
   );
+  const canUseBoardLaneHydrate =
+    cwd !== null &&
+    view === "all" &&
+    serverSearch.trim().length === 0 &&
+    activeFilters.length === 0 &&
+    resultLimitState === null;
+  const boardLanesQuery = useQuery({
+    ...reviewLoadBoardLanesQueryOptions({ cwd }),
+    enabled: canUseBoardLaneHydrate,
+  });
   const columnQueryInputs = useMemo(
     () =>
-      REVIEW_BOARD_COLUMNS.map((column): {
-        columnId: ReviewColumnId;
-        enabled: boolean;
-        scopeKey: string;
-        input: ReviewBoardColumnQueryInput;
-      } => {
-        const selectedColumns = serverFilters.columns;
-        const enabled =
-          isColumnAvailableForView(column.id, view) &&
-          selectedColumnsAllow(column.id, selectedColumns);
-        const columnFilters = boardColumnServerFilters(column.id, serverFilters);
-        const state = boardColumnListState(column.id);
-        const scopeKey = JSON.stringify([cwd, column.id, state, serverSearch.trim(), columnFilters]);
-        const resultLimitForColumn =
-          resultLimitState?.scopeKey === scopeKey ? resultLimitState.limit : null;
-        return {
-          columnId: column.id,
-          enabled,
-          scopeKey,
-          input: {
-            cwd: enabled && viewerFilterReady ? cwd : null,
+      REVIEW_BOARD_COLUMNS.map(
+        (
+          column,
+        ): {
+          columnId: ReviewColumnId;
+          enabled: boolean;
+          scopeKey: string;
+          input: ReviewBoardColumnQueryInput;
+        } => {
+          const selectedColumns = serverFilters.columns;
+          const enabled =
+            isColumnAvailableForView(column.id, view) &&
+            selectedColumnsAllow(column.id, selectedColumns);
+          const columnFilters = boardColumnServerFilters(column.id, serverFilters);
+          const state = boardColumnListState(column.id);
+          const scopeKey = JSON.stringify([
+            cwd,
+            column.id,
             state,
-            ...(resultLimitForColumn !== null ? { limit: resultLimitForColumn } : {}),
-            search: serverSearch,
-            ...columnFilters,
-          },
-        };
-      }),
+            serverSearch.trim(),
+            columnFilters,
+          ]);
+          const resultLimitForColumn =
+            resultLimitState?.scopeKey === scopeKey ? resultLimitState.limit : null;
+          return {
+            columnId: column.id,
+            enabled,
+            scopeKey,
+            input: {
+              cwd: enabled && viewerFilterReady ? cwd : null,
+              state,
+              ...(resultLimitForColumn !== null ? { limit: resultLimitForColumn } : {}),
+              search: serverSearch,
+              ...columnFilters,
+            },
+          };
+        },
+      ),
     [cwd, resultLimitState, serverFilters, serverSearch, view, viewerFilterReady],
   );
   const columnQueries = useQueries({
     queries: columnQueryInputs.map((columnInput) => ({
       ...reviewListPullRequestsQueryOptions(columnInput.input),
+      enabled:
+        columnInput.input.cwd !== null &&
+        !canUseBoardLaneHydrate &&
+        (resultLimitState === null || resultLimitState.scopeKey === columnInput.scopeKey),
       placeholderData: (previousData: ReviewListPullRequestsResult | undefined) => previousData,
     })),
   });
@@ -176,8 +218,17 @@ export function ReviewBoard(props: { cwd: string | null }) {
       })
       .flatMap(([, data]) => data?.pullRequests ?? []);
     const columnPullRequests = columnQueries.flatMap((query) => query.data?.pullRequests ?? []);
-    return uniqueReviewPullRequests([...cachedPullRequests, ...columnPullRequests]);
-  }, [columnQueries, queryClient, cwd]);
+    // Lane-hydrated views disable the per-column queries, so their pull requests
+    // only live in boardLanesQuery; include them or the facet menu has no options.
+    const lanePullRequests = REVIEW_BOARD_COLUMNS.flatMap(
+      (column) => boardLaneResultForColumn(boardLanesQuery.data, column.id)?.pullRequests ?? [],
+    );
+    return uniqueReviewPullRequests([
+      ...cachedPullRequests,
+      ...columnPullRequests,
+      ...lanePullRequests,
+    ]);
+  }, [columnQueries, queryClient, cwd, boardLanesQuery.data]);
 
   const facetItems = useMemo(
     () => filterByView(facetBasePullRequests, view, viewerLogin),
@@ -192,14 +243,17 @@ export function ReviewBoard(props: { cwd: string | null }) {
       REVIEW_BOARD_COLUMNS.map((column, index) => {
         const columnInput = columnQueryInputs[index]!;
         const query = columnQueries[index]!;
+        const laneData = boardLaneResultForColumn(boardLanesQuery.data, column.id);
         const pullRequests = filterReviewPullRequests(
-          filterByView(query.data?.pullRequests ?? [], view, viewerLogin).filter(
-            (summary) => deriveReviewColumn(summary) === column.id,
-          ),
+          filterByView(
+            laneData?.pullRequests ?? query.data?.pullRequests ?? [],
+            view,
+            viewerLogin,
+          ).filter((summary) => deriveReviewColumn(summary) === column.id),
           clientSearch,
           activeFilters,
         );
-        const meta = query.data?.meta;
+        const meta = laneData?.meta ?? query.data?.meta;
         const resultLimitForColumn =
           resultLimitState?.scopeKey === columnInput.scopeKey ? resultLimitState.limit : null;
         const canLoadMore =
@@ -222,6 +276,7 @@ export function ReviewBoard(props: { cwd: string | null }) {
       clientSearch,
       columnQueries,
       columnQueryInputs,
+      boardLanesQuery.data,
       resultLimitState,
       view,
       viewerLogin,
@@ -239,33 +294,42 @@ export function ReviewBoard(props: { cwd: string | null }) {
     );
   const enabledColumnStates = columnStates.filter((column) => column.enabled);
   const hasPullRequestListData =
-    enabledColumnStates.length > 0 && enabledColumnStates.every((column) => column.query.data);
+    canUseBoardLaneHydrate && boardLanesQuery.data
+      ? true
+      : enabledColumnStates.length > 0 && enabledColumnStates.every((column) => column.query.data);
   const isColdSyncing =
     !hasPullRequestListData &&
     (enabledColumnStates.some((column) => column.query.isFetching) ||
+      boardLanesQuery.isFetching ||
       (shouldLoadViewer && viewerQuery.isFetching));
   const isRefreshing =
-    hasPullRequestListData && enabledColumnStates.some((column) => column.query.isFetching);
-  const errorState = enabledColumnStates.find((column) => column.query.isError)?.query.error;
-  const loadMore = useCallback((columnId: ReviewColumnId) => {
-    const columnState = columnStates.find((column) => column.columnId === columnId);
-    if (!columnState?.canLoadMore || columnState.query.isFetching) {
-      return;
-    }
-    setResultLimitState((current) => {
-      const currentLimit = current?.scopeKey === columnState.scopeKey ? current.limit : null;
-      if (currentLimit !== null && currentLimit > (columnState.meta?.resultLimit ?? 0)) {
-        return current;
+    hasPullRequestListData &&
+    (enabledColumnStates.some((column) => column.query.isFetching) || boardLanesQuery.isFetching);
+  const errorState =
+    boardLanesQuery.error ??
+    enabledColumnStates.find((column) => column.query.isError)?.query.error;
+  const loadMore = useCallback(
+    (columnId: ReviewColumnId) => {
+      const columnState = columnStates.find((column) => column.columnId === columnId);
+      if (!columnState?.canLoadMore || columnState.query.isFetching) {
+        return;
       }
-      return {
-        scopeKey: columnState.scopeKey,
-        limit: Math.min(
-          (currentLimit ?? columnState.meta?.resultLimit ?? 0) + REVIEW_LIST_PAGE_SIZE,
-          REVIEW_LIST_MAX_LIMIT,
-        ),
-      };
-    });
-  }, [columnStates]);
+      setResultLimitState((current) => {
+        const currentLimit = current?.scopeKey === columnState.scopeKey ? current.limit : null;
+        if (currentLimit !== null && currentLimit > (columnState.meta?.resultLimit ?? 0)) {
+          return current;
+        }
+        return {
+          scopeKey: columnState.scopeKey,
+          limit: Math.min(
+            (currentLimit ?? columnState.meta?.resultLimit ?? 0) + REVIEW_LIST_PAGE_SIZE,
+            REVIEW_LIST_MAX_LIMIT,
+          ),
+        };
+      });
+    },
+    [columnStates],
+  );
 
   if (cwd === null) {
     return (
@@ -277,6 +341,7 @@ export function ReviewBoard(props: { cwd: string | null }) {
 
   const handleSync = () => {
     void queryClient.invalidateQueries({ queryKey: reviewQueryKeys.pullRequestLists(cwd) });
+    void queryClient.invalidateQueries({ queryKey: reviewQueryKeys.boardLanes(cwd) });
   };
 
   const openReference = (reference: string) => {
@@ -337,14 +402,14 @@ export function ReviewBoard(props: { cwd: string | null }) {
             onActiveFiltersChange={setActiveFilters}
             optionsByFieldId={filterOptionsByFieldId}
             onOpenReference={openReference}
-            className="min-w-[18rem]"
-            searchClassName="lg:max-w-[40rem]"
+            className="min-w-[16rem]"
+            searchClassName="lg:max-w-[32rem]"
           />
           <Button
             type="button"
             size="sm"
             variant="outline"
-            className="ms-auto h-8 shrink-0 rounded-full bg-background/72 px-3 text-[12px] shadow-none ring-border/55 transition-[background-color] hover:bg-background"
+            className="h-8 shrink-0 rounded-full bg-background/72 px-3 text-[12px] shadow-none ring-border/55 transition-[background-color] hover:bg-background"
             onClick={handleSync}
             disabled={enabledColumnStates.some((column) => column.query.isFetching)}
           >
@@ -365,9 +430,7 @@ export function ReviewBoard(props: { cwd: string | null }) {
         />
       ) : errorState ? (
         <div className="flex flex-1 items-center justify-center px-6 text-center text-[12px] text-destructive">
-          {errorState instanceof Error
-            ? errorState.message
-            : "Failed to load pull requests."}
+          {errorState instanceof Error ? errorState.message : "Failed to load pull requests."}
         </div>
       ) : (
         <div className="flex h-full min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3">

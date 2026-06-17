@@ -54,6 +54,7 @@ import type {
 import type {
   ReviewAddCommentInput,
   ReviewAgentResult,
+  ReviewBoardLanesResult,
   ReviewChangesetResult,
   ReviewCheckProjectAccessInput,
   ReviewCommentList,
@@ -65,6 +66,7 @@ import type {
   ReviewListPullRequestsInput,
   ReviewListPullRequestsResult,
   ReviewConversationResult,
+  ReviewLoadBoardLanesInput,
   ReviewLoadChangesetInput,
   ReviewLoadRemoteThreadsInput,
   ReviewLocalComment,
@@ -483,6 +485,7 @@ export interface NativeApi {
   };
   review: {
     listPullRequests: (input: ReviewListPullRequestsInput) => Promise<ReviewListPullRequestsResult>;
+    loadBoardLanes: (input: ReviewLoadBoardLanesInput) => Promise<ReviewBoardLanesResult>;
     getViewer: (input: ReviewGetViewerInput) => Promise<ReviewViewerResult>;
     loadChangeset: (input: ReviewLoadChangesetInput) => Promise<ReviewChangesetResult>;
     loadPullRequestHeader: (input: ReviewPullRequestQueryInput) => Promise<ReviewPullRequestHeader>;

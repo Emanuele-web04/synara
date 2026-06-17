@@ -1,5 +1,6 @@
 import { it } from "@effect/vitest";
 import type {
+  ReviewBoardLanesResult,
   ReviewListPullRequestsResult,
   ReviewPullRequestSummary,
   ReviewUpdatedPayload,
@@ -190,7 +191,8 @@ function makeLayer(options: {
   const cacheStore: ReviewCacheStoreShape = {
     getPullRequestList: (input) => {
       const write = recorded.cacheWrites.find(
-        (entry) => entry.repositoryId === input.repositoryId && entry.listFilter === input.listFilter,
+        (entry) =>
+          entry.repositoryId === input.repositoryId && entry.listFilter === input.listFilter,
       );
       if (!write) {
         return Effect.succeed(Option.none());
@@ -208,9 +210,11 @@ function makeLayer(options: {
         } satisfies ReviewCacheEnvelope<ReviewListPullRequestsResult>),
       );
     },
-    upsertPullRequestList: (input: ReviewCacheWrite<ReviewListPullRequestsResult> & {
-      readonly listFilter: string;
-    }) => {
+    upsertPullRequestList: (
+      input: ReviewCacheWrite<ReviewListPullRequestsResult> & {
+        readonly listFilter: string;
+      },
+    ) => {
       recorded.cacheWrites.push({
         repositoryId: input.repositoryId,
         listFilter: input.listFilter,
@@ -278,8 +282,21 @@ const runList = (
     return yield* reviewSource.listPullRequests(input);
   }).pipe(Effect.provide(layer));
 
+const runBoardLanes = (
+  layer: Layer.Layer<ReviewSource>,
+  input: Parameters<ReviewSource["loadBoardLanes"]>[0],
+) =>
+  Effect.gen(function* () {
+    const reviewSource = yield* ReviewSource;
+    return yield* reviewSource.loadBoardLanes(input);
+  }).pipe(Effect.provide(layer));
+
 function numbers(result: ReviewListPullRequestsResult): number[] {
   return result.pullRequests.map((pullRequest: ReviewPullRequestSummary) => pullRequest.number);
+}
+
+function laneNumbers(result: ReviewBoardLanesResult, lane: keyof ReviewBoardLanesResult): number[] {
+  return numbers(result[lane]);
 }
 
 function makeSurfaceLayer() {
@@ -625,65 +642,103 @@ it.effect("trusts pull requests returned by GitHub search", () => {
   });
 });
 
-it.effect("pushes native review status and check filters without the local candidate window", () => {
-  const pullRequests = Array.from({ length: 4 }, (_, index) =>
+it.effect("loads default board lanes from one expanded open candidate window", () => {
+  const pullRequests = [
+    ghPr({ number: 1, reviewDecision: null, updatedAt: "2026-06-16T00:04:00.000Z" }),
     ghPr({
-      number: index + 1,
-      reviewDecision: index % 2 === 0 ? "APPROVED" : null,
-      checksStatus: index % 2 === 0 ? "failing" : "passing",
+      number: 2,
+      reviewDecision: "CHANGES_REQUESTED",
+      updatedAt: "2026-06-16T00:03:00.000Z",
     }),
-  );
+    ghPr({ number: 3, reviewDecision: "APPROVED", updatedAt: "2026-06-16T00:02:00.000Z" }),
+    ghPr({ number: 4, isDraft: true, updatedAt: "2026-06-16T00:01:00.000Z" }),
+    ghPr({ number: 5, reviewDecision: null, updatedAt: "2026-06-16T00:00:00.000Z" }),
+  ];
   const { layer, recorded } = makeLayer({ pullRequests });
 
   return Effect.gen(function* () {
-    const result = yield* runList(layer, {
-      cwd: "/repo",
-      limit: 200,
-      columns: ["approved"],
-      checks: ["failing"],
-    });
+    const result = yield* runBoardLanes(layer, { cwd: "/repo", limit: 1 });
 
-    expect(numbers(result)).toEqual([1, 3]);
-    expect(result.meta).toEqual({
-      requestedLimit: 200,
-      resultLimit: 200,
-      candidateLimit: 200,
-      candidateCount: 4,
+    expect(recorded.listCalls).toEqual([{ cwd: "/repo", state: "open", limit: 1000 }]);
+    expect(laneNumbers(result, "needs-review")).toEqual([1]);
+    expect(laneNumbers(result, "changes-requested")).toEqual([2]);
+    expect(laneNumbers(result, "approved")).toEqual([3]);
+    expect(laneNumbers(result, "draft")).toEqual([4]);
+    expect(result["needs-review"].meta).toEqual({
+      requestedLimit: 1,
+      resultLimit: 1,
+      candidateLimit: 1000,
+      candidateCount: 5,
       candidateLimitReached: false,
       matchedCount: 2,
-      returnedCount: 2,
+      returnedCount: 1,
       bounded: true,
-    });
-    expect(recorded.listCalls).toEqual([
-      {
-        cwd: "/repo",
-        state: "open",
-        limit: 200,
-        reviewStatus: "approved",
-        checksStatuses: ["failing"],
-      },
-    ]);
-    expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
-      state: "open",
-      limit: 200,
-      search: null,
-      author: null,
-      authors: [],
-      reviewRequested: null,
-      baseBranch: null,
-      baseBranches: [],
-      headBranch: null,
-      headBranches: [],
-      label: null,
-      labels: [],
-      assignee: null,
-      assignees: [],
-      draft: null,
-      columns: ["approved"],
-      checks: ["failing"],
     });
   });
 });
+
+it.effect(
+  "pushes native review status and check filters without the local candidate window",
+  () => {
+    const pullRequests = Array.from({ length: 4 }, (_, index) =>
+      ghPr({
+        number: index + 1,
+        reviewDecision: index % 2 === 0 ? "APPROVED" : null,
+        checksStatus: index % 2 === 0 ? "failing" : "passing",
+      }),
+    );
+    const { layer, recorded } = makeLayer({ pullRequests });
+
+    return Effect.gen(function* () {
+      const result = yield* runList(layer, {
+        cwd: "/repo",
+        limit: 200,
+        columns: ["approved"],
+        checks: ["failing"],
+      });
+
+      expect(numbers(result)).toEqual([1, 3]);
+      expect(result.meta).toEqual({
+        requestedLimit: 200,
+        resultLimit: 200,
+        candidateLimit: 200,
+        candidateCount: 4,
+        candidateLimitReached: false,
+        matchedCount: 2,
+        returnedCount: 2,
+        bounded: true,
+      });
+      expect(recorded.listCalls).toEqual([
+        {
+          cwd: "/repo",
+          state: "open",
+          limit: 200,
+          reviewStatus: "approved",
+          checksStatuses: ["failing"],
+        },
+      ]);
+      expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
+        state: "open",
+        limit: 200,
+        search: null,
+        author: null,
+        authors: [],
+        reviewRequested: null,
+        baseBranch: null,
+        baseBranches: [],
+        headBranch: null,
+        headBranches: [],
+        label: null,
+        labels: [],
+        assignee: null,
+        assignees: [],
+        draft: null,
+        columns: ["approved"],
+        checks: ["failing"],
+      });
+    });
+  },
+);
 
 it.effect("keeps a larger bounded candidate window when status still needs local filtering", () => {
   const pullRequests = Array.from({ length: 120 }, (_, index) =>
@@ -1231,10 +1286,7 @@ it.effect("keeps unsafe plural OR filters on the local candidate window", () => 
 
 it.effect("pushes a single draft status to GitHub without the local candidate window", () => {
   const { layer, recorded } = makeLayer({
-    pullRequests: [
-      ghPr({ number: 1, isDraft: true }),
-      ghPr({ number: 2, isDraft: false }),
-    ],
+    pullRequests: [ghPr({ number: 1, isDraft: true }), ghPr({ number: 2, isDraft: false })],
   });
 
   return Effect.gen(function* () {

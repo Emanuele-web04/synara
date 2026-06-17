@@ -119,6 +119,20 @@ export const ReviewListPullRequestsResult = Schema.Struct({
 });
 export type ReviewListPullRequestsResult = typeof ReviewListPullRequestsResult.Type;
 
+export const ReviewLoadBoardLanesInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  limit: Schema.optional(PositiveInt),
+});
+export type ReviewLoadBoardLanesInput = typeof ReviewLoadBoardLanesInput.Type;
+
+export const ReviewBoardLanesResult = Schema.Struct({
+  "needs-review": ReviewListPullRequestsResult,
+  "changes-requested": ReviewListPullRequestsResult,
+  approved: ReviewListPullRequestsResult,
+  draft: ReviewListPullRequestsResult,
+});
+export type ReviewBoardLanesResult = typeof ReviewBoardLanesResult.Type;
+
 export const ReviewGetViewerInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
 });
