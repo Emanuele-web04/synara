@@ -22,6 +22,28 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.2.41",
+    date: "Jun 17",
+    features: [
+      {
+        id: "header-handoff-menu",
+        title: "Hand off chats from the header again",
+        description:
+          "The chat header now has a compact Hand off menu, so you can start a provider handoff without hunting through the rest of the workspace.",
+        details:
+          "The header handoff action now offers only usable target providers, checks provider availability before creating the handoff thread, and keeps the action disabled while the current thread is busy or waiting on approvals/input.",
+      },
+      {
+        id: "hidden-project-script-runner",
+        title: "Project scripts stay out of the way",
+        description:
+          "Project action dialogs remain available, but the old inline script runner no longer crowds the chat header controls.",
+        details:
+          "Project script controls stay mounted for the shared Open-in/project-action dialog path, while the visible header play/chevron runner is hidden to keep the top bar focused.",
+      },
+    ],
+  },
+  {
     version: "0.2.4",
     date: "Jun 17",
     features: [

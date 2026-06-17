@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.2.41 - 2026-06-17
+
+### Added
+
+- Added a compact chat-header handoff menu so handoff threads can be created directly from the active chat header again.
+- Added provider-target filtering for the handoff menu so only currently usable handoff destinations are offered.
+
+### Changed
+
+- Bumped Synara release package versions to `0.2.41` across the server, desktop, web, and contracts packages.
+- Kept the shared project-action dialog path mounted while hiding the visible inline project script runner from the chat header.
+- Improved header handoff failure handling by checking provider send availability before creating a handoff and showing a toast when the target is unavailable.
+
+### Fixed
+
+- Fixed the missing header handoff action after the previous chat-header cleanup.
+- Fixed chat-header crowding from the project script runner while preserving the project action dialog plumbing used by other header actions.
+
+### Verification
+
+- `bun run fmt:check` passed.
+- `bun run lint` passed with 148 warnings, 0 errors.
+- `bun run typecheck` passed with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed and left the worktree unchanged.
+- `bun run build` passed. Vite still warns about large web chunks and plugin timings; desktop build still reports the existing typeless `tsdown.config.ts` module warning.
+- Root `bun run test` did not complete cleanly in two attempts: both runs reached a green `@t3tools/web` suite (169 files / 1954 tests), then stalled in the `apps/server` Vitest tail. The stale duplicate root/Vitest processes were stopped before continuing verification.
+- Direct `bun run test` from `apps/server` also stalled before reporting test-file progress, only printing Node SQLite experimental warnings, so it is not counted as passed.
+- Direct package tests passed for the release-relevant and non-server packages: `apps/web` 169 files / 1954 tests, `packages/contracts` 9 files / 90 tests, `packages/shared` 24 files / 228 tests, `packages/effect-acp` 3 files / 24 tests, `apps/desktop` 19 files / 149 tests, and `scripts` 5 files / 36 tests.
+- `apps/marketing` has no `test` script.
+- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.2.41`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+
 ## 0.2.4 - 2026-06-17
 
 ### Added
