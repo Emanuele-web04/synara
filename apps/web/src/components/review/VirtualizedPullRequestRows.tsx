@@ -1,7 +1,6 @@
 import type { ReviewPullRequestSummary } from "@t3tools/contracts";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ReactNode, UIEvent } from "react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
 
@@ -18,27 +17,26 @@ export function VirtualizedPullRequestRows(props: {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const threshold = props.threshold ?? 0;
   const shouldVirtualize = props.pullRequests.length > threshold;
+  const [scrollWindow, setScrollWindow] = useState({
+    scrollTop: 0,
+    viewportHeight: props.estimateSize * 6,
+  });
   const handleScroll = (event: UIEvent<HTMLDivElement | HTMLUListElement>) => {
+    const element = event.currentTarget;
+    if (shouldVirtualize) {
+      setScrollWindow({
+        scrollTop: element.scrollTop,
+        viewportHeight: element.clientHeight || props.estimateSize * 6,
+      });
+    }
     if (!props.onEndReached) {
       return;
     }
-    const element = event.currentTarget;
     const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
     if (distanceToBottom <= props.estimateSize * 3) {
       props.onEndReached();
     }
   };
-  const virtualizer = useVirtualizer({
-    count: props.pullRequests.length,
-    estimateSize: () => props.estimateSize,
-    getScrollElement: () => scrollRef.current,
-    overscan: props.overscan ?? 10,
-    enabled: shouldVirtualize,
-    initialRect: {
-      height: props.estimateSize * 6,
-      width: 0,
-    },
-  });
 
   if (!shouldVirtualize) {
     return (
@@ -52,42 +50,42 @@ export function VirtualizedPullRequestRows(props: {
     );
   }
 
-  const virtualItems = virtualizer.getVirtualItems();
-  const firstVirtualItem = virtualItems[0];
-  const lastVirtualItem = virtualItems.at(-1);
-  const paddingTop = firstVirtualItem?.start ?? 0;
-  const paddingBottom =
-    lastVirtualItem === undefined
-      ? 0
-      : Math.max(virtualizer.getTotalSize() - lastVirtualItem.end, 0);
+  const overscan = props.overscan ?? 10;
+  const rowCount = props.pullRequests.length;
+  const visibleStartIndex = Math.floor(scrollWindow.scrollTop / props.estimateSize);
+  const visibleRowCount = Math.ceil(scrollWindow.viewportHeight / props.estimateSize);
+  const startIndex = Math.max(visibleStartIndex - overscan, 0);
+  const endIndex = Math.min(visibleStartIndex + visibleRowCount + overscan, rowCount);
+  const virtualPullRequests = props.pullRequests.slice(startIndex, endIndex);
+  const totalHeight = rowCount * props.estimateSize;
 
   return (
-    <ul
+    <div
       ref={scrollRef}
       role="list"
       className={cn("overflow-y-auto", props.className)}
       onScroll={handleScroll}
     >
-      {paddingTop > 0 ? <li aria-hidden="true" style={{ height: paddingTop }} /> : null}
-      {virtualItems.map((virtualItem) => {
-        const pullRequest = props.pullRequests[virtualItem.index];
-        if (!pullRequest) {
-          return null;
-        }
-        return (
-          <li
-            key={pullRequest.number}
-            ref={virtualizer.measureElement}
-            data-index={virtualItem.index}
-            role="listitem"
-            className={props.rowClassName}
-          >
-            {props.renderPullRequest(pullRequest)}
-          </li>
-        );
-      })}
-      {paddingBottom > 0 ? <li aria-hidden="true" style={{ height: paddingBottom }} /> : null}
-    </ul>
+      <div className="relative w-full" style={{ height: totalHeight }}>
+        {virtualPullRequests.map((pullRequest, offset) => {
+          const index = startIndex + offset;
+          return (
+            <div
+              key={pullRequest.number}
+              data-index={index}
+              role="listitem"
+              className={cn("absolute inset-x-0 top-0", props.rowClassName)}
+              style={{
+                height: props.estimateSize,
+                transform: `translateY(${String(index * props.estimateSize)}px)`,
+              }}
+            >
+              {props.renderPullRequest(pullRequest)}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

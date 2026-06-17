@@ -120,4 +120,31 @@ describe("VirtualizedPullRequestRows", () => {
       await mounted.cleanup();
     }
   });
+
+  it("keeps rows pinned to the viewport after partial upward scrolling", async () => {
+    const pullRequests = makePullRequests(80);
+    const mounted = await renderRows({ pullRequests, threshold: 10 });
+
+    try {
+      const list = page.getByRole("list").element();
+      await expect.element(page.getByRole("button", { name: "Open PR 1" })).toBeVisible();
+
+      list.scrollTop = 1_600;
+      list.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await expect.poll(() => list.scrollTop).toBeGreaterThan(1_000);
+
+      list.scrollTop = 1_000;
+      list.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await expect.poll(() => {
+        const rows = Array.from(document.querySelectorAll<HTMLElement>('[role="listitem"]'));
+        const listTop = list.getBoundingClientRect().top;
+        return rows.some((row) => {
+          const rect = row.getBoundingClientRect();
+          return rect.bottom > listTop && rect.top <= listTop + 4;
+        });
+      }).toBe(true);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
 });
