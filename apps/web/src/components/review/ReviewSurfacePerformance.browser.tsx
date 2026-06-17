@@ -15,6 +15,7 @@ const nativeApiMock = vi.hoisted(() => ({
   listPullRequests: vi.fn(async () => ({ pullRequests: [] as ReviewPullRequestSummary[] })),
 }));
 const REVIEW_BENCHMARK_INITIAL_LIMIT = 50;
+const MIN_REVIEW_SURFACE_REDUCTION = 10;
 
 vi.mock("@tanstack/react-router", async (importActual) => {
   const actual = await importActual<typeof import("@tanstack/react-router")>();
@@ -167,6 +168,7 @@ describe("review surface performance benchmark", () => {
     try {
       const mountedRowReduction = naive.rows / Math.max(optimized.rows, 1);
       const dataReadyReduction = pullRequests.length / Math.max(optimized.resultRows, 1);
+      const elapsedReduction = naive.elapsedMs / Math.max(optimized.elapsedMs, 1);
       const benchmark = {
         inputRows: pullRequests.length,
         naiveRows: naive.rows,
@@ -174,6 +176,7 @@ describe("review surface performance benchmark", () => {
         optimizedRows: optimized.rows,
         dataReadyReduction,
         mountedRowReduction,
+        elapsedReduction,
         naiveElapsedMs: Math.round(naive.elapsedMs),
         optimizedElapsedMs: Math.round(optimized.elapsedMs),
         listCalls: nativeApiMock.listPullRequests.mock.calls.length,
@@ -187,8 +190,9 @@ describe("review surface performance benchmark", () => {
       expect(naive.rows).toBe(pullRequests.length);
       expect(optimized.resultRows).toBe(REVIEW_BENCHMARK_INITIAL_LIMIT);
       expect(optimized.rows).toBeGreaterThan(0);
-      expect(dataReadyReduction).toBeGreaterThanOrEqual(10);
-      expect(mountedRowReduction).toBeGreaterThanOrEqual(10);
+      expect(dataReadyReduction).toBeGreaterThanOrEqual(MIN_REVIEW_SURFACE_REDUCTION);
+      expect(mountedRowReduction).toBeGreaterThanOrEqual(MIN_REVIEW_SURFACE_REDUCTION);
+      expect(elapsedReduction).toBeGreaterThanOrEqual(MIN_REVIEW_SURFACE_REDUCTION);
       expect(document.body.textContent).toContain("Review benchmark PR 1");
       expect(document.body.textContent).not.toContain("Review benchmark PR 5000");
     } finally {

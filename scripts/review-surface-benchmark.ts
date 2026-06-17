@@ -14,6 +14,7 @@ interface ReviewBenchmarkMetrics {
   readonly optimizedRows: number;
   readonly dataReadyReduction: number;
   readonly mountedRowReduction: number;
+  readonly elapsedReduction: number;
   readonly naiveElapsedMs: number;
   readonly optimizedElapsedMs: number;
   readonly listCalls: number;
@@ -30,6 +31,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const webRoot = resolve(repoRoot, "apps/web");
 const BENCHMARK_PREFIX = "[benchmark] review surface board";
 const BENCHMARK_PATTERN = /^\[benchmark\] review surface board (\{.*\})$/m;
+const MIN_REVIEW_SURFACE_REDUCTION = 10;
 
 function parseIterations(args: ReadonlyArray<string>): number {
   const runsFlagIndex = args.findIndex((arg) => arg === "--runs" || arg === "-r");
@@ -90,6 +92,18 @@ function round(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+function assertAtLeast(
+  label: string,
+  value: number,
+  minimum: number,
+): void {
+  if (value < minimum) {
+    throw new Error(
+      `${label} expected at least ${String(minimum)}x reduction, got ${String(round(value))}x.`,
+    );
+  }
+}
+
 const iterations = parseIterations(process.argv.slice(2));
 const runs: ReviewBenchmarkMetrics[] = [];
 
@@ -97,7 +111,7 @@ for (let index = 1; index <= iterations; index += 1) {
   const metrics = runBenchmarkOnce(index);
   runs.push(metrics);
   console.log(
-    `run ${String(index)}/${String(iterations)}: ${round(metrics.dataReadyReduction)}x data-ready, ${round(metrics.mountedRowReduction)}x mounted, ${String(metrics.optimizedRows)} rows mounted, ${String(metrics.listCalls)} list call, ${String(metrics.viewerCalls)} viewer calls`,
+    `run ${String(index)}/${String(iterations)}: ${round(metrics.dataReadyReduction)}x data-ready, ${round(metrics.mountedRowReduction)}x mounted, ${round(metrics.elapsedReduction)}x elapsed, ${String(metrics.optimizedRows)} rows mounted, ${String(metrics.listCalls)} list call, ${String(metrics.viewerCalls)} viewer calls`,
   );
 }
 
@@ -109,10 +123,15 @@ const summary = {
   optimizedRows: summarize(runs.map((run) => run.optimizedRows)),
   dataReadyReduction: summarize(runs.map((run) => run.dataReadyReduction)),
   mountedRowReduction: summarize(runs.map((run) => run.mountedRowReduction)),
+  elapsedReduction: summarize(runs.map((run) => run.elapsedReduction)),
   naiveElapsedMs: summarize(runs.map((run) => run.naiveElapsedMs)),
   optimizedElapsedMs: summarize(runs.map((run) => run.optimizedElapsedMs)),
   listCalls: summarize(runs.map((run) => run.listCalls)),
   viewerCalls: summarize(runs.map((run) => run.viewerCalls)),
 };
+
+assertAtLeast("median data-ready", summary.dataReadyReduction.median, MIN_REVIEW_SURFACE_REDUCTION);
+assertAtLeast("median mounted-row", summary.mountedRowReduction.median, MIN_REVIEW_SURFACE_REDUCTION);
+assertAtLeast("median elapsed", summary.elapsedReduction.median, MIN_REVIEW_SURFACE_REDUCTION);
 
 console.log(JSON.stringify(summary, null, 2));
