@@ -384,6 +384,7 @@ export function ReviewPrView(props: {
                 reviewThreadId={reviewChatThreadId}
                 collapsed={sidebarCollapsed}
                 onCollapsedChange={updateSidebarCollapsed}
+                sidechatOwnsPrewarm={false}
               />
             ) : null}
           </div>

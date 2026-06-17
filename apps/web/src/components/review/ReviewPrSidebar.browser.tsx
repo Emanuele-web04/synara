@@ -771,7 +771,7 @@ describe("ReviewPrSidebar", () => {
       const input = page.getByTestId("composer-editor");
       await expect.element(page.getByText("Reading changed files")).toBeVisible();
       await vi.waitFor(() => {
-        expect(prewarmReviewChatThreadMock).toHaveBeenCalledTimes(2);
+        expect(prewarmReviewChatThreadMock).toHaveBeenCalledTimes(1);
       });
 
       const threadId = ThreadId.makeUnsafe("thread-review-chat-normalized");
@@ -805,7 +805,7 @@ describe("ReviewPrSidebar", () => {
 
       expect(performance.now() - startedAt).toBeLessThan(1_500);
       await expect.element(input).toHaveTextContent("Production question 19");
-      expect(prewarmReviewChatThreadMock).toHaveBeenCalledTimes(2);
+      expect(prewarmReviewChatThreadMock).toHaveBeenCalledTimes(1);
     } finally {
       await mounted.cleanup();
     }

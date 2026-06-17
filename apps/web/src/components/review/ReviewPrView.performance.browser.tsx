@@ -274,7 +274,7 @@ describe("ReviewPrView performance", () => {
       expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadConversation).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadPullRequest).toHaveBeenCalledTimes(0);
-      expect(reviewChatThreadMock.prewarmReviewChatThread.mock.calls.length).toBeGreaterThan(0);
+      expect(reviewChatThreadMock.prewarmReviewChatThread).toHaveBeenCalledTimes(1);
       expect(queuedFrame).not.toBeNull();
 
       queuedFrame?.(performance.now());
@@ -332,6 +332,7 @@ describe("ReviewPrView performance", () => {
       await page.getByRole("button", { name: "Review changes" }).click();
 
       await expect.poll(() => nativeApiMock.loadPullRequestSurface.mock.calls.length).toBe(1);
+      expect(reviewChatThreadMock.prewarmReviewChatThread).toHaveBeenCalledTimes(1);
       expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledWith({
         cwd: CWD,
         reference: REFERENCE,
