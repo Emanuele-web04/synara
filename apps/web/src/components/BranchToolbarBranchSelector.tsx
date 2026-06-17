@@ -849,9 +849,9 @@ export function BranchToolbarBranchSelector({
           />
         ) : (
           <>
-            <CentralIcon name="branch" className="size-3.5 shrink-0" />
+            <CentralIcon name="branch" className="size-4 shrink-0" />
             <span className="max-w-[240px] truncate">{triggerLabel}</span>
-            <ChevronDownIcon className="size-3 opacity-60" />
+            <ChevronDownIcon className="size-3.5 opacity-60" />
           </>
         )}
       </ComboboxTrigger>
