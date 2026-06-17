@@ -22,6 +22,7 @@ import GitActionsControl from "../GitActionsControl";
 import {
   ArrowRightIcon,
   CheckIcon,
+  HandoffIcon,
   HistoryIcon,
   MessageCircleIcon,
   PanelRightCloseIcon,
@@ -92,6 +93,9 @@ interface ChatHeaderProps {
   availableEditors: ReadonlyArray<EditorId>;
   diffToggleShortcutLabel: string | null;
   handoffBadgeLabel: string | null;
+  handoffActionLabel: string;
+  handoffDisabled: boolean;
+  handoffActionTargetProviders: ReadonlyArray<ProviderKind>;
   handoffBadgeSourceProvider: ProviderKind | null;
   handoffBadgeTargetProvider: ProviderKind | null;
   gitCwd: string | null;
@@ -134,6 +138,7 @@ interface ChatHeaderProps {
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleDiff: () => void;
+  onCreateHandoff: (targetProvider: ProviderKind) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
   onRenameThread: () => void;
   onCloseThreadPane?: () => void;
@@ -489,6 +494,9 @@ export const ChatHeader = memo(function ChatHeader({
   availableEditors,
   diffToggleShortcutLabel,
   handoffBadgeLabel,
+  handoffActionLabel,
+  handoffDisabled,
+  handoffActionTargetProviders,
   handoffBadgeSourceProvider,
   handoffBadgeTargetProvider,
   gitCwd,
@@ -508,6 +516,7 @@ export const ChatHeader = memo(function ChatHeader({
   onUpdateProjectScript,
   onDeleteProjectScript,
   onToggleDiff,
+  onCreateHandoff,
   onNavigateToThread,
   onRenameThread,
   onCloseThreadPane,
@@ -739,13 +748,47 @@ export const ChatHeader = memo(function ChatHeader({
         {!isDisposableThread && !hideHandoffControls && !environment ? (
           <ProviderUsageMenuControl provider={activeProvider} />
         ) : null}
-        {/* Project actions stay mounted in the header so scripts without
-            keybindings remain runnable, while also hosting the shared dialog. */}
+        {!isDisposableThread && !hideHandoffControls ? (
+          <Menu modal={false}>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <MenuTrigger
+                    render={
+                      <ChatHeaderButton
+                        type="button"
+                        tone="outline"
+                        className={compact ? "gap-1" : "gap-1.5"}
+                        aria-label={handoffActionLabel}
+                        disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
+                      />
+                    }
+                  >
+                    <HandoffIcon className="size-[1em] shrink-0 opacity-80" />
+                    {!compact ? <span className="truncate font-normal">Hand off</span> : null}
+                  </MenuTrigger>
+                }
+              />
+              <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
+            </Tooltip>
+            <ComposerPickerMenuPopup align="end" side="bottom" className="w-48 min-w-48">
+              {handoffActionTargetProviders.map((provider) => (
+                <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
+                  {renderProviderIcon(provider, "size-3.5 shrink-0")}
+                  <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
+                </MenuItem>
+              ))}
+            </ComposerPickerMenuPopup>
+          </Menu>
+        ) : null}
+        {/* Keep the shared project-action dialog mounted for the Open-in picker,
+            but do not render the header play/chevron runner. */}
         {!isDisposableThread && activeProjectScripts ? (
           <ProjectScriptsControl
             scripts={activeProjectScripts}
             keybindings={keybindings}
             preferredScriptId={preferredScriptId}
+            showInlineControls={false}
             openAddActionNonce={openAddActionNonce}
             onRunScript={onRunProjectScript}
             onAddScript={onAddProjectScript}
