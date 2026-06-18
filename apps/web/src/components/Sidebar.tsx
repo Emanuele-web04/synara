@@ -6,6 +6,7 @@ import {
   ArchiveIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  ClockIcon,
   CopyIcon,
   DisposableThreadIcon,
   ExternalLinkIcon,
@@ -28,6 +29,7 @@ import {
   WorktreeIcon,
   XIcon,
 } from "~/lib/icons";
+import { ensureNativeApi } from "~/nativeApi";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch, FiPlus } from "react-icons/fi";
 import { GoRepoForked } from "react-icons/go";
@@ -63,6 +65,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  type AutomationListResult,
   MAX_PINNED_PROJECTS,
   type DesktopUpdateState,
   type OrchestrationShellSnapshot,
@@ -133,6 +136,7 @@ import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
+import { applyAutomationEvent, automationQueryKey } from "../routes/-automations.shared";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { ProviderIcon } from "./ProviderIcon";
@@ -1005,6 +1009,7 @@ function SidebarPrimaryAction({
   active = false,
   disabled = false,
   shortcutLabel,
+  badgeCount,
 }: {
   icon: LucideIcon;
   label: string;
@@ -1012,8 +1017,10 @@ function SidebarPrimaryAction({
   active?: boolean;
   disabled?: boolean;
   shortcutLabel?: string | null;
+  badgeCount?: number | null;
 }) {
   const shortcutParts = shortcutLabel ? splitShortcutLabel(shortcutLabel) : [];
+  const showBadge = typeof badgeCount === "number" && badgeCount > 0;
 
   return (
     <SidebarMenuItem>
@@ -1036,7 +1043,11 @@ function SidebarPrimaryAction({
           <SidebarGlyph icon={Icon} variant="leading" />
         </SidebarLeadingIcon>
         <span className="truncate">{label}</span>
-        {shortcutParts.length > 0 ? (
+        {showBadge ? (
+          <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-md bg-muted px-1 text-[10px] font-medium text-muted-foreground">
+            {badgeCount}
+          </span>
+        ) : shortcutParts.length > 0 ? (
           <span className="ml-auto opacity-0 transition-opacity group-hover/sidebar-primary-action:opacity-100 group-focus-visible/sidebar-primary-action:opacity-100">
             <KbdGroup>
               {shortcutParts.map((part) => (
@@ -1212,12 +1223,44 @@ export default function Sidebar() {
   const homeDir = useWorkspaceStore((store) => store.homeDir);
   const chatWorkspaceRoot = useWorkspaceStore((store) => store.chatWorkspaceRoot);
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const pathname = useLocation({ select: (loc) => loc.pathname });
   const isOnSettings = useLocation({
     select: (loc) => loc.pathname === "/settings",
   });
   const isOnWorkspace = pathname.startsWith("/workspace");
   const isOnKanban = pathname.startsWith("/kanban");
+  const isOnAutomations = pathname.startsWith("/automations");
+  // Lightweight read of automations to drive the sidebar attention badge. Shares the
+  // ["automations"] query cache with the Automations route (and its live stream updates).
+  const automationListQuery = useQuery({
+    queryKey: automationQueryKey,
+    queryFn: () => ensureNativeApi().automation.list({}),
+  });
+  useEffect(() => {
+    const api = ensureNativeApi();
+    return api.automation.onEvent((event) => {
+      queryClient.setQueryData<AutomationListResult>(automationQueryKey, (prev) =>
+        applyAutomationEvent(prev, event),
+      );
+    });
+  }, [queryClient]);
+  const automationAttentionCount = useMemo(() => {
+    const data = automationListQuery.data;
+    if (!data) return 0;
+    const flagged = new Set<string>();
+    for (const run of data.runs) {
+      if (
+        run.status === "failed" ||
+        run.status === "cancelled" ||
+        run.status === "interrupted" ||
+        run.status === "waiting-for-approval"
+      ) {
+        flagged.add(run.automationId);
+      }
+    }
+    return flagged.size;
+  }, [automationListQuery.data]);
   const { settings: appSettings, updateSettings } = useAppSettings();
   // The Threads/Projects tab is always available; only the optional Workspace tab
   // and the standalone Chats footer list can be hidden from Settings.
@@ -1321,7 +1364,6 @@ export default function Sidebar() {
     ...serverConfigQueryOptions(),
     select: (config) => config.keybindings,
   });
-  const queryClient = useQueryClient();
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const { activeProjectId: focusedProjectId } = useFocusedChatContext();
   const [addingProject, setAddingProject] = useState(false);
@@ -6052,6 +6094,15 @@ export default function Sidebar() {
                       active={isOnKanban}
                       onClick={() => {
                         void navigate({ to: "/kanban" });
+                      }}
+                    />
+                    <SidebarPrimaryAction
+                      icon={ClockIcon}
+                      label="Automations"
+                      active={isOnAutomations}
+                      badgeCount={automationAttentionCount}
+                      onClick={() => {
+                        void navigate({ to: "/automations" });
                       }}
                     />
                   </>

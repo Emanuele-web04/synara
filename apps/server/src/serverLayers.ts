@@ -1,6 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Layer } from "effect";
 
+import { AutomationRunReactorLive } from "./automation/Layers/AutomationRunReactor";
+import { AutomationSchedulerLive } from "./automation/Layers/AutomationScheduler";
+import { AutomationServiceLive } from "./automation/Layers/AutomationService";
 import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQuery";
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
@@ -29,6 +32,8 @@ import { ServerSettingsLive } from "./serverSettings";
 import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
+import { AutomationRepositoryLive } from "./persistence/Layers/AutomationRepository";
+import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -90,8 +95,23 @@ export function makeServerRuntimeServicesLayer() {
     authControlPlaneLayer,
     serverAuthLayer,
   );
+  const automationServiceLayer = AutomationServiceLive.pipe(
+    Layer.provideMerge(AutomationRepositoryLive),
+    Layer.provideMerge(ProjectionTurnRepositoryLive),
+    Layer.provideMerge(GitCoreLive),
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+  const automationSchedulerLayer = AutomationSchedulerLive.pipe(
+    Layer.provideMerge(automationServiceLayer),
+  );
+  const automationRunReactorLayer = AutomationRunReactorLive.pipe(
+    Layer.provideMerge(automationServiceLayer),
+  );
 
   return Layer.mergeAll(
+    automationServiceLayer,
+    automationSchedulerLayer,
+    automationRunReactorLayer,
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
     devServerManagerLayer,

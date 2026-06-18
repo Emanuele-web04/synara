@@ -5,6 +5,7 @@
 
 import {
   ApprovalRequestId,
+  AutomationId,
   CommandId,
   type ContextMenuItem,
   EventId,
@@ -391,6 +392,38 @@ describe("wsNativeApi", () => {
       phase: "commit",
       label: "Committing...",
     });
+  });
+
+  it("forwards automation requests and events", async () => {
+    requestMock.mockResolvedValue({ definitions: [], runs: [] });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    const onAutomationEvent = vi.fn();
+    const unsubscribe = api.automation.onEvent(onAutomationEvent);
+
+    await api.automation.list({ projectId: ProjectId.makeUnsafe("project-1") });
+    await api.automation.runNow({ automationId: AutomationId.makeUnsafe("automation-1") });
+
+    const event = {
+      type: "definition-deleted",
+      automationId: AutomationId.makeUnsafe("automation-1"),
+    } as const;
+    emitPush(WS_CHANNELS.automationEvent, event);
+    unsubscribe();
+    emitPush(WS_CHANNELS.automationEvent, {
+      type: "definition-deleted",
+      automationId: AutomationId.makeUnsafe("automation-2"),
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.automationList, {
+      projectId: "project-1",
+    });
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.automationRunNow, {
+      automationId: "automation-1",
+    });
+    expect(onAutomationEvent).toHaveBeenCalledTimes(1);
+    expect(onAutomationEvent).toHaveBeenCalledWith(event);
   });
 
   it("wraps orchestration dispatch commands in the command envelope", async () => {

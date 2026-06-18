@@ -402,9 +402,9 @@ export default function BranchToolbar({
                 />
               ) : (
                 <>
-                  {envGlyph("size-3.5")}
+                  {envGlyph("size-4")}
                   {environmentPresentation.shortLabel}
-                  <ChevronDownIcon className="size-3 opacity-60" />
+                  <ChevronDownIcon className="size-3.5 opacity-60" />
                 </>
               )}
             </MenuTrigger>
@@ -498,7 +498,7 @@ export default function BranchToolbar({
           </div>
         ) : (
           <span className="inline-flex items-center gap-1 px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)]">
-            <WorktreeGlyph className="size-3.5" />
+            <WorktreeGlyph className="size-4" />
             {environmentPresentation.shortLabel}
           </span>
         )}
