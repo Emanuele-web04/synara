@@ -41,6 +41,7 @@ import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   type ChatAssistantSelectionAttachment,
+  type ChatFileAttachment,
   type ChatImageAttachment,
   type ThreadPrimarySurface,
 } from "./types";
@@ -114,6 +115,10 @@ export interface ComposerImageAttachment extends Omit<ChatImageAttachment, "prev
   file: File;
 }
 
+export interface ComposerFileAttachment extends ChatFileAttachment {
+  file: File;
+}
+
 export type ComposerAssistantSelectionAttachment = ChatAssistantSelectionAttachment;
 
 export interface QueuedComposerChatTurn {
@@ -123,6 +128,7 @@ export interface QueuedComposerChatTurn {
   previewText: string;
   prompt: string;
   images: ComposerImageAttachment[];
+  files: ComposerFileAttachment[];
   assistantSelections: ComposerAssistantSelectionAttachment[];
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
@@ -355,6 +361,7 @@ const PersistedComposerDraftStoreStorage = Schema.Struct({
 export interface ComposerThreadDraftState {
   prompt: string;
   images: ComposerImageAttachment[];
+  files: ComposerFileAttachment[];
   nonPersistedImageIds: string[];
   persistedAttachments: PersistedComposerImageAttachment[];
   assistantSelections: ComposerAssistantSelectionAttachment[];
@@ -488,6 +495,8 @@ export interface ComposerDraftStoreState {
   addImage: (threadId: ThreadId, image: ComposerImageAttachment) => void;
   addImages: (threadId: ThreadId, images: ComposerImageAttachment[]) => void;
   removeImage: (threadId: ThreadId, imageId: string) => void;
+  addFiles: (threadId: ThreadId, files: ComposerFileAttachment[]) => void;
+  removeFile: (threadId: ThreadId, fileId: string) => void;
   addAssistantSelection: (
     threadId: ThreadId,
     selection: ComposerAssistantSelectionAttachment,
@@ -602,6 +611,7 @@ function projectIdFromDraftThreadMappingKey(key: string): ProjectId {
 }
 
 const EMPTY_IMAGES: ComposerImageAttachment[] = [];
+const EMPTY_FILES: ComposerFileAttachment[] = [];
 const EMPTY_IDS: string[] = [];
 const EMPTY_PERSISTED_ATTACHMENTS: PersistedComposerImageAttachment[] = [];
 const EMPTY_TERMINAL_CONTEXTS: TerminalContextDraft[] = [];
@@ -610,6 +620,7 @@ const EMPTY_SKILLS: ProviderSkillReference[] = [];
 const EMPTY_MENTIONS: ProviderMentionReference[] = [];
 const EMPTY_QUEUED_TURNS: QueuedComposerTurn[] = [];
 Object.freeze(EMPTY_IMAGES);
+Object.freeze(EMPTY_FILES);
 Object.freeze(EMPTY_IDS);
 Object.freeze(EMPTY_PERSISTED_ATTACHMENTS);
 Object.freeze(EMPTY_PASTED_TEXTS);
@@ -622,6 +633,7 @@ const EMPTY_MODEL_SELECTION_BY_PROVIDER: Partial<Record<ProviderKind, ModelSelec
 const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   prompt: "",
   images: EMPTY_IMAGES,
+  files: EMPTY_FILES,
   nonPersistedImageIds: EMPTY_IDS,
   persistedAttachments: EMPTY_PERSISTED_ATTACHMENTS,
   assistantSelections: [],
@@ -641,6 +653,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
   return {
     prompt: "",
     images: [],
+    files: [],
     nonPersistedImageIds: [],
     persistedAttachments: [],
     assistantSelections: [],
@@ -661,6 +674,10 @@ function composerImageDedupKey(image: ComposerImageAttachment): string {
   // Keep this independent from File.lastModified so dedupe is stable for hydrated
   // images reconstructed from localStorage (which get a fresh lastModified value).
   return `${image.mimeType}\u0000${image.sizeBytes}\u0000${image.name}`;
+}
+
+function composerFileDedupKey(file: ComposerFileAttachment): string {
+  return `${file.mimeType}\u0000${file.sizeBytes}\u0000${file.name}`;
 }
 
 function terminalContextDedupKey(context: TerminalContextDraft): string {
@@ -848,6 +865,7 @@ function buildTransferredComposerDraft(input: {
     ...base,
     prompt: sourceDraft.prompt,
     images: sourceDraft.images.map(cloneComposerImageAttachment),
+    files: [...sourceDraft.files],
     nonPersistedImageIds: [...sourceDraft.nonPersistedImageIds],
     persistedAttachments: [...sourceDraft.persistedAttachments],
     assistantSelections: normalizeAssistantSelections(sourceDraft.assistantSelections),
@@ -866,6 +884,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
   return (
     draft.prompt.length === 0 &&
     draft.images.length === 0 &&
+    draft.files.length === 0 &&
     draft.persistedAttachments.length === 0 &&
     draft.assistantSelections.length === 0 &&
     draft.terminalContexts.length === 0 &&
@@ -2102,6 +2121,11 @@ function partializeComposerDraftStoreState(
     > = [];
     for (const queuedTurn of draft.queuedTurns) {
       if (queuedTurn.kind === "chat") {
+        // File attachments are intentionally in-memory only; persisting the
+        // queued turn without them would make a later send incomplete.
+        if (queuedTurn.files.length > 0) {
+          continue;
+        }
         const images = persistQueuedComposerImages(queuedTurn.images);
         if (images.length !== queuedTurn.images.length) {
           continue;
@@ -2460,6 +2484,7 @@ function hydrateQueuedTurnsFromPersisted(
       return {
         ...queuedTurn,
         images: hydrateImagesFromPersisted(queuedTurn.images),
+        files: [],
         assistantSelections: normalizeAssistantSelections(queuedTurn.assistantSelections ?? []),
         terminalContexts: normalizeTerminalContextsForThread(threadId, queuedTurn.terminalContexts),
         fileComments: normalizeFileComments(queuedTurn.fileComments ?? []),
@@ -2484,6 +2509,7 @@ function toHydratedThreadDraft(
   return {
     prompt: persistedDraft.prompt,
     images: hydrateImagesFromPersisted(persistedDraft.attachments),
+    files: [],
     nonPersistedImageIds: [],
     persistedAttachments: [...persistedDraft.attachments],
     assistantSelections: normalizeAssistantSelections(persistedDraft.assistantSelections ?? []),
@@ -3463,6 +3489,62 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           return { draftsByThreadId: nextDraftsByThreadId };
         });
       },
+      addFiles: (threadId, files) => {
+        if (threadId.length === 0 || files.length === 0) {
+          return;
+        }
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+          const existingIds = new Set(existing.files.map((file) => file.id));
+          const existingDedupKeys = new Set(
+            existing.files.map((file) => composerFileDedupKey(file)),
+          );
+          const dedupedIncoming: ComposerFileAttachment[] = [];
+          for (const file of files) {
+            const dedupKey = composerFileDedupKey(file);
+            if (existingIds.has(file.id) || existingDedupKeys.has(dedupKey)) {
+              continue;
+            }
+            dedupedIncoming.push(file);
+            existingIds.add(file.id);
+            existingDedupKeys.add(dedupKey);
+          }
+          if (dedupedIncoming.length === 0) {
+            return state;
+          }
+          return {
+            draftsByThreadId: {
+              ...state.draftsByThreadId,
+              [threadId]: {
+                ...existing,
+                files: [...existing.files, ...dedupedIncoming],
+              },
+            },
+          };
+        });
+      },
+      removeFile: (threadId, fileId) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const current = state.draftsByThreadId[threadId];
+          if (!current) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...current,
+            files: current.files.filter((file) => file.id !== fileId),
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
       addAssistantSelection: (threadId, selection) => {
         if (threadId.length === 0) {
           return false;
@@ -3892,13 +3974,14 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           if (!current) {
             return state;
           }
-          const nextDraft: ComposerThreadDraftState = {
-            ...current,
-            prompt: "",
-            images: [],
-            nonPersistedImageIds: [],
-            persistedAttachments: [],
-            assistantSelections: [],
+      const nextDraft: ComposerThreadDraftState = {
+        ...current,
+        prompt: "",
+        images: [],
+        files: [],
+        nonPersistedImageIds: [],
+        persistedAttachments: [],
+        assistantSelections: [],
             terminalContexts: [],
             fileComments: [],
             pastedTexts: [],

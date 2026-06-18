@@ -813,6 +813,14 @@ function normalizeChatAttachments(
             assistantMessageId: attachment.assistantMessageId,
             text: attachment.text,
           }
+        : attachment.type === "file"
+          ? {
+              type: "file",
+              id: attachment.id,
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+            }
         : {
             type: "image",
             id: attachment.id,
@@ -833,7 +841,12 @@ function normalizeChatAttachments(
           existing.name === nextAttachment.name &&
           existing.mimeType === nextAttachment.mimeType &&
           existing.sizeBytes === nextAttachment.sizeBytes &&
-          existing.previewUrl === nextAttachment.previewUrl))
+          existing.previewUrl === nextAttachment.previewUrl) ||
+        (existing.type === "file" &&
+          nextAttachment.type === "file" &&
+          existing.name === nextAttachment.name &&
+          existing.mimeType === nextAttachment.mimeType &&
+          existing.sizeBytes === nextAttachment.sizeBytes))
     ) {
       return existing;
     }
@@ -916,6 +929,14 @@ function readModelAttachmentsFromChatMessage(
             assistantMessageId: MessageId.makeUnsafe(attachment.assistantMessageId),
             text: attachment.text,
           }
+        : attachment.type === "file"
+          ? {
+              id: attachment.id,
+              name: attachment.name,
+              type: "file" as const,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+            }
         : {
             id: attachment.id,
             name: attachment.name,

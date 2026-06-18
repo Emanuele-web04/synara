@@ -335,7 +335,7 @@ describe("resolveActiveTurnLiveDiffState", () => {
     });
   });
 
-  it("returns zero totals before the active turn has a diff summary", () => {
+  it("returns zero totals before the active turn has a diff summary or file-edit work", () => {
     expect(
       resolveActiveTurnLiveDiffState({
         latestTurnId: TurnId.makeUnsafe("turn-active"),
@@ -353,6 +353,52 @@ describe("resolveActiveTurnLiveDiffState", () => {
       additions: 0,
       deletions: 0,
       hasChanges: false,
+    });
+  });
+
+  it("falls back to in-turn file-edit work before the diff summary lands", () => {
+    const activeTurnId = TurnId.makeUnsafe("turn-active");
+
+    expect(
+      resolveActiveTurnLiveDiffState({
+        latestTurnId: activeTurnId,
+        turnDiffSummaries: [],
+        workLogEntries: [
+          // Other turn / non-edit work is ignored.
+          { turnId: TurnId.makeUnsafe("turn-previous"), itemType: "file_change" },
+          { turnId: activeTurnId, requestKind: "command" },
+          {
+            turnId: activeTurnId,
+            itemType: "file_change",
+            changedFiles: ["src/a.ts", "src/b.ts"],
+          },
+          { turnId: activeTurnId, itemType: "file_change", changedFiles: ["src/a.ts"] },
+        ],
+      }),
+    ).toEqual({
+      turnId: activeTurnId,
+      fileCount: 2,
+      additions: 0,
+      deletions: 0,
+      hasChanges: true,
+    });
+  });
+
+  it("surfaces a stat-less strip when file-edit work has no changed paths yet", () => {
+    const activeTurnId = TurnId.makeUnsafe("turn-active");
+
+    expect(
+      resolveActiveTurnLiveDiffState({
+        latestTurnId: activeTurnId,
+        turnDiffSummaries: [],
+        workLogEntries: [{ turnId: activeTurnId, itemType: "file_change" }],
+      }),
+    ).toEqual({
+      turnId: activeTurnId,
+      fileCount: null,
+      additions: 0,
+      deletions: 0,
+      hasChanges: true,
     });
   });
 });
@@ -500,6 +546,7 @@ describe("deriveComposerSendState", () => {
     const state = deriveComposerSendState({
       prompt: "\uFFFC",
       imageCount: 0,
+      fileCount: 0,
       assistantSelectionCount: 0,
       fileCommentCount: 0,
       terminalContexts: [
@@ -527,6 +574,7 @@ describe("deriveComposerSendState", () => {
     const state = deriveComposerSendState({
       prompt: `yoo \uFFFC waddup`,
       imageCount: 0,
+      fileCount: 0,
       assistantSelectionCount: 0,
       fileCommentCount: 0,
       terminalContexts: [
@@ -553,6 +601,7 @@ describe("deriveComposerSendState", () => {
     const state = deriveComposerSendState({
       prompt: "",
       imageCount: 0,
+      fileCount: 0,
       assistantSelectionCount: 1,
       fileCommentCount: 0,
       terminalContexts: [],
@@ -566,8 +615,23 @@ describe("deriveComposerSendState", () => {
     const state = deriveComposerSendState({
       prompt: "",
       imageCount: 0,
+      fileCount: 0,
       assistantSelectionCount: 0,
       fileCommentCount: 1,
+      terminalContexts: [],
+      pastedTexts: [],
+    });
+
+    expect(state.hasSendableContent).toBe(true);
+  });
+
+  it("treats file attachments as sendable content", () => {
+    const state = deriveComposerSendState({
+      prompt: "",
+      imageCount: 0,
+      fileCount: 1,
+      assistantSelectionCount: 0,
+      fileCommentCount: 0,
       terminalContexts: [],
       pastedTexts: [],
     });

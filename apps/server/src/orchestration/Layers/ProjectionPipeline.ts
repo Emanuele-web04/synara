@@ -453,7 +453,7 @@ function collectThreadAttachmentRelativePaths(
   const relativePaths = new Set<string>();
   for (const message of messages) {
     for (const attachment of message.attachments ?? []) {
-      if (attachment.type !== "image") {
+      if (attachment.type !== "image" && attachment.type !== "file") {
         continue;
       }
       const attachmentThreadSegment = parseThreadSegmentFromAttachmentId(attachment.id);

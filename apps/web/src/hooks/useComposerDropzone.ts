@@ -16,12 +16,13 @@ export function isComposerHandledDrag(dataTransfer: DataTransfer): boolean {
 
 export function useComposerDropzone(input: {
   readonly addImages: (files: readonly File[]) => void;
+  readonly addFiles?: ((files: readonly File[]) => void) | undefined;
   readonly appendReferenceText?: ((text: string) => void) | undefined;
   readonly focusComposer?: (() => void) | undefined;
   readonly dragDepthRef?: { current: number } | undefined;
   readonly setIsDragOverComposer: (dragging: boolean) => void;
 }) {
-  const { addImages, appendReferenceText, focusComposer, setIsDragOverComposer } = input;
+  const { addImages, addFiles, appendReferenceText, focusComposer, setIsDragOverComposer } = input;
   const internalDragDepthRef = useRef(0);
   const dragDepthRef = input.dragDepthRef ?? internalDragDepthRef;
 
@@ -32,16 +33,17 @@ export function useComposerDropzone(input: {
 
   const onComposerPaste = useCallback(
     (event: ClipboardEvent<HTMLElement>) => {
-      const imageFiles = Array.from(event.clipboardData.files).filter((file) =>
-        file.type.startsWith("image/"),
-      );
-      if (imageFiles.length === 0) {
+      const pastedFiles = Array.from(event.clipboardData.files);
+      const imageFiles = pastedFiles.filter((file) => file.type.startsWith("image/"));
+      const genericFiles = pastedFiles.filter((file) => !file.type.startsWith("image/"));
+      if (imageFiles.length === 0 && genericFiles.length === 0) {
         return;
       }
       event.preventDefault();
       addImages(imageFiles);
+      addFiles?.(genericFiles);
     },
-    [addImages],
+    [addFiles, addImages],
   );
 
   const onComposerDragEnter = useCallback(
@@ -90,10 +92,12 @@ export function useComposerDropzone(input: {
         appendReferenceText?.(referenceText);
         return;
       }
-      addImages(Array.from(event.dataTransfer.files));
+      const droppedFiles = Array.from(event.dataTransfer.files);
+      addImages(droppedFiles.filter((file) => file.type.startsWith("image/")));
+      addFiles?.(droppedFiles.filter((file) => !file.type.startsWith("image/")));
       focusComposer?.();
     },
-    [addImages, appendReferenceText, focusComposer, resetComposerDragState],
+    [addFiles, addImages, appendReferenceText, focusComposer, resetComposerDragState],
   );
 
   return {

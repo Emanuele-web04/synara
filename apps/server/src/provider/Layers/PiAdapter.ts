@@ -43,6 +43,7 @@ import {
 } from "../Errors.ts";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
 import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
+import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
 import { clampUsagePercent, nonNegativeFiniteNumber, positiveFiniteNumber } from "../tokenUsage.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -1762,7 +1763,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
     }) =>
       Effect.gen(function* () {
-        const text = input.input ?? "";
+        const text =
+          appendFileAttachmentsPromptBlock({
+            text: input.input,
+            attachments: input.attachments,
+            attachmentsDir: serverConfig.attachmentsDir,
+            include: "all-files",
+          }) ?? "";
         const images = yield* Effect.forEach(
           input.attachments ?? [],
           (attachment) =>

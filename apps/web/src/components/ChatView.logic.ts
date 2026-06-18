@@ -33,7 +33,11 @@ import {
   humanizeSubagentStatus,
   resolveSubagentPresentationForThread,
 } from "../lib/subagentPresentation";
-import { hasLiveTurnTailWork, type WorkLogEntry } from "../session-logic";
+import {
+  hasLiveTurnTailWork,
+  isProviderFileEditWorkLogEntry,
+  type WorkLogEntry,
+} from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
 import type { ProviderModelOption } from "../providerModelOptions";
 
@@ -115,16 +119,20 @@ export function resolveEnvironmentPanelVisible(input: {
   return input.environmentEnabled && input.environmentPanelOpen;
 }
 
-// The composer live strip only surfaces once the turn's diff has been computed
-// (the `thread.turn-diff-completed` event), so it always carries real per-file
-// +/- stats. Mid-turn work-log activity has file paths but no diff totals, so we
-// intentionally wait rather than render a stat-less "N files changed" strip.
+// The composer live strip prefers the turn's computed diff (the
+// `thread.turn-diff-completed` event) so it can show real per-file +/- stats.
+// Before that lands, it falls back to mid-turn file-edit work-log activity so
+// the strip still appears while the turn is running — it just renders a
+// stat-less "Files changed" label (fileCount: null) until the diff totals land.
 export function resolveActiveTurnLiveDiffState(input: {
   latestTurnId: TurnDiffSummary["turnId"] | null | undefined;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
+  workLogEntries?: ReadonlyArray<
+    Pick<WorkLogEntry, "changedFiles" | "itemType" | "requestKind" | "turnId">
+  >;
 }): {
   turnId: TurnDiffSummary["turnId"] | null;
-  fileCount: number;
+  fileCount: number | null;
   additions: number;
   deletions: number;
   hasChanges: boolean;
@@ -133,12 +141,48 @@ export function resolveActiveTurnLiveDiffState(input: {
     ? (input.turnDiffSummaries.find((entry) => entry.turnId === input.latestTurnId) ?? null)
     : null;
   const files = summary?.files ?? [];
+  if (summary && files.length > 0) {
+    return {
+      turnId: summary.turnId,
+      fileCount: files.length,
+      additions: files.reduce((total, file) => total + (file.additions ?? 0), 0),
+      deletions: files.reduce((total, file) => total + (file.deletions ?? 0), 0),
+      hasChanges: true,
+    };
+  }
+
+  // No diff totals yet: keep the strip visible from in-turn file-edit work so it
+  // does not vanish between the first edit and the turn-diff-completed event.
+  const workLogFilePaths = new Set<string>();
+  let hasFileEditWork = false;
+  if (input.latestTurnId) {
+    for (const entry of input.workLogEntries ?? []) {
+      if (entry.turnId !== input.latestTurnId || !isProviderFileEditWorkLogEntry(entry)) {
+        continue;
+      }
+      hasFileEditWork = true;
+      for (const filePath of entry.changedFiles ?? []) {
+        workLogFilePaths.add(filePath);
+      }
+    }
+  }
+
+  if (hasFileEditWork && input.latestTurnId) {
+    return {
+      turnId: input.latestTurnId,
+      fileCount: workLogFilePaths.size > 0 ? workLogFilePaths.size : null,
+      additions: 0,
+      deletions: 0,
+      hasChanges: true,
+    };
+  }
+
   return {
-    turnId: summary?.turnId ?? null,
-    fileCount: files.length,
-    additions: files.reduce((total, file) => total + (file.additions ?? 0), 0),
-    deletions: files.reduce((total, file) => total + (file.deletions ?? 0), 0),
-    hasChanges: files.length > 0,
+    turnId: null,
+    fileCount: 0,
+    additions: 0,
+    deletions: 0,
+    hasChanges: false,
   };
 }
 
@@ -486,6 +530,7 @@ export function buildSuggestedWorktreeName(input: {
 export function deriveComposerSendState(options: {
   prompt: string;
   imageCount: number;
+  fileCount: number;
   assistantSelectionCount: number;
   fileCommentCount: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
@@ -510,6 +555,7 @@ export function deriveComposerSendState(options: {
     hasSendableContent:
       trimmedPrompt.length > 0 ||
       options.imageCount > 0 ||
+      options.fileCount > 0 ||
       options.assistantSelectionCount > 0 ||
       options.fileCommentCount > 0 ||
       sendableTerminalContexts.length > 0 ||

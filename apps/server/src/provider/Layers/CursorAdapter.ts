@@ -43,6 +43,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
+import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { filterProviderPromptImageAttachments } from "../promptAttachments.ts";
 import {
   ProviderAdapterProcessError,
@@ -1130,15 +1131,23 @@ export function makeCursorAdapter(
             mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
         });
         const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
-        if (input.input?.trim()) {
+        const promptText = appendFileAttachmentsPromptBlock({
+          text: input.input?.trim()
+            ? withCursorPlanModePrompt({
+                text: input.input.trim(),
+                ...(input.interactionMode !== undefined
+                  ? { interactionMode: input.interactionMode }
+                  : {}),
+              })
+            : undefined,
+          attachments: input.attachments,
+          attachmentsDir: serverConfig.attachmentsDir,
+          include: "all-files",
+        });
+        if (promptText) {
           promptParts.push({
             type: "text",
-            text: withCursorPlanModePrompt({
-              text: input.input.trim(),
-              ...(input.interactionMode !== undefined
-                ? { interactionMode: input.interactionMode }
-                : {}),
-            }),
+            text: promptText,
           });
         }
         if (input.attachments && input.attachments.length > 0) {

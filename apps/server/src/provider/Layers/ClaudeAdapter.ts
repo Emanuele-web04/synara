@@ -81,6 +81,7 @@ import {
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { buildFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { positiveFiniteNumber } from "../tokenUsage.ts";
 import {
   ProviderAdapterProcessError,
@@ -907,6 +908,15 @@ function buildUserMessageEffect(
           bytes,
         }),
       );
+    }
+
+    const fileBlock = buildFileAttachmentsPromptBlock({
+      attachments: input.attachments,
+      attachmentsDir: dependencies.attachmentsDir,
+      include: "all-files",
+    });
+    if (fileBlock) {
+      sdkContent.push({ type: "text", text: fileBlock });
     }
 
     return buildUserMessage({ sdkContent });

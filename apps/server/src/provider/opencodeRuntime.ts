@@ -714,7 +714,7 @@ export function toOpenCodeFileParts(input: {
   const parts: Array<FilePartInput> = [];
 
   for (const attachment of input.attachments ?? []) {
-    if (attachment.type !== "image") {
+    if (attachment.type !== "image" && attachment.type !== "file") {
       continue;
     }
 
