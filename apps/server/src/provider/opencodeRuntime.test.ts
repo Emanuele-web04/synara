@@ -6,6 +6,7 @@
 import { Duration, Effect, Exit, Layer, Scope, Sink, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { TestClock } from "effect/testing";
+import type { ChatAttachment } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -15,6 +16,7 @@ import {
   OPENCODE_LOCAL_SERVER_IDLE_TTL_MS,
   parseOpenCodeCliModelsOutput,
   parseOpenCodeCredentialProviderIDs,
+  toOpenCodeFileParts,
 } from "./opencodeRuntime.ts";
 
 const encoder = new TextEncoder();
@@ -90,6 +92,32 @@ function openCodeRuntimePoolTestLayer(state: {
     TestClock.layer(),
   );
 }
+
+describe("toOpenCodeFileParts", () => {
+  it("materializes generic file attachments as SDK file parts", () => {
+    const attachment = {
+      type: "file",
+      id: "thread-attachment-file",
+      name: "notes.txt",
+      mimeType: "text/plain",
+      sizeBytes: 12,
+    } satisfies ChatAttachment;
+
+    expect(
+      toOpenCodeFileParts({
+        attachments: [attachment],
+        resolveAttachmentPath: () => "/tmp/synara-attachments/notes.txt",
+      }),
+    ).toEqual([
+      {
+        type: "file",
+        mime: "text/plain",
+        filename: "notes.txt",
+        url: "file:///tmp/synara-attachments/notes.txt",
+      },
+    ]);
+  });
+});
 
 describe("OpenCodeRuntime startup diagnostics", () => {
   it("includes command and partial process output when server startup times out", async () => {

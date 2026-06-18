@@ -66,6 +66,7 @@ import { InlineAgentChip } from "./InlineAgentChip";
 import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
+import { FileAttachmentChip } from "./FileAttachmentChip";
 import { FileCommentsSummaryChip } from "./FileCommentsSummaryChip";
 import { UserMessagePastedTextCard } from "./PastedTextChip";
 import {
@@ -778,8 +779,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               { type: "assistant-selection" }
             > => attachment.type === "assistant-selection",
           );
+          const userFiles = (row.message.attachments ?? []).filter(
+            (
+              attachment,
+            ): attachment is Extract<
+              NonNullable<TimelineMessage["attachments"]>[number],
+              { type: "file" }
+            > => attachment.type === "file",
+          );
           const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text, {
-            hideImageOnlyBootstrapPrompt: userImages.length > 0 || assistantSelections.length > 0,
+            hideImageOnlyBootstrapPrompt:
+              userImages.length > 0 || userFiles.length > 0 || assistantSelections.length > 0,
           });
           const renderedAssistantSelections =
             assistantSelections.length > 0
@@ -850,6 +860,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         text={pasted.text}
                         metrics={{ lineCount: pasted.lineCount, charCount: pasted.charCount }}
                       />
+                    ))}
+                  </div>
+                )}
+                {userFiles.length > 0 && (
+                  <div className="mb-1 flex max-w-[280px] flex-wrap justify-end gap-1.5 self-end">
+                    {userFiles.map((file) => (
+                      <FileAttachmentChip key={file.id} file={file} />
                     ))}
                   </div>
                 )}
@@ -1250,7 +1267,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </p>
                 </div>
                 {(() => {
-                  if (!turnSummary) return null;
+                  // Hold the end-of-turn changes card (Undo / Review) until the
+                  // turn settles. While the turn is live the composer's own
+                  // live-changes strip owns this surface; showing the card too
+                  // would duplicate it and pre-empt the strip mid-turn.
+                  if (!turnSummary || row.assistantTurnInProgress) return null;
                   const checkpointFiles = turnSummary.files;
                   if (checkpointFiles.length === 0) return null;
                   const fileChangesExpanded =

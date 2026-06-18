@@ -122,7 +122,7 @@ function attachmentTitleSeed(attachment: ChatAttachment | undefined): string {
   if (!attachment) {
     return "";
   }
-  if (attachment.type === "image") {
+  if (attachment.type === "image" || attachment.type === "file") {
     return attachment.name;
   }
   return attachment.text.trim();
