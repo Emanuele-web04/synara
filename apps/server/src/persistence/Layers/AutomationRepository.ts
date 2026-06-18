@@ -531,7 +531,7 @@ const makeAutomationRepository = Effect.gen(function* () {
             lease_expires_at = NULL,
             claimed_by = NULL
         WHERE run_id = ${id}
-          AND status NOT IN ('succeeded', 'cancelled')
+          AND status NOT IN ('succeeded', 'failed', 'cancelled', 'interrupted')
       `,
   });
 

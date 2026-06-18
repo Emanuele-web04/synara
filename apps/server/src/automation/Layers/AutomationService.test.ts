@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
   AutomationId,
+  AutomationRunId,
   ProjectId,
   ThreadId,
   TurnId,
@@ -731,6 +732,78 @@ layer("AutomationService", (it) => {
       const definition = reloaded.definitions.find((entry) => entry.id === automationId);
       assert.strictEqual(definition?.nextRunAt, "2026-06-16T10:05:00.000Z");
     }),
+  );
+
+  it.effect(
+    "does not re-dispatch or double-count an occurrence whose run was interrupted before the schedule advanced",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        const service = yield* AutomationService;
+        const repository = yield* AutomationRepository;
+        const automationId = AutomationId.makeUnsafe("automation-crash-replay");
+        const scheduledFor = "2026-06-16T10:00:00.000Z";
+
+        yield* repository.createDefinition({
+          id: automationId,
+          input: {
+            ...createInput("local"),
+            schedule: { type: "interval", everySeconds: 300 },
+          },
+          now: scheduledFor,
+        });
+
+        // Simulate a prior process that created the scheduled run, then crashed before it
+        // advanced the schedule or counted the iteration. Recovery marked the orphaned run
+        // interrupted; nextRunAt and iterationCount were never updated.
+        const crashed = yield* repository.createRun({
+          id: AutomationRunId.makeUnsafe("run-crashed"),
+          automationId,
+          projectId,
+          threadId: null,
+          trigger: { type: "scheduled" },
+          scheduledFor,
+          permissionSnapshot: {
+            provider: "codex",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            worktreeMode: "local",
+            allowedCapabilities: ["send-turn"],
+            createdAt: scheduledFor,
+          },
+          now: scheduledFor,
+        });
+        yield* repository.markRunInterrupted({
+          id: crashed.id,
+          turnId: null,
+          finishedAt: scheduledFor,
+        });
+
+        const results = yield* service.runDueOnce({
+          now: scheduledFor,
+          limit: 10,
+          leaseOwnerId: "test-scheduler",
+        });
+
+        // The already-recorded occurrence is not re-dispatched (no orphan thread)...
+        assert.strictEqual(results.length, 0);
+        assert.strictEqual(dispatchedCommands.length, 0);
+        const reloaded = yield* service.list({ projectId });
+        const definition = reloaded.definitions.find((entry) => entry.id === automationId);
+        // ...but the schedule still advances past it...
+        assert.strictEqual(definition?.nextRunAt, "2026-06-16T10:05:00.000Z");
+        // ...and the iteration count is not double-incremented for the deduped occurrence.
+        assert.strictEqual(definition?.iterationCount, 0);
+        assert.strictEqual(
+          reloaded.runs.filter((entry) => entry.automationId === automationId).length,
+          1,
+        );
+        assert.strictEqual(
+          reloaded.runs.find((entry) => entry.id === crashed.id)?.status,
+          "interrupted",
+        );
+      }),
   );
 
   it.effect("refuses a manual heartbeat run while a prior run is still in flight", () =>

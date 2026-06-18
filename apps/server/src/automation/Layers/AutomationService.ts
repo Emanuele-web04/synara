@@ -351,15 +351,17 @@ export const AutomationServiceLive = Layer.effect(
         return Effect.succeed(null);
       }
       if (run.turnId) {
-        return projectionTurnRepository.getByTurnId({ threadId: run.threadId, turnId: run.turnId }).pipe(
-          Effect.mapError(toServiceError("Failed to load automation turn.")),
-          Effect.map((turnOption) =>
-            Option.match(turnOption, {
-              onNone: () => null,
-              onSome: (turn) => turn,
-            }),
-          ),
-        );
+        return projectionTurnRepository
+          .getByTurnId({ threadId: run.threadId, turnId: run.turnId })
+          .pipe(
+            Effect.mapError(toServiceError("Failed to load automation turn.")),
+            Effect.map((turnOption) =>
+              Option.match(turnOption, {
+                onNone: () => null,
+                onSome: (turn) => turn,
+              }),
+            ),
+          );
       }
       return projectionTurnRepository.listByThreadId({ threadId: run.threadId }).pipe(
         Effect.mapError(toServiceError("Failed to list automation turns.")),
@@ -519,8 +521,10 @@ export const AutomationServiceLive = Layer.effect(
       });
     };
 
-    // Create + persist a pending run and count it against the iteration cap, BEFORE any
-    // dispatch. The schedule is only advanced once this has durably succeeded.
+    // Create + persist a pending run and return whether it was a fresh insert. Scheduled
+    // occurrences dedupe via INSERT OR IGNORE on (automationId, scheduledFor), so createRun
+    // may return a pre-existing row (inserted === false); callers count + dispatch only
+    // fresh runs, and the schedule is only advanced once the run has durably succeeded.
     const createPendingRun = (
       definition: AutomationDefinition,
       trigger: AutomationRun["trigger"],
@@ -529,9 +533,10 @@ export const AutomationServiceLive = Layer.effect(
     ) =>
       Effect.gen(function* () {
         const threadId = definition.mode === "heartbeat" ? definition.targetThreadId : null;
+        const runId = makeAutomationRunId();
         const run = yield* automationRepository
           .createRun({
-            id: makeAutomationRunId(),
+            id: runId,
             automationId: definition.id,
             projectId: definition.projectId,
             threadId,
@@ -542,10 +547,7 @@ export const AutomationServiceLive = Layer.effect(
           })
           .pipe(Effect.mapError(toServiceError("Failed to create automation run.")));
         yield* publish({ type: "run-upserted", run });
-        yield* automationRepository
-          .incrementDefinitionIterationCount({ id: definition.id, now })
-          .pipe(Effect.mapError(toServiceError("Failed to update automation iteration count.")));
-        return run;
+        return { run, inserted: run.id === runId };
       });
 
     const maybeStopLoop = (automationId: AutomationId, status: AutomationRunStatus, now: string) =>
@@ -769,7 +771,12 @@ export const AutomationServiceLive = Layer.effect(
           }
         }
         const now = isoNow();
-        const run = yield* createPendingRun(definition, { type: "manual" }, now, now);
+        const { run, inserted } = yield* createPendingRun(definition, { type: "manual" }, now, now);
+        if (inserted) {
+          yield* automationRepository
+            .incrementDefinitionIterationCount({ id: definition.id, now })
+            .pipe(Effect.mapError(toServiceError("Failed to update automation iteration count.")));
+        }
         return yield* dispatchRun(definition, run, now);
       });
 
@@ -812,12 +819,28 @@ export const AutomationServiceLive = Layer.effect(
           return Option.none<AutomationRunNowResult>();
         }
 
-        const run = yield* createPendingRun(definition, { type: "scheduled" }, scheduledFor, now);
+        const { run, inserted } = yield* createPendingRun(
+          definition,
+          { type: "scheduled" },
+          scheduledFor,
+          now,
+        );
         // The run is now durable, so it is safe to advance the schedule even if dispatch fails.
         yield* automationRepository
           .setDefinitionNextRunAt({ id: definition.id, nextRunAt, updatedAt: now })
           .pipe(Effect.mapError(toServiceError("Failed to advance automation schedule.")));
         yield* publishDefinition(definition.id);
+
+        if (!inserted) {
+          // This scheduled occurrence already had a durable row (e.g. a run interrupted by a
+          // crash before the schedule advanced). Don't re-dispatch or double-count it; the
+          // occurrence is already recorded and the schedule has now moved past it.
+          return Option.none<AutomationRunNowResult>();
+        }
+
+        yield* automationRepository
+          .incrementDefinitionIterationCount({ id: definition.id, now })
+          .pipe(Effect.mapError(toServiceError("Failed to update automation iteration count.")));
 
         const result = yield* dispatchRun(definition, run, now).pipe(
           Effect.catch(() =>

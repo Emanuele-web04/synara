@@ -318,6 +318,7 @@ export function useAutomations(onRunStarted?: (threadId: ThreadId) => void) {
     // Optimistically merge the patch so inline edits on the detail page feel instant; the
     // server's authoritative definition (with recomputed nextRunAt) arrives via the stream.
     onMutate: (input) => {
+      const previous = queryClient.getQueryData<AutomationListResult>(automationQueryKey);
       queryClient.setQueryData<AutomationListResult>(automationQueryKey, (prev) => {
         const base = prev ?? EMPTY_AUTOMATION_LIST;
         return {
@@ -329,9 +330,17 @@ export function useAutomations(onRunStarted?: (threadId: ThreadId) => void) {
           runs: base.runs,
         };
       });
+      return { previous };
     },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: automationQueryKey }),
-    onError: (error) => toastManager.add({ type: "error", title: error.message }),
+    onError: (error, _input, context) => {
+      // A failed update would otherwise leave the incomplete optimistic merge in the cache
+      // until the next stream tick; restore the pre-edit snapshot so the UI reflects reality.
+      if (context?.previous) {
+        queryClient.setQueryData<AutomationListResult>(automationQueryKey, context.previous);
+      }
+      toastManager.add({ type: "error", title: error.message });
+    },
   });
   const deleteMutation = useMutation({
     mutationFn: (definition: AutomationDefinition) =>
