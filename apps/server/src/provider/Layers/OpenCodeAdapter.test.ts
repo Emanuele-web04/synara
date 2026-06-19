@@ -119,6 +119,8 @@ function createMockOpenCodeRuntime(options?: {
   readonly session?: Record<string, unknown>;
 }) {
   const abortCalls: Array<{ sessionID: string }> = [];
+  const cliModelCalls: Array<Parameters<OpenCodeRuntimeShape["listOpenCodeCliModels"]>[0]> = [];
+  const connectCalls: Array<Parameters<OpenCodeRuntimeShape["connectToOpenCodeServer"]>[0]> = [];
   const createCalls: Array<Record<string, unknown>> = [];
   const promptCalls: Array<Record<string, unknown>> = [];
   const emptySubscription = {
@@ -195,11 +197,14 @@ function createMockOpenCodeRuntime(options?: {
 
   const runtime: OpenCodeRuntimeShape = {
     startOpenCodeServerProcess: () => unexpectedOperation("startOpenCodeServerProcess"),
-    connectToOpenCodeServer: () =>
-      Effect.succeed({
-        url: "http://127.0.0.1:4099",
-        exitCode: null,
-        external: true,
+    connectToOpenCodeServer: (input) =>
+      Effect.sync(() => {
+        connectCalls.push(input);
+        return {
+          url: input.serverUrl ?? "http://127.0.0.1:4099",
+          exitCode: null,
+          external: Boolean(input.serverUrl),
+        };
       }),
     runOpenCodeCommand: () => unexpectedOperation("runOpenCodeCommand"),
     createOpenCodeSdkClient,
@@ -211,11 +216,15 @@ function createMockOpenCodeRuntime(options?: {
           consoleState: null,
         },
       ),
-    listOpenCodeCliModels: () => Effect.succeed(options?.cliModels ?? []),
+    listOpenCodeCliModels: (input) =>
+      Effect.sync(() => {
+        cliModelCalls.push(input);
+        return options?.cliModels ?? [];
+      }),
     loadOpenCodeCredentialProviderIDs: () => Effect.succeed([]),
   };
 
-  return { abortCalls, createCalls, promptCalls, runtime };
+  return { abortCalls, cliModelCalls, connectCalls, createCalls, promptCalls, runtime };
 }
 
 function createSubscribedEventQueue() {
@@ -1056,6 +1065,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         return yield* listModels({
           provider: "opencode",
           binaryPath: "opencode",
+          cwd: "/repo/model-discovery-config",
         });
       }).pipe(
         Effect.provide(
@@ -1078,6 +1088,10 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       "opencode/minimax-m2.5-free",
       "opencode-go/kimi-k2.6",
     ]);
+    expect(runtime.connectCalls).toHaveLength(1);
+    expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
+    expect(runtime.cliModelCalls).toHaveLength(1);
+    expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
   });
 
   it("does not reuse an unrelated active OpenCode session for command discovery", async () => {
@@ -1120,6 +1134,35 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       source: "opencode",
       cached: false,
     });
+  });
+
+  it("passes the session cwd to managed OpenCode server connections", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const cwd = process.cwd();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-managed-cwd"),
+          runtimeMode: "full-access",
+          cwd,
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.connectCalls).toHaveLength(1);
+    expect(runtime.connectCalls[0]).toMatchObject({ cwd });
   });
 
   it("reuses the matching active OpenCode thread for command discovery", async () => {

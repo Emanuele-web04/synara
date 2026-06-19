@@ -3608,6 +3608,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 const server = yield* openCodeRuntime.connectToOpenCodeServer({
                   binaryPath,
                   cliSpec: adapterConfig.cliSpec,
+                  cwd: directory,
                   ...(serverUrl ? { serverUrl } : {}),
                   ...(provider === "opencode" && experimentalWebSockets
                     ? { experimentalWebSockets: true }
@@ -4014,6 +4015,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               .connectToOpenCodeServer({
                 binaryPath: adapterConfig.defaultBinaryPath,
                 cliSpec: adapterConfig.cliSpec,
+                cwd: directory,
               })
               .pipe(Effect.mapError(toAdapterRequestError));
             const client = openCodeRuntime.createOpenCodeSdkClient({
@@ -4127,6 +4129,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   .connectToOpenCodeServer({
                     binaryPath,
                     cliSpec: adapterConfig.cliSpec,
+                    cwd: directory,
                     ...(serverUrl ? { serverUrl } : {}),
                   })
                   .pipe(Effect.mapError(toAdapterRequestError));
@@ -4213,6 +4216,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 .connectToOpenCodeServer({
                   binaryPath: input.binaryPath?.trim() || adapterConfig.defaultBinaryPath,
                   cliSpec: adapterConfig.cliSpec,
+                  cwd: input.cwd?.trim() || serverConfig.cwd,
                   ...(serverUrl ? { serverUrl } : {}),
                   ...(provider === "opencode" && input.experimentalWebSockets
                     ? { experimentalWebSockets: true }
@@ -4273,7 +4277,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const listModels: NonNullable<OpenCodeAdapterShape["listModels"]> = (input) => {
         const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
         const freeOnlyProviderID = adapterConfig.provider === "kilo" ? "kilo" : undefined;
-        return withDiscoveryInventory({ binaryPath }, ({ inventory, credentialProviderIDs }) =>
+        return withDiscoveryInventory(
+          { binaryPath, ...(input.cwd ? { cwd: input.cwd } : {}) },
+          ({ inventory, credentialProviderIDs }) =>
           Effect.gen(function* () {
             const preferredProviderIDs = new Set(
               resolvePreferredOpenCodeModelProviders({
@@ -4287,7 +4293,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               ...(freeOnlyProviderID ? { freeOnlyProviderID } : {}),
             });
             const cliModels = yield* openCodeRuntime
-              .listOpenCodeCliModels({ binaryPath, cliSpec: adapterConfig.cliSpec })
+              .listOpenCodeCliModels({
+                binaryPath,
+                cliSpec: adapterConfig.cliSpec,
+                ...(input.cwd ? { cwd: input.cwd } : {}),
+              })
               .pipe(Effect.catch(() => Effect.succeed([])));
             const preferredCliModels = cliModels.filter((model) =>
               preferredProviderIDs.has(model.providerID),
