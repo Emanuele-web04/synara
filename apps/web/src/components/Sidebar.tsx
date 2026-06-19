@@ -94,6 +94,7 @@ import { isElectron } from "../env";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import { formatRelativeTime } from "../lib/relativeTime";
 import { isMacPlatform, newCommandId, newProjectId, newThreadId, randomUUID } from "../lib/utils";
+import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
 import { persistAppStateNow, useStore } from "../store";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import {
@@ -2708,6 +2709,13 @@ export default function Sidebar() {
         commandId: newCommandId(),
         threadId,
       });
+      void reconcileDeletedThreadFromClient({
+        api: api.orchestration,
+        threadId,
+        removeDeletedThreadFromClientState:
+          useStore.getState().removeDeletedThreadFromClientState,
+        syncServerShellSnapshot,
+      });
       unpinThread(threadId);
       clearComposerDraftForThread(threadId);
       clearProjectDraftThreadById(thread.projectId, thread.id);
@@ -2789,6 +2797,7 @@ export default function Sidebar() {
       removeThreadFromSplitViews,
       clearTemporaryThread,
       sidebarThreads,
+      syncServerShellSnapshot,
       unpinThread,
     ],
   );

@@ -14,6 +14,7 @@ import { type MouseEvent, useCallback, useMemo, useState } from "react";
 import { useAppSettings } from "~/appSettings";
 import { RenameThreadDialog } from "~/components/RenameThreadDialog";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
+import { reconcileDeletedThreadFromClient } from "~/lib/deletedThreadClientReconciliation";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { dispatchThreadRename } from "~/lib/threadRename";
 import { newCommandId } from "~/lib/utils";
@@ -52,6 +53,7 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
   const clearProjectDraftThreadById = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadById,
   );
+  const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const clearTerminalState = useTerminalStateStore((state) => state.clearTerminalState);
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
 
@@ -152,6 +154,13 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
         commandId: newCommandId(),
         threadId: card.threadId,
       });
+      void reconcileDeletedThreadFromClient({
+        api: api.orchestration,
+        threadId: card.threadId,
+        removeDeletedThreadFromClientState:
+          useStore.getState().removeDeletedThreadFromClientState,
+        syncServerShellSnapshot,
+      });
       clearDraftThread(card.threadId);
       clearProjectDraftThreadById(thread.projectId, thread.id);
       clearTerminalState(card.threadId);
@@ -181,6 +190,7 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
       clearProjectDraftThreadById,
       clearTerminalState,
       removeWorktreeMutation,
+      syncServerShellSnapshot,
     ],
   );
 

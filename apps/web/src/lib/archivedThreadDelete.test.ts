@@ -112,5 +112,43 @@ describe("deleteArchivedThreadFromClient", () => {
       [threadA],
       [threadB],
     ]);
+    const firstRemoveOrder =
+      removeDeletedThreadFromClientState.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
+    const secondDispatchOrder =
+      dispatchCommand.mock.invocationCallOrder[1] ?? Number.MAX_SAFE_INTEGER;
+    expect(firstRemoveOrder).toBeLessThan(secondDispatchOrder);
+  });
+
+  it("reconciles successful archived deletes when a later bulk delete fails", async () => {
+    const threadA = ThreadId.makeUnsafe("thread-archived-a");
+    const threadB = ThreadId.makeUnsafe("thread-archived-b");
+    const snapshot: OrchestrationShellSnapshot = {
+      snapshotSequence: 15,
+      updatedAt: "2026-02-27T00:08:00.000Z",
+      projects: [],
+      threads: [],
+    };
+    const dispatchError = new Error("delete failed");
+    const dispatchCommand = vi
+      .fn()
+      .mockResolvedValueOnce({ sequence: 11 })
+      .mockRejectedValueOnce(dispatchError);
+    const getShellSnapshot = vi.fn().mockResolvedValue(snapshot);
+    const removeDeletedThreadFromClientState = vi.fn();
+    const syncServerShellSnapshot = vi.fn();
+
+    await expect(
+      deleteArchivedThreadsFromClient({
+        api: { dispatchCommand, getShellSnapshot },
+        threadIds: [threadA, threadB],
+        removeDeletedThreadFromClientState,
+        syncServerShellSnapshot,
+      }),
+    ).rejects.toThrow(dispatchError);
+
+    expect(dispatchCommand).toHaveBeenCalledTimes(2);
+    expect(getShellSnapshot).toHaveBeenCalledOnce();
+    expect(syncServerShellSnapshot).toHaveBeenCalledWith(snapshot);
+    expect(removeDeletedThreadFromClientState.mock.calls).toEqual([[threadA], [threadA]]);
   });
 });

@@ -1,6 +1,7 @@
 import type { ThreadId } from "@t3tools/contracts";
 import { useEffect, useRef } from "react";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
 import { resolveDisposableThreadIdToDispose } from "../lib/disposableThread";
 import { newCommandId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
@@ -77,16 +78,22 @@ export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): v
             .catch(() => undefined);
 
           if (serverThread) {
-            await api.orchestration
+            const deletedOnServer = await api.orchestration
               .dispatchCommand({
                 type: "thread.delete",
                 commandId: newCommandId(),
                 threadId: disposableThreadId,
               })
-              .catch(() => undefined);
-            const snapshot = await api.orchestration.getShellSnapshot().catch(() => null);
-            if (snapshot) {
-              syncServerShellSnapshot(snapshot);
+              .then(() => true)
+              .catch(() => false);
+            if (deletedOnServer) {
+              void reconcileDeletedThreadFromClient({
+                api: api.orchestration,
+                threadId: disposableThreadId,
+                removeDeletedThreadFromClientState:
+                  useStore.getState().removeDeletedThreadFromClientState,
+                syncServerShellSnapshot,
+              });
             }
           }
         }

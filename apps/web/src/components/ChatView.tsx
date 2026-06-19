@@ -121,6 +121,7 @@ import {
   formatOutgoingComposerPrompt,
   readFileAsDataUrl,
 } from "../lib/composerSend";
+import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useComposerDropzone } from "../hooks/useComposerDropzone";
@@ -3649,8 +3650,13 @@ export default function ChatView({
             commandId: newCommandId(),
             threadId: activeThreadId,
           });
-          const snapshot = await api.orchestration.getShellSnapshot();
-          syncServerShellSnapshot(snapshot);
+          void reconcileDeletedThreadFromClient({
+            api: api.orchestration,
+            threadId: activeThreadId,
+            removeDeletedThreadFromClientState:
+              useStore.getState().removeDeletedThreadFromClientState,
+            syncServerShellSnapshot,
+          });
           useComposerDraftStore.getState().clearDraftThread(activeThreadId);
           storeClearTerminalState(activeThreadId);
           removeThreadFromSplitViews(activeThreadId);
@@ -6422,13 +6428,23 @@ export default function ChatView({
       turnStartSucceeded = true;
     })().catch(async (err: unknown) => {
       if (createdServerThreadForLocalDraft && !turnStartSucceeded) {
-        await api.orchestration
+        const deletedOnServer = await api.orchestration
           .dispatchCommand({
             type: "thread.delete",
             commandId: newCommandId(),
             threadId: threadIdForSend,
           })
-          .catch(() => undefined);
+          .then(() => true)
+          .catch(() => false);
+        if (deletedOnServer) {
+          void reconcileDeletedThreadFromClient({
+            api: api.orchestration,
+            threadId: threadIdForSend,
+            removeDeletedThreadFromClientState:
+              useStore.getState().removeDeletedThreadFromClientState,
+            syncServerShellSnapshot,
+          });
+        }
       }
       if (
         queuedChatTurn === null &&
@@ -7111,19 +7127,23 @@ export default function ChatView({
         });
       })
       .catch(async (err) => {
-        await api.orchestration
+        const deletedOnServer = await api.orchestration
           .dispatchCommand({
             type: "thread.delete",
             commandId: newCommandId(),
             threadId: nextThreadId,
           })
-          .catch(() => undefined);
-        await api.orchestration
-          .getShellSnapshot()
-          .then((snapshot) => {
-            syncServerShellSnapshot(snapshot);
-          })
-          .catch(() => undefined);
+          .then(() => true)
+          .catch(() => false);
+        if (deletedOnServer) {
+          void reconcileDeletedThreadFromClient({
+            api: api.orchestration,
+            threadId: nextThreadId,
+            removeDeletedThreadFromClientState:
+              useStore.getState().removeDeletedThreadFromClientState,
+            syncServerShellSnapshot,
+          });
+        }
         toastManager.add({
           type: "error",
           title: "Could not start implementation thread",

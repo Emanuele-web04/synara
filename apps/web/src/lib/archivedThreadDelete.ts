@@ -5,6 +5,7 @@
 
 import type { NativeApi, OrchestrationShellSnapshot, ThreadId } from "@t3tools/contracts";
 
+import { reconcileDeletedThreadsFromClient } from "./deletedThreadClientReconciliation";
 import { newCommandId } from "./utils";
 
 interface DeleteArchivedThreadFromClientInput {
@@ -42,20 +43,24 @@ export async function deleteArchivedThreadsFromClient(
     return;
   }
 
-  for (const threadId of threadIds) {
-    await input.api.dispatchCommand({
-      type: "thread.delete",
-      commandId: newCommandId(),
-      threadId,
-    });
-    input.removeDeletedThreadFromClientState(threadId);
-  }
-
-  const snapshot = await input.api.getShellSnapshot().catch(() => null);
-  if (snapshot) {
-    input.syncServerShellSnapshot(snapshot);
+  const deletedThreadIds: ThreadId[] = [];
+  try {
     for (const threadId of threadIds) {
+      await input.api.dispatchCommand({
+        type: "thread.delete",
+        commandId: newCommandId(),
+        threadId,
+      });
+      deletedThreadIds.push(threadId);
       input.removeDeletedThreadFromClientState(threadId);
     }
+  } finally {
+    await reconcileDeletedThreadsFromClient({
+      api: input.api,
+      threadIds: deletedThreadIds,
+      removeDeletedThreadFromClientState: input.removeDeletedThreadFromClientState,
+      removeBeforeRefresh: false,
+      syncServerShellSnapshot: input.syncServerShellSnapshot,
+    });
   }
 }
