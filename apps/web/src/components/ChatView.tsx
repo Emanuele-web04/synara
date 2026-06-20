@@ -3745,8 +3745,15 @@ export default function ChatView({
   const [environmentPanelPreferenceOpen, setEnvironmentPanelPreferenceOpen] = useState<
     boolean | null
   >(null);
+  const [environmentPanelActionDismissedThreadId, setEnvironmentPanelActionDismissedThreadId] =
+    useState<ThreadId | null>(null);
+  // Action clicks close the current panel, but only the header toggle owns cross-chat preference.
+  useEffect(() => {
+    setEnvironmentPanelActionDismissedThreadId(null);
+  }, [threadId]);
   const environmentPanelOpen = resolveEnvironmentPanelOpen({
     defaultOpen: environmentDefaultOpen,
+    actionDismissed: environmentPanelActionDismissedThreadId === threadId,
     userPreferenceOpen: environmentPanelPreferenceOpen,
   });
   const environmentPanelVisible = resolveEnvironmentPanelVisible({
@@ -8396,7 +8403,7 @@ export default function ChatView({
     onRenameThreadMarker: handleRenameThreadMarker,
     onNotesChange: handleNotesChange,
     onOpenEditorView: viewModeAction?.onClick ?? null,
-    onClose: () => setEnvironmentPanelPreferenceOpen(false),
+    onClose: () => setEnvironmentPanelActionDismissedThreadId(threadId),
   };
   // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
   // column is already narrow — right dock open or a split pane (same as header compact mode).
@@ -8406,7 +8413,10 @@ export default function ChatView({
   const environmentHeaderState = environmentEnabled
     ? {
         open: environmentPanelVisible,
-        onOpenChange: setEnvironmentPanelPreferenceOpen,
+        onOpenChange: (open: boolean) => {
+          setEnvironmentPanelActionDismissedThreadId(null);
+          setEnvironmentPanelPreferenceOpen(open);
+        },
       }
     : null;
 
