@@ -106,10 +106,21 @@ export function resolveDefaultEnvironmentPanelOpen(input: {
   environmentEnabled: boolean;
   isCenteredEmptyLanding: boolean;
   isTerminalPrimarySurface: boolean;
+  isConstrainedChatLayout: boolean;
 }): boolean {
   return (
-    input.environmentEnabled && !input.isCenteredEmptyLanding && !input.isTerminalPrimarySurface
+    input.environmentEnabled &&
+    !input.isCenteredEmptyLanding &&
+    !input.isTerminalPrimarySurface &&
+    !input.isConstrainedChatLayout
   );
+}
+
+export function resolveEnvironmentPanelOpen(input: {
+  defaultOpen: boolean;
+  userPreferenceOpen: boolean | null;
+}): boolean {
+  return input.userPreferenceOpen ?? input.defaultOpen;
 }
 
 export function resolveEnvironmentPanelVisible(input: {

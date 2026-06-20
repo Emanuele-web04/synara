@@ -132,6 +132,7 @@ import {
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
+  resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
   shouldEnableComposerPastedTextCollapse,
@@ -3733,18 +3734,21 @@ export default function ChatView({
   // threads; disposable (temporary/draft) threads keep the legacy inline controls.
   const isDisposableThread = useIsDisposableThread(threadId);
   const environmentEnabled = !isDisposableThread && !isEditorRail;
+  const environmentUsesFloatingOverlay =
+    isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
   const environmentDefaultOpen = resolveDefaultEnvironmentPanelOpen({
     environmentEnabled,
     isCenteredEmptyLanding,
     isTerminalPrimarySurface,
+    isConstrainedChatLayout: environmentUsesFloatingOverlay,
   });
-  const [environmentPanelOpen, setEnvironmentPanelOpen] = useState(() => environmentDefaultOpen);
-  useEffect(() => {
-    // Terminal threads keep the Environment panel closed by default so the full
-    // workspace stays untouched until the user explicitly toggles the overlay.
-    // Each normal chat thread starts open; empty/disposable views stay hidden.
-    setEnvironmentPanelOpen(environmentDefaultOpen);
-  }, [environmentDefaultOpen, threadId]);
+  const [environmentPanelPreferenceOpen, setEnvironmentPanelPreferenceOpen] = useState<
+    boolean | null
+  >(null);
+  const environmentPanelOpen = resolveEnvironmentPanelOpen({
+    defaultOpen: environmentDefaultOpen,
+    userPreferenceOpen: environmentPanelPreferenceOpen,
+  });
   const environmentPanelVisible = resolveEnvironmentPanelVisible({
     environmentEnabled,
     environmentPanelOpen,
@@ -8392,19 +8396,17 @@ export default function ChatView({
     onRenameThreadMarker: handleRenameThreadMarker,
     onNotesChange: handleNotesChange,
     onOpenEditorView: viewModeAction?.onClick ?? null,
-    onClose: () => setEnvironmentPanelOpen(false),
+    onClose: () => setEnvironmentPanelPreferenceOpen(false),
   };
   // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
   // column is already narrow — right dock open or a split pane (same as header compact mode).
   // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
-  const environmentUsesFloatingOverlay =
-    isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
   const environmentAppliesContentInset = environmentPanelVisible && !environmentUsesFloatingOverlay;
   const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
   const environmentHeaderState = environmentEnabled
     ? {
         open: environmentPanelVisible,
-        onOpenChange: setEnvironmentPanelOpen,
+        onOpenChange: setEnvironmentPanelPreferenceOpen,
       }
     : null;
 

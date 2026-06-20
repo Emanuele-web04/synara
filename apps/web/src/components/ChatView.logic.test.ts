@@ -15,6 +15,7 @@ import {
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
+  resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
   resolveRuntimeModeAfterApprovalDecision,
@@ -257,16 +258,18 @@ describe("environment panel visibility", () => {
         environmentEnabled: true,
         isCenteredEmptyLanding: false,
         isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: false,
       }),
     ).toBe(true);
   });
 
-  it("keeps empty landing and terminal-primary surfaces closed by default", () => {
+  it("keeps empty landing, terminal-primary, and constrained layouts closed by default", () => {
     expect(
       resolveDefaultEnvironmentPanelOpen({
         environmentEnabled: true,
         isCenteredEmptyLanding: true,
         isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: false,
       }),
     ).toBe(false);
     expect(
@@ -274,8 +277,38 @@ describe("environment panel visibility", () => {
         environmentEnabled: true,
         isCenteredEmptyLanding: false,
         isTerminalPrimarySurface: true,
+        isConstrainedChatLayout: false,
       }),
     ).toBe(false);
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("lets a manual preference override the default while switching chats", () => {
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        userPreferenceOpen: null,
+      }),
+    ).toBe(true);
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        userPreferenceOpen: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: false,
+        userPreferenceOpen: true,
+      }),
+    ).toBe(true);
   });
 
   it("renders the panel when the user toggles it open on empty landing", () => {
