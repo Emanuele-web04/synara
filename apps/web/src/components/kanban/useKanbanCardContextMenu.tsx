@@ -53,7 +53,6 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
   const clearProjectDraftThreadById = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadById,
   );
-  const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const clearTerminalState = useTerminalStateStore((state) => state.clearTerminalState);
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
 
@@ -155,11 +154,9 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
         threadId: card.threadId,
       });
       void reconcileDeletedThreadFromClient({
-        api: api.orchestration,
         threadId: card.threadId,
         removeDeletedThreadFromClientState:
           useStore.getState().removeDeletedThreadFromClientState,
-        syncServerShellSnapshot,
       });
       clearDraftThread(card.threadId);
       clearProjectDraftThreadById(thread.projectId, thread.id);
@@ -190,7 +187,6 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
       clearProjectDraftThreadById,
       clearTerminalState,
       removeWorktreeMutation,
-      syncServerShellSnapshot,
     ],
   );
 

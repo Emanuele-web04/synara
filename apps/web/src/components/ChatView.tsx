@@ -3763,11 +3763,9 @@ export default function ChatView({
             threadId: activeThreadId,
           });
           void reconcileDeletedThreadFromClient({
-            api: api.orchestration,
             threadId: activeThreadId,
             removeDeletedThreadFromClientState:
               useStore.getState().removeDeletedThreadFromClientState,
-            syncServerShellSnapshot,
           });
           useComposerDraftStore.getState().clearDraftThread(activeThreadId);
           storeClearTerminalState(activeThreadId);
@@ -6904,23 +6902,14 @@ export default function ChatView({
       turnStartSucceeded = true;
     })().catch(async (err: unknown) => {
       if (createdServerThreadForLocalDraft && !turnStartSucceeded) {
-        const deletedOnServer = await api.orchestration
+        // This rollback cleans up a retryable draft promotion; do not tombstone the draft id.
+        await api.orchestration
           .dispatchCommand({
             type: "thread.delete",
             commandId: newCommandId(),
             threadId: threadIdForSend,
           })
-          .then(() => true)
-          .catch(() => false);
-        if (deletedOnServer) {
-          void reconcileDeletedThreadFromClient({
-            api: api.orchestration,
-            threadId: threadIdForSend,
-            removeDeletedThreadFromClientState:
-              useStore.getState().removeDeletedThreadFromClientState,
-            syncServerShellSnapshot,
-          });
-        }
+          .catch(() => undefined);
       }
       if (
         queuedChatTurn === null &&
@@ -7613,11 +7602,9 @@ export default function ChatView({
           .catch(() => false);
         if (deletedOnServer) {
           void reconcileDeletedThreadFromClient({
-            api: api.orchestration,
             threadId: nextThreadId,
             removeDeletedThreadFromClientState:
               useStore.getState().removeDeletedThreadFromClientState,
-            syncServerShellSnapshot,
           });
         }
         toastManager.add({
