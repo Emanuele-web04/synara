@@ -5,22 +5,31 @@
 // Depends on: AutomationSchedule contract shared with the automation API.
 
 import type {
+  AutomationCompletionPolicy,
   AutomationMode,
   AutomationSchedule,
   ServerGenerateAutomationIntentResult,
 } from "@t3tools/contracts";
+
+import {
+  completionPolicyFromStopWhen,
+  modeForCompletionPolicy,
+  requiresCompletionPolicyReview,
+} from "./automationCompletionPolicy";
 
 export interface ChatAutomationIntent {
   readonly name: string;
   readonly prompt: string;
   readonly schedule: AutomationSchedule;
   readonly cadenceLabel: string;
+  readonly completionPolicy: AutomationCompletionPolicy;
 }
 
 export interface ResolvedChatAutomationIntent {
   readonly intent: ChatAutomationIntent;
   readonly mode: AutomationMode;
   readonly source: "deterministic" | "generated";
+  readonly requiresReview: boolean;
   readonly generatedConfidence: number | null;
   readonly generatedNeedsConfirmation: boolean;
   readonly reason: string | null;
@@ -87,6 +96,40 @@ function normalizeSearchText(value: string): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
+}
+
+interface ParsedStopClause {
+  readonly stopWhen: string;
+  readonly textWithoutStopClause: string;
+}
+
+function extractStopClause(value: string): ParsedStopClause | null {
+  const patterns: readonly RegExp[] = [
+    /\bstop\s+when\s+(.+?)(?=(?:[.!?]\s+|$))/i,
+    /\buntil\s+(.+?)(?=(?:[.!?]\s+|$))/i,
+    /\bkeep\s+monitoring\s+until\s+(.+?)(?=(?:[.!?]\s+|$))/i,
+    /\bif\s+(.+?),\s*stop\b/i,
+    /\bquando\s+(.+?),\s*fermati\b/i,
+    /\bfinch[eé]\s+(.+?)(?=(?:[.!?]\s+|$))/i,
+    /\bfino\s+a\s+quando\s+(.+?)(?=(?:[.!?]\s+|$))/i,
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(value);
+    const stopWhen = match?.[1]?.trim().replace(/[.!?]+$/g, "").trim();
+    if (!match || !stopWhen) {
+      continue;
+    }
+    const textWithoutStopClause = normalizeInlineText(
+      `${value.slice(0, match.index)} ${value.slice(match.index + match[0].length)}`,
+    )
+      .replace(/([.!?])\s+[.!?]/g, "$1")
+      .replace(/^(?:and|then|e|poi)\s+/i, "");
+    return {
+      stopWhen,
+      textWithoutStopClause,
+    };
+  }
+  return null;
 }
 
 export function extractChatAutomationInvocation(value: string): string | null {
@@ -491,11 +534,16 @@ export function parseChatAutomationInvocation(
   }
 
   const prompt = stripAutomationScaffold(normalizedInvocation) || normalizedInvocation;
+  const stopClause = extractStopClause(prompt);
+  const taskPrompt = stopClause?.textWithoutStopClause
+    ? stripAutomationScaffold(stopClause.textWithoutStopClause)
+    : prompt;
   return {
-    name: deriveAutomationIntentName(prompt),
-    prompt,
+    name: deriveAutomationIntentName(taskPrompt),
+    prompt: taskPrompt,
     schedule: parsedSchedule.schedule,
     cadenceLabel: parsedSchedule.cadenceLabel,
+    completionPolicy: completionPolicyFromStopWhen(stopClause?.stopWhen ?? ""),
   };
 }
 
@@ -531,6 +579,7 @@ function generatedAutomationIntentToChatIntent(
     prompt: generatedIntent.taskPrompt,
     schedule,
     cadenceLabel: formatAutomationIntentCadence(schedule),
+    completionPolicy: generatedIntent.completionPolicy ?? { type: "none" },
   };
 }
 
@@ -541,10 +590,15 @@ export function resolveChatAutomationIntent(input: {
 }): ResolvedChatAutomationIntent | null {
   const defaultMode: AutomationMode = input.isServerThread ? "heartbeat" : "standalone";
   if (input.deterministicIntent) {
+    const mode = modeForCompletionPolicy(defaultMode, input.deterministicIntent.completionPolicy);
     return {
       intent: input.deterministicIntent,
-      mode: defaultMode,
+      mode,
       source: "deterministic",
+      requiresReview: requiresCompletionPolicyReview(
+        defaultMode,
+        input.deterministicIntent.completionPolicy,
+      ),
       generatedConfidence: null,
       generatedNeedsConfirmation: false,
       reason: null,
@@ -560,10 +614,18 @@ export function resolveChatAutomationIntent(input: {
   const fastRecurringInterval =
     generatedSchedule?.type === "interval" && generatedSchedule.everySeconds < 60;
 
+  const requestedMode = input.isServerThread
+    ? (input.generatedIntent?.mode ?? "heartbeat")
+    : "standalone";
+  const mode = modeForCompletionPolicy(requestedMode, generatedIntent.completionPolicy);
   return {
     intent: generatedIntent,
-    mode: input.isServerThread ? (input.generatedIntent?.mode ?? "heartbeat") : "standalone",
+    mode,
     source: "generated",
+    requiresReview: requiresCompletionPolicyReview(
+      requestedMode,
+      generatedIntent.completionPolicy,
+    ),
     generatedConfidence: input.generatedIntent?.confidence ?? null,
     generatedNeedsConfirmation:
       (input.generatedIntent?.needsConfirmation ?? false) || fastRecurringInterval,

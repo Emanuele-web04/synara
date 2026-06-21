@@ -23,6 +23,7 @@ export default Effect.gen(function* () {
       target_thread_id TEXT,
       max_iterations INTEGER,
       stop_on_error INTEGER NOT NULL,
+      completion_policy_json TEXT NOT NULL DEFAULT '{"type":"none"}',
       minimum_interval_seconds INTEGER NOT NULL,
       max_runtime_seconds INTEGER,
       retry_policy_json TEXT NOT NULL,

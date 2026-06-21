@@ -8,6 +8,7 @@ import {
   MessageId,
   ThreadId,
   type AutomationAllowedCapability,
+  type AutomationCompletionPolicy,
   type AutomationDefinition,
   type AutomationRun,
   type AutomationRunResult,
@@ -19,9 +20,10 @@ import {
   type OrchestrationThreadShell,
   type ThreadEnvironmentMode,
 } from "@t3tools/contracts";
-import { Effect, Layer, Option, PubSub, Stream } from "effect";
+import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
+import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AutomationRepository } from "../../persistence/Services/AutomationRepository.ts";
@@ -30,14 +32,26 @@ import type { ProjectionTurn } from "../../persistence/Services/ProjectionTurns.
 import { AutomationServiceError } from "../Errors.ts";
 import { AutomationService, type AutomationServiceShape } from "../Services/AutomationService.ts";
 import {
+  automationCompletionRunResult,
+  automationRunResultSummary,
+  failedAutomationCompletionEvaluation,
+  normalizeAutomationCompletionReason,
+} from "../runResult.ts";
+import {
   computeAutomationScheduleSpacingSeconds,
   computeNextAutomationRunAt,
   computeNextAutomationRunAtAfter,
 } from "../schedule.ts";
 
 const AUTOMATION_ERROR_MAX_CHARS = 4_000;
-const AUTOMATION_RUN_RESULT_SUMMARY_MAX_CHARS = 2_000;
 const FAST_INTERVAL_ACKNOWLEDGED_MINIMUM_SECONDS = 1;
+const AUTOMATION_COMPLETION_EVALUATION_WORKERS = 2;
+
+interface AutomationCompletionEvaluationJob {
+  readonly definition: AutomationDefinition;
+  readonly run: AutomationRun;
+  readonly policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>;
+}
 
 /** Statuses a run can no longer leave; reconciliation never overwrites these. */
 const TERMINAL_RUN_STATUSES: ReadonlySet<AutomationRunStatus> = new Set([
@@ -94,9 +108,12 @@ function errorMessage(cause: unknown): string {
 }
 
 function resultSummary(value: string | null | undefined, fallback?: string): string | null {
-  const summary = value ?? fallback ?? null;
-  const trimmed = summary?.trim();
-  return trimmed ? trimmed.slice(0, AUTOMATION_RUN_RESULT_SUMMARY_MAX_CHARS) : null;
+  return automationRunResultSummary(value, fallback);
+}
+
+function completionFailureReason(error: unknown): string {
+  const message = error instanceof AutomationServiceError ? error.message : errorMessage(error);
+  return normalizeAutomationCompletionReason(`Stop check failed: ${message}`);
 }
 
 function resultForRunStatus(
@@ -292,6 +309,8 @@ function mergeDefinitionUpdate(
           ? ((input.maxIterations as AutomationDefinition["maxIterations"] | undefined) ?? null)
           : current.maxIterations,
     stopOnError: input.stopOnError ?? current.stopOnError,
+    completionPolicy:
+      mode === "standalone" ? { type: "none" } : (input.completionPolicy ?? current.completionPolicy),
     minimumIntervalSeconds: input.minimumIntervalSeconds ?? current.minimumIntervalSeconds,
     maxRuntimeSeconds: hasOwn(input, "maxRuntimeSeconds")
       ? ((input.maxRuntimeSeconds as AutomationDefinition["maxRuntimeSeconds"] | undefined) ?? null)
@@ -344,12 +363,15 @@ export const AutomationServiceLive = Layer.effect(
   Effect.gen(function* () {
     const automationRepository = yield* AutomationRepository;
     const git = yield* GitCore;
+    const textGeneration = yield* TextGeneration;
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
     // Unbounded so we never silently drop run/definition updates under a burst, matching
     // the rest of the server's PubSub usage.
     const events = yield* PubSub.unbounded<AutomationStreamEvent>();
+    // Stop-condition AI calls can be slow; a dedicated queue keeps reconciliation responsive.
+    const completionEvaluationQueue = yield* Queue.unbounded<AutomationCompletionEvaluationJob>();
 
     const publish = (event: AutomationStreamEvent) =>
       PubSub.publish(events, event).pipe(Effect.asVoid);
@@ -735,7 +757,7 @@ export const AutomationServiceLive = Layer.effect(
               })
               .pipe(Effect.mapError(toServiceError("Failed to update automation run result.")));
             yield* publish({ type: "run-upserted", run: withResult });
-            yield* maybeStopLoop(run.automationId, "failed", failedAt);
+            yield* maybeStopLoop(withResult, "failed", failedAt);
             return yield* Effect.fail(error);
           }).pipe(Effect.catch(() => Effect.fail(error))),
         ),
@@ -809,8 +831,197 @@ export const AutomationServiceLive = Layer.effect(
         Effect.tap((updated) => publish({ type: "run-upserted", run: updated })),
       );
 
-    const maybeStopLoop = (automationId: AutomationId, status: AutomationRunStatus, now: string) =>
-      automationRepository.getDefinitionById({ id: automationId }).pipe(
+    const recentThreadContext = (thread: {
+      readonly messages?: ReadonlyArray<{
+        readonly role: string;
+        readonly text: string;
+      }>;
+    }) =>
+      (thread.messages ?? [])
+        .slice(-8)
+        .map((message) => `${message.role}: ${message.text}`)
+        .join("\n\n");
+
+    const findRunCompletionMessages = (input: {
+      readonly run: AutomationRun;
+      readonly thread: {
+        readonly messages: ReadonlyArray<{
+          readonly id: string;
+          readonly role: string;
+          readonly text: string;
+          readonly turnId: string | null;
+        }>;
+      };
+    }) => {
+      const userMessage =
+        input.thread.messages.find((message) => message.id === input.run.messageId)?.text ?? "";
+      const assistantMessages = input.thread.messages.filter(
+        (message) =>
+          message.role === "assistant" &&
+          input.run.turnId !== null &&
+          message.turnId === input.run.turnId,
+      );
+      const fallbackAssistant = [...input.thread.messages]
+        .reverse()
+        .find((message) => message.role === "assistant");
+      return {
+        runUserMessage: userMessage,
+        runAssistantText:
+          assistantMessages.length > 0
+            ? assistantMessages.map((message) => message.text).join("\n\n")
+            : (fallbackAssistant?.text ?? ""),
+      };
+    };
+
+    // The AI check runs after the run is published; reload so read/archive changes win the race.
+    const latestRunForCompletionResult = (run: AutomationRun) =>
+      automationRepository.getRunById({ id: run.id }).pipe(
+        Effect.mapError(toServiceError("Failed to load automation run.")),
+        Effect.map((runOption) =>
+          Option.match(runOption, {
+            onNone: () => run,
+            onSome: (latestRun) => latestRun,
+          }),
+        ),
+      );
+
+    const evaluateCompletionPolicy = (
+      definition: AutomationDefinition,
+      run: AutomationRun,
+      policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
+      now: string,
+    ) =>
+      Effect.gen(function* () {
+        if (!run.threadId) {
+          return false;
+        }
+        const project = yield* requireProject(definition.projectId);
+        const threadOption = yield* projectionSnapshotQuery
+          .getThreadDetailById(run.threadId)
+          .pipe(Effect.mapError(toServiceError("Failed to load automation thread detail.")));
+        if (Option.isNone(threadOption)) {
+          return false;
+        }
+        const thread = threadOption.value;
+        const { runUserMessage, runAssistantText } = findRunCompletionMessages({
+          run,
+          thread,
+        });
+        const evaluationRaw = yield* textGeneration
+          .evaluateAutomationCompletion({
+            cwd: project.workspaceRoot,
+            automationName: definition.name,
+            automationPrompt: definition.prompt,
+            stopWhen: policy.stopWhen,
+            runUserMessage: runUserMessage || definition.prompt,
+            runAssistantText: runAssistantText || "(no assistant output)",
+            threadContext: recentThreadContext(thread),
+            modelSelection: definition.modelSelection,
+            ...(definition.providerOptions ? { providerOptions: definition.providerOptions } : {}),
+          })
+          .pipe(Effect.mapError(toServiceError("Failed to evaluate automation stop condition.")));
+        const evaluation = {
+          stopMatched: evaluationRaw.stopMatched,
+          confidence: Math.max(0, Math.min(1, evaluationRaw.confidence)),
+          reason: normalizeAutomationCompletionReason(evaluationRaw.reason),
+        };
+        const matched =
+          evaluation.stopMatched && evaluation.confidence >= policy.confidenceThreshold;
+        const latestRun = yield* latestRunForCompletionResult(run);
+        const updated = yield* automationRepository
+          .markRunResult({
+            id: latestRun.id,
+            result: automationCompletionRunResult({
+              baseResult: latestRun.result,
+              evaluation,
+              matched,
+            }),
+            updatedAt: now,
+          })
+          .pipe(Effect.mapError(toServiceError("Failed to update automation run result.")));
+        yield* publish({ type: "run-upserted", run: updated });
+        if (!matched) {
+          return false;
+        }
+        yield* automationRepository
+          .disableDefinition({ id: definition.id, now })
+          .pipe(Effect.mapError(toServiceError("Failed to disable automation.")));
+        yield* publishDefinition(definition.id);
+        return true;
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            const reason = completionFailureReason(error);
+            yield* Effect.logWarning("automation completion evaluation failed", {
+              automationId: definition.id,
+              runId: run.id,
+              error: errorMessage(error),
+            });
+            // Keep the heartbeat active, but make the failed stop check visible in run history.
+            const updatedOption = yield* latestRunForCompletionResult(run)
+              .pipe(
+                Effect.flatMap((latestRun) =>
+                  automationRepository.markRunResult({
+                    id: latestRun.id,
+                    result: automationCompletionRunResult({
+                      baseResult: latestRun.result,
+                      evaluation: failedAutomationCompletionEvaluation(reason),
+                      matched: false,
+                      summary: reason,
+                      severity: "warning",
+                    }),
+                    updatedAt: now,
+                  }),
+                ),
+              )
+              .pipe(
+                Effect.map(Option.some),
+                Effect.catch((recordError) =>
+                  Effect.logWarning(
+                    "automation completion evaluation failure could not be recorded",
+                    {
+                      automationId: definition.id,
+                      runId: run.id,
+                      error: errorMessage(recordError),
+                    },
+                  ).pipe(Effect.as(Option.none())),
+                ),
+              );
+            if (Option.isSome(updatedOption)) {
+              yield* publish({ type: "run-upserted", run: updatedOption.value });
+            }
+            return false;
+          }),
+        ),
+      );
+
+    const processCompletionEvaluationJob = (job: AutomationCompletionEvaluationJob) =>
+      evaluateCompletionPolicy(job.definition, job.run, job.policy, isoNow()).pipe(
+        Effect.asVoid,
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) {
+            return Effect.failCause(cause);
+          }
+          return Effect.logWarning("automation completion evaluation worker failed", {
+            automationId: job.definition.id,
+            runId: job.run.id,
+            cause: Cause.pretty(cause),
+          });
+        }),
+      );
+
+    const completionEvaluationWorker = Effect.forever(
+      Queue.take(completionEvaluationQueue).pipe(Effect.flatMap(processCompletionEvaluationJob)),
+    );
+
+    yield* Effect.forEach(
+      Array.from({ length: AUTOMATION_COMPLETION_EVALUATION_WORKERS }),
+      () => Effect.forkScoped(completionEvaluationWorker),
+      { discard: true },
+    );
+
+    const maybeStopLoop = (run: AutomationRun, status: AutomationRunStatus, now: string) =>
+      automationRepository.getDefinitionById({ id: run.automationId }).pipe(
         Effect.mapError(toServiceError("Failed to load automation.")),
         Effect.flatMap((definitionOption) =>
           Option.match(definitionOption, {
@@ -819,16 +1030,30 @@ export const AutomationServiceLive = Layer.effect(
               if (definition.archivedAt || !definition.enabled) {
                 return Effect.void;
               }
+              const enqueueAiStop =
+                status === "succeeded" &&
+                definition.mode === "heartbeat" &&
+                definition.completionPolicy.type === "ai-evaluated"
+                  ? Queue.offer(completionEvaluationQueue, {
+                      definition,
+                      run,
+                      policy: definition.completionPolicy,
+                    }).pipe(Effect.asVoid)
+                  : Effect.void;
               const stopOnError = status === "failed" && definition.stopOnError;
               const reachedMax =
                 definition.maxIterations !== null &&
                 definition.iterationCount >= definition.maxIterations;
-              if (!stopOnError && !reachedMax) {
-                return Effect.void;
-              }
-              return automationRepository.disableDefinition({ id: automationId, now }).pipe(
-                Effect.mapError(toServiceError("Failed to disable automation.")),
-                Effect.flatMap(() => publishDefinition(automationId)),
+              return enqueueAiStop.pipe(
+                Effect.flatMap(() => {
+                  if (!stopOnError && !reachedMax) {
+                    return Effect.void;
+                  }
+                  return automationRepository.disableDefinition({ id: run.automationId, now }).pipe(
+                    Effect.mapError(toServiceError("Failed to disable automation.")),
+                    Effect.flatMap(() => publishDefinition(run.automationId)),
+                  );
+                }),
               );
             },
           }),
@@ -961,7 +1186,7 @@ export const AutomationServiceLive = Layer.effect(
         }
 
         yield* publish({ type: "run-upserted", run: updated });
-        yield* maybeStopLoop(run.automationId, updated.status, now);
+        yield* maybeStopLoop(updated, updated.status, now);
       });
 
     const failRunForTimeout = (definition: AutomationDefinition, run: AutomationRun, now: string) =>
@@ -983,7 +1208,7 @@ export const AutomationServiceLive = Layer.effect(
           })
           .pipe(Effect.mapError(toServiceError("Failed to update automation run result.")));
         yield* publish({ type: "run-upserted", run: withResult });
-        yield* maybeStopLoop(run.automationId, "failed", now);
+        yield* maybeStopLoop(withResult, "failed", now);
       });
 
     const reconcileActiveRun = (run: AutomationRun, now: string) =>

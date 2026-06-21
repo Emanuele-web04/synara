@@ -51,6 +51,10 @@ import {
   type AutomationDraftWarningId,
 } from "~/lib/automationDraft";
 import {
+  completionPolicyFromStopWhen,
+  stopWhenFromCompletionPolicy,
+} from "~/lib/automationCompletionPolicy";
+import {
   BrainIcon,
   ChevronDownIcon,
   ClockIcon,
@@ -211,6 +215,7 @@ export type AutomationFormState = {
   readonly targetThreadId: string;
   readonly maxIterations: string;
   readonly stopOnError: boolean;
+  readonly stopWhen: string;
 };
 
 type IntervalUnit = "seconds" | "minutes";
@@ -530,6 +535,7 @@ export function formFromDefinition(
     targetThreadId: definition?.targetThreadId ?? "",
     maxIterations: definition?.maxIterations != null ? String(definition.maxIterations) : "",
     stopOnError: definition?.stopOnError ?? true,
+    stopWhen: definition ? stopWhenFromCompletionPolicy(definition.completionPolicy) : "",
   };
 }
 
@@ -633,6 +639,7 @@ export function createInputFromForm(
   acknowledgedRisks?: AutomationCreateInput["acknowledgedRisks"],
 ): AutomationCreateInput {
   const maxIterations = form.maxIterations.trim() ? Number.parseInt(form.maxIterations, 10) : null;
+  const stopWhen = form.stopWhen.trim();
   return {
     name: form.name.trim(),
     projectId: form.projectId as ProjectId,
@@ -646,7 +653,13 @@ export function createInputFromForm(
     ...(providerOptions ? { providerOptions } : {}),
     mode: form.mode,
     targetThreadId: form.mode === "heartbeat" ? (form.targetThreadId as ThreadId) : null,
-    ...(form.mode === "heartbeat" ? { maxIterations, stopOnError: form.stopOnError } : {}),
+    ...(form.mode === "heartbeat"
+      ? {
+          maxIterations,
+          stopOnError: form.stopOnError,
+          completionPolicy: completionPolicyFromStopWhen(stopWhen),
+        }
+      : { completionPolicy: { type: "none" as const } }),
     ...(acknowledgedRisks ? { acknowledgedRisks } : {}),
   };
 }
@@ -1431,6 +1444,18 @@ export function AutomationDialog({
                           ))}
                         </MenuRadioGroup>
                       )}
+                    </MenuGroup>
+                    <MenuSeparator />
+                    <MenuGroup>
+                      <MenuGroupLabel>Stop when</MenuGroupLabel>
+                      <div className="px-2 py-1">
+                        <input
+                          value={form.stopWhen}
+                          onChange={(event) => setField("stopWhen", event.target.value)}
+                          placeholder="PR is ready to merge"
+                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        />
+                      </div>
                     </MenuGroup>
                     <MenuSeparator />
                     <MenuGroup>

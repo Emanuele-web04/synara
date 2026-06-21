@@ -28,6 +28,10 @@ import {
   type AutomationDraftWarningId,
 } from "~/lib/automationDraft";
 import {
+  completionPolicyFromStopWhen,
+  stopWhenFromCompletionPolicy,
+} from "~/lib/automationCompletionPolicy";
+import {
   useDesktopTopBarTrafficLightGutterClassName,
   useDesktopTopBarWindowControlsGutterClassName,
 } from "~/hooks/useDesktopTopBarGutter";
@@ -188,6 +192,7 @@ function AutomationDetailView() {
   const targetThread = threads.find((candidate) => candidate.id === definition.targetThreadId);
   const lastRun = lastFinishedRun(runs);
   const schedule = definition.schedule;
+  const stopWhen = stopWhenFromCompletionPolicy(definition.completionPolicy);
 
   const patch = (input: Omit<AutomationUpdateInput, "id">) =>
     updateMutation.mutate({ id: definition.id, ...input });
@@ -512,6 +517,19 @@ function AutomationDetailView() {
                   {definition.mode === "heartbeat" ? "Heartbeat" : "Standalone"}
                 </DetailRow>
                 {definition.mode === "heartbeat" ? (
+                  <EditRow label="Stop when">
+                    <InlineCommitTextInput
+                      value={stopWhen}
+                      placeholder="Never"
+                      onCommit={(value) =>
+                        patch({
+                          completionPolicy: completionPolicyFromStopWhen(value),
+                        })
+                      }
+                    />
+                  </EditRow>
+                ) : null}
+                {definition.mode === "heartbeat" ? (
                   <EditRow label="Max iterations">
                     <InlineSelect
                       value={
@@ -675,10 +693,12 @@ function InlineCommitTextInput({
   value,
   onCommit,
   className,
+  placeholder,
 }: {
   readonly value: string;
   readonly onCommit: (value: string) => void;
   readonly className?: string;
+  readonly placeholder?: string;
 }) {
   const [draft, setDraft] = useState(value);
 
@@ -695,6 +715,7 @@ function InlineCommitTextInput({
   return (
     <input
       value={draft}
+      placeholder={placeholder}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={commitDraft}
       onKeyDown={(event) => {

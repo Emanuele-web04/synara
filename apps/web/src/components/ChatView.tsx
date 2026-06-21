@@ -128,6 +128,7 @@ import {
   parseChatAutomationInvocation,
   resolveChatAutomationIntent,
 } from "../lib/automationIntent";
+import { stopWhenFromCompletionPolicy } from "../lib/automationCompletionPolicy";
 import {
   acknowledgedRiskIdsForDraft,
   buildAutomationDraftWarnings,
@@ -6183,6 +6184,7 @@ export default function ChatView({
           return true;
         }
         const { intent: automationIntent, mode: automationMode } = automationResolution;
+        const automationStopWhen = stopWhenFromCompletionPolicy(automationIntent.completionPolicy);
         const baseForm = formFromDefinition(
           null,
           activeProject.id,
@@ -6201,9 +6203,10 @@ export default function ChatView({
             runtimeMode: chatAutomationRuntimeMode,
             worktreeMode: "auto",
             mode: automationMode,
-            targetThreadId: automationMode === "heartbeat" ? activeThread.id : "",
+            targetThreadId: automationMode === "heartbeat" && isServerThread ? activeThread.id : "",
             maxIterations: "",
             stopOnError: true,
+            stopWhen: automationMode === "heartbeat" ? automationStopWhen : "",
           },
           automationIntent.schedule,
         );
@@ -6224,6 +6227,7 @@ export default function ChatView({
         };
         const acknowledgedWarningIds = new Set<AutomationDraftWarningId>();
         const needsDraftReview =
+          automationResolution.requiresReview ||
           automationResolution.generatedNeedsConfirmation ||
           !isFormSubmittable(nextForm) ||
           hasBlockingAutomationDraftWarnings(warnings, acknowledgedWarningIds);

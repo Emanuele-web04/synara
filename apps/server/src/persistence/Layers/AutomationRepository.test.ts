@@ -3,6 +3,7 @@ import {
   AutomationId,
   AutomationRunId,
   CommandId,
+  DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   MessageId,
   ProjectId,
   ThreadId,
@@ -515,6 +516,7 @@ layer("AutomationRepository", (it) => {
       assert.strictEqual(created.targetThreadId, null);
       assert.strictEqual(created.maxIterations, null);
       assert.strictEqual(created.stopOnError, true);
+      assert.deepStrictEqual(created.completionPolicy, { type: "none" });
       assert.strictEqual(created.minimumIntervalSeconds, 60);
       assert.strictEqual(created.maxRuntimeSeconds, 60 * 60);
       assert.deepStrictEqual(created.retryPolicy, { type: "none" });
@@ -532,6 +534,7 @@ layer("AutomationRepository", (it) => {
       assert.strictEqual(reloaded.targetThreadId, null);
       assert.strictEqual(reloaded.maxIterations, null);
       assert.strictEqual(reloaded.stopOnError, true);
+      assert.deepStrictEqual(reloaded.completionPolicy, { type: "none" });
       assert.strictEqual(reloaded.minimumIntervalSeconds, 60);
       assert.strictEqual(reloaded.maxRuntimeSeconds, 60 * 60);
       assert.deepStrictEqual(reloaded.retryPolicy, { type: "none" });
@@ -554,6 +557,11 @@ layer("AutomationRepository", (it) => {
           targetThreadId: ThreadId.makeUnsafe("thread-target"),
           maxIterations: 5,
           stopOnError: false,
+          completionPolicy: {
+            type: "ai-evaluated",
+            stopWhen: "the PR is ready",
+            confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+          },
           minimumIntervalSeconds: 120,
           maxRuntimeSeconds: 900,
           retryPolicy: { type: "fixed", maxAttempts: 3, delaySeconds: 30 },
@@ -572,6 +580,11 @@ layer("AutomationRepository", (it) => {
       assert.strictEqual(reloaded.targetThreadId, ThreadId.makeUnsafe("thread-target"));
       assert.strictEqual(reloaded.maxIterations, 5);
       assert.strictEqual(reloaded.stopOnError, false);
+      assert.deepStrictEqual(reloaded.completionPolicy, {
+        type: "ai-evaluated",
+        stopWhen: "the PR is ready",
+        confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+      });
       assert.strictEqual(reloaded.minimumIntervalSeconds, 120);
       assert.strictEqual(reloaded.maxRuntimeSeconds, 900);
       assert.deepStrictEqual(reloaded.retryPolicy, {

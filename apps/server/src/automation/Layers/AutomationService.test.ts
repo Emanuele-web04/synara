@@ -1,13 +1,16 @@
 import { assert, it } from "@effect/vitest";
 import {
   AutomationId,
+  type AutomationListResult,
   AutomationRunId,
   CommandId,
+  DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   MessageId,
   ProjectId,
   ThreadId,
   TurnId,
   type AutomationCreateInput,
+  type AutomationRun,
   type GitCreateWorktreeInput,
   type OrchestrationCommand,
   type OrchestrationProjectShell,
@@ -16,6 +19,7 @@ import {
 import { Effect, Layer, Option, Stream } from "effect";
 
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
+import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationCommandInternalError } from "../../orchestration/Errors.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import type { OrchestrationEngineShape } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -26,7 +30,7 @@ import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/Projectio
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { AutomationRepository } from "../../persistence/Services/AutomationRepository.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
-import { AutomationService } from "../Services/AutomationService.ts";
+import { AutomationService, type AutomationServiceShape } from "../Services/AutomationService.ts";
 import { AutomationServiceLive } from "./AutomationService.ts";
 
 const now = "2026-06-16T10:00:00.000Z";
@@ -52,6 +56,21 @@ let gitMode: "nonRepo" | "worktree" = "nonRepo";
 // Configurable thread shell returned by the ProjectionSnapshotQuery mock; reconcile
 // tests set it to drive the run's latest-turn outcome.
 let threadShell: Option.Option<OrchestrationThreadShell> = Option.none();
+let threadDetail: Option.Option<unknown> = Option.none();
+let completionEvaluation: {
+  readonly stopMatched: boolean;
+  readonly confidence: number;
+  readonly reason: string;
+} = {
+  stopMatched: false,
+  confidence: 0.2,
+  reason: "Stop condition was not met.",
+};
+let completionEvaluationFailure: Error | null = null;
+let completionEvaluationGate: {
+  readonly started: () => void;
+  readonly wait: Promise<void>;
+} | null = null;
 // When set, the orchestration dispatch mock fails on the matching command type so we
 // can exercise the failed-run / advance-after-dispatch paths.
 let failDispatchType: OrchestrationCommand["type"] | null = null;
@@ -62,6 +81,14 @@ function resetHarness() {
   createdWorktrees.length = 0;
   gitMode = "nonRepo";
   threadShell = Option.none();
+  threadDetail = Option.none();
+  completionEvaluation = {
+    stopMatched: false,
+    confidence: 0.2,
+    reason: "Stop condition was not met.",
+  };
+  completionEvaluationFailure = null;
+  completionEvaluationGate = null;
   failDispatchType = null;
   dispatchHook = null;
 }
@@ -97,6 +124,165 @@ function makeLatestTurn(
     completedAt: state === "completed" ? now : null,
     assistantMessageId: null,
   } as unknown as OrchestrationThreadShell["latestTurn"];
+}
+
+function makeThreadDetailForRun(input: {
+  readonly runId: AutomationRunId;
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId;
+  readonly messageId: MessageId;
+  readonly userText: string;
+  readonly assistantText: string;
+}) {
+  return {
+    ...makeThreadShell({
+      id: input.threadId,
+      latestTurn: makeLatestTurn("completed", input.turnId),
+    }),
+    messages: [
+      {
+        id: input.messageId,
+        role: "user",
+        text: input.userText,
+        turnId: input.turnId,
+        streaming: false,
+        source: "native",
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: MessageId.makeUnsafe(`assistant-${input.runId}`),
+        role: "assistant",
+        text: input.assistantText,
+        turnId: input.turnId,
+        streaming: false,
+        source: "native",
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
+  };
+}
+
+function heartbeatCompletionPolicy(stopWhen: string) {
+  return {
+    type: "ai-evaluated" as const,
+    stopWhen,
+    confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+  };
+}
+
+// Completes a heartbeat turn and exposes the transcript used by AI stop-condition checks.
+function completeHeartbeatRun(input: {
+  readonly run: AutomationRun;
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId;
+  readonly userText?: string;
+  readonly assistantText?: string;
+}) {
+  return Effect.gen(function* () {
+    const projectionTurns = yield* ProjectionTurnRepository;
+    const messageId = input.run.messageId;
+    if (messageId === null) {
+      throw new Error("Expected heartbeat run to have a pending message id.");
+    }
+    yield* projectionTurns.upsertByTurnId({
+      threadId: input.threadId,
+      turnId: input.turnId,
+      pendingMessageId: messageId,
+      sourceProposedPlanThreadId: null,
+      sourceProposedPlanId: null,
+      assistantMessageId: null,
+      state: "completed",
+      requestedAt: now,
+      startedAt: now,
+      completedAt: now,
+      checkpointTurnCount: null,
+      checkpointRef: null,
+      checkpointStatus: null,
+      checkpointFiles: [],
+    });
+    threadShell = Option.some(
+      makeThreadShell({
+        id: input.threadId,
+        latestTurn: makeLatestTurn("completed", input.turnId),
+      }),
+    );
+    threadDetail = Option.some(
+      makeThreadDetailForRun({
+        runId: input.run.id,
+        threadId: input.threadId,
+        turnId: input.turnId,
+        messageId,
+        userText: input.userText ?? "Check whether the PR is ready.",
+        assistantText: input.assistantText ?? "The PR is ready.",
+      }),
+    );
+  });
+}
+
+function holdCompletionEvaluation() {
+  let releaseEvaluation: () => void = () => undefined;
+  const started = new Promise<void>((resolve) => {
+    completionEvaluationGate = {
+      started: resolve,
+      wait: new Promise<void>((release) => {
+        releaseEvaluation = release;
+      }),
+    };
+  });
+  return {
+    started,
+    release: () => releaseEvaluation(),
+  };
+}
+
+function realDelay(ms: number) {
+  return Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+}
+
+function waitForPromise(input: {
+  readonly promise: Promise<void>;
+  readonly timeoutMs: number;
+  readonly description: string;
+}) {
+  return Effect.promise(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error(`Timed out waiting for ${input.description}.`)),
+          input.timeoutMs,
+        );
+        input.promise.then(
+          () => {
+            clearTimeout(timer);
+            resolve();
+          },
+          (error) => {
+            clearTimeout(timer);
+            reject(error);
+          },
+        );
+      }),
+  );
+}
+
+// Polls the automation list until a background stop-check write becomes visible.
+function waitForAutomationList(input: {
+  readonly service: AutomationServiceShape;
+  readonly description: string;
+  readonly predicate: (listed: AutomationListResult) => boolean;
+}) {
+  return Effect.gen(function* () {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const listed = yield* input.service.list({ projectId });
+      if (input.predicate(listed)) {
+        return listed;
+      }
+      yield* realDelay(10);
+    }
+    throw new Error(`Timed out waiting for ${input.description}.`);
+  });
 }
 
 const createInput = (
@@ -180,9 +366,32 @@ const projectionSnapshotQuery = {
   getFullThreadDiffContext: () => Effect.succeed(Option.none()),
   getThreadShellById: () => Effect.succeed(threadShell),
   findSyntheticSubagentParentThread: () => Effect.succeed(Option.none()),
-  getThreadDetailById: () => Effect.succeed(Option.none()),
+  getThreadDetailById: () => Effect.succeed(threadDetail as never),
   getThreadDetailSnapshotById: () => Effect.succeed(Option.none()),
 } as unknown as ProjectionSnapshotQueryShape;
+
+const textGeneration = {
+  generateCommitMessage: () => Effect.die("unused"),
+  generatePrContent: () => Effect.die("unused"),
+  generateDiffSummary: () => Effect.die("unused"),
+  generateBranchName: () => Effect.die("unused"),
+  generateThreadTitle: () => Effect.die("unused"),
+  generateThreadRecap: () => Effect.die("unused"),
+  generateAutomationIntent: () => Effect.die("unused"),
+  evaluateAutomationCompletion: () => {
+    if (completionEvaluationFailure) {
+      return Effect.fail(completionEvaluationFailure);
+    }
+    const gate = completionEvaluationGate;
+    return gate
+      ? Effect.promise(async () => {
+          gate.started();
+          await gate.wait;
+          return completionEvaluation;
+        })
+      : Effect.succeed(completionEvaluation);
+  },
+} as unknown as TextGenerationShape;
 
 const gitCore = {
   statusDetails: (cwd: string) =>
@@ -219,6 +428,7 @@ const layer = it.layer(
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provideMerge(Layer.succeed(OrchestrationEngineService, orchestrationEngine)),
     Layer.provideMerge(Layer.succeed(ProjectionSnapshotQuery, projectionSnapshotQuery)),
+    Layer.provideMerge(Layer.succeed(TextGeneration, textGeneration)),
     Layer.provideMerge(Layer.succeed(GitCore, gitCore)),
   ),
 );
@@ -836,6 +1046,326 @@ layer("AutomationService", (it) => {
       const updated = reconciled.runs.find((entry) => entry.id === run.id);
       assert.strictEqual(updated?.status, "succeeded");
       assert.strictEqual(updated?.turnId, automationTurnId);
+    }),
+  );
+
+  it.effect("disables a heartbeat automation when the AI stop condition matches", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-thread");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-matched");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.92,
+        reason: "The assistant says the PR is ready to merge.",
+      };
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready to merge"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "The PR is ready to merge and has no actionable issues.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "matched stop evaluation",
+        predicate: (listed) =>
+          listed.definitions.find((entry) => entry.id === created.id)?.enabled === false &&
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+            ?.stopMatched === true,
+      });
+      const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(updatedDefinition?.enabled, false);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, true);
+      assert.include(updatedRun?.result?.summary ?? "", "Stopped:");
+    }),
+  );
+
+  it.effect("does not block reconciliation while AI stop evaluation is pending", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-nonblocking");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-nonblocking");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: false,
+        confidence: 0.88,
+        reason: "The assistant found actionable issues.",
+      };
+      const evaluationGate = holdCompletionEvaluation();
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("there are no actionable issues"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "There are still actionable review comments.",
+      });
+
+      const reconciled = yield* Effect.race(
+        service.reconcileThread({ threadId: targetThreadId }).pipe(Effect.as("reconciled" as const)),
+        realDelay(50).pipe(Effect.as("timeout" as const)),
+      );
+      assert.strictEqual(reconciled, "reconciled");
+
+      yield* waitForPromise({
+        promise: evaluationGate.started,
+        timeoutMs: 1_000,
+        description: "background stop evaluation to start",
+      });
+      const beforeRelease = yield* service.list({ projectId });
+      const pendingRun = beforeRelease.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(pendingRun?.status, "succeeded");
+      assert.isUndefined(pendingRun?.result?.completionEvaluation);
+
+      evaluationGate.release();
+      yield* waitForAutomationList({
+        service,
+        description: "nonblocking stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+            ?.stopMatched === false,
+      });
+    }),
+  );
+
+  it.effect("keeps a heartbeat automation active when the AI stop condition is unmatched", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-unmatched");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-unmatched");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: false,
+        confidence: 0.88,
+        reason: "The assistant found actionable issues.",
+      };
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("there are no actionable issues"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "There are still actionable review comments.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "unmatched stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+            ?.stopMatched === false,
+      });
+      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, true);
+      assert.strictEqual(
+        listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+          ?.stopMatched,
+        false,
+      );
+    }),
+  );
+
+  it.effect("preserves run triage state while recording unmatched stop evaluations", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-triage-preserved");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-triage-preserved");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: false,
+        confidence: 0.88,
+        reason: "The assistant found actionable issues.",
+      };
+      const evaluationGate = holdCompletionEvaluation();
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("there are no actionable issues"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "There are still actionable review comments.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* waitForPromise({
+        promise: evaluationGate.started,
+        timeoutMs: 1_000,
+        description: "triage stop evaluation to start",
+      });
+      yield* service.markRunRead({ runId: run.id, unread: false });
+      const archived = yield* service.archiveRun({ runId: run.id, archived: true });
+      evaluationGate.release();
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "triage-preserving stop evaluation",
+        predicate: (listed) => {
+          const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+          return (
+            updatedRun?.result?.completionEvaluation?.stopMatched === false &&
+            updatedRun.result.unread === false &&
+            updatedRun.result.archivedAt === archived.run.result?.archivedAt
+          );
+        },
+      });
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, true);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
+      assert.strictEqual(updatedRun?.result?.unread, false);
+      assert.strictEqual(updatedRun?.result?.archivedAt, archived.run.result?.archivedAt);
+    }),
+  );
+
+  it.effect("keeps a heartbeat automation active when the stop match is low confidence", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-ambiguous");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-ambiguous");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.52,
+        reason: "The assistant was uncertain whether the PR is ready.",
+      };
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "It may be ready, but one signal is unclear.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "low-confidence stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+            ?.confidence === 0.52,
+      });
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, true);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, true);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.confidence, 0.52);
+    }),
+  );
+
+  it.effect("keeps a heartbeat automation active and records history when stop evaluation fails", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-evaluator-failure");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-evaluator-failure");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluationFailure = new Error("provider unavailable");
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "failed stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+            ?.confidence === 0,
+      });
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, true);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.confidence, 0);
+      assert.include(updatedRun?.result?.summary ?? "", "Stop check failed:");
+      assert.include(updatedRun?.result?.completionEvaluation?.reason ?? "", "Stop check failed:");
+    }),
+  );
+
+  it.effect("does not auto-stop a heartbeat automation without a completion policy", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-no-stop-policy");
+      const automationTurnId = TurnId.makeUnsafe("turn-no-stop-policy");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 1,
+        reason: "This would stop if a policy existed.",
+      };
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      const listed = yield* service.list({ projectId });
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, true);
+      assert.isUndefined(updatedRun?.result?.completionEvaluation);
     }),
   );
 

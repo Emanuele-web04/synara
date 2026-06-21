@@ -3,6 +3,7 @@
 // Layer: Web lib test
 // Depends on: parseChatAutomationIntent and cadence formatting.
 
+import { DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -50,7 +51,59 @@ describe("parseChatAutomationIntent", () => {
       cadenceLabel: "Every 6h",
       prompt: "check the website",
       schedule: { type: "interval", everySeconds: 21_600 },
+      completionPolicy: { type: "none" },
     });
+  });
+
+  it("extracts English stop clauses into first-class completion policies", () => {
+    expect(
+      parseChatAutomationInvocation(
+        "every 3 min watch codex-bot. Stop when codex-bot says the PR is ready to merge. If there are actionable issues, fix them and keep monitoring.",
+      ),
+    ).toMatchObject({
+      prompt:
+        "watch codex-bot. If there are actionable issues, fix them and keep monitoring.",
+      completionPolicy: {
+        type: "ai-evaluated",
+        stopWhen: "codex-bot says the PR is ready to merge",
+        confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+      },
+    });
+
+    expect(parseChatAutomationInvocation("every 5 min keep monitoring until CI is green"))
+      .toMatchObject({
+        prompt: "keep monitoring",
+        completionPolicy: {
+          type: "ai-evaluated",
+          stopWhen: "CI is green",
+        },
+      });
+
+    expect(parseChatAutomationInvocation("every 10 min check the PR; if there are no issues, stop"))
+      .toMatchObject({
+        completionPolicy: {
+          type: "ai-evaluated",
+          stopWhen: "there are no issues",
+        },
+      });
+  });
+
+  it("extracts Italian stop clauses into first-class completion policies", () => {
+    expect(parseChatAutomationInvocation("ogni 5 minuti controlla la PR finché è pronta"))
+      .toMatchObject({
+        completionPolicy: {
+          type: "ai-evaluated",
+          stopWhen: "è pronta",
+        },
+      });
+
+    expect(parseChatAutomationInvocation("ogni 5 minuti controlla la PR. Quando è pronta, fermati"))
+      .toMatchObject({
+        completionPolicy: {
+          type: "ai-evaluated",
+          stopWhen: "è pronta",
+        },
+      });
   });
 
   it("parses English and Italian one-shot timers from a deterministic now", () => {
@@ -206,6 +259,7 @@ describe("parseChatAutomationIntent", () => {
         taskPrompt: "Generated prompt",
         schedule: { type: "daily", timeOfDay: "09:00" },
         mode: "standalone",
+        completionPolicy: { type: "none" },
         missingFields: [],
         needsConfirmation: false,
         reason: null,
@@ -223,6 +277,65 @@ describe("parseChatAutomationIntent", () => {
     });
   });
 
+  it("requires review instead of auto-submitting stop clauses from standalone contexts", () => {
+    const deterministicIntent = parseChatAutomationIntent(
+      "/automation every 5m check CI until it is green",
+    );
+
+    const resolved = resolveChatAutomationIntent({
+      deterministicIntent,
+      generatedIntent: null,
+      isServerThread: false,
+    });
+
+    expect(resolved).toMatchObject({
+      mode: "heartbeat",
+      requiresReview: true,
+      intent: {
+        completionPolicy: {
+          type: "ai-evaluated",
+          stopWhen: "it is green",
+        },
+      },
+    });
+  });
+
+  it("converts generated standalone stop clauses to heartbeat drafts", () => {
+    const resolved = resolveChatAutomationIntent({
+      deterministicIntent: null,
+      generatedIntent: {
+        isAutomation: true,
+        confidence: 0.95,
+        language: "en",
+        name: "Check CI",
+        taskPrompt: "check CI",
+        schedule: { type: "interval", everySeconds: 300 },
+        mode: "standalone",
+        completionPolicy: {
+          type: "ai-evaluated",
+          stopWhen: "CI is green",
+          confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+        },
+        missingFields: [],
+        needsConfirmation: false,
+        reason: null,
+      },
+      isServerThread: true,
+    });
+
+    expect(resolved).toMatchObject({
+      source: "generated",
+      mode: "heartbeat",
+      requiresReview: true,
+      intent: {
+        completionPolicy: {
+          type: "ai-evaluated",
+          stopWhen: "CI is green",
+        },
+      },
+    });
+  });
+
   it("uses generated intent when local parsing cannot resolve the schedule", () => {
     const resolved = resolveChatAutomationIntent({
       deterministicIntent: null,
@@ -234,6 +347,7 @@ describe("parseChatAutomationIntent", () => {
         taskPrompt: "controlla se il Fitbit nero e disponibile",
         schedule: { type: "interval", everySeconds: 21_600 },
         mode: "heartbeat",
+        completionPolicy: { type: "none" },
         missingFields: [],
         needsConfirmation: false,
         reason: null,
@@ -262,6 +376,7 @@ describe("parseChatAutomationIntent", () => {
         taskPrompt: "check the thing",
         schedule: null,
         mode: "heartbeat",
+        completionPolicy: { type: "none" },
         missingFields: ["schedule"],
         needsConfirmation: true,
         reason: "Missing schedule",
@@ -287,6 +402,7 @@ describe("parseChatAutomationIntent", () => {
         taskPrompt: "check logs",
         schedule: { type: "interval", everySeconds: 15 },
         mode: "heartbeat",
+        completionPolicy: { type: "none" },
         missingFields: [],
         needsConfirmation: false,
         reason: null,
@@ -313,6 +429,7 @@ describe("parseChatAutomationIntent", () => {
           taskPrompt: "check something",
           schedule: { type: "interval", everySeconds: 3600 },
           mode: "heartbeat",
+          completionPolicy: { type: "none" },
           missingFields: [],
           needsConfirmation: false,
           reason: "Ambiguous",

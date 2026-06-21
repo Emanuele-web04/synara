@@ -115,6 +115,15 @@ export const AutomationRunResult = Schema.Struct({
   severity: Schema.optional(Schema.Literals(["info", "warning", "error"])),
   unread: Schema.Boolean,
   archivedAt: Schema.NullOr(AutomationIsoDateTime),
+  completionEvaluation: Schema.optional(
+    Schema.Struct({
+      stopMatched: Schema.Boolean,
+      confidence: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)).check(
+        Schema.isLessThanOrEqualTo(1),
+      ),
+      reason: TrimmedNonEmptyString.check(Schema.isMaxLength(1_000)),
+    }),
+  ),
 });
 export type AutomationRunResult = typeof AutomationRunResult.Type;
 
@@ -160,6 +169,20 @@ export const DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS = 60;
 export const DEFAULT_AUTOMATION_MAX_RUNTIME_SECONDS = 60 * 60;
 export const DEFAULT_AUTOMATION_RETRY_POLICY: AutomationRetryPolicy = { type: "none" };
 export const DEFAULT_AUTOMATION_MISFIRE_POLICY: AutomationMisfirePolicy = "coalesce";
+export const DEFAULT_AUTOMATION_COMPLETION_POLICY = { type: "none" } as const;
+export const DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD = 0.8;
+
+export const AutomationCompletionPolicy = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("none") }),
+  Schema.Struct({
+    type: Schema.Literal("ai-evaluated"),
+    stopWhen: TrimmedNonEmptyString.check(Schema.isMaxLength(2_000)),
+    confidenceThreshold: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)).check(
+      Schema.isLessThanOrEqualTo(1),
+    ),
+  }),
+]);
+export type AutomationCompletionPolicy = typeof AutomationCompletionPolicy.Type;
 
 export const AutomationDefinition = Schema.Struct({
   id: AutomationId,
@@ -182,6 +205,10 @@ export const AutomationDefinition = Schema.Struct({
   maxIterations: Schema.NullOr(PositiveInt),
   /** When true, a failed run disables the automation (stops a runaway loop). */
   stopOnError: Schema.Boolean,
+  /** Heartbeat-only natural language stop condition. Standalone runs ignore it for now. */
+  completionPolicy: Schema.optional(AutomationCompletionPolicy).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_COMPLETION_POLICY),
+  ),
   minimumIntervalSeconds: PositiveInt,
   maxRuntimeSeconds: Schema.NullOr(PositiveInt),
   retryPolicy: AutomationRetryPolicy,
@@ -227,6 +254,9 @@ const AutomationDefinitionConfig = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   stopOnError: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => true)),
+  completionPolicy: Schema.optional(AutomationCompletionPolicy).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_COMPLETION_POLICY),
+  ),
   minimumIntervalSeconds: Schema.optional(PositiveInt).pipe(
     Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS),
   ),
@@ -264,6 +294,7 @@ export const AutomationUpdateInput = Schema.Struct({
   targetThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   maxIterations: Schema.optional(Schema.NullOr(PositiveInt)),
   stopOnError: Schema.optional(Schema.Boolean),
+  completionPolicy: Schema.optional(AutomationCompletionPolicy),
   minimumIntervalSeconds: Schema.optional(PositiveInt),
   maxRuntimeSeconds: Schema.optional(Schema.NullOr(PositiveInt)),
   retryPolicy: Schema.optional(AutomationRetryPolicy),

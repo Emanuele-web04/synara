@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect";
 import {
+  DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   ServerGenerateAutomationIntentResult,
   type AutomationMode,
   type ChatAttachment,
@@ -399,6 +400,7 @@ export function buildAutomationIntentPrompt(input: {
       "- taskPrompt: the actual recurring instruction to save, without /automation, @automation, or schedule scaffolding.",
       "- schedule: automation cadence, or null when missing/ambiguous.",
       "- mode: heartbeat or standalone.",
+      `- completionPolicy: use {"type":"ai-evaluated","stopWhen":"...","confidenceThreshold":${DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD}} only when the user explicitly says until/stop when/if X stop/fino a quando/finche. Otherwise use {"type":"none"}.`,
       "- missingFields: include schedule, taskPrompt, name, or mode when that field is null or too unclear.",
       "- needsConfirmation: true when schedule/task/mode is missing, ambiguous, or confidence < 0.75.",
       "- reason: short explanation when isAutomation=false or needsConfirmation=true; otherwise null.",
@@ -416,11 +418,62 @@ export function buildAutomationIntentPrompt(input: {
       "- heartbeat means continue/report in the current thread on each run.",
       "- standalone means create independent scheduled runs.",
       "- Use the default unless the user clearly asks for the other behavior.",
+      "- Stop clauses are currently supported only for heartbeat automations; if mode is standalone, use completionPolicy {\"type\":\"none\"}.",
       "",
       "User message:",
       limitSection(input.message, 16_000),
     ].join("\n"),
     outputSchemaJson: ServerGenerateAutomationIntentResult,
+  };
+}
+
+// Evaluates a heartbeat stop clause from the completed run output, separate from the
+// automation agent so the agent cannot self-disable the loop.
+export function buildAutomationCompletionEvaluationPrompt(input: {
+  readonly automationName: string;
+  readonly automationPrompt: string;
+  readonly stopWhen: string;
+  readonly runUserMessage: string;
+  readonly runAssistantText: string;
+  readonly threadContext?: string;
+}) {
+  return {
+    prompt: [
+      "You evaluate whether a completed Synara heartbeat automation should stop.",
+      "Return a JSON object with keys: stopMatched, confidence, reason.",
+      "Respond with only the JSON object, no prose and no code fences.",
+      "",
+      "Decision rules:",
+      "- stopMatched=true only if the completed run clearly satisfies the stop condition.",
+      "- If the evidence is missing, indirect, ambiguous, or only says work continues, set stopMatched=false.",
+      "- confidence must be a number from 0 to 1.",
+      "- reason must be one concise sentence grounded in the run output.",
+      "- Do not infer from the automation prompt alone; use the completed run output as evidence.",
+      "",
+      `Automation: ${input.automationName}`,
+      "",
+      "Saved automation prompt:",
+      limitSection(input.automationPrompt, 4_000),
+      "",
+      "Stop condition:",
+      limitSection(input.stopWhen, 2_000),
+      "",
+      "Run user message:",
+      limitSection(input.runUserMessage, 4_000),
+      "",
+      "Run assistant output:",
+      limitSection(input.runAssistantText, 12_000),
+      "",
+      "Recent thread context:",
+      limitSection(input.threadContext?.trim() || "(none)", 6_000),
+    ].join("\n"),
+    outputSchemaJson: Schema.Struct({
+      stopMatched: Schema.Boolean,
+      confidence: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)).check(
+        Schema.isLessThanOrEqualTo(1),
+      ),
+      reason: Schema.String,
+    }),
   };
 }
 

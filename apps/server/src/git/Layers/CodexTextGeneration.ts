@@ -28,6 +28,7 @@ import {
 import {
   buildBranchNamePrompt,
   buildAutomationIntentPrompt,
+  buildAutomationCompletionEvaluationPrompt,
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
@@ -613,6 +614,23 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     });
   };
 
+  const evaluateAutomationCompletion: TextGenerationShape["evaluateAutomationCompletion"] = (
+    input,
+  ) => {
+    const { prompt, outputSchemaJson } = buildAutomationCompletionEvaluationPrompt(input);
+
+    return runCodexJson({
+      operation: "evaluateAutomationCompletion",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
+  };
+
   return {
     generateCommitMessage,
     generatePrContent,
@@ -621,6 +639,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     generateThreadTitle,
     generateThreadRecap,
     generateAutomationIntent,
+    evaluateAutomationCompletion,
   } satisfies TextGenerationShape;
 });
 

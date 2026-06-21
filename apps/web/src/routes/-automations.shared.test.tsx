@@ -10,6 +10,7 @@ import {
   MessageId,
   ProjectId,
   ThreadId,
+  DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   type AutomationDefinition,
   type AutomationRun,
 } from "@t3tools/contracts";
@@ -21,6 +22,7 @@ import {
   applyAutomationEvent,
   automationAttentionCount,
   canCancelAutomationRun,
+  createInputFromForm,
   datetimeLocalFromIso,
   formFromDefinition,
   isoFromDatetimeLocal,
@@ -95,6 +97,7 @@ const baseDefinition: AutomationDefinition = {
   targetThreadId: null,
   maxIterations: null,
   stopOnError: true,
+  completionPolicy: { type: "none" },
   minimumIntervalSeconds: 60,
   maxRuntimeSeconds: 3600,
   retryPolicy: { type: "none" },
@@ -304,6 +307,23 @@ describe("automation shared route helpers", () => {
 
     expect(isFormSubmittable(form)).toBe(false);
     expect(isFormSubmittable({ ...form, timezone: "UTC" })).toBe(true);
+  });
+
+  it("serializes heartbeat stop clauses as completion policies", () => {
+    const form = {
+      ...formFromDefinition(null, "project-1"),
+      name: "Watch PR",
+      prompt: "Check the PR.",
+      mode: "heartbeat" as const,
+      targetThreadId: "thread-1",
+      stopWhen: "the PR is ready to merge",
+    };
+
+    expect(createInputFromForm(form).completionPolicy).toEqual({
+      type: "ai-evaluated",
+      stopWhen: "the PR is ready to merge",
+      confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+    });
   });
 
   it("keeps a newer run update when an older automation snapshot arrives later", () => {

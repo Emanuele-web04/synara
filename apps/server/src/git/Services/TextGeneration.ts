@@ -144,6 +144,29 @@ export interface AutomationIntentGenerationInput {
 
 export type AutomationIntentGenerationResult = ServerGenerateAutomationIntentResult;
 
+export interface AutomationCompletionEvaluationInput {
+  cwd: string;
+  automationName: string;
+  automationPrompt: string;
+  stopWhen: string;
+  runUserMessage: string;
+  runAssistantText: string;
+  threadContext?: string | undefined;
+  codexHomePath?: string;
+  /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
+  model?: string;
+  /** Optional provider-aware selection for providers that need more than a raw model slug. */
+  modelSelection?: ModelSelection;
+  /** Optional provider startup overrides, such as custom binary paths or server URLs. */
+  providerOptions?: ProviderStartOptions;
+}
+
+export interface AutomationCompletionEvaluationResult {
+  stopMatched: boolean;
+  confidence: number;
+  reason: string;
+}
+
 export type TextGenerationOperation =
   | "generateCommitMessage"
   | "generatePrContent"
@@ -151,7 +174,8 @@ export type TextGenerationOperation =
   | "generateBranchName"
   | "generateThreadTitle"
   | "generateThreadRecap"
-  | "generateAutomationIntent";
+  | "generateAutomationIntent"
+  | "evaluateAutomationCompletion";
 
 export interface TextGenerationService {
   generateCommitMessage(
@@ -165,6 +189,9 @@ export interface TextGenerationService {
   generateAutomationIntent(
     input: AutomationIntentGenerationInput,
   ): Promise<AutomationIntentGenerationResult>;
+  evaluateAutomationCompletion(
+    input: AutomationCompletionEvaluationInput,
+  ): Promise<AutomationCompletionEvaluationResult>;
 }
 
 /**
@@ -219,6 +246,13 @@ export interface TextGenerationShape {
   readonly generateAutomationIntent: (
     input: AutomationIntentGenerationInput,
   ) => Effect.Effect<AutomationIntentGenerationResult, TextGenerationError>;
+
+  /**
+   * Decide whether a completed heartbeat run satisfies its saved stop clause.
+   */
+  readonly evaluateAutomationCompletion: (
+    input: AutomationCompletionEvaluationInput,
+  ) => Effect.Effect<AutomationCompletionEvaluationResult, TextGenerationError>;
 }
 
 /**
