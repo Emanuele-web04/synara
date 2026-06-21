@@ -14,6 +14,7 @@ import { type MouseEvent, useCallback, useMemo, useState } from "react";
 import { useAppSettings } from "~/appSettings";
 import { RenameThreadDialog } from "~/components/RenameThreadDialog";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
+import { reconcileDeletedThreadFromClient } from "~/lib/deletedThreadClientReconciliation";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { dispatchThreadRename } from "~/lib/threadRename";
 import { newCommandId } from "~/lib/utils";
@@ -151,6 +152,11 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
         type: "thread.delete",
         commandId: newCommandId(),
         threadId: card.threadId,
+      });
+      void reconcileDeletedThreadFromClient({
+        threadId: card.threadId,
+        removeDeletedThreadFromClientState:
+          useStore.getState().removeDeletedThreadFromClientState,
       });
       clearDraftThread(card.threadId);
       clearProjectDraftThreadById(thread.projectId, thread.id);

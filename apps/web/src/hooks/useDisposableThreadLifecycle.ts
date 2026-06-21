@@ -1,6 +1,7 @@
 import type { ThreadId } from "@t3tools/contracts";
 import { useEffect, useRef } from "react";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
 import { resolveDisposableThreadIdToDispose } from "../lib/disposableThread";
 import { newCommandId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
@@ -11,7 +12,6 @@ import { useTerminalStateStore } from "../terminalStateStore";
 import { getThreadFromState } from "../threadDerivation";
 
 export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): void {
-  const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const clearDraftThread = useComposerDraftStore((store) => store.clearDraftThread);
   const clearTerminalState = useTerminalStateStore((store) => store.clearTerminalState);
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
@@ -77,16 +77,20 @@ export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): v
             .catch(() => undefined);
 
           if (serverThread) {
-            await api.orchestration
+            const deletedOnServer = await api.orchestration
               .dispatchCommand({
                 type: "thread.delete",
                 commandId: newCommandId(),
                 threadId: disposableThreadId,
               })
-              .catch(() => undefined);
-            const snapshot = await api.orchestration.getShellSnapshot().catch(() => null);
-            if (snapshot) {
-              syncServerShellSnapshot(snapshot);
+              .then(() => true)
+              .catch(() => false);
+            if (deletedOnServer) {
+              void reconcileDeletedThreadFromClient({
+                threadId: disposableThreadId,
+                removeDeletedThreadFromClientState:
+                  useStore.getState().removeDeletedThreadFromClientState,
+              });
             }
           }
         }
@@ -105,7 +109,6 @@ export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): v
     clearTerminalState,
     clearTemporaryThread,
     removeThreadFromSplitViews,
-    syncServerShellSnapshot,
     temporaryThreadIds,
   ]);
 }

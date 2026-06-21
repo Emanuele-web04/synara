@@ -14,6 +14,7 @@ import {
   TurnId,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
   type OrchestrationThreadActivity,
   type ThreadMarker,
@@ -31,6 +32,7 @@ import {
   reorderProjects,
   setThreadWorkspace,
   setAllProjectsExpanded,
+  syncServerShellSnapshot,
   syncServerReadModel,
   syncServerThreadDetailHotPath,
   type AppState,
@@ -197,6 +199,28 @@ function makeReadModel(thread: OrchestrationReadModel["threads"][number]): Orche
     ],
     threads: [thread],
   };
+}
+
+function makeShellSnapshot(thread: OrchestrationShellSnapshot["threads"][number]) {
+  return {
+    snapshotSequence: 2,
+    updatedAt: "2026-02-27T00:01:00.000Z",
+    projects: [
+      {
+        id: ProjectId.makeUnsafe("project-1"),
+        title: "Project",
+        workspaceRoot: "/tmp/project",
+        defaultModelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:00.000Z",
+        scripts: [],
+      },
+    ],
+    threads: [thread],
+  } satisfies OrchestrationShellSnapshot;
 }
 
 function makeReadModelProject(
@@ -2868,6 +2892,37 @@ describe("store read model sync", () => {
     expect(next.threadIds).not.toContain(threadId);
     expect(next.threadShellById?.[threadId]).toBeUndefined();
     expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
+    expect(next.deletedThreadIdsById?.[threadId]).toBe(true);
+
+    const afterStaleSnapshot = syncServerShellSnapshot(
+      next,
+      makeShellSnapshot({
+        id: threadId,
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Stale archived thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
+        latestTurn: null,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:30.000Z",
+        handoff: null,
+        session: null,
+        activities: [],
+        proposedPlans: [],
+        checkpoints: [],
+      }),
+    );
+    expect(afterStaleSnapshot.threads).toHaveLength(0);
+    expect(afterStaleSnapshot.threadShellById?.[threadId]).toBeUndefined();
   });
 
   it("removes successfully deleted archived threads through the shared client helper", () => {
@@ -2888,6 +2943,105 @@ describe("store read model sync", () => {
     expect(next.threadIds).not.toContain(threadId);
     expect(next.threadShellById?.[threadId]).toBeUndefined();
     expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
+  });
+
+  it("keeps a client-deleted thread hidden when a stale shell snapshot includes it", () => {
+    const threadId = ThreadId.makeUnsafe("thread-stale-delete");
+    const initialState = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          title: "Soon deleted",
+        }),
+      ),
+    );
+
+    const deletedState = removeDeletedThreadFromClientState(initialState, threadId);
+    const next = syncServerShellSnapshot(
+      deletedState,
+      makeShellSnapshot({
+        id: threadId,
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Stale resurrected thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
+        latestTurn: null,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:30.000Z",
+        handoff: null,
+        session: null,
+        activities: [],
+        proposedPlans: [],
+        checkpoints: [],
+      }),
+    );
+
+    expect(next.deletedThreadIdsById?.[threadId]).toBe(true);
+    expect(next.threads).toHaveLength(0);
+    expect(next.threadIds).not.toContain(threadId);
+    expect(next.threadShellById?.[threadId]).toBeUndefined();
+    expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
+  });
+
+  it("does not tombstone shell-only removals so rollback draft ids can rehydrate", () => {
+    const threadId = ThreadId.makeUnsafe("thread-shell-removed");
+    const initialState = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          title: "Shell removed",
+        }),
+      ),
+    );
+
+    const removedState = applyShellEvent(initialState, {
+      kind: "thread-removed",
+      sequence: 3,
+      threadId,
+    } satisfies OrchestrationShellStreamEvent);
+    const next = syncServerShellSnapshot(
+      removedState,
+      makeShellSnapshot({
+        id: threadId,
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Rehydrated shell removed thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
+        latestTurn: null,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:30.000Z",
+        handoff: null,
+        session: null,
+        activities: [],
+        proposedPlans: [],
+        checkpoints: [],
+      }),
+    );
+
+    expect(removedState.deletedThreadIdsById?.[threadId]).toBeUndefined();
+    expect(next.threads).toHaveLength(1);
+    expect(next.threadIds).toContain(threadId);
+    expect(next.threadShellById?.[threadId]?.title).toBe("Rehydrated shell removed thread");
   });
 
   it("keeps sidebar summaries shell-owned during hot-path thread detail syncs", () => {

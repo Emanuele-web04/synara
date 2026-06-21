@@ -94,6 +94,10 @@ import { isElectron } from "../env";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import { formatRelativeTime } from "../lib/relativeTime";
 import { isMacPlatform, newCommandId, newProjectId, newThreadId, randomUUID } from "../lib/utils";
+import {
+  reconcileDeletedThreadFromClient,
+  reconcileDeletedThreadsFromClient,
+} from "../lib/deletedThreadClientReconciliation";
 import { persistAppStateNow, useStore } from "../store";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import {
@@ -2630,6 +2634,7 @@ export default function Sidebar() {
       threadId: ThreadId,
       opts: {
         deletedThreadIds?: ReadonlySet<ThreadId>;
+        reconcileDeletedThread?: boolean;
         worktreeCleanupMode?: "prompt" | "skip";
       } = {},
     ): Promise<void> => {
@@ -2701,6 +2706,13 @@ export default function Sidebar() {
         commandId: newCommandId(),
         threadId,
       });
+      if (opts.reconcileDeletedThread ?? true) {
+        void reconcileDeletedThreadFromClient({
+          threadId,
+          removeDeletedThreadFromClientState:
+            useStore.getState().removeDeletedThreadFromClientState,
+        });
+      }
       unpinThread(threadId);
       clearComposerDraftForThread(threadId);
       clearProjectDraftThreadById(thread.projectId, thread.id);
@@ -2782,6 +2794,7 @@ export default function Sidebar() {
       removeThreadFromSplitViews,
       clearTemporaryThread,
       sidebarThreads,
+      syncServerShellSnapshot,
       unpinThread,
     ],
   );
@@ -3074,16 +3087,19 @@ export default function Sidebar() {
       }
 
       const deletedIds = new Set<ThreadId>(projectThreads.map((thread) => thread.id));
+      const successfullyDeletedIds: ThreadId[] = [];
       let deletedCount = 0;
       let failureCount = 0;
       for (const thread of projectThreads) {
         try {
           await deleteThread(thread.id, {
             deletedThreadIds: deletedIds,
+            reconcileDeletedThread: false,
             ...(options?.worktreeCleanupMode
               ? { worktreeCleanupMode: options.worktreeCleanupMode }
               : {}),
           });
+          successfullyDeletedIds.push(thread.id);
           deletedCount += 1;
         } catch (error) {
           failureCount += 1;
@@ -3095,6 +3111,11 @@ export default function Sidebar() {
         }
       }
 
+      void reconcileDeletedThreadsFromClient({
+        threadIds: successfullyDeletedIds,
+        removeDeletedThreadFromClientState:
+          useStore.getState().removeDeletedThreadFromClientState,
+      });
       removeFromSelection([...deletedIds]);
 
       if (options?.showResultToast ?? true) {
@@ -3407,8 +3428,20 @@ export default function Sidebar() {
       }
 
       const deletedIds = new Set<ThreadId>(ids);
-      for (const id of ids) {
-        await deleteThread(id, { deletedThreadIds: deletedIds });
+      const successfullyDeletedIds: ThreadId[] = [];
+      try {
+        for (const id of ids) {
+          await deleteThread(id, { deletedThreadIds: deletedIds, reconcileDeletedThread: false });
+          successfullyDeletedIds.push(id);
+        }
+      } finally {
+        if (successfullyDeletedIds.length > 0) {
+          void reconcileDeletedThreadsFromClient({
+            threadIds: successfullyDeletedIds,
+            removeDeletedThreadFromClientState:
+              useStore.getState().removeDeletedThreadFromClientState,
+          });
+        }
       }
       removeFromSelection(ids);
     },
