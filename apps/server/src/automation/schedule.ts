@@ -228,7 +228,8 @@ function parseCronField(raw: string, min: number, max: number, name: string): Cr
     if (!Number.isInteger(step) || step <= 0) {
       throw new Error(`Invalid cron ${name}: bad step`);
     }
-    if (rangePart === "*") {
+    // Only a literal `*` is unrestricted for DOM/DOW cron semantics; `*/2` is still a filter.
+    if (rangePart === "*" && stepPart === undefined) {
       isWildcard = true;
     }
     const rangeParts = rangePart === "*" ? [String(min), String(max)] : rangePart.split("-");

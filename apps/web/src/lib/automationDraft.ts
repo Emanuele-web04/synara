@@ -73,7 +73,7 @@ export function buildAutomationDraftWarnings(input: {
       id: "attachments-not-persisted",
       title: "Composer context is not persisted",
       detail:
-        "Attachments, pasted context, and terminal snippets will not be replayed on scheduled runs.",
+        "Attachments, provider mentions, pasted context, and terminal snippets will not be replayed on scheduled runs.",
       requiresAcknowledgement: true,
     });
   }
