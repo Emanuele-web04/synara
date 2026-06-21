@@ -55,7 +55,9 @@ let threadShell: Option.Option<OrchestrationThreadShell> = Option.none();
 // When set, the orchestration dispatch mock fails on the matching command type so we
 // can exercise the failed-run / advance-after-dispatch paths.
 let failDispatchType: OrchestrationCommand["type"] | null = null;
-let dispatchHook: ((command: OrchestrationCommand) => Effect.Effect<void>) | null = null;
+let dispatchHook:
+  | ((command: OrchestrationCommand) => Effect.Effect<void, OrchestrationCommandInternalError>)
+  | null = null;
 
 function resetHarness() {
   dispatchedCommands.length = 0;
@@ -307,6 +309,42 @@ layer("AutomationService", (it) => {
       assert.strictEqual(threadCreate.envMode, "worktree");
       assert.strictEqual(threadCreate.worktreePath, "/tmp/automation-worktree");
       assert.strictEqual(threadCreate.associatedWorktreeBranch, createdWorktrees[0]?.newBranch);
+    }),
+  );
+
+  it.effect("rejects auto local checkout fallback without acknowledgement", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const created = yield* service.create(createInput("auto"));
+      const error = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
+
+      assert.match(error.message, /local checkout fallback/);
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type === "thread.create").length,
+        0,
+      );
+    }),
+  );
+
+  it.effect("allows acknowledged auto local checkout fallback", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const created = yield* service.create({
+        ...createInput("auto"),
+        acknowledgedRisks: ["local-checkout"],
+      });
+      yield* service.runNow({ automationId: created.id });
+
+      const threadCreate = dispatchedCommands.find((command) => command.type === "thread.create");
+      assert.strictEqual(threadCreate?.type, "thread.create");
+      if (threadCreate?.type !== "thread.create") {
+        assert.fail("Expected thread.create command.");
+      }
+      assert.strictEqual(threadCreate.envMode, "local");
     }),
   );
 
@@ -1448,6 +1486,64 @@ layer("AutomationService", (it) => {
       const reloaded = yield* service.list({ projectId });
       const definition = reloaded.definitions.find((entry) => entry.id === automationId);
       assert.strictEqual(definition?.enabled, false);
+    }),
+  );
+
+  it.effect("does not disable stopOnError when cancellation wins a dispatch failure race", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-cancel-wins-dispatch-fail");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+          stopOnError: true,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      dispatchHook = (command) =>
+        command.type === "thread.turn.start"
+          ? Effect.gen(function* () {
+              const runOption = yield* repository
+                .getRunByThreadId({ threadId: command.threadId })
+                .pipe(Effect.orDie);
+              const run = Option.getOrThrow(runOption);
+              yield* repository
+                .cancelRun({
+                  runId: run.id,
+                  now: "2026-06-16T10:00:30.000Z",
+                })
+                .pipe(Effect.orDie);
+              return yield* Effect.fail(
+                new OrchestrationCommandInternalError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  detail: "dispatch cancelled by test harness",
+                }),
+              );
+            })
+          : Effect.void;
+
+      const results = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      assert.strictEqual(
+        results.find((entry) => entry.run.automationId === automationId)?.run.status,
+        "cancelled",
+      );
+      const reloaded = yield* service.list({ projectId });
+      const definition = reloaded.definitions.find((entry) => entry.id === automationId);
+      const run = reloaded.runs.find((entry) => entry.automationId === automationId);
+      assert.strictEqual(definition?.enabled, true);
+      assert.strictEqual(run?.status, "cancelled");
     }),
   );
 

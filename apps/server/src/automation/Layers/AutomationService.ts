@@ -490,8 +490,17 @@ export const AutomationServiceLive = Layer.effect(
       project: OrchestrationProjectShell,
       runId: AutomationRunId,
     ): Effect.Effect<ThreadEnvironment, AutomationServiceError> => {
+      const requireLocalCheckoutAcknowledgement = () =>
+        definition.acknowledgedRisks.includes("local-checkout")
+          ? Effect.void
+          : Effect.fail(
+              new AutomationServiceError({
+                message: "Automation local checkout fallback requires an explicit acknowledgement.",
+              }),
+            );
+
       if (definition.worktreeMode === "local") {
-        return Effect.succeed(localThreadEnvironment);
+        return requireLocalCheckoutAcknowledgement().pipe(Effect.as(localThreadEnvironment));
       }
 
       return git.statusDetails(project.workspaceRoot).pipe(
@@ -505,7 +514,7 @@ export const AutomationServiceLive = Layer.effect(
                       "Automation requires a Git worktree, but the project is not on a branch.",
                   }),
                 )
-              : Effect.succeed(localThreadEnvironment);
+              : requireLocalCheckoutAcknowledgement().pipe(Effect.as(localThreadEnvironment));
           }
 
           const branch = makeAutomationBranchName(definition, runId);
@@ -532,7 +541,7 @@ export const AutomationServiceLive = Layer.effect(
         }),
         Effect.catch((error) =>
           definition.worktreeMode === "auto"
-            ? Effect.succeed(localThreadEnvironment)
+            ? requireLocalCheckoutAcknowledgement().pipe(Effect.as(localThreadEnvironment))
             : Effect.fail(error),
         ),
       );
@@ -727,6 +736,10 @@ export const AutomationServiceLive = Layer.effect(
                 finishedAt: failedAt,
               })
               .pipe(Effect.mapError(toServiceError("Failed to update automation run.")));
+            if (failed.status !== "failed") {
+              yield* publish({ type: "run-upserted", run: failed });
+              return yield* Effect.fail(error);
+            }
             const withResult = yield* automationRepository
               .markRunResult({
                 id: failed.id,
@@ -763,11 +776,17 @@ export const AutomationServiceLive = Layer.effect(
       trigger: AutomationRun["trigger"],
       scheduledFor: string,
       now: string,
+      options: { readonly threadIdOverride?: ThreadId | null } = {},
     ) =>
       Effect.gen(function* () {
         const runId = makeAutomationRunId();
         const ids = deriveAutomationRunIds(runId);
-        const threadId = definition.mode === "heartbeat" ? definition.targetThreadId : ids.threadId;
+        const threadId =
+          "threadIdOverride" in options
+            ? options.threadIdOverride
+            : definition.mode === "heartbeat"
+              ? definition.targetThreadId
+              : ids.threadId;
         const run = yield* automationRepository
           .createRun({
             id: runId,
@@ -1220,11 +1239,16 @@ export const AutomationServiceLive = Layer.effect(
         }
         const now = isoNow();
         const { run, inserted } = yield* createPendingRun(definition, { type: "manual" }, now, now);
-        if (inserted) {
-          yield* automationRepository
-            .incrementDefinitionIterationCount({ id: definition.id, now })
-            .pipe(Effect.mapError(toServiceError("Failed to update automation iteration count.")));
+        if (!inserted) {
+          return yield* Effect.fail(
+            new AutomationServiceError({
+              message: "This thread already has a run in progress.",
+            }),
+          );
         }
+        yield* automationRepository
+          .incrementDefinitionIterationCount({ id: definition.id, now })
+          .pipe(Effect.mapError(toServiceError("Failed to update automation iteration count.")));
         return yield* dispatchRun(definition, run, now);
       });
 
@@ -1303,6 +1327,7 @@ export const AutomationServiceLive = Layer.effect(
             { type: "scheduled" },
             scheduledFor,
             now,
+            { threadIdOverride: null },
           );
           if (inserted) {
             yield* markScheduledRunSkipped(run, "Scheduled occurrence was missed.", now);
@@ -1330,6 +1355,7 @@ export const AutomationServiceLive = Layer.effect(
               { type: "scheduled" },
               scheduledFor,
               now,
+              { threadIdOverride: null },
             );
             if (inserted) {
               yield* markScheduledRunSkipped(run, reason, now);

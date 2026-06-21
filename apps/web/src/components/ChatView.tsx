@@ -8354,15 +8354,16 @@ export default function ChatView({
     }
 
     const { snapshot, trigger } = resolveActiveComposerTrigger();
+    const menuIsActive = composerMenuOpenRef.current || trigger !== null;
     if (
       key === "Enter" &&
       !event.shiftKey &&
+      !menuIsActive &&
       extractChatAutomationInvocation(snapshot.value) !== null
     ) {
       void onSend(undefined, event.metaKey || event.ctrlKey ? "steer" : "queue");
       return true;
     }
-    const menuIsActive = composerMenuOpenRef.current || trigger !== null;
 
     if (menuIsActive && isLocalFolderBrowserOpen) {
       if (key === "ArrowDown") {

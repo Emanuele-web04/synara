@@ -400,7 +400,7 @@ const makeAutomationRepository = Effect.gen(function* () {
           created_at,
           updated_at
         )
-        VALUES (
+        SELECT
           ${run.id},
           ${run.automationId},
           ${run.projectId},
@@ -422,7 +422,13 @@ const makeAutomationRepository = Effect.gen(function* () {
           ${run.permissionSnapshot},
           ${run.createdAt},
           ${run.updatedAt}
-        )
+        WHERE ${run.threadId} IS NULL
+           OR NOT EXISTS (
+             SELECT 1
+             FROM automation_runs
+             WHERE thread_id = ${run.threadId}
+               AND status IN ('pending', 'claimed', 'running', 'waiting-for-approval')
+           )
       `,
   });
 
@@ -978,6 +984,19 @@ const makeAutomationRepository = Effect.gen(function* () {
           ),
         onSome: toRun,
       });
+    const decodeInsertedOrActiveThread = (rowOption: Option.Option<AutomationRunDbRow>) =>
+      Option.match(rowOption, {
+        onSome: toRun,
+        onNone: () =>
+          input.threadId
+            ? getRunRowByThread({ threadId: input.threadId }).pipe(
+                Effect.mapError(
+                  toPersistenceSqlError("AutomationRepository.createRun:selectActiveThread"),
+                ),
+                Effect.flatMap(decodeInserted),
+              )
+            : decodeInserted(rowOption),
+      });
     const inserted = insertRun({
       ...run,
       turnId: null,
@@ -994,7 +1013,7 @@ const makeAutomationRepository = Effect.gen(function* () {
             scheduledFor: input.scheduledFor,
           }).pipe(
             Effect.mapError(toPersistenceSqlError("AutomationRepository.createRun:select")),
-            Effect.flatMap(decodeInserted),
+            Effect.flatMap(decodeInsertedOrActiveThread),
           ),
         ),
       );
@@ -1003,7 +1022,7 @@ const makeAutomationRepository = Effect.gen(function* () {
       Effect.flatMap(() =>
         getRunRowById({ id: input.id }).pipe(
           Effect.mapError(toPersistenceSqlError("AutomationRepository.createRun:select")),
-          Effect.flatMap(decodeInserted),
+          Effect.flatMap(decodeInsertedOrActiveThread),
         ),
       ),
     );
