@@ -294,7 +294,7 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
-  it.effect("returns the most recent active run for a thread", () =>
+  it.effect("admits at most one active run for a thread", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;
       yield* runMigrations();
@@ -316,7 +316,7 @@ layer("AutomationRepository", (it) => {
         permissionSnapshot,
         now: "2026-06-16T10:00:00.000Z",
       });
-      const newer = yield* repository.createRun({
+      const blocked = yield* repository.createRun({
         id: AutomationRunId.makeUnsafe("run-by-thread-new"),
         automationId: AutomationId.makeUnsafe("automation-by-thread"),
         projectId: ProjectId.makeUnsafe("project-by-thread"),
@@ -326,11 +326,8 @@ layer("AutomationRepository", (it) => {
         permissionSnapshot,
         now: "2026-06-16T10:01:00.000Z",
       });
-      yield* repository.markRunSkipped({
-        id: newer.id,
-        reason: "Target thread already has an automation run in progress.",
-        finishedAt: "2026-06-16T10:01:00.000Z",
-      });
+      assert.strictEqual(blocked.id, AutomationRunId.makeUnsafe("run-by-thread-old"));
+      assert.strictEqual(yield* repository.countActiveRunsForThread({ threadId }), 1);
 
       const found = yield* repository.getRunByThreadId({ threadId });
       assert.isTrue(Option.isSome(found));
@@ -338,6 +335,25 @@ layer("AutomationRepository", (it) => {
         Option.getOrThrow(found).id,
         AutomationRunId.makeUnsafe("run-by-thread-old"),
       );
+
+      yield* repository.markRunSucceeded({
+        id: AutomationRunId.makeUnsafe("run-by-thread-old"),
+        turnId: null,
+        result: null,
+        finishedAt: "2026-06-16T10:02:00.000Z",
+      });
+      const newer = yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-by-thread-new"),
+        automationId: AutomationId.makeUnsafe("automation-by-thread"),
+        projectId: ProjectId.makeUnsafe("project-by-thread"),
+        threadId,
+        trigger: { type: "manual" },
+        scheduledFor: "2026-06-16T10:05:00.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:03:00.000Z",
+      });
+      assert.strictEqual(newer.id, AutomationRunId.makeUnsafe("run-by-thread-new"));
+      assert.strictEqual(yield* repository.countActiveRunsForThread({ threadId }), 1);
 
       const missing = yield* repository.getRunByThreadId({
         threadId: ThreadId.makeUnsafe("thread-none"),
@@ -541,6 +557,29 @@ layer("AutomationRepository", (it) => {
       assert.strictEqual(reloaded.misfirePolicy, "coalesce");
       assert.deepStrictEqual(reloaded.acknowledgedRisks, []);
       assert.strictEqual(reloaded.iterationCount, 0);
+    }),
+  );
+
+  it.effect("preserves explicit null maxRuntimeSeconds on create", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-null-runtime"),
+        input: {
+          ...createInputForProject("project-null-runtime"),
+          maxRuntimeSeconds: null,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const reloaded = Option.getOrThrow(
+        yield* repository.getDefinitionById({
+          id: AutomationId.makeUnsafe("automation-null-runtime"),
+        }),
+      );
+      assert.strictEqual(reloaded.maxRuntimeSeconds, null);
     }),
   );
 

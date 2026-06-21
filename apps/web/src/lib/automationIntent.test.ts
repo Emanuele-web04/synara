@@ -207,6 +207,29 @@ describe("parseChatAutomationIntent", () => {
     });
   });
 
+  it("parses meridiem times instead of falling back to the default daily time", () => {
+    expect(parseChatAutomationIntent("/automation daily at 9pm check the queue")).toMatchObject({
+      cadenceLabel: "Daily at 21:00",
+      prompt: "check the queue",
+      schedule: { type: "daily", timeOfDay: "21:00" },
+    });
+
+    expect(parseChatAutomationIntent("/automation weekdays at 12am check logs")).toMatchObject({
+      cadenceLabel: "Weekdays at 00:00",
+      prompt: "check logs",
+      schedule: { type: "weekdays", timeOfDay: "00:00" },
+    });
+  });
+
+  it("does not default to 09:00 when an explicit time clause is unsupported", () => {
+    expect(parseChatAutomationIntent("/automation daily at bedtime check the queue")).toBeNull();
+  });
+
+  it("requires a real task after removing the schedule scaffold", () => {
+    expect(parseChatAutomationInvocation("every 5m")).toBeNull();
+    expect(parseChatAutomationIntent("/automation daily at 9pm")).toBeNull();
+  });
+
   it("strips weekday and weekly cadence text from deterministic prompts", () => {
     expect(parseChatAutomationIntent("/automation every Monday at 9 check CI")).toMatchObject({
       cadenceLabel: "Weekly at 09:00",

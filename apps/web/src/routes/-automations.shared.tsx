@@ -289,6 +289,17 @@ function timezoneSuffix(schedule: AutomationSchedule): string {
   return " UTC";
 }
 
+function formatIntervalSchedule(seconds: number): string {
+  return seconds % 60 === 0 ? `Every ${seconds / 60} min` : `Every ${seconds} sec`;
+}
+
+function formatIntervalCadence(seconds: number): string {
+  if (seconds === 3600) return "Hourly";
+  if (seconds % 3600 === 0) return `Every ${seconds / 3600}h`;
+  if (seconds % 60 === 0) return `Every ${seconds / 60}m`;
+  return `Every ${seconds}s`;
+}
+
 export function formatSchedule(schedule: AutomationSchedule): string {
   switch (schedule.type) {
     case "manual":
@@ -296,9 +307,7 @@ export function formatSchedule(schedule: AutomationSchedule): string {
     case "once":
       return `Once ${formatDateTime(schedule.runAt)}`;
     case "interval":
-      return schedule.everySeconds < 60
-        ? `Every ${schedule.everySeconds} sec`
-        : `Every ${Math.max(1, Math.round(schedule.everySeconds / 60))} min`;
+      return formatIntervalSchedule(schedule.everySeconds);
     case "daily":
       return `Daily ${schedule.timeOfDay}${timezoneSuffix(schedule)}`;
     case "weekdays":
@@ -324,12 +333,8 @@ export function formatCadence(schedule: AutomationSchedule): string {
       return "Manual";
     case "once":
       return formatDateTime(schedule.runAt);
-    case "interval": {
-      if (schedule.everySeconds === 3600) return "Hourly";
-      if (schedule.everySeconds < 60) return `Every ${schedule.everySeconds}s`;
-      const minutes = Math.max(1, Math.round(schedule.everySeconds / 60));
-      return minutes % 60 === 0 ? `Every ${minutes / 60}h` : `Every ${minutes}m`;
-    }
+    case "interval":
+      return formatIntervalCadence(schedule.everySeconds);
     case "daily":
       return `Daily at ${formatClockTime(schedule.timeOfDay)}`;
     case "weekdays":

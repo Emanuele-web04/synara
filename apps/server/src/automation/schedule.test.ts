@@ -97,6 +97,15 @@ describe("computeNextAutomationRunAt", () => {
     ).toBe("2026-06-08T09:00:00.000Z");
   });
 
+  it("treats stepped cron day wildcards as restricted day fields", () => {
+    expect(
+      computeNextAutomationRunAt(
+        { type: "cron", expression: "0 9 1 * */2", timezone: "UTC" },
+        "2026-06-02T10:00:00.000Z",
+      ),
+    ).toBe("2026-06-04T09:00:00.000Z");
+  });
+
   it("finds sparse cron schedules without scanning every minute", () => {
     expect(
       computeNextAutomationRunAt(

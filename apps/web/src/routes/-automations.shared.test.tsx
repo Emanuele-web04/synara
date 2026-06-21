@@ -24,6 +24,8 @@ import {
   canCancelAutomationRun,
   createInputFromForm,
   datetimeLocalFromIso,
+  formatCadence,
+  formatSchedule,
   formFromDefinition,
   isoFromDatetimeLocal,
   isFormSubmittable,
@@ -217,6 +219,13 @@ describe("automation shared route helpers", () => {
     expect(form.intervalAmount).toBe("90");
     expect(form.intervalUnit).toBe("seconds");
     expect(scheduleFromForm(form)).toEqual({ type: "interval", everySeconds: 90 });
+  });
+
+  it("labels non-minute interval cadences without rounding", () => {
+    const schedule = { type: "interval", everySeconds: 90 } as const;
+
+    expect(formatSchedule(schedule)).toBe("Every 90 sec");
+    expect(formatCadence(schedule)).toBe("Every 90s");
   });
 
   it("refreshes the default model when the current model came from the old project", () => {
