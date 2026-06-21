@@ -1163,6 +1163,27 @@ export function groupSidebarThreadsByProjectId(
   return byProjectId;
 }
 
+export function partitionSidebarThreadsByProjectIds<
+  T extends Pick<SidebarThreadSummary, "projectId">,
+>(
+  threads: readonly T[],
+  studioProjectIds: ReadonlySet<ProjectId>,
+): {
+  readonly studioThreads: T[];
+  readonly nonStudioThreads: T[];
+} {
+  const studioThreads: T[] = [];
+  const nonStudioThreads: T[] = [];
+  for (const thread of threads) {
+    if (studioProjectIds.has(thread.projectId)) {
+      studioThreads.push(thread);
+    } else {
+      nonStudioThreads.push(thread);
+    }
+  }
+  return { studioThreads, nonStudioThreads };
+}
+
 // Centralizes the expensive per-project row derivation so Sidebar.tsx can mostly orchestrate UI state.
 export function deriveSidebarProjectData(input: {
   projects: readonly Pick<Project, "id" | "cwd" | "expanded">[];

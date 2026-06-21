@@ -62,6 +62,22 @@ import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackp
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
 const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
 
+// Relative subdirectories scaffolded under a freshly created container workspace root.
+// General chats get a minimal work/outputs split; Studio mirrors the Claude `~/Documents/Claude`
+// Outbox layout so generated content lands in predictable folders.
+const CHAT_WORKSPACE_SUBDIRECTORIES = ["work", "outputs"] as const;
+const STUDIO_WORKSPACE_SUBDIRECTORIES = [
+  "Inbox",
+  "Context",
+  "Logs",
+  "Skills",
+  "Outbox/Content",
+  "Outbox/Daily",
+  "Outbox/Notion",
+  "Outbox/TikTok",
+  "Outbox/YouTube",
+] as const;
+
 interface ProcessTableRow {
   readonly pid: number;
   readonly ppid: number;
@@ -402,28 +418,41 @@ export const makeWsRpcLayer = () =>
           return normalizedWorkspaceRoot;
         }
       });
-      const prepareChatWorkspaceRoot = Effect.fnUntraced(function* (workspaceRoot: string) {
-        for (const dirname of ["work", "outputs"]) {
+      // One mkdir loop shared by every container kind; the relative directory set is the
+      // only thing that varies (general chats scaffold work/outputs, Studio mirrors the
+      // Claude Outbox layout). Keeping a single implementation keeps error handling and
+      // idempotency identical across kinds.
+      const prepareWorkspaceSubdirectories = Effect.fnUntraced(function* (
+        workspaceRoot: string,
+        relativeDirnames: readonly string[],
+      ) {
+        for (const dirname of relativeDirnames) {
           const childPath = path.join(workspaceRoot, dirname);
           yield* fileSystem.makeDirectory(childPath, { recursive: true }).pipe(
             Effect.mapError(
               (cause) =>
                 new WsRpcError({
-                  message: `Failed to create chat workspace directory: ${childPath}`,
+                  message: `Failed to create workspace directory: ${childPath}`,
                   cause,
                 }),
             ),
           );
         }
       });
+      const prepareChatWorkspaceRoot = (workspaceRoot: string) =>
+        prepareWorkspaceSubdirectories(workspaceRoot, CHAT_WORKSPACE_SUBDIRECTORIES);
+      const prepareStudioWorkspaceRoot = (workspaceRoot: string) =>
+        prepareWorkspaceSubdirectories(workspaceRoot, STUDIO_WORKSPACE_SUBDIRECTORIES);
 
       const normalizeDispatchCommand = makeDispatchCommandNormalizer<WsRpcError>({
         attachmentsDir: config.attachmentsDir,
         chatWorkspaceRoot: config.chatWorkspaceRoot,
+        studioWorkspaceRoot: config.studioWorkspaceRoot,
         fileSystem,
         path,
         canonicalizeProjectWorkspaceRoot,
         prepareChatWorkspaceRoot,
+        prepareStudioWorkspaceRoot,
       });
 
       const importThread = makeImportThreadHandler({
@@ -502,6 +531,7 @@ export const makeWsRpcLayer = () =>
           cwd: config.cwd,
           homeDir: config.homeDir,
           chatWorkspaceRoot: config.chatWorkspaceRoot,
+          studioWorkspaceRoot: config.studioWorkspaceRoot,
           worktreesDir: config.worktreesDir,
           keybindingsConfigPath: config.keybindingsConfigPath,
           keybindings: keybindingsConfig.keybindings,

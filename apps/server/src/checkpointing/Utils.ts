@@ -1,5 +1,12 @@
 import { Encoding } from "effect";
-import { CheckpointRef, MessageId, ProjectId, type ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  MessageId,
+  ProjectId,
+  type ProjectKind,
+  type ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import { resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
 
 export const CHECKPOINT_REFS_PREFIX = "refs/t3/checkpoints";
@@ -33,7 +40,7 @@ export function resolveThreadWorkspaceCwd(input: {
   };
   readonly projects: ReadonlyArray<{
     readonly id: ProjectId;
-    readonly kind?: "project" | "chat" | undefined;
+    readonly kind?: ProjectKind | undefined;
     readonly workspaceRoot: string;
   }>;
 }): string | undefined {

@@ -2,6 +2,7 @@ import type {
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
+  ProjectKind,
   ThreadMarker,
 } from "@t3tools/contracts";
 import {
@@ -99,7 +100,7 @@ function validateProjectPinLimit(input: {
   >;
   readonly readModel: OrchestrationReadModel;
   readonly projectId: OrchestrationEvent["aggregateId"];
-  readonly nextKind: "project" | "chat";
+  readonly nextKind: ProjectKind;
   readonly nextDeletedAt?: string | null;
   readonly wasPinned?: boolean;
   readonly staleProjectIds?: ReadonlySet<string>;

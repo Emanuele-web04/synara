@@ -46,6 +46,7 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly cwd: string;
   readonly homeDir: string;
   readonly chatWorkspaceRoot: string;
+  readonly studioWorkspaceRoot: string;
   readonly baseDir: string;
   readonly staticDir: string | undefined;
   readonly devUrl: URL | undefined;
@@ -96,6 +97,14 @@ export function resolveDefaultChatWorkspaceRoot(input: {
   return pathApi.join(homeDir, "Documents", "Synara");
 }
 
+export function resolveDefaultStudioWorkspaceRoot(input: {
+  readonly homeDir: string;
+  readonly platform?: NodeJS.Platform;
+}): string {
+  const pathApi = (input.platform ?? process.platform) === "win32" ? pathWin32 : pathPosix;
+  return pathApi.join(resolveDefaultChatWorkspaceRoot(input), "Studio");
+}
+
 /**
  * ServerConfig - Service tag for server runtime configuration.
  */
@@ -123,6 +132,7 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
           cwd,
           homeDir: OS.homedir(),
           chatWorkspaceRoot: resolveDefaultChatWorkspaceRoot({ homeDir: OS.homedir() }),
+          studioWorkspaceRoot: resolveDefaultStudioWorkspaceRoot({ homeDir: OS.homedir() }),
           baseDir,
           ...derivedPaths,
           mode: "web",

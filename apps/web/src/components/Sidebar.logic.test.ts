@@ -25,6 +25,7 @@ import {
   getVisibleThreadsForProject,
   getProjectSortTimestamp,
   hasUnseenCompletion,
+  partitionSidebarThreadsByProjectIds,
   isLatestPinnedThreadMutation,
   isLoopbackHostname,
   isDuplicateProjectCreateError,
@@ -1304,6 +1305,27 @@ function makeSidebarThreadSummary(
     ...overrides,
   };
 }
+
+describe("partitionSidebarThreadsByProjectIds", () => {
+  it("splits Studio threads from the regular Threads surface by project id", () => {
+    const projectThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-project"),
+      projectId: ProjectId.makeUnsafe("project-app"),
+    });
+    const studioThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-studio"),
+      projectId: ProjectId.makeUnsafe("project-studio"),
+    });
+
+    const partitioned = partitionSidebarThreadsByProjectIds(
+      [projectThread, studioThread],
+      new Set([ProjectId.makeUnsafe("project-studio")]),
+    );
+
+    expect(partitioned.nonStudioThreads.map((thread) => thread.id)).toEqual(["thread-project"]);
+    expect(partitioned.studioThreads.map((thread) => thread.id)).toEqual(["thread-studio"]);
+  });
+});
 
 describe("deriveSidebarProjectData", () => {
   it("shows split member threads as normal project rows", () => {

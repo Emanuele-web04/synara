@@ -935,6 +935,7 @@ function SettingsRouteView() {
       ? ["Thread sort order"]
       : []),
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
+    ...(settings.showStudioSection !== defaults.showStudioSection ? ["Studio section"] : []),
     ...(settings.showWorkspaceSection !== defaults.showWorkspaceSection
       ? ["Workspace section"]
       : []),
@@ -1661,6 +1662,14 @@ function SettingsRouteView() {
             "Show the standalone Chats list in the sidebar footer (chats not tied to a project).",
           resetLabel: "chats section",
           ariaLabel: "Show the Chats section in the sidebar",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "showStudioSection",
+          title: "Studio",
+          description: "Show the Studio tab in the sidebar switcher.",
+          resetLabel: "studio section",
+          ariaLabel: "Show the Studio section in the sidebar",
         })}
 
         {renderBooleanSettingRow({

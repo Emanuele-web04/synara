@@ -126,6 +126,7 @@ function persistBinaryAttachment(input: {
 export interface DispatchCommandNormalizerOptions<E> {
   readonly attachmentsDir: string;
   readonly chatWorkspaceRoot?: string;
+  readonly studioWorkspaceRoot?: string;
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
   readonly canonicalizeProjectWorkspaceRoot: (
@@ -133,6 +134,7 @@ export interface DispatchCommandNormalizerOptions<E> {
     options?: { readonly createIfMissing?: boolean },
   ) => Effect.Effect<string, E>;
   readonly prepareChatWorkspaceRoot?: (workspaceRoot: string) => Effect.Effect<void, E>;
+  readonly prepareStudioWorkspaceRoot?: (workspaceRoot: string) => Effect.Effect<void, E>;
 }
 
 export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormalizerOptions<E>) {
@@ -155,6 +157,25 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
     }
     return options.prepareChatWorkspaceRoot(workspaceRoot);
   };
+  const maybePrepareStudioWorkspaceRoot = (
+    command: Extract<
+      ClientOrchestrationCommand,
+      { type: "project.create" | "project.meta.update" }
+    >,
+    workspaceRoot: string,
+  ) => {
+    if (
+      command.kind !== "studio" ||
+      command.createWorkspaceRootIfMissing !== true ||
+      !options.studioWorkspaceRoot ||
+      !options.prepareStudioWorkspaceRoot ||
+      (!isWorkspaceRootWithin(workspaceRoot, options.studioWorkspaceRoot) &&
+        !workspaceRootsEqual(workspaceRoot, options.studioWorkspaceRoot))
+    ) {
+      return Effect.void;
+    }
+    return options.prepareStudioWorkspaceRoot(workspaceRoot);
+  };
 
   return Effect.fnUntraced(function* (input: { readonly command: ClientOrchestrationCommand }) {
     if (input.command.type === "project.create") {
@@ -165,6 +186,7 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
         },
       );
       yield* maybePrepareChatWorkspaceRoot(input.command, workspaceRoot);
+      yield* maybePrepareStudioWorkspaceRoot(input.command, workspaceRoot);
       return {
         ...input.command,
         workspaceRoot,
@@ -180,6 +202,7 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
         },
       );
       yield* maybePrepareChatWorkspaceRoot(input.command, workspaceRoot);
+      yield* maybePrepareStudioWorkspaceRoot(input.command, workspaceRoot);
       return {
         ...input.command,
         workspaceRoot,

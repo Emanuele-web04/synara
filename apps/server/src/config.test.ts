@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { resolveDefaultChatWorkspaceRoot } from "./config";
+import { resolveDefaultChatWorkspaceRoot, resolveDefaultStudioWorkspaceRoot } from "./config";
 
 describe("resolveDefaultChatWorkspaceRoot", () => {
   it("places the managed chat workspace under Documents/Synara on macOS and Linux", () => {
@@ -44,5 +44,31 @@ describe("resolveDefaultChatWorkspaceRoot", () => {
     } finally {
       Object.defineProperty(process, "platform", originalPlatformDescriptor!);
     }
+  });
+});
+
+describe("resolveDefaultStudioWorkspaceRoot", () => {
+  it("places the Studio workspace under Documents/Synara/Studio on macOS and Linux", () => {
+    expect(
+      resolveDefaultStudioWorkspaceRoot({
+        homeDir: "/Users/tester",
+        platform: "darwin",
+      }),
+    ).toBe("/Users/tester/Documents/Synara/Studio");
+    expect(
+      resolveDefaultStudioWorkspaceRoot({
+        homeDir: "/home/tester",
+        platform: "linux",
+      }),
+    ).toBe("/home/tester/Documents/Synara/Studio");
+  });
+
+  it("uses Windows separators when deriving the Studio workspace on Windows", () => {
+    expect(
+      resolveDefaultStudioWorkspaceRoot({
+        homeDir: "C:\\Users\\tester",
+        platform: "win32",
+      }),
+    ).toBe("C:\\Users\\tester\\Documents\\Synara\\Studio");
   });
 });

@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 
 import { ensureHomeChatProject } from "../lib/chatProjects";
-import type { NewThreadOptions } from "../lib/threadBootstrap";
+import { startContainerChat, type StartContainerChatResult } from "../lib/startContainerChat";
 import { useWorkspaceStore } from "../workspaceStore";
 import { useHandleNewThread } from "./useHandleNewThread";
 
@@ -11,7 +11,7 @@ export function useHandleNewChat() {
   const { handleNewThread } = useHandleNewThread();
 
   const handleNewChat = useCallback(
-    async (options?: { fresh?: boolean }): Promise<{ ok: true } | { ok: false; error: string }> => {
+    async (options?: { fresh?: boolean }): Promise<StartContainerChatResult> => {
       if (!homeDir) {
         return {
           ok: false,
@@ -19,31 +19,12 @@ export function useHandleNewChat() {
         };
       }
 
-      const projectId = await ensureHomeChatProject({ homeDir, chatWorkspaceRoot });
-      if (!projectId) {
-        return {
-          ok: false,
-          error: "Unable to prepare a new chat.",
-        };
-      }
-
-      try {
-        const threadOptions: NewThreadOptions | undefined =
-          options?.fresh === true
-            ? {
-                fresh: true,
-                envMode: "local",
-                worktreePath: null,
-              }
-            : undefined;
-        await handleNewThread(projectId, threadOptions);
-        return { ok: true };
-      } catch (error) {
-        return {
-          ok: false,
-          error: error instanceof Error ? error.message : "Unable to prepare a new chat.",
-        };
-      }
+      return startContainerChat({
+        ensureProjectId: () => ensureHomeChatProject({ homeDir, chatWorkspaceRoot }),
+        handleNewThread,
+        fresh: options?.fresh,
+        errorLabel: "Unable to prepare a new chat.",
+      });
     },
     [chatWorkspaceRoot, handleNewThread, homeDir],
   );

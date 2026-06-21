@@ -1238,6 +1238,7 @@ function EventRouter() {
         setServerWorkspacePaths({
           homeDir: payload.homeDir,
           chatWorkspaceRoot: payload.chatWorkspaceRoot,
+          studioWorkspaceRoot: payload.studioWorkspaceRoot,
         });
         await ensureScopedSubscriptions();
         if (disposed) {
