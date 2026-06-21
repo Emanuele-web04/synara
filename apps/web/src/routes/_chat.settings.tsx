@@ -1339,7 +1339,6 @@ function SettingsRouteView() {
           api: api.orchestration,
           threadIds: linkedArchivedThreadIds,
           removeDeletedThreadFromClientState,
-          syncServerShellSnapshot,
         });
 
         await removeWorktreeMutation.mutateAsync({
@@ -1366,12 +1365,7 @@ function SettingsRouteView() {
         });
       }
     },
-    [
-      queryClient,
-      removeDeletedThreadFromClientState,
-      removeWorktreeMutation,
-      syncServerShellSnapshot,
-    ],
+    [queryClient, removeDeletedThreadFromClientState, removeWorktreeMutation],
   );
 
   const unarchiveThread = useCallback(async (threadId: ThreadId) => {
@@ -1412,7 +1406,6 @@ function SettingsRouteView() {
           api: api.orchestration,
           threadId,
           removeDeletedThreadFromClientState,
-          syncServerShellSnapshot,
         });
         toastManager.add({
           type: "success",
@@ -1427,7 +1420,7 @@ function SettingsRouteView() {
         });
       }
     },
-    [removeDeletedThreadFromClientState, syncServerShellSnapshot],
+    [removeDeletedThreadFromClientState],
   );
 
   const handleArchivedThreadContextMenu = useCallback(

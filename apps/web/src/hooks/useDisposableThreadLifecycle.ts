@@ -12,7 +12,6 @@ import { useTerminalStateStore } from "../terminalStateStore";
 import { getThreadFromState } from "../threadDerivation";
 
 export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): void {
-  const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const clearDraftThread = useComposerDraftStore((store) => store.clearDraftThread);
   const clearTerminalState = useTerminalStateStore((store) => store.clearTerminalState);
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
@@ -88,11 +87,9 @@ export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): v
               .catch(() => false);
             if (deletedOnServer) {
               void reconcileDeletedThreadFromClient({
-                api: api.orchestration,
                 threadId: disposableThreadId,
                 removeDeletedThreadFromClientState:
                   useStore.getState().removeDeletedThreadFromClientState,
-                syncServerShellSnapshot,
               });
             }
           }
@@ -112,7 +109,6 @@ export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): v
     clearTerminalState,
     clearTemporaryThread,
     removeThreadFromSplitViews,
-    syncServerShellSnapshot,
     temporaryThreadIds,
   ]);
 }
