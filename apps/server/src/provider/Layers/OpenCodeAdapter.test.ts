@@ -1229,6 +1229,40 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.connectCalls[0]).toMatchObject({ cwd });
   });
 
+  it("uses the persisted resume cursor cwd when resuming OpenCode sessions", async () => {
+    const runtime = createMockOpenCodeRuntime();
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        return yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-resume-cwd"),
+          runtimeMode: "full-access",
+          resumeCursor: { openCodeSessionId: "existing-session-1", cwd: "/repo/resume" },
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.createCalls).toEqual([]);
+    expect(runtime.connectCalls).toHaveLength(1);
+    expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/resume" });
+    expect(result.cwd).toBe("/repo/resume");
+    expect(result.resumeCursor).toMatchObject({
+      openCodeSessionId: "existing-session-1",
+      cwd: "/repo/resume",
+    });
+  });
+
   it("declines inactive OpenCode native fork when source and target cwd differ", async () => {
     const runtime = createMockOpenCodeRuntime();
 
@@ -1265,7 +1299,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.connectCalls).toEqual([]);
   });
 
-  it("forks inactive OpenCode source sessions through the matching source cwd", async () => {
+  it("defaults inactive OpenCode native forks to the source cwd", async () => {
     const runtime = createMockOpenCodeRuntime();
 
     const result = await Effect.runPromise(
@@ -1280,7 +1314,6 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId: asThreadId("thread-target"),
           sourceResumeCursor: { openCodeSessionId: "source-session-1" },
           sourceCwd: "/repo/source",
-          cwd: "/repo/source",
           runtimeMode: "full-access",
         });
       }).pipe(

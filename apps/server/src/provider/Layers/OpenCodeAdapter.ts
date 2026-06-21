@@ -3593,7 +3593,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             adapterConfig.providerOptionsKey === "opencode"
               ? input.providerOptions?.opencode?.experimentalWebSockets
               : undefined;
-          const directory = input.cwd ?? serverConfig.cwd;
+          const resumeDirectory = extractResumeCwd(input.resumeCursor);
+          const directory = input.cwd ?? resumeDirectory ?? serverConfig.cwd;
           const initialParsedModel =
             input.modelSelection?.provider === adapterConfig.provider
               ? parseOpenCodeModelSlug(input.modelSelection.model)
@@ -4130,12 +4131,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const binaryPath = providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
           const serverUrl = providerOptions?.serverUrl?.trim();
           const serverPassword = providerOptions?.serverPassword?.trim();
-          const targetDirectory = input.cwd ?? sourceContext?.directory ?? serverConfig.cwd;
-          const sourceDirectory =
+          const persistedSourceDirectory =
             sourceContext?.directory ??
             input.sourceCwd ??
-            extractResumeCwd(input.sourceResumeCursor) ??
-            targetDirectory;
+            extractResumeCwd(input.sourceResumeCursor);
+          const targetDirectory = input.cwd ?? persistedSourceDirectory ?? serverConfig.cwd;
+          const sourceDirectory = persistedSourceDirectory ?? targetDirectory;
           if (sourceDirectory !== targetDirectory) {
             return yield* new ProviderAdapterValidationError({
               provider,
