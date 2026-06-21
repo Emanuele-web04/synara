@@ -3429,15 +3429,20 @@ export default function Sidebar() {
 
       const deletedIds = new Set<ThreadId>(ids);
       const successfullyDeletedIds: ThreadId[] = [];
-      for (const id of ids) {
-        await deleteThread(id, { deletedThreadIds: deletedIds, reconcileDeletedThread: false });
-        successfullyDeletedIds.push(id);
+      try {
+        for (const id of ids) {
+          await deleteThread(id, { deletedThreadIds: deletedIds, reconcileDeletedThread: false });
+          successfullyDeletedIds.push(id);
+        }
+      } finally {
+        if (successfullyDeletedIds.length > 0) {
+          void reconcileDeletedThreadsFromClient({
+            threadIds: successfullyDeletedIds,
+            removeDeletedThreadFromClientState:
+              useStore.getState().removeDeletedThreadFromClientState,
+          });
+        }
       }
-      void reconcileDeletedThreadsFromClient({
-        threadIds: successfullyDeletedIds,
-        removeDeletedThreadFromClientState:
-          useStore.getState().removeDeletedThreadFromClientState,
-      });
       removeFromSelection(ids);
     },
     [

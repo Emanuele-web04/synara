@@ -4083,7 +4083,8 @@ export function applyShellEvent(state: AppState, event: OrchestrationShellStream
       return commitThreadProjection(nextState, event.thread.id);
     }
     case "thread-removed":
-      return removeDeletedThreadFromClientState(state, event.threadId);
+      // Shell removals can be retryable draft rollbacks; explicit delete reconciliation owns tombstones.
+      return removeThreadState(state, event.threadId);
   }
 }
 

@@ -2993,7 +2993,7 @@ describe("store read model sync", () => {
     expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
   });
 
-  it("keeps a shell-removed thread hidden when a stale shell snapshot includes it", () => {
+  it("does not tombstone shell-only removals so rollback draft ids can rehydrate", () => {
     const threadId = ThreadId.makeUnsafe("thread-shell-removed");
     const initialState = syncServerReadModel(
       makeState(makeThread()),
@@ -3015,7 +3015,7 @@ describe("store read model sync", () => {
       makeShellSnapshot({
         id: threadId,
         projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Stale shell removed thread",
+        title: "Rehydrated shell removed thread",
         modelSelection: {
           provider: "codex",
           model: "gpt-5.3-codex",
@@ -3038,10 +3038,10 @@ describe("store read model sync", () => {
       }),
     );
 
-    expect(removedState.deletedThreadIdsById?.[threadId]).toBe(true);
-    expect(next.threads).toHaveLength(0);
-    expect(next.threadIds).not.toContain(threadId);
-    expect(next.threadShellById?.[threadId]).toBeUndefined();
+    expect(removedState.deletedThreadIdsById?.[threadId]).toBeUndefined();
+    expect(next.threads).toHaveLength(1);
+    expect(next.threadIds).toContain(threadId);
+    expect(next.threadShellById?.[threadId]?.title).toBe("Rehydrated shell removed thread");
   });
 
   it("keeps sidebar summaries shell-owned during hot-path thread detail syncs", () => {
