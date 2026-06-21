@@ -197,6 +197,21 @@ function effectiveMinimumIntervalSeconds(input: {
   return input.minimumIntervalSeconds;
 }
 
+function riskAcknowledgementError(input: {
+  readonly runtimeMode: AutomationDefinition["runtimeMode"];
+  readonly worktreeMode: AutomationDefinition["worktreeMode"];
+  readonly acknowledgedRisks: readonly string[];
+}): string | null {
+  const acknowledgedRisks = new Set(input.acknowledgedRisks);
+  if (input.runtimeMode === "full-access" && !acknowledgedRisks.has("full-access")) {
+    return "Automation full-access mode requires an explicit acknowledgement.";
+  }
+  if (input.worktreeMode === "local" && !acknowledgedRisks.has("local-checkout")) {
+    return "Automation local checkout mode requires an explicit acknowledgement.";
+  }
+  return null;
+}
+
 function isBeforeIso(value: string, comparison: string): boolean {
   const valueMs = Date.parse(value);
   const comparisonMs = Date.parse(comparison);
@@ -454,6 +469,21 @@ export const AutomationServiceLive = Layer.effect(
               message: "Automation retry policies are not supported yet.",
             }),
           );
+
+    const validateRiskAcknowledgements = (input: {
+      readonly runtimeMode: AutomationDefinition["runtimeMode"];
+      readonly worktreeMode: AutomationDefinition["worktreeMode"];
+      readonly acknowledgedRisks: readonly string[];
+    }) => {
+      const message = riskAcknowledgementError(input);
+      return message
+        ? Effect.fail(
+            new AutomationServiceError({
+              message,
+            }),
+          )
+        : Effect.void;
+    };
 
     const resolveThreadEnvironment = (
       definition: AutomationDefinition,
@@ -737,7 +767,7 @@ export const AutomationServiceLive = Layer.effect(
       Effect.gen(function* () {
         const runId = makeAutomationRunId();
         const ids = deriveAutomationRunIds(runId);
-        const threadId = definition.mode === "heartbeat" ? definition.targetThreadId : null;
+        const threadId = definition.mode === "heartbeat" ? definition.targetThreadId : ids.threadId;
         const run = yield* automationRepository
           .createRun({
             id: runId,
@@ -757,6 +787,27 @@ export const AutomationServiceLive = Layer.effect(
         yield* publish({ type: "run-upserted", run });
         return { run, inserted: run.id === runId };
       });
+
+    // Recovery may find a durable run + thread without the queued turn row; retire it so
+    // future heartbeat ticks and scheduled occurrences are not blocked forever.
+    const interruptRunForRecovery = (run: AutomationRun, now: string) =>
+      automationRepository.markRunInterrupted({ id: run.id, turnId: null, finishedAt: now }).pipe(
+        Effect.flatMap((interrupted) =>
+          interrupted.status !== "interrupted"
+            ? Effect.succeed(interrupted)
+            : automationRepository
+                .markRunResult({
+                  id: interrupted.id,
+                  result: resultForRunStatus("interrupted", {
+                    summary: "Automation run was interrupted during recovery.",
+                    now,
+                  }),
+                  updatedAt: now,
+                })
+                .pipe(Effect.orElseSucceed(() => interrupted)),
+        ),
+        Effect.tap((updated) => publish({ type: "run-upserted", run: updated })),
+      );
 
     const maybeStopLoop = (automationId: AutomationId, status: AutomationRunStatus, now: string) =>
       automationRepository.getDefinitionById({ id: automationId }).pipe(
@@ -920,6 +971,10 @@ export const AutomationServiceLive = Layer.effect(
         const failed = yield* automationRepository
           .markRunFailed({ id: run.id, error: summary, finishedAt: now })
           .pipe(Effect.mapError(toServiceError("Failed to time out automation run.")));
+        if (failed.status !== "failed") {
+          yield* publish({ type: "run-upserted", run: failed });
+          return;
+        }
         const withResult = yield* automationRepository
           .markRunResult({
             id: failed.id,
@@ -971,27 +1026,32 @@ export const AutomationServiceLive = Layer.effect(
               const threadId = run.threadId;
               if (!threadId) {
                 // Orphaned before any thread was created (crash between create and dispatch).
-                return automationRepository
-                  .markRunInterrupted({ id: run.id, turnId: null, finishedAt: now })
-                  .pipe(
-                    Effect.tap((updated) => publish({ type: "run-upserted", run: updated })),
-                    Effect.mapError(toServiceError("Failed to recover automation run.")),
-                    Effect.asVoid,
-                    Effect.catch(() => Effect.void),
-                  );
+                return interruptRunForRecovery(run, now).pipe(
+                  Effect.mapError(toServiceError("Failed to recover automation run.")),
+                  Effect.asVoid,
+                  Effect.catch(() => Effect.void),
+                );
               }
               return projectionSnapshotQuery.getThreadShellById(threadId).pipe(
                 Effect.mapError(toServiceError("Failed to load automation thread state.")),
                 Effect.flatMap((shellOption) =>
                   Option.isNone(shellOption)
-                    ? automationRepository
-                        .markRunInterrupted({ id: run.id, turnId: null, finishedAt: now })
-                        .pipe(
-                          Effect.tap((updated) => publish({ type: "run-upserted", run: updated })),
-                          Effect.mapError(toServiceError("Failed to recover automation run.")),
-                          Effect.asVoid,
-                        )
-                    : reconcileThread({ threadId }),
+                    ? interruptRunForRecovery(run, now).pipe(
+                        Effect.mapError(toServiceError("Failed to recover automation run.")),
+                        Effect.asVoid,
+                      )
+                    : resolveRunTurn(run, shellOption.value).pipe(
+                        Effect.flatMap((turn) =>
+                          turn === null
+                            ? interruptRunForRecovery(run, now).pipe(
+                                Effect.mapError(
+                                  toServiceError("Failed to recover automation run."),
+                                ),
+                                Effect.asVoid,
+                              )
+                            : reconcileThread({ threadId }),
+                        ),
+                      ),
                 ),
                 Effect.catch(() => Effect.void),
               );
@@ -1020,6 +1080,11 @@ export const AutomationServiceLive = Layer.effect(
         });
         yield* validateExecutionPolicies({
           retryPolicy: input.retryPolicy ?? { type: "none" },
+        });
+        yield* validateRiskAcknowledgements({
+          runtimeMode: input.runtimeMode ?? "approval-required",
+          worktreeMode: input.worktreeMode ?? "auto",
+          acknowledgedRisks: input.acknowledgedRisks ?? [],
         });
         yield* validateHeartbeatTarget({
           mode: input.mode ?? "standalone",
@@ -1050,6 +1115,11 @@ export const AutomationServiceLive = Layer.effect(
           now,
         });
         yield* validateExecutionPolicies({ retryPolicy: updated.retryPolicy });
+        yield* validateRiskAcknowledgements({
+          runtimeMode: updated.runtimeMode,
+          worktreeMode: updated.worktreeMode,
+          acknowledgedRisks: updated.acknowledgedRisks,
+        });
         yield* validateHeartbeatTarget(updated);
         const saved = yield* automationRepository
           .saveDefinition(updated)

@@ -5,7 +5,7 @@ import {
   type AutomationWorktreeMode,
 } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { getProviderStartOptions, useAppSettings } from "~/appSettings";
 import {
@@ -427,18 +427,18 @@ function AutomationDetailView() {
                 ) : null}
                 {schedule.type === "cron" ? (
                   <EditRow label="Cron">
-                    <input
+                    <InlineCommitTextInput
                       value={schedule.expression}
-                      onChange={(event) =>
+                      onCommit={(value) =>
                         patch({
                           schedule: {
                             type: "cron",
-                            expression: event.target.value,
+                            expression: value,
                             timezone: schedule.timezone,
                           },
                         })
                       }
-                      className={cn(INLINE_CONTROL_CLASS, "font-mono")}
+                      className="font-mono"
                     />
                   </EditRow>
                 ) : null}
@@ -488,12 +488,9 @@ function AutomationDetailView() {
                   schedule.type === "cron") &&
                 schedule.timezone ? (
                   <EditRow label="Timezone">
-                    <input
+                    <InlineCommitTextInput
                       value={schedule.timezone}
-                      onChange={(event) =>
-                        patch({ schedule: { ...schedule, timezone: event.target.value } })
-                      }
-                      className={INLINE_CONTROL_CLASS}
+                      onCommit={(value) => patch({ schedule: { ...schedule, timezone: value } })}
                     />
                   </EditRow>
                 ) : null}
@@ -669,6 +666,46 @@ function InlineTime({
       value={value}
       onChange={(event) => onChange(event.target.value)}
       className={INLINE_CONTROL_CLASS}
+    />
+  );
+}
+
+// Keeps free-text schedule fields editable while intermediate cron/timezone text is invalid.
+function InlineCommitTextInput({
+  value,
+  onCommit,
+  className,
+}: {
+  readonly value: string;
+  readonly onCommit: (value: string) => void;
+  readonly className?: string;
+}) {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  const commitDraft = () => {
+    if (draft !== value) {
+      onCommit(draft);
+    }
+  };
+
+  return (
+    <input
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commitDraft}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.currentTarget.blur();
+        } else if (event.key === "Escape") {
+          setDraft(value);
+          event.currentTarget.blur();
+        }
+      }}
+      className={cn(INLINE_CONTROL_CLASS, className)}
     />
   );
 }
