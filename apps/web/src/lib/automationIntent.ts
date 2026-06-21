@@ -83,7 +83,7 @@ const WEEKDAY_STRIP_PATTERN = [
   "venerdì",
 ].join("|");
 
-const TIME_PATTERN = "([01]?\\d|2[0-3])(?::([0-5]\\d))?";
+const TIME_PATTERN = "((?:[01]?\\d|2[0-3])(?::[0-5]\\d)?\\s*(?:am|pm)?)";
 const INTERVAL_PATTERN =
   "(\\d{1,4})\\s*(seconds|second|secs|sec|secondi|secondo|minutes|minute|mins|minuti|minuto|min|hours|hour|hrs|hr|ore|ora|days|day|giorni|giorno|s|m|h|d|g)";
 
@@ -154,10 +154,19 @@ export function extractChatAutomationInvocation(value: string): string | null {
   return null;
 }
 
-function parseTimeOfDay(hourValue: string | undefined, minuteValue: string | undefined): string {
-  const hour = Number.parseInt(hourValue ?? "", 10);
-  const minute = Number.parseInt(minuteValue ?? "0", 10);
-  const safeHour = Number.isNaN(hour) ? 9 : Math.min(23, Math.max(0, hour));
+function parseTimeOfDay(value: string | undefined): string | null {
+  const match = /^([01]?\d|2[0-3])(?::([0-5]\d))?\s*(am|pm)?$/i.exec(value?.trim() ?? "");
+  if (!match) {
+    return null;
+  }
+  const meridiem = match[3]?.toLowerCase();
+  const hour = Number.parseInt(match[1] ?? "", 10);
+  const minute = Number.parseInt(match[2] ?? "0", 10);
+  if (Number.isNaN(hour) || (meridiem && hour > 12)) {
+    return null;
+  }
+  const safeHour =
+    meridiem === "pm" && hour < 12 ? hour + 12 : meridiem === "am" && hour === 12 ? 0 : hour;
   const safeMinute = Number.isNaN(minute) ? 0 : Math.min(59, Math.max(0, minute));
   return `${String(safeHour).padStart(2, "0")}:${String(safeMinute).padStart(2, "0")}`;
 }
@@ -305,18 +314,36 @@ function parseCronSchedule(searchText: string): ParsedSchedule | null {
 }
 
 function parseDailySchedule(searchText: string): ParsedSchedule | null {
-  const dailyMatch =
-    searchText.match(new RegExp(`\\b(?:daily|every day)(?:\\s+at\\s+${TIME_PATTERN})?\\b`)) ??
+  const timedDailyMatch =
+    searchText.match(new RegExp(`\\b(?:daily|every day)\\s+at\\s+${TIME_PATTERN}\\b`)) ??
     searchText.match(
-      new RegExp(`\\b(?:ogni giorno|tutti i giorni)(?:\\s+(?:alle|a)\\s+${TIME_PATTERN})?\\b`),
+      new RegExp(`\\b(?:ogni giorno|tutti i giorni)\\s+(?:alle|a)\\s+${TIME_PATTERN}\\b`),
     );
+  if (timedDailyMatch) {
+    const timeOfDay = parseTimeOfDay(timedDailyMatch[1]);
+    return timeOfDay
+      ? {
+          schedule: { type: "daily", timeOfDay },
+          cadenceLabel: `Daily at ${timeOfDay}`,
+        }
+      : null;
+  }
+
+  if (
+    /\b(?:daily|every day)\s+at\b/.test(searchText) ||
+    /\b(?:ogni giorno|tutti i giorni)\s+(?:alle|a)\b/.test(searchText)
+  ) {
+    return null;
+  }
+
+  const dailyMatch =
+    searchText.match(/\b(?:daily|every day)\b/) ??
+    searchText.match(/\b(?:ogni giorno|tutti i giorni)\b/);
   if (!dailyMatch) {
     return null;
   }
 
-  const timeOfDay = dailyMatch[1]
-    ? parseTimeOfDay(dailyMatch[1], dailyMatch[2])
-    : DEFAULT_DAILY_TIME;
+  const timeOfDay = DEFAULT_DAILY_TIME;
   return {
     schedule: { type: "daily", timeOfDay },
     cadenceLabel: `Daily at ${timeOfDay}`,
@@ -324,22 +351,40 @@ function parseDailySchedule(searchText: string): ParsedSchedule | null {
 }
 
 function parseWeekdaysSchedule(searchText: string): ParsedSchedule | null {
-  const weekdaysMatch =
+  const timedWeekdaysMatch =
     searchText.match(
-      new RegExp(`\\b(?:weekdays|every weekday|workdays)(?:\\s+at\\s+${TIME_PATTERN})?\\b`),
+      new RegExp(`\\b(?:weekdays|every weekday|workdays)\\s+at\\s+${TIME_PATTERN}\\b`),
     ) ??
     searchText.match(
       new RegExp(
-        `\\b(?:giorni lavorativi|ogni giorno lavorativo)(?:\\s+(?:alle|a)\\s+${TIME_PATTERN})?\\b`,
+        `\\b(?:giorni lavorativi|ogni giorno lavorativo)\\s+(?:alle|a)\\s+${TIME_PATTERN}\\b`,
       ),
     );
+  if (timedWeekdaysMatch) {
+    const timeOfDay = parseTimeOfDay(timedWeekdaysMatch[1]);
+    return timeOfDay
+      ? {
+          schedule: { type: "weekdays", timeOfDay },
+          cadenceLabel: `Weekdays at ${timeOfDay}`,
+        }
+      : null;
+  }
+
+  if (
+    /\b(?:weekdays|every weekday|workdays)\s+at\b/.test(searchText) ||
+    /\b(?:giorni lavorativi|ogni giorno lavorativo)\s+(?:alle|a)\b/.test(searchText)
+  ) {
+    return null;
+  }
+
+  const weekdaysMatch =
+    searchText.match(/\b(?:weekdays|every weekday|workdays)\b/) ??
+    searchText.match(/\b(?:giorni lavorativi|ogni giorno lavorativo)\b/);
   if (!weekdaysMatch) {
     return null;
   }
 
-  const timeOfDay = weekdaysMatch[1]
-    ? parseTimeOfDay(weekdaysMatch[1], weekdaysMatch[2])
-    : DEFAULT_DAILY_TIME;
+  const timeOfDay = DEFAULT_DAILY_TIME;
   return {
     schedule: { type: "weekdays", timeOfDay },
     cadenceLabel: `Weekdays at ${timeOfDay}`,
@@ -348,13 +393,32 @@ function parseWeekdaysSchedule(searchText: string): ParsedSchedule | null {
 
 function parseWeeklySchedule(searchText: string): ParsedSchedule | null {
   const weekdayTokens = Object.keys(WEEKDAY_BY_TOKEN).join("|");
-  const weeklyMatch =
+  const timedWeeklyMatch =
+    searchText.match(new RegExp(`\\bevery\\s+(${weekdayTokens})\\s+at\\s+${TIME_PATTERN}\\b`)) ??
     searchText.match(
-      new RegExp(`\\bevery\\s+(${weekdayTokens})(?:\\s+at\\s+${TIME_PATTERN})?\\b`),
-    ) ??
-    searchText.match(
-      new RegExp(`\\bogni\\s+(${weekdayTokens})(?:\\s+(?:alle|a)\\s+${TIME_PATTERN})?\\b`),
+      new RegExp(`\\bogni\\s+(${weekdayTokens})\\s+(?:alle|a)\\s+${TIME_PATTERN}\\b`),
     );
+  if (timedWeeklyMatch) {
+    const dayOfWeek = WEEKDAY_BY_TOKEN[timedWeeklyMatch[1] ?? ""];
+    const timeOfDay = parseTimeOfDay(timedWeeklyMatch[2]);
+    return dayOfWeek !== undefined && timeOfDay
+      ? {
+          schedule: { type: "weekly", dayOfWeek, timeOfDay },
+          cadenceLabel: `Weekly at ${timeOfDay}`,
+        }
+      : null;
+  }
+
+  if (
+    new RegExp(`\\bevery\\s+(?:${weekdayTokens})\\s+at\\b`).test(searchText) ||
+    new RegExp(`\\bogni\\s+(?:${weekdayTokens})\\s+(?:alle|a)\\b`).test(searchText)
+  ) {
+    return null;
+  }
+
+  const weeklyMatch =
+    searchText.match(new RegExp(`\\bevery\\s+(${weekdayTokens})\\b`)) ??
+    searchText.match(new RegExp(`\\bogni\\s+(${weekdayTokens})\\b`));
   if (!weeklyMatch) {
     return null;
   }
@@ -364,9 +428,7 @@ function parseWeeklySchedule(searchText: string): ParsedSchedule | null {
     return null;
   }
 
-  const timeOfDay = weeklyMatch[2]
-    ? parseTimeOfDay(weeklyMatch[2], weeklyMatch[3])
-    : DEFAULT_DAILY_TIME;
+  const timeOfDay = DEFAULT_DAILY_TIME;
   return {
     schedule: { type: "weekly", dayOfWeek, timeOfDay },
     cadenceLabel: `Weekly at ${timeOfDay}`,
@@ -533,11 +595,17 @@ export function parseChatAutomationInvocation(
     return null;
   }
 
-  const prompt = stripAutomationScaffold(normalizedInvocation) || normalizedInvocation;
+  const prompt = stripAutomationScaffold(normalizedInvocation);
+  if (!prompt) {
+    return null;
+  }
   const stopClause = extractStopClause(prompt);
   const taskPrompt = stopClause?.textWithoutStopClause
     ? stripAutomationScaffold(stopClause.textWithoutStopClause)
     : prompt;
+  if (!taskPrompt) {
+    return null;
+  }
   return {
     name: deriveAutomationIntentName(taskPrompt),
     prompt: taskPrompt,
