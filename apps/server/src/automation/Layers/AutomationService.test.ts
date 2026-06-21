@@ -491,6 +491,31 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("clamps long failed-run summaries to the result schema limit", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const created = yield* service.create(createInput("local"));
+      const { run } = yield* service.runNow({ automationId: created.id });
+      const threadId = run.threadId!;
+      const longError = "x".repeat(3_000);
+
+      threadShell = Option.some(
+        makeThreadShell({
+          latestTurn: makeLatestTurn("error"),
+          lastError: longError,
+        }),
+      );
+      yield* service.reconcileThread({ threadId });
+
+      const reloaded = yield* service.list({ projectId });
+      const reconciled = reloaded.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(reconciled?.status, "failed");
+      assert.strictEqual(reconciled?.result?.summary?.length, 2_000);
+    }),
+  );
+
   it.effect("reconciles an interrupted turn into an interrupted run", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -1112,6 +1137,41 @@ layer("AutomationService", (it) => {
       // The occurrence is not silently lost: the schedule advanced to the next slot.
       const definition = reloaded.definitions.find((entry) => entry.id === automationId);
       assert.strictEqual(definition?.nextRunAt, "2026-06-16T10:05:00.000Z");
+    }),
+  );
+
+  it.effect("keeps standalone runs without a thread id until turn dispatch starts", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-turn-start-fail");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+          stopOnError: false,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      failDispatchType = "thread.turn.start";
+      const results = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(dispatchedCommands[0]?.type, "thread.create");
+      assert.strictEqual(results[0]?.run.status, "failed");
+
+      const reloaded = yield* service.list({ projectId });
+      const failedRun = reloaded.runs.find((entry) => entry.automationId === automationId);
+      assert.strictEqual(failedRun?.status, "failed");
+      assert.strictEqual(failedRun?.threadId, null);
     }),
   );
 

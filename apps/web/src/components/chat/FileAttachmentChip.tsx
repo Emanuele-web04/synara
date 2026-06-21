@@ -5,7 +5,7 @@
 
 import { formatBytes } from "@t3tools/shared/formatBytes";
 
-import { FileIcon } from "~/lib/icons";
+import { CircleAlertIcon, FileIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { type ChatFileAttachment } from "../../types";
 import { COMPOSER_ATTACHMENT_CHIP_CLASS_NAME } from "../composerInlineChip";
@@ -16,9 +16,15 @@ interface FileAttachmentChipProps {
   file: ChatFileAttachment;
   onRemove?: ((fileId: string) => void) | undefined;
   className?: string;
+  nonPersisted?: boolean;
 }
 
-export function FileAttachmentChip({ file, onRemove, className }: FileAttachmentChipProps) {
+export function FileAttachmentChip({
+  file,
+  onRemove,
+  className,
+  nonPersisted = false,
+}: FileAttachmentChipProps) {
   const detail = `${file.mimeType} - ${formatBytes(file.sizeBytes)}`;
   return (
     <Tooltip>
@@ -38,6 +44,15 @@ export function FileAttachmentChip({ file, onRemove, className }: FileAttachment
               <span className="shrink-0 text-muted-foreground/70">
                 {formatBytes(file.sizeBytes)}
               </span>
+              {nonPersisted ? (
+                <span
+                  role="img"
+                  aria-label="Draft attachment may not persist"
+                  className="inline-flex size-4 shrink-0 items-center justify-center rounded-full text-amber-600"
+                >
+                  <CircleAlertIcon className="size-3" />
+                </span>
+              ) : null}
             </span>
             {onRemove ? (
               <AttachmentRemoveButton
@@ -54,6 +69,11 @@ export function FileAttachmentChip({ file, onRemove, className }: FileAttachment
         <div className="space-y-1">
           <p className="text-xs font-medium text-foreground">{file.name}</p>
           <p className="text-[0.6875rem] text-muted-foreground">{detail}</p>
+          {nonPersisted ? (
+            <p className="text-[0.6875rem] text-amber-600">
+              Draft attachment is kept in memory and may be lost on navigation.
+            </p>
+          ) : null}
         </div>
       </TooltipPopup>
     </Tooltip>

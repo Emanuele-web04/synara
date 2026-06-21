@@ -1,6 +1,7 @@
 import {
   type AutomationCreateInput,
   type AutomationDefinition,
+  type AutomationId,
   type AutomationListResult,
   type AutomationMode,
   type AutomationRun,
@@ -233,7 +234,8 @@ export function datetimeLocalFromIso(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   const offsetMs = date.getTimezoneOffset() * 60_000;
-  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+  const localIso = new Date(date.getTime() - offsetMs).toISOString();
+  return localIso.slice(0, date.getSeconds() === 0 && date.getMilliseconds() === 0 ? 16 : 19);
 }
 
 export function isoFromDatetimeLocal(value: string): string {
@@ -475,6 +477,15 @@ export function automationStatusDotClass(
   return "text-emerald-500";
 }
 
+function intervalFormPartsFromSeconds(everySeconds: number): {
+  readonly amount: string;
+  readonly unit: IntervalUnit;
+} {
+  return everySeconds >= 60 && everySeconds % 60 === 0
+    ? { amount: String(everySeconds / 60), unit: "minutes" }
+    : { amount: String(everySeconds), unit: "seconds" };
+}
+
 export function formFromDefinition(
   definition: AutomationDefinition | null,
   fallbackProjectId: string,
@@ -495,12 +506,12 @@ export function formFromDefinition(
     scheduleKind: scheduleKindFromSchedule(schedule),
     intervalAmount:
       schedule.type === "interval" && schedule.everySeconds !== 3600
-        ? schedule.everySeconds < 60
-          ? String(schedule.everySeconds)
-          : String(Math.max(1, Math.round(schedule.everySeconds / 60)))
+        ? intervalFormPartsFromSeconds(schedule.everySeconds).amount
         : "30",
     intervalUnit:
-      schedule.type === "interval" && schedule.everySeconds < 60 ? "seconds" : "minutes",
+      schedule.type === "interval" && schedule.everySeconds !== 3600
+        ? intervalFormPartsFromSeconds(schedule.everySeconds).unit
+        : "minutes",
     timeOfDay:
       schedule.type === "daily" || schedule.type === "weekly" || schedule.type === "weekdays"
         ? schedule.timeOfDay
@@ -533,15 +544,11 @@ export function applyScheduleToForm(
     scheduleKind: scheduleKindFromSchedule(schedule),
     intervalAmount:
       schedule.type === "interval" && schedule.everySeconds !== 3600
-        ? schedule.everySeconds < 60
-          ? String(schedule.everySeconds)
-          : String(Math.max(1, Math.round(schedule.everySeconds / 60)))
+        ? intervalFormPartsFromSeconds(schedule.everySeconds).amount
         : form.intervalAmount,
     intervalUnit:
-      schedule.type === "interval"
-        ? schedule.everySeconds < 60
-          ? "seconds"
-          : "minutes"
+      schedule.type === "interval" && schedule.everySeconds !== 3600
+        ? intervalFormPartsFromSeconds(schedule.everySeconds).unit
         : form.intervalUnit,
     timeOfDay:
       schedule.type === "daily" || schedule.type === "weekly" || schedule.type === "weekdays"
@@ -595,6 +602,29 @@ export function projectModelSelection(
     projects.find((project) => project.id === projectId)?.defaultModelSelection ??
     defaultModelSelection
   );
+}
+
+function modelSelectionsMatch(left: ModelSelection, right: ModelSelection): boolean {
+  const leftOptions = "options" in left ? left.options : undefined;
+  const rightOptions = "options" in right ? right.options : undefined;
+  return (
+    left.provider === right.provider &&
+    left.model === right.model &&
+    JSON.stringify(leftOptions ?? null) === JSON.stringify(rightOptions ?? null)
+  );
+}
+
+export function modelSelectionForProjectChange(
+  projects: ReturnType<typeof useStore.getState>["projects"],
+  currentProjectId: string,
+  nextProjectId: string,
+  currentModelSelection: ModelSelection,
+): ModelSelection {
+  const currentDefaultModelSelection = projectModelSelection(projects, currentProjectId);
+  const nextDefaultModelSelection = projectModelSelection(projects, nextProjectId);
+  return modelSelectionsMatch(currentModelSelection, currentDefaultModelSelection)
+    ? nextDefaultModelSelection
+    : currentModelSelection;
 }
 
 export function createInputFromForm(
@@ -712,39 +742,29 @@ function mergeDefinitionsByUpdatedAt(
         : snapshotDefinition,
     );
   }
-  for (const previousDefinition of previousDefinitions) {
-    if (seen.has(previousDefinition.id) || deletedAutomationIdsInCache.has(previousDefinition.id)) {
-      continue;
-    }
-    definitions.push(previousDefinition);
-  }
   return definitions;
 }
 
 function mergeRunsByUpdatedAt(
   snapshotRuns: readonly AutomationRun[],
   previousRuns: readonly AutomationRun[],
+  visibleAutomationIds?: ReadonlySet<AutomationId>,
 ): AutomationRun[] {
   const previousById = new Map(previousRuns.map((run) => [run.id, run]));
-  const seen = new Set<string>();
   const runs: AutomationRun[] = [];
   for (const snapshotRun of snapshotRuns) {
-    if (deletedAutomationIdsInCache.has(snapshotRun.automationId)) {
+    if (
+      deletedAutomationIdsInCache.has(snapshotRun.automationId) ||
+      (visibleAutomationIds && !visibleAutomationIds.has(snapshotRun.automationId))
+    ) {
       continue;
     }
-    seen.add(snapshotRun.id);
     const previousRun = previousById.get(snapshotRun.id);
     runs.push(
       previousRun && isNewerOrEqualTimestamp(previousRun.updatedAt, snapshotRun.updatedAt)
         ? previousRun
         : snapshotRun,
     );
-  }
-  for (const previousRun of previousRuns) {
-    if (seen.has(previousRun.id) || deletedAutomationIdsInCache.has(previousRun.automationId)) {
-      continue;
-    }
-    runs.push(previousRun);
   }
   return runs;
 }
@@ -755,11 +775,14 @@ export function applyAutomationEvent(
 ): AutomationListResult {
   const base = prev ?? EMPTY_AUTOMATION_LIST;
   switch (event.type) {
-    case "snapshot":
+    case "snapshot": {
+      const definitions = mergeDefinitionsByUpdatedAt(event.definitions, base.definitions);
+      const visibleAutomationIds = new Set(definitions.map((definition) => definition.id));
       return {
-        definitions: mergeDefinitionsByUpdatedAt(event.definitions, base.definitions),
-        runs: mergeRunsByUpdatedAt(event.runs, base.runs),
+        definitions,
+        runs: mergeRunsByUpdatedAt(event.runs, base.runs, visibleAutomationIds),
       };
+    }
     case "definition-upserted": {
       deletedAutomationIdsInCache.delete(event.definition.id);
       const exists = base.definitions.some((definition) => definition.id === event.definition.id);
@@ -1045,6 +1068,12 @@ export function AutomationDialog({
     onFormChange({
       ...form,
       projectId,
+      modelSelection: modelSelectionForProjectChange(
+        projects,
+        form.projectId,
+        projectId,
+        form.modelSelection,
+      ),
       targetThreadId: targetStillMatches ? form.targetThreadId : "",
     });
   };
@@ -1267,6 +1296,7 @@ export function AutomationDialog({
                       <div className="px-2 py-1">
                         <input
                           type="datetime-local"
+                          step={1}
                           value={form.onceRunAt}
                           onChange={(event) => setField("onceRunAt", event.target.value)}
                           className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"

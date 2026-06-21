@@ -25,6 +25,7 @@ import {
   formFromDefinition,
   isoFromDatetimeLocal,
   isFormSubmittable,
+  modelSelectionForProjectChange,
   runResultSummary,
   scheduleKindFromSchedule,
   scheduleFromForm,
@@ -187,6 +188,12 @@ describe("automation shared route helpers", () => {
     expect(isoFromDatetimeLocal(datetimeLocalFromIso(runAt))).toBe(runAt);
   });
 
+  it("preserves one-shot datetime seconds through datetime-local values", () => {
+    const runAt = "2026-06-19T10:00:15.000Z";
+
+    expect(isoFromDatetimeLocal(datetimeLocalFromIso(runAt))).toBe(runAt);
+  });
+
   it("preserves sub-minute custom intervals through the form state", () => {
     const form = applyScheduleToForm(formFromDefinition(null, "project-1"), {
       type: "interval",
@@ -196,6 +203,57 @@ describe("automation shared route helpers", () => {
     expect(form.intervalAmount).toBe("15");
     expect(form.intervalUnit).toBe("seconds");
     expect(scheduleFromForm(form)).toEqual({ type: "interval", everySeconds: 15 });
+  });
+
+  it("preserves non-minute interval cadences through the form state", () => {
+    const form = applyScheduleToForm(formFromDefinition(null, "project-1"), {
+      type: "interval",
+      everySeconds: 90,
+    });
+
+    expect(form.intervalAmount).toBe("90");
+    expect(form.intervalUnit).toBe("seconds");
+    expect(scheduleFromForm(form)).toEqual({ type: "interval", everySeconds: 90 });
+  });
+
+  it("refreshes the default model when the current model came from the old project", () => {
+    const projects = [
+      {
+        id: projectId("project-old"),
+        defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+      },
+      {
+        id: projectId("project-new"),
+        defaultModelSelection: { provider: "claudeAgent", model: "sonnet" },
+      },
+    ] as Parameters<typeof modelSelectionForProjectChange>[0];
+
+    expect(
+      modelSelectionForProjectChange(projects, "project-old", "project-new", {
+        provider: "codex",
+        model: "gpt-5-codex",
+      }),
+    ).toEqual({ provider: "claudeAgent", model: "sonnet" });
+  });
+
+  it("preserves an explicitly chosen model when switching projects", () => {
+    const projects = [
+      {
+        id: projectId("project-old"),
+        defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+      },
+      {
+        id: projectId("project-new"),
+        defaultModelSelection: { provider: "claudeAgent", model: "sonnet" },
+      },
+    ] as Parameters<typeof modelSelectionForProjectChange>[0];
+
+    expect(
+      modelSelectionForProjectChange(projects, "project-old", "project-new", {
+        provider: "cursor",
+        model: "cursor-default",
+      }),
+    ).toEqual({ provider: "cursor", model: "cursor-default" });
   });
 
   it("preserves timezone when changing weekly day and time", () => {
@@ -296,5 +354,49 @@ describe("automation shared route helpers", () => {
 
     expect(afterLateSnapshot.definitions).toEqual([]);
     expect(afterLateSnapshot.runs).toEqual([]);
+  });
+
+  it("drops definitions and runs that disappear from a reconnect snapshot", () => {
+    const deletedDefinition = definitionWith({
+      id: automationId("automation-missed-delete"),
+    });
+    const deletedRun = runWith({
+      id: runId("run-missed-delete"),
+      automationId: deletedDefinition.id,
+    });
+
+    const afterReconnectSnapshot = applyAutomationEvent(
+      { definitions: [deletedDefinition], runs: [deletedRun] },
+      {
+        type: "snapshot",
+        definitions: [],
+        runs: [],
+      },
+    );
+
+    expect(afterReconnectSnapshot.definitions).toEqual([]);
+    expect(afterReconnectSnapshot.runs).toEqual([]);
+  });
+
+  it("drops runs that disappear from a reconnect snapshot for an existing definition", () => {
+    const definition = definitionWith({
+      id: automationId("automation-existing-definition"),
+    });
+    const deletedRun = runWith({
+      id: runId("run-missed-delete-existing-definition"),
+      automationId: definition.id,
+    });
+
+    const afterReconnectSnapshot = applyAutomationEvent(
+      { definitions: [definition], runs: [deletedRun] },
+      {
+        type: "snapshot",
+        definitions: [definition],
+        runs: [],
+      },
+    );
+
+    expect(afterReconnectSnapshot.definitions).toEqual([definition]);
+    expect(afterReconnectSnapshot.runs).toEqual([]);
   });
 });

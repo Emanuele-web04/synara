@@ -36,6 +36,7 @@ import {
 } from "../schedule.ts";
 
 const AUTOMATION_ERROR_MAX_CHARS = 4_000;
+const AUTOMATION_RUN_RESULT_SUMMARY_MAX_CHARS = 2_000;
 const FAST_INTERVAL_ACKNOWLEDGED_MINIMUM_SECONDS = 1;
 
 /** Statuses a run can no longer leave; reconciliation never overwrites these. */
@@ -92,6 +93,12 @@ function errorMessage(cause: unknown): string {
   return redactSecrets(raw).slice(0, AUTOMATION_ERROR_MAX_CHARS);
 }
 
+function resultSummary(value: string | null | undefined, fallback?: string): string | null {
+  const summary = value ?? fallback ?? null;
+  const trimmed = summary?.trim();
+  return trimmed ? trimmed.slice(0, AUTOMATION_RUN_RESULT_SUMMARY_MAX_CHARS) : null;
+}
+
 function resultForRunStatus(
   status: AutomationRunStatus,
   input: { readonly summary?: string | null; readonly now: string },
@@ -100,7 +107,7 @@ function resultForRunStatus(
     case "succeeded":
       return {
         outcome: "unknown",
-        summary: input.summary ?? null,
+        summary: resultSummary(input.summary),
         unread: true,
         archivedAt: null,
       };
@@ -110,7 +117,7 @@ function resultForRunStatus(
     case "waiting-for-approval":
       return {
         outcome: "needs-attention",
-        summary: input.summary ?? "Automation run needs attention.",
+        summary: resultSummary(input.summary, "Automation run needs attention."),
         severity: status === "failed" ? "error" : "warning",
         unread: true,
         archivedAt: null,
@@ -118,7 +125,7 @@ function resultForRunStatus(
     case "skipped":
       return {
         outcome: "no-findings",
-        summary: input.summary ?? "Run skipped.",
+        summary: resultSummary(input.summary, "Run skipped."),
         severity: "info",
         unread: false,
         archivedAt: input.now,
@@ -556,7 +563,9 @@ export const AutomationServiceLive = Layer.effect(
       now: string,
     ): Effect.Effect<AutomationRunNowResult, AutomationServiceError> => {
       return Effect.gen(function* () {
-        const plannedThreadId = run.threadId;
+        const plannedIds = deriveAutomationRunIds(run.id);
+        const plannedThreadId =
+          definition.mode === "heartbeat" ? run.threadId : plannedIds.threadId;
         const messageId = run.messageId;
         const turnStartCommandId = run.turnStartCommandId;
         if (!plannedThreadId || !messageId || !turnStartCommandId) {
@@ -728,7 +737,7 @@ export const AutomationServiceLive = Layer.effect(
       Effect.gen(function* () {
         const runId = makeAutomationRunId();
         const ids = deriveAutomationRunIds(runId);
-        const threadId = definition.mode === "heartbeat" ? definition.targetThreadId : ids.threadId;
+        const threadId = definition.mode === "heartbeat" ? definition.targetThreadId : null;
         const run = yield* automationRepository
           .createRun({
             id: runId,
