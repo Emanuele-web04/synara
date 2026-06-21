@@ -8,6 +8,7 @@ import {
   createThreadExistsSelector,
   createThreadProjectIdSelector,
   createThreadShellsSelector,
+  createThreadWorkspaceMetadataSelector,
 } from "./storeSelectors";
 import type { ThreadShell } from "./types";
 
@@ -117,5 +118,32 @@ describe("thread shell route selectors", () => {
 
     expect(createThreadExistsSelector(threadIdA)(state)).toBe(true);
     expect(createThreadProjectIdSelector(threadIdA)(state)).toBe(projectId);
+  });
+
+  it("keeps workspace metadata stable while streaming messages change", () => {
+    const selectWorkspaceMetadata = createThreadWorkspaceMetadataSelector(threadIdA);
+    const threadIds = [threadIdA];
+    const threadShellById = {
+      [threadIdA]: {
+        ...shellA,
+        envMode: "worktree",
+        worktreePath: "/repo/.worktrees/feature",
+      },
+    };
+
+    const before = selectWorkspaceMetadata(makeState({ threadIds, threadShellById }));
+    const after = selectWorkspaceMetadata(
+      makeState({
+        threadIds,
+        threadShellById,
+        messageIdsByThreadId: { [threadIdA]: [messageId] },
+      }),
+    );
+
+    expect(after).toBe(before);
+    expect(after).toEqual({
+      envMode: "worktree",
+      worktreePath: "/repo/.worktrees/feature",
+    });
   });
 });

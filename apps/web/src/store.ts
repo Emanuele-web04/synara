@@ -821,14 +821,14 @@ function normalizeChatAttachments(
               mimeType: attachment.mimeType,
               sizeBytes: attachment.sizeBytes,
             }
-        : {
-            type: "image",
-            id: attachment.id,
-            name: attachment.name,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-            previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
-          };
+          : {
+              type: "image",
+              id: attachment.id,
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+              previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
+            };
     const existing = previousById.get(attachment.id);
     if (
       existing &&
@@ -937,13 +937,13 @@ function readModelAttachmentsFromChatMessage(
               mimeType: attachment.mimeType,
               sizeBytes: attachment.sizeBytes,
             }
-        : {
-            id: attachment.id,
-            name: attachment.name,
-            type: "image" as const,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-          },
+          : {
+              id: attachment.id,
+              name: attachment.name,
+              type: "image" as const,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+            },
     ) ?? []
   );
 }

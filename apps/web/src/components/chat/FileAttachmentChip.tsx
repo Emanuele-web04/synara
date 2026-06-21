@@ -14,16 +14,16 @@ import { AttachmentRemoveButton } from "./AttachmentRemoveButton";
 
 interface FileAttachmentChipProps {
   file: ChatFileAttachment;
-  nonPersisted?: boolean;
   onRemove?: ((fileId: string) => void) | undefined;
   className?: string;
+  nonPersisted?: boolean;
 }
 
 export function FileAttachmentChip({
   file,
-  nonPersisted = false,
   onRemove,
   className,
+  nonPersisted = false,
 }: FileAttachmentChipProps) {
   const detail = `${file.mimeType} - ${formatBytes(file.sizeBytes)}`;
   return (
@@ -45,15 +45,19 @@ export function FileAttachmentChip({
                 {formatBytes(file.sizeBytes)}
               </span>
               {nonPersisted ? (
-                <CircleAlertIcon
-                  className="size-3.5 shrink-0 text-amber-600"
-                  aria-label="Draft file may not persist"
-                />
+                <span
+                  role="img"
+                  aria-label="Draft attachment may not persist"
+                  className="inline-flex size-4 shrink-0 items-center justify-center rounded-full text-amber-600"
+                >
+                  <CircleAlertIcon className="size-3" />
+                </span>
               ) : null}
             </span>
             {onRemove ? (
               <AttachmentRemoveButton
                 size="sm"
+                placement="center-right"
                 label={`Remove ${file.name}`}
                 onRemove={() => onRemove(file.id)}
               />
@@ -66,8 +70,8 @@ export function FileAttachmentChip({
           <p className="text-xs font-medium text-foreground">{file.name}</p>
           <p className="text-[0.6875rem] text-muted-foreground">{detail}</p>
           {nonPersisted ? (
-            <p className="text-[0.6875rem] text-amber-700">
-              This draft file is in memory only and will be lost on reload.
+            <p className="text-[0.6875rem] text-amber-600">
+              Draft attachment is kept in memory and may be lost on navigation.
             </p>
           ) : null}
         </div>

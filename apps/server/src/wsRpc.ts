@@ -995,6 +995,25 @@ export const makeWsRpcLayer = () =>
             }),
             "Failed to generate thread recap",
           ),
+        [WS_METHODS.serverGenerateAutomationIntent]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const settings = yield* serverSettings.getSettings;
+              const modelSelection =
+                input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
+              return yield* textGeneration.generateAutomationIntent({
+                cwd: input.cwd,
+                message: input.message,
+                ...(input.defaultMode ? { defaultMode: input.defaultMode } : {}),
+                nowIso: input.nowIso,
+                ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+                model: input.textGenerationModel ?? modelSelection.model,
+                modelSelection,
+                ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+              });
+            }),
+            "Failed to generate automation intent",
+          ),
         [WS_METHODS.serverUpsertKeybinding]: (input) =>
           rpcEffect(
             keybindings
@@ -1139,6 +1158,10 @@ export const makeWsRpcLayer = () =>
           rpcEffect(automationService.runNow(input), "Failed to run automation"),
         [WS_METHODS.automationCancelRun]: (input) =>
           rpcEffect(automationService.cancelRun(input), "Failed to cancel automation run"),
+        [WS_METHODS.automationMarkRunRead]: (input) =>
+          rpcEffect(automationService.markRunRead(input), "Failed to update automation run"),
+        [WS_METHODS.automationArchiveRun]: (input) =>
+          rpcEffect(automationService.archiveRun(input), "Failed to update automation run"),
         [WS_METHODS.subscribeAutomationEvents]: () =>
           Stream.merge(
             Stream.fromEffect(

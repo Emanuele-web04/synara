@@ -1,4 +1,5 @@
 import {
+  AutomationCompletionPolicy,
   AutomationDefinition,
   AutomationPermissionSnapshot,
   AutomationRun,
@@ -23,16 +24,24 @@ import {
   ArchiveAutomationDefinitionInput,
   AutomationRepository,
   type AutomationRepositoryShape,
+  CountActiveAutomationRunsByThreadInput,
   CountActiveAutomationRunsInput,
+  CountPendingCompletionEvaluationsByThreadInput,
   DisableAutomationDefinitionInput,
+  DisableAutomationDefinitionIfUnchangedInput,
+  GetEarliestAutomationNextRunAtInput,
   GetAutomationDefinitionInput,
   GetAutomationRunByThreadInput,
   GetAutomationRunInput,
   IncrementAutomationIterationInput,
+  ListActiveAutomationRunsForDefinitionInput,
   ListDueAutomationDefinitionsInput,
+  ListAutomationRunsNeedingCompletionEvaluationInput,
   ListRecoverableAutomationRunsInput,
   MarkAutomationRunFailedInput,
   MarkAutomationRunInterruptedInput,
+  MarkAutomationRunResultInput,
+  MarkAutomationRunSkippedInput,
   MarkAutomationRunStartedInput,
   MarkAutomationRunSucceededInput,
   MarkAutomationRunWaitingForApprovalInput,
@@ -57,6 +66,14 @@ const AutomationDefinitionDbRow = Schema.Struct({
   targetThreadId: AutomationDefinition.fields.targetThreadId,
   maxIterations: AutomationDefinition.fields.maxIterations,
   stopOnError: Schema.Number,
+  completionPolicy: Schema.fromJsonString(AutomationCompletionPolicy),
+  completionPolicyVersion: AutomationDefinition.fields.completionPolicyVersion,
+  completionPolicyUpdatedAt: AutomationDefinition.fields.completionPolicyUpdatedAt,
+  minimumIntervalSeconds: AutomationDefinition.fields.minimumIntervalSeconds,
+  maxRuntimeSeconds: AutomationDefinition.fields.maxRuntimeSeconds,
+  retryPolicy: Schema.fromJsonString(AutomationDefinition.fields.retryPolicy),
+  misfirePolicy: AutomationDefinition.fields.misfirePolicy,
+  acknowledgedRisks: Schema.fromJsonString(AutomationDefinition.fields.acknowledgedRisks),
   iterationCount: AutomationDefinition.fields.iterationCount,
   createdAt: AutomationDefinition.fields.createdAt,
   updatedAt: AutomationDefinition.fields.updatedAt,
@@ -82,12 +99,23 @@ const AutomationRunDbRow = Schema.Struct({
   turnStartCommandId: AutomationRun.fields.turnStartCommandId,
   messageId: AutomationRun.fields.messageId,
   error: AutomationRun.fields.error,
-  result: Schema.NullOr(Schema.fromJsonString(Schema.Unknown)),
+  result: Schema.NullOr(Schema.fromJsonString(AutomationRun.fields.result)),
   permissionSnapshot: Schema.fromJsonString(AutomationPermissionSnapshot),
   createdAt: AutomationRun.fields.createdAt,
   updatedAt: AutomationRun.fields.updatedAt,
 });
 type AutomationRunDbRow = typeof AutomationRunDbRow.Type;
+
+function withResultDefaults(run: AutomationRun): NonNullable<AutomationRun["result"]> {
+  return (
+    run.result ?? {
+      outcome: "unknown",
+      summary: null,
+      unread: true,
+      archivedAt: null,
+    }
+  );
+}
 
 const decodeDefinition = Schema.decodeUnknownEffect(AutomationDefinition);
 const decodeRun = Schema.decodeUnknownEffect(AutomationRun);
@@ -137,6 +165,14 @@ const makeAutomationRepository = Effect.gen(function* () {
           target_thread_id,
           max_iterations,
           stop_on_error,
+          completion_policy_json,
+          completion_policy_version,
+          completion_policy_updated_at,
+          minimum_interval_seconds,
+          max_runtime_seconds,
+          retry_policy_json,
+          misfire_policy,
+          acknowledged_risks_json,
           iteration_count,
           created_at,
           updated_at,
@@ -160,6 +196,14 @@ const makeAutomationRepository = Effect.gen(function* () {
           ${definition.targetThreadId},
           ${definition.maxIterations},
           ${definition.stopOnError},
+          ${definition.completionPolicy},
+          ${definition.completionPolicyVersion},
+          ${definition.completionPolicyUpdatedAt},
+          ${definition.minimumIntervalSeconds},
+          ${definition.maxRuntimeSeconds},
+          ${definition.retryPolicy},
+          ${definition.misfirePolicy},
+          ${definition.acknowledgedRisks},
           ${definition.iterationCount},
           ${definition.createdAt},
           ${definition.updatedAt},
@@ -191,6 +235,19 @@ const makeAutomationRepository = Effect.gen(function* () {
           target_thread_id AS "targetThreadId",
           max_iterations AS "maxIterations",
           stop_on_error AS "stopOnError",
+          completion_policy_json AS "completionPolicy",
+          completion_policy_version AS "completionPolicyVersion",
+          COALESCE(
+            completion_policy_updated_at,
+            updated_at,
+            created_at,
+            '1970-01-01T00:00:00.000Z'
+          ) AS "completionPolicyUpdatedAt",
+          minimum_interval_seconds AS "minimumIntervalSeconds",
+          max_runtime_seconds AS "maxRuntimeSeconds",
+          retry_policy_json AS "retryPolicy",
+          misfire_policy AS "misfirePolicy",
+          acknowledged_risks_json AS "acknowledgedRisks",
           iteration_count AS "iterationCount",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -221,6 +278,14 @@ const makeAutomationRepository = Effect.gen(function* () {
             target_thread_id = ${definition.targetThreadId},
             max_iterations = ${definition.maxIterations},
             stop_on_error = ${definition.stopOnError},
+            completion_policy_json = ${definition.completionPolicy},
+            completion_policy_version = ${definition.completionPolicyVersion},
+            completion_policy_updated_at = ${definition.completionPolicyUpdatedAt},
+            minimum_interval_seconds = ${definition.minimumIntervalSeconds},
+            max_runtime_seconds = ${definition.maxRuntimeSeconds},
+            retry_policy_json = ${definition.retryPolicy},
+            misfire_policy = ${definition.misfirePolicy},
+            acknowledged_risks_json = ${definition.acknowledgedRisks},
             updated_at = ${definition.updatedAt},
             archived_at = ${definition.archivedAt}
         WHERE automation_id = ${definition.id}
@@ -253,6 +318,19 @@ const makeAutomationRepository = Effect.gen(function* () {
           target_thread_id AS "targetThreadId",
           max_iterations AS "maxIterations",
           stop_on_error AS "stopOnError",
+          completion_policy_json AS "completionPolicy",
+          completion_policy_version AS "completionPolicyVersion",
+          COALESCE(
+            completion_policy_updated_at,
+            updated_at,
+            created_at,
+            '1970-01-01T00:00:00.000Z'
+          ) AS "completionPolicyUpdatedAt",
+          minimum_interval_seconds AS "minimumIntervalSeconds",
+          max_runtime_seconds AS "maxRuntimeSeconds",
+          retry_policy_json AS "retryPolicy",
+          misfire_policy AS "misfirePolicy",
+          acknowledged_risks_json AS "acknowledgedRisks",
           iteration_count AS "iterationCount",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -270,33 +348,89 @@ const makeAutomationRepository = Effect.gen(function* () {
     execute: ({ now, limit }) =>
       sql`
         SELECT
-          automation_id AS "id",
-          project_id AS "projectId",
-          source_thread_id AS "sourceThreadId",
-          name,
-          prompt,
-          schedule_json AS "schedule",
-          enabled,
-          next_run_at AS "nextRunAt",
-          model_selection_json AS "modelSelection",
-          provider_options_json AS "providerOptions",
-          runtime_mode AS "runtimeMode",
-          interaction_mode AS "interactionMode",
-          worktree_mode AS "worktreeMode",
-          mode,
-          target_thread_id AS "targetThreadId",
-          max_iterations AS "maxIterations",
-          stop_on_error AS "stopOnError",
-          iteration_count AS "iterationCount",
-          created_at AS "createdAt",
-          updated_at AS "updatedAt",
-          archived_at AS "archivedAt"
-        FROM automation_definitions
-        WHERE enabled = 1
-          AND archived_at IS NULL
-          AND next_run_at IS NOT NULL
-          AND next_run_at <= ${now}
-        ORDER BY next_run_at ASC, automation_id ASC
+          definitions.automation_id AS "id",
+          definitions.project_id AS "projectId",
+          definitions.source_thread_id AS "sourceThreadId",
+          definitions.name,
+          definitions.prompt,
+          definitions.schedule_json AS "schedule",
+          definitions.enabled,
+          definitions.next_run_at AS "nextRunAt",
+          definitions.model_selection_json AS "modelSelection",
+          definitions.provider_options_json AS "providerOptions",
+          definitions.runtime_mode AS "runtimeMode",
+          definitions.interaction_mode AS "interactionMode",
+          definitions.worktree_mode AS "worktreeMode",
+          definitions.mode,
+          definitions.target_thread_id AS "targetThreadId",
+          definitions.max_iterations AS "maxIterations",
+          definitions.stop_on_error AS "stopOnError",
+          definitions.completion_policy_json AS "completionPolicy",
+          definitions.completion_policy_version AS "completionPolicyVersion",
+          COALESCE(
+            definitions.completion_policy_updated_at,
+            definitions.updated_at,
+            definitions.created_at,
+            '1970-01-01T00:00:00.000Z'
+          ) AS "completionPolicyUpdatedAt",
+          definitions.minimum_interval_seconds AS "minimumIntervalSeconds",
+          definitions.max_runtime_seconds AS "maxRuntimeSeconds",
+          definitions.retry_policy_json AS "retryPolicy",
+          definitions.misfire_policy AS "misfirePolicy",
+          definitions.acknowledged_risks_json AS "acknowledgedRisks",
+          definitions.iteration_count AS "iterationCount",
+          definitions.created_at AS "createdAt",
+          definitions.updated_at AS "updatedAt",
+          definitions.archived_at AS "archivedAt"
+        FROM automation_definitions definitions
+        WHERE definitions.enabled = 1
+          AND definitions.archived_at IS NULL
+          AND definitions.next_run_at IS NOT NULL
+          AND definitions.next_run_at <= ${now}
+          AND NOT (
+            definitions.mode = 'heartbeat'
+            AND definitions.target_thread_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1
+              FROM automation_runs runs
+              INNER JOIN automation_definitions pending_definitions
+                ON pending_definitions.automation_id = runs.automation_id
+              WHERE runs.thread_id = definitions.target_thread_id
+                AND runs.status = 'succeeded'
+                AND pending_definitions.enabled = 1
+                AND pending_definitions.archived_at IS NULL
+                AND pending_definitions.mode = 'heartbeat'
+                AND json_extract(
+                  pending_definitions.completion_policy_json,
+                  '$.type'
+                ) = 'ai-evaluated'
+                AND runs.finished_at IS NOT NULL
+                AND (
+                  json_extract(
+                    runs.permission_snapshot_json,
+                    '$.completionPolicyVersion'
+                  ) = pending_definitions.completion_policy_version
+                  OR (
+                    json_type(
+                      runs.permission_snapshot_json,
+                      '$.completionPolicyVersion'
+                    ) IS NULL
+                    AND COALESCE(runs.started_at, runs.created_at) >
+                      COALESCE(
+                        pending_definitions.completion_policy_updated_at,
+                        pending_definitions.updated_at,
+                        pending_definitions.created_at,
+                        '1970-01-01T00:00:00.000Z'
+                      )
+                  )
+                )
+                AND (
+                  runs.result_json IS NULL
+                  OR json_type(runs.result_json, '$.completionEvaluation') IS NULL
+                )
+            )
+          )
+        ORDER BY definitions.next_run_at ASC, definitions.automation_id ASC
         LIMIT ${limit}
       `,
   });
@@ -349,7 +483,7 @@ const makeAutomationRepository = Effect.gen(function* () {
           created_at,
           updated_at
         )
-        VALUES (
+        SELECT
           ${run.id},
           ${run.automationId},
           ${run.projectId},
@@ -371,7 +505,13 @@ const makeAutomationRepository = Effect.gen(function* () {
           ${run.permissionSnapshot},
           ${run.createdAt},
           ${run.updatedAt}
-        )
+        WHERE ${run.threadId} IS NULL
+           OR NOT EXISTS (
+             SELECT 1
+             FROM automation_runs
+             WHERE thread_id = ${run.threadId}
+               AND status IN ('pending', 'claimed', 'running', 'waiting-for-approval')
+           )
       `,
   });
 
@@ -515,7 +655,7 @@ const makeAutomationRepository = Effect.gen(function* () {
             started_at = ${startedAt},
             updated_at = ${startedAt}
         WHERE run_id = ${id}
-          AND status IN ('pending', 'claimed')
+          AND status IN ('pending', 'claimed', 'waiting-for-approval')
       `,
   });
 
@@ -535,6 +675,22 @@ const makeAutomationRepository = Effect.gen(function* () {
       `,
   });
 
+  const markRunSkippedRow = SqlSchema.void({
+    Request: MarkAutomationRunSkippedInput,
+    execute: ({ id, reason, finishedAt }) =>
+      sql`
+        UPDATE automation_runs
+        SET status = 'skipped',
+            error = ${reason},
+            finished_at = ${finishedAt},
+            updated_at = ${finishedAt},
+            lease_expires_at = NULL,
+            claimed_by = NULL
+        WHERE run_id = ${id}
+          AND status IN ('pending', 'claimed')
+      `,
+  });
+
   const markRunSucceededRow = SqlSchema.void({
     Request: MarkAutomationRunSucceededInput,
     execute: ({ id, turnId, result, finishedAt }) =>
@@ -549,6 +705,17 @@ const makeAutomationRepository = Effect.gen(function* () {
             claimed_by = NULL
         WHERE run_id = ${id}
           AND status NOT IN ('succeeded', 'failed', 'cancelled', 'interrupted')
+      `,
+  });
+
+  const markRunResultRow = SqlSchema.void({
+    Request: MarkAutomationRunResultInput,
+    execute: ({ id, result, updatedAt }) =>
+      sql`
+        UPDATE automation_runs
+        SET result_json = ${result === null ? null : JSON.stringify(result)},
+            updated_at = ${updatedAt}
+        WHERE run_id = ${id}
       `,
   });
 
@@ -610,6 +777,7 @@ const makeAutomationRepository = Effect.gen(function* () {
           updated_at AS "updatedAt"
         FROM automation_runs
         WHERE thread_id = ${threadId}
+          AND status IN ('pending', 'claimed', 'running', 'waiting-for-approval')
         ORDER BY created_at DESC, run_id DESC
         LIMIT 1
       `,
@@ -649,6 +817,65 @@ const makeAutomationRepository = Effect.gen(function* () {
       `,
   });
 
+  const listRunsNeedingCompletionEvaluationRows = SqlSchema.findAll({
+    Request: ListAutomationRunsNeedingCompletionEvaluationInput,
+    Result: AutomationRunDbRow,
+    execute: ({ limit }) =>
+      sql`
+        SELECT
+          runs.run_id AS "id",
+          runs.automation_id AS "automationId",
+          runs.project_id AS "projectId",
+          runs.thread_id AS "threadId",
+          runs.turn_id AS "turnId",
+          runs.trigger_type AS "triggerType",
+          runs.status,
+          runs.scheduled_for AS "scheduledFor",
+          runs.claimed_by AS "claimedBy",
+          runs.claimed_at AS "claimedAt",
+          runs.lease_expires_at AS "leaseExpiresAt",
+          runs.started_at AS "startedAt",
+          runs.finished_at AS "finishedAt",
+          runs.thread_create_command_id AS "threadCreateCommandId",
+          runs.turn_start_command_id AS "turnStartCommandId",
+          runs.message_id AS "messageId",
+          runs.error,
+          runs.result_json AS "result",
+          runs.permission_snapshot_json AS "permissionSnapshot",
+          runs.created_at AS "createdAt",
+          runs.updated_at AS "updatedAt"
+        FROM automation_runs runs
+        INNER JOIN automation_definitions definitions
+          ON definitions.automation_id = runs.automation_id
+        WHERE runs.status = 'succeeded'
+          AND definitions.enabled = 1
+          AND definitions.archived_at IS NULL
+          AND definitions.mode = 'heartbeat'
+          AND json_extract(definitions.completion_policy_json, '$.type') = 'ai-evaluated'
+          AND runs.finished_at IS NOT NULL
+          AND (
+            json_extract(runs.permission_snapshot_json, '$.completionPolicyVersion') =
+              definitions.completion_policy_version
+            OR (
+              json_type(runs.permission_snapshot_json, '$.completionPolicyVersion') IS NULL
+              AND COALESCE(runs.started_at, runs.created_at) >
+                COALESCE(
+                  definitions.completion_policy_updated_at,
+                  definitions.updated_at,
+                  definitions.created_at,
+                  '1970-01-01T00:00:00.000Z'
+                )
+            )
+          )
+          AND (
+            runs.result_json IS NULL
+            OR json_type(runs.result_json, '$.completionEvaluation') IS NULL
+          )
+        ORDER BY runs.finished_at ASC, runs.run_id ASC
+        LIMIT ${limit}
+      `,
+  });
+
   const countActiveRunsRow = SqlSchema.findAll({
     Request: CountActiveAutomationRunsInput,
     Result: Schema.Struct({ count: Schema.Number }),
@@ -661,6 +888,147 @@ const makeAutomationRepository = Effect.gen(function* () {
       `,
   });
 
+  const countActiveRunsByThreadRow = SqlSchema.findAll({
+    Request: CountActiveAutomationRunsByThreadInput,
+    Result: Schema.Struct({ count: Schema.Number }),
+    execute: ({ threadId }) =>
+      sql`
+        SELECT COUNT(*) AS "count"
+        FROM automation_runs
+        WHERE thread_id = ${threadId}
+          AND status IN ('pending', 'claimed', 'running', 'waiting-for-approval')
+      `,
+  });
+
+  const countPendingCompletionEvaluationsByThreadRow = SqlSchema.findAll({
+    Request: CountPendingCompletionEvaluationsByThreadInput,
+    Result: Schema.Struct({ count: Schema.Number }),
+    execute: ({ threadId }) =>
+      sql`
+        SELECT COUNT(*) AS "count"
+        FROM automation_runs runs
+        INNER JOIN automation_definitions definitions
+          ON definitions.automation_id = runs.automation_id
+        WHERE runs.thread_id = ${threadId}
+          AND runs.status = 'succeeded'
+          AND definitions.enabled = 1
+          AND definitions.archived_at IS NULL
+          AND definitions.mode = 'heartbeat'
+          AND json_extract(definitions.completion_policy_json, '$.type') = 'ai-evaluated'
+          AND runs.finished_at IS NOT NULL
+          AND (
+            json_extract(runs.permission_snapshot_json, '$.completionPolicyVersion') =
+              definitions.completion_policy_version
+            OR (
+              json_type(runs.permission_snapshot_json, '$.completionPolicyVersion') IS NULL
+              AND COALESCE(runs.started_at, runs.created_at) >
+                COALESCE(
+                  definitions.completion_policy_updated_at,
+                  definitions.updated_at,
+                  definitions.created_at,
+                  '1970-01-01T00:00:00.000Z'
+                )
+            )
+          )
+          AND (
+            runs.result_json IS NULL
+            OR json_type(runs.result_json, '$.completionEvaluation') IS NULL
+          )
+      `,
+  });
+
+  const listActiveRunsForDefinitionRows = SqlSchema.findAll({
+    Request: ListActiveAutomationRunsForDefinitionInput,
+    Result: AutomationRunDbRow,
+    execute: ({ automationId }) =>
+      sql`
+        SELECT
+          run_id AS "id",
+          automation_id AS "automationId",
+          project_id AS "projectId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          trigger_type AS "triggerType",
+          status,
+          scheduled_for AS "scheduledFor",
+          claimed_by AS "claimedBy",
+          claimed_at AS "claimedAt",
+          lease_expires_at AS "leaseExpiresAt",
+          started_at AS "startedAt",
+          finished_at AS "finishedAt",
+          thread_create_command_id AS "threadCreateCommandId",
+          turn_start_command_id AS "turnStartCommandId",
+          message_id AS "messageId",
+          error,
+          result_json AS "result",
+          permission_snapshot_json AS "permissionSnapshot",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM automation_runs
+        WHERE automation_id = ${automationId}
+          AND status IN ('pending', 'claimed', 'running', 'waiting-for-approval')
+        ORDER BY created_at ASC, run_id ASC
+      `,
+  });
+
+  const getEarliestNextRunAtRow = SqlSchema.findOneOption({
+    Request: GetEarliestAutomationNextRunAtInput,
+    Result: Schema.Struct({ nextRunAt: AutomationDefinition.fields.nextRunAt }),
+    execute: () =>
+      sql`
+        SELECT definitions.next_run_at AS "nextRunAt"
+        FROM automation_definitions definitions
+        WHERE definitions.enabled = 1
+          AND definitions.archived_at IS NULL
+          AND definitions.next_run_at IS NOT NULL
+          AND NOT (
+            definitions.mode = 'heartbeat'
+            AND definitions.target_thread_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1
+              FROM automation_runs runs
+              INNER JOIN automation_definitions pending_definitions
+                ON pending_definitions.automation_id = runs.automation_id
+              WHERE runs.thread_id = definitions.target_thread_id
+                AND runs.status = 'succeeded'
+                AND pending_definitions.enabled = 1
+                AND pending_definitions.archived_at IS NULL
+                AND pending_definitions.mode = 'heartbeat'
+                AND json_extract(
+                  pending_definitions.completion_policy_json,
+                  '$.type'
+                ) = 'ai-evaluated'
+                AND runs.finished_at IS NOT NULL
+                AND (
+                  json_extract(
+                    runs.permission_snapshot_json,
+                    '$.completionPolicyVersion'
+                  ) = pending_definitions.completion_policy_version
+                  OR (
+                    json_type(
+                      runs.permission_snapshot_json,
+                      '$.completionPolicyVersion'
+                    ) IS NULL
+                    AND COALESCE(runs.started_at, runs.created_at) >
+                      COALESCE(
+                        pending_definitions.completion_policy_updated_at,
+                        pending_definitions.updated_at,
+                        pending_definitions.created_at,
+                        '1970-01-01T00:00:00.000Z'
+                      )
+                  )
+                )
+                AND (
+                  runs.result_json IS NULL
+                  OR json_type(runs.result_json, '$.completionEvaluation') IS NULL
+                )
+            )
+          )
+        ORDER BY definitions.next_run_at ASC, definitions.automation_id ASC
+        LIMIT 1
+      `,
+  });
+
   const disableDefinitionRow = SqlSchema.void({
     Request: DisableAutomationDefinitionInput,
     execute: ({ id, now }) =>
@@ -668,6 +1036,21 @@ const makeAutomationRepository = Effect.gen(function* () {
         UPDATE automation_definitions
         SET enabled = 0, next_run_at = NULL, updated_at = ${now}
         WHERE automation_id = ${id}
+      `,
+  });
+
+  const disableDefinitionIfUnchangedRow = SqlSchema.findAll({
+    Request: DisableAutomationDefinitionIfUnchangedInput,
+    Result: Schema.Struct({ id: AutomationDefinition.fields.id }),
+    execute: ({ id, expectedUpdatedAt, now }) =>
+      sql`
+        UPDATE automation_definitions
+        SET enabled = 0, next_run_at = NULL, updated_at = ${now}
+        WHERE automation_id = ${id}
+          AND enabled = 1
+          AND archived_at IS NULL
+          AND updated_at = ${expectedUpdatedAt}
+        RETURNING automation_id AS "id"
       `,
   });
 
@@ -706,7 +1089,18 @@ const makeAutomationRepository = Effect.gen(function* () {
       `,
   });
 
-  const createDefinition: AutomationRepositoryShape["createDefinition"] = ({ id, input, now }) => {
+  const createDefinition: AutomationRepositoryShape["createDefinition"] = (request) => {
+    const { id, input, now } = request;
+    const initialNextRunAt = Object.hasOwn(request, "nextRunAt")
+      ? (request.nextRunAt ?? null)
+      : input.schedule.type === "manual"
+        ? null
+        : now;
+    const mode = input.mode ?? "standalone";
+    const completionPolicy =
+      mode === "standalone"
+        ? { type: "none" as const }
+        : (input.completionPolicy ?? { type: "none" as const });
     const definition: AutomationDefinition = {
       id,
       projectId: input.projectId,
@@ -715,16 +1109,24 @@ const makeAutomationRepository = Effect.gen(function* () {
       prompt: input.prompt,
       schedule: input.schedule,
       enabled: input.enabled ?? true,
-      nextRunAt: input.schedule.type === "manual" ? null : now,
+      nextRunAt: initialNextRunAt,
       modelSelection: input.modelSelection,
       ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       runtimeMode: input.runtimeMode ?? DEFAULT_AUTOMATION_RUNTIME_MODE,
       interactionMode: input.interactionMode ?? "default",
       worktreeMode: input.worktreeMode ?? "auto",
-      mode: input.mode ?? "standalone",
-      targetThreadId: input.targetThreadId ?? null,
+      mode,
+      targetThreadId: mode === "heartbeat" ? (input.targetThreadId ?? null) : null,
       maxIterations: input.maxIterations ?? null,
       stopOnError: input.stopOnError ?? true,
+      completionPolicy,
+      completionPolicyVersion: 1,
+      completionPolicyUpdatedAt: now,
+      minimumIntervalSeconds: input.minimumIntervalSeconds ?? 60,
+      maxRuntimeSeconds: input.maxRuntimeSeconds === undefined ? 60 * 60 : input.maxRuntimeSeconds,
+      retryPolicy: input.retryPolicy ?? { type: "none" },
+      misfirePolicy: input.misfirePolicy ?? "coalesce",
+      acknowledgedRisks: input.acknowledgedRisks ?? [],
       iterationCount: 0,
       createdAt: now,
       updatedAt: now,
@@ -808,9 +1210,9 @@ const makeAutomationRepository = Effect.gen(function* () {
       leaseExpiresAt: null,
       startedAt: null,
       finishedAt: null,
-      threadCreateCommandId: null,
-      turnStartCommandId: null,
-      messageId: null,
+      threadCreateCommandId: input.threadCreateCommandId ?? null,
+      turnStartCommandId: input.turnStartCommandId ?? null,
+      messageId: input.messageId ?? null,
       error: null,
       result: null,
       permissionSnapshot: input.permissionSnapshot,
@@ -826,6 +1228,19 @@ const makeAutomationRepository = Effect.gen(function* () {
             ),
           ),
         onSome: toRun,
+      });
+    const decodeInsertedOrActiveThread = (rowOption: Option.Option<AutomationRunDbRow>) =>
+      Option.match(rowOption, {
+        onSome: toRun,
+        onNone: () =>
+          input.threadId
+            ? getRunRowByThread({ threadId: input.threadId }).pipe(
+                Effect.mapError(
+                  toPersistenceSqlError("AutomationRepository.createRun:selectActiveThread"),
+                ),
+                Effect.flatMap(decodeInserted),
+              )
+            : decodeInserted(rowOption),
       });
     const inserted = insertRun({
       ...run,
@@ -843,7 +1258,7 @@ const makeAutomationRepository = Effect.gen(function* () {
             scheduledFor: input.scheduledFor,
           }).pipe(
             Effect.mapError(toPersistenceSqlError("AutomationRepository.createRun:select")),
-            Effect.flatMap(decodeInserted),
+            Effect.flatMap(decodeInsertedOrActiveThread),
           ),
         ),
       );
@@ -852,7 +1267,7 @@ const makeAutomationRepository = Effect.gen(function* () {
       Effect.flatMap(() =>
         getRunRowById({ id: input.id }).pipe(
           Effect.mapError(toPersistenceSqlError("AutomationRepository.createRun:select")),
-          Effect.flatMap(decodeInserted),
+          Effect.flatMap(decodeInsertedOrActiveThread),
         ),
       ),
     );
@@ -896,10 +1311,22 @@ const makeAutomationRepository = Effect.gen(function* () {
       Effect.flatMap(() => requireRunById(input.id, "AutomationRepository.markRunFailed")),
     );
 
+  const markRunSkipped: AutomationRepositoryShape["markRunSkipped"] = (input) =>
+    markRunSkippedRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.markRunSkipped:update")),
+      Effect.flatMap(() => requireRunById(input.id, "AutomationRepository.markRunSkipped")),
+    );
+
   const markRunSucceeded: AutomationRepositoryShape["markRunSucceeded"] = (input) =>
     markRunSucceededRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("AutomationRepository.markRunSucceeded:update")),
       Effect.flatMap(() => requireRunById(input.id, "AutomationRepository.markRunSucceeded")),
+    );
+
+  const markRunResult: AutomationRepositoryShape["markRunResult"] = (input) =>
+    markRunResultRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.markRunResult:update")),
+      Effect.flatMap(() => requireRunById(input.id, "AutomationRepository.markRunResult")),
     );
 
   const markRunInterrupted: AutomationRepositoryShape["markRunInterrupted"] = (input) =>
@@ -943,6 +1370,17 @@ const makeAutomationRepository = Effect.gen(function* () {
       Effect.flatMap((rows) => Effect.forEach(rows, toRun, { concurrency: "unbounded" })),
     );
 
+  const listRunsNeedingCompletionEvaluation: AutomationRepositoryShape["listRunsNeedingCompletionEvaluation"] =
+    (input) =>
+      listRunsNeedingCompletionEvaluationRows(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError(
+            "AutomationRepository.listRunsNeedingCompletionEvaluation:query",
+          ),
+        ),
+        Effect.flatMap((rows) => Effect.forEach(rows, toRun, { concurrency: "unbounded" })),
+      );
+
   const countActiveRunsForDefinition: AutomationRepositoryShape["countActiveRunsForDefinition"] = (
     input,
   ) =>
@@ -953,10 +1391,83 @@ const makeAutomationRepository = Effect.gen(function* () {
       Effect.map((rows) => rows[0]?.count ?? 0),
     );
 
+  const countActiveRunsForThread: AutomationRepositoryShape["countActiveRunsForThread"] = (input) =>
+    countActiveRunsByThreadRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.countActiveRunsForThread:query")),
+      Effect.map((rows) => rows[0]?.count ?? 0),
+    );
+
+  const countPendingCompletionEvaluationsForThread: AutomationRepositoryShape["countPendingCompletionEvaluationsForThread"] =
+    (input) =>
+      countPendingCompletionEvaluationsByThreadRow(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError(
+            "AutomationRepository.countPendingCompletionEvaluationsForThread:query",
+          ),
+        ),
+        Effect.map((rows) => rows[0]?.count ?? 0),
+      );
+
+  const listActiveRunsForDefinition: AutomationRepositoryShape["listActiveRunsForDefinition"] = (
+    input,
+  ) =>
+    listActiveRunsForDefinitionRows(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("AutomationRepository.listActiveRunsForDefinition:query"),
+      ),
+      Effect.flatMap((rows) => Effect.forEach(rows, toRun, { concurrency: "unbounded" })),
+    );
+
+  const getEarliestNextRunAt: AutomationRepositoryShape["getEarliestNextRunAt"] = (input = {}) =>
+    getEarliestNextRunAtRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.getEarliestNextRunAt:query")),
+      Effect.map((rowOption) =>
+        Option.match(rowOption, {
+          onNone: () => null,
+          onSome: (row) => row.nextRunAt,
+        }),
+      ),
+    );
+
+  const markRunRead: AutomationRepositoryShape["markRunRead"] = ({ runId, unread, now }) =>
+    requireRunById(runId, "AutomationRepository.markRunRead:load").pipe(
+      Effect.flatMap((run) =>
+        markRunResult({
+          id: run.id,
+          result: { ...withResultDefaults(run), unread },
+          updatedAt: now,
+        }),
+      ),
+    );
+
+  const archiveRun: AutomationRepositoryShape["archiveRun"] = ({ runId, archived, now }) =>
+    requireRunById(runId, "AutomationRepository.archiveRun:load").pipe(
+      Effect.flatMap((run) =>
+        markRunResult({
+          id: run.id,
+          result: {
+            ...withResultDefaults(run),
+            unread: archived ? false : withResultDefaults(run).unread,
+            archivedAt: archived ? now : null,
+          },
+          updatedAt: now,
+        }),
+      ),
+    );
+
   const disableDefinition: AutomationRepositoryShape["disableDefinition"] = (input) =>
     disableDefinitionRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("AutomationRepository.disableDefinition:update")),
     );
+
+  const disableDefinitionIfUnchanged: AutomationRepositoryShape["disableDefinitionIfUnchanged"] =
+    (input) =>
+      disableDefinitionIfUnchangedRow(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError("AutomationRepository.disableDefinitionIfUnchanged:update"),
+        ),
+        Effect.map((rows) => rows.length > 0),
+      );
 
   const incrementDefinitionIterationCount: AutomationRepositoryShape["incrementDefinitionIterationCount"] =
     (input) =>
@@ -984,14 +1495,24 @@ const makeAutomationRepository = Effect.gen(function* () {
     getRunById,
     markRunStarted,
     markRunFailed,
+    markRunSkipped,
     markRunSucceeded,
+    markRunResult,
     markRunInterrupted,
     markRunWaitingForApproval,
     cancelRun,
     getRunByThreadId,
     listRecoverableRuns,
+    listRunsNeedingCompletionEvaluation,
     countActiveRunsForDefinition,
+    countActiveRunsForThread,
+    countPendingCompletionEvaluationsForThread,
+    listActiveRunsForDefinition,
+    getEarliestNextRunAt,
+    markRunRead,
+    archiveRun,
     disableDefinition,
+    disableDefinitionIfUnchanged,
     incrementDefinitionIterationCount,
     tryAcquireSchedulerLease,
   } satisfies AutomationRepositoryShape;

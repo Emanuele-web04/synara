@@ -3974,14 +3974,14 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           if (!current) {
             return state;
           }
-      const nextDraft: ComposerThreadDraftState = {
-        ...current,
-        prompt: "",
-        images: [],
-        files: [],
-        nonPersistedImageIds: [],
-        persistedAttachments: [],
-        assistantSelections: [],
+          const nextDraft: ComposerThreadDraftState = {
+            ...current,
+            prompt: "",
+            images: [],
+            files: [],
+            nonPersistedImageIds: [],
+            persistedAttachments: [],
+            assistantSelections: [],
             terminalContexts: [],
             fileComments: [],
             pastedTexts: [],

@@ -22,11 +22,11 @@ const indexNames = (sql: SqlClient.SqlClient) =>
   `.pipe(Effect.map((rows) => rows.map((row) => row.name)));
 
 layer("automation migration", (it) => {
-  it.effect("registers migration 44 in the Synara lineage", () =>
-    Effect.gen(function* () {
+  it.effect("registers automation policy migration in the Synara lineage", () =>
+    Effect.sync(() => {
       assert.deepStrictEqual(migrationEntries[migrationEntries.length - 1]?.slice(0, 2), [
-        44,
-        "Automations",
+        47,
+        "AutomationCompletionPolicyVersion",
       ]);
     }),
   );
@@ -49,6 +49,20 @@ layer("automation migration", (it) => {
         "idx_automation_runs_project",
         "idx_automation_runs_thread",
       ]);
+      const policyColumns = yield* sql<{ readonly name: string }>`
+        SELECT name FROM pragma_table_info('automation_definitions')
+        WHERE name IN (
+          'minimum_interval_seconds',
+          'max_runtime_seconds',
+          'retry_policy_json',
+          'misfire_policy',
+          'acknowledged_risks_json',
+          'completion_policy_json',
+          'completion_policy_version',
+          'completion_policy_updated_at'
+        )
+      `;
+      assert.strictEqual(policyColumns.length, 8);
     }),
   );
 });

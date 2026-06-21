@@ -14,11 +14,14 @@ import type {
 import type {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
+  AutomationArchiveRunInput,
   AutomationCreateInput,
   AutomationDefinition,
   AutomationDeleteInput,
   AutomationListInput,
   AutomationListResult,
+  AutomationMarkRunReadInput,
+  AutomationRunActionResult,
   AutomationRunNowInput,
   AutomationRunNowResult,
   AutomationStreamEvent,
@@ -88,6 +91,8 @@ import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem
 import type {
   ServerConfig,
   ServerDiagnosticsResult,
+  ServerGenerateAutomationIntentInput,
+  ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
   ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
@@ -501,6 +506,9 @@ export interface NativeApi {
     generateThreadRecap: (
       input: ServerGenerateThreadRecapInput,
     ) => Promise<ServerGenerateThreadRecapResult>;
+    generateAutomationIntent: (
+      input: ServerGenerateAutomationIntentInput,
+    ) => Promise<ServerGenerateAutomationIntentResult>;
     transcribeVoice: (
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;
@@ -553,6 +561,8 @@ export interface NativeApi {
     delete: (input: AutomationDeleteInput) => Promise<void>;
     runNow: (input: AutomationRunNowInput) => Promise<AutomationRunNowResult>;
     cancelRun: (input: AutomationCancelRunInput) => Promise<AutomationCancelRunResult>;
+    markRunRead: (input: AutomationMarkRunReadInput) => Promise<AutomationRunActionResult>;
+    archiveRun: (input: AutomationArchiveRunInput) => Promise<AutomationRunActionResult>;
     onEvent: (callback: (event: AutomationStreamEvent) => void) => () => void;
   };
   browser: {

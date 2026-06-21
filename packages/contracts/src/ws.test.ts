@@ -114,6 +114,30 @@ it.effect("accepts automation create requests", () =>
   }),
 );
 
+it.effect("accepts automation run action requests", () =>
+  Effect.gen(function* () {
+    const markRead = yield* decode(WebSocketRequest, {
+      id: "req-automation-read-1",
+      body: {
+        _tag: WS_METHODS.automationMarkRunRead,
+        runId: "run-1",
+        unread: false,
+      },
+    });
+    const archive = yield* decode(WebSocketRequest, {
+      id: "req-automation-archive-1",
+      body: {
+        _tag: WS_METHODS.automationArchiveRun,
+        runId: "run-1",
+        archived: true,
+      },
+    });
+
+    assert.strictEqual(markRead.body._tag, WS_METHODS.automationMarkRunRead);
+    assert.strictEqual(archive.body._tag, WS_METHODS.automationArchiveRun);
+  }),
+);
+
 it.effect("accepts typed websocket push envelopes with sequence", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(WsResponse, {

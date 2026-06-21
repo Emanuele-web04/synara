@@ -6,6 +6,7 @@
 import {
   ApprovalRequestId,
   AutomationId,
+  AutomationRunId,
   CommandId,
   type ContextMenuItem,
   EventId,
@@ -404,6 +405,14 @@ describe("wsNativeApi", () => {
 
     await api.automation.list({ projectId: ProjectId.makeUnsafe("project-1") });
     await api.automation.runNow({ automationId: AutomationId.makeUnsafe("automation-1") });
+    await api.automation.markRunRead({
+      runId: AutomationRunId.makeUnsafe("automation-run-1"),
+      unread: false,
+    });
+    await api.automation.archiveRun({
+      runId: AutomationRunId.makeUnsafe("automation-run-1"),
+      archived: true,
+    });
 
     const event = {
       type: "definition-deleted",
@@ -421,6 +430,14 @@ describe("wsNativeApi", () => {
     });
     expect(requestMock).toHaveBeenCalledWith(WS_METHODS.automationRunNow, {
       automationId: "automation-1",
+    });
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.automationMarkRunRead, {
+      runId: "automation-run-1",
+      unread: false,
+    });
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.automationArchiveRun, {
+      runId: "automation-run-1",
+      archived: true,
     });
     expect(onAutomationEvent).toHaveBeenCalledTimes(1);
     expect(onAutomationEvent).toHaveBeenCalledWith(event);

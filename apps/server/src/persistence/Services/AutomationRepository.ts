@@ -1,12 +1,15 @@
 import {
   AutomationCancelRunInput,
+  AutomationArchiveRunInput,
   AutomationCreateInput,
   AutomationDefinition,
   AutomationId,
   AutomationListInput,
   AutomationListResult,
+  AutomationMarkRunReadInput,
   AutomationPermissionSnapshot,
   AutomationRun,
+  AutomationRunResult,
   AutomationRunId,
   AutomationTrigger,
   CommandId,
@@ -24,6 +27,7 @@ export const CreateAutomationDefinitionInput = Schema.Struct({
   id: AutomationId,
   input: AutomationCreateInput,
   now: Schema.String,
+  nextRunAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type CreateAutomationDefinitionInput = typeof CreateAutomationDefinitionInput.Type;
 
@@ -57,6 +61,13 @@ export const CreateAutomationRunInput = Schema.Struct({
   automationId: AutomationId,
   projectId: ProjectId,
   threadId: Schema.NullOr(ThreadId),
+  messageId: Schema.optional(Schema.NullOr(MessageId)).pipe(Schema.withDecodingDefault(() => null)),
+  threadCreateCommandId: Schema.optional(Schema.NullOr(CommandId)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  turnStartCommandId: Schema.optional(Schema.NullOr(CommandId)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   trigger: AutomationTrigger,
   scheduledFor: Schema.String,
   permissionSnapshot: AutomationPermissionSnapshot,
@@ -86,13 +97,27 @@ export const MarkAutomationRunFailedInput = Schema.Struct({
 });
 export type MarkAutomationRunFailedInput = typeof MarkAutomationRunFailedInput.Type;
 
+export const MarkAutomationRunSkippedInput = Schema.Struct({
+  id: AutomationRunId,
+  reason: Schema.String,
+  finishedAt: Schema.String,
+});
+export type MarkAutomationRunSkippedInput = typeof MarkAutomationRunSkippedInput.Type;
+
 export const MarkAutomationRunSucceededInput = Schema.Struct({
   id: AutomationRunId,
   turnId: Schema.NullOr(TurnId),
-  result: Schema.NullOr(Schema.Unknown),
+  result: Schema.NullOr(AutomationRunResult),
   finishedAt: Schema.String,
 });
 export type MarkAutomationRunSucceededInput = typeof MarkAutomationRunSucceededInput.Type;
+
+export const MarkAutomationRunResultInput = Schema.Struct({
+  id: AutomationRunId,
+  result: Schema.NullOr(AutomationRunResult),
+  updatedAt: Schema.String,
+});
+export type MarkAutomationRunResultInput = typeof MarkAutomationRunResultInput.Type;
 
 export const MarkAutomationRunInterruptedInput = Schema.Struct({
   id: AutomationRunId,
@@ -119,16 +144,53 @@ export const ListRecoverableAutomationRunsInput = Schema.Struct({
 });
 export type ListRecoverableAutomationRunsInput = typeof ListRecoverableAutomationRunsInput.Type;
 
+export const ListAutomationRunsNeedingCompletionEvaluationInput = Schema.Struct({
+  limit: Schema.Number,
+});
+export type ListAutomationRunsNeedingCompletionEvaluationInput =
+  typeof ListAutomationRunsNeedingCompletionEvaluationInput.Type;
+
 export const CountActiveAutomationRunsInput = Schema.Struct({
   automationId: AutomationId,
 });
 export type CountActiveAutomationRunsInput = typeof CountActiveAutomationRunsInput.Type;
+
+export const CountActiveAutomationRunsByThreadInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type CountActiveAutomationRunsByThreadInput =
+  typeof CountActiveAutomationRunsByThreadInput.Type;
+
+export const CountPendingCompletionEvaluationsByThreadInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type CountPendingCompletionEvaluationsByThreadInput =
+  typeof CountPendingCompletionEvaluationsByThreadInput.Type;
+
+export const ListActiveAutomationRunsForDefinitionInput = Schema.Struct({
+  automationId: AutomationId,
+});
+export type ListActiveAutomationRunsForDefinitionInput =
+  typeof ListActiveAutomationRunsForDefinitionInput.Type;
+
+export const GetEarliestAutomationNextRunAtInput = Schema.Struct({
+  now: Schema.optional(Schema.String),
+});
+export type GetEarliestAutomationNextRunAtInput = typeof GetEarliestAutomationNextRunAtInput.Type;
 
 export const DisableAutomationDefinitionInput = Schema.Struct({
   id: AutomationId,
   now: Schema.String,
 });
 export type DisableAutomationDefinitionInput = typeof DisableAutomationDefinitionInput.Type;
+
+export const DisableAutomationDefinitionIfUnchangedInput = Schema.Struct({
+  id: AutomationId,
+  expectedUpdatedAt: Schema.String,
+  now: Schema.String,
+});
+export type DisableAutomationDefinitionIfUnchangedInput =
+  typeof DisableAutomationDefinitionIfUnchangedInput.Type;
 
 export const IncrementAutomationIterationInput = Schema.Struct({
   id: AutomationId,
@@ -178,8 +240,14 @@ export interface AutomationRepositoryShape {
   readonly markRunFailed: (
     input: MarkAutomationRunFailedInput,
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
+  readonly markRunSkipped: (
+    input: MarkAutomationRunSkippedInput,
+  ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
   readonly markRunSucceeded: (
     input: MarkAutomationRunSucceededInput,
+  ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
+  readonly markRunResult: (
+    input: MarkAutomationRunResultInput,
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
   readonly markRunInterrupted: (
     input: MarkAutomationRunInterruptedInput,
@@ -190,18 +258,43 @@ export interface AutomationRepositoryShape {
   readonly cancelRun: (
     input: AutomationCancelRunInput & { readonly now: string },
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
+  /** Returns the newest active run for a thread; terminal history rows are intentionally ignored. */
   readonly getRunByThreadId: (
     input: GetAutomationRunByThreadInput,
   ) => Effect.Effect<Option.Option<AutomationRun>, AutomationRepositoryError>;
   readonly listRecoverableRuns: (
     input: ListRecoverableAutomationRunsInput,
   ) => Effect.Effect<ReadonlyArray<AutomationRun>, AutomationRepositoryError>;
+  readonly listRunsNeedingCompletionEvaluation: (
+    input: ListAutomationRunsNeedingCompletionEvaluationInput,
+  ) => Effect.Effect<ReadonlyArray<AutomationRun>, AutomationRepositoryError>;
   readonly countActiveRunsForDefinition: (
     input: CountActiveAutomationRunsInput,
   ) => Effect.Effect<number, AutomationRepositoryError>;
+  readonly countActiveRunsForThread: (
+    input: CountActiveAutomationRunsByThreadInput,
+  ) => Effect.Effect<number, AutomationRepositoryError>;
+  readonly countPendingCompletionEvaluationsForThread: (
+    input: CountPendingCompletionEvaluationsByThreadInput,
+  ) => Effect.Effect<number, AutomationRepositoryError>;
+  readonly listActiveRunsForDefinition: (
+    input: ListActiveAutomationRunsForDefinitionInput,
+  ) => Effect.Effect<ReadonlyArray<AutomationRun>, AutomationRepositoryError>;
+  readonly getEarliestNextRunAt: (
+    input?: GetEarliestAutomationNextRunAtInput,
+  ) => Effect.Effect<string | null, AutomationRepositoryError>;
+  readonly markRunRead: (
+    input: AutomationMarkRunReadInput & { readonly now: string },
+  ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
+  readonly archiveRun: (
+    input: AutomationArchiveRunInput & { readonly now: string },
+  ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
   readonly disableDefinition: (
     input: DisableAutomationDefinitionInput,
   ) => Effect.Effect<void, AutomationRepositoryError>;
+  readonly disableDefinitionIfUnchanged: (
+    input: DisableAutomationDefinitionIfUnchangedInput,
+  ) => Effect.Effect<boolean, AutomationRepositoryError>;
   readonly incrementDefinitionIterationCount: (
     input: IncrementAutomationIterationInput,
   ) => Effect.Effect<void, AutomationRepositoryError>;

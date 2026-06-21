@@ -3,7 +3,10 @@
 //   composer attachments in one reusable row.
 // Layer: Chat composer presentation
 
-import { type ComposerFileAttachment, type ComposerImageAttachment } from "../../composerDraftStore";
+import {
+  type ComposerFileAttachment,
+  type ComposerImageAttachment,
+} from "../../composerDraftStore";
 import { type PastedTextDraft } from "../../lib/composerPastedText";
 import { type FileCommentDraft } from "../../lib/fileComments";
 import { type ChatAssistantSelectionAttachment } from "../../types";
@@ -75,12 +78,7 @@ export function ComposerReferenceAttachments({
         />
       ))}
       {files.map((file) => (
-        <FileAttachmentChip
-          key={file.id}
-          file={file}
-          nonPersisted
-          onRemove={onRemoveFile}
-        />
+        <FileAttachmentChip key={file.id} file={file} nonPersisted onRemove={onRemoveFile} />
       ))}
       {images.map((image) => (
         <ComposerImageAttachmentChip
