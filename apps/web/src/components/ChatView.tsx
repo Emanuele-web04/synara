@@ -8812,17 +8812,13 @@ export default function ChatView({
       </div>
     ) : null;
 
-  const threadAutomationItems = useMemo(
-    () =>
-      automationData.definitions
-        .filter(
-          (definition) =>
-            definition.mode === "heartbeat" && definition.targetThreadId === activeThread.id,
-        )
-        .sort((left, right) => left.name.localeCompare(right.name))
-        .map((definition) => ({ definition })),
-    [activeThread.id, automationData.definitions],
-  );
+  const threadAutomationItems = automationData.definitions
+    .filter(
+      (definition) =>
+        definition.mode === "heartbeat" && definition.targetThreadId === activeThread.id,
+    )
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((definition) => ({ definition }));
 
   // Shared inputs for both Environment panel surfaces (the header Popover when the dock is
   // open, and the docked right column when it is closed) so the two never drift.

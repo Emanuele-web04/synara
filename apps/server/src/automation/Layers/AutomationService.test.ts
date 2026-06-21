@@ -1652,6 +1652,58 @@ layer("AutomationService", (it) => {
           ?.stopMatched,
         false,
       );
+      assert.strictEqual(
+        listed.runs.find((entry) => entry.id === run.id)?.result?.summary,
+        "The assistant found actionable issues.",
+      );
+    }),
+  );
+
+  it.effect("does not apply newly edited stop policies to in-flight heartbeat runs", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-policy-edited-in-flight");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-policy-edited-in-flight");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.98,
+        reason: "The newly added stop policy would match.",
+      };
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: { type: "none" },
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* realDelay(5);
+      yield* service.update({
+        id: created.id,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "The PR is ready.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* realDelay(20);
+
+      const listed = yield* service.list({ projectId });
+      const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(updatedDefinition?.enabled, true);
+      assert.deepStrictEqual(
+        updatedDefinition?.completionPolicy,
+        heartbeatCompletionPolicy("the PR is ready"),
+      );
+      assert.isUndefined(updatedRun?.result?.completionEvaluation);
+      assert.strictEqual(completionEvaluationInputs.length, 0);
     }),
   );
 
@@ -1758,6 +1810,10 @@ layer("AutomationService", (it) => {
       assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, true);
       assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, true);
       assert.strictEqual(updatedRun?.result?.completionEvaluation?.confidence, 0.52);
+      assert.strictEqual(
+        updatedRun?.result?.summary,
+        "The assistant was uncertain whether the PR is ready.",
+      );
     }),
   );
 

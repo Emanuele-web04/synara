@@ -128,6 +128,19 @@ function isSameAiCompletionPolicy(
   );
 }
 
+function runStartedAfterDefinitionUpdate(
+  run: AutomationRun,
+  definition: AutomationDefinition,
+): boolean {
+  const runPolicyAnchorMs = Date.parse(run.startedAt ?? run.createdAt);
+  const definitionUpdatedAtMs = Date.parse(definition.updatedAt);
+  return (
+    Number.isFinite(runPolicyAnchorMs) &&
+    Number.isFinite(definitionUpdatedAtMs) &&
+    runPolicyAnchorMs >= definitionUpdatedAtMs
+  );
+}
+
 function resultForRunStatus(
   status: AutomationRunStatus,
   input: { readonly summary?: string | null; readonly now: string },
@@ -1215,6 +1228,9 @@ export const AutomationServiceLive = Layer.effect(
               if (!shouldUseStopPolicyForDefinition(definition, definition.completionPolicy)) {
                 return Effect.void;
               }
+              if (!runStartedAfterDefinitionUpdate(run, definition)) {
+                return Effect.void;
+              }
               return enqueueCompletionEvaluationJob({
                 definition,
                 run,
@@ -1282,7 +1298,8 @@ export const AutomationServiceLive = Layer.effect(
               const enqueueAiStop =
                 status === "succeeded" &&
                 definition.mode === "heartbeat" &&
-                definition.completionPolicy.type === "ai-evaluated"
+                definition.completionPolicy.type === "ai-evaluated" &&
+                runStartedAfterDefinitionUpdate(run, definition)
                   ? enqueueCompletionEvaluationJob({
                       definition,
                       run,

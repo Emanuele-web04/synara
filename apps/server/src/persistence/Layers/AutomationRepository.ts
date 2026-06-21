@@ -781,7 +781,7 @@ const makeAutomationRepository = Effect.gen(function* () {
           AND definitions.mode = 'heartbeat'
           AND json_extract(definitions.completion_policy_json, '$.type') = 'ai-evaluated'
           AND runs.finished_at IS NOT NULL
-          AND runs.finished_at >= definitions.updated_at
+          AND COALESCE(runs.started_at, runs.created_at) >= definitions.updated_at
           AND (
             runs.result_json IS NULL
             OR json_type(runs.result_json, '$.completionEvaluation') IS NULL
@@ -831,7 +831,7 @@ const makeAutomationRepository = Effect.gen(function* () {
           AND definitions.mode = 'heartbeat'
           AND json_extract(definitions.completion_policy_json, '$.type') = 'ai-evaluated'
           AND runs.finished_at IS NOT NULL
-          AND runs.finished_at >= definitions.updated_at
+          AND COALESCE(runs.started_at, runs.created_at) >= definitions.updated_at
           AND (
             runs.result_json IS NULL
             OR json_type(runs.result_json, '$.completionEvaluation') IS NULL
@@ -901,7 +901,7 @@ const makeAutomationRepository = Effect.gen(function* () {
                   '$.type'
                 ) = 'ai-evaluated'
                 AND runs.finished_at IS NOT NULL
-                AND runs.finished_at >= pending_definitions.updated_at
+                AND COALESCE(runs.started_at, runs.created_at) >= pending_definitions.updated_at
                 AND (
                   runs.result_json IS NULL
                   OR json_type(runs.result_json, '$.completionEvaluation') IS NULL

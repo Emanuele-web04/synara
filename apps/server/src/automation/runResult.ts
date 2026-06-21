@@ -61,7 +61,7 @@ export function automationCompletionRunResult(input: {
       ? automationRunResultSummary(`Stopped: ${input.evaluation.reason}`)
       : input.summary !== undefined
         ? automationRunResultSummary(input.summary)
-        : base.summary,
+        : automationRunResultSummary(input.evaluation.reason),
     severity: input.matched ? "info" : (input.severity ?? base.severity),
     unread: input.unread ?? base.unread,
     completionEvaluation: input.evaluation,

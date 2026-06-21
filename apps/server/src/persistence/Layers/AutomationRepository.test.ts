@@ -679,9 +679,41 @@ layer("AutomationRepository", (it) => {
         },
         finishedAt: "2026-06-16T10:01:00.000Z",
       });
+      const inFlightBeforePolicyRun = yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-stop-backfill-in-flight-before-policy"),
+        automationId,
+        projectId,
+        threadId,
+        messageId: MessageId.makeUnsafe("message-stop-backfill-in-flight-before-policy"),
+        threadCreateCommandId: null,
+        turnStartCommandId: CommandId.makeUnsafe("command-stop-backfill-in-flight-before-policy"),
+        trigger: { type: "manual" },
+        scheduledFor: "2026-06-16T10:01:30.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:01:30.000Z",
+      });
+      yield* repository.markRunStarted({
+        id: inFlightBeforePolicyRun.id,
+        threadId,
+        messageId: MessageId.makeUnsafe("message-stop-backfill-in-flight-before-policy"),
+        threadCreateCommandId: null,
+        turnStartCommandId: CommandId.makeUnsafe("command-stop-backfill-in-flight-before-policy"),
+        startedAt: "2026-06-16T10:01:40.000Z",
+      });
       yield* repository.saveDefinition({
         ...definition,
         updatedAt: "2026-06-16T10:02:00.000Z",
+      });
+      yield* repository.markRunSucceeded({
+        id: inFlightBeforePolicyRun.id,
+        turnId: null,
+        result: {
+          outcome: "unknown",
+          summary: null,
+          unread: true,
+          archivedAt: null,
+        },
+        finishedAt: "2026-06-16T10:02:30.000Z",
       });
 
       const currentRun = yield* repository.createRun({
