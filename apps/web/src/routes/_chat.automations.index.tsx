@@ -52,6 +52,7 @@ import {
   formFromDefinition,
   isFormSubmittable,
   isTriageRun,
+  providerOptionsForAutomationEdit,
   projectModelSelection,
   runResultSummary,
   runStatusLabel,
@@ -252,7 +253,12 @@ function AutomationsRouteView() {
     const closeOnSuccess = { onSuccess: () => setDialogOpen(false) };
     if (editingDefinition) {
       updateMutation.mutate(
-        updateInputFromForm(editingDefinition, form, providerOptionsForDispatch, acknowledgedRisks),
+        updateInputFromForm(
+          editingDefinition,
+          form,
+          providerOptionsForAutomationEdit(editingDefinition, form, providerOptionsForDispatch),
+          acknowledgedRisks,
+        ),
         closeOnSuccess,
       );
       return;

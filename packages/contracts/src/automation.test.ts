@@ -3,12 +3,15 @@ import { Effect, Schema } from "effect";
 
 import {
   AutomationCreateInput,
+  AutomationDefinition,
+  AutomationCompletionPolicy,
   AutomationRun,
   AutomationRunResult,
   AutomationSchedule,
   AutomationRunStatus,
   AutomationStreamEvent,
   DEFAULT_AUTOMATION_RUNTIME_MODE,
+  DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
 } from "./automation";
 
 const decode = <S extends Schema.Top>(
@@ -40,7 +43,60 @@ it.effect("defaults automation runtime mode to approval-required", () =>
     assert.strictEqual(parsed.maxRuntimeSeconds, 60 * 60);
     assert.deepStrictEqual(parsed.retryPolicy, { type: "none" });
     assert.strictEqual(parsed.misfirePolicy, "coalesce");
+    assert.deepStrictEqual(parsed.completionPolicy, { type: "none" });
     assert.deepStrictEqual(parsed.acknowledgedRisks, []);
+  }),
+);
+
+it.effect("decodes legacy automation definitions without completion policies", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(AutomationDefinition, {
+      id: "automation-legacy",
+      projectId: "project-1",
+      sourceThreadId: null,
+      name: "Legacy automation",
+      prompt: "Check the PR.",
+      schedule: { type: "manual" },
+      enabled: true,
+      nextRunAt: null,
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      worktreeMode: "auto",
+      mode: "heartbeat",
+      targetThreadId: "thread-1",
+      maxIterations: null,
+      stopOnError: true,
+      minimumIntervalSeconds: 60,
+      maxRuntimeSeconds: 3600,
+      retryPolicy: { type: "none" },
+      misfirePolicy: "coalesce",
+      acknowledgedRisks: [],
+      iterationCount: 0,
+      createdAt: "2026-06-16T10:00:00.000Z",
+      updatedAt: "2026-06-16T10:00:00.000Z",
+      archivedAt: null,
+    });
+
+    assert.deepStrictEqual(parsed.completionPolicy, { type: "none" });
+    assert.strictEqual(parsed.completionPolicyVersion, 0);
+    assert.strictEqual(parsed.completionPolicyUpdatedAt, "1970-01-01T00:00:00.000Z");
+  }),
+);
+
+it.effect("accepts AI-evaluated automation completion policies", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(AutomationCompletionPolicy, {
+      type: "ai-evaluated",
+      stopWhen: "the PR is ready to merge",
+      confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+    });
+
+    assert.strictEqual(parsed.type, "ai-evaluated");
+    assert.strictEqual(parsed.confidenceThreshold, DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD);
   }),
 );
 
@@ -70,6 +126,7 @@ it.effect("accepts automation runs with immutable permission snapshots", () =>
           provider: "codex",
           model: "gpt-5-codex",
         },
+        completionPolicyVersion: 7,
         runtimeMode: "approval-required",
         interactionMode: "default",
         worktreeMode: "worktree",
@@ -81,6 +138,7 @@ it.effect("accepts automation runs with immutable permission snapshots", () =>
     });
 
     assert.strictEqual(parsed.permissionSnapshot.runtimeMode, "approval-required");
+    assert.strictEqual(parsed.permissionSnapshot.completionPolicyVersion, 7);
     assert.strictEqual(parsed.status, "running");
   }),
 );
@@ -145,6 +203,25 @@ it.effect("accepts typed automation run results", () =>
 
     assert.strictEqual(parsed.outcome, "needs-attention");
     assert.strictEqual(parsed.unread, true);
+  }),
+);
+
+it.effect("accepts automation run result completion evaluations", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(AutomationRunResult, {
+      outcome: "no-findings",
+      summary: "Stopped: PR is ready.",
+      severity: "info",
+      unread: true,
+      archivedAt: null,
+      completionEvaluation: {
+        stopMatched: true,
+        confidence: 0.94,
+        reason: "The assistant says the PR is ready.",
+      },
+    });
+
+    assert.strictEqual(parsed.completionEvaluation?.stopMatched, true);
   }),
 );
 

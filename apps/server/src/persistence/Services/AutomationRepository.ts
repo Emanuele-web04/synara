@@ -144,6 +144,12 @@ export const ListRecoverableAutomationRunsInput = Schema.Struct({
 });
 export type ListRecoverableAutomationRunsInput = typeof ListRecoverableAutomationRunsInput.Type;
 
+export const ListAutomationRunsNeedingCompletionEvaluationInput = Schema.Struct({
+  limit: Schema.Number,
+});
+export type ListAutomationRunsNeedingCompletionEvaluationInput =
+  typeof ListAutomationRunsNeedingCompletionEvaluationInput.Type;
+
 export const CountActiveAutomationRunsInput = Schema.Struct({
   automationId: AutomationId,
 });
@@ -154,6 +160,12 @@ export const CountActiveAutomationRunsByThreadInput = Schema.Struct({
 });
 export type CountActiveAutomationRunsByThreadInput =
   typeof CountActiveAutomationRunsByThreadInput.Type;
+
+export const CountPendingCompletionEvaluationsByThreadInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type CountPendingCompletionEvaluationsByThreadInput =
+  typeof CountPendingCompletionEvaluationsByThreadInput.Type;
 
 export const ListActiveAutomationRunsForDefinitionInput = Schema.Struct({
   automationId: AutomationId,
@@ -171,6 +183,14 @@ export const DisableAutomationDefinitionInput = Schema.Struct({
   now: Schema.String,
 });
 export type DisableAutomationDefinitionInput = typeof DisableAutomationDefinitionInput.Type;
+
+export const DisableAutomationDefinitionIfUnchangedInput = Schema.Struct({
+  id: AutomationId,
+  expectedUpdatedAt: Schema.String,
+  now: Schema.String,
+});
+export type DisableAutomationDefinitionIfUnchangedInput =
+  typeof DisableAutomationDefinitionIfUnchangedInput.Type;
 
 export const IncrementAutomationIterationInput = Schema.Struct({
   id: AutomationId,
@@ -245,11 +265,17 @@ export interface AutomationRepositoryShape {
   readonly listRecoverableRuns: (
     input: ListRecoverableAutomationRunsInput,
   ) => Effect.Effect<ReadonlyArray<AutomationRun>, AutomationRepositoryError>;
+  readonly listRunsNeedingCompletionEvaluation: (
+    input: ListAutomationRunsNeedingCompletionEvaluationInput,
+  ) => Effect.Effect<ReadonlyArray<AutomationRun>, AutomationRepositoryError>;
   readonly countActiveRunsForDefinition: (
     input: CountActiveAutomationRunsInput,
   ) => Effect.Effect<number, AutomationRepositoryError>;
   readonly countActiveRunsForThread: (
     input: CountActiveAutomationRunsByThreadInput,
+  ) => Effect.Effect<number, AutomationRepositoryError>;
+  readonly countPendingCompletionEvaluationsForThread: (
+    input: CountPendingCompletionEvaluationsByThreadInput,
   ) => Effect.Effect<number, AutomationRepositoryError>;
   readonly listActiveRunsForDefinition: (
     input: ListActiveAutomationRunsForDefinitionInput,
@@ -266,6 +292,9 @@ export interface AutomationRepositoryShape {
   readonly disableDefinition: (
     input: DisableAutomationDefinitionInput,
   ) => Effect.Effect<void, AutomationRepositoryError>;
+  readonly disableDefinitionIfUnchanged: (
+    input: DisableAutomationDefinitionIfUnchangedInput,
+  ) => Effect.Effect<boolean, AutomationRepositoryError>;
   readonly incrementDefinitionIterationCount: (
     input: IncrementAutomationIterationInput,
   ) => Effect.Effect<void, AutomationRepositoryError>;

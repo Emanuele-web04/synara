@@ -12,7 +12,7 @@ import { EditorId } from "./editor";
 import { ModelSelection, ProviderKind, ProviderStartOptions } from "./orchestration";
 import { ServerSettings, ServerSettingsPatch } from "./settings";
 import { ExecutionEnvironmentDescriptor } from "./environment";
-import { AutomationMode, AutomationSchedule } from "./automation";
+import { AutomationCompletionPolicy, AutomationMode, AutomationSchedule } from "./automation";
 
 const SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BASE64_CHARS = 14_000_000;
 
@@ -315,6 +315,9 @@ export const ServerGenerateAutomationIntentResult = Schema.Struct({
   taskPrompt: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(64_000))),
   schedule: Schema.NullOr(AutomationSchedule),
   mode: Schema.NullOr(AutomationMode),
+  completionPolicy: Schema.optional(AutomationCompletionPolicy).pipe(
+    Schema.withDecodingDefault(() => ({ type: "none" as const })),
+  ),
   missingFields: Schema.Array(ServerAutomationIntentMissingField),
   needsConfirmation: Schema.Boolean,
   reason: Schema.NullOr(Schema.String.check(Schema.isMaxLength(500))),

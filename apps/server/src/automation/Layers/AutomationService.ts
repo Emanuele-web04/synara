@@ -8,6 +8,7 @@ import {
   MessageId,
   ThreadId,
   type AutomationAllowedCapability,
+  type AutomationCompletionPolicy,
   type AutomationDefinition,
   type AutomationRun,
   type AutomationRunResult,
@@ -19,16 +20,26 @@ import {
   type OrchestrationThreadShell,
   type ThreadEnvironmentMode,
 } from "@t3tools/contracts";
-import { Effect, Layer, Option, PubSub, Stream } from "effect";
+import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
+import { TextGeneration } from "../../git/Services/TextGeneration.ts";
+import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AutomationRepository } from "../../persistence/Services/AutomationRepository.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import type { ProjectionTurn } from "../../persistence/Services/ProjectionTurns.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { AutomationServiceError } from "../Errors.ts";
 import { AutomationService, type AutomationServiceShape } from "../Services/AutomationService.ts";
+import {
+  type AutomationCompletionEvaluation,
+  automationCompletionRunResult,
+  automationRunResultSummary,
+  failedAutomationCompletionEvaluation,
+  normalizeAutomationCompletionReason,
+} from "../runResult.ts";
 import {
   computeAutomationScheduleSpacingSeconds,
   computeNextAutomationRunAt,
@@ -36,8 +47,14 @@ import {
 } from "../schedule.ts";
 
 const AUTOMATION_ERROR_MAX_CHARS = 4_000;
-const AUTOMATION_RUN_RESULT_SUMMARY_MAX_CHARS = 2_000;
 const FAST_INTERVAL_ACKNOWLEDGED_MINIMUM_SECONDS = 1;
+const AUTOMATION_COMPLETION_EVALUATION_WORKERS = 2;
+
+interface AutomationCompletionEvaluationJob {
+  readonly definition: AutomationDefinition;
+  readonly run: AutomationRun;
+  readonly policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>;
+}
 
 /** Statuses a run can no longer leave; reconciliation never overwrites these. */
 const TERMINAL_RUN_STATUSES: ReadonlySet<AutomationRunStatus> = new Set([
@@ -94,9 +111,50 @@ function errorMessage(cause: unknown): string {
 }
 
 function resultSummary(value: string | null | undefined, fallback?: string): string | null {
-  const summary = value ?? fallback ?? null;
-  const trimmed = summary?.trim();
-  return trimmed ? trimmed.slice(0, AUTOMATION_RUN_RESULT_SUMMARY_MAX_CHARS) : null;
+  return automationRunResultSummary(value, fallback);
+}
+
+function completionFailureReason(error: unknown): string {
+  const message = error instanceof AutomationServiceError ? error.message : errorMessage(error);
+  return normalizeAutomationCompletionReason(`Stop check failed: ${message}`);
+}
+
+function isSameAiCompletionPolicy(
+  left: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
+  right: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
+): boolean {
+  return (
+    left.stopWhen === right.stopWhen && left.confidenceThreshold === right.confidenceThreshold
+  );
+}
+
+function isSameCompletionPolicy(
+  left: AutomationCompletionPolicy,
+  right: AutomationCompletionPolicy,
+): boolean {
+  if (left.type !== right.type) {
+    return false;
+  }
+  if (left.type === "none") {
+    return true;
+  }
+  return right.type === "ai-evaluated" && isSameAiCompletionPolicy(left, right);
+}
+
+function runUsesCurrentCompletionPolicy(
+  run: AutomationRun,
+  definition: AutomationDefinition,
+): boolean {
+  if (run.permissionSnapshot.completionPolicyVersion !== undefined) {
+    return run.permissionSnapshot.completionPolicyVersion === definition.completionPolicyVersion;
+  }
+  const runPolicyAnchorMs = Date.parse(run.startedAt ?? run.createdAt);
+  const policyUpdatedAtMs = Date.parse(definition.completionPolicyUpdatedAt);
+  return (
+    Number.isFinite(runPolicyAnchorMs) &&
+    Number.isFinite(policyUpdatedAtMs) &&
+    runPolicyAnchorMs > policyUpdatedAtMs
+  );
 }
 
 function resultForRunStatus(
@@ -164,6 +222,7 @@ function makePermissionSnapshot(definition: AutomationDefinition, now: string) {
     provider: definition.modelSelection.provider,
     modelSelection: definition.modelSelection,
     ...(definition.providerOptions ? { providerOptions: definition.providerOptions } : {}),
+    completionPolicyVersion: definition.completionPolicyVersion,
     runtimeMode: definition.runtimeMode,
     interactionMode: definition.interactionMode,
     worktreeMode: definition.worktreeMode,
@@ -266,6 +325,14 @@ function mergeDefinitionUpdate(
         : (current.nextRunAt ?? safeComputeNextRunAt(schedule, now, null));
   const providerOptions = input.providerOptions ?? current.providerOptions;
   const mode = input.mode ?? current.mode;
+  const completionPolicy =
+    mode === "standalone"
+      ? { type: "none" as const }
+      : (input.completionPolicy ?? current.completionPolicy);
+  const completionPolicyChanged = !isSameCompletionPolicy(
+    current.completionPolicy,
+    completionPolicy,
+  );
   const nextDefinition: AutomationDefinition = {
     ...current,
     projectId: input.projectId ?? current.projectId,
@@ -292,6 +359,11 @@ function mergeDefinitionUpdate(
           ? ((input.maxIterations as AutomationDefinition["maxIterations"] | undefined) ?? null)
           : current.maxIterations,
     stopOnError: input.stopOnError ?? current.stopOnError,
+    completionPolicy,
+    completionPolicyVersion: completionPolicyChanged
+      ? current.completionPolicyVersion + 1
+      : current.completionPolicyVersion,
+    completionPolicyUpdatedAt: completionPolicyChanged ? now : current.completionPolicyUpdatedAt,
     minimumIntervalSeconds: input.minimumIntervalSeconds ?? current.minimumIntervalSeconds,
     maxRuntimeSeconds: hasOwn(input, "maxRuntimeSeconds")
       ? ((input.maxRuntimeSeconds as AutomationDefinition["maxRuntimeSeconds"] | undefined) ?? null)
@@ -344,12 +416,17 @@ export const AutomationServiceLive = Layer.effect(
   Effect.gen(function* () {
     const automationRepository = yield* AutomationRepository;
     const git = yield* GitCore;
+    const textGeneration = yield* TextGeneration;
+    const serverSettings = yield* ServerSettingsService;
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
     // Unbounded so we never silently drop run/definition updates under a burst, matching
     // the rest of the server's PubSub usage.
     const events = yield* PubSub.unbounded<AutomationStreamEvent>();
+    // Stop-condition AI calls can be slow; a dedicated queue keeps reconciliation responsive.
+    const completionEvaluationQueue = yield* Queue.unbounded<AutomationCompletionEvaluationJob>();
+    const queuedCompletionEvaluationRunIds = new Set<string>();
 
     const publish = (event: AutomationStreamEvent) =>
       PubSub.publish(events, event).pipe(Effect.asVoid);
@@ -801,7 +878,7 @@ export const AutomationServiceLive = Layer.effect(
               })
               .pipe(Effect.mapError(toServiceError("Failed to update automation run result.")));
             yield* publish({ type: "run-upserted", run: withResult });
-            yield* maybeStopLoop(run.automationId, "failed", failedAt);
+            yield* maybeStopLoop(withResult, "failed", failedAt);
             return yield* Effect.fail(error);
           }).pipe(Effect.catch(() => Effect.fail(error))),
         ),
@@ -881,8 +958,363 @@ export const AutomationServiceLive = Layer.effect(
         Effect.tap((updated) => publish({ type: "run-upserted", run: updated })),
       );
 
-    const maybeStopLoop = (automationId: AutomationId, status: AutomationRunStatus, now: string) =>
-      automationRepository.getDefinitionById({ id: automationId }).pipe(
+    // Stop checks must only evaluate evidence from the just-finished heartbeat turn.
+    const findRunCompletionMessages = (input: {
+      readonly run: AutomationRun;
+      readonly thread: {
+        readonly messages: ReadonlyArray<{
+          readonly id: string;
+          readonly role: string;
+          readonly text: string;
+          readonly turnId: string | null;
+        }>;
+      };
+    }) => {
+      const runMessages = input.thread.messages.filter(
+        (message) =>
+          message.id === input.run.messageId ||
+          (input.run.turnId !== null && message.turnId === input.run.turnId),
+      );
+      const userMessage =
+        input.thread.messages.find((message) => message.id === input.run.messageId)?.text ?? "";
+      const assistantMessages = runMessages.filter((message) => message.role === "assistant");
+      const runThreadContext = runMessages
+        .slice(-8)
+        .map((message) => `${message.role}: ${message.text}`)
+        .join("\n\n");
+      return {
+        runUserMessage: userMessage,
+        runAssistantText:
+          assistantMessages.length > 0
+            ? assistantMessages.map((message) => message.text).join("\n\n")
+            : "",
+        runThreadContext,
+      };
+    };
+
+    const staleStopCheckEvaluation = (rawEvaluation: AutomationCompletionEvaluation) => ({
+      ...rawEvaluation,
+      stopMatched: false,
+      reason: normalizeAutomationCompletionReason(
+        "Stop check ignored because the automation changed before evaluation finished.",
+      ),
+    });
+
+    const disableDefinitionForCompletionMatch = (definition: AutomationDefinition) =>
+      automationRepository
+        .disableDefinitionIfUnchanged({
+          id: definition.id,
+          expectedUpdatedAt: definition.updatedAt,
+          now: isoNow(),
+        })
+        .pipe(Effect.mapError(toServiceError("Failed to disable automation.")));
+
+    // The AI check runs after the run is published; reload so read/archive changes win the race.
+    const latestRunForCompletionResult = (run: AutomationRun) =>
+      automationRepository.getRunById({ id: run.id }).pipe(
+        Effect.mapError(toServiceError("Failed to load automation run.")),
+        Effect.map((runOption) =>
+          Option.match(runOption, {
+            onNone: () => run,
+            onSome: (latestRun) => latestRun,
+          }),
+        ),
+      );
+
+    const recordCompletionEvaluation = (input: {
+      readonly run: AutomationRun;
+      readonly evaluation: AutomationCompletionEvaluation;
+      readonly matched: boolean;
+      readonly summary?: string;
+      readonly severity?: NonNullable<AutomationRunResult["severity"]>;
+    }) =>
+      Effect.gen(function* () {
+        const latestRun = yield* latestRunForCompletionResult(input.run);
+        const updatedAt = isoNow();
+        const updated = yield* automationRepository
+          .markRunResult({
+            id: latestRun.id,
+            result: automationCompletionRunResult({
+              baseResult: latestRun.result,
+              evaluation: input.evaluation,
+              matched: input.matched,
+              ...(input.summary !== undefined ? { summary: input.summary } : {}),
+              ...(input.severity ? { severity: input.severity } : {}),
+            }),
+            updatedAt,
+          })
+          .pipe(Effect.mapError(toServiceError("Failed to update automation run result.")));
+        yield* publish({ type: "run-upserted", run: updated });
+        return updated;
+      });
+
+    const resolveAutomationCompletionTextGenerationInput = (definition: AutomationDefinition) =>
+      Effect.gen(function* () {
+        const directInput = resolveTextGenerationInputForSelection(
+          definition.modelSelection,
+          definition.providerOptions,
+        );
+        if (directInput) {
+          return directInput;
+        }
+
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.mapError(toServiceError("Failed to load text-generation settings.")),
+        );
+        return (
+          resolveTextGenerationInputForSelection(
+            settings.textGenerationModelSelection,
+            definition.providerOptions,
+          ) ?? {}
+        );
+      });
+
+    const shouldUseStopPolicyForDefinition = (
+      definition: AutomationDefinition,
+      policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
+    ): boolean =>
+      definition.mode === "heartbeat" &&
+      definition.enabled &&
+      definition.archivedAt === null &&
+      definition.completionPolicy.type === "ai-evaluated" &&
+      isSameAiCompletionPolicy(definition.completionPolicy, policy);
+
+    const loadCurrentStopDefinition = (
+      definition: AutomationDefinition,
+      policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
+    ) =>
+      automationRepository.getDefinitionById({ id: definition.id }).pipe(
+        Effect.mapError(toServiceError("Failed to load automation.")),
+        Effect.map((definitionOption) =>
+          Option.match(definitionOption, {
+            onNone: () => Option.none<AutomationDefinition>(),
+            onSome: (currentDefinition) =>
+              currentDefinition.updatedAt === definition.updatedAt &&
+              shouldUseStopPolicyForDefinition(currentDefinition, policy)
+                ? Option.some(currentDefinition)
+                : Option.none<AutomationDefinition>(),
+          }),
+        ),
+      );
+
+    const evaluateCompletionPolicy = (
+      definition: AutomationDefinition,
+      run: AutomationRun,
+      policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
+    ) =>
+      Effect.gen(function* () {
+        if (!run.threadId) {
+          yield* recordCompletionEvaluation({
+            run,
+            evaluation: failedAutomationCompletionEvaluation(
+              "Stop check skipped because the automation run has no target thread.",
+            ),
+            matched: false,
+            summary: "Stop check skipped because the automation run has no target thread.",
+            severity: "warning",
+          });
+          return false;
+        }
+        const project = yield* requireProject(definition.projectId);
+        const threadOption = yield* projectionSnapshotQuery
+          .getThreadDetailById(run.threadId)
+          .pipe(Effect.mapError(toServiceError("Failed to load automation thread detail.")));
+        if (Option.isNone(threadOption)) {
+          yield* recordCompletionEvaluation({
+            run,
+            evaluation: failedAutomationCompletionEvaluation(
+              "Stop check skipped because the target thread could not be found.",
+            ),
+            matched: false,
+            summary: "Stop check skipped because the target thread could not be found.",
+            severity: "warning",
+          });
+          return false;
+        }
+        const thread = threadOption.value;
+        const { runUserMessage, runAssistantText, runThreadContext } = findRunCompletionMessages({
+          run,
+          thread,
+        });
+        const textGenerationInput = yield* resolveAutomationCompletionTextGenerationInput(
+          definition,
+        );
+        const evaluationRaw = yield* textGeneration
+          .evaluateAutomationCompletion({
+            cwd: project.workspaceRoot,
+            automationName: definition.name,
+            automationPrompt: definition.prompt,
+            stopWhen: policy.stopWhen,
+            runUserMessage: runUserMessage || definition.prompt,
+            runAssistantText: runAssistantText || "(no assistant output)",
+            threadContext: runThreadContext || "(no run-scoped thread context)",
+            ...textGenerationInput,
+          })
+          .pipe(Effect.mapError(toServiceError("Failed to evaluate automation stop condition.")));
+        const rawEvaluation = {
+          stopMatched: evaluationRaw.stopMatched,
+          confidence: Math.max(0, Math.min(1, evaluationRaw.confidence)),
+          reason: normalizeAutomationCompletionReason(evaluationRaw.reason),
+        };
+        const currentDefinitionOption = yield* loadCurrentStopDefinition(definition, policy);
+        const policyStillCurrent = Option.isSome(currentDefinitionOption);
+        const evaluation: AutomationCompletionEvaluation = policyStillCurrent
+          ? rawEvaluation
+          : staleStopCheckEvaluation(rawEvaluation);
+        const matched =
+          policyStillCurrent &&
+          evaluation.stopMatched &&
+          evaluation.confidence >= policy.confidenceThreshold;
+        if (!matched) {
+          yield* recordCompletionEvaluation({
+            run,
+            evaluation,
+            matched: false,
+          });
+          return false;
+        }
+        const currentDefinition = Option.getOrThrow(currentDefinitionOption);
+        // Disable before clearing the pending stop-check marker, so no extra heartbeat can launch.
+        const disabled = yield* disableDefinitionForCompletionMatch(currentDefinition);
+        if (!disabled) {
+          yield* recordCompletionEvaluation({
+            run,
+            evaluation: staleStopCheckEvaluation(rawEvaluation),
+            matched: false,
+          });
+          return false;
+        }
+        yield* publishDefinition(currentDefinition.id);
+        yield* recordCompletionEvaluation({
+          run,
+          evaluation,
+          matched: true,
+        });
+        return true;
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            const reason = completionFailureReason(error);
+            yield* Effect.logWarning("automation completion evaluation failed", {
+              automationId: definition.id,
+              runId: run.id,
+              error: errorMessage(error),
+            });
+            // Keep the heartbeat active, but make the failed stop check visible in run history.
+            yield* recordCompletionEvaluation({
+              run,
+              evaluation: failedAutomationCompletionEvaluation(reason),
+              matched: false,
+              summary: reason,
+              severity: "warning",
+            }).pipe(
+              Effect.catch((recordError) =>
+                Effect.logWarning(
+                  "automation completion evaluation failure could not be recorded",
+                  {
+                    automationId: definition.id,
+                    runId: run.id,
+                    error: errorMessage(recordError),
+                  },
+                ),
+              ),
+            );
+            return false;
+          }),
+        ),
+      );
+
+    const enqueueCompletionEvaluationJob = (job: AutomationCompletionEvaluationJob) =>
+      Effect.sync(() => {
+        if (queuedCompletionEvaluationRunIds.has(job.run.id)) {
+          return false;
+        }
+        queuedCompletionEvaluationRunIds.add(job.run.id);
+        return true;
+      }).pipe(
+        Effect.flatMap((shouldEnqueue) =>
+          shouldEnqueue
+            ? Queue.offer(completionEvaluationQueue, job).pipe(Effect.asVoid)
+            : Effect.void,
+        ),
+      );
+
+    const enqueueCompletionEvaluationForRun = (run: AutomationRun) => {
+      if (run.status !== "succeeded" || run.result?.completionEvaluation !== undefined) {
+        return Effect.void;
+      }
+
+      return automationRepository.getDefinitionById({ id: run.automationId }).pipe(
+        Effect.mapError(toServiceError("Failed to load automation.")),
+        Effect.flatMap((definitionOption) =>
+          Option.match(definitionOption, {
+            onNone: () => Effect.void,
+            onSome: (definition) => {
+              if (definition.completionPolicy.type !== "ai-evaluated") {
+                return Effect.void;
+              }
+              if (!shouldUseStopPolicyForDefinition(definition, definition.completionPolicy)) {
+                return Effect.void;
+              }
+              if (!runUsesCurrentCompletionPolicy(run, definition)) {
+                return Effect.void;
+              }
+              return enqueueCompletionEvaluationJob({
+                definition,
+                run,
+                policy: definition.completionPolicy,
+              });
+            },
+          }),
+        ),
+      );
+    };
+
+    const enqueuePendingCompletionEvaluations = () =>
+      automationRepository.listRunsNeedingCompletionEvaluation({ limit: 100 }).pipe(
+        Effect.mapError(toServiceError("Failed to list pending stop evaluations.")),
+        Effect.flatMap((runs) =>
+          Effect.forEach(runs, enqueueCompletionEvaluationForRun, { concurrency: 1 }),
+        ),
+        Effect.asVoid,
+      );
+
+    const processCompletionEvaluationJob = (job: AutomationCompletionEvaluationJob) =>
+      evaluateCompletionPolicy(job.definition, job.run, job.policy).pipe(
+        Effect.asVoid,
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) {
+            return Effect.failCause(cause);
+          }
+          return Effect.logWarning("automation completion evaluation worker failed", {
+            automationId: job.definition.id,
+            runId: job.run.id,
+            cause: Cause.pretty(cause),
+          });
+        }),
+        Effect.ensuring(Effect.sync(() => queuedCompletionEvaluationRunIds.delete(job.run.id))),
+      );
+
+    const completionEvaluationWorker = Effect.forever(
+      Queue.take(completionEvaluationQueue).pipe(Effect.flatMap(processCompletionEvaluationJob)),
+    );
+
+    yield* Effect.forEach(
+      Array.from({ length: AUTOMATION_COMPLETION_EVALUATION_WORKERS }),
+      () => Effect.forkScoped(completionEvaluationWorker),
+      { discard: true },
+    );
+
+    yield* enqueuePendingCompletionEvaluations().pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("automation pending stop evaluations could not be queued", {
+          error: errorMessage(error),
+        }),
+      ),
+    );
+
+    const maybeStopLoop = (run: AutomationRun, status: AutomationRunStatus, now: string) =>
+      automationRepository.getDefinitionById({ id: run.automationId }).pipe(
         Effect.mapError(toServiceError("Failed to load automation.")),
         Effect.flatMap((definitionOption) =>
           Option.match(definitionOption, {
@@ -895,12 +1327,28 @@ export const AutomationServiceLive = Layer.effect(
               const reachedMax =
                 definition.maxIterations !== null &&
                 definition.iterationCount >= definition.maxIterations;
-              if (!stopOnError && !reachedMax) {
-                return Effect.void;
-              }
-              return automationRepository.disableDefinition({ id: automationId, now }).pipe(
-                Effect.mapError(toServiceError("Failed to disable automation.")),
-                Effect.flatMap(() => publishDefinition(automationId)),
+              const enqueueAiStop =
+                !reachedMax &&
+                status === "succeeded" &&
+                definition.mode === "heartbeat" &&
+                definition.completionPolicy.type === "ai-evaluated" &&
+                runUsesCurrentCompletionPolicy(run, definition)
+                  ? enqueueCompletionEvaluationJob({
+                      definition,
+                      run,
+                      policy: definition.completionPolicy,
+                    })
+                  : Effect.void;
+              return enqueueAiStop.pipe(
+                Effect.flatMap(() => {
+                  if (!stopOnError && !reachedMax) {
+                    return Effect.void;
+                  }
+                  return automationRepository.disableDefinition({ id: run.automationId, now }).pipe(
+                    Effect.mapError(toServiceError("Failed to disable automation.")),
+                    Effect.flatMap(() => publishDefinition(run.automationId)),
+                  );
+                }),
               );
             },
           }),
@@ -1033,7 +1481,7 @@ export const AutomationServiceLive = Layer.effect(
         }
 
         yield* publish({ type: "run-upserted", run: updated });
-        yield* maybeStopLoop(run.automationId, updated.status, now);
+        yield* maybeStopLoop(updated, updated.status, now);
       });
 
     const failRunForTimeout = (definition: AutomationDefinition, run: AutomationRun, now: string) =>
@@ -1055,7 +1503,7 @@ export const AutomationServiceLive = Layer.effect(
           })
           .pipe(Effect.mapError(toServiceError("Failed to update automation run result.")));
         yield* publish({ type: "run-upserted", run: withResult });
-        yield* maybeStopLoop(run.automationId, "failed", now);
+        yield* maybeStopLoop(withResult, "failed", now);
       });
 
     const reconcileActiveRun = (run: AutomationRun, now: string) =>
@@ -1084,6 +1532,7 @@ export const AutomationServiceLive = Layer.effect(
             { concurrency: 1 },
           ),
         ),
+        Effect.flatMap(() => enqueuePendingCompletionEvaluations()),
         Effect.asVoid,
       );
 
@@ -1131,6 +1580,7 @@ export const AutomationServiceLive = Layer.effect(
             { concurrency: 1 },
           ),
         ),
+        Effect.flatMap(() => enqueuePendingCompletionEvaluations()),
         Effect.asVoid,
       );
 
@@ -1265,6 +1715,21 @@ export const AutomationServiceLive = Layer.effect(
         yield* publish({ type: "definition-deleted", automationId: input.id });
       });
 
+    const heartbeatThreadRunState = (threadId: ThreadId) =>
+      Effect.gen(function* () {
+        const activeRuns = yield* automationRepository
+          .countActiveRunsForThread({ threadId })
+          .pipe(Effect.mapError(toServiceError("Failed to count active automation runs.")));
+        const pendingCompletionEvaluations = yield* automationRepository
+          .countPendingCompletionEvaluationsForThread({ threadId })
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to count pending automation stop evaluations."),
+            ),
+          );
+        return { activeRuns, pendingCompletionEvaluations };
+      });
+
     const runNow: AutomationServiceShape["runNow"] = (input) =>
       Effect.gen(function* () {
         const definition = yield* requireDefinition(input.automationId);
@@ -1279,13 +1744,18 @@ export const AutomationServiceLive = Layer.effect(
               }),
             );
           }
-          const activeRuns = yield* automationRepository
-            .countActiveRunsForThread({ threadId: definition.targetThreadId })
-            .pipe(Effect.mapError(toServiceError("Failed to count active automation runs.")));
-          if (activeRuns > 0) {
+          const runState = yield* heartbeatThreadRunState(definition.targetThreadId);
+          if (runState.activeRuns > 0) {
             return yield* Effect.fail(
               new AutomationServiceError({
                 message: "This thread already has a run in progress.",
+              }),
+            );
+          }
+          if (runState.pendingCompletionEvaluations > 0) {
+            return yield* Effect.fail(
+              new AutomationServiceError({
+                message: "This thread already has a stop check in progress.",
               }),
             );
           }
@@ -1398,10 +1868,11 @@ export const AutomationServiceLive = Layer.effect(
               }),
             );
           }
-          const activeRuns = yield* automationRepository
-            .countActiveRunsForThread({ threadId: targetThreadId })
-            .pipe(Effect.mapError(toServiceError("Failed to count active automation runs.")));
-          if (activeRuns > 0) {
+          const runState = yield* heartbeatThreadRunState(targetThreadId);
+          if (runState.pendingCompletionEvaluations > 0) {
+            return Option.none<AutomationRunNowResult>();
+          }
+          if (runState.activeRuns > 0) {
             const reason = "Target thread already has an automation run in progress.";
             const { run, inserted } = yield* createPendingRun(
               definition,

@@ -53,9 +53,19 @@ function createTextGenerationDouble(label: string) {
       taskPrompt: "Check the site",
       schedule: { type: "interval", everySeconds: 3600 },
       mode: "heartbeat",
+      completionPolicy: { type: "none" },
       missingFields: [],
       needsConfirmation: false,
       reason: null,
+    }),
+  );
+  const evaluateAutomationCompletion = vi.fn<
+    TextGenerationShape["evaluateAutomationCompletion"]
+  >(() =>
+    Effect.succeed({
+      stopMatched: false,
+      confidence: 0.2,
+      reason: `${label} completion`,
     }),
   );
 
@@ -68,6 +78,7 @@ function createTextGenerationDouble(label: string) {
       generateThreadTitle,
       generateThreadRecap,
       generateAutomationIntent,
+      evaluateAutomationCompletion,
     } satisfies TextGenerationShape,
     generateCommitMessage,
     generatePrContent,
@@ -76,6 +87,7 @@ function createTextGenerationDouble(label: string) {
     generateThreadTitle,
     generateThreadRecap,
     generateAutomationIntent,
+    evaluateAutomationCompletion,
   };
 }
 
@@ -265,5 +277,36 @@ describe("ProviderTextGenerationLive", () => {
     );
     expect(codex.generateAutomationIntent).not.toHaveBeenCalled();
     expect(opencode.generateAutomationIntent).not.toHaveBeenCalled();
+  });
+
+  it("routes automation completion evaluation through the selected provider", async () => {
+    const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer();
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        return yield* textGeneration.evaluateAutomationCompletion({
+          cwd: "/repo",
+          automationName: "Watch PR",
+          automationPrompt: "Check PR readiness.",
+          stopWhen: "the PR is ready",
+          runUserMessage: "Check PR readiness.",
+          runAssistantText: "Still working.",
+          modelSelection: {
+            provider: "cursor",
+            model: "composer-2",
+          },
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.reason).toBe("cursor completion");
+    expect(cursor.evaluateAutomationCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stopWhen: "the PR is ready",
+      }),
+    );
+    expect(codex.evaluateAutomationCompletion).not.toHaveBeenCalled();
+    expect(opencode.evaluateAutomationCompletion).not.toHaveBeenCalled();
   });
 });

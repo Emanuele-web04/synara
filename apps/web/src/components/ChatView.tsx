@@ -1,4 +1,5 @@
 import {
+  type AutomationDefinition,
   type AutomationSchedule,
   type ApprovalRequestId,
   DEFAULT_MODEL_BY_PROVIDER,
@@ -128,12 +129,14 @@ import {
   parseChatAutomationInvocation,
   resolveChatAutomationIntent,
 } from "../lib/automationIntent";
+import { stopWhenFromCompletionPolicy } from "../lib/automationCompletionPolicy";
 import {
   acknowledgedRiskIdsForDraft,
   buildAutomationDraftWarnings,
   hasBlockingAutomationDraftWarnings,
   type AutomationDraftWarning,
   type AutomationDraftWarningId,
+  warningIdsForAcknowledgedRisks,
 } from "../lib/automationDraft";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
@@ -383,16 +386,21 @@ import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import {
+  acknowledgedRiskIdsForFormWarnings,
   applyScheduleToForm,
   AutomationDialog,
   automationQueryKey,
+  buildAutomationFormWarnings,
   createInputFromForm,
   formatCadence,
   formFromDefinition,
   isFormSubmittable,
+  providerOptionsForAutomationEdit,
   projectModelSelection as automationProjectModelSelection,
   scheduleFromForm,
   type AutomationFormState,
+  updateInputFromForm,
+  useAutomations,
 } from "../routes/-automations.shared";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import type { MessagesTimelineController } from "./chat/MessagesTimeline";
@@ -1346,7 +1354,13 @@ export default function ChatView({
   );
   const automationProjects = useStore((state) => state.projects);
   const automationThreads = useStore((state) => state.threads);
+  const {
+    data: automationData,
+    updateMutation: automationUpdateMutation,
+  } = useAutomations();
   const [automationDraftForm, setAutomationDraftForm] = useState<AutomationFormState | null>(null);
+  const [automationEditingDefinition, setAutomationEditingDefinition] =
+    useState<AutomationDefinition | null>(null);
   const [automationDraftWarnings, setAutomationDraftWarnings] = useState<
     readonly AutomationDraftWarning[]
   >([]);
@@ -5768,24 +5782,27 @@ export default function ChatView({
     (nextForm: AutomationFormState) => {
       setAutomationDraftForm(nextForm);
       setAutomationDraftWarnings(
-        buildAutomationDraftWarnings({
-          schedule: scheduleFromForm(nextForm),
-          mode: nextForm.mode,
-          runtimeMode: nextForm.runtimeMode,
-          worktreeMode: nextForm.worktreeMode,
-          hasEphemeralContext: automationDraftWarningContext.hasEphemeralContext,
-          generatedConfidence: automationDraftWarningContext.generatedConfidence,
-          generatedNeedsConfirmation: automationDraftWarningContext.generatedNeedsConfirmation,
-          prompt: nextForm.prompt,
-        }),
+        automationEditingDefinition
+          ? buildAutomationFormWarnings(nextForm)
+          : buildAutomationDraftWarnings({
+              schedule: scheduleFromForm(nextForm),
+              mode: nextForm.mode,
+              runtimeMode: nextForm.runtimeMode,
+              worktreeMode: nextForm.worktreeMode,
+              hasEphemeralContext: automationDraftWarningContext.hasEphemeralContext,
+              generatedConfidence: automationDraftWarningContext.generatedConfidence,
+              generatedNeedsConfirmation: automationDraftWarningContext.generatedNeedsConfirmation,
+              prompt: nextForm.prompt,
+            }),
       );
     },
-    [automationDraftWarningContext],
+    [automationDraftWarningContext, automationEditingDefinition],
   );
 
   const resetAutomationDraftState = useCallback(() => {
     setAutomationDraftOpen(false);
     setAutomationDraftForm(null);
+    setAutomationEditingDefinition(null);
     setAutomationDraftWarnings([]);
     setAutomationDraftWarningContext({
       hasEphemeralContext: false,
@@ -5897,8 +5914,90 @@ export default function ChatView({
     ],
   );
 
+  const openAutomationEditDialog = useCallback(
+    (definition: AutomationDefinition) => {
+      const nextForm = formFromDefinition(
+        definition,
+        activeProjectId ?? definition.projectId ?? automationProjects[0]?.id ?? "",
+      );
+      setAutomationEditingDefinition(definition);
+      setAutomationDraftWarningContext({
+        hasEphemeralContext: false,
+        generatedConfidence: null,
+        generatedNeedsConfirmation: false,
+      });
+      setAutomationDraftForm(nextForm);
+      setAutomationDraftWarnings(buildAutomationFormWarnings(nextForm));
+      setAcknowledgedAutomationWarnings(
+        warningIdsForAcknowledgedRisks(definition.acknowledgedRisks),
+      );
+      setAutomationDraftOpen(true);
+    },
+    [activeProjectId, automationProjects],
+  );
+
+  const updateAutomationFromForm = useCallback(
+    async (input: {
+      readonly definition: AutomationDefinition;
+      readonly form: AutomationFormState;
+      readonly warnings: readonly AutomationDraftWarning[];
+      readonly acknowledgedWarningIds: ReadonlySet<AutomationDraftWarningId>;
+      readonly providerOptions?: ProviderStartOptions;
+    }): Promise<boolean> => {
+      if (automationDraftSubmittingRef.current) {
+        return false;
+      }
+      if (!isFormSubmittable(input.form)) {
+        return false;
+      }
+      if (hasBlockingAutomationDraftWarnings(input.warnings, input.acknowledgedWarningIds)) {
+        return false;
+      }
+      const acknowledgedRisks = acknowledgedRiskIdsForFormWarnings(
+        input.warnings,
+        input.acknowledgedWarningIds,
+      );
+      automationDraftSubmittingRef.current = true;
+      setIsAutomationDraftSubmitting(true);
+      try {
+        const providerOptions =
+          input.providerOptions ??
+          providerOptionsForAutomationEdit(
+            input.definition,
+            input.form,
+            providerOptionsForDispatch,
+          );
+        const updated = await automationUpdateMutation.mutateAsync(
+          updateInputFromForm(input.definition, input.form, providerOptions, acknowledgedRisks),
+        );
+        resetAutomationDraftState();
+        toastManager.add({
+          type: "success",
+          title: "Automation updated",
+          description: `${updated.name} - ${formatCadence(updated.schedule)}`,
+        });
+        return true;
+      } catch {
+        return false;
+      } finally {
+        automationDraftSubmittingRef.current = false;
+        setIsAutomationDraftSubmitting(false);
+      }
+    },
+    [automationUpdateMutation, providerOptionsForDispatch, resetAutomationDraftState],
+  );
+
   const submitAutomationDraft = useCallback(async () => {
     if (!automationDraftForm) {
+      return;
+    }
+    if (automationEditingDefinition) {
+      await updateAutomationFromForm({
+        definition: automationEditingDefinition,
+        form: automationDraftForm,
+        warnings: automationDraftWarnings,
+        acknowledgedWarningIds: acknowledgedAutomationWarnings,
+      });
       return;
     }
     await createAutomationFromForm({
@@ -5908,9 +6007,11 @@ export default function ChatView({
     });
   }, [
     acknowledgedAutomationWarnings,
+    automationEditingDefinition,
     automationDraftForm,
     automationDraftWarnings,
     createAutomationFromForm,
+    updateAutomationFromForm,
   ]);
 
   const restoreQueuedTurnToComposer = useCallback(
@@ -6186,6 +6287,7 @@ export default function ChatView({
           return true;
         }
         const { intent: automationIntent, mode: automationMode } = automationResolution;
+        const automationStopWhen = stopWhenFromCompletionPolicy(automationIntent.completionPolicy);
         const baseForm = formFromDefinition(
           null,
           activeProject.id,
@@ -6204,9 +6306,10 @@ export default function ChatView({
             runtimeMode: chatAutomationRuntimeMode,
             worktreeMode: "auto",
             mode: automationMode,
-            targetThreadId: automationMode === "heartbeat" ? activeThread.id : "",
+            targetThreadId: automationMode === "heartbeat" && isServerThread ? activeThread.id : "",
             maxIterations: "",
             stopOnError: true,
+            stopWhen: automationMode === "heartbeat" ? automationStopWhen : "",
           },
           automationIntent.schedule,
         );
@@ -6227,10 +6330,12 @@ export default function ChatView({
         };
         const acknowledgedWarningIds = new Set<AutomationDraftWarningId>();
         const needsDraftReview =
+          automationResolution.requiresReview ||
           automationResolution.generatedNeedsConfirmation ||
           !isFormSubmittable(nextForm) ||
           hasBlockingAutomationDraftWarnings(warnings, acknowledgedWarningIds);
         if (needsDraftReview) {
+          setAutomationEditingDefinition(null);
           setAutomationDraftWarningContext(warningContext);
           setAutomationDraftForm(nextForm);
           setAutomationDraftWarnings(warnings);
@@ -8710,6 +8815,14 @@ export default function ChatView({
       </div>
     ) : null;
 
+  const threadAutomationItems = automationData.definitions
+    .filter(
+      (definition) =>
+        definition.mode === "heartbeat" && definition.targetThreadId === activeThread.id,
+    )
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((definition) => ({ definition }));
+
   // Shared inputs for both Environment panel surfaces (the header Popover when the dock is
   // open, and the docked right column when it is closed) so the two never drift.
   const environmentPanelProps: Omit<EnvironmentPanelProps, "open" | "variant"> = {
@@ -8723,6 +8836,7 @@ export default function ChatView({
     activeProvider: activeThread.session?.provider ?? activeThread.modelSelection.provider,
     showGitActions,
     diffOpen: resolvedDiffOpen,
+    threadAutomations: threadAutomationItems,
     diffDisabledReason,
     diffTotals: repoDiffTotals,
     branchToolbar: branchToolbarProps,
@@ -8738,6 +8852,7 @@ export default function ChatView({
     onProjectInstructionsChange: setProjectInstructions,
     onCopyProjectInstructionsToNotes: handleCopyProjectInstructionsToNotes,
     onToggleDiff,
+    onOpenAutomation: openAutomationEditDialog,
     onOpenGithubRepository: openBrowserUrl,
     onJumpToPinnedMessage: handleJumpToPinnedMessage,
     onTogglePinnedMessageDone: handleTogglePinnedMessageDone,
@@ -9373,17 +9488,22 @@ export default function ChatView({
       {automationDraftForm ? (
         <AutomationDialog
           open={automationDraftOpen}
-          editing={false}
+          editing={automationEditingDefinition !== null}
           form={automationDraftForm}
           projects={automationProjects}
           threads={automationThreads}
           warnings={automationDraftWarnings}
           acknowledgedWarningIds={acknowledgedAutomationWarnings}
           onToggleWarning={toggleAutomationWarning}
-          onOpenChange={setAutomationDraftOpen}
+          onOpenChange={(open) => {
+            setAutomationDraftOpen(open);
+            if (!open) {
+              setAutomationEditingDefinition(null);
+            }
+          }}
           onFormChange={updateAutomationDraftForm}
           onSubmit={submitAutomationDraft}
-          busy={isAutomationDraftSubmitting}
+          busy={isAutomationDraftSubmitting || automationUpdateMutation.isPending}
         />
       ) : null}
 

@@ -19,6 +19,8 @@ import {
 import {
   type AutomationIntentGenerationInput,
   type AutomationIntentGenerationResult,
+  type AutomationCompletionEvaluationInput,
+  type AutomationCompletionEvaluationResult,
   type TextGenerationShape,
   TextGeneration,
   type ThreadRecapGenerationInput,
@@ -104,6 +106,9 @@ interface FakeGitTextGeneration {
   generateAutomationIntent: (
     input: AutomationIntentGenerationInput,
   ) => Effect.Effect<AutomationIntentGenerationResult, TextGenerationError>;
+  evaluateAutomationCompletion: (
+    input: AutomationCompletionEvaluationInput,
+  ) => Effect.Effect<AutomationCompletionEvaluationResult, TextGenerationError>;
 }
 
 type FakePullRequest = NonNullable<FakeGhScenario["pullRequest"]>;
@@ -228,9 +233,16 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
         taskPrompt: "Check the site",
         schedule: { type: "interval", everySeconds: 3600 },
         mode: "heartbeat",
+        completionPolicy: { type: "none" },
         missingFields: [],
         needsConfirmation: false,
         reason: null,
+      }),
+    evaluateAutomationCompletion: () =>
+      Effect.succeed({
+        stopMatched: false,
+        confidence: 0.2,
+        reason: "Stop condition was not met.",
       }),
     ...overrides,
   };
@@ -308,6 +320,17 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
           (cause) =>
             new TextGenerationError({
               operation: "generateAutomationIntent",
+              detail: "fake text generation failed",
+              ...(cause !== undefined ? { cause } : {}),
+            }),
+        ),
+      ),
+    evaluateAutomationCompletion: (input) =>
+      implementation.evaluateAutomationCompletion(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation: "evaluateAutomationCompletion",
               detail: "fake text generation failed",
               ...(cause !== undefined ? { cause } : {}),
             }),

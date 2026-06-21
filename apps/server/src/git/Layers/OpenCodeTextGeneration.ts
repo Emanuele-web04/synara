@@ -34,6 +34,7 @@ import {
 } from "../Services/TextGeneration.ts";
 import {
   buildAutomationIntentPrompt,
+  buildAutomationCompletionEvaluationPrompt,
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
@@ -625,6 +626,27 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       });
     });
 
+    const evaluateAutomationCompletion: TextGenerationShape["evaluateAutomationCompletion"] =
+      Effect.fn(`${config.serviceName}.evaluateAutomationCompletion`)(function* (input) {
+        const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
+        if (!modelSelection) {
+          return yield* new TextGenerationError({
+            operation: "evaluateAutomationCompletion",
+            detail: `Invalid ${config.displayName} model selection.`,
+          });
+        }
+
+        const { prompt, outputSchemaJson } = buildAutomationCompletionEvaluationPrompt(input);
+        return yield* runOpenCodeJson({
+          operation: "evaluateAutomationCompletion",
+          cwd: input.cwd,
+          prompt,
+          outputSchemaJson,
+          modelSelection,
+          ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+        });
+      });
+
     return {
       generateCommitMessage,
       generatePrContent,
@@ -633,6 +655,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       generateThreadTitle,
       generateThreadRecap,
       generateAutomationIntent,
+      evaluateAutomationCompletion,
     } satisfies TextGenerationShape;
   });
 
