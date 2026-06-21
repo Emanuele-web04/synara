@@ -625,6 +625,30 @@ function modelSelectionsMatch(left: ModelSelection, right: ModelSelection): bool
   );
 }
 
+// Automation edits keep their saved provider options unless the user changes models.
+// On model changes, an empty object intentionally clears stale provider-specific options.
+export function providerOptionsForAutomationModelSelection(
+  definition: Pick<AutomationDefinition, "modelSelection" | "providerOptions">,
+  nextModelSelection: ModelSelection,
+  currentProviderOptions?: ProviderStartOptions,
+): ProviderStartOptions | undefined {
+  return modelSelectionsMatch(definition.modelSelection, nextModelSelection)
+    ? definition.providerOptions
+    : (currentProviderOptions ?? {});
+}
+
+export function providerOptionsForAutomationEdit(
+  definition: Pick<AutomationDefinition, "modelSelection" | "providerOptions">,
+  form: Pick<AutomationFormState, "modelSelection">,
+  currentProviderOptions?: ProviderStartOptions,
+): ProviderStartOptions | undefined {
+  return providerOptionsForAutomationModelSelection(
+    definition,
+    form.modelSelection,
+    currentProviderOptions,
+  );
+}
+
 export function modelSelectionForProjectChange(
   projects: ReturnType<typeof useStore.getState>["projects"],
   currentProjectId: string,

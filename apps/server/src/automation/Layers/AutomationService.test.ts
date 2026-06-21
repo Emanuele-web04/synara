@@ -1276,6 +1276,51 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("skips AI stop evaluation when a heartbeat run reaches its iteration cap", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-max-iterations");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-max-iterations");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.98,
+        reason: "This should not run because the iteration cap already stopped the loop.",
+      };
+      const evaluationGate = holdCompletionEvaluation();
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        maxIterations: 1,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "The PR is ready.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      const started = yield* Effect.race(
+        Effect.promise(() => evaluationGate.started).pipe(Effect.as("started" as const)),
+        realDelay(100).pipe(Effect.as("not-started" as const)),
+      );
+
+      const listed = yield* service.list({ projectId });
+      const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(started, "not-started");
+      assert.strictEqual(updatedDefinition?.enabled, false);
+      assert.isUndefined(updatedRun?.result?.completionEvaluation);
+      assert.strictEqual(completionEvaluationInputs.length, 0);
+    }),
+  );
+
   it.effect("reconciles succeeded heartbeat runs that still need stop evaluation", () =>
     Effect.gen(function* () {
       resetHarness();

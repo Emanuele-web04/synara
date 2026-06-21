@@ -469,9 +469,7 @@ export function buildAutomationCompletionEvaluationPrompt(input: {
     ].join("\n"),
     outputSchemaJson: Schema.Struct({
       stopMatched: Schema.Boolean,
-      confidence: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)).check(
-        Schema.isLessThanOrEqualTo(1),
-      ),
+      confidence: Schema.Number,
       reason: Schema.String,
     }),
   };

@@ -52,6 +52,7 @@ import {
   formFromDefinition,
   isFormSubmittable,
   isTriageRun,
+  providerOptionsForAutomationEdit,
   projectModelSelection,
   runResultSummary,
   runStatusLabel,
@@ -255,7 +256,7 @@ function AutomationsRouteView() {
         updateInputFromForm(
           editingDefinition,
           form,
-          editingDefinition.providerOptions,
+          providerOptionsForAutomationEdit(editingDefinition, form, providerOptionsForDispatch),
           acknowledgedRisks,
         ),
         closeOnSuccess,

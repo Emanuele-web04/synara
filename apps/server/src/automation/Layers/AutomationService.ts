@@ -1323,7 +1323,12 @@ export const AutomationServiceLive = Layer.effect(
               if (definition.archivedAt || !definition.enabled) {
                 return Effect.void;
               }
+              const stopOnError = status === "failed" && definition.stopOnError;
+              const reachedMax =
+                definition.maxIterations !== null &&
+                definition.iterationCount >= definition.maxIterations;
               const enqueueAiStop =
+                !reachedMax &&
                 status === "succeeded" &&
                 definition.mode === "heartbeat" &&
                 definition.completionPolicy.type === "ai-evaluated" &&
@@ -1334,10 +1339,6 @@ export const AutomationServiceLive = Layer.effect(
                       policy: definition.completionPolicy,
                     })
                   : Effect.void;
-              const stopOnError = status === "failed" && definition.stopOnError;
-              const reachedMax =
-                definition.maxIterations !== null &&
-                definition.iterationCount >= definition.maxIterations;
               return enqueueAiStop.pipe(
                 Effect.flatMap(() => {
                   if (!stopOnError && !reachedMax) {

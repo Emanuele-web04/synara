@@ -13,6 +13,7 @@ import {
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   type AutomationDefinition,
   type AutomationRun,
+  type ProviderStartOptions,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
@@ -30,6 +31,8 @@ import {
   isoFromDatetimeLocal,
   isFormSubmittable,
   modelSelectionForProjectChange,
+  providerOptionsForAutomationEdit,
+  providerOptionsForAutomationModelSelection,
   runResultSummary,
   scheduleKindFromSchedule,
   scheduleFromForm,
@@ -335,6 +338,62 @@ describe("automation shared route helpers", () => {
       stopWhen: "the PR is ready to merge",
       confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
     });
+  });
+
+  it("preserves saved provider options when editing without changing models", () => {
+    const savedProviderOptions: ProviderStartOptions = {
+      opencode: { binaryPath: "/old/opencode", serverUrl: "http://old.example" },
+    };
+    const currentProviderOptions: ProviderStartOptions = {
+      opencode: { binaryPath: "/new/opencode", serverUrl: "http://new.example" },
+    };
+    const definition = definitionWith({
+      modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+      providerOptions: savedProviderOptions,
+    });
+    const form = formFromDefinition(definition, "project-1");
+
+    expect(providerOptionsForAutomationEdit(definition, form, currentProviderOptions)).toEqual(
+      savedProviderOptions,
+    );
+  });
+
+  it("uses current provider options when an automation edit changes models", () => {
+    const savedProviderOptions: ProviderStartOptions = {
+      opencode: { binaryPath: "/old/opencode", serverUrl: "http://old.example" },
+    };
+    const currentProviderOptions: ProviderStartOptions = {
+      cursor: { binaryPath: "/current/cursor", apiEndpoint: "http://cursor.example" },
+    };
+    const definition = definitionWith({
+      modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+      providerOptions: savedProviderOptions,
+    });
+    const nextModelSelection = { provider: "cursor" as const, model: "composer-2" };
+
+    expect(
+      providerOptionsForAutomationModelSelection(
+        definition,
+        nextModelSelection,
+        currentProviderOptions,
+      ),
+    ).toEqual(currentProviderOptions);
+  });
+
+  it("clears stale provider options when an automation edit changes models without current options", () => {
+    const definition = definitionWith({
+      modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+      providerOptions: {
+        opencode: { binaryPath: "/old/opencode", serverUrl: "http://old.example" },
+      },
+    });
+
+    expect(
+      providerOptionsForAutomationModelSelection(definition, {
+        provider: "cursor",
+        model: "composer-2",
+      }),
+    ).toEqual({});
   });
 
   it("keeps a newer run update when an older automation snapshot arrives later", () => {

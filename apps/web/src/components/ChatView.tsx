@@ -395,6 +395,7 @@ import {
   formatCadence,
   formFromDefinition,
   isFormSubmittable,
+  providerOptionsForAutomationEdit,
   projectModelSelection as automationProjectModelSelection,
   scheduleFromForm,
   type AutomationFormState,
@@ -5959,13 +5960,15 @@ export default function ChatView({
       automationDraftSubmittingRef.current = true;
       setIsAutomationDraftSubmitting(true);
       try {
-        const updated = await automationUpdateMutation.mutateAsync(
-          updateInputFromForm(
+        const providerOptions =
+          input.providerOptions ??
+          providerOptionsForAutomationEdit(
             input.definition,
             input.form,
-            input.providerOptions ?? input.definition.providerOptions,
-            acknowledgedRisks,
-          ),
+            providerOptionsForDispatch,
+          );
+        const updated = await automationUpdateMutation.mutateAsync(
+          updateInputFromForm(input.definition, input.form, providerOptions, acknowledgedRisks),
         );
         resetAutomationDraftState();
         toastManager.add({
@@ -5981,7 +5984,7 @@ export default function ChatView({
         setIsAutomationDraftSubmitting(false);
       }
     },
-    [automationUpdateMutation, resetAutomationDraftState],
+    [automationUpdateMutation, providerOptionsForDispatch, resetAutomationDraftState],
   );
 
   const submitAutomationDraft = useCallback(async () => {

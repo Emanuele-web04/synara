@@ -53,6 +53,8 @@ import {
   isoFromDatetimeLocal,
   isTriageRun,
   isFormSubmittable,
+  providerOptionsForAutomationEdit,
+  providerOptionsForAutomationModelSelection,
   runStatusVariant,
   runResultSummary,
   runStatusLabel,
@@ -233,7 +235,12 @@ function AutomationDetailView() {
       acknowledgedWarningIds,
     );
     updateMutation.mutate(
-      updateInputFromForm(definition, form, definition.providerOptions, acknowledgedRisks),
+      updateInputFromForm(
+        definition,
+        form,
+        providerOptionsForAutomationEdit(definition, form, providerOptionsForDispatch),
+        acknowledgedRisks,
+      ),
       {
         onSuccess: () => setDialogOpen(false),
       },
@@ -503,14 +510,17 @@ function AutomationDetailView() {
                   <AutomationModelPicker
                     value={definition.modelSelection}
                     projectCwd={project?.cwd ?? null}
-                    onChange={(value) =>
+                    onChange={(value) => {
+                      const providerOptions = providerOptionsForAutomationModelSelection(
+                        definition,
+                        value,
+                        providerOptionsForDispatch,
+                      );
                       patch({
                         modelSelection: value,
-                        ...(providerOptionsForDispatch
-                          ? { providerOptions: providerOptionsForDispatch }
-                          : {}),
-                      })
-                    }
+                        ...(providerOptions ? { providerOptions } : {}),
+                      });
+                    }}
                   />
                 </EditRow>
                 <DetailRow label="Mode">
