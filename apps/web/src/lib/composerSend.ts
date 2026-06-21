@@ -88,7 +88,7 @@ export function buildComposerImageAttachmentsFromFiles(input: {
       `Unsupported file type for '${file.name}'. Please attach image files only.`,
   });
 
-  const images = result.files.map((file) => ({
+  const images = result.files.map<ComposerImageAttachment>((file) => ({
     type: "image",
     id: randomUUID(),
     name: file.name || "image",
@@ -114,7 +114,7 @@ export function buildComposerFileAttachmentsFromFiles(input: {
     acceptsFile: (file) => !file.type.startsWith("image/"),
   });
 
-  const files = result.files.map((file) => ({
+  const files = result.files.map<ComposerFileAttachment>((file) => ({
     type: "file",
     id: randomUUID(),
     name: file.name || "attachment",

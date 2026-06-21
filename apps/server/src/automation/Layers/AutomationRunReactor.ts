@@ -9,9 +9,8 @@ import {
   type AutomationRunReactorShape,
 } from "../Services/AutomationRunReactor.ts";
 
-// Orchestration domain events that can mean an automation-owned thread's turn changed
-// outcome (completed / errored / interrupted / awaiting approval). Any of these triggers
-// a reconcile against the authoritative thread state.
+// Only events that can change an automation turn's lifecycle should trigger reconciliation.
+// Message/activity streams can be token-level noisy, so they stay off this hot path.
 const RECONCILE_EVENT_TYPES: ReadonlySet<OrchestrationEvent["type"]> = new Set([
   "thread.turn-diff-completed",
   "thread.approval-response-requested",
@@ -47,7 +46,22 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const worker = yield* makeDrainableWorker(reconcileSafely);
+  const queuedThreadIds = new Set<ThreadId>();
+  const worker = yield* makeDrainableWorker((threadId: ThreadId) =>
+    reconcileSafely(threadId).pipe(
+      Effect.ensuring(Effect.sync(() => queuedThreadIds.delete(threadId))),
+    ),
+  );
+  const enqueueReconcile = (threadId: ThreadId) =>
+    Effect.sync(() => {
+      if (queuedThreadIds.has(threadId)) {
+        return false;
+      }
+      queuedThreadIds.add(threadId);
+      return true;
+    }).pipe(
+      Effect.flatMap((shouldEnqueue) => (shouldEnqueue ? worker.enqueue(threadId) : Effect.void)),
+    );
 
   const start: AutomationRunReactorShape["start"] = Effect.fn(function* () {
     // Close out runs orphaned by a crash/restart before watching live events. Reconcile is
@@ -62,7 +76,7 @@ const make = Effect.gen(function* () {
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
         const threadId = reconcileThreadIdOf(event);
-        return threadId ? worker.enqueue(threadId) : Effect.void;
+        return threadId ? enqueueReconcile(threadId) : Effect.void;
       }),
     );
   });

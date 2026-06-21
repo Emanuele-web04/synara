@@ -63,7 +63,11 @@ import { findProviderStatus } from "~/lib/providerAvailability";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
-import { type DraftThreadEnvMode, useComposerDraftStore } from "../../composerDraftStore";
+import {
+  type ComposerFileAttachment,
+  type DraftThreadEnvMode,
+  useComposerDraftStore,
+} from "../../composerDraftStore";
 import { buildModelSelection } from "../../providerModelOptions";
 import { type ExpandedImagePreview } from "../chat/ExpandedImagePreview";
 import { useStore } from "../../store";
@@ -75,6 +79,10 @@ import { KanbanTaskProjectPicker } from "./KanbanTaskProjectPicker";
 import { useKanbanTaskComposerMenu } from "./useKanbanTaskComposerMenu";
 import { useKanbanTaskScratchDraft } from "./useKanbanTaskScratchDraft";
 import { useKanbanTaskSubmit } from "./useKanbanTaskSubmit";
+
+const EMPTY_COMPOSER_FILES: ReadonlyArray<ComposerFileAttachment> = [];
+
+function ignoreComposerFileRemoval(_fileId: string): void {}
 
 export interface KanbanNewTaskProjectOption {
   id: ProjectId;
@@ -423,11 +431,13 @@ export function KanbanNewTaskDialog({
             <ComposerReferenceAttachments
               assistantSelections={composerAssistantSelections}
               fileComments={composerFileComments}
+              files={EMPTY_COMPOSER_FILES}
               images={composerImages}
               nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
               onExpandImage={setExpandedImage}
               onRemoveAssistantSelections={clearComposerAssistantSelections}
               onRemoveFileComments={clearComposerFileComments}
+              onRemoveFile={ignoreComposerFileRemoval}
               onRemoveImage={removeComposerImage}
             />
             <ComposerPromptEditor

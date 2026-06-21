@@ -4,6 +4,8 @@ import { Effect, Schema } from "effect";
 import {
   AutomationCreateInput,
   AutomationRun,
+  AutomationRunResult,
+  AutomationSchedule,
   AutomationRunStatus,
   AutomationStreamEvent,
   DEFAULT_AUTOMATION_RUNTIME_MODE,
@@ -34,6 +36,11 @@ it.effect("defaults automation runtime mode to approval-required", () =>
 
     assert.strictEqual(DEFAULT_AUTOMATION_RUNTIME_MODE, "approval-required");
     assert.strictEqual(parsed.runtimeMode, "approval-required");
+    assert.strictEqual(parsed.minimumIntervalSeconds, 60);
+    assert.strictEqual(parsed.maxRuntimeSeconds, 60 * 60);
+    assert.deepStrictEqual(parsed.retryPolicy, { type: "none" });
+    assert.strictEqual(parsed.misfirePolicy, "coalesce");
+    assert.deepStrictEqual(parsed.acknowledgedRisks, []);
   }),
 );
 
@@ -75,6 +82,83 @@ it.effect("accepts automation runs with immutable permission snapshots", () =>
 
     assert.strictEqual(parsed.permissionSnapshot.runtimeMode, "approval-required");
     assert.strictEqual(parsed.status, "running");
+  }),
+);
+
+it.effect("accepts one-shot automation schedules", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(AutomationSchedule, {
+      type: "once",
+      runAt: "2026-06-19T10:00:15.000Z",
+    });
+
+    assert.strictEqual(parsed.type, "once");
+  }),
+);
+
+it.effect("rejects invalid one-shot timestamps", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decode(AutomationSchedule, {
+        type: "once",
+        runAt: "tomorrow",
+      }),
+    );
+
+    assert.strictEqual(result._tag, "Failure");
+  }),
+);
+
+it.effect("accepts legacy UTC and timezone-aware wall-clock schedules", () =>
+  Effect.gen(function* () {
+    const legacy = yield* decode(AutomationSchedule, {
+      type: "daily",
+      timeOfDay: "09:00",
+    });
+    const timezoneAware = yield* decode(AutomationSchedule, {
+      type: "weekly",
+      dayOfWeek: 1,
+      timeOfDay: "09:00",
+      timezone: "Europe/Rome",
+    });
+    const cron = yield* decode(AutomationSchedule, {
+      type: "cron",
+      expression: "0 9 * * *",
+      timezone: "Europe/Rome",
+    });
+
+    assert.strictEqual(legacy.type, "daily");
+    assert.strictEqual(timezoneAware.type, "weekly");
+    assert.strictEqual(cron.type, "cron");
+  }),
+);
+
+it.effect("accepts typed automation run results", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(AutomationRunResult, {
+      outcome: "needs-attention",
+      summary: "Approval required.",
+      severity: "warning",
+      unread: true,
+      archivedAt: null,
+    });
+
+    assert.strictEqual(parsed.outcome, "needs-attention");
+    assert.strictEqual(parsed.unread, true);
+  }),
+);
+
+it.effect("rejects invalid automation result outcomes", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decode(AutomationRunResult, {
+        outcome: "surprise",
+        summary: "Nope",
+        unread: true,
+        archivedAt: null,
+      }),
+    );
+    assert.strictEqual(result._tag, "Failure");
   }),
 );
 

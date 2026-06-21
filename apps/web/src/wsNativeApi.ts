@@ -630,6 +630,10 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.serverGenerateThreadRecap, input, {
           timeoutMs: null,
         }),
+      generateAutomationIntent: (input) =>
+        transport.request(WS_METHODS.serverGenerateAutomationIntent, input, {
+          timeoutMs: null,
+        }),
       transcribeVoice: (input) => {
         if (window.desktopBridge?.server?.transcribeVoice) {
           return window.desktopBridge.server.transcribeVoice(input);
@@ -705,6 +709,8 @@ export function createWsNativeApi(): NativeApi {
       delete: (input) => transport.request(WS_METHODS.automationDelete, input),
       runNow: (input) => transport.request(WS_METHODS.automationRunNow, input),
       cancelRun: (input) => transport.request(WS_METHODS.automationCancelRun, input),
+      markRunRead: (input) => transport.request(WS_METHODS.automationMarkRunRead, input),
+      archiveRun: (input) => transport.request(WS_METHODS.automationArchiveRun, input),
       onEvent: (callback) => {
         automationEventListeners.add(callback);
         return () => {

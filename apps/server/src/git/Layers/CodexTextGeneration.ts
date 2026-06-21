@@ -21,11 +21,13 @@ import {
   type PrContentGenerationResult,
   type ThreadTitleGenerationResult,
   type ThreadRecapGenerationResult,
+  type TextGenerationOperation,
   type TextGenerationShape,
   TextGeneration,
 } from "../Services/TextGeneration.ts";
 import {
   buildBranchNamePrompt,
+  buildAutomationIntentPrompt,
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
@@ -167,13 +169,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     fileSystem.remove(directoryPath, { recursive: true }).pipe(Effect.catch(() => Effect.void));
 
   const prepareIsolatedCodexHome = (
-    operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateDiffSummary"
-      | "generateBranchName"
-      | "generateThreadTitle"
-      | "generateThreadRecap",
+    operation: TextGenerationOperation,
     sourceHomePath?: string,
   ): Effect.Effect<{ readonly homePath: string }, TextGenerationError> =>
     Effect.gen(function* () {
@@ -237,13 +233,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     });
 
   const materializeImageAttachments = (
-    _operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateDiffSummary"
-      | "generateBranchName"
-      | "generateThreadTitle"
-      | "generateThreadRecap",
+    _operation: TextGenerationOperation,
     attachments: BranchNameGenerationInput["attachments"],
   ): Effect.Effect<MaterializedImageAttachments, TextGenerationError> =>
     Effect.gen(function* () {
@@ -287,13 +277,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     modelSelection,
     providerOptions,
   }: {
-    operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateDiffSummary"
-      | "generateBranchName"
-      | "generateThreadTitle"
-      | "generateThreadRecap";
+    operation: TextGenerationOperation;
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -610,6 +594,25 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     );
   };
 
+  const generateAutomationIntent: TextGenerationShape["generateAutomationIntent"] = (input) => {
+    const { prompt, outputSchemaJson } = buildAutomationIntentPrompt({
+      message: input.message,
+      ...(input.defaultMode ? { defaultMode: input.defaultMode } : {}),
+      nowIso: input.nowIso,
+    });
+
+    return runCodexJson({
+      operation: "generateAutomationIntent",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
+  };
+
   return {
     generateCommitMessage,
     generatePrContent,
@@ -617,6 +620,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     generateBranchName,
     generateThreadTitle,
     generateThreadRecap,
+    generateAutomationIntent,
   } satisfies TextGenerationShape;
 });
 
