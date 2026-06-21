@@ -101,11 +101,18 @@ export function buildAutomationDraftWarnings(input: {
       requiresAcknowledgement: true,
     });
   }
-  if (input.worktreeMode === "local") {
+  if (
+    input.worktreeMode === "local" ||
+    (input.mode === "standalone" && input.worktreeMode === "auto")
+  ) {
     warnings.push({
       id: "local-checkout",
-      title: "Local checkout",
-      detail: "Runs may edit files in the active project checkout.",
+      title:
+        input.worktreeMode === "auto" ? "Auto fallback may use local checkout" : "Local checkout",
+      detail:
+        input.worktreeMode === "auto"
+          ? "If Synara cannot create a worktree, runs may fall back to editing the active project checkout."
+          : "Runs may edit files in the active project checkout.",
       requiresAcknowledgement: true,
     });
   }

@@ -557,6 +557,29 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
+  it.effect("preserves explicit null maxRuntimeSeconds on create", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-null-runtime"),
+        input: {
+          ...createInputForProject("project-null-runtime"),
+          maxRuntimeSeconds: null,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const reloaded = Option.getOrThrow(
+        yield* repository.getDefinitionById({
+          id: AutomationId.makeUnsafe("automation-null-runtime"),
+        }),
+      );
+      assert.strictEqual(reloaded.maxRuntimeSeconds, null);
+    }),
+  );
+
   it.effect("persists explicit heartbeat definition fields", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;

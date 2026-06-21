@@ -355,10 +355,10 @@ function AutomationDetailView() {
                       options={WORKTREE_OPTIONS}
                       onChange={(value) => {
                         if (
-                          value === "local" &&
+                          (value === "local" || value === "auto") &&
                           !definition.acknowledgedRisks.includes("local-checkout")
                         ) {
-                          openEditDialog({ worktreeMode: "local" });
+                          openEditDialog({ worktreeMode: value as AutomationWorktreeMode });
                           return;
                         }
                         patch({ worktreeMode: value as AutomationWorktreeMode });

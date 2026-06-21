@@ -489,6 +489,7 @@ export const AutomationServiceLive = Layer.effect(
       definition: AutomationDefinition,
       project: OrchestrationProjectShell,
       runId: AutomationRunId,
+      beforeWorktreeCreate: () => Effect.Effect<void, AutomationServiceError> = () => Effect.void,
     ): Effect.Effect<ThreadEnvironment, AutomationServiceError> => {
       const requireLocalCheckoutAcknowledgement = () =>
         definition.acknowledgedRisks.includes("local-checkout")
@@ -517,27 +518,32 @@ export const AutomationServiceLive = Layer.effect(
               : requireLocalCheckoutAcknowledgement().pipe(Effect.as(localThreadEnvironment));
           }
 
+          const sourceBranch = status.branch;
           const branch = makeAutomationBranchName(definition, runId);
-          return git
-            .createWorktree({
-              cwd: project.workspaceRoot,
-              branch: status.branch,
-              newBranch: branch,
-              path: null,
-            })
-            .pipe(
-              Effect.mapError(toServiceError("Failed to create automation worktree.")),
-              Effect.map(
-                (result): ThreadEnvironment => ({
-                  envMode: "worktree",
-                  branch: result.worktree.branch,
-                  worktreePath: result.worktree.path,
-                  associatedWorktreePath: result.worktree.path,
-                  associatedWorktreeBranch: result.worktree.branch,
-                  associatedWorktreeRef: result.worktree.branch,
-                }),
-              ),
-            );
+          return beforeWorktreeCreate().pipe(
+            Effect.flatMap(() =>
+              git
+                .createWorktree({
+                  cwd: project.workspaceRoot,
+                  branch: sourceBranch,
+                  newBranch: branch,
+                  path: null,
+                })
+                .pipe(
+                  Effect.mapError(toServiceError("Failed to create automation worktree.")),
+                  Effect.map(
+                    (result): ThreadEnvironment => ({
+                      envMode: "worktree",
+                      branch: result.worktree.branch,
+                      worktreePath: result.worktree.path,
+                      associatedWorktreePath: result.worktree.path,
+                      associatedWorktreeBranch: result.worktree.branch,
+                      associatedWorktreeRef: result.worktree.branch,
+                    }),
+                  ),
+                ),
+            ),
+          );
         }),
         Effect.catch((error) =>
           definition.worktreeMode === "auto"
@@ -615,6 +621,59 @@ export const AutomationServiceLive = Layer.effect(
           );
         }
 
+        const stopIfRunCannotDispatch = (latest: AutomationRun, detail: string) =>
+          latest.status === "running"
+            ? Effect.succeed(latest)
+            : publish({ type: "run-upserted", run: latest }).pipe(
+                Effect.flatMap(() =>
+                  Effect.fail(
+                    new AutomationServiceError({
+                      message: detail,
+                    }),
+                  ),
+                ),
+              );
+
+        const markRunDispatchStarted = (
+          threadId: ThreadId,
+          threadCreateCommandId: CommandId | null,
+        ) =>
+          automationRepository
+            .markRunStarted({
+              id: run.id,
+              threadId,
+              messageId,
+              threadCreateCommandId,
+              turnStartCommandId,
+              startedAt: now,
+            })
+            .pipe(
+              Effect.mapError(toServiceError("Failed to update automation run.")),
+              Effect.tap((started) => publish({ type: "run-upserted", run: started })),
+              Effect.flatMap((started) =>
+                stopIfRunCannotDispatch(
+                  started,
+                  "Automation run was cancelled before dispatch started.",
+                ),
+              ),
+            );
+
+        const requireRunStillDispatching = (detail: string) =>
+          automationRepository.getRunById({ id: run.id }).pipe(
+            Effect.mapError(toServiceError("Failed to load automation run.")),
+            Effect.flatMap((runOption) =>
+              Option.match(runOption, {
+                onNone: () =>
+                  Effect.fail(
+                    new AutomationServiceError({
+                      message: "Automation run no longer exists.",
+                    }),
+                  ),
+                onSome: (latest) => stopIfRunCannotDispatch(latest, detail),
+              }),
+            ),
+          );
+
         if (definition.mode === "heartbeat") {
           const targetThreadId = definition.targetThreadId;
           if (!targetThreadId) {
@@ -624,6 +683,11 @@ export const AutomationServiceLive = Layer.effect(
               }),
             );
           }
+
+          const started = yield* markRunDispatchStarted(targetThreadId, null);
+          yield* requireRunStillDispatching(
+            "Automation run was cancelled before continuing the thread.",
+          );
 
           yield* orchestrationEngine
             .dispatch({
@@ -647,22 +711,10 @@ export const AutomationServiceLive = Layer.effect(
             })
             .pipe(Effect.mapError(toServiceError("Failed to continue automation thread.")));
 
-          const started = yield* automationRepository
-            .markRunStarted({
-              id: run.id,
-              threadId: targetThreadId,
-              messageId,
-              threadCreateCommandId: null,
-              turnStartCommandId,
-              startedAt: now,
-            })
-            .pipe(Effect.mapError(toServiceError("Failed to update automation run.")));
-          yield* publish({ type: "run-upserted", run: started });
           return { run: started };
         }
 
         const project = yield* requireProject(definition.projectId);
-        const environment = yield* resolveThreadEnvironment(definition, project, run.id);
         const threadCreateCommandId = run.threadCreateCommandId;
         if (!threadCreateCommandId) {
           return yield* Effect.fail(
@@ -671,6 +723,15 @@ export const AutomationServiceLive = Layer.effect(
             }),
           );
         }
+        const started = yield* markRunDispatchStarted(plannedThreadId, threadCreateCommandId);
+        const environment = yield* resolveThreadEnvironment(definition, project, run.id, () =>
+          requireRunStillDispatching(
+            "Automation run was cancelled before creating the automation worktree.",
+          ).pipe(Effect.asVoid),
+        );
+        yield* requireRunStillDispatching(
+          "Automation run was cancelled before creating the automation thread.",
+        );
 
         yield* orchestrationEngine
           .dispatch({
@@ -692,6 +753,9 @@ export const AutomationServiceLive = Layer.effect(
           })
           .pipe(Effect.mapError(toServiceError("Failed to create automation thread.")));
 
+        yield* requireRunStillDispatching(
+          "Automation run was cancelled before starting the automation turn.",
+        );
         yield* orchestrationEngine
           .dispatch({
             type: "thread.turn.start",
@@ -712,17 +776,6 @@ export const AutomationServiceLive = Layer.effect(
           })
           .pipe(Effect.mapError(toServiceError("Failed to start automation turn.")));
 
-        const started = yield* automationRepository
-          .markRunStarted({
-            id: run.id,
-            threadId: plannedThreadId,
-            messageId,
-            threadCreateCommandId,
-            turnStartCommandId,
-            startedAt: now,
-          })
-          .pipe(Effect.mapError(toServiceError("Failed to update automation run.")));
-        yield* publish({ type: "run-upserted", run: started });
         return { run: started };
       }).pipe(
         Effect.catch((error) =>

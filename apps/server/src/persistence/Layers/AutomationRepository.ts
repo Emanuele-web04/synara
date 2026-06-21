@@ -878,7 +878,7 @@ const makeAutomationRepository = Effect.gen(function* () {
       maxIterations: input.maxIterations ?? null,
       stopOnError: input.stopOnError ?? true,
       minimumIntervalSeconds: input.minimumIntervalSeconds ?? 60,
-      maxRuntimeSeconds: input.maxRuntimeSeconds ?? 60 * 60,
+      maxRuntimeSeconds: input.maxRuntimeSeconds === undefined ? 60 * 60 : input.maxRuntimeSeconds,
       retryPolicy: input.retryPolicy ?? { type: "none" },
       misfirePolicy: input.misfirePolicy ?? "coalesce",
       acknowledgedRisks: input.acknowledgedRisks ?? [],
