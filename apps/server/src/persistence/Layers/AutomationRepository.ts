@@ -34,6 +34,7 @@ import {
   IncrementAutomationIterationInput,
   ListActiveAutomationRunsForDefinitionInput,
   ListDueAutomationDefinitionsInput,
+  ListAutomationRunsNeedingCompletionEvaluationInput,
   ListRecoverableAutomationRunsInput,
   MarkAutomationRunFailedInput,
   MarkAutomationRunInterruptedInput,
@@ -742,6 +743,50 @@ const makeAutomationRepository = Effect.gen(function* () {
       `,
   });
 
+  const listRunsNeedingCompletionEvaluationRows = SqlSchema.findAll({
+    Request: ListAutomationRunsNeedingCompletionEvaluationInput,
+    Result: AutomationRunDbRow,
+    execute: ({ limit }) =>
+      sql`
+        SELECT
+          runs.run_id AS "id",
+          runs.automation_id AS "automationId",
+          runs.project_id AS "projectId",
+          runs.thread_id AS "threadId",
+          runs.turn_id AS "turnId",
+          runs.trigger_type AS "triggerType",
+          runs.status,
+          runs.scheduled_for AS "scheduledFor",
+          runs.claimed_by AS "claimedBy",
+          runs.claimed_at AS "claimedAt",
+          runs.lease_expires_at AS "leaseExpiresAt",
+          runs.started_at AS "startedAt",
+          runs.finished_at AS "finishedAt",
+          runs.thread_create_command_id AS "threadCreateCommandId",
+          runs.turn_start_command_id AS "turnStartCommandId",
+          runs.message_id AS "messageId",
+          runs.error,
+          runs.result_json AS "result",
+          runs.permission_snapshot_json AS "permissionSnapshot",
+          runs.created_at AS "createdAt",
+          runs.updated_at AS "updatedAt"
+        FROM automation_runs runs
+        INNER JOIN automation_definitions definitions
+          ON definitions.automation_id = runs.automation_id
+        WHERE runs.status = 'succeeded'
+          AND definitions.enabled = 1
+          AND definitions.archived_at IS NULL
+          AND definitions.mode = 'heartbeat'
+          AND json_extract(definitions.completion_policy_json, '$.type') = 'ai-evaluated'
+          AND (
+            runs.result_json IS NULL
+            OR json_type(runs.result_json, '$.completionEvaluation') IS NULL
+          )
+        ORDER BY runs.finished_at ASC, runs.run_id ASC
+        LIMIT ${limit}
+      `,
+  });
+
   const countActiveRunsRow = SqlSchema.findAll({
     Request: CountActiveAutomationRunsInput,
     Result: Schema.Struct({ count: Schema.Number }),
@@ -1134,6 +1179,17 @@ const makeAutomationRepository = Effect.gen(function* () {
       Effect.flatMap((rows) => Effect.forEach(rows, toRun, { concurrency: "unbounded" })),
     );
 
+  const listRunsNeedingCompletionEvaluation: AutomationRepositoryShape["listRunsNeedingCompletionEvaluation"] =
+    (input) =>
+      listRunsNeedingCompletionEvaluationRows(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError(
+            "AutomationRepository.listRunsNeedingCompletionEvaluation:query",
+          ),
+        ),
+        Effect.flatMap((rows) => Effect.forEach(rows, toRun, { concurrency: "unbounded" })),
+      );
+
   const countActiveRunsForDefinition: AutomationRepositoryShape["countActiveRunsForDefinition"] = (
     input,
   ) =>
@@ -1236,6 +1292,7 @@ const makeAutomationRepository = Effect.gen(function* () {
     cancelRun,
     getRunByThreadId,
     listRecoverableRuns,
+    listRunsNeedingCompletionEvaluation,
     countActiveRunsForDefinition,
     countActiveRunsForThread,
     listActiveRunsForDefinition,

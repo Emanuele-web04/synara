@@ -24,11 +24,13 @@ import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
+import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AutomationRepository } from "../../persistence/Services/AutomationRepository.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import type { ProjectionTurn } from "../../persistence/Services/ProjectionTurns.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { AutomationServiceError } from "../Errors.ts";
 import { AutomationService, type AutomationServiceShape } from "../Services/AutomationService.ts";
 import {
@@ -114,6 +116,15 @@ function resultSummary(value: string | null | undefined, fallback?: string): str
 function completionFailureReason(error: unknown): string {
   const message = error instanceof AutomationServiceError ? error.message : errorMessage(error);
   return normalizeAutomationCompletionReason(`Stop check failed: ${message}`);
+}
+
+function isSameAiCompletionPolicy(
+  left: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
+  right: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
+): boolean {
+  return (
+    left.stopWhen === right.stopWhen && left.confidenceThreshold === right.confidenceThreshold
+  );
 }
 
 function resultForRunStatus(
@@ -364,6 +375,7 @@ export const AutomationServiceLive = Layer.effect(
     const automationRepository = yield* AutomationRepository;
     const git = yield* GitCore;
     const textGeneration = yield* TextGeneration;
+    const serverSettings = yield* ServerSettingsService;
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
@@ -372,6 +384,7 @@ export const AutomationServiceLive = Layer.effect(
     const events = yield* PubSub.unbounded<AutomationStreamEvent>();
     // Stop-condition AI calls can be slow; a dedicated queue keeps reconciliation responsive.
     const completionEvaluationQueue = yield* Queue.unbounded<AutomationCompletionEvaluationJob>();
+    const queuedCompletionEvaluationRunIds = new Set<string>();
 
     const publish = (event: AutomationStreamEvent) =>
       PubSub.publish(events, event).pipe(Effect.asVoid);
@@ -933,15 +946,12 @@ export const AutomationServiceLive = Layer.effect(
           input.run.turnId !== null &&
           message.turnId === input.run.turnId,
       );
-      const fallbackAssistant = [...input.thread.messages]
-        .reverse()
-        .find((message) => message.role === "assistant");
       return {
         runUserMessage: userMessage,
         runAssistantText:
           assistantMessages.length > 0
             ? assistantMessages.map((message) => message.text).join("\n\n")
-            : (fallbackAssistant?.text ?? ""),
+            : "",
       };
     };
 
@@ -953,6 +963,52 @@ export const AutomationServiceLive = Layer.effect(
           Option.match(runOption, {
             onNone: () => run,
             onSome: (latestRun) => latestRun,
+          }),
+        ),
+      );
+
+    const resolveAutomationCompletionTextGenerationInput = (definition: AutomationDefinition) =>
+      Effect.gen(function* () {
+        const directInput = resolveTextGenerationInputForSelection(
+          definition.modelSelection,
+          definition.providerOptions,
+        );
+        if (directInput) {
+          return directInput;
+        }
+
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.mapError(toServiceError("Failed to load text-generation settings.")),
+        );
+        return (
+          resolveTextGenerationInputForSelection(
+            settings.textGenerationModelSelection,
+            definition.providerOptions,
+          ) ?? {}
+        );
+      });
+
+    const shouldUseStopPolicyForDefinition = (
+      definition: AutomationDefinition,
+      policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
+    ): boolean =>
+      definition.mode === "heartbeat" &&
+      definition.enabled &&
+      definition.archivedAt === null &&
+      definition.completionPolicy.type === "ai-evaluated" &&
+      isSameAiCompletionPolicy(definition.completionPolicy, policy);
+
+    const isStopPolicyStillCurrent = (
+      definitionId: AutomationDefinition["id"],
+      policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
+    ) =>
+      automationRepository.getDefinitionById({ id: definitionId }).pipe(
+        Effect.mapError(toServiceError("Failed to load automation.")),
+        Effect.map((definitionOption) =>
+          Option.match(definitionOption, {
+            onNone: () => false,
+            onSome: (currentDefinition) =>
+              shouldUseStopPolicyForDefinition(currentDefinition, policy),
           }),
         ),
       );
@@ -979,6 +1035,9 @@ export const AutomationServiceLive = Layer.effect(
           run,
           thread,
         });
+        const textGenerationInput = yield* resolveAutomationCompletionTextGenerationInput(
+          definition,
+        );
         const evaluationRaw = yield* textGeneration
           .evaluateAutomationCompletion({
             cwd: project.workspaceRoot,
@@ -988,15 +1047,26 @@ export const AutomationServiceLive = Layer.effect(
             runUserMessage: runUserMessage || definition.prompt,
             runAssistantText: runAssistantText || "(no assistant output)",
             threadContext: recentThreadContext(thread),
-            modelSelection: definition.modelSelection,
-            ...(definition.providerOptions ? { providerOptions: definition.providerOptions } : {}),
+            ...textGenerationInput,
           })
           .pipe(Effect.mapError(toServiceError("Failed to evaluate automation stop condition.")));
-        const evaluation = {
+        const rawEvaluation = {
           stopMatched: evaluationRaw.stopMatched,
           confidence: Math.max(0, Math.min(1, evaluationRaw.confidence)),
           reason: normalizeAutomationCompletionReason(evaluationRaw.reason),
         };
+        const policyStillCurrent = rawEvaluation.stopMatched
+          ? yield* isStopPolicyStillCurrent(definition.id, policy)
+          : true;
+        const evaluation = policyStillCurrent
+          ? rawEvaluation
+          : {
+              ...rawEvaluation,
+              stopMatched: false,
+              reason: normalizeAutomationCompletionReason(
+                "Stop check ignored because the automation stop policy changed before evaluation finished.",
+              ),
+            };
         const matched =
           evaluation.stopMatched && evaluation.confidence >= policy.confidenceThreshold;
         const latestRun = yield* latestRunForCompletionResult(run);
@@ -1067,6 +1137,58 @@ export const AutomationServiceLive = Layer.effect(
         ),
       );
 
+    const enqueueCompletionEvaluationJob = (job: AutomationCompletionEvaluationJob) =>
+      Effect.sync(() => {
+        if (queuedCompletionEvaluationRunIds.has(job.run.id)) {
+          return false;
+        }
+        queuedCompletionEvaluationRunIds.add(job.run.id);
+        return true;
+      }).pipe(
+        Effect.flatMap((shouldEnqueue) =>
+          shouldEnqueue
+            ? Queue.offer(completionEvaluationQueue, job).pipe(Effect.asVoid)
+            : Effect.void,
+        ),
+      );
+
+    const enqueueCompletionEvaluationForRun = (run: AutomationRun) => {
+      if (run.status !== "succeeded" || run.result?.completionEvaluation !== undefined) {
+        return Effect.void;
+      }
+
+      return automationRepository.getDefinitionById({ id: run.automationId }).pipe(
+        Effect.mapError(toServiceError("Failed to load automation.")),
+        Effect.flatMap((definitionOption) =>
+          Option.match(definitionOption, {
+            onNone: () => Effect.void,
+            onSome: (definition) => {
+              if (definition.completionPolicy.type !== "ai-evaluated") {
+                return Effect.void;
+              }
+              if (!shouldUseStopPolicyForDefinition(definition, definition.completionPolicy)) {
+                return Effect.void;
+              }
+              return enqueueCompletionEvaluationJob({
+                definition,
+                run,
+                policy: definition.completionPolicy,
+              });
+            },
+          }),
+        ),
+      );
+    };
+
+    const enqueuePendingCompletionEvaluations = () =>
+      automationRepository.listRunsNeedingCompletionEvaluation({ limit: 100 }).pipe(
+        Effect.mapError(toServiceError("Failed to list pending stop evaluations.")),
+        Effect.flatMap((runs) =>
+          Effect.forEach(runs, enqueueCompletionEvaluationForRun, { concurrency: 1 }),
+        ),
+        Effect.asVoid,
+      );
+
     const processCompletionEvaluationJob = (job: AutomationCompletionEvaluationJob) =>
       evaluateCompletionPolicy(job.definition, job.run, job.policy, isoNow()).pipe(
         Effect.asVoid,
@@ -1080,6 +1202,7 @@ export const AutomationServiceLive = Layer.effect(
             cause: Cause.pretty(cause),
           });
         }),
+        Effect.ensuring(Effect.sync(() => queuedCompletionEvaluationRunIds.delete(job.run.id))),
       );
 
     const completionEvaluationWorker = Effect.forever(
@@ -1090,6 +1213,14 @@ export const AutomationServiceLive = Layer.effect(
       Array.from({ length: AUTOMATION_COMPLETION_EVALUATION_WORKERS }),
       () => Effect.forkScoped(completionEvaluationWorker),
       { discard: true },
+    );
+
+    yield* enqueuePendingCompletionEvaluations().pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("automation pending stop evaluations could not be queued", {
+          error: errorMessage(error),
+        }),
+      ),
     );
 
     const maybeStopLoop = (run: AutomationRun, status: AutomationRunStatus, now: string) =>
@@ -1106,11 +1237,11 @@ export const AutomationServiceLive = Layer.effect(
                 status === "succeeded" &&
                 definition.mode === "heartbeat" &&
                 definition.completionPolicy.type === "ai-evaluated"
-                  ? Queue.offer(completionEvaluationQueue, {
+                  ? enqueueCompletionEvaluationJob({
                       definition,
                       run,
                       policy: definition.completionPolicy,
-                    }).pipe(Effect.asVoid)
+                    })
                   : Effect.void;
               const stopOnError = status === "failed" && definition.stopOnError;
               const reachedMax =
@@ -1309,6 +1440,7 @@ export const AutomationServiceLive = Layer.effect(
             { concurrency: 1 },
           ),
         ),
+        Effect.flatMap(() => enqueuePendingCompletionEvaluations()),
         Effect.asVoid,
       );
 
@@ -1356,6 +1488,7 @@ export const AutomationServiceLive = Layer.effect(
             { concurrency: 1 },
           ),
         ),
+        Effect.flatMap(() => enqueuePendingCompletionEvaluations()),
         Effect.asVoid,
       );
 

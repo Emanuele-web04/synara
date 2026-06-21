@@ -144,6 +144,12 @@ export const ListRecoverableAutomationRunsInput = Schema.Struct({
 });
 export type ListRecoverableAutomationRunsInput = typeof ListRecoverableAutomationRunsInput.Type;
 
+export const ListAutomationRunsNeedingCompletionEvaluationInput = Schema.Struct({
+  limit: Schema.Number,
+});
+export type ListAutomationRunsNeedingCompletionEvaluationInput =
+  typeof ListAutomationRunsNeedingCompletionEvaluationInput.Type;
+
 export const CountActiveAutomationRunsInput = Schema.Struct({
   automationId: AutomationId,
 });
@@ -244,6 +250,9 @@ export interface AutomationRepositoryShape {
   ) => Effect.Effect<Option.Option<AutomationRun>, AutomationRepositoryError>;
   readonly listRecoverableRuns: (
     input: ListRecoverableAutomationRunsInput,
+  ) => Effect.Effect<ReadonlyArray<AutomationRun>, AutomationRepositoryError>;
+  readonly listRunsNeedingCompletionEvaluation: (
+    input: ListAutomationRunsNeedingCompletionEvaluationInput,
   ) => Effect.Effect<ReadonlyArray<AutomationRun>, AutomationRepositoryError>;
   readonly countActiveRunsForDefinition: (
     input: CountActiveAutomationRunsInput,
