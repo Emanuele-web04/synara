@@ -126,9 +126,9 @@ import {
   createAllThreadsSelector,
   createProjectSelector,
   createSidebarThreadSummariesSelector,
-  createThreadSelector,
   createThreadExistsSelector,
   createThreadProjectIdSelector,
+  createThreadWorkspaceMetadataSelector,
 } from "../storeSelectors";
 import { sortThreadsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
@@ -1426,8 +1426,8 @@ function SingleChatSurface(props: {
   const activeProject = useStore(
     useMemo(() => createProjectSelector(props.projectId), [props.projectId]),
   );
-  const activeThread = useStore(
-    useMemo(() => createThreadSelector(props.threadId), [props.threadId]),
+  const threadWorkspaceMetadata = useStore(
+    useMemo(() => createThreadWorkspaceMetadataSelector(props.threadId), [props.threadId]),
   );
   const draftThread = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[props.threadId] ?? null,
@@ -1436,10 +1436,8 @@ function SingleChatSurface(props: {
   // worktree-backed threads resolve links against their materialized worktree.
   const workspaceRoot = resolveFilePreviewWorkspaceRoot({
     projectCwd: activeProject?.cwd ?? null,
-    threadEnvMode: activeThread ? (activeThread.envMode ?? null) : (draftThread?.envMode ?? null),
-    threadWorktreePath: activeThread
-      ? (activeThread.worktreePath ?? null)
-      : (draftThread?.worktreePath ?? null),
+    threadEnvMode: threadWorkspaceMetadata.envMode ?? draftThread?.envMode ?? null,
+    threadWorktreePath: threadWorkspaceMetadata.worktreePath ?? draftThread?.worktreePath ?? null,
   });
   const projects = useStore((store) => store.projects);
   const { settings: appSettings } = useAppSettings();
