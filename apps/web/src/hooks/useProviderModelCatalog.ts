@@ -94,6 +94,7 @@ export function useProviderModelCatalog(input: {
     providerModelsQueryOptions({
       provider: "opencode",
       binaryPath: settings.openCodeBinaryPath || null,
+      cwd: discoveryCwd,
       enabled: selectedProvider === "opencode" || discoveryEnabled,
     }),
   );
@@ -101,6 +102,7 @@ export function useProviderModelCatalog(input: {
     providerModelsQueryOptions({
       provider: "kilo",
       binaryPath: settings.kiloBinaryPath || null,
+      cwd: discoveryCwd,
       enabled: selectedProvider === "kilo" || discoveryEnabled,
     }),
   );

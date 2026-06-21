@@ -1653,6 +1653,7 @@ export default function ChatView({
     providerModelsQueryOptions({
       provider: "opencode",
       binaryPath: settings.openCodeBinaryPath || null,
+      cwd: providerModelDiscoveryCwd,
       enabled: openCodeModelDiscoveryEnabled,
     }),
   );
@@ -1660,6 +1661,7 @@ export default function ChatView({
     providerModelsQueryOptions({
       provider: "kilo",
       binaryPath: settings.kiloBinaryPath || null,
+      cwd: providerModelDiscoveryCwd,
       enabled: kiloModelDiscoveryEnabled,
     }),
   );
