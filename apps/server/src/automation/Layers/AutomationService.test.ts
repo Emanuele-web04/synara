@@ -2,6 +2,8 @@ import { assert, it } from "@effect/vitest";
 import {
   AutomationId,
   AutomationRunId,
+  CommandId,
+  MessageId,
   ProjectId,
   ThreadId,
   TurnId,
@@ -47,19 +49,25 @@ const project: OrchestrationProjectShell = {
 const dispatchedCommands: OrchestrationCommand[] = [];
 const createdWorktrees: GitCreateWorktreeInput[] = [];
 let gitMode: "nonRepo" | "worktree" = "nonRepo";
+let gitStatusHook: ((cwd: string) => Effect.Effect<void>) | null = null;
 // Configurable thread shell returned by the ProjectionSnapshotQuery mock; reconcile
 // tests set it to drive the run's latest-turn outcome.
 let threadShell: Option.Option<OrchestrationThreadShell> = Option.none();
 // When set, the orchestration dispatch mock fails on the matching command type so we
 // can exercise the failed-run / advance-after-dispatch paths.
 let failDispatchType: OrchestrationCommand["type"] | null = null;
+let dispatchHook:
+  | ((command: OrchestrationCommand) => Effect.Effect<void, OrchestrationCommandInternalError>)
+  | null = null;
 
 function resetHarness() {
   dispatchedCommands.length = 0;
   createdWorktrees.length = 0;
   gitMode = "nonRepo";
+  gitStatusHook = null;
   threadShell = Option.none();
   failDispatchType = null;
+  dispatchHook = null;
 }
 
 // Build a partial thread shell; only the fields reconcileThread reads are populated.
@@ -107,6 +115,7 @@ const createInput = (
     model: "gpt-5-codex",
   },
   worktreeMode,
+  acknowledgedRisks: worktreeMode === "local" ? ["local-checkout"] : [],
 });
 
 const orchestrationEngine = {
@@ -127,7 +136,10 @@ const orchestrationEngine = {
             detail: "dispatch rejected by test harness",
           }),
         )
-      : Effect.sync(() => {
+      : Effect.gen(function* () {
+          if (dispatchHook) {
+            yield* dispatchHook(command);
+          }
           dispatchedCommands.push(command);
           return { sequence: dispatchedCommands.length };
         }),
@@ -178,19 +190,24 @@ const projectionSnapshotQuery = {
 
 const gitCore = {
   statusDetails: (cwd: string) =>
-    Effect.succeed({
-      isRepo: gitMode === "worktree",
-      hasOriginRemote: false,
-      isDefaultBranch: true,
-      branch: gitMode === "worktree" ? "main" : null,
-      upstreamRef: null,
-      upstreamBranch: null,
-      hasWorkingTreeChanges: false,
-      workingTree: { files: [], insertions: 0, deletions: 0 },
-      hasUpstream: false,
-      aheadCount: 0,
-      behindCount: 0,
-      cwd,
+    Effect.gen(function* () {
+      if (gitStatusHook) {
+        yield* gitStatusHook(cwd);
+      }
+      return {
+        isRepo: gitMode === "worktree",
+        hasOriginRemote: false,
+        isDefaultBranch: true,
+        branch: gitMode === "worktree" ? "main" : null,
+        upstreamRef: null,
+        upstreamBranch: null,
+        hasWorkingTreeChanges: false,
+        workingTree: { files: [], insertions: 0, deletions: 0 },
+        hasUpstream: false,
+        aheadCount: 0,
+        behindCount: 0,
+        cwd,
+      };
     }),
   createWorktree: (input: GitCreateWorktreeInput) =>
     Effect.sync(() => {
@@ -230,6 +247,28 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("initializes future scheduled automations with their first real run time", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const runAt = "2099-01-01T00:00:00.000Z";
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        schedule: { type: "once", runAt },
+      });
+      const results = yield* service.runDueOnce({
+        now: "2030-01-01T00:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      assert.strictEqual(created.nextRunAt, runAt);
+      assert.strictEqual(results.length, 0);
+      assert.strictEqual(dispatchedCommands.length, 0);
+    }),
+  );
+
   it.effect("runs a manual automation through normal thread commands", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -253,6 +292,8 @@ layer("AutomationService", (it) => {
       assert.strictEqual(turnStart.dispatchMode, "queue");
       assert.strictEqual(result.run.threadId, threadCreate.threadId);
       assert.strictEqual(result.run.messageId, turnStart.message.messageId);
+      assert.strictEqual(result.run.threadCreateCommandId, threadCreate.commandId);
+      assert.strictEqual(result.run.turnStartCommandId, turnStart.commandId);
     }),
   );
 
@@ -275,6 +316,99 @@ layer("AutomationService", (it) => {
       assert.strictEqual(threadCreate.envMode, "worktree");
       assert.strictEqual(threadCreate.worktreePath, "/tmp/automation-worktree");
       assert.strictEqual(threadCreate.associatedWorktreeBranch, createdWorktrees[0]?.newBranch);
+    }),
+  );
+
+  it.effect("does not dispatch a run cancelled while resolving the environment", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      gitMode = "worktree";
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-cancel-before-dispatch");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("worktree"),
+          schedule: { type: "interval", everySeconds: 300 },
+          stopOnError: true,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      gitStatusHook = () =>
+        Effect.gen(function* () {
+          const runs = yield* repository
+            .listActiveRunsForDefinition({ automationId })
+            .pipe(Effect.orDie);
+          const run = runs.find((entry) => entry.automationId === automationId);
+          if (run) {
+            yield* repository
+              .cancelRun({
+                runId: run.id,
+                now: "2026-06-16T10:00:30.000Z",
+              })
+              .pipe(Effect.orDie);
+          }
+        });
+
+      const results = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      assert.strictEqual(
+        results.find((entry) => entry.run.automationId === automationId)?.run.status,
+        "cancelled",
+      );
+      assert.strictEqual(
+        dispatchedCommands.some(
+          (command) => command.type === "thread.create" || command.type === "thread.turn.start",
+        ),
+        false,
+      );
+      assert.strictEqual(createdWorktrees.length, 0);
+      const reloaded = yield* service.list({ projectId });
+      const definition = reloaded.definitions.find((entry) => entry.id === automationId);
+      assert.strictEqual(definition?.enabled, true);
+    }),
+  );
+
+  it.effect("rejects auto local checkout fallback without acknowledgement", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const created = yield* service.create(createInput("auto"));
+      const error = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
+
+      assert.match(error.message, /local checkout fallback/);
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type === "thread.create").length,
+        0,
+      );
+    }),
+  );
+
+  it.effect("allows acknowledged auto local checkout fallback", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const created = yield* service.create({
+        ...createInput("auto"),
+        acknowledgedRisks: ["local-checkout"],
+      });
+      yield* service.runNow({ automationId: created.id });
+
+      const threadCreate = dispatchedCommands.find((command) => command.type === "thread.create");
+      assert.strictEqual(threadCreate?.type, "thread.create");
+      if (threadCreate?.type !== "thread.create") {
+        assert.fail("Expected thread.create command.");
+      }
+      assert.strictEqual(threadCreate.envMode, "local");
     }),
   );
 
@@ -308,6 +442,115 @@ layer("AutomationService", (it) => {
       assert.strictEqual(
         listed.definitions.find((definition) => definition.id === automationId)?.nextRunAt,
         "2026-06-16T10:05:00.000Z",
+      );
+    }),
+  );
+
+  it.effect("records and advances missed scheduled occurrences when misfire policy is skip", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-misfire-skip");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+          misfirePolicy: "skip",
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const results = yield* service.runDueOnce({
+        now: "2026-06-16T10:11:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      assert.strictEqual(
+        results.filter((entry) => entry.run.automationId === automationId).length,
+        0,
+      );
+      const listed = yield* service.list({ projectId });
+      const definition = listed.definitions.find((entry) => entry.id === automationId);
+      const runs = listed.runs.filter((entry) => entry.automationId === automationId);
+      assert.strictEqual(definition?.nextRunAt, "2026-06-16T10:15:00.000Z");
+      assert.strictEqual(runs.length, 1);
+      assert.strictEqual(runs[0]?.status, "skipped");
+      yield* repository.disableDefinition({ id: automationId, now: "2026-06-16T10:11:00.000Z" });
+    }),
+  );
+
+  it.effect("runs the current slot for missed schedules when misfire policy is run-latest", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-misfire-latest");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+          misfirePolicy: "run-latest",
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const results = yield* service.runDueOnce({
+        now: "2026-06-16T10:11:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      const runForAutomation = results.find((entry) => entry.run.automationId === automationId);
+      assert.strictEqual(runForAutomation?.run.scheduledFor, "2026-06-16T10:11:00.000Z");
+      const listed = yield* service.list({ projectId });
+      const definition = listed.definitions.find((entry) => entry.id === automationId);
+      assert.strictEqual(definition?.nextRunAt, "2026-06-16T10:16:00.000Z");
+      yield* repository.disableDefinition({ id: automationId, now: "2026-06-16T10:11:00.000Z" });
+    }),
+  );
+
+  it.effect("runs one-shot automations once and disables them", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-once-service");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "once", runAt: "2026-06-16T10:00:15.000Z" },
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const first = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:15.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const second = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:20.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const listed = yield* service.list({ projectId });
+
+      assert.strictEqual(first.length, 1);
+      assert.strictEqual(second.length, 0);
+      const definition = listed.definitions.find((entry) => entry.id === automationId);
+      assert.strictEqual(definition?.enabled, false);
+      assert.strictEqual(definition?.nextRunAt, null);
+      assert.strictEqual(
+        listed.runs.filter((entry) => entry.automationId === automationId).length,
+        1,
       );
     }),
   );
@@ -356,6 +599,31 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("clamps long failed-run summaries to the result schema limit", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const created = yield* service.create(createInput("local"));
+      const { run } = yield* service.runNow({ automationId: created.id });
+      const threadId = run.threadId!;
+      const longError = "x".repeat(3_000);
+
+      threadShell = Option.some(
+        makeThreadShell({
+          latestTurn: makeLatestTurn("error"),
+          lastError: longError,
+        }),
+      );
+      yield* service.reconcileThread({ threadId });
+
+      const reloaded = yield* service.list({ projectId });
+      const reconciled = reloaded.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(reconciled?.status, "failed");
+      assert.strictEqual(reconciled?.result?.summary?.length, 2_000);
+    }),
+  );
+
   it.effect("reconciles an interrupted turn into an interrupted run", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -398,6 +666,33 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("reconciles a cleared approval wait back into running", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const created = yield* service.create(createInput("local"));
+      const { run } = yield* service.runNow({ automationId: created.id });
+      const threadId = run.threadId!;
+
+      threadShell = Option.some(
+        makeThreadShell({
+          latestTurn: makeLatestTurn("running"),
+          hasPendingApprovals: true,
+        }),
+      );
+      yield* service.reconcileThread({ threadId });
+
+      threadShell = Option.some(makeThreadShell({ latestTurn: makeLatestTurn("running") }));
+      yield* service.reconcileThread({ threadId });
+
+      const reloaded = yield* service.list({ projectId });
+      const reconciled = reloaded.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(reconciled?.status, "running");
+      assert.strictEqual(reconciled?.result, null);
+    }),
+  );
+
   it.effect("leaves a still-running turn untouched on reconcile", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -413,6 +708,147 @@ layer("AutomationService", (it) => {
 
       const reloaded = yield* service.list({ projectId });
       assert.strictEqual(reloaded.runs.find((entry) => entry.id === run.id)?.status, "running");
+    }),
+  );
+
+  it.effect("times out active runs that exceed maxRuntimeSeconds", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-timeout");
+      const threadId = ThreadId.makeUnsafe("thread-timeout");
+      const messageId = MessageId.makeUnsafe("message-timeout");
+      const threadCreateCommandId = CommandId.makeUnsafe("command-timeout-thread");
+      const turnStartCommandId = CommandId.makeUnsafe("command-timeout-turn");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          maxRuntimeSeconds: 1,
+          stopOnError: false,
+        },
+        now: "2000-01-01T00:00:00.000Z",
+      });
+      const run = yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-timeout"),
+        automationId,
+        projectId,
+        threadId,
+        messageId,
+        threadCreateCommandId,
+        turnStartCommandId,
+        trigger: { type: "manual" },
+        scheduledFor: "2000-01-01T00:00:00.000Z",
+        permissionSnapshot: {
+          provider: "codex",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          worktreeMode: "local",
+          allowedCapabilities: ["send-turn"],
+          createdAt: "2000-01-01T00:00:00.000Z",
+        },
+        now: "2000-01-01T00:00:00.000Z",
+      });
+      yield* repository.markRunStarted({
+        id: run.id,
+        threadId,
+        messageId,
+        threadCreateCommandId,
+        turnStartCommandId,
+        startedAt: "2000-01-01T00:00:00.000Z",
+      });
+
+      yield* service.reconcileActiveRuns();
+
+      const listed = yield* service.list({ projectId });
+      const timedOut = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(timedOut?.status, "failed");
+      assert.match(timedOut?.error ?? "", /runtime limit/);
+      assert.isDefined(
+        dispatchedCommands.find(
+          (command) => command.type === "thread.turn.interrupt" && command.threadId === threadId,
+        ),
+      );
+    }),
+  );
+
+  it.effect("does not overwrite a succeeded result when a timeout loses the race", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-timeout-race");
+      const runId = AutomationRunId.makeUnsafe("run-timeout-race");
+      const threadId = ThreadId.makeUnsafe("thread-timeout-race");
+      const messageId = MessageId.makeUnsafe("message-timeout-race");
+      const threadCreateCommandId = CommandId.makeUnsafe("command-timeout-race-thread");
+      const turnStartCommandId = CommandId.makeUnsafe("command-timeout-race-turn");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          maxRuntimeSeconds: 1,
+          stopOnError: false,
+        },
+        now: "2000-01-01T00:00:00.000Z",
+      });
+      const run = yield* repository.createRun({
+        id: runId,
+        automationId,
+        projectId,
+        threadId,
+        messageId,
+        threadCreateCommandId,
+        turnStartCommandId,
+        trigger: { type: "manual" },
+        scheduledFor: "2000-01-01T00:00:00.000Z",
+        permissionSnapshot: {
+          provider: "codex",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          worktreeMode: "local",
+          allowedCapabilities: ["send-turn"],
+          createdAt: "2000-01-01T00:00:00.000Z",
+        },
+        now: "2000-01-01T00:00:00.000Z",
+      });
+      yield* repository.markRunStarted({
+        id: run.id,
+        threadId,
+        messageId,
+        threadCreateCommandId,
+        turnStartCommandId,
+        startedAt: "2000-01-01T00:00:00.000Z",
+      });
+      dispatchHook = (command) =>
+        command.type === "thread.turn.interrupt"
+          ? repository
+              .markRunSucceeded({
+                id: run.id,
+                turnId: TurnId.makeUnsafe("turn-timeout-race-completed"),
+                result: {
+                  outcome: "no-findings",
+                  summary: "Completed before timeout.",
+                  unread: false,
+                  archivedAt: null,
+                },
+                finishedAt: "2026-06-16T10:00:00.000Z",
+              })
+              .pipe(Effect.asVoid, Effect.orDie)
+          : Effect.void;
+
+      yield* service.reconcileActiveRuns();
+
+      const listed = yield* service.list({ projectId });
+      const reconciled = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(reconciled?.status, "succeeded");
+      assert.strictEqual(reconciled?.result?.outcome, "no-findings");
+      assert.strictEqual(reconciled?.result?.summary, "Completed before timeout.");
     }),
   );
 
@@ -567,6 +1003,160 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("clears heartbeat max iterations when switching back to standalone", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-to-standalone-thread");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        maxIterations: 3,
+      });
+      const updated = yield* service.update({
+        id: created.id,
+        mode: "standalone",
+        targetThreadId: null,
+      });
+
+      assert.strictEqual(updated.mode, "standalone");
+      assert.strictEqual(updated.maxIterations, null);
+    }),
+  );
+
+  it.effect("rejects custom schedules faster than the configured minimum interval", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const error = yield* service
+        .create({
+          ...createInput("local"),
+          schedule: { type: "cron", expression: "* * * * *", timezone: "UTC" },
+          minimumIntervalSeconds: 120,
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /120 seconds apart/);
+    }),
+  );
+
+  it.effect("allows acknowledged fast recurring intervals at the default minimum", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        schedule: { type: "interval", everySeconds: 15 },
+        acknowledgedRisks: ["fast-interval", "local-checkout"],
+      });
+
+      assert.strictEqual(created.schedule.type, "interval");
+      assert.deepStrictEqual(created.acknowledgedRisks, ["fast-interval", "local-checkout"]);
+    }),
+  );
+
+  it.effect("rejects unacknowledged fast recurring intervals", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const error = yield* service
+        .create({
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 15 },
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /60 seconds apart/);
+    }),
+  );
+
+  it.effect("rejects unacknowledged full-access automations", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const error = yield* service
+        .create({
+          ...createInput("worktree"),
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /full-access/);
+    }),
+  );
+
+  it.effect("rejects unacknowledged local-checkout automations", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const error = yield* service
+        .create({
+          ...createInput("local"),
+          acknowledgedRisks: [],
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /local checkout/);
+    }),
+  );
+
+  it.effect("rejects updates that switch to local checkout without acknowledgement", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create(createInput("worktree"));
+
+      const error = yield* service
+        .update({
+          id: created.id,
+          worktreeMode: "local",
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /local checkout/);
+    }),
+  );
+
+  it.effect("rejects enabled one-shot schedules that no longer have a future run", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const error = yield* service
+        .create({
+          ...createInput("local"),
+          schedule: { type: "once", runAt: "2000-01-01T00:00:00.000Z" },
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /future run time/);
+    }),
+  );
+
+  it.effect("rejects retry policies until retry attempts are modeled", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const error = yield* service
+        .create({
+          ...createInput("local"),
+          retryPolicy: { type: "fixed", maxAttempts: 3, delaySeconds: 30 },
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /retry policies are not supported/);
+    }),
+  );
+
   it.effect("disables a scheduled automation that has reached its iteration cap", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -649,18 +1239,22 @@ layer("AutomationService", (it) => {
     }),
   );
 
-  it.effect("skips a due run while a prior run is in flight but advances the schedule", () =>
+  it.effect("skips a due heartbeat run while the target thread is in flight", () =>
     Effect.gen(function* () {
       resetHarness();
       const service = yield* AutomationService;
       const repository = yield* AutomationRepository;
       const automationId = AutomationId.makeUnsafe("automation-in-flight");
+      const targetThreadId = ThreadId.makeUnsafe("thread-in-flight-target");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
 
       yield* repository.createDefinition({
         id: automationId,
         input: {
           ...createInput("local"),
           schedule: { type: "interval", everySeconds: 300 },
+          mode: "heartbeat",
+          targetThreadId,
         },
         now: "2026-06-16T10:00:00.000Z",
       });
@@ -670,9 +1264,19 @@ layer("AutomationService", (it) => {
         limit: 10,
         leaseOwnerId: "test-scheduler",
       });
-      assert.strictEqual(first.length, 1);
-      assert.strictEqual(dispatchedCommands.length, 2);
-      const dispatchedBefore = dispatchedCommands.length;
+      const firstForAutomation = first.filter((entry) => entry.run.automationId === automationId);
+      assert.strictEqual(firstForAutomation.length, 1);
+      const activeRun = firstForAutomation[0]!.run;
+      const targetThreadDispatchCount = () =>
+        dispatchedCommands.filter(
+          (command) => command.type === "thread.turn.start" && command.threadId === targetThreadId,
+        ).length;
+      const dispatchedBefore = targetThreadDispatchCount();
+      assert.strictEqual(dispatchedBefore, 1);
+      assert.strictEqual(
+        yield* repository.countActiveRunsForThread({ threadId: targetThreadId }),
+        1,
+      );
 
       // Second due tick: the prior run is still active, so no new run is dispatched,
       // but the schedule still advances past this occurrence.
@@ -682,15 +1286,51 @@ layer("AutomationService", (it) => {
         leaseOwnerId: "test-scheduler",
       });
 
-      assert.strictEqual(second.length, 0);
-      assert.strictEqual(dispatchedCommands.length, dispatchedBefore);
+      assert.strictEqual(
+        second.filter((entry) => entry.run.automationId === automationId).length,
+        0,
+      );
+      assert.strictEqual(targetThreadDispatchCount(), dispatchedBefore);
       const reloaded = yield* service.list({ projectId });
       const definition = reloaded.definitions.find((entry) => entry.id === automationId);
       assert.strictEqual(definition?.nextRunAt, "2026-06-16T10:10:00.000Z");
-      // Only the first occurrence produced a run row.
+      const runs = reloaded.runs.filter((entry) => entry.automationId === automationId);
+      assert.strictEqual(runs.length, 2);
+      assert.strictEqual(runs[0]?.status, "skipped");
+
+      const projectionTurns = yield* ProjectionTurnRepository;
+      yield* projectionTurns.upsertByTurnId({
+        threadId: targetThreadId,
+        turnId: TurnId.makeUnsafe("turn-in-flight-complete"),
+        pendingMessageId: activeRun.messageId,
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId: null,
+        state: "completed",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: now,
+        checkpointTurnCount: null,
+        checkpointRef: null,
+        checkpointStatus: null,
+        checkpointFiles: [],
+      });
+      threadShell = Option.some(
+        makeThreadShell({
+          id: targetThreadId,
+          latestTurn: makeLatestTurn("completed", TurnId.makeUnsafe("turn-in-flight-complete")),
+        }),
+      );
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      const reconciled = yield* service.list({ projectId });
       assert.strictEqual(
-        reloaded.runs.filter((entry) => entry.automationId === automationId).length,
-        1,
+        reconciled.runs.find((entry) => entry.id === activeRun.id)?.status,
+        "succeeded",
+      );
+      assert.strictEqual(
+        yield* repository.countActiveRunsForThread({ threadId: targetThreadId }),
+        0,
       );
     }),
   );
@@ -731,6 +1371,243 @@ layer("AutomationService", (it) => {
       // The occurrence is not silently lost: the schedule advanced to the next slot.
       const definition = reloaded.definitions.find((entry) => entry.id === automationId);
       assert.strictEqual(definition?.nextRunAt, "2026-06-16T10:05:00.000Z");
+    }),
+  );
+
+  it.effect("persists standalone thread ids before turn dispatch starts", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-turn-start-fail");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+          stopOnError: false,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      failDispatchType = "thread.turn.start";
+      const results = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(dispatchedCommands[0]?.type, "thread.create");
+      assert.strictEqual(results[0]?.run.status, "failed");
+
+      const reloaded = yield* service.list({ projectId });
+      const failedRun = reloaded.runs.find((entry) => entry.automationId === automationId);
+      assert.strictEqual(failedRun?.status, "failed");
+      assert.isNotNull(failedRun?.threadId ?? null);
+    }),
+  );
+
+  it.effect("recovers standalone pending rows using their persisted thread id", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-standalone-recovery");
+      const threadId = ThreadId.makeUnsafe("thread-standalone-recovery");
+      const messageId = MessageId.makeUnsafe("message-standalone-recovery");
+      const turnId = TurnId.makeUnsafe("turn-standalone-recovery");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+          stopOnError: false,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-standalone-recovery"),
+        automationId,
+        projectId,
+        threadId,
+        messageId,
+        threadCreateCommandId: CommandId.makeUnsafe("command-standalone-recovery-thread"),
+        turnStartCommandId: CommandId.makeUnsafe("command-standalone-recovery-turn"),
+        trigger: { type: "scheduled" },
+        scheduledFor: "2026-06-16T10:00:00.000Z",
+        permissionSnapshot: {
+          provider: "codex",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          worktreeMode: "local",
+          allowedCapabilities: ["send-turn"],
+          createdAt: "2026-06-16T10:00:00.000Z",
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      threadShell = Option.some(
+        makeThreadShell({
+          id: threadId,
+          latestTurn: makeLatestTurn("completed", turnId),
+        }),
+      );
+
+      yield* service.recoverPendingRuns();
+
+      const reloaded = yield* service.list({ projectId });
+      const recovered = reloaded.runs.find((entry) => entry.automationId === automationId);
+      assert.strictEqual(recovered?.status, "succeeded");
+      assert.strictEqual(recovered?.threadId, threadId);
+    }),
+  );
+
+  it.effect("interrupts heartbeat recovery rows whose turn was never queued", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-heartbeat-no-turn");
+      const targetThreadId = ThreadId.makeUnsafe("thread-heartbeat-no-turn");
+
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          mode: "heartbeat",
+          targetThreadId,
+          schedule: { type: "interval", everySeconds: 300 },
+          stopOnError: false,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-heartbeat-no-turn"),
+        automationId,
+        projectId,
+        threadId: targetThreadId,
+        messageId: MessageId.makeUnsafe("message-heartbeat-no-turn"),
+        threadCreateCommandId: null,
+        turnStartCommandId: CommandId.makeUnsafe("command-heartbeat-no-turn"),
+        trigger: { type: "scheduled" },
+        scheduledFor: "2026-06-16T10:00:00.000Z",
+        permissionSnapshot: {
+          provider: "codex",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          worktreeMode: "local",
+          allowedCapabilities: ["send-turn"],
+          createdAt: "2026-06-16T10:00:00.000Z",
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      yield* service.recoverPendingRuns();
+
+      const reloaded = yield* service.list({ projectId });
+      const interrupted = reloaded.runs.find((entry) => entry.automationId === automationId);
+      assert.strictEqual(interrupted?.status, "interrupted");
+      assert.strictEqual(
+        yield* repository.countActiveRunsForThread({ threadId: targetThreadId }),
+        0,
+      );
+    }),
+  );
+
+  it.effect("disables a stopOnError automation when dispatch fails", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-dispatch-fail-stop");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+          stopOnError: true,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      failDispatchType = "thread.create";
+      const results = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      assert.strictEqual(
+        results.find((entry) => entry.run.automationId === automationId)?.run.status,
+        "failed",
+      );
+      const reloaded = yield* service.list({ projectId });
+      const definition = reloaded.definitions.find((entry) => entry.id === automationId);
+      assert.strictEqual(definition?.enabled, false);
+    }),
+  );
+
+  it.effect("does not disable stopOnError when cancellation wins a dispatch failure race", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-cancel-wins-dispatch-fail");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+          stopOnError: true,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      dispatchHook = (command) =>
+        command.type === "thread.turn.start"
+          ? Effect.gen(function* () {
+              const runOption = yield* repository
+                .getRunByThreadId({ threadId: command.threadId })
+                .pipe(Effect.orDie);
+              const run = Option.getOrThrow(runOption);
+              yield* repository
+                .cancelRun({
+                  runId: run.id,
+                  now: "2026-06-16T10:00:30.000Z",
+                })
+                .pipe(Effect.orDie);
+              return yield* Effect.fail(
+                new OrchestrationCommandInternalError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  detail: "dispatch cancelled by test harness",
+                }),
+              );
+            })
+          : Effect.void;
+
+      const results = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      assert.strictEqual(
+        results.find((entry) => entry.run.automationId === automationId)?.run.status,
+        "cancelled",
+      );
+      const reloaded = yield* service.list({ projectId });
+      const definition = reloaded.definitions.find((entry) => entry.id === automationId);
+      const run = reloaded.runs.find((entry) => entry.automationId === automationId);
+      assert.strictEqual(definition?.enabled, true);
+      assert.strictEqual(run?.status, "cancelled");
     }),
   );
 
@@ -804,6 +1681,56 @@ layer("AutomationService", (it) => {
           "interrupted",
         );
       }),
+  );
+
+  it.effect(
+    "cancels an active run by dispatching an interrupt and keeping cancelled terminal",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        const service = yield* AutomationService;
+
+        const created = yield* service.create(createInput("local"));
+        const { run } = yield* service.runNow({ automationId: created.id });
+        const threadId = run.threadId!;
+
+        const cancelled = yield* service.cancelRun({ runId: run.id });
+        assert.strictEqual(cancelled.run.status, "cancelled");
+        assert.isDefined(
+          dispatchedCommands.find(
+            (command) => command.type === "thread.turn.interrupt" && command.threadId === threadId,
+          ),
+        );
+
+        threadShell = Option.some(makeThreadShell({ latestTurn: makeLatestTurn("completed") }));
+        yield* service.reconcileThread({ threadId });
+
+        const reloaded = yield* service.list({ projectId });
+        assert.strictEqual(reloaded.runs.find((entry) => entry.id === run.id)?.status, "cancelled");
+      }),
+  );
+
+  it.effect("deleting an automation cancels and interrupts its active runs", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const created = yield* service.create(createInput("local"));
+      const { run } = yield* service.runNow({ automationId: created.id });
+      const threadId = run.threadId!;
+
+      yield* service.delete({ id: created.id });
+
+      const reloaded = yield* service.list({ projectId, includeArchived: true });
+      const definition = reloaded.definitions.find((entry) => entry.id === created.id);
+      assert.isNotNull(definition?.archivedAt ?? null);
+      assert.strictEqual(reloaded.runs.find((entry) => entry.id === run.id)?.status, "cancelled");
+      assert.isDefined(
+        dispatchedCommands.find(
+          (command) => command.type === "thread.turn.interrupt" && command.threadId === threadId,
+        ),
+      );
+    }),
   );
 
   it.effect("refuses a manual heartbeat run while a prior run is still in flight", () =>

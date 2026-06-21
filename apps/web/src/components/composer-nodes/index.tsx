@@ -4,6 +4,7 @@
  * Custom nodes for the composer editor:
  * - ComposerMentionNode: File/path mentions (@path)
  * - ComposerSkillNode: Skill mentions ($skill or /skill)
+ * - ComposerSlashCommandNode: app-level slash commands (/automation)
  * - ComposerAgentMentionNode: Agent mentions (@alias(task))
  * - ComposerTerminalContextNode: Terminal context blocks
  */
@@ -37,9 +38,12 @@ import {
   COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
   COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
+  formatComposerSlashCommandChipLabel,
   formatComposerSkillChipLabel,
   resolveAgentChipColor,
 } from "../composerInlineChip";
+import { ClockIcon } from "~/lib/icons";
+import type { ComposerSlashCommand } from "~/composerSlashCommands";
 import { InlineLinkChip } from "../InlineLinkChip";
 import { ComposerPendingTerminalContextChip } from "../chat/ComposerPendingTerminalContexts";
 import { createMentionChipIconElement, type MentionChipKind } from "../chat/MentionChipIcon";
@@ -60,6 +64,15 @@ export type SerializedComposerSkillNode = Spread<
   {
     skillName: string;
     type: "composer-skill";
+    version: 1;
+  },
+  SerializedTextNode
+>;
+
+export type SerializedComposerSlashCommandNode = Spread<
+  {
+    command: ComposerSlashCommand;
+    type: "composer-slash-command";
     version: 1;
   },
   SerializedTextNode
@@ -140,6 +153,24 @@ function renderSkillChipDom(container: HTMLElement, name: string): void {
   } else {
     container.append(label);
   }
+}
+
+const AUTOMATION_COMMAND_ICON_SVG = renderToStaticMarkup(
+  <ClockIcon aria-hidden="true" className={COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME} />,
+);
+
+function renderSlashCommandChipDom(container: HTMLElement, command: ComposerSlashCommand): void {
+  resetInlineChipContainer(container);
+
+  const icon = document.createElement("span");
+  icon.ariaHidden = "true";
+  icon.innerHTML = AUTOMATION_COMMAND_ICON_SVG;
+
+  const label = document.createElement("span");
+  label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;
+  label.textContent = formatComposerSlashCommandChipLabel(command);
+
+  container.append(icon, label);
 }
 
 const AGENT_ROBOT_ICON_SVG = renderToStaticMarkup(
@@ -326,6 +357,83 @@ export class ComposerSkillNode extends TextNode {
 
 export function $createComposerSkillNode(name: string): ComposerSkillNode {
   return $applyNodeReplacement(new ComposerSkillNode(name));
+}
+
+// ── ComposerSlashCommandNode ──────────────────────────────────────────
+
+export class ComposerSlashCommandNode extends TextNode {
+  __command: ComposerSlashCommand;
+
+  static override getType(): string {
+    return "composer-slash-command";
+  }
+
+  static override clone(node: ComposerSlashCommandNode): ComposerSlashCommandNode {
+    return new ComposerSlashCommandNode(node.__command, node.__key);
+  }
+
+  static override importJSON(
+    serializedNode: SerializedComposerSlashCommandNode,
+  ): ComposerSlashCommandNode {
+    return $createComposerSlashCommandNode(serializedNode.command);
+  }
+
+  constructor(command: ComposerSlashCommand, key?: NodeKey) {
+    super(`/${command}`, key);
+    this.__command = command;
+  }
+
+  override exportJSON(): SerializedComposerSlashCommandNode {
+    return {
+      ...super.exportJSON(),
+      command: this.__command,
+      type: "composer-slash-command",
+      version: 1,
+    };
+  }
+
+  override createDOM(_config: EditorConfig): HTMLElement {
+    const dom = document.createElement("span");
+    dom.className = COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME;
+    dom.contentEditable = "false";
+    dom.setAttribute("spellcheck", "false");
+    renderSlashCommandChipDom(dom, this.__command);
+    return dom;
+  }
+
+  override updateDOM(
+    prevNode: ComposerSlashCommandNode,
+    dom: HTMLElement,
+    _config: EditorConfig,
+  ): boolean {
+    dom.contentEditable = "false";
+    if (prevNode.__text !== this.__text || prevNode.__command !== this.__command) {
+      renderSlashCommandChipDom(dom, this.__command);
+    }
+    return false;
+  }
+
+  override canInsertTextBefore(): false {
+    return false;
+  }
+
+  override canInsertTextAfter(): true {
+    return true;
+  }
+
+  override isTextEntity(): true {
+    return true;
+  }
+
+  override isToken(): true {
+    return true;
+  }
+}
+
+export function $createComposerSlashCommandNode(
+  command: ComposerSlashCommand,
+): ComposerSlashCommandNode {
+  return $applyNodeReplacement(new ComposerSlashCommandNode(command));
 }
 
 // ── ComposerAgentMentionNode ──────────────────────────────────────────
@@ -538,6 +646,7 @@ export function $createComposerTerminalContextNode(
 export type ComposerInlineTokenNode =
   | ComposerMentionNode
   | ComposerSkillNode
+  | ComposerSlashCommandNode
   | ComposerTerminalContextNode
   | ComposerAgentMentionNode
   | ComposerLinkNode;
@@ -548,6 +657,7 @@ export function isComposerInlineTokenNode(
   return (
     candidate instanceof ComposerMentionNode ||
     candidate instanceof ComposerSkillNode ||
+    candidate instanceof ComposerSlashCommandNode ||
     candidate instanceof ComposerTerminalContextNode ||
     candidate instanceof ComposerAgentMentionNode ||
     candidate instanceof ComposerLinkNode
@@ -558,6 +668,7 @@ export function isComposerInlineTokenNode(
 export const COMPOSER_NODE_CLASSES = [
   ComposerMentionNode,
   ComposerSkillNode,
+  ComposerSlashCommandNode,
   ComposerTerminalContextNode,
   ComposerAgentMentionNode,
   ComposerLinkNode,

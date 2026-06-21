@@ -23,16 +23,21 @@ import {
   ArchiveAutomationDefinitionInput,
   AutomationRepository,
   type AutomationRepositoryShape,
+  CountActiveAutomationRunsByThreadInput,
   CountActiveAutomationRunsInput,
   DisableAutomationDefinitionInput,
+  GetEarliestAutomationNextRunAtInput,
   GetAutomationDefinitionInput,
   GetAutomationRunByThreadInput,
   GetAutomationRunInput,
   IncrementAutomationIterationInput,
+  ListActiveAutomationRunsForDefinitionInput,
   ListDueAutomationDefinitionsInput,
   ListRecoverableAutomationRunsInput,
   MarkAutomationRunFailedInput,
   MarkAutomationRunInterruptedInput,
+  MarkAutomationRunResultInput,
+  MarkAutomationRunSkippedInput,
   MarkAutomationRunStartedInput,
   MarkAutomationRunSucceededInput,
   MarkAutomationRunWaitingForApprovalInput,
@@ -57,6 +62,11 @@ const AutomationDefinitionDbRow = Schema.Struct({
   targetThreadId: AutomationDefinition.fields.targetThreadId,
   maxIterations: AutomationDefinition.fields.maxIterations,
   stopOnError: Schema.Number,
+  minimumIntervalSeconds: AutomationDefinition.fields.minimumIntervalSeconds,
+  maxRuntimeSeconds: AutomationDefinition.fields.maxRuntimeSeconds,
+  retryPolicy: Schema.fromJsonString(AutomationDefinition.fields.retryPolicy),
+  misfirePolicy: AutomationDefinition.fields.misfirePolicy,
+  acknowledgedRisks: Schema.fromJsonString(AutomationDefinition.fields.acknowledgedRisks),
   iterationCount: AutomationDefinition.fields.iterationCount,
   createdAt: AutomationDefinition.fields.createdAt,
   updatedAt: AutomationDefinition.fields.updatedAt,
@@ -82,12 +92,23 @@ const AutomationRunDbRow = Schema.Struct({
   turnStartCommandId: AutomationRun.fields.turnStartCommandId,
   messageId: AutomationRun.fields.messageId,
   error: AutomationRun.fields.error,
-  result: Schema.NullOr(Schema.fromJsonString(Schema.Unknown)),
+  result: Schema.NullOr(Schema.fromJsonString(AutomationRun.fields.result)),
   permissionSnapshot: Schema.fromJsonString(AutomationPermissionSnapshot),
   createdAt: AutomationRun.fields.createdAt,
   updatedAt: AutomationRun.fields.updatedAt,
 });
 type AutomationRunDbRow = typeof AutomationRunDbRow.Type;
+
+function withResultDefaults(run: AutomationRun): NonNullable<AutomationRun["result"]> {
+  return (
+    run.result ?? {
+      outcome: "unknown",
+      summary: null,
+      unread: true,
+      archivedAt: null,
+    }
+  );
+}
 
 const decodeDefinition = Schema.decodeUnknownEffect(AutomationDefinition);
 const decodeRun = Schema.decodeUnknownEffect(AutomationRun);
@@ -137,6 +158,11 @@ const makeAutomationRepository = Effect.gen(function* () {
           target_thread_id,
           max_iterations,
           stop_on_error,
+          minimum_interval_seconds,
+          max_runtime_seconds,
+          retry_policy_json,
+          misfire_policy,
+          acknowledged_risks_json,
           iteration_count,
           created_at,
           updated_at,
@@ -160,6 +186,11 @@ const makeAutomationRepository = Effect.gen(function* () {
           ${definition.targetThreadId},
           ${definition.maxIterations},
           ${definition.stopOnError},
+          ${definition.minimumIntervalSeconds},
+          ${definition.maxRuntimeSeconds},
+          ${definition.retryPolicy},
+          ${definition.misfirePolicy},
+          ${definition.acknowledgedRisks},
           ${definition.iterationCount},
           ${definition.createdAt},
           ${definition.updatedAt},
@@ -191,6 +222,11 @@ const makeAutomationRepository = Effect.gen(function* () {
           target_thread_id AS "targetThreadId",
           max_iterations AS "maxIterations",
           stop_on_error AS "stopOnError",
+          minimum_interval_seconds AS "minimumIntervalSeconds",
+          max_runtime_seconds AS "maxRuntimeSeconds",
+          retry_policy_json AS "retryPolicy",
+          misfire_policy AS "misfirePolicy",
+          acknowledged_risks_json AS "acknowledgedRisks",
           iteration_count AS "iterationCount",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -221,6 +257,11 @@ const makeAutomationRepository = Effect.gen(function* () {
             target_thread_id = ${definition.targetThreadId},
             max_iterations = ${definition.maxIterations},
             stop_on_error = ${definition.stopOnError},
+            minimum_interval_seconds = ${definition.minimumIntervalSeconds},
+            max_runtime_seconds = ${definition.maxRuntimeSeconds},
+            retry_policy_json = ${definition.retryPolicy},
+            misfire_policy = ${definition.misfirePolicy},
+            acknowledged_risks_json = ${definition.acknowledgedRisks},
             updated_at = ${definition.updatedAt},
             archived_at = ${definition.archivedAt}
         WHERE automation_id = ${definition.id}
@@ -253,6 +294,11 @@ const makeAutomationRepository = Effect.gen(function* () {
           target_thread_id AS "targetThreadId",
           max_iterations AS "maxIterations",
           stop_on_error AS "stopOnError",
+          minimum_interval_seconds AS "minimumIntervalSeconds",
+          max_runtime_seconds AS "maxRuntimeSeconds",
+          retry_policy_json AS "retryPolicy",
+          misfire_policy AS "misfirePolicy",
+          acknowledged_risks_json AS "acknowledgedRisks",
           iteration_count AS "iterationCount",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -287,6 +333,11 @@ const makeAutomationRepository = Effect.gen(function* () {
           target_thread_id AS "targetThreadId",
           max_iterations AS "maxIterations",
           stop_on_error AS "stopOnError",
+          minimum_interval_seconds AS "minimumIntervalSeconds",
+          max_runtime_seconds AS "maxRuntimeSeconds",
+          retry_policy_json AS "retryPolicy",
+          misfire_policy AS "misfirePolicy",
+          acknowledged_risks_json AS "acknowledgedRisks",
           iteration_count AS "iterationCount",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -349,7 +400,7 @@ const makeAutomationRepository = Effect.gen(function* () {
           created_at,
           updated_at
         )
-        VALUES (
+        SELECT
           ${run.id},
           ${run.automationId},
           ${run.projectId},
@@ -371,7 +422,13 @@ const makeAutomationRepository = Effect.gen(function* () {
           ${run.permissionSnapshot},
           ${run.createdAt},
           ${run.updatedAt}
-        )
+        WHERE ${run.threadId} IS NULL
+           OR NOT EXISTS (
+             SELECT 1
+             FROM automation_runs
+             WHERE thread_id = ${run.threadId}
+               AND status IN ('pending', 'claimed', 'running', 'waiting-for-approval')
+           )
       `,
   });
 
@@ -515,7 +572,7 @@ const makeAutomationRepository = Effect.gen(function* () {
             started_at = ${startedAt},
             updated_at = ${startedAt}
         WHERE run_id = ${id}
-          AND status IN ('pending', 'claimed')
+          AND status IN ('pending', 'claimed', 'waiting-for-approval')
       `,
   });
 
@@ -535,6 +592,22 @@ const makeAutomationRepository = Effect.gen(function* () {
       `,
   });
 
+  const markRunSkippedRow = SqlSchema.void({
+    Request: MarkAutomationRunSkippedInput,
+    execute: ({ id, reason, finishedAt }) =>
+      sql`
+        UPDATE automation_runs
+        SET status = 'skipped',
+            error = ${reason},
+            finished_at = ${finishedAt},
+            updated_at = ${finishedAt},
+            lease_expires_at = NULL,
+            claimed_by = NULL
+        WHERE run_id = ${id}
+          AND status IN ('pending', 'claimed')
+      `,
+  });
+
   const markRunSucceededRow = SqlSchema.void({
     Request: MarkAutomationRunSucceededInput,
     execute: ({ id, turnId, result, finishedAt }) =>
@@ -549,6 +622,17 @@ const makeAutomationRepository = Effect.gen(function* () {
             claimed_by = NULL
         WHERE run_id = ${id}
           AND status NOT IN ('succeeded', 'failed', 'cancelled', 'interrupted')
+      `,
+  });
+
+  const markRunResultRow = SqlSchema.void({
+    Request: MarkAutomationRunResultInput,
+    execute: ({ id, result, updatedAt }) =>
+      sql`
+        UPDATE automation_runs
+        SET result_json = ${result === null ? null : JSON.stringify(result)},
+            updated_at = ${updatedAt}
+        WHERE run_id = ${id}
       `,
   });
 
@@ -610,6 +694,7 @@ const makeAutomationRepository = Effect.gen(function* () {
           updated_at AS "updatedAt"
         FROM automation_runs
         WHERE thread_id = ${threadId}
+          AND status IN ('pending', 'claimed', 'running', 'waiting-for-approval')
         ORDER BY created_at DESC, run_id DESC
         LIMIT 1
       `,
@@ -661,6 +746,67 @@ const makeAutomationRepository = Effect.gen(function* () {
       `,
   });
 
+  const countActiveRunsByThreadRow = SqlSchema.findAll({
+    Request: CountActiveAutomationRunsByThreadInput,
+    Result: Schema.Struct({ count: Schema.Number }),
+    execute: ({ threadId }) =>
+      sql`
+        SELECT COUNT(*) AS "count"
+        FROM automation_runs
+        WHERE thread_id = ${threadId}
+          AND status IN ('pending', 'claimed', 'running', 'waiting-for-approval')
+      `,
+  });
+
+  const listActiveRunsForDefinitionRows = SqlSchema.findAll({
+    Request: ListActiveAutomationRunsForDefinitionInput,
+    Result: AutomationRunDbRow,
+    execute: ({ automationId }) =>
+      sql`
+        SELECT
+          run_id AS "id",
+          automation_id AS "automationId",
+          project_id AS "projectId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          trigger_type AS "triggerType",
+          status,
+          scheduled_for AS "scheduledFor",
+          claimed_by AS "claimedBy",
+          claimed_at AS "claimedAt",
+          lease_expires_at AS "leaseExpiresAt",
+          started_at AS "startedAt",
+          finished_at AS "finishedAt",
+          thread_create_command_id AS "threadCreateCommandId",
+          turn_start_command_id AS "turnStartCommandId",
+          message_id AS "messageId",
+          error,
+          result_json AS "result",
+          permission_snapshot_json AS "permissionSnapshot",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM automation_runs
+        WHERE automation_id = ${automationId}
+          AND status IN ('pending', 'claimed', 'running', 'waiting-for-approval')
+        ORDER BY created_at ASC, run_id ASC
+      `,
+  });
+
+  const getEarliestNextRunAtRow = SqlSchema.findOneOption({
+    Request: GetEarliestAutomationNextRunAtInput,
+    Result: Schema.Struct({ nextRunAt: AutomationDefinition.fields.nextRunAt }),
+    execute: () =>
+      sql`
+        SELECT next_run_at AS "nextRunAt"
+        FROM automation_definitions
+        WHERE enabled = 1
+          AND archived_at IS NULL
+          AND next_run_at IS NOT NULL
+        ORDER BY next_run_at ASC, automation_id ASC
+        LIMIT 1
+      `,
+  });
+
   const disableDefinitionRow = SqlSchema.void({
     Request: DisableAutomationDefinitionInput,
     execute: ({ id, now }) =>
@@ -706,7 +852,13 @@ const makeAutomationRepository = Effect.gen(function* () {
       `,
   });
 
-  const createDefinition: AutomationRepositoryShape["createDefinition"] = ({ id, input, now }) => {
+  const createDefinition: AutomationRepositoryShape["createDefinition"] = (request) => {
+    const { id, input, now } = request;
+    const initialNextRunAt = Object.hasOwn(request, "nextRunAt")
+      ? (request.nextRunAt ?? null)
+      : input.schedule.type === "manual"
+        ? null
+        : now;
     const definition: AutomationDefinition = {
       id,
       projectId: input.projectId,
@@ -715,7 +867,7 @@ const makeAutomationRepository = Effect.gen(function* () {
       prompt: input.prompt,
       schedule: input.schedule,
       enabled: input.enabled ?? true,
-      nextRunAt: input.schedule.type === "manual" ? null : now,
+      nextRunAt: initialNextRunAt,
       modelSelection: input.modelSelection,
       ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       runtimeMode: input.runtimeMode ?? DEFAULT_AUTOMATION_RUNTIME_MODE,
@@ -725,6 +877,11 @@ const makeAutomationRepository = Effect.gen(function* () {
       targetThreadId: input.targetThreadId ?? null,
       maxIterations: input.maxIterations ?? null,
       stopOnError: input.stopOnError ?? true,
+      minimumIntervalSeconds: input.minimumIntervalSeconds ?? 60,
+      maxRuntimeSeconds: input.maxRuntimeSeconds === undefined ? 60 * 60 : input.maxRuntimeSeconds,
+      retryPolicy: input.retryPolicy ?? { type: "none" },
+      misfirePolicy: input.misfirePolicy ?? "coalesce",
+      acknowledgedRisks: input.acknowledgedRisks ?? [],
       iterationCount: 0,
       createdAt: now,
       updatedAt: now,
@@ -808,9 +965,9 @@ const makeAutomationRepository = Effect.gen(function* () {
       leaseExpiresAt: null,
       startedAt: null,
       finishedAt: null,
-      threadCreateCommandId: null,
-      turnStartCommandId: null,
-      messageId: null,
+      threadCreateCommandId: input.threadCreateCommandId ?? null,
+      turnStartCommandId: input.turnStartCommandId ?? null,
+      messageId: input.messageId ?? null,
       error: null,
       result: null,
       permissionSnapshot: input.permissionSnapshot,
@@ -826,6 +983,19 @@ const makeAutomationRepository = Effect.gen(function* () {
             ),
           ),
         onSome: toRun,
+      });
+    const decodeInsertedOrActiveThread = (rowOption: Option.Option<AutomationRunDbRow>) =>
+      Option.match(rowOption, {
+        onSome: toRun,
+        onNone: () =>
+          input.threadId
+            ? getRunRowByThread({ threadId: input.threadId }).pipe(
+                Effect.mapError(
+                  toPersistenceSqlError("AutomationRepository.createRun:selectActiveThread"),
+                ),
+                Effect.flatMap(decodeInserted),
+              )
+            : decodeInserted(rowOption),
       });
     const inserted = insertRun({
       ...run,
@@ -843,7 +1013,7 @@ const makeAutomationRepository = Effect.gen(function* () {
             scheduledFor: input.scheduledFor,
           }).pipe(
             Effect.mapError(toPersistenceSqlError("AutomationRepository.createRun:select")),
-            Effect.flatMap(decodeInserted),
+            Effect.flatMap(decodeInsertedOrActiveThread),
           ),
         ),
       );
@@ -852,7 +1022,7 @@ const makeAutomationRepository = Effect.gen(function* () {
       Effect.flatMap(() =>
         getRunRowById({ id: input.id }).pipe(
           Effect.mapError(toPersistenceSqlError("AutomationRepository.createRun:select")),
-          Effect.flatMap(decodeInserted),
+          Effect.flatMap(decodeInsertedOrActiveThread),
         ),
       ),
     );
@@ -896,10 +1066,22 @@ const makeAutomationRepository = Effect.gen(function* () {
       Effect.flatMap(() => requireRunById(input.id, "AutomationRepository.markRunFailed")),
     );
 
+  const markRunSkipped: AutomationRepositoryShape["markRunSkipped"] = (input) =>
+    markRunSkippedRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.markRunSkipped:update")),
+      Effect.flatMap(() => requireRunById(input.id, "AutomationRepository.markRunSkipped")),
+    );
+
   const markRunSucceeded: AutomationRepositoryShape["markRunSucceeded"] = (input) =>
     markRunSucceededRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("AutomationRepository.markRunSucceeded:update")),
       Effect.flatMap(() => requireRunById(input.id, "AutomationRepository.markRunSucceeded")),
+    );
+
+  const markRunResult: AutomationRepositoryShape["markRunResult"] = (input) =>
+    markRunResultRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.markRunResult:update")),
+      Effect.flatMap(() => requireRunById(input.id, "AutomationRepository.markRunResult")),
     );
 
   const markRunInterrupted: AutomationRepositoryShape["markRunInterrupted"] = (input) =>
@@ -953,6 +1135,59 @@ const makeAutomationRepository = Effect.gen(function* () {
       Effect.map((rows) => rows[0]?.count ?? 0),
     );
 
+  const countActiveRunsForThread: AutomationRepositoryShape["countActiveRunsForThread"] = (input) =>
+    countActiveRunsByThreadRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.countActiveRunsForThread:query")),
+      Effect.map((rows) => rows[0]?.count ?? 0),
+    );
+
+  const listActiveRunsForDefinition: AutomationRepositoryShape["listActiveRunsForDefinition"] = (
+    input,
+  ) =>
+    listActiveRunsForDefinitionRows(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("AutomationRepository.listActiveRunsForDefinition:query"),
+      ),
+      Effect.flatMap((rows) => Effect.forEach(rows, toRun, { concurrency: "unbounded" })),
+    );
+
+  const getEarliestNextRunAt: AutomationRepositoryShape["getEarliestNextRunAt"] = (input = {}) =>
+    getEarliestNextRunAtRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.getEarliestNextRunAt:query")),
+      Effect.map((rowOption) =>
+        Option.match(rowOption, {
+          onNone: () => null,
+          onSome: (row) => row.nextRunAt,
+        }),
+      ),
+    );
+
+  const markRunRead: AutomationRepositoryShape["markRunRead"] = ({ runId, unread, now }) =>
+    requireRunById(runId, "AutomationRepository.markRunRead:load").pipe(
+      Effect.flatMap((run) =>
+        markRunResult({
+          id: run.id,
+          result: { ...withResultDefaults(run), unread },
+          updatedAt: now,
+        }),
+      ),
+    );
+
+  const archiveRun: AutomationRepositoryShape["archiveRun"] = ({ runId, archived, now }) =>
+    requireRunById(runId, "AutomationRepository.archiveRun:load").pipe(
+      Effect.flatMap((run) =>
+        markRunResult({
+          id: run.id,
+          result: {
+            ...withResultDefaults(run),
+            unread: archived ? false : withResultDefaults(run).unread,
+            archivedAt: archived ? now : null,
+          },
+          updatedAt: now,
+        }),
+      ),
+    );
+
   const disableDefinition: AutomationRepositoryShape["disableDefinition"] = (input) =>
     disableDefinitionRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("AutomationRepository.disableDefinition:update")),
@@ -984,13 +1219,20 @@ const makeAutomationRepository = Effect.gen(function* () {
     getRunById,
     markRunStarted,
     markRunFailed,
+    markRunSkipped,
     markRunSucceeded,
+    markRunResult,
     markRunInterrupted,
     markRunWaitingForApproval,
     cancelRun,
     getRunByThreadId,
     listRecoverableRuns,
     countActiveRunsForDefinition,
+    countActiveRunsForThread,
+    listActiveRunsForDefinition,
+    getEarliestNextRunAt,
+    markRunRead,
+    archiveRun,
     disableDefinition,
     incrementDefinitionIterationCount,
     tryAcquireSchedulerLease,

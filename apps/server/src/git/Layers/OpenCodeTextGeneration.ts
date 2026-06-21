@@ -27,11 +27,13 @@ import {
 } from "../../provider/opencodeRuntime.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
+  type TextGenerationOperation,
   type TextGenerationShape,
   KiloTextGeneration,
   OpenCodeTextGeneration,
 } from "../Services/TextGeneration.ts";
 import {
+  buildAutomationIntentPrompt,
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
@@ -188,13 +190,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
 
     const acquireSharedServer = (input: {
       readonly binaryPath: string;
-      readonly operation:
-        | "generateCommitMessage"
-        | "generatePrContent"
-        | "generateDiffSummary"
-        | "generateBranchName"
-        | "generateThreadTitle"
-        | "generateThreadRecap";
+      readonly operation: TextGenerationOperation;
     }) =>
       sharedServerMutex.withPermit(
         Effect.gen(function* () {
@@ -286,13 +282,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
     );
 
     const runOpenCodeJson = Effect.fn("runOpenCodeJson")(function* <S extends Schema.Top>(input: {
-      readonly operation:
-        | "generateCommitMessage"
-        | "generatePrContent"
-        | "generateDiffSummary"
-        | "generateBranchName"
-        | "generateThreadTitle"
-        | "generateThreadRecap";
+      readonly operation: TextGenerationOperation;
       readonly cwd: string;
       readonly prompt: string;
       readonly outputSchemaJson: S;
@@ -609,6 +599,32 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       };
     });
 
+    const generateAutomationIntent: TextGenerationShape["generateAutomationIntent"] = Effect.fn(
+      `${config.serviceName}.generateAutomationIntent`,
+    )(function* (input) {
+      const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
+      if (!modelSelection) {
+        return yield* new TextGenerationError({
+          operation: "generateAutomationIntent",
+          detail: `Invalid ${config.displayName} model selection.`,
+        });
+      }
+
+      const { prompt, outputSchemaJson } = buildAutomationIntentPrompt({
+        message: input.message,
+        ...(input.defaultMode ? { defaultMode: input.defaultMode } : {}),
+        nowIso: input.nowIso,
+      });
+      return yield* runOpenCodeJson({
+        operation: "generateAutomationIntent",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson,
+        modelSelection,
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      });
+    });
+
     return {
       generateCommitMessage,
       generatePrContent,
@@ -616,6 +632,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       generateBranchName,
       generateThreadTitle,
       generateThreadRecap,
+      generateAutomationIntent,
     } satisfies TextGenerationShape;
   });
 

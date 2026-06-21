@@ -44,6 +44,20 @@ function createTextGenerationDouble(label: string) {
       recap: `${label} recap`,
     }),
   );
+  const generateAutomationIntent = vi.fn<TextGenerationShape["generateAutomationIntent"]>(() =>
+    Effect.succeed({
+      isAutomation: true,
+      confidence: 1,
+      language: null,
+      name: `${label} automation`,
+      taskPrompt: "Check the site",
+      schedule: { type: "interval", everySeconds: 3600 },
+      mode: "heartbeat",
+      missingFields: [],
+      needsConfirmation: false,
+      reason: null,
+    }),
+  );
 
   return {
     service: {
@@ -53,6 +67,7 @@ function createTextGenerationDouble(label: string) {
       generateBranchName,
       generateThreadTitle,
       generateThreadRecap,
+      generateAutomationIntent,
     } satisfies TextGenerationShape,
     generateCommitMessage,
     generatePrContent,
@@ -60,6 +75,7 @@ function createTextGenerationDouble(label: string) {
     generateBranchName,
     generateThreadTitle,
     generateThreadRecap,
+    generateAutomationIntent,
   };
 }
 
@@ -219,5 +235,35 @@ describe("ProviderTextGenerationLive", () => {
     );
     expect(codex.generateThreadTitle).not.toHaveBeenCalled();
     expect(opencode.generateThreadTitle).not.toHaveBeenCalled();
+  });
+
+  it("routes automation intent generation through the selected provider", async () => {
+    const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer();
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        return yield* textGeneration.generateAutomationIntent({
+          cwd: "/repo",
+          message: "every 6h check the Amazon listing",
+          defaultMode: "heartbeat",
+          nowIso: "2026-06-19T10:00:00.000Z",
+          modelSelection: {
+            provider: "cursor",
+            model: "composer-2",
+          },
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.name).toBe("cursor automation");
+    expect(cursor.generateAutomationIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "every 6h check the Amazon listing",
+        defaultMode: "heartbeat",
+      }),
+    );
+    expect(codex.generateAutomationIntent).not.toHaveBeenCalled();
+    expect(opencode.generateAutomationIntent).not.toHaveBeenCalled();
   });
 });

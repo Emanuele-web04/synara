@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   matchComposerLinkToken,
+  matchComposerSlashCommandChipToken,
   splitPromptIntoComposerSegments,
   splitPromptIntoDisplaySegments,
 } from "./composer-editor-mentions";
@@ -51,6 +52,32 @@ describe("matchComposerLinkToken", () => {
         includeTrailingTokenAtEnd: false,
       }),
     ).toBeNull();
+  });
+});
+
+describe("matchComposerSlashCommandChipToken", () => {
+  it("matches /automation only after a delimiter while typing", () => {
+    expect(matchComposerSlashCommandChipToken("/automation")).toBeNull();
+    expect(matchComposerSlashCommandChipToken("/automation ")).toEqual({
+      command: "automation",
+      start: 0,
+      end: "/automation".length,
+    });
+    expect(matchComposerSlashCommandChipToken("/Automation ")).toEqual({
+      command: "automation",
+      start: 0,
+      end: "/automation".length,
+    });
+    expect(matchComposerSlashCommandChipToken("please /automation now")).toEqual({
+      command: "automation",
+      start: "please ".length,
+      end: "please /automation".length,
+    });
+  });
+
+  it("does not match other built-in slash commands as composer chips", () => {
+    expect(matchComposerSlashCommandChipToken("/plan ")).toBeNull();
+    expect(matchComposerSlashCommandChipToken("/model spark")).toBeNull();
   });
 });
 
@@ -115,6 +142,13 @@ describe("splitPromptIntoComposerSegments", () => {
     expect(splitPromptIntoComposerSegments("/plan ")).toEqual([{ type: "text", text: "/plan " }]);
     expect(splitPromptIntoComposerSegments("/model spark")).toEqual([
       { type: "text", text: "/model spark" },
+    ]);
+  });
+
+  it("converts completed /automation into an app slash-command segment", () => {
+    expect(splitPromptIntoComposerSegments("/automation fra 15 secondi scrivi qui")).toEqual([
+      { type: "slash-command", command: "automation" },
+      { type: "text", text: " fra 15 secondi scrivi qui" },
     ]);
   });
 

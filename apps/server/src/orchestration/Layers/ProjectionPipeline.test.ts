@@ -1255,8 +1255,7 @@ it.layer(
       const threadId = ThreadId.makeUnsafe("Thread Revert.Files");
       const keepAttachmentId = "thread-revert-files-00000000-0000-4000-8000-000000000001";
       const removeAttachmentId = "thread-revert-files-00000000-0000-4000-8000-000000000002";
-      const removeFileAttachmentId =
-        "thread-revert-files-00000000-0000-4000-8000-000000000004";
+      const removeFileAttachmentId = "thread-revert-files-00000000-0000-4000-8000-000000000004";
       const otherThreadAttachmentId =
         "thread-revert-files-extra-00000000-0000-4000-8000-000000000003";
 

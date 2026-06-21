@@ -5,11 +5,14 @@ import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
+  AutomationArchiveRunInput,
   AutomationCreateInput,
   AutomationDefinition,
   AutomationDeleteInput,
   AutomationListInput,
   AutomationListResult,
+  AutomationMarkRunReadInput,
+  AutomationRunActionResult,
   AutomationRunNowInput,
   AutomationRunNowResult,
   AutomationStreamEvent,
@@ -110,6 +113,8 @@ import {
   ServerConfig,
   ServerConfigStreamEvent,
   ServerDiagnosticsResult,
+  ServerGenerateAutomationIntentInput,
+  ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
   ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
@@ -616,6 +621,15 @@ export const WsServerGenerateThreadRecapRpc = Rpc.make(WS_METHODS.serverGenerate
   error: WsRpcError,
 });
 
+export const WsServerGenerateAutomationIntentRpc = Rpc.make(
+  WS_METHODS.serverGenerateAutomationIntent,
+  {
+    payload: ServerGenerateAutomationIntentInput,
+    success: ServerGenerateAutomationIntentResult,
+    error: WsRpcError,
+  },
+);
+
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
   payload: KeybindingRule,
   success: ServerUpsertKeybindingResult,
@@ -746,6 +760,18 @@ export const WsAutomationCancelRunRpc = Rpc.make(WS_METHODS.automationCancelRun,
   error: WsRpcError,
 });
 
+export const WsAutomationMarkRunReadRpc = Rpc.make(WS_METHODS.automationMarkRunRead, {
+  payload: AutomationMarkRunReadInput,
+  success: AutomationRunActionResult,
+  error: WsRpcError,
+});
+
+export const WsAutomationArchiveRunRpc = Rpc.make(WS_METHODS.automationArchiveRun, {
+  payload: AutomationArchiveRunInput,
+  success: AutomationRunActionResult,
+  error: WsRpcError,
+});
+
 export const WsSubscribeAutomationEventsRpc = Rpc.make(WS_METHODS.subscribeAutomationEvents, {
   payload: Schema.Struct({}),
   success: AutomationStreamEvent,
@@ -825,6 +851,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetDiagnosticsRpc,
   WsServerTranscribeVoiceRpc,
   WsServerGenerateThreadRecapRpc,
+  WsServerGenerateAutomationIntentRpc,
   WsServerUpsertKeybindingRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeServerConfigRpc,
@@ -845,5 +872,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAutomationDeleteRpc,
   WsAutomationRunNowRpc,
   WsAutomationCancelRunRpc,
+  WsAutomationMarkRunReadRpc,
+  WsAutomationArchiveRunRpc,
   WsSubscribeAutomationEventsRpc,
 );

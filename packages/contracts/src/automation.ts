@@ -23,13 +23,27 @@ import {
 
 export const DEFAULT_AUTOMATION_RUNTIME_MODE: RuntimeMode = "approval-required";
 
+const AutomationIsoDateTime = IsoDateTime.check(
+  Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/),
+);
+
 export const AutomationTimeOfDay = TrimmedNonEmptyString.check(
   Schema.isPattern(/^([01]\d|2[0-3]):[0-5]\d$/),
 );
 export type AutomationTimeOfDay = typeof AutomationTimeOfDay.Type;
 
+export const AutomationTimezone = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
+export type AutomationTimezone = typeof AutomationTimezone.Type;
+
+export const AutomationCronExpression = TrimmedNonEmptyString.check(Schema.isMaxLength(120));
+export type AutomationCronExpression = typeof AutomationCronExpression.Type;
+
 export const AutomationSchedule = Schema.Union([
   Schema.Struct({ type: Schema.Literal("manual") }),
+  Schema.Struct({
+    type: Schema.Literal("once"),
+    runAt: AutomationIsoDateTime,
+  }),
   Schema.Struct({
     type: Schema.Literal("interval"),
     everySeconds: PositiveInt,
@@ -37,11 +51,24 @@ export const AutomationSchedule = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("daily"),
     timeOfDay: AutomationTimeOfDay,
+    timezone: Schema.optional(AutomationTimezone),
+  }),
+  // Runs at `timeOfDay` on every weekday (Mon-Fri) in the optional schedule timezone.
+  Schema.Struct({
+    type: Schema.Literal("weekdays"),
+    timeOfDay: AutomationTimeOfDay,
+    timezone: Schema.optional(AutomationTimezone),
   }),
   Schema.Struct({
     type: Schema.Literal("weekly"),
     dayOfWeek: NonNegativeInt.check(Schema.isLessThanOrEqualTo(6)),
     timeOfDay: AutomationTimeOfDay,
+    timezone: Schema.optional(AutomationTimezone),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("cron"),
+    expression: AutomationCronExpression,
+    timezone: AutomationTimezone,
   }),
 ]);
 export type AutomationSchedule = typeof AutomationSchedule.Type;
@@ -76,6 +103,21 @@ export const AutomationRunStatus = Schema.Literals([
 ]);
 export type AutomationRunStatus = typeof AutomationRunStatus.Type;
 
+export const AutomationRunResult = Schema.Struct({
+  outcome: Schema.Literals([
+    "findings",
+    "no-findings",
+    "changed-files",
+    "needs-attention",
+    "unknown",
+  ]),
+  summary: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(2_000))),
+  severity: Schema.optional(Schema.Literals(["info", "warning", "error"])),
+  unread: Schema.Boolean,
+  archivedAt: Schema.NullOr(AutomationIsoDateTime),
+});
+export type AutomationRunResult = typeof AutomationRunResult.Type;
+
 export const AutomationAllowedCapability = Schema.Literals([
   "send-turn",
   "create-worktree",
@@ -91,9 +133,33 @@ export const AutomationPermissionSnapshot = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   worktreeMode: AutomationWorktreeMode,
   allowedCapabilities: Schema.Array(AutomationAllowedCapability),
-  createdAt: IsoDateTime,
+  createdAt: AutomationIsoDateTime,
 });
 export type AutomationPermissionSnapshot = typeof AutomationPermissionSnapshot.Type;
+
+export const AutomationRetryPolicy = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("none") }),
+  Schema.Struct({
+    type: Schema.Literal("fixed"),
+    maxAttempts: PositiveInt,
+    delaySeconds: PositiveInt,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("exponential"),
+    maxAttempts: PositiveInt,
+    initialDelaySeconds: PositiveInt,
+    maxDelaySeconds: PositiveInt,
+  }),
+]);
+export type AutomationRetryPolicy = typeof AutomationRetryPolicy.Type;
+
+export const AutomationMisfirePolicy = Schema.Literals(["skip", "coalesce", "run-latest"]);
+export type AutomationMisfirePolicy = typeof AutomationMisfirePolicy.Type;
+
+export const DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS = 60;
+export const DEFAULT_AUTOMATION_MAX_RUNTIME_SECONDS = 60 * 60;
+export const DEFAULT_AUTOMATION_RETRY_POLICY: AutomationRetryPolicy = { type: "none" };
+export const DEFAULT_AUTOMATION_MISFIRE_POLICY: AutomationMisfirePolicy = "coalesce";
 
 export const AutomationDefinition = Schema.Struct({
   id: AutomationId,
@@ -103,7 +169,7 @@ export const AutomationDefinition = Schema.Struct({
   prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(64_000)),
   schedule: AutomationSchedule,
   enabled: Schema.Boolean,
-  nextRunAt: Schema.NullOr(IsoDateTime),
+  nextRunAt: Schema.NullOr(AutomationIsoDateTime),
   modelSelection: ModelSelection,
   providerOptions: Schema.optional(ProviderStartOptions),
   runtimeMode: RuntimeMode,
@@ -116,11 +182,18 @@ export const AutomationDefinition = Schema.Struct({
   maxIterations: Schema.NullOr(PositiveInt),
   /** When true, a failed run disables the automation (stops a runaway loop). */
   stopOnError: Schema.Boolean,
+  minimumIntervalSeconds: PositiveInt,
+  maxRuntimeSeconds: Schema.NullOr(PositiveInt),
+  retryPolicy: AutomationRetryPolicy,
+  misfirePolicy: AutomationMisfirePolicy,
+  acknowledgedRisks: Schema.Array(
+    Schema.Literals(["full-access", "local-checkout", "fast-interval"]),
+  ),
   /** Number of runs created so far; used to enforce maxIterations. */
   iterationCount: NonNegativeInt,
-  createdAt: IsoDateTime,
-  updatedAt: IsoDateTime,
-  archivedAt: Schema.NullOr(IsoDateTime),
+  createdAt: AutomationIsoDateTime,
+  updatedAt: AutomationIsoDateTime,
+  archivedAt: Schema.NullOr(AutomationIsoDateTime),
 });
 export type AutomationDefinition = typeof AutomationDefinition.Type;
 
@@ -154,6 +227,21 @@ const AutomationDefinitionConfig = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   stopOnError: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => true)),
+  minimumIntervalSeconds: Schema.optional(PositiveInt).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS),
+  ),
+  maxRuntimeSeconds: Schema.optional(Schema.NullOr(PositiveInt)).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_MAX_RUNTIME_SECONDS),
+  ),
+  retryPolicy: Schema.optional(AutomationRetryPolicy).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_RETRY_POLICY),
+  ),
+  misfirePolicy: Schema.optional(AutomationMisfirePolicy).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_MISFIRE_POLICY),
+  ),
+  acknowledgedRisks: Schema.optional(
+    Schema.Array(Schema.Literals(["full-access", "local-checkout", "fast-interval"])),
+  ).pipe(Schema.withDecodingDefault(() => [])),
 });
 
 export const AutomationCreateInput = AutomationDefinitionConfig;
@@ -176,6 +264,13 @@ export const AutomationUpdateInput = Schema.Struct({
   targetThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   maxIterations: Schema.optional(Schema.NullOr(PositiveInt)),
   stopOnError: Schema.optional(Schema.Boolean),
+  minimumIntervalSeconds: Schema.optional(PositiveInt),
+  maxRuntimeSeconds: Schema.optional(Schema.NullOr(PositiveInt)),
+  retryPolicy: Schema.optional(AutomationRetryPolicy),
+  misfirePolicy: Schema.optional(AutomationMisfirePolicy),
+  acknowledgedRisks: Schema.optional(
+    Schema.Array(Schema.Literals(["full-access", "local-checkout", "fast-interval"])),
+  ),
 });
 export type AutomationUpdateInput = typeof AutomationUpdateInput.Type;
 
@@ -200,6 +295,18 @@ export const AutomationCancelRunInput = Schema.Struct({
 });
 export type AutomationCancelRunInput = typeof AutomationCancelRunInput.Type;
 
+export const AutomationMarkRunReadInput = Schema.Struct({
+  runId: AutomationRunId,
+  unread: Schema.Boolean,
+});
+export type AutomationMarkRunReadInput = typeof AutomationMarkRunReadInput.Type;
+
+export const AutomationArchiveRunInput = Schema.Struct({
+  runId: AutomationRunId,
+  archived: Schema.Boolean,
+});
+export type AutomationArchiveRunInput = typeof AutomationArchiveRunInput.Type;
+
 export const AutomationRun = Schema.Struct({
   id: AutomationRunId,
   automationId: AutomationId,
@@ -208,20 +315,20 @@ export const AutomationRun = Schema.Struct({
   turnId: Schema.optional(Schema.NullOr(TurnId)),
   trigger: AutomationTrigger,
   status: AutomationRunStatus,
-  scheduledFor: IsoDateTime,
+  scheduledFor: AutomationIsoDateTime,
   claimedBy: Schema.NullOr(TrimmedNonEmptyString),
-  claimedAt: Schema.NullOr(IsoDateTime),
-  leaseExpiresAt: Schema.NullOr(IsoDateTime),
-  startedAt: Schema.NullOr(IsoDateTime),
-  finishedAt: Schema.NullOr(IsoDateTime),
+  claimedAt: Schema.NullOr(AutomationIsoDateTime),
+  leaseExpiresAt: Schema.NullOr(AutomationIsoDateTime),
+  startedAt: Schema.NullOr(AutomationIsoDateTime),
+  finishedAt: Schema.NullOr(AutomationIsoDateTime),
   threadCreateCommandId: Schema.NullOr(CommandId),
   turnStartCommandId: Schema.NullOr(CommandId),
   messageId: Schema.NullOr(MessageId),
   error: Schema.NullOr(Schema.String.check(Schema.isMaxLength(4_000))),
-  result: Schema.NullOr(Schema.Unknown),
+  result: Schema.NullOr(AutomationRunResult),
   permissionSnapshot: AutomationPermissionSnapshot,
-  createdAt: IsoDateTime,
-  updatedAt: IsoDateTime,
+  createdAt: AutomationIsoDateTime,
+  updatedAt: AutomationIsoDateTime,
 });
 export type AutomationRun = typeof AutomationRun.Type;
 
@@ -240,6 +347,11 @@ export const AutomationCancelRunResult = Schema.Struct({
   run: AutomationRun,
 });
 export type AutomationCancelRunResult = typeof AutomationCancelRunResult.Type;
+
+export const AutomationRunActionResult = Schema.Struct({
+  run: AutomationRun,
+});
+export type AutomationRunActionResult = typeof AutomationRunActionResult.Type;
 
 export const AutomationStreamEvent = Schema.Union([
   Schema.Struct({

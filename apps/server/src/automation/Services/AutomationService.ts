@@ -1,11 +1,14 @@
 import {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
+  AutomationArchiveRunInput,
   AutomationCreateInput,
   AutomationDefinition,
   AutomationDeleteInput,
   AutomationListInput,
   AutomationListResult,
+  AutomationMarkRunReadInput,
+  AutomationRunActionResult,
   AutomationRunNowInput,
   AutomationRunNowResult,
   AutomationStreamEvent,
@@ -34,6 +37,12 @@ export interface AutomationServiceShape {
   readonly cancelRun: (
     input: AutomationCancelRunInput,
   ) => Effect.Effect<AutomationCancelRunResult, AutomationServiceError>;
+  readonly markRunRead: (
+    input: AutomationMarkRunReadInput,
+  ) => Effect.Effect<AutomationRunActionResult, AutomationServiceError>;
+  readonly archiveRun: (
+    input: AutomationArchiveRunInput,
+  ) => Effect.Effect<AutomationRunActionResult, AutomationServiceError>;
   readonly runDueOnce: (input?: {
     readonly now?: string;
     readonly limit?: number;

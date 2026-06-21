@@ -1,13 +1,13 @@
 // FILE: AttachmentRemoveButton.tsx
-// Purpose: Shared circular "remove" affordance overlaid on the top-right corner of a
-//   composer attachment (image thumbnail, pasted-text card, …). One primitive so
-//   every attachment type dismisses with the same look, position, and semantics.
+// Purpose: Shared circular "remove" affordance for composer attachments. One primitive
+//   keeps dismiss behavior consistent while each attachment shape chooses placement.
 // Layer: Chat composer presentation
 
 import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 export type AttachmentRemoveButtonSize = "sm" | "md";
+export type AttachmentRemoveButtonPlacement = "corner" | "center-right";
 
 const ATTACHMENT_REMOVE_BUTTON_SIZE_STYLES: Record<
   AttachmentRemoveButtonSize,
@@ -22,6 +22,7 @@ interface AttachmentRemoveButtonProps {
   /** Accessible label, e.g. `Remove screenshot.png`. */
   label: string;
   size?: AttachmentRemoveButtonSize;
+  placement?: AttachmentRemoveButtonPlacement;
   className?: string;
 }
 
@@ -29,6 +30,7 @@ export function AttachmentRemoveButton({
   onRemove,
   label,
   size = "md",
+  placement = "corner",
   className,
 }: AttachmentRemoveButtonProps) {
   const styles = ATTACHMENT_REMOVE_BUTTON_SIZE_STYLES[size];
@@ -36,7 +38,8 @@ export function AttachmentRemoveButton({
     <button
       type="button"
       className={cn(
-        "absolute right-1 top-1 flex items-center justify-center rounded-full bg-foreground/80 text-background shadow-sm transition-colors hover:bg-foreground focus-visible:outline-none focus-visible:ring-ring",
+        "absolute flex items-center justify-center rounded-full bg-foreground/80 text-background shadow-sm transition-colors hover:bg-foreground focus-visible:outline-none focus-visible:ring-ring",
+        placement === "center-right" ? "right-1 top-1/2 -translate-y-1/2" : "right-1 top-1",
         styles.button,
         className,
       )}

@@ -26,7 +26,9 @@ describe("composerSend attachment builders", () => {
       existingAttachmentCount: 0,
     });
 
-    expect(result.error).toBe("Unsupported file type for 'notes.txt'. Please attach image files only.");
+    expect(result.error).toBe(
+      "Unsupported file type for 'notes.txt'. Please attach image files only.",
+    );
     expect(result.images).toEqual([
       expect.objectContaining({
         type: "image",

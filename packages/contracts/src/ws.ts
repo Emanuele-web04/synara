@@ -3,9 +3,11 @@ import { NonNegativeInt, ProjectId, ThreadId, TrimmedNonEmptyString } from "./ba
 
 import {
   AutomationCancelRunInput,
+  AutomationArchiveRunInput,
   AutomationCreateInput,
   AutomationDeleteInput,
   AutomationListInput,
+  AutomationMarkRunReadInput,
   AutomationRunNowInput,
   AutomationStreamEvent,
   AutomationUpdateInput,
@@ -80,6 +82,7 @@ import { FilesystemBrowseInput } from "./filesystem";
 import { OpenInEditorInput } from "./editor";
 import {
   ServerConfigUpdatedPayload,
+  ServerGenerateAutomationIntentInput,
   ServerGenerateThreadRecapInput,
   ServerLifecycleStreamEvent,
   ServerProviderUpdateInput,
@@ -178,6 +181,7 @@ export const WS_METHODS = {
   serverGetDiagnostics: "server.getDiagnostics",
   serverTranscribeVoice: "server.transcribeVoice",
   serverGenerateThreadRecap: "server.generateThreadRecap",
+  serverGenerateAutomationIntent: "server.generateAutomationIntent",
   serverUpsertKeybinding: "server.upsertKeybinding",
   subscribeServerLifecycle: "server.subscribeLifecycle",
   subscribeServerConfig: "server.subscribeConfig",
@@ -207,6 +211,8 @@ export const WS_METHODS = {
   automationDelete: "automation.delete",
   automationRunNow: "automation.runNow",
   automationCancelRun: "automation.cancelRun",
+  automationMarkRunRead: "automation.markRunRead",
+  automationArchiveRun: "automation.archiveRun",
   subscribeAutomationEvents: "automation.subscribe",
 } as const;
 
@@ -322,6 +328,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverGetDiagnostics, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverTranscribeVoice, ServerVoiceTranscriptionInput),
   tagRequestBody(WS_METHODS.serverGenerateThreadRecap, ServerGenerateThreadRecapInput),
+  tagRequestBody(WS_METHODS.serverGenerateAutomationIntent, ServerGenerateAutomationIntentInput),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
 
   // Provider discovery
@@ -342,6 +349,8 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.automationDelete, AutomationDeleteInput),
   tagRequestBody(WS_METHODS.automationRunNow, AutomationRunNowInput),
   tagRequestBody(WS_METHODS.automationCancelRun, AutomationCancelRunInput),
+  tagRequestBody(WS_METHODS.automationMarkRunRead, AutomationMarkRunReadInput),
+  tagRequestBody(WS_METHODS.automationArchiveRun, AutomationArchiveRunInput),
   tagRequestBody(WS_METHODS.subscribeAutomationEvents, Schema.Struct({})),
 ]);
 

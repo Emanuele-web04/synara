@@ -103,6 +103,7 @@ export function makeServerRuntimeServicesLayer() {
   );
   const automationSchedulerLayer = AutomationSchedulerLive.pipe(
     Layer.provideMerge(automationServiceLayer),
+    Layer.provideMerge(AutomationRepositoryLive),
   );
   const automationRunReactorLayer = AutomationRunReactorLive.pipe(
     Layer.provideMerge(automationServiceLayer),

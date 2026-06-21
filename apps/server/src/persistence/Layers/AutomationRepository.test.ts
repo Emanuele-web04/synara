@@ -293,7 +293,7 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
-  it.effect("returns the most recent run for a thread", () =>
+  it.effect("admits at most one active run for a thread", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;
       yield* runMigrations();
@@ -315,7 +315,7 @@ layer("AutomationRepository", (it) => {
         permissionSnapshot,
         now: "2026-06-16T10:00:00.000Z",
       });
-      yield* repository.createRun({
+      const blocked = yield* repository.createRun({
         id: AutomationRunId.makeUnsafe("run-by-thread-new"),
         automationId: AutomationId.makeUnsafe("automation-by-thread"),
         projectId: ProjectId.makeUnsafe("project-by-thread"),
@@ -325,13 +325,34 @@ layer("AutomationRepository", (it) => {
         permissionSnapshot,
         now: "2026-06-16T10:01:00.000Z",
       });
+      assert.strictEqual(blocked.id, AutomationRunId.makeUnsafe("run-by-thread-old"));
+      assert.strictEqual(yield* repository.countActiveRunsForThread({ threadId }), 1);
 
       const found = yield* repository.getRunByThreadId({ threadId });
       assert.isTrue(Option.isSome(found));
       assert.strictEqual(
         Option.getOrThrow(found).id,
-        AutomationRunId.makeUnsafe("run-by-thread-new"),
+        AutomationRunId.makeUnsafe("run-by-thread-old"),
       );
+
+      yield* repository.markRunSucceeded({
+        id: AutomationRunId.makeUnsafe("run-by-thread-old"),
+        turnId: null,
+        result: null,
+        finishedAt: "2026-06-16T10:02:00.000Z",
+      });
+      const newer = yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-by-thread-new"),
+        automationId: AutomationId.makeUnsafe("automation-by-thread"),
+        projectId: ProjectId.makeUnsafe("project-by-thread"),
+        threadId,
+        trigger: { type: "manual" },
+        scheduledFor: "2026-06-16T10:05:00.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:03:00.000Z",
+      });
+      assert.strictEqual(newer.id, AutomationRunId.makeUnsafe("run-by-thread-new"));
+      assert.strictEqual(yield* repository.countActiveRunsForThread({ threadId }), 1);
 
       const missing = yield* repository.getRunByThreadId({
         threadId: ThreadId.makeUnsafe("thread-none"),
@@ -510,6 +531,11 @@ layer("AutomationRepository", (it) => {
       assert.strictEqual(created.targetThreadId, null);
       assert.strictEqual(created.maxIterations, null);
       assert.strictEqual(created.stopOnError, true);
+      assert.strictEqual(created.minimumIntervalSeconds, 60);
+      assert.strictEqual(created.maxRuntimeSeconds, 60 * 60);
+      assert.deepStrictEqual(created.retryPolicy, { type: "none" });
+      assert.strictEqual(created.misfirePolicy, "coalesce");
+      assert.deepStrictEqual(created.acknowledgedRisks, []);
       assert.strictEqual(created.iterationCount, 0);
 
       // And they survive a round trip through the DB row decoder.
@@ -522,7 +548,35 @@ layer("AutomationRepository", (it) => {
       assert.strictEqual(reloaded.targetThreadId, null);
       assert.strictEqual(reloaded.maxIterations, null);
       assert.strictEqual(reloaded.stopOnError, true);
+      assert.strictEqual(reloaded.minimumIntervalSeconds, 60);
+      assert.strictEqual(reloaded.maxRuntimeSeconds, 60 * 60);
+      assert.deepStrictEqual(reloaded.retryPolicy, { type: "none" });
+      assert.strictEqual(reloaded.misfirePolicy, "coalesce");
+      assert.deepStrictEqual(reloaded.acknowledgedRisks, []);
       assert.strictEqual(reloaded.iterationCount, 0);
+    }),
+  );
+
+  it.effect("preserves explicit null maxRuntimeSeconds on create", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-null-runtime"),
+        input: {
+          ...createInputForProject("project-null-runtime"),
+          maxRuntimeSeconds: null,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const reloaded = Option.getOrThrow(
+        yield* repository.getDefinitionById({
+          id: AutomationId.makeUnsafe("automation-null-runtime"),
+        }),
+      );
+      assert.strictEqual(reloaded.maxRuntimeSeconds, null);
     }),
   );
 
@@ -531,7 +585,7 @@ layer("AutomationRepository", (it) => {
       const repository = yield* AutomationRepository;
       yield* runMigrations();
 
-      const created = yield* repository.createDefinition({
+      yield* repository.createDefinition({
         id: AutomationId.makeUnsafe("automation-heartbeat"),
         input: {
           ...createInputForProject("project-heartbeat"),
@@ -539,6 +593,11 @@ layer("AutomationRepository", (it) => {
           targetThreadId: ThreadId.makeUnsafe("thread-target"),
           maxIterations: 5,
           stopOnError: false,
+          minimumIntervalSeconds: 120,
+          maxRuntimeSeconds: 900,
+          retryPolicy: { type: "fixed", maxAttempts: 3, delaySeconds: 30 },
+          misfirePolicy: "skip",
+          acknowledgedRisks: ["full-access", "local-checkout"],
         },
         now: "2026-06-16T10:00:00.000Z",
       });
@@ -552,6 +611,127 @@ layer("AutomationRepository", (it) => {
       assert.strictEqual(reloaded.targetThreadId, ThreadId.makeUnsafe("thread-target"));
       assert.strictEqual(reloaded.maxIterations, 5);
       assert.strictEqual(reloaded.stopOnError, false);
+      assert.strictEqual(reloaded.minimumIntervalSeconds, 120);
+      assert.strictEqual(reloaded.maxRuntimeSeconds, 900);
+      assert.deepStrictEqual(reloaded.retryPolicy, {
+        type: "fixed",
+        maxAttempts: 3,
+        delaySeconds: 30,
+      });
+      assert.strictEqual(reloaded.misfirePolicy, "skip");
+      assert.deepStrictEqual(reloaded.acknowledgedRisks, ["full-access", "local-checkout"]);
+    }),
+  );
+
+  it.effect("updates run triage result read and archive state", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-result-actions"),
+        input: createInputForProject("project-result-actions"),
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      const run = yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-result-actions"),
+        automationId: AutomationId.makeUnsafe("automation-result-actions"),
+        projectId: ProjectId.makeUnsafe("project-result-actions"),
+        threadId: ThreadId.makeUnsafe("thread-result-actions"),
+        trigger: { type: "manual" },
+        scheduledFor: "2026-06-16T10:00:00.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const withResult = yield* repository.markRunResult({
+        id: run.id,
+        result: {
+          outcome: "needs-attention",
+          summary: "Review failed run.",
+          severity: "warning",
+          unread: true,
+          archivedAt: null,
+        },
+        updatedAt: "2026-06-16T10:01:00.000Z",
+      });
+      assert.strictEqual(withResult.result?.unread, true);
+
+      const read = yield* repository.markRunRead({
+        runId: run.id,
+        unread: false,
+        now: "2026-06-16T10:02:00.000Z",
+      });
+      assert.strictEqual(read.result?.unread, false);
+      assert.strictEqual(read.result?.archivedAt, null);
+
+      const archived = yield* repository.archiveRun({
+        runId: run.id,
+        archived: true,
+        now: "2026-06-16T10:03:00.000Z",
+      });
+      assert.strictEqual(archived.result?.unread, false);
+      assert.strictEqual(archived.result?.archivedAt, "2026-06-16T10:03:00.000Z");
+
+      const unarchived = yield* repository.archiveRun({
+        runId: run.id,
+        archived: false,
+        now: "2026-06-16T10:04:00.000Z",
+      });
+      assert.strictEqual(unarchived.result?.unread, false);
+      assert.strictEqual(unarchived.result?.archivedAt, null);
+    }),
+  );
+
+  it.effect("returns the earliest enabled next run, including overdue rows", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-earliest-overdue"),
+        input: {
+          ...createInputForProject("project-earliest"),
+          schedule: { type: "interval", everySeconds: 300 },
+        },
+        now: "2030-01-01T10:00:00.000Z",
+      });
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-earliest-late"),
+        input: {
+          ...createInputForProject("project-earliest"),
+          schedule: { type: "interval", everySeconds: 300 },
+        },
+        now: "2030-01-01T10:00:00.000Z",
+      });
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-earliest-soon"),
+        input: {
+          ...createInputForProject("project-earliest"),
+          schedule: { type: "interval", everySeconds: 300 },
+        },
+        now: "2030-01-01T10:00:00.000Z",
+      });
+      yield* repository.setDefinitionNextRunAt({
+        id: AutomationId.makeUnsafe("automation-earliest-late"),
+        nextRunAt: "2030-01-01T10:10:00.000Z",
+        updatedAt: "2030-01-01T10:00:00.000Z",
+      });
+      yield* repository.setDefinitionNextRunAt({
+        id: AutomationId.makeUnsafe("automation-earliest-soon"),
+        nextRunAt: "2030-01-01T10:05:00.000Z",
+        updatedAt: "2030-01-01T10:00:00.000Z",
+      });
+
+      const earliest = yield* repository.getEarliestNextRunAt({
+        now: "2030-01-01T10:01:00.000Z",
+      });
+
+      assert.isNotNull(earliest);
+      assert.isAtMost(
+        Date.parse(earliest ?? "9999-01-01T00:00:00.000Z"),
+        Date.parse("2030-01-01T10:01:00.000Z"),
+      );
     }),
   );
 
