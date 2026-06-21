@@ -1679,10 +1679,20 @@ export default function ChatView({
   );
   const codexDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "codex" }));
   const openCodeDynamicAgentsQuery = useQuery(
-    providerAgentsQueryOptions({ provider: "opencode", enabled: openCodeModelDiscoveryEnabled }),
+    providerAgentsQueryOptions({
+      provider: "opencode",
+      binaryPath: settings.openCodeBinaryPath || null,
+      cwd: providerModelDiscoveryCwd,
+      enabled: openCodeModelDiscoveryEnabled,
+    }),
   );
   const kiloDynamicAgentsQuery = useQuery(
-    providerAgentsQueryOptions({ provider: "kilo", enabled: kiloModelDiscoveryEnabled }),
+    providerAgentsQueryOptions({
+      provider: "kilo",
+      binaryPath: settings.kiloBinaryPath || null,
+      cwd: providerModelDiscoveryCwd,
+      enabled: kiloModelDiscoveryEnabled,
+    }),
   );
   const cursorRuntimeModels = useMemo(
     () =>

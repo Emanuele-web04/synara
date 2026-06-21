@@ -804,6 +804,19 @@ function extractResumeSessionId(resumeCursor: unknown): string | undefined {
   return undefined;
 }
 
+function extractResumeCwd(resumeCursor: unknown): string | undefined {
+  if (
+    resumeCursor &&
+    typeof resumeCursor === "object" &&
+    "cwd" in resumeCursor &&
+    typeof resumeCursor.cwd === "string" &&
+    resumeCursor.cwd.trim().length > 0
+  ) {
+    return resumeCursor.cwd.trim();
+  }
+  return undefined;
+}
+
 type OpenCodeModelInventory = {
   readonly providerList: {
     readonly connected: ReadonlyArray<string>;
@@ -3693,7 +3706,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             cwd: directory,
             ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
             threadId: input.threadId,
-            resumeCursor: { openCodeSessionId: started.openCodeSessionId },
+            resumeCursor: { openCodeSessionId: started.openCodeSessionId, cwd: directory },
             createdAt,
             updatedAt: createdAt,
           };
@@ -3887,7 +3900,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         return {
           threadId: input.threadId,
           turnId,
-          resumeCursor: { openCodeSessionId: context.openCodeSessionId },
+          resumeCursor: { openCodeSessionId: context.openCodeSessionId, cwd: context.directory },
         };
       });
 
@@ -4117,7 +4130,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const binaryPath = providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
           const serverUrl = providerOptions?.serverUrl?.trim();
           const serverPassword = providerOptions?.serverPassword?.trim();
-          const directory = input.cwd ?? sourceContext?.directory ?? serverConfig.cwd;
+          const targetDirectory = input.cwd ?? sourceContext?.directory ?? serverConfig.cwd;
+          const sourceDirectory =
+            sourceContext?.directory ??
+            input.sourceCwd ??
+            extractResumeCwd(input.sourceResumeCursor) ??
+            targetDirectory;
 
           let client: OpencodeClient;
           if (sourceContext) {
@@ -4129,13 +4147,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   .connectToOpenCodeServer({
                     binaryPath,
                     cliSpec: adapterConfig.cliSpec,
-                    cwd: directory,
+                    cwd: sourceDirectory,
                     ...(serverUrl ? { serverUrl } : {}),
                   })
                   .pipe(Effect.mapError(toAdapterRequestError));
                 return openCodeRuntime.createOpenCodeSdkClient({
                   baseUrl: server.url,
-                  directory,
+                  directory: sourceDirectory,
                   cliSpec: adapterConfig.cliSpec,
                   ...(server.external && serverPassword ? { serverPassword } : {}),
                 });
@@ -4161,10 +4179,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const session = yield* startSession({
             threadId: input.threadId,
             provider,
-            cwd: directory,
+            cwd: targetDirectory,
             ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
             ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-            resumeCursor: { openCodeSessionId: forkedSessionId },
+            resumeCursor: { openCodeSessionId: forkedSessionId, cwd: targetDirectory },
             runtimeMode: input.runtimeMode,
           });
 
@@ -4340,14 +4358,18 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         );
       };
 
-      const listAgents: NonNullable<OpenCodeAdapterShape["listAgents"]> = () =>
-        withDiscoveryInventory({}, ({ inventory }) =>
-          Effect.succeed({
-            agents: flattenOpenCodeAgents(inventory.agents),
-            source: adapterConfig.fallbackModelSource,
-            cached: false,
-          }),
+      const listAgents: NonNullable<OpenCodeAdapterShape["listAgents"]> = (input) => {
+        const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
+        return withDiscoveryInventory(
+          { binaryPath, ...(input.cwd ? { cwd: input.cwd } : {}) },
+          ({ inventory }) =>
+            Effect.succeed({
+              agents: flattenOpenCodeAgents(inventory.agents),
+              source: adapterConfig.fallbackModelSource,
+              cached: false,
+            }),
         );
+      };
 
       const listCommands: NonNullable<OpenCodeAdapterShape["listCommands"]> = (input) => {
         const discoveryInput = {

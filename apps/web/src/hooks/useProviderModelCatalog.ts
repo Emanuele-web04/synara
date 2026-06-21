@@ -129,12 +129,16 @@ export function useProviderModelCatalog(input: {
   const openCodeDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({
       provider: "opencode",
+      binaryPath: settings.openCodeBinaryPath || null,
+      cwd: discoveryCwd,
       enabled: selectedProvider === "opencode" || discoveryEnabled,
     }),
   );
   const kiloDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({
       provider: "kilo",
+      binaryPath: settings.kiloBinaryPath || null,
+      cwd: discoveryCwd,
       enabled: selectedProvider === "kilo" || discoveryEnabled,
     }),
   );

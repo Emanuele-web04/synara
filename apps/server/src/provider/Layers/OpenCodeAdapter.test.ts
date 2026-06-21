@@ -1,6 +1,6 @@
 import { ThreadId } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { Model, OpencodeClient, Part, Provider } from "@opencode-ai/sdk/v2";
+import type { Agent, Model, OpencodeClient, Part, Provider } from "@opencode-ai/sdk/v2";
 import { Effect, Fiber, Layer, Stream } from "effect";
 import { describe, it, expect } from "vitest";
 
@@ -122,6 +122,7 @@ function createMockOpenCodeRuntime(options?: {
   const cliModelCalls: Array<Parameters<OpenCodeRuntimeShape["listOpenCodeCliModels"]>[0]> = [];
   const connectCalls: Array<Parameters<OpenCodeRuntimeShape["connectToOpenCodeServer"]>[0]> = [];
   const createCalls: Array<Record<string, unknown>> = [];
+  const forkCalls: Array<{ sessionID: string }> = [];
   const promptCalls: Array<Record<string, unknown>> = [];
   const emptySubscription = {
     async *[Symbol.asyncIterator]() {
@@ -159,7 +160,10 @@ function createMockOpenCodeRuntime(options?: {
       get: async () => ({ data: { directory: process.cwd(), ...(options?.session ?? {}) } }),
       revert: async () => ({ data: null }),
       summarize: async () => ({ data: null }),
-      fork: async () => ({ data: { id: "forked-session-1" } }),
+      fork: async (input: { sessionID: string }) => {
+        forkCalls.push(input);
+        return { data: { id: "forked-session-1" } };
+      },
     },
     permission: {
       reply: async () => ({ data: null }),
@@ -224,7 +228,7 @@ function createMockOpenCodeRuntime(options?: {
     loadOpenCodeCredentialProviderIDs: () => Effect.succeed([]),
   };
 
-  return { abortCalls, cliModelCalls, connectCalls, createCalls, promptCalls, runtime };
+  return { abortCalls, cliModelCalls, connectCalls, createCalls, forkCalls, promptCalls, runtime };
 }
 
 function createSubscribedEventQueue() {
@@ -1094,6 +1098,66 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
   });
 
+  it("lists OpenCode agents from the active discovery cwd", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      inventory: {
+        providerList: {
+          connected: [],
+          default: {},
+          all: [],
+        },
+        agents: [
+          {
+            name: "project-review",
+            displayName: "Project Review",
+            description: "Review code with the project-local agent",
+            mode: "primary",
+            hidden: false,
+          } as unknown as Agent,
+        ],
+        consoleState: null,
+      },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const listAgents = adapter.listAgents;
+        if (!listAgents) {
+          throw new Error("Expected OpenCode adapter to support runtime agent listing.");
+        }
+        return yield* listAgents({
+          provider: "opencode",
+          binaryPath: "opencode",
+          cwd: "/repo/agent-discovery-config",
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result).toMatchObject({
+      source: "opencode",
+      cached: false,
+      agents: [
+        {
+          name: "project-review",
+          displayName: "Project Review",
+          description: "Review code with the project-local agent",
+        },
+      ],
+    });
+    expect(runtime.connectCalls).toHaveLength(1);
+    expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/agent-discovery-config" });
+  });
+
   it("does not reuse an unrelated active OpenCode session for command discovery", async () => {
     const runtime = createMockOpenCodeRuntime({
       commandLists: [[{ name: "wrong-thread" }], [{ name: "review", description: "Review code" }]],
@@ -1163,6 +1227,46 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
 
     expect(runtime.connectCalls).toHaveLength(1);
     expect(runtime.connectCalls[0]).toMatchObject({ cwd });
+  });
+
+  it("forks inactive OpenCode source sessions through the source cwd", async () => {
+    const runtime = createMockOpenCodeRuntime();
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const forkThread = adapter.forkThread;
+        if (!forkThread) {
+          throw new Error("Expected OpenCode adapter to support native thread forking.");
+        }
+        return yield* forkThread({
+          sourceThreadId: asThreadId("thread-source"),
+          threadId: asThreadId("thread-target"),
+          sourceResumeCursor: { openCodeSessionId: "source-session-1" },
+          sourceCwd: "/repo/source",
+          cwd: "/repo/target",
+          runtimeMode: "full-access",
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.forkCalls).toEqual([{ sessionID: "source-session-1" }]);
+    expect(runtime.connectCalls).toHaveLength(2);
+    expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/source" });
+    expect(runtime.connectCalls[1]).toMatchObject({ cwd: "/repo/target" });
+    expect(result.resumeCursor).toMatchObject({
+      openCodeSessionId: "forked-session-1",
+      cwd: "/repo/target",
+    });
   });
 
   it("reuses the matching active OpenCode thread for command discovery", async () => {

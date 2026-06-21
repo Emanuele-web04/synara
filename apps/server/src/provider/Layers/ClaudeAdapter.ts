@@ -201,6 +201,7 @@ interface ClaudeSessionContext {
   streamFiber: Fiber.Fiber<void, Error> | undefined;
   readonly startedAt: string;
   readonly basePermissionMode: PermissionMode | undefined;
+  lastInteractionMode: "default" | "plan" | undefined;
   currentApiModelId: string | undefined;
   resumeSessionId: string | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
@@ -1963,6 +1964,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         if (context.interruptRequestedTurnId === turnState.turnId) {
           context.interruptRequestedTurnId = undefined;
         }
+        context.lastInteractionMode = turnState.interactionMode;
         context.turnState = undefined;
         context.session = {
           ...context.session,
@@ -3409,6 +3411,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           streamFiber: undefined,
           startedAt,
           basePermissionMode: permissionMode,
+          lastInteractionMode: undefined,
           currentApiModelId: apiModelId,
           resumeSessionId: sessionId,
           pendingApprovals,
@@ -3529,7 +3532,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             try: () => context.query.setPermissionMode("plan"),
             catch: (cause) => toRequestError(input.threadId, "turn/setPermissionMode", cause),
           });
-        } else {
+        } else if (
+          context.basePermissionMode !== undefined ||
+          context.lastInteractionMode === "plan"
+        ) {
           yield* Effect.tryPromise({
             try: () => context.query.setPermissionMode(context.basePermissionMode ?? "default"),
             catch: (cause) => toRequestError(input.threadId, "turn/setPermissionMode", cause),
@@ -3839,7 +3845,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         return { models: [], source: "pending", cached: false };
       });
 
-    const listAgents: NonNullable<ClaudeAdapterShape["listAgents"]> = () =>
+    const listAgents: NonNullable<ClaudeAdapterShape["listAgents"]> = (_input) =>
       Effect.sync(() => {
         if (cachedAgents) {
           return { ...cachedAgents, cached: true };
