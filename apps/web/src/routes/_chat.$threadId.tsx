@@ -126,6 +126,7 @@ import {
   createAllThreadsSelector,
   createProjectSelector,
   createSidebarThreadSummariesSelector,
+  createThreadSelector,
   createThreadExistsSelector,
   createThreadProjectIdSelector,
 } from "../storeSelectors";
@@ -141,6 +142,7 @@ import {
   DialogTitle,
 } from "../components/ui/dialog";
 import {
+  resolveFilePreviewWorkspaceRoot,
   resolveRoutePanelBootstrap,
   resolveSplitPaneCloseDecision,
   resolveSplitPaneMaximizeDecision,
@@ -1424,7 +1426,21 @@ function SingleChatSurface(props: {
   const activeProject = useStore(
     useMemo(() => createProjectSelector(props.projectId), [props.projectId]),
   );
-  const workspaceRoot = activeProject?.cwd ?? null;
+  const activeThread = useStore(
+    useMemo(() => createThreadSelector(props.threadId), [props.threadId]),
+  );
+  const draftThread = useComposerDraftStore(
+    (store) => store.draftThreadsByThreadId[props.threadId] ?? null,
+  );
+  // File preview must follow the same runtime cwd as chat markdown, diffs, and git:
+  // worktree-backed threads resolve links against their materialized worktree.
+  const workspaceRoot = resolveFilePreviewWorkspaceRoot({
+    projectCwd: activeProject?.cwd ?? null,
+    threadEnvMode: activeThread ? (activeThread.envMode ?? null) : (draftThread?.envMode ?? null),
+    threadWorktreePath: activeThread
+      ? (activeThread.worktreePath ?? null)
+      : (draftThread?.worktreePath ?? null),
+  });
   const projects = useStore((store) => store.projects);
   const { settings: appSettings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();
