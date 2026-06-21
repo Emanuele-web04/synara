@@ -82,6 +82,8 @@ it.effect("decodes legacy automation definitions without completion policies", (
     });
 
     assert.deepStrictEqual(parsed.completionPolicy, { type: "none" });
+    assert.strictEqual(parsed.completionPolicyVersion, 0);
+    assert.strictEqual(parsed.completionPolicyUpdatedAt, "1970-01-01T00:00:00.000Z");
   }),
 );
 
@@ -124,6 +126,7 @@ it.effect("accepts automation runs with immutable permission snapshots", () =>
           provider: "codex",
           model: "gpt-5-codex",
         },
+        completionPolicyVersion: 7,
         runtimeMode: "approval-required",
         interactionMode: "default",
         worktreeMode: "worktree",
@@ -135,6 +138,7 @@ it.effect("accepts automation runs with immutable permission snapshots", () =>
     });
 
     assert.strictEqual(parsed.permissionSnapshot.runtimeMode, "approval-required");
+    assert.strictEqual(parsed.permissionSnapshot.completionPolicyVersion, 7);
     assert.strictEqual(parsed.status, "running");
   }),
 );

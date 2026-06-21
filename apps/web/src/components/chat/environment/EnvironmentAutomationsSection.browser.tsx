@@ -34,6 +34,8 @@ const baseAutomation = (overrides: Partial<AutomationDefinition> = {}): Automati
   maxIterations: null,
   stopOnError: false,
   completionPolicy: { type: "none" },
+  completionPolicyVersion: 1,
+  completionPolicyUpdatedAt: "2026-06-21T14:00:00.000Z",
   minimumIntervalSeconds: 60,
   maxRuntimeSeconds: null,
   retryPolicy: { type: "none" },

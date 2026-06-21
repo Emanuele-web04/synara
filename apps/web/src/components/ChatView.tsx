@@ -5963,7 +5963,7 @@ export default function ChatView({
           updateInputFromForm(
             input.definition,
             input.form,
-            input.providerOptions ?? providerOptionsForDispatch,
+            input.providerOptions ?? input.definition.providerOptions,
             acknowledgedRisks,
           ),
         );
@@ -5981,7 +5981,7 @@ export default function ChatView({
         setIsAutomationDraftSubmitting(false);
       }
     },
-    [automationUpdateMutation, providerOptionsForDispatch, resetAutomationDraftState],
+    [automationUpdateMutation, resetAutomationDraftState],
   );
 
   const submitAutomationDraft = useCallback(async () => {

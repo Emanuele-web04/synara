@@ -533,6 +533,8 @@ layer("AutomationRepository", (it) => {
       assert.strictEqual(created.maxIterations, null);
       assert.strictEqual(created.stopOnError, true);
       assert.deepStrictEqual(created.completionPolicy, { type: "none" });
+      assert.strictEqual(created.completionPolicyVersion, 1);
+      assert.strictEqual(created.completionPolicyUpdatedAt, "2026-06-16T10:00:00.000Z");
       assert.strictEqual(created.minimumIntervalSeconds, 60);
       assert.strictEqual(created.maxRuntimeSeconds, 60 * 60);
       assert.deepStrictEqual(created.retryPolicy, { type: "none" });
@@ -551,6 +553,8 @@ layer("AutomationRepository", (it) => {
       assert.strictEqual(reloaded.maxIterations, null);
       assert.strictEqual(reloaded.stopOnError, true);
       assert.deepStrictEqual(reloaded.completionPolicy, { type: "none" });
+      assert.strictEqual(reloaded.completionPolicyVersion, 1);
+      assert.strictEqual(reloaded.completionPolicyUpdatedAt, "2026-06-16T10:00:00.000Z");
       assert.strictEqual(reloaded.minimumIntervalSeconds, 60);
       assert.strictEqual(reloaded.maxRuntimeSeconds, 60 * 60);
       assert.deepStrictEqual(reloaded.retryPolicy, { type: "none" });
@@ -580,6 +584,36 @@ layer("AutomationRepository", (it) => {
         }),
       );
       assert.strictEqual(reloaded.maxRuntimeSeconds, null);
+    }),
+  );
+
+  it.effect("coerces standalone completion policies to none on create", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      const created = yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-standalone-stop-policy"),
+        input: {
+          ...createInputForProject("project-standalone-stop-policy"),
+          mode: "standalone",
+          completionPolicy: {
+            type: "ai-evaluated",
+            stopWhen: "the PR is ready",
+            confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+          },
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const reloaded = Option.getOrThrow(
+        yield* repository.getDefinitionById({
+          id: AutomationId.makeUnsafe("automation-standalone-stop-policy"),
+        }),
+      );
+      assert.deepStrictEqual(created.completionPolicy, { type: "none" });
+      assert.deepStrictEqual(reloaded.completionPolicy, { type: "none" });
+      assert.strictEqual(reloaded.targetThreadId, null);
     }),
   );
 
@@ -624,6 +658,8 @@ layer("AutomationRepository", (it) => {
         stopWhen: "the PR is ready",
         confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
       });
+      assert.strictEqual(reloaded.completionPolicyVersion, 1);
+      assert.strictEqual(reloaded.completionPolicyUpdatedAt, "2026-06-16T10:00:00.000Z");
       assert.strictEqual(reloaded.minimumIntervalSeconds, 120);
       assert.strictEqual(reloaded.maxRuntimeSeconds, 900);
       assert.deepStrictEqual(reloaded.retryPolicy, {
@@ -650,11 +686,7 @@ layer("AutomationRepository", (it) => {
           ...createInputForProject("project-stop-backfill"),
           mode: "heartbeat",
           targetThreadId: threadId,
-          completionPolicy: {
-            type: "ai-evaluated",
-            stopWhen: "the PR is ready",
-            confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
-          },
+          completionPolicy: { type: "none" },
         },
         now: "2026-06-16T10:00:00.000Z",
       });
@@ -702,6 +734,13 @@ layer("AutomationRepository", (it) => {
       });
       yield* repository.saveDefinition({
         ...definition,
+        completionPolicy: {
+          type: "ai-evaluated",
+          stopWhen: "the PR is ready",
+          confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+        },
+        completionPolicyVersion: definition.completionPolicyVersion + 1,
+        completionPolicyUpdatedAt: "2026-06-16T10:02:00.000Z",
         updatedAt: "2026-06-16T10:02:00.000Z",
       });
       yield* repository.markRunSucceeded({
@@ -924,6 +963,14 @@ layer("AutomationRepository", (it) => {
         permissionSnapshot,
         now: "2020-01-01T10:00:00.000Z",
       });
+      yield* repository.markRunStarted({
+        id: runId,
+        threadId,
+        messageId: MessageId.makeUnsafe("message-earliest-pending-stop"),
+        threadCreateCommandId: null,
+        turnStartCommandId: CommandId.makeUnsafe("command-earliest-pending-stop"),
+        startedAt: "2020-01-01T10:00:01.000Z",
+      });
       yield* repository.markRunSucceeded({
         id: runId,
         turnId: TurnId.makeUnsafe("turn-earliest-pending-stop"),
@@ -961,6 +1008,101 @@ layer("AutomationRepository", (it) => {
         now: "2020-01-01T10:02:01.000Z",
       });
       assert.strictEqual(unblockedEarliest, "2020-01-01T10:00:30.000Z");
+    }),
+  );
+
+  it.effect("filters pending stop checks before applying the due definition limit", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      const createBlockedHeartbeat = (suffix: string, nextRunAt: string) =>
+        Effect.gen(function* () {
+          const automationId = AutomationId.makeUnsafe(`automation-due-pending-${suffix}`);
+          const threadId = ThreadId.makeUnsafe(`thread-due-pending-${suffix}`);
+          const runId = AutomationRunId.makeUnsafe(`run-due-pending-${suffix}`);
+          const messageId = MessageId.makeUnsafe(`message-due-pending-${suffix}`);
+          const turnStartCommandId = CommandId.makeUnsafe(`command-due-pending-${suffix}`);
+
+          yield* repository.createDefinition({
+            id: automationId,
+            input: {
+              ...createInputForProject(`project-due-pending-${suffix}`),
+              schedule: { type: "interval", everySeconds: 300 },
+              mode: "heartbeat",
+              targetThreadId: threadId,
+              completionPolicy: {
+                type: "ai-evaluated",
+                stopWhen: "the PR is ready",
+                confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+              },
+            },
+            now: "2019-06-16T10:00:00.000Z",
+          });
+          yield* repository.setDefinitionNextRunAt({
+            id: automationId,
+            nextRunAt,
+            updatedAt: "2019-06-16T10:00:00.000Z",
+          });
+          yield* repository.createRun({
+            id: runId,
+            automationId,
+            projectId: ProjectId.makeUnsafe(`project-due-pending-${suffix}`),
+            threadId,
+            messageId,
+            threadCreateCommandId: null,
+            turnStartCommandId,
+            trigger: { type: "scheduled" },
+            scheduledFor: "2019-06-16T10:00:00.000Z",
+            permissionSnapshot,
+            now: "2019-06-16T10:00:01.000Z",
+          });
+          yield* repository.markRunStarted({
+            id: runId,
+            threadId,
+            messageId,
+            threadCreateCommandId: null,
+            turnStartCommandId,
+            startedAt: "2019-06-16T10:00:01.000Z",
+          });
+          yield* repository.markRunSucceeded({
+            id: runId,
+            turnId: TurnId.makeUnsafe(`turn-due-pending-${suffix}`),
+            result: {
+              outcome: "unknown",
+              summary: null,
+              unread: true,
+              archivedAt: null,
+            },
+            finishedAt: "2019-06-16T10:00:30.000Z",
+          });
+        });
+
+      yield* createBlockedHeartbeat("a", "2019-06-16T10:00:10.000Z");
+      yield* createBlockedHeartbeat("b", "2019-06-16T10:00:20.000Z");
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-due-ready"),
+        input: {
+          ...createInputForProject("project-due-ready"),
+          schedule: { type: "interval", everySeconds: 300 },
+        },
+        now: "2019-06-16T10:00:00.000Z",
+      });
+      yield* repository.setDefinitionNextRunAt({
+        id: AutomationId.makeUnsafe("automation-due-ready"),
+        nextRunAt: "2019-06-16T10:00:30.000Z",
+        updatedAt: "2019-06-16T10:00:00.000Z",
+      });
+
+      const due = yield* repository.listDueDefinitions({
+        now: "2019-06-16T10:01:00.000Z",
+        limit: 1,
+      });
+
+      assert.deepStrictEqual(
+        due.map((definition) => definition.id),
+        [AutomationId.makeUnsafe("automation-due-ready")],
+      );
     }),
   );
 

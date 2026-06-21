@@ -25,8 +25,8 @@ layer("automation migration", (it) => {
   it.effect("registers automation policy migration in the Synara lineage", () =>
     Effect.sync(() => {
       assert.deepStrictEqual(migrationEntries[migrationEntries.length - 1]?.slice(0, 2), [
-        46,
-        "AutomationCompletionPolicy",
+        47,
+        "AutomationCompletionPolicyVersion",
       ]);
     }),
   );
@@ -57,10 +57,12 @@ layer("automation migration", (it) => {
           'retry_policy_json',
           'misfire_policy',
           'acknowledged_risks_json',
-          'completion_policy_json'
+          'completion_policy_json',
+          'completion_policy_version',
+          'completion_policy_updated_at'
         )
       `;
-      assert.strictEqual(policyColumns.length, 6);
+      assert.strictEqual(policyColumns.length, 8);
     }),
   );
 });

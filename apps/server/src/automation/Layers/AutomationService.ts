@@ -128,16 +128,32 @@ function isSameAiCompletionPolicy(
   );
 }
 
-function runStartedAfterDefinitionUpdate(
+function isSameCompletionPolicy(
+  left: AutomationCompletionPolicy,
+  right: AutomationCompletionPolicy,
+): boolean {
+  if (left.type !== right.type) {
+    return false;
+  }
+  if (left.type === "none") {
+    return true;
+  }
+  return right.type === "ai-evaluated" && isSameAiCompletionPolicy(left, right);
+}
+
+function runUsesCurrentCompletionPolicy(
   run: AutomationRun,
   definition: AutomationDefinition,
 ): boolean {
+  if (run.permissionSnapshot.completionPolicyVersion !== undefined) {
+    return run.permissionSnapshot.completionPolicyVersion === definition.completionPolicyVersion;
+  }
   const runPolicyAnchorMs = Date.parse(run.startedAt ?? run.createdAt);
-  const definitionUpdatedAtMs = Date.parse(definition.updatedAt);
+  const policyUpdatedAtMs = Date.parse(definition.completionPolicyUpdatedAt);
   return (
     Number.isFinite(runPolicyAnchorMs) &&
-    Number.isFinite(definitionUpdatedAtMs) &&
-    runPolicyAnchorMs >= definitionUpdatedAtMs
+    Number.isFinite(policyUpdatedAtMs) &&
+    runPolicyAnchorMs > policyUpdatedAtMs
   );
 }
 
@@ -206,6 +222,7 @@ function makePermissionSnapshot(definition: AutomationDefinition, now: string) {
     provider: definition.modelSelection.provider,
     modelSelection: definition.modelSelection,
     ...(definition.providerOptions ? { providerOptions: definition.providerOptions } : {}),
+    completionPolicyVersion: definition.completionPolicyVersion,
     runtimeMode: definition.runtimeMode,
     interactionMode: definition.interactionMode,
     worktreeMode: definition.worktreeMode,
@@ -308,6 +325,14 @@ function mergeDefinitionUpdate(
         : (current.nextRunAt ?? safeComputeNextRunAt(schedule, now, null));
   const providerOptions = input.providerOptions ?? current.providerOptions;
   const mode = input.mode ?? current.mode;
+  const completionPolicy =
+    mode === "standalone"
+      ? { type: "none" as const }
+      : (input.completionPolicy ?? current.completionPolicy);
+  const completionPolicyChanged = !isSameCompletionPolicy(
+    current.completionPolicy,
+    completionPolicy,
+  );
   const nextDefinition: AutomationDefinition = {
     ...current,
     projectId: input.projectId ?? current.projectId,
@@ -334,8 +359,11 @@ function mergeDefinitionUpdate(
           ? ((input.maxIterations as AutomationDefinition["maxIterations"] | undefined) ?? null)
           : current.maxIterations,
     stopOnError: input.stopOnError ?? current.stopOnError,
-    completionPolicy:
-      mode === "standalone" ? { type: "none" } : (input.completionPolicy ?? current.completionPolicy),
+    completionPolicy,
+    completionPolicyVersion: completionPolicyChanged
+      ? current.completionPolicyVersion + 1
+      : current.completionPolicyVersion,
+    completionPolicyUpdatedAt: completionPolicyChanged ? now : current.completionPolicyUpdatedAt,
     minimumIntervalSeconds: input.minimumIntervalSeconds ?? current.minimumIntervalSeconds,
     maxRuntimeSeconds: hasOwn(input, "maxRuntimeSeconds")
       ? ((input.maxRuntimeSeconds as AutomationDefinition["maxRuntimeSeconds"] | undefined) ?? null)
@@ -1228,7 +1256,7 @@ export const AutomationServiceLive = Layer.effect(
               if (!shouldUseStopPolicyForDefinition(definition, definition.completionPolicy)) {
                 return Effect.void;
               }
-              if (!runStartedAfterDefinitionUpdate(run, definition)) {
+              if (!runUsesCurrentCompletionPolicy(run, definition)) {
                 return Effect.void;
               }
               return enqueueCompletionEvaluationJob({
@@ -1299,7 +1327,7 @@ export const AutomationServiceLive = Layer.effect(
                 status === "succeeded" &&
                 definition.mode === "heartbeat" &&
                 definition.completionPolicy.type === "ai-evaluated" &&
-                runStartedAfterDefinitionUpdate(run, definition)
+                runUsesCurrentCompletionPolicy(run, definition)
                   ? enqueueCompletionEvaluationJob({
                       definition,
                       run,

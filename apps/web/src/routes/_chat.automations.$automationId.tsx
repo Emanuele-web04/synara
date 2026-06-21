@@ -233,7 +233,7 @@ function AutomationDetailView() {
       acknowledgedWarningIds,
     );
     updateMutation.mutate(
-      updateInputFromForm(definition, form, providerOptionsForDispatch, acknowledgedRisks),
+      updateInputFromForm(definition, form, definition.providerOptions, acknowledgedRisks),
       {
         onSuccess: () => setDialogOpen(false),
       },

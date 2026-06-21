@@ -100,6 +100,8 @@ const baseDefinition: AutomationDefinition = {
   maxIterations: null,
   stopOnError: true,
   completionPolicy: { type: "none" },
+  completionPolicyVersion: 1,
+  completionPolicyUpdatedAt: "2026-06-19T10:00:00.000Z",
   minimumIntervalSeconds: 60,
   maxRuntimeSeconds: 3600,
   retryPolicy: { type: "none" },

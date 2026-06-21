@@ -1679,7 +1679,6 @@ layer("AutomationService", (it) => {
         completionPolicy: { type: "none" },
       });
       const { run } = yield* service.runNow({ automationId: created.id });
-      yield* realDelay(5);
       yield* service.update({
         id: created.id,
         completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
