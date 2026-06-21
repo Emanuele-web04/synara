@@ -1303,6 +1303,11 @@ layer("AutomationService", (it) => {
         turnId: automationTurnId,
         assistantText: "The PR is ready.",
       });
+      const afterDispatch = yield* service.list({ projectId });
+      const definitionUpdatedAt = afterDispatch.definitions.find(
+        (entry) => entry.id === created.id,
+      )?.updatedAt;
+      assert.isDefined(definitionUpdatedAt);
       yield* repository.markRunSucceeded({
         id: run.id,
         turnId: automationTurnId,
@@ -1312,7 +1317,7 @@ layer("AutomationService", (it) => {
           unread: true,
           archivedAt: null,
         },
-        finishedAt: now,
+        finishedAt: definitionUpdatedAt!,
       });
 
       yield* service.reconcileActiveRuns();
@@ -1436,6 +1441,44 @@ layer("AutomationService", (it) => {
         completionEvaluationInputs.at(-1)?.runAssistantText,
         "(no assistant output)",
       );
+    }),
+  );
+
+  it.effect("marks missing-thread stop checks as evaluated", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-missing-thread");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-missing-thread");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+      });
+      threadDetail = Option.none();
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "missing-thread stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+            ?.reason === "Stop check skipped because the target thread could not be found.",
+      });
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.confidence, 0);
+      assert.strictEqual(completionEvaluationInputs.length, 0);
     }),
   );
 
@@ -2098,6 +2141,95 @@ layer("AutomationService", (it) => {
         yield* repository.countActiveRunsForThread({ threadId: targetThreadId }),
         0,
       );
+    }),
+  );
+
+  it.effect("pauses a due heartbeat run while stop evaluation is pending", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-stop-check-pending");
+      const targetThreadId = ThreadId.makeUnsafe("thread-stop-check-pending");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-check-pending");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: false,
+        confidence: 0.91,
+        reason: "The assistant still found actionable work.",
+      };
+      const evaluationGate = holdCompletionEvaluation();
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+          mode: "heartbeat",
+          targetThreadId,
+          completionPolicy: heartbeatCompletionPolicy("there are no actionable issues"),
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      const first = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const firstRun = first.find((entry) => entry.run.automationId === automationId)?.run;
+      assert.isDefined(firstRun);
+      const dispatchedBefore = dispatchedCommands.filter(
+        (command) => command.type === "thread.turn.start" && command.threadId === targetThreadId,
+      ).length;
+      assert.strictEqual(dispatchedBefore, 1);
+
+      yield* completeHeartbeatRun({
+        run: firstRun!,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "There are still actionable review comments.",
+      });
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* waitForPromise({
+        promise: evaluationGate.started,
+        timeoutMs: 1_000,
+        description: "pending scheduler stop evaluation to start",
+      });
+      assert.strictEqual(
+        yield* repository.countPendingCompletionEvaluationsForThread({ threadId: targetThreadId }),
+        1,
+      );
+
+      const second = yield* service.runDueOnce({
+        now: "2026-06-16T10:05:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      assert.strictEqual(
+        second.filter((entry) => entry.run.automationId === automationId).length,
+        0,
+      );
+      assert.strictEqual(
+        dispatchedCommands.filter(
+          (command) => command.type === "thread.turn.start" && command.threadId === targetThreadId,
+        ).length,
+        dispatchedBefore,
+      );
+      const paused = yield* service.list({ projectId });
+      const pausedDefinition = paused.definitions.find((entry) => entry.id === automationId);
+      const pausedRuns = paused.runs.filter((entry) => entry.automationId === automationId);
+      assert.strictEqual(pausedDefinition?.nextRunAt, "2026-06-16T10:05:00.000Z");
+      assert.strictEqual(pausedRuns.length, 1);
+
+      evaluationGate.release();
+      yield* waitForAutomationList({
+        service,
+        description: "pending scheduler stop evaluation to finish",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === firstRun!.id)?.result?.completionEvaluation !==
+          undefined,
+      });
     }),
   );
 

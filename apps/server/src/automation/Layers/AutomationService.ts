@@ -34,6 +34,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { AutomationServiceError } from "../Errors.ts";
 import { AutomationService, type AutomationServiceShape } from "../Services/AutomationService.ts";
 import {
+  type AutomationCompletionEvaluation,
   automationCompletionRunResult,
   automationRunResultSummary,
   failedAutomationCompletionEvaluation,
@@ -967,6 +968,33 @@ export const AutomationServiceLive = Layer.effect(
         ),
       );
 
+    const recordCompletionEvaluation = (input: {
+      readonly run: AutomationRun;
+      readonly evaluation: AutomationCompletionEvaluation;
+      readonly matched: boolean;
+      readonly now: string;
+      readonly summary?: string;
+      readonly severity?: NonNullable<AutomationRunResult["severity"]>;
+    }) =>
+      Effect.gen(function* () {
+        const latestRun = yield* latestRunForCompletionResult(input.run);
+        const updated = yield* automationRepository
+          .markRunResult({
+            id: latestRun.id,
+            result: automationCompletionRunResult({
+              baseResult: latestRun.result,
+              evaluation: input.evaluation,
+              matched: input.matched,
+              ...(input.summary !== undefined ? { summary: input.summary } : {}),
+              ...(input.severity ? { severity: input.severity } : {}),
+            }),
+            updatedAt: input.now,
+          })
+          .pipe(Effect.mapError(toServiceError("Failed to update automation run result.")));
+        yield* publish({ type: "run-upserted", run: updated });
+        return updated;
+      });
+
     const resolveAutomationCompletionTextGenerationInput = (definition: AutomationDefinition) =>
       Effect.gen(function* () {
         const directInput = resolveTextGenerationInputForSelection(
@@ -998,7 +1026,7 @@ export const AutomationServiceLive = Layer.effect(
       definition.completionPolicy.type === "ai-evaluated" &&
       isSameAiCompletionPolicy(definition.completionPolicy, policy);
 
-    const isStopPolicyStillCurrent = (
+    const loadCurrentStopDefinition = (
       definitionId: AutomationDefinition["id"],
       policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
     ) =>
@@ -1006,9 +1034,11 @@ export const AutomationServiceLive = Layer.effect(
         Effect.mapError(toServiceError("Failed to load automation.")),
         Effect.map((definitionOption) =>
           Option.match(definitionOption, {
-            onNone: () => false,
+            onNone: () => Option.none<AutomationDefinition>(),
             onSome: (currentDefinition) =>
-              shouldUseStopPolicyForDefinition(currentDefinition, policy),
+              shouldUseStopPolicyForDefinition(currentDefinition, policy)
+                ? Option.some(currentDefinition)
+                : Option.none<AutomationDefinition>(),
           }),
         ),
       );
@@ -1021,6 +1051,16 @@ export const AutomationServiceLive = Layer.effect(
     ) =>
       Effect.gen(function* () {
         if (!run.threadId) {
+          yield* recordCompletionEvaluation({
+            run,
+            evaluation: failedAutomationCompletionEvaluation(
+              "Stop check skipped because the automation run has no target thread.",
+            ),
+            matched: false,
+            now,
+            summary: "Stop check skipped because the automation run has no target thread.",
+            severity: "warning",
+          });
           return false;
         }
         const project = yield* requireProject(definition.projectId);
@@ -1028,6 +1068,16 @@ export const AutomationServiceLive = Layer.effect(
           .getThreadDetailById(run.threadId)
           .pipe(Effect.mapError(toServiceError("Failed to load automation thread detail.")));
         if (Option.isNone(threadOption)) {
+          yield* recordCompletionEvaluation({
+            run,
+            evaluation: failedAutomationCompletionEvaluation(
+              "Stop check skipped because the target thread could not be found.",
+            ),
+            matched: false,
+            now,
+            summary: "Stop check skipped because the target thread could not be found.",
+            severity: "warning",
+          });
           return false;
         }
         const thread = threadOption.value;
@@ -1055,10 +1105,9 @@ export const AutomationServiceLive = Layer.effect(
           confidence: Math.max(0, Math.min(1, evaluationRaw.confidence)),
           reason: normalizeAutomationCompletionReason(evaluationRaw.reason),
         };
-        const policyStillCurrent = rawEvaluation.stopMatched
-          ? yield* isStopPolicyStillCurrent(definition.id, policy)
-          : true;
-        const evaluation = policyStillCurrent
+        const currentDefinitionOption = yield* loadCurrentStopDefinition(definition.id, policy);
+        const policyStillCurrent = Option.isSome(currentDefinitionOption);
+        const evaluation: AutomationCompletionEvaluation = policyStillCurrent
           ? rawEvaluation
           : {
               ...rawEvaluation,
@@ -1068,27 +1117,23 @@ export const AutomationServiceLive = Layer.effect(
               ),
             };
         const matched =
-          evaluation.stopMatched && evaluation.confidence >= policy.confidenceThreshold;
-        const latestRun = yield* latestRunForCompletionResult(run);
-        const updated = yield* automationRepository
-          .markRunResult({
-            id: latestRun.id,
-            result: automationCompletionRunResult({
-              baseResult: latestRun.result,
-              evaluation,
-              matched,
-            }),
-            updatedAt: now,
-          })
-          .pipe(Effect.mapError(toServiceError("Failed to update automation run result.")));
-        yield* publish({ type: "run-upserted", run: updated });
+          policyStillCurrent &&
+          evaluation.stopMatched &&
+          evaluation.confidence >= policy.confidenceThreshold;
+        yield* recordCompletionEvaluation({
+          run,
+          evaluation,
+          matched,
+          now,
+        });
         if (!matched) {
           return false;
         }
+        const currentDefinition = Option.getOrThrow(currentDefinitionOption);
         yield* automationRepository
-          .disableDefinition({ id: definition.id, now })
+          .disableDefinition({ id: currentDefinition.id, now })
           .pipe(Effect.mapError(toServiceError("Failed to disable automation.")));
-        yield* publishDefinition(definition.id);
+        yield* publishDefinition(currentDefinition.id);
         return true;
       }).pipe(
         Effect.catch((error) =>
@@ -1100,38 +1145,25 @@ export const AutomationServiceLive = Layer.effect(
               error: errorMessage(error),
             });
             // Keep the heartbeat active, but make the failed stop check visible in run history.
-            const updatedOption = yield* latestRunForCompletionResult(run)
-              .pipe(
-                Effect.flatMap((latestRun) =>
-                  automationRepository.markRunResult({
-                    id: latestRun.id,
-                    result: automationCompletionRunResult({
-                      baseResult: latestRun.result,
-                      evaluation: failedAutomationCompletionEvaluation(reason),
-                      matched: false,
-                      summary: reason,
-                      severity: "warning",
-                    }),
-                    updatedAt: now,
-                  }),
+            yield* recordCompletionEvaluation({
+              run,
+              evaluation: failedAutomationCompletionEvaluation(reason),
+              matched: false,
+              now,
+              summary: reason,
+              severity: "warning",
+            }).pipe(
+              Effect.catch((recordError) =>
+                Effect.logWarning(
+                  "automation completion evaluation failure could not be recorded",
+                  {
+                    automationId: definition.id,
+                    runId: run.id,
+                    error: errorMessage(recordError),
+                  },
                 ),
-              )
-              .pipe(
-                Effect.map(Option.some),
-                Effect.catch((recordError) =>
-                  Effect.logWarning(
-                    "automation completion evaluation failure could not be recorded",
-                    {
-                      automationId: definition.id,
-                      runId: run.id,
-                      error: errorMessage(recordError),
-                    },
-                  ).pipe(Effect.as(Option.none())),
-                ),
-              );
-            if (Option.isSome(updatedOption)) {
-              yield* publish({ type: "run-upserted", run: updatedOption.value });
-            }
+              ),
+            );
             return false;
           }),
         ),
@@ -1623,6 +1655,21 @@ export const AutomationServiceLive = Layer.effect(
         yield* publish({ type: "definition-deleted", automationId: input.id });
       });
 
+    const heartbeatThreadRunState = (threadId: ThreadId) =>
+      Effect.gen(function* () {
+        const activeRuns = yield* automationRepository
+          .countActiveRunsForThread({ threadId })
+          .pipe(Effect.mapError(toServiceError("Failed to count active automation runs.")));
+        const pendingCompletionEvaluations = yield* automationRepository
+          .countPendingCompletionEvaluationsForThread({ threadId })
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to count pending automation stop evaluations."),
+            ),
+          );
+        return { activeRuns, pendingCompletionEvaluations };
+      });
+
     const runNow: AutomationServiceShape["runNow"] = (input) =>
       Effect.gen(function* () {
         const definition = yield* requireDefinition(input.automationId);
@@ -1637,13 +1684,18 @@ export const AutomationServiceLive = Layer.effect(
               }),
             );
           }
-          const activeRuns = yield* automationRepository
-            .countActiveRunsForThread({ threadId: definition.targetThreadId })
-            .pipe(Effect.mapError(toServiceError("Failed to count active automation runs.")));
-          if (activeRuns > 0) {
+          const runState = yield* heartbeatThreadRunState(definition.targetThreadId);
+          if (runState.activeRuns > 0) {
             return yield* Effect.fail(
               new AutomationServiceError({
                 message: "This thread already has a run in progress.",
+              }),
+            );
+          }
+          if (runState.pendingCompletionEvaluations > 0) {
+            return yield* Effect.fail(
+              new AutomationServiceError({
+                message: "This thread already has a stop check in progress.",
               }),
             );
           }
@@ -1756,10 +1808,11 @@ export const AutomationServiceLive = Layer.effect(
               }),
             );
           }
-          const activeRuns = yield* automationRepository
-            .countActiveRunsForThread({ threadId: targetThreadId })
-            .pipe(Effect.mapError(toServiceError("Failed to count active automation runs.")));
-          if (activeRuns > 0) {
+          const runState = yield* heartbeatThreadRunState(targetThreadId);
+          if (runState.pendingCompletionEvaluations > 0) {
+            return Option.none<AutomationRunNowResult>();
+          }
+          if (runState.activeRuns > 0) {
             const reason = "Target thread already has an automation run in progress.";
             const { run, inserted } = yield* createPendingRun(
               definition,

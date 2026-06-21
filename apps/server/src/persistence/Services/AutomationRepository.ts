@@ -161,6 +161,12 @@ export const CountActiveAutomationRunsByThreadInput = Schema.Struct({
 export type CountActiveAutomationRunsByThreadInput =
   typeof CountActiveAutomationRunsByThreadInput.Type;
 
+export const CountPendingCompletionEvaluationsByThreadInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type CountPendingCompletionEvaluationsByThreadInput =
+  typeof CountPendingCompletionEvaluationsByThreadInput.Type;
+
 export const ListActiveAutomationRunsForDefinitionInput = Schema.Struct({
   automationId: AutomationId,
 });
@@ -259,6 +265,9 @@ export interface AutomationRepositoryShape {
   ) => Effect.Effect<number, AutomationRepositoryError>;
   readonly countActiveRunsForThread: (
     input: CountActiveAutomationRunsByThreadInput,
+  ) => Effect.Effect<number, AutomationRepositoryError>;
+  readonly countPendingCompletionEvaluationsForThread: (
+    input: CountPendingCompletionEvaluationsByThreadInput,
   ) => Effect.Effect<number, AutomationRepositoryError>;
   readonly listActiveRunsForDefinition: (
     input: ListActiveAutomationRunsForDefinitionInput,

@@ -26,6 +26,7 @@ import {
   type AutomationRepositoryShape,
   CountActiveAutomationRunsByThreadInput,
   CountActiveAutomationRunsInput,
+  CountPendingCompletionEvaluationsByThreadInput,
   DisableAutomationDefinitionInput,
   GetEarliestAutomationNextRunAtInput,
   GetAutomationDefinitionInput,
@@ -778,6 +779,8 @@ const makeAutomationRepository = Effect.gen(function* () {
           AND definitions.archived_at IS NULL
           AND definitions.mode = 'heartbeat'
           AND json_extract(definitions.completion_policy_json, '$.type') = 'ai-evaluated'
+          AND runs.finished_at IS NOT NULL
+          AND runs.finished_at >= definitions.updated_at
           AND (
             runs.result_json IS NULL
             OR json_type(runs.result_json, '$.completionEvaluation') IS NULL
@@ -808,6 +811,30 @@ const makeAutomationRepository = Effect.gen(function* () {
         FROM automation_runs
         WHERE thread_id = ${threadId}
           AND status IN ('pending', 'claimed', 'running', 'waiting-for-approval')
+      `,
+  });
+
+  const countPendingCompletionEvaluationsByThreadRow = SqlSchema.findAll({
+    Request: CountPendingCompletionEvaluationsByThreadInput,
+    Result: Schema.Struct({ count: Schema.Number }),
+    execute: ({ threadId }) =>
+      sql`
+        SELECT COUNT(*) AS "count"
+        FROM automation_runs runs
+        INNER JOIN automation_definitions definitions
+          ON definitions.automation_id = runs.automation_id
+        WHERE runs.thread_id = ${threadId}
+          AND runs.status = 'succeeded'
+          AND definitions.enabled = 1
+          AND definitions.archived_at IS NULL
+          AND definitions.mode = 'heartbeat'
+          AND json_extract(definitions.completion_policy_json, '$.type') = 'ai-evaluated'
+          AND runs.finished_at IS NOT NULL
+          AND runs.finished_at >= definitions.updated_at
+          AND (
+            runs.result_json IS NULL
+            OR json_type(runs.result_json, '$.completionEvaluation') IS NULL
+          )
       `,
   });
 
@@ -1206,6 +1233,17 @@ const makeAutomationRepository = Effect.gen(function* () {
       Effect.map((rows) => rows[0]?.count ?? 0),
     );
 
+  const countPendingCompletionEvaluationsForThread: AutomationRepositoryShape["countPendingCompletionEvaluationsForThread"] =
+    (input) =>
+      countPendingCompletionEvaluationsByThreadRow(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError(
+            "AutomationRepository.countPendingCompletionEvaluationsForThread:query",
+          ),
+        ),
+        Effect.map((rows) => rows[0]?.count ?? 0),
+      );
+
   const listActiveRunsForDefinition: AutomationRepositoryShape["listActiveRunsForDefinition"] = (
     input,
   ) =>
@@ -1295,6 +1333,7 @@ const makeAutomationRepository = Effect.gen(function* () {
     listRunsNeedingCompletionEvaluation,
     countActiveRunsForDefinition,
     countActiveRunsForThread,
+    countPendingCompletionEvaluationsForThread,
     listActiveRunsForDefinition,
     getEarliestNextRunAt,
     markRunRead,

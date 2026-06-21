@@ -636,6 +636,109 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
+  it.effect("lists only post-policy heartbeat runs that still need stop evaluation", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+      const automationId = AutomationId.makeUnsafe("automation-stop-backfill");
+      const projectId = ProjectId.makeUnsafe("project-stop-backfill");
+      const threadId = ThreadId.makeUnsafe("thread-stop-backfill");
+
+      const definition = yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInputForProject("project-stop-backfill"),
+          mode: "heartbeat",
+          targetThreadId: threadId,
+          completionPolicy: {
+            type: "ai-evaluated",
+            stopWhen: "the PR is ready",
+            confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+          },
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      const oldRun = yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-stop-backfill-old"),
+        automationId,
+        projectId,
+        threadId,
+        trigger: { type: "manual" },
+        scheduledFor: "2026-06-16T10:00:30.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:00:30.000Z",
+      });
+      yield* repository.markRunSucceeded({
+        id: oldRun.id,
+        turnId: null,
+        result: {
+          outcome: "unknown",
+          summary: null,
+          unread: true,
+          archivedAt: null,
+        },
+        finishedAt: "2026-06-16T10:01:00.000Z",
+      });
+      yield* repository.saveDefinition({
+        ...definition,
+        updatedAt: "2026-06-16T10:02:00.000Z",
+      });
+
+      const currentRun = yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-stop-backfill-current"),
+        automationId,
+        projectId,
+        threadId,
+        trigger: { type: "manual" },
+        scheduledFor: "2026-06-16T10:03:00.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:03:00.000Z",
+      });
+      yield* repository.markRunSucceeded({
+        id: currentRun.id,
+        turnId: null,
+        result: {
+          outcome: "unknown",
+          summary: null,
+          unread: true,
+          archivedAt: null,
+        },
+        finishedAt: "2026-06-16T10:03:30.000Z",
+      });
+
+      const pending = yield* repository.listRunsNeedingCompletionEvaluation({ limit: 10 });
+      assert.deepStrictEqual(
+        pending.map((run) => run.id),
+        [currentRun.id],
+      );
+      assert.strictEqual(
+        yield* repository.countPendingCompletionEvaluationsForThread({ threadId }),
+        1,
+      );
+
+      yield* repository.markRunResult({
+        id: currentRun.id,
+        result: {
+          outcome: "unknown",
+          summary: null,
+          unread: true,
+          archivedAt: null,
+          completionEvaluation: {
+            stopMatched: false,
+            confidence: 0,
+            reason: "Stop condition was not met.",
+          },
+        },
+        updatedAt: "2026-06-16T10:04:00.000Z",
+      });
+
+      assert.strictEqual(
+        yield* repository.countPendingCompletionEvaluationsForThread({ threadId }),
+        0,
+      );
+    }),
+  );
+
   it.effect("updates run triage result read and archive state", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;
