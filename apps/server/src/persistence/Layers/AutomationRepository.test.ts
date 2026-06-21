@@ -851,6 +851,87 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
+  it.effect("ignores due heartbeat rows blocked by a pending stop evaluation", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+      const automationId = AutomationId.makeUnsafe("automation-earliest-pending-stop");
+      const threadId = ThreadId.makeUnsafe("thread-earliest-pending-stop");
+      const runId = AutomationRunId.makeUnsafe("run-earliest-pending-stop");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInputForProject("project-earliest-pending-stop"),
+          schedule: { type: "interval", everySeconds: 300 },
+          mode: "heartbeat",
+          targetThreadId: threadId,
+          completionPolicy: {
+            type: "ai-evaluated",
+            stopWhen: "the PR is ready",
+            confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+          },
+        },
+        now: "2020-01-01T10:00:00.000Z",
+      });
+      yield* repository.setDefinitionNextRunAt({
+        id: automationId,
+        nextRunAt: "2020-01-01T10:00:30.000Z",
+        updatedAt: "2020-01-01T10:00:00.000Z",
+      });
+      yield* repository.createRun({
+        id: runId,
+        automationId,
+        projectId: ProjectId.makeUnsafe("project-earliest-pending-stop"),
+        threadId,
+        messageId: MessageId.makeUnsafe("message-earliest-pending-stop"),
+        threadCreateCommandId: null,
+        turnStartCommandId: CommandId.makeUnsafe("command-earliest-pending-stop"),
+        trigger: { type: "scheduled" },
+        scheduledFor: "2020-01-01T10:00:00.000Z",
+        permissionSnapshot,
+        now: "2020-01-01T10:00:00.000Z",
+      });
+      yield* repository.markRunSucceeded({
+        id: runId,
+        turnId: TurnId.makeUnsafe("turn-earliest-pending-stop"),
+        result: {
+          outcome: "unknown",
+          summary: null,
+          unread: true,
+          archivedAt: null,
+        },
+        finishedAt: "2020-01-01T10:01:00.000Z",
+      });
+
+      const blockedEarliest = yield* repository.getEarliestNextRunAt({
+        now: "2020-01-01T10:02:00.000Z",
+      });
+      assert.notStrictEqual(blockedEarliest, "2020-01-01T10:00:30.000Z");
+
+      yield* repository.markRunResult({
+        id: runId,
+        result: {
+          outcome: "no-findings",
+          summary: "Stop check did not match.",
+          unread: false,
+          archivedAt: null,
+          completionEvaluation: {
+            stopMatched: false,
+            confidence: 0.2,
+            reason: "The stop condition was not met.",
+          },
+        },
+        updatedAt: "2020-01-01T10:02:00.000Z",
+      });
+
+      const unblockedEarliest = yield* repository.getEarliestNextRunAt({
+        now: "2020-01-01T10:02:01.000Z",
+      });
+      assert.strictEqual(unblockedEarliest, "2020-01-01T10:00:30.000Z");
+    }),
+  );
+
   it.effect("dedupes a scheduled occurrence past a manual run sharing its scheduledFor", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;

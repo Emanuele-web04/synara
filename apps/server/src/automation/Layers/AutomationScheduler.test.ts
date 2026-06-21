@@ -73,3 +73,61 @@ it.effect("wakes a long sleep when an automation definition changes", () =>
     }).pipe(Effect.provide(layer), Effect.scoped);
   }),
 );
+
+it.effect("wakes a pending heartbeat sleep when a stop evaluation is recorded", () =>
+  Effect.gen(function* () {
+    let runDuePasses = 0;
+    const events = yield* PubSub.unbounded<AutomationStreamEvent>();
+    const automationService = {
+      list: unusedEffect,
+      create: unusedEffect,
+      update: unusedEffect,
+      delete: unusedEffect,
+      runNow: unusedEffect,
+      cancelRun: unusedEffect,
+      markRunRead: unusedEffect,
+      archiveRun: unusedEffect,
+      runDueOnce: () =>
+        Effect.sync(() => {
+          runDuePasses += 1;
+          return [];
+        }),
+      reconcileThread: unusedEffect,
+      reconcileActiveRuns: () => Effect.void,
+      recoverPendingRuns: unusedEffect,
+      streamEvents: Stream.fromPubSub(events),
+    } satisfies AutomationServiceShape;
+    const automationRepository = {
+      getEarliestNextRunAt: () => Effect.succeed(null),
+    } as unknown as AutomationRepositoryShape;
+    const layer = makeAutomationSchedulerLive({ intervalMs: 60_000 }).pipe(
+      Layer.provide(Layer.succeed(AutomationService, automationService)),
+      Layer.provide(Layer.succeed(AutomationRepository, automationRepository)),
+    );
+
+    yield* Effect.gen(function* () {
+      const scheduler = yield* AutomationScheduler;
+      yield* scheduler.start();
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      assert.strictEqual(runDuePasses, 1);
+
+      yield* PubSub.publish(events, {
+        type: "run-upserted",
+        run: {
+          result: {
+            completionEvaluation: {
+              stopMatched: false,
+              confidence: 0.4,
+              reason: "Still waiting.",
+            },
+          },
+        },
+      } as AutomationStreamEvent);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      assert.strictEqual(runDuePasses, 2);
+    }).pipe(Effect.provide(layer), Effect.scoped);
+  }),
+);

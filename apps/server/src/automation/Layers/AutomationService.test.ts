@@ -1377,12 +1377,84 @@ layer("AutomationService", (it) => {
         predicate: (listed) =>
           listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
             ?.reason ===
-          "Stop check ignored because the automation stop policy changed before evaluation finished.",
+          "Stop check ignored because the automation changed before evaluation finished.",
       });
       const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
       const updatedRun = listed.runs.find((entry) => entry.id === run.id);
       assert.strictEqual(updatedDefinition?.enabled, true);
       assert.deepStrictEqual(updatedDefinition?.completionPolicy, { type: "none" });
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
+      assert.notInclude(updatedRun?.result?.summary ?? "", "Stopped:");
+    }),
+  );
+
+  it.effect("ignores a matched stop evaluation when the automation changes while pending", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-stale-definition");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-stale-definition");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.98,
+        reason: "The old automation definition matched.",
+      };
+      const evaluationGate = holdCompletionEvaluation();
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "The PR is ready.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* waitForPromise({
+        promise: evaluationGate.started,
+        timeoutMs: 1_000,
+        description: "stale-definition stop evaluation to start",
+      });
+      const beforeEdit = yield* service.list({ projectId });
+      const queuedDefinition = beforeEdit.definitions.find((entry) => entry.id === created.id);
+      yield* realDelay(5);
+      let edited = yield* service.update({
+        id: created.id,
+        name: "Retitled heartbeat monitor",
+      });
+      if (edited.updatedAt === queuedDefinition?.updatedAt) {
+        yield* realDelay(5);
+        edited = yield* service.update({
+          id: created.id,
+          name: "Retitled heartbeat monitor again",
+        });
+      }
+      evaluationGate.release();
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "stale-definition stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+            ?.reason ===
+          "Stop check ignored because the automation changed before evaluation finished.",
+      });
+      const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.notStrictEqual(edited.updatedAt, queuedDefinition?.updatedAt);
+      assert.strictEqual(updatedDefinition?.enabled, true);
+      assert.strictEqual(updatedDefinition?.name, edited.name);
+      assert.deepStrictEqual(
+        updatedDefinition?.completionPolicy,
+        heartbeatCompletionPolicy("the PR is ready"),
+      );
       assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
       assert.notInclude(updatedRun?.result?.summary ?? "", "Stopped:");
     }),
@@ -1440,6 +1512,14 @@ layer("AutomationService", (it) => {
       assert.strictEqual(
         completionEvaluationInputs.at(-1)?.runAssistantText,
         "(no assistant output)",
+      );
+      assert.notInclude(
+        completionEvaluationInputs.at(-1)?.threadContext ?? "",
+        "Unrelated earlier answer",
+      );
+      assert.include(
+        completionEvaluationInputs.at(-1)?.threadContext ?? "",
+        "user: Check whether the PR is ready.",
       );
     }),
   );
@@ -1611,6 +1691,7 @@ layer("AutomationService", (it) => {
       });
       yield* service.markRunRead({ runId: run.id, unread: false });
       const archived = yield* service.archiveRun({ runId: run.id, archived: true });
+      yield* realDelay(5);
       evaluationGate.release();
 
       const listed = yield* waitForAutomationList({
@@ -1630,6 +1711,10 @@ layer("AutomationService", (it) => {
       assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
       assert.strictEqual(updatedRun?.result?.unread, false);
       assert.strictEqual(updatedRun?.result?.archivedAt, archived.run.result?.archivedAt);
+      assert.isAtLeast(
+        Date.parse(updatedRun?.updatedAt ?? ""),
+        Date.parse(archived.run.updatedAt),
+      );
     }),
   );
 

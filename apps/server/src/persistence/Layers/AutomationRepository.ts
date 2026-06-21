@@ -28,6 +28,7 @@ import {
   CountActiveAutomationRunsInput,
   CountPendingCompletionEvaluationsByThreadInput,
   DisableAutomationDefinitionInput,
+  DisableAutomationDefinitionIfUnchangedInput,
   GetEarliestAutomationNextRunAtInput,
   GetAutomationDefinitionInput,
   GetAutomationRunByThreadInput,
@@ -877,12 +878,37 @@ const makeAutomationRepository = Effect.gen(function* () {
     Result: Schema.Struct({ nextRunAt: AutomationDefinition.fields.nextRunAt }),
     execute: () =>
       sql`
-        SELECT next_run_at AS "nextRunAt"
-        FROM automation_definitions
-        WHERE enabled = 1
-          AND archived_at IS NULL
-          AND next_run_at IS NOT NULL
-        ORDER BY next_run_at ASC, automation_id ASC
+        SELECT definitions.next_run_at AS "nextRunAt"
+        FROM automation_definitions definitions
+        WHERE definitions.enabled = 1
+          AND definitions.archived_at IS NULL
+          AND definitions.next_run_at IS NOT NULL
+          AND NOT (
+            definitions.mode = 'heartbeat'
+            AND definitions.target_thread_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1
+              FROM automation_runs runs
+              INNER JOIN automation_definitions pending_definitions
+                ON pending_definitions.automation_id = runs.automation_id
+              WHERE runs.thread_id = definitions.target_thread_id
+                AND runs.status = 'succeeded'
+                AND pending_definitions.enabled = 1
+                AND pending_definitions.archived_at IS NULL
+                AND pending_definitions.mode = 'heartbeat'
+                AND json_extract(
+                  pending_definitions.completion_policy_json,
+                  '$.type'
+                ) = 'ai-evaluated'
+                AND runs.finished_at IS NOT NULL
+                AND runs.finished_at >= pending_definitions.updated_at
+                AND (
+                  runs.result_json IS NULL
+                  OR json_type(runs.result_json, '$.completionEvaluation') IS NULL
+                )
+            )
+          )
+        ORDER BY definitions.next_run_at ASC, definitions.automation_id ASC
         LIMIT 1
       `,
   });
@@ -894,6 +920,21 @@ const makeAutomationRepository = Effect.gen(function* () {
         UPDATE automation_definitions
         SET enabled = 0, next_run_at = NULL, updated_at = ${now}
         WHERE automation_id = ${id}
+      `,
+  });
+
+  const disableDefinitionIfUnchangedRow = SqlSchema.findAll({
+    Request: DisableAutomationDefinitionIfUnchangedInput,
+    Result: Schema.Struct({ id: AutomationDefinition.fields.id }),
+    execute: ({ id, expectedUpdatedAt, now }) =>
+      sql`
+        UPDATE automation_definitions
+        SET enabled = 0, next_run_at = NULL, updated_at = ${now}
+        WHERE automation_id = ${id}
+          AND enabled = 1
+          AND archived_at IS NULL
+          AND updated_at = ${expectedUpdatedAt}
+        RETURNING automation_id AS "id"
       `,
   });
 
@@ -1296,6 +1337,15 @@ const makeAutomationRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("AutomationRepository.disableDefinition:update")),
     );
 
+  const disableDefinitionIfUnchanged: AutomationRepositoryShape["disableDefinitionIfUnchanged"] =
+    (input) =>
+      disableDefinitionIfUnchangedRow(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError("AutomationRepository.disableDefinitionIfUnchanged:update"),
+        ),
+        Effect.map((rows) => rows.length > 0),
+      );
+
   const incrementDefinitionIterationCount: AutomationRepositoryShape["incrementDefinitionIterationCount"] =
     (input) =>
       incrementIterationRow(input).pipe(
@@ -1339,6 +1389,7 @@ const makeAutomationRepository = Effect.gen(function* () {
     markRunRead,
     archiveRun,
     disableDefinition,
+    disableDefinitionIfUnchanged,
     incrementDefinitionIterationCount,
     tryAcquireSchedulerLease,
   } satisfies AutomationRepositoryShape;

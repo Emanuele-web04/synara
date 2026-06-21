@@ -11,7 +11,12 @@ import {
 const DEFAULT_AUTOMATION_SCHEDULER_INTERVAL_MS = 60_000;
 
 function shouldWakeScheduler(event: AutomationStreamEvent): boolean {
-  return event.type === "definition-upserted" || event.type === "definition-deleted";
+  return (
+    event.type === "definition-upserted" ||
+    event.type === "definition-deleted" ||
+    (event.type === "run-upserted" &&
+      event.run.result?.completionEvaluation !== undefined)
+  );
 }
 
 export interface AutomationSchedulerLiveOptions {

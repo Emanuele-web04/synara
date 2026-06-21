@@ -184,6 +184,14 @@ export const DisableAutomationDefinitionInput = Schema.Struct({
 });
 export type DisableAutomationDefinitionInput = typeof DisableAutomationDefinitionInput.Type;
 
+export const DisableAutomationDefinitionIfUnchangedInput = Schema.Struct({
+  id: AutomationId,
+  expectedUpdatedAt: Schema.String,
+  now: Schema.String,
+});
+export type DisableAutomationDefinitionIfUnchangedInput =
+  typeof DisableAutomationDefinitionIfUnchangedInput.Type;
+
 export const IncrementAutomationIterationInput = Schema.Struct({
   id: AutomationId,
   now: Schema.String,
@@ -284,6 +292,9 @@ export interface AutomationRepositoryShape {
   readonly disableDefinition: (
     input: DisableAutomationDefinitionInput,
   ) => Effect.Effect<void, AutomationRepositoryError>;
+  readonly disableDefinitionIfUnchanged: (
+    input: DisableAutomationDefinitionIfUnchangedInput,
+  ) => Effect.Effect<boolean, AutomationRepositoryError>;
   readonly incrementDefinitionIterationCount: (
     input: IncrementAutomationIterationInput,
   ) => Effect.Effect<void, AutomationRepositoryError>;
