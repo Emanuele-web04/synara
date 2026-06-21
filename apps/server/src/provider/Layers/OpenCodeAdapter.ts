@@ -4136,6 +4136,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             input.sourceCwd ??
             extractResumeCwd(input.sourceResumeCursor) ??
             targetDirectory;
+          if (sourceDirectory !== targetDirectory) {
+            return yield* new ProviderAdapterValidationError({
+              provider,
+              operation: "forkThread",
+              issue: `${adapterConfig.displayName} native fork cannot cross cwd boundaries.`,
+            });
+          }
 
           let client: OpencodeClient;
           if (sourceContext) {

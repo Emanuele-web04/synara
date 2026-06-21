@@ -1229,7 +1229,43 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.connectCalls[0]).toMatchObject({ cwd });
   });
 
-  it("forks inactive OpenCode source sessions through the source cwd", async () => {
+  it("declines inactive OpenCode native fork when source and target cwd differ", async () => {
+    const runtime = createMockOpenCodeRuntime();
+
+    await expect(
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const forkThread = adapter.forkThread;
+          if (!forkThread) {
+            throw new Error("Expected OpenCode adapter to support native thread forking.");
+          }
+          return yield* forkThread({
+            sourceThreadId: asThreadId("thread-source"),
+            threadId: asThreadId("thread-target"),
+            sourceResumeCursor: { openCodeSessionId: "source-session-1" },
+            sourceCwd: "/repo/source",
+            cwd: "/repo/target",
+            runtimeMode: "full-access",
+          });
+        }).pipe(
+          Effect.provide(
+            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      ),
+    ).rejects.toThrow("native fork cannot cross cwd boundaries");
+
+    expect(runtime.forkCalls).toEqual([]);
+    expect(runtime.connectCalls).toEqual([]);
+  });
+
+  it("forks inactive OpenCode source sessions through the matching source cwd", async () => {
     const runtime = createMockOpenCodeRuntime();
 
     const result = await Effect.runPromise(
@@ -1244,7 +1280,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId: asThreadId("thread-target"),
           sourceResumeCursor: { openCodeSessionId: "source-session-1" },
           sourceCwd: "/repo/source",
-          cwd: "/repo/target",
+          cwd: "/repo/source",
           runtimeMode: "full-access",
         });
       }).pipe(
@@ -1262,10 +1298,10 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.forkCalls).toEqual([{ sessionID: "source-session-1" }]);
     expect(runtime.connectCalls).toHaveLength(2);
     expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/source" });
-    expect(runtime.connectCalls[1]).toMatchObject({ cwd: "/repo/target" });
+    expect(runtime.connectCalls[1]).toMatchObject({ cwd: "/repo/source" });
     expect(result.resumeCursor).toMatchObject({
       openCodeSessionId: "forked-session-1",
-      cwd: "/repo/target",
+      cwd: "/repo/source",
     });
   });
 
