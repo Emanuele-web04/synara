@@ -3,7 +3,8 @@
 // Layer: Route UI logic helpers.
 // Exports: thread title fallback, deep-link bootstrap replay handling, and panel toggle helpers.
 
-import type { ThreadId, TurnId } from "@t3tools/contracts";
+import type { ThreadEnvironmentMode, ThreadId, TurnId } from "@t3tools/contracts";
+import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
 
 import type { ChatRightPanel, DiffRouteSearch } from "../diffRouteSearch";
 
@@ -47,6 +48,19 @@ export type SplitPaneCloseDecision =
 
 export function resolveThreadPickerTitle(title: string | null): string {
   return title || "New chat";
+}
+
+// File previews follow the thread runtime cwd so worktree chats open the files they actually edit.
+export function resolveFilePreviewWorkspaceRoot(input: {
+  projectCwd?: string | null | undefined;
+  threadEnvMode?: ThreadEnvironmentMode | null | undefined;
+  threadWorktreePath?: string | null | undefined;
+}): string | null {
+  return resolveThreadWorkspaceCwd({
+    projectCwd: input.projectCwd,
+    envMode: input.threadEnvMode,
+    worktreePath: input.threadWorktreePath,
+  });
 }
 
 function createRoutePanelSearchKey(input: {

@@ -240,6 +240,44 @@ describe("threadBootstrap", () => {
     });
   });
 
+  it("does not inherit plan mode from the previously active thread for a fresh creation", () => {
+    expect(
+      resolveTerminalThreadCreationState({
+        activeDraftThread: null,
+        activeThread: {
+          projectId: PROJECT_ID,
+          modelSelection: modelSelection("codex", "gpt-5"),
+          runtimeMode: "full-access",
+          interactionMode: "plan",
+        },
+        draftComposerState: makeComposerDraftState(),
+        draftThread: null,
+        options: undefined,
+        projectDefaultModelSelection: modelSelection("codex", "gpt-5.4"),
+        projectId: PROJECT_ID,
+      }).interactionMode,
+    ).toBe("default");
+  });
+
+  it("preserves explicit draft plan mode when resolving terminal creation payloads", () => {
+    expect(
+      resolveTerminalThreadCreationState({
+        activeDraftThread: null,
+        activeThread: {
+          projectId: PROJECT_ID,
+          modelSelection: modelSelection("codex", "gpt-5"),
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        },
+        draftComposerState: makeComposerDraftState(),
+        draftThread: makeDraftThread({ interactionMode: "plan" }),
+        options: undefined,
+        projectDefaultModelSelection: modelSelection("codex", "gpt-5.4"),
+        projectId: PROJECT_ID,
+      }).interactionMode,
+    ).toBe("plan");
+  });
+
   it("clears inherited worktree state when an explicit local env override is requested", () => {
     expect(
       resolveTerminalThreadCreationState({

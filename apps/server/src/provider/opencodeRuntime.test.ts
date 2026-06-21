@@ -10,6 +10,7 @@ import type { ChatAttachment } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildOpenCodeServerProcessEnv,
   OpenCodeRuntime,
   OpenCodeRuntimeError,
   OpenCodeRuntimeLive,
@@ -50,13 +51,18 @@ function mockOpenCodeServerSpawnerLayer(input: { stdout: string; stderr: string 
 
 function mockPooledOpenCodeServerSpawnerLayer(state: {
   spawnUrls: Array<string>;
+  spawnCwds?: Array<string | undefined>;
   killUrls: Array<string>;
 }) {
   return Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make(() => {
+    ChildProcessSpawner.make((command) => {
+      const cmd = command as unknown as {
+        options?: { cwd?: string };
+      };
       const url = `http://127.0.0.1:${59000 + state.spawnUrls.length}`;
       state.spawnUrls.push(url);
+      state.spawnCwds?.push(cmd.options?.cwd);
       return Effect.succeed(
         mockOpenCodeServerHandle({
           stdout: `opencode server listening on ${url}\n`,
@@ -116,6 +122,29 @@ describe("toOpenCodeFileParts", () => {
         url: "file:///tmp/synara-attachments/notes.txt",
       },
     ]);
+  });
+});
+
+describe("buildOpenCodeServerProcessEnv", () => {
+  it("does not override file-based config with synthetic empty config content", () => {
+    const env = buildOpenCodeServerProcessEnv({
+      baseEnv: {
+        PATH: "/usr/bin",
+      },
+    });
+
+    expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+    expect(env.PATH).toBe("/usr/bin");
+  });
+
+  it("preserves an explicitly configured config-content environment value", () => {
+    const env = buildOpenCodeServerProcessEnv({
+      baseEnv: {
+        OPENCODE_CONFIG_CONTENT: '{"provider":{"openai":{}}}',
+      },
+    });
+
+    expect(env.OPENCODE_CONFIG_CONTENT).toBe('{"provider":{"openai":{}}}');
   });
 });
 
@@ -322,6 +351,44 @@ describe("OpenCodeRuntime local server pool", () => {
 
           yield* Scope.close(firstScope, Exit.void);
           yield* Scope.close(secondScope, Exit.void);
+        }),
+      ).pipe(Effect.provide(openCodeRuntimePoolTestLayer(state))),
+    );
+  });
+
+  it("starts local servers in the requested cwd and separates cwd-specific pools", async () => {
+    const state = {
+      spawnUrls: [] as Array<string>,
+      spawnCwds: [] as Array<string | undefined>,
+      killUrls: [] as Array<string>,
+    };
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          const firstScope = yield* Scope.make();
+          const secondScope = yield* Scope.make();
+          const thirdScope = yield* Scope.make();
+
+          const first = yield* runtime
+            .connectToOpenCodeServer({ binaryPath: "opencode", cwd: "/repo/alpha" })
+            .pipe(Effect.provideService(Scope.Scope, firstScope));
+          const second = yield* runtime
+            .connectToOpenCodeServer({ binaryPath: "opencode", cwd: "/repo/beta" })
+            .pipe(Effect.provideService(Scope.Scope, secondScope));
+          const third = yield* runtime
+            .connectToOpenCodeServer({ binaryPath: "opencode", cwd: "/repo/alpha" })
+            .pipe(Effect.provideService(Scope.Scope, thirdScope));
+
+          expect(first.url).toBe("http://127.0.0.1:59000");
+          expect(second.url).toBe("http://127.0.0.1:59001");
+          expect(third.url).toBe(first.url);
+          expect(state.spawnCwds).toEqual(["/repo/alpha", "/repo/beta"]);
+
+          yield* Scope.close(firstScope, Exit.void);
+          yield* Scope.close(secondScope, Exit.void);
+          yield* Scope.close(thirdScope, Exit.void);
         }),
       ).pipe(Effect.provide(openCodeRuntimePoolTestLayer(state))),
     );

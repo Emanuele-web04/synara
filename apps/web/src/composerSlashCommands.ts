@@ -72,7 +72,7 @@ function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
   provider: ProviderKind,
   command: ComposerSlashCommand,
 ): boolean {
-  return provider === "codex" && command === "review";
+  return command === "automation" || (provider === "codex" && command === "review");
 }
 
 export function shouldHideProviderNativeCommandFromComposerMenu(
@@ -80,7 +80,9 @@ export function shouldHideProviderNativeCommandFromComposerMenu(
   command: string,
 ): boolean {
   const normalizedCommand = normalizeComposerSlashCommandName(command);
-  return provider === "codex" && normalizedCommand === "review";
+  return (
+    normalizedCommand === "automation" || (provider === "codex" && normalizedCommand === "review")
+  );
 }
 
 export function getProviderNativeSlashCommandSearchTerms(
@@ -159,6 +161,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     command: "fast",
     label: "/fast",
     description: "Turn fast mode on or off for this thread",
+    source: "app",
+  },
+  automation: {
+    command: "automation",
+    label: "/automation",
+    description: "Create a scheduled automation from this prompt",
     source: "app",
   },
 };
@@ -359,11 +367,13 @@ export function getAvailableComposerSlashCommands(input: {
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           "status",
           "subagents",
+          "automation",
         ]
       : [
           // Claude owns most slash-command UX natively; sidechat remains app-level because it
           // creates a Synara split/context clone before the provider sees the first turn.
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
+          "automation",
         ];
   return availableCommands.filter((command) => !collidingNativeCommandNames.has(command));
 }

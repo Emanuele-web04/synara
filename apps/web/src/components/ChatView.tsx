@@ -1,6 +1,9 @@
 import {
+  type AutomationDefinition,
+  type AutomationSchedule,
   type ApprovalRequestId,
   DEFAULT_MODEL_BY_PROVIDER,
+  EventId,
   MessageId,
   type ModelSelection,
   type ProjectScript,
@@ -122,6 +125,20 @@ import {
   readFileAsDataUrl,
 } from "../lib/composerSend";
 import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
+import {
+  extractChatAutomationInvocation,
+  parseChatAutomationInvocation,
+  resolveChatAutomationIntent,
+} from "../lib/automationIntent";
+import { stopWhenFromCompletionPolicy } from "../lib/automationCompletionPolicy";
+import {
+  acknowledgedRiskIdsForDraft,
+  buildAutomationDraftWarnings,
+  hasBlockingAutomationDraftWarnings,
+  type AutomationDraftWarning,
+  type AutomationDraftWarningId,
+  warningIdsForAcknowledgedRisks,
+} from "../lib/automationDraft";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useComposerDropzone } from "../hooks/useComposerDropzone";
@@ -133,6 +150,7 @@ import {
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
+  resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
   shouldEnableComposerPastedTextCollapse,
@@ -369,6 +387,23 @@ import {
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { useIsMobile } from "~/hooks/useMediaQuery";
+import {
+  acknowledgedRiskIdsForFormWarnings,
+  applyScheduleToForm,
+  AutomationDialog,
+  automationQueryKey,
+  buildAutomationFormWarnings,
+  createInputFromForm,
+  formatCadence,
+  formFromDefinition,
+  isFormSubmittable,
+  providerOptionsForAutomationEdit,
+  projectModelSelection as automationProjectModelSelection,
+  scheduleFromForm,
+  type AutomationFormState,
+  updateInputFromForm,
+  useAutomations,
+} from "../routes/-automations.shared";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import type { MessagesTimelineController } from "./chat/MessagesTimeline";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
@@ -499,6 +534,44 @@ const EMPTY_COMPOSER_SUGGESTIONS: ComposerSuggestion[] = [];
 const EMPTY_SUGGESTION_SOURCE_THREADS: Thread[] = [];
 const selectEmptyComposerSuggestionThreads: ReturnType<typeof createAllThreadsSelector> = () =>
   EMPTY_SUGGESTION_SOURCE_THREADS;
+
+function automationScheduleActivityPayload(schedule: AutomationSchedule) {
+  switch (schedule.type) {
+    case "manual":
+      return { type: "manual" } as const;
+    case "once":
+      return { type: "once", runAt: schedule.runAt } as const;
+    case "interval":
+      return { type: "interval", everySeconds: schedule.everySeconds } as const;
+    case "daily":
+      return schedule.timezone
+        ? { type: "daily", timeOfDay: schedule.timeOfDay, timezone: schedule.timezone }
+        : { type: "daily", timeOfDay: schedule.timeOfDay };
+    case "weekdays":
+      return schedule.timezone
+        ? { type: "weekdays", timeOfDay: schedule.timeOfDay, timezone: schedule.timezone }
+        : { type: "weekdays", timeOfDay: schedule.timeOfDay };
+    case "weekly":
+      return schedule.timezone
+        ? {
+            type: "weekly",
+            dayOfWeek: schedule.dayOfWeek,
+            timeOfDay: schedule.timeOfDay,
+            timezone: schedule.timezone,
+          }
+        : {
+            type: "weekly",
+            dayOfWeek: schedule.dayOfWeek,
+            timeOfDay: schedule.timeOfDay,
+          };
+    case "cron":
+      return {
+        type: "cron",
+        expression: schedule.expression,
+        timezone: schedule.timezone,
+      } as const;
+  }
+}
 
 function revokeBlobPreviewUrlsAfterPaint(previewUrls: readonly string[]): void {
   if (previewUrls.length === 0 || typeof window === "undefined") {
@@ -1281,6 +1354,33 @@ export default function ChatView({
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
+  const automationProjects = useStore((state) => state.projects);
+  const automationThreads = useStore((state) => state.threads);
+  const {
+    data: automationData,
+    updateMutation: automationUpdateMutation,
+  } = useAutomations();
+  const [automationDraftForm, setAutomationDraftForm] = useState<AutomationFormState | null>(null);
+  const [automationEditingDefinition, setAutomationEditingDefinition] =
+    useState<AutomationDefinition | null>(null);
+  const [automationDraftWarnings, setAutomationDraftWarnings] = useState<
+    readonly AutomationDraftWarning[]
+  >([]);
+  const [automationDraftWarningContext, setAutomationDraftWarningContext] = useState<{
+    readonly hasEphemeralContext: boolean;
+    readonly generatedConfidence: number | null;
+    readonly generatedNeedsConfirmation: boolean;
+  }>({
+    hasEphemeralContext: false,
+    generatedConfidence: null,
+    generatedNeedsConfirmation: false,
+  });
+  const [acknowledgedAutomationWarnings, setAcknowledgedAutomationWarnings] = useState<
+    ReadonlySet<AutomationDraftWarningId>
+  >(() => new Set());
+  const [automationDraftOpen, setAutomationDraftOpen] = useState(false);
+  const [isAutomationDraftSubmitting, setIsAutomationDraftSubmitting] = useState(false);
+  const automationDraftSubmittingRef = useRef(false);
   const projectInstructions = useProjectInstructionsStore((state) =>
     activeProjectId ? (state.instructionsByProjectId[activeProjectId] ?? "") : "",
   );
@@ -1554,6 +1654,7 @@ export default function ChatView({
     providerModelsQueryOptions({
       provider: "opencode",
       binaryPath: settings.openCodeBinaryPath || null,
+      cwd: providerModelDiscoveryCwd,
       enabled: openCodeModelDiscoveryEnabled,
     }),
   );
@@ -1561,6 +1662,7 @@ export default function ChatView({
     providerModelsQueryOptions({
       provider: "kilo",
       binaryPath: settings.kiloBinaryPath || null,
+      cwd: providerModelDiscoveryCwd,
       enabled: kiloModelDiscoveryEnabled,
     }),
   );
@@ -1578,10 +1680,20 @@ export default function ChatView({
   );
   const codexDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "codex" }));
   const openCodeDynamicAgentsQuery = useQuery(
-    providerAgentsQueryOptions({ provider: "opencode", enabled: openCodeModelDiscoveryEnabled }),
+    providerAgentsQueryOptions({
+      provider: "opencode",
+      binaryPath: settings.openCodeBinaryPath || null,
+      cwd: providerModelDiscoveryCwd,
+      enabled: openCodeModelDiscoveryEnabled,
+    }),
   );
   const kiloDynamicAgentsQuery = useQuery(
-    providerAgentsQueryOptions({ provider: "kilo", enabled: kiloModelDiscoveryEnabled }),
+    providerAgentsQueryOptions({
+      provider: "kilo",
+      binaryPath: settings.kiloBinaryPath || null,
+      cwd: providerModelDiscoveryCwd,
+      enabled: kiloModelDiscoveryEnabled,
+    }),
   );
   const cursorRuntimeModels = useMemo(
     () =>
@@ -3739,18 +3851,28 @@ export default function ChatView({
   // threads; disposable (temporary/draft) threads keep the legacy inline controls.
   const isDisposableThread = useIsDisposableThread(threadId);
   const environmentEnabled = !isDisposableThread && !isEditorRail;
+  const environmentUsesFloatingOverlay =
+    isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
   const environmentDefaultOpen = resolveDefaultEnvironmentPanelOpen({
     environmentEnabled,
     isCenteredEmptyLanding,
     isTerminalPrimarySurface,
+    isConstrainedChatLayout: environmentUsesFloatingOverlay,
   });
-  const [environmentPanelOpen, setEnvironmentPanelOpen] = useState(() => environmentDefaultOpen);
+  const [environmentPanelPreferenceOpen, setEnvironmentPanelPreferenceOpen] = useState<
+    boolean | null
+  >(null);
+  const [environmentPanelActionDismissedThreadId, setEnvironmentPanelActionDismissedThreadId] =
+    useState<ThreadId | null>(null);
+  // Action clicks close the current panel, but only the header toggle owns cross-chat preference.
   useEffect(() => {
-    // Terminal threads keep the Environment panel closed by default so the full
-    // workspace stays untouched until the user explicitly toggles the overlay.
-    // Each normal chat thread starts open; empty/disposable views stay hidden.
-    setEnvironmentPanelOpen(environmentDefaultOpen);
-  }, [environmentDefaultOpen, threadId]);
+    setEnvironmentPanelActionDismissedThreadId(null);
+  }, [threadId]);
+  const environmentPanelOpen = resolveEnvironmentPanelOpen({
+    defaultOpen: environmentDefaultOpen,
+    actionDismissed: environmentPanelActionDismissedThreadId === threadId,
+    userPreferenceOpen: environmentPanelPreferenceOpen,
+  });
   const environmentPanelVisible = resolveEnvironmentPanelVisible({
     environmentEnabled,
     environmentPanelOpen,
@@ -5673,6 +5795,254 @@ export default function ChatView({
     [clearComposerDraftContent, updateSelectedComposerMentions, updateSelectedComposerSkills],
   );
 
+  const toggleAutomationWarning = useCallback((id: AutomationDraftWarningId, checked: boolean) => {
+    setAcknowledgedAutomationWarnings((current) => {
+      const next = new Set(current);
+      if (checked) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const updateAutomationDraftForm = useCallback(
+    (nextForm: AutomationFormState) => {
+      setAutomationDraftForm(nextForm);
+      setAutomationDraftWarnings(
+        automationEditingDefinition
+          ? buildAutomationFormWarnings(nextForm)
+          : buildAutomationDraftWarnings({
+              schedule: scheduleFromForm(nextForm),
+              mode: nextForm.mode,
+              runtimeMode: nextForm.runtimeMode,
+              worktreeMode: nextForm.worktreeMode,
+              hasEphemeralContext: automationDraftWarningContext.hasEphemeralContext,
+              generatedConfidence: automationDraftWarningContext.generatedConfidence,
+              generatedNeedsConfirmation: automationDraftWarningContext.generatedNeedsConfirmation,
+              prompt: nextForm.prompt,
+            }),
+      );
+    },
+    [automationDraftWarningContext, automationEditingDefinition],
+  );
+
+  const resetAutomationDraftState = useCallback(() => {
+    setAutomationDraftOpen(false);
+    setAutomationDraftForm(null);
+    setAutomationEditingDefinition(null);
+    setAutomationDraftWarnings([]);
+    setAutomationDraftWarningContext({
+      hasEphemeralContext: false,
+      generatedConfidence: null,
+      generatedNeedsConfirmation: false,
+    });
+    setAcknowledgedAutomationWarnings(new Set());
+  }, []);
+
+  const createAutomationFromForm = useCallback(
+    async (input: {
+      readonly form: AutomationFormState;
+      readonly warnings: readonly AutomationDraftWarning[];
+      readonly acknowledgedWarningIds: ReadonlySet<AutomationDraftWarningId>;
+      readonly providerOptions?: ProviderStartOptions;
+    }): Promise<boolean> => {
+      const api = readNativeApi();
+      if (!api || !activeThread || !activeProject) {
+        return false;
+      }
+      if (automationDraftSubmittingRef.current) {
+        return false;
+      }
+      if (!isFormSubmittable(input.form)) {
+        return false;
+      }
+      if (hasBlockingAutomationDraftWarnings(input.warnings, input.acknowledgedWarningIds)) {
+        return false;
+      }
+      const acknowledgedRisks = acknowledgedRiskIdsForDraft(
+        input.warnings,
+        input.acknowledgedWarningIds,
+      );
+      const createdAt = new Date().toISOString();
+      const automationInput = createInputFromForm(
+        input.form,
+        input.providerOptions ?? providerOptionsForDispatch,
+        acknowledgedRisks,
+      );
+      automationDraftSubmittingRef.current = true;
+      setIsAutomationDraftSubmitting(true);
+      try {
+        const definition = await api.automation.create(automationInput);
+        if (isServerThread) {
+          void (async () => {
+            try {
+              await api.orchestration.dispatchCommand({
+                type: "thread.activity.append",
+                commandId: newCommandId(),
+                threadId: activeThread.id,
+                activity: {
+                  id: EventId.makeUnsafe(randomUUID()),
+                  tone: "info",
+                  kind: "automation.created",
+                  summary: `Created automation: ${definition.name} - ${formatCadence(definition.schedule)}`,
+                  payload: {
+                    source: "chat-composer",
+                    automationId: definition.id,
+                    automationName: definition.name,
+                    mode: definition.mode,
+                    cadenceLabel: formatCadence(definition.schedule),
+                    schedule: automationScheduleActivityPayload(definition.schedule),
+                  },
+                  turnId: null,
+                  createdAt,
+                },
+                createdAt,
+              });
+            } catch {
+              toastManager.add({
+                type: "warning",
+                title: "Thread note not added",
+                description:
+                  "The automation was created, but Synara could not add the activity note.",
+              });
+            }
+          })();
+        }
+        void queryClient.invalidateQueries({ queryKey: automationQueryKey });
+        clearComposerInput(activeThread.id);
+        resetAutomationDraftState();
+        toastManager.add({
+          type: "success",
+          title: "Automation created",
+          description: `${definition.name} - ${formatCadence(definition.schedule)}`,
+        });
+        return true;
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not create automation",
+          description:
+            error instanceof Error ? error.message : "Synara could not save the automation.",
+        });
+        return false;
+      } finally {
+        automationDraftSubmittingRef.current = false;
+        setIsAutomationDraftSubmitting(false);
+      }
+    },
+    [
+      activeProject,
+      activeThread,
+      clearComposerInput,
+      isServerThread,
+      providerOptionsForDispatch,
+      queryClient,
+      resetAutomationDraftState,
+    ],
+  );
+
+  const openAutomationEditDialog = useCallback(
+    (definition: AutomationDefinition) => {
+      const nextForm = formFromDefinition(
+        definition,
+        activeProjectId ?? definition.projectId ?? automationProjects[0]?.id ?? "",
+      );
+      setAutomationEditingDefinition(definition);
+      setAutomationDraftWarningContext({
+        hasEphemeralContext: false,
+        generatedConfidence: null,
+        generatedNeedsConfirmation: false,
+      });
+      setAutomationDraftForm(nextForm);
+      setAutomationDraftWarnings(buildAutomationFormWarnings(nextForm));
+      setAcknowledgedAutomationWarnings(
+        warningIdsForAcknowledgedRisks(definition.acknowledgedRisks),
+      );
+      setAutomationDraftOpen(true);
+    },
+    [activeProjectId, automationProjects],
+  );
+
+  const updateAutomationFromForm = useCallback(
+    async (input: {
+      readonly definition: AutomationDefinition;
+      readonly form: AutomationFormState;
+      readonly warnings: readonly AutomationDraftWarning[];
+      readonly acknowledgedWarningIds: ReadonlySet<AutomationDraftWarningId>;
+      readonly providerOptions?: ProviderStartOptions;
+    }): Promise<boolean> => {
+      if (automationDraftSubmittingRef.current) {
+        return false;
+      }
+      if (!isFormSubmittable(input.form)) {
+        return false;
+      }
+      if (hasBlockingAutomationDraftWarnings(input.warnings, input.acknowledgedWarningIds)) {
+        return false;
+      }
+      const acknowledgedRisks = acknowledgedRiskIdsForFormWarnings(
+        input.warnings,
+        input.acknowledgedWarningIds,
+      );
+      automationDraftSubmittingRef.current = true;
+      setIsAutomationDraftSubmitting(true);
+      try {
+        const providerOptions =
+          input.providerOptions ??
+          providerOptionsForAutomationEdit(
+            input.definition,
+            input.form,
+            providerOptionsForDispatch,
+          );
+        const updated = await automationUpdateMutation.mutateAsync(
+          updateInputFromForm(input.definition, input.form, providerOptions, acknowledgedRisks),
+        );
+        resetAutomationDraftState();
+        toastManager.add({
+          type: "success",
+          title: "Automation updated",
+          description: `${updated.name} - ${formatCadence(updated.schedule)}`,
+        });
+        return true;
+      } catch {
+        return false;
+      } finally {
+        automationDraftSubmittingRef.current = false;
+        setIsAutomationDraftSubmitting(false);
+      }
+    },
+    [automationUpdateMutation, providerOptionsForDispatch, resetAutomationDraftState],
+  );
+
+  const submitAutomationDraft = useCallback(async () => {
+    if (!automationDraftForm) {
+      return;
+    }
+    if (automationEditingDefinition) {
+      await updateAutomationFromForm({
+        definition: automationEditingDefinition,
+        form: automationDraftForm,
+        warnings: automationDraftWarnings,
+        acknowledgedWarningIds: acknowledgedAutomationWarnings,
+      });
+      return;
+    }
+    await createAutomationFromForm({
+      form: automationDraftForm,
+      warnings: automationDraftWarnings,
+      acknowledgedWarningIds: acknowledgedAutomationWarnings,
+    });
+  }, [
+    acknowledgedAutomationWarnings,
+    automationEditingDefinition,
+    automationDraftForm,
+    automationDraftWarnings,
+    createAutomationFromForm,
+    updateAutomationFromForm,
+  ]);
+
   const restoreQueuedTurnToComposer = useCallback(
     (queuedTurn: QueuedComposerTurn) => {
       if (!activeThread) {
@@ -5879,14 +6249,17 @@ export default function ChatView({
         dispatchMode,
       });
     }
-    if (
+    const hasNoStructuredComposerContext =
       composerImagesForSend.length === 0 &&
       composerFilesForSend.length === 0 &&
       composerAssistantSelectionsForSend.length === 0 &&
       composerFileCommentsForSend.length === 0 &&
       sendableComposerTerminalContexts.length === 0 &&
-      sendableComposerPastedTexts.length === 0
-    ) {
+      sendableComposerPastedTexts.length === 0 &&
+      // Provider mentions are structured turn metadata, and automation definitions persist text only.
+      selectedComposerMentionsForSend.length === 0;
+    const hasPromptOnlySendableContent = hasNoStructuredComposerContext;
+    if (hasPromptOnlySendableContent) {
       const handledSlashCommand = await handleStandaloneSlashCommand(trimmed);
       if (handledSlashCommand) {
         return true;
@@ -5907,6 +6280,109 @@ export default function ChatView({
       return false;
     }
     if (!activeProject) return false;
+    if (queuedChatTurn === null) {
+      // Explicit automation triggers create a saved automation instead of sending a provider turn.
+      const automationInvocation = extractChatAutomationInvocation(trimmed);
+      if (automationInvocation !== null) {
+        const automationMessage = automationInvocation.trim();
+        const nowIso = new Date().toISOString();
+        const deterministicAutomationIntent = parseChatAutomationInvocation(automationInvocation, {
+          nowIso,
+        });
+        const generatedAutomationIntent =
+          !deterministicAutomationIntent && automationMessage.length > 0
+            ? await api.server
+                .generateAutomationIntent({
+                  cwd: activeProject.cwd,
+                  message: automationMessage,
+                  defaultMode: isServerThread ? "heartbeat" : "standalone",
+                  nowIso,
+                })
+                .catch(() => null)
+            : null;
+        const automationResolution = resolveChatAutomationIntent({
+          deterministicIntent: deterministicAutomationIntent,
+          generatedIntent: generatedAutomationIntent,
+          isServerThread,
+        });
+        if (!automationResolution) {
+          toastManager.add({
+            type: "warning",
+            title: "Automation schedule needed",
+            description:
+              generatedAutomationIntent?.reason ??
+              "Try /automation every 6h check the page, or @automation daily at 9:00.",
+          });
+          return true;
+        }
+        const { intent: automationIntent, mode: automationMode } = automationResolution;
+        const automationStopWhen = stopWhenFromCompletionPolicy(automationIntent.completionPolicy);
+        const baseForm = formFromDefinition(
+          null,
+          activeProject.id,
+          automationProjectModelSelection(automationProjects, activeProject.id),
+        );
+        // Chat-created automations should not inherit live Full access; escalating scheduled
+        // runs stays an explicit review step in the automation dialog.
+        const chatAutomationRuntimeMode: RuntimeMode = "approval-required";
+        const nextForm = applyScheduleToForm(
+          {
+            ...baseForm,
+            name: automationIntent.name,
+            prompt: automationIntent.prompt,
+            projectId: activeProject.id,
+            modelSelection: selectedModelSelectionForSend,
+            runtimeMode: chatAutomationRuntimeMode,
+            worktreeMode: "auto",
+            mode: automationMode,
+            targetThreadId: automationMode === "heartbeat" && isServerThread ? activeThread.id : "",
+            maxIterations: "",
+            stopOnError: true,
+            stopWhen: automationMode === "heartbeat" ? automationStopWhen : "",
+          },
+          automationIntent.schedule,
+        );
+        const warnings = buildAutomationDraftWarnings({
+          schedule: automationIntent.schedule,
+          mode: nextForm.mode,
+          runtimeMode: nextForm.runtimeMode,
+          worktreeMode: nextForm.worktreeMode,
+          hasEphemeralContext: !hasPromptOnlySendableContent,
+          generatedConfidence: automationResolution.generatedConfidence,
+          generatedNeedsConfirmation: automationResolution.generatedNeedsConfirmation,
+          prompt: automationIntent.prompt,
+        });
+        const warningContext = {
+          hasEphemeralContext: !hasPromptOnlySendableContent,
+          generatedConfidence: automationResolution.generatedConfidence,
+          generatedNeedsConfirmation: automationResolution.generatedNeedsConfirmation,
+        };
+        const acknowledgedWarningIds = new Set<AutomationDraftWarningId>();
+        const needsDraftReview =
+          automationResolution.requiresReview ||
+          automationResolution.generatedNeedsConfirmation ||
+          !isFormSubmittable(nextForm) ||
+          hasBlockingAutomationDraftWarnings(warnings, acknowledgedWarningIds);
+        if (needsDraftReview) {
+          setAutomationEditingDefinition(null);
+          setAutomationDraftWarningContext(warningContext);
+          setAutomationDraftForm(nextForm);
+          setAutomationDraftWarnings(warnings);
+          setAcknowledgedAutomationWarnings(acknowledgedWarningIds);
+          setAutomationDraftOpen(true);
+          return true;
+        }
+        await createAutomationFromForm({
+          form: nextForm,
+          warnings,
+          acknowledgedWarningIds,
+          ...(providerOptionsForDispatchForSend
+            ? { providerOptions: providerOptionsForDispatchForSend }
+            : {}),
+        });
+        return true;
+      }
+    }
     const sendProviderAvailability = resolveProviderSendAvailability({
       provider: selectedModelSelectionForSend.provider,
       statuses: providerStatuses,
@@ -8025,8 +8501,17 @@ export default function ChatView({
       return true;
     }
 
-    const { trigger } = resolveActiveComposerTrigger();
+    const { snapshot, trigger } = resolveActiveComposerTrigger();
     const menuIsActive = composerMenuOpenRef.current || trigger !== null;
+    if (
+      key === "Enter" &&
+      !event.shiftKey &&
+      !menuIsActive &&
+      extractChatAutomationInvocation(snapshot.value) !== null
+    ) {
+      void onSend(undefined, event.metaKey || event.ctrlKey ? "steer" : "queue");
+      return true;
+    }
 
     if (menuIsActive && isLocalFolderBrowserOpen) {
       if (key === "ArrowDown") {
@@ -8373,6 +8858,14 @@ export default function ChatView({
       </div>
     ) : null;
 
+  const threadAutomationItems = automationData.definitions
+    .filter(
+      (definition) =>
+        definition.mode === "heartbeat" && definition.targetThreadId === activeThread.id,
+    )
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((definition) => ({ definition }));
+
   // Shared inputs for both Environment panel surfaces (the header Popover when the dock is
   // open, and the docked right column when it is closed) so the two never drift.
   const environmentPanelProps: Omit<EnvironmentPanelProps, "open" | "variant"> = {
@@ -8386,6 +8879,7 @@ export default function ChatView({
     activeProvider: activeThread.session?.provider ?? activeThread.modelSelection.provider,
     showGitActions,
     diffOpen: resolvedDiffOpen,
+    threadAutomations: threadAutomationItems,
     diffDisabledReason,
     diffTotals: repoDiffTotals,
     branchToolbar: branchToolbarProps,
@@ -8401,6 +8895,7 @@ export default function ChatView({
     onProjectInstructionsChange: setProjectInstructions,
     onCopyProjectInstructionsToNotes: handleCopyProjectInstructionsToNotes,
     onToggleDiff,
+    onOpenAutomation: openAutomationEditDialog,
     onOpenGithubRepository: openBrowserUrl,
     onJumpToPinnedMessage: handleJumpToPinnedMessage,
     onTogglePinnedMessageDone: handleTogglePinnedMessageDone,
@@ -8412,19 +8907,20 @@ export default function ChatView({
     onRenameThreadMarker: handleRenameThreadMarker,
     onNotesChange: handleNotesChange,
     onOpenEditorView: viewModeAction?.onClick ?? null,
-    onClose: () => setEnvironmentPanelOpen(false),
+    onClose: () => setEnvironmentPanelActionDismissedThreadId(threadId),
   };
   // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
   // column is already narrow — right dock open or a split pane (same as header compact mode).
   // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
-  const environmentUsesFloatingOverlay =
-    isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
   const environmentAppliesContentInset = environmentPanelVisible && !environmentUsesFloatingOverlay;
   const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
   const environmentHeaderState = environmentEnabled
     ? {
         open: environmentPanelVisible,
-        onOpenChange: setEnvironmentPanelOpen,
+        onOpenChange: (open: boolean) => {
+          setEnvironmentPanelActionDismissedThreadId(null);
+          setEnvironmentPanelPreferenceOpen(open);
+        },
       }
     : null;
 
@@ -9033,6 +9529,27 @@ export default function ChatView({
         onOpenChange={setRenameDialogOpen}
         onSave={handleRenameActiveThread}
       />
+      {automationDraftForm ? (
+        <AutomationDialog
+          open={automationDraftOpen}
+          editing={automationEditingDefinition !== null}
+          form={automationDraftForm}
+          projects={automationProjects}
+          threads={automationThreads}
+          warnings={automationDraftWarnings}
+          acknowledgedWarningIds={acknowledgedAutomationWarnings}
+          onToggleWarning={toggleAutomationWarning}
+          onOpenChange={(open) => {
+            setAutomationDraftOpen(open);
+            if (!open) {
+              setAutomationEditingDefinition(null);
+            }
+          }}
+          onFormChange={updateAutomationDraftForm}
+          onSubmit={submitAutomationDraft}
+          busy={isAutomationDraftSubmitting || automationUpdateMutation.isPending}
+        />
+      ) : null}
 
       {/* Error banner */}
       <ProviderHealthBanner

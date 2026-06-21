@@ -269,10 +269,9 @@ export function resolveTerminalThreadCreationState(
         : null) ??
       DEFAULT_RUNTIME_MODE,
     interactionMode:
+      // Plan mode is an explicit composer/thread choice. Do not copy it from
+      // the previously active thread into a fresh session bootstrap.
       input.draftThread?.interactionMode ??
-      (input.activeThread?.projectId === input.projectId
-        ? input.activeThread.interactionMode
-        : null) ??
       DEFAULT_INTERACTION_MODE,
     lastKnownPr:
       input.draftThread?.lastKnownPr ??

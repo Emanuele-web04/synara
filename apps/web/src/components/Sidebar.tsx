@@ -137,7 +137,11 @@ import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
-import { applyAutomationEvent, automationQueryKey } from "../routes/-automations.shared";
+import {
+  applyAutomationEvent,
+  automationAttentionCount,
+  automationQueryKey,
+} from "../routes/-automations.shared";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { ProviderIcon } from "./ProviderIcon";
@@ -1246,21 +1250,10 @@ export default function Sidebar() {
       );
     });
   }, [queryClient]);
-  const automationAttentionCount = useMemo(() => {
+  const automationAttentionBadgeCount = useMemo(() => {
     const data = automationListQuery.data;
     if (!data) return 0;
-    const flagged = new Set<string>();
-    for (const run of data.runs) {
-      if (
-        run.status === "failed" ||
-        run.status === "cancelled" ||
-        run.status === "interrupted" ||
-        run.status === "waiting-for-approval"
-      ) {
-        flagged.add(run.automationId);
-      }
-    }
-    return flagged.size;
+    return automationAttentionCount(data.runs);
   }, [automationListQuery.data]);
   const { settings: appSettings, updateSettings } = useAppSettings();
   // The Threads/Projects tab is always available; only the optional Workspace tab
@@ -6109,7 +6102,7 @@ export default function Sidebar() {
                       icon={ClockIcon}
                       label="Automations"
                       active={isOnAutomations}
-                      badgeCount={automationAttentionCount}
+                      badgeCount={automationAttentionBadgeCount}
                       onClick={() => {
                         void navigate({ to: "/automations" });
                       }}

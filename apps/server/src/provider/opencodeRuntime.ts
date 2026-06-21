@@ -184,6 +184,7 @@ export interface OpenCodeRuntimeShape {
   readonly startOpenCodeServerProcess: (input: {
     readonly binaryPath: string;
     readonly cliSpec?: OpenCodeCompatibleCliSpec;
+    readonly cwd?: string;
     readonly port?: number;
     readonly hostname?: string;
     readonly timeoutMs?: number;
@@ -192,6 +193,7 @@ export interface OpenCodeRuntimeShape {
   readonly connectToOpenCodeServer: (input: {
     readonly binaryPath: string;
     readonly cliSpec?: OpenCodeCompatibleCliSpec;
+    readonly cwd?: string;
     readonly serverUrl?: string | null;
     readonly port?: number;
     readonly hostname?: string;
@@ -202,6 +204,7 @@ export interface OpenCodeRuntimeShape {
     readonly binaryPath: string;
     readonly cliSpec?: OpenCodeCompatibleCliSpec;
     readonly args: ReadonlyArray<string>;
+    readonly cwd?: string;
   }) => Effect.Effect<OpenCodeCommandResult, OpenCodeRuntimeError>;
   readonly createOpenCodeSdkClient: (input: {
     readonly baseUrl: string;
@@ -215,6 +218,7 @@ export interface OpenCodeRuntimeShape {
   readonly listOpenCodeCliModels: (input: {
     readonly binaryPath: string;
     readonly cliSpec?: OpenCodeCompatibleCliSpec;
+    readonly cwd?: string;
   }) => Effect.Effect<ReadonlyArray<OpenCodeCliModelDescriptor>, OpenCodeRuntimeError>;
   readonly loadOpenCodeCredentialProviderIDs: (
     client: OpencodeClient,
@@ -289,6 +293,7 @@ function formatOpenCodeServerStartupDetail(input: {
 function pooledOpenCodeServerKey(input: {
   readonly binaryPath: string;
   readonly cliSpec?: OpenCodeCompatibleCliSpec;
+  readonly cwd?: string;
   readonly port?: number;
   readonly hostname?: string;
   readonly experimentalWebSockets?: boolean;
@@ -296,6 +301,7 @@ function pooledOpenCodeServerKey(input: {
   const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
   return JSON.stringify({
     binaryPath: input.binaryPath,
+    cwd: input.cwd ?? null,
     hostname: input.hostname ?? DEFAULT_HOSTNAME,
     port: input.port ?? null,
     experimentalWebSockets: input.experimentalWebSockets === true,
@@ -757,10 +763,8 @@ export function buildOpenCodeServerProcessEnv(input: {
   readonly experimentalWebSockets?: boolean;
   readonly baseEnv?: NodeJS.ProcessEnv;
 }): NodeJS.ProcessEnv {
-  const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
   return {
     ...(input.baseEnv ?? process.env),
-    [cliSpec.configContentEnvVar]: JSON.stringify({}),
     ...(input.experimentalWebSockets ? { OPENCODE_EXPERIMENTAL_WEBSOCKETS: "true" } : {}),
   };
 }
@@ -830,6 +834,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       const child = yield* spawner.spawn(
         ChildProcess.make(input.binaryPath, [...input.args], {
           shell: process.platform === "win32",
+          ...(input.cwd ? { cwd: input.cwd } : {}),
           env: process.env,
         }),
       );
@@ -890,6 +895,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
                 ? { experimentalWebSockets: input.experimentalWebSockets }
                 : {}),
             }),
+            ...(input.cwd ? { cwd: input.cwd } : {}),
             detached: false,
             killSignal: "SIGKILL",
             forceKillAfter: "1500 millis",
@@ -1111,6 +1117,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   const acquirePooledServer = (input: {
     readonly binaryPath: string;
     readonly cliSpec?: OpenCodeCompatibleCliSpec;
+    readonly cwd?: string;
     readonly port?: number;
     readonly hostname?: string;
     readonly timeoutMs?: number;
@@ -1197,6 +1204,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       const pooledServer = yield* acquirePooledServer({
         binaryPath: input.binaryPath,
         ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
+        ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         ...(input.port !== undefined ? { port: input.port } : {}),
         ...(input.hostname !== undefined ? { hostname: input.hostname } : {}),
         ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
@@ -1296,11 +1304,13 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   const listOpenCodeCliModelsFromArgs = (input: {
     readonly binaryPath: string;
     readonly cliSpec?: OpenCodeCompatibleCliSpec;
+    readonly cwd?: string;
     readonly args: ReadonlyArray<string>;
   }) =>
     runOpenCodeCommand({
       binaryPath: input.binaryPath,
       ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
+      ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
       args: input.args,
     }).pipe(
       Effect.flatMap((result) =>
@@ -1322,6 +1332,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
     listOpenCodeCliModelsFromArgs({
       binaryPath: input.binaryPath,
       ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
+      ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
       args: ["models", "--verbose"],
     }).pipe(
       Effect.catch((error) => {
@@ -1345,6 +1356,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         return listOpenCodeCliModelsFromArgs({
           binaryPath: input.binaryPath,
           ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
+          ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
           args: ["models"],
         });
       }),

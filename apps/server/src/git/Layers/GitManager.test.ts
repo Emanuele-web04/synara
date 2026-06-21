@@ -17,6 +17,10 @@ import {
   GitHubCli,
 } from "../Services/GitHubCli.ts";
 import {
+  type AutomationIntentGenerationInput,
+  type AutomationIntentGenerationResult,
+  type AutomationCompletionEvaluationInput,
+  type AutomationCompletionEvaluationResult,
   type TextGenerationShape,
   TextGeneration,
   type ThreadRecapGenerationInput,
@@ -99,6 +103,12 @@ interface FakeGitTextGeneration {
   generateThreadRecap: (
     input: ThreadRecapGenerationInput,
   ) => Effect.Effect<{ recap: string }, TextGenerationError>;
+  generateAutomationIntent: (
+    input: AutomationIntentGenerationInput,
+  ) => Effect.Effect<AutomationIntentGenerationResult, TextGenerationError>;
+  evaluateAutomationCompletion: (
+    input: AutomationCompletionEvaluationInput,
+  ) => Effect.Effect<AutomationCompletionEvaluationResult, TextGenerationError>;
 }
 
 type FakePullRequest = NonNullable<FakeGhScenario["pullRequest"]>;
@@ -214,6 +224,26 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
       Effect.succeed({
         recap: "Update workflow recap",
       }),
+    generateAutomationIntent: () =>
+      Effect.succeed({
+        isAutomation: true,
+        confidence: 1,
+        language: null,
+        name: "Check site",
+        taskPrompt: "Check the site",
+        schedule: { type: "interval", everySeconds: 3600 },
+        mode: "heartbeat",
+        completionPolicy: { type: "none" },
+        missingFields: [],
+        needsConfirmation: false,
+        reason: null,
+      }),
+    evaluateAutomationCompletion: () =>
+      Effect.succeed({
+        stopMatched: false,
+        confidence: 0.2,
+        reason: "Stop condition was not met.",
+      }),
     ...overrides,
   };
 
@@ -279,6 +309,28 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
           (cause) =>
             new TextGenerationError({
               operation: "generateThreadRecap",
+              detail: "fake text generation failed",
+              ...(cause !== undefined ? { cause } : {}),
+            }),
+        ),
+      ),
+    generateAutomationIntent: (input) =>
+      implementation.generateAutomationIntent(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation: "generateAutomationIntent",
+              detail: "fake text generation failed",
+              ...(cause !== undefined ? { cause } : {}),
+            }),
+        ),
+      ),
+    evaluateAutomationCompletion: (input) =>
+      implementation.evaluateAutomationCompletion(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation: "evaluateAutomationCompletion",
               detail: "fake text generation failed",
               ...(cause !== undefined ? { cause } : {}),
             }),
@@ -474,37 +526,54 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         }).pipe(
           Effect.map((result) => {
             const parsed = JSON.parse(result.stdout) as Array<Record<string, unknown>>;
-            return parsed.map((pullRequest) => ({
-              number: pullRequest.number as number,
-              title: pullRequest.title as string,
-              url: pullRequest.url as string,
-              baseRefName: pullRequest.baseRefName as string,
-              headRefName: pullRequest.headRefName as string,
-              ...(typeof pullRequest.state === "string"
-                ? { state: pullRequest.state as GitHubPullRequestSummary["state"] }
-                : {}),
-              ...(typeof pullRequest.isCrossRepository === "boolean"
-                ? { isCrossRepository: pullRequest.isCrossRepository }
-                : {}),
-              ...(pullRequest.headRepository &&
-              typeof pullRequest.headRepository === "object" &&
-              typeof (pullRequest.headRepository as { nameWithOwner?: unknown }).nameWithOwner ===
-                "string"
-                ? {
-                    headRepositoryNameWithOwner: (
-                      pullRequest.headRepository as { nameWithOwner: string }
-                    ).nameWithOwner,
-                  }
-                : {}),
-              ...(pullRequest.headRepositoryOwner &&
-              typeof pullRequest.headRepositoryOwner === "object" &&
-              typeof (pullRequest.headRepositoryOwner as { login?: unknown }).login === "string"
-                ? {
-                    headRepositoryOwnerLogin: (pullRequest.headRepositoryOwner as { login: string })
-                      .login,
-                  }
-                : {}),
-            })) as ReadonlyArray<GitHubPullRequestSummary>;
+            return parsed.map<GitHubPullRequestSummary>((pullRequest) => {
+              const summary: {
+                number: number;
+                title: string;
+                url: string;
+                baseRefName: string;
+                headRefName: string;
+                state?: Exclude<GitHubPullRequestSummary["state"], undefined>;
+                isCrossRepository?: boolean;
+                headRepositoryNameWithOwner?: string | null;
+                headRepositoryOwnerLogin?: string | null;
+              } = {
+                number: pullRequest.number as number,
+                title: pullRequest.title as string,
+                url: pullRequest.url as string,
+                baseRefName: pullRequest.baseRefName as string,
+                headRefName: pullRequest.headRefName as string,
+              };
+              if (typeof pullRequest.state === "string") {
+                summary.state = pullRequest.state as Exclude<
+                  GitHubPullRequestSummary["state"],
+                  undefined
+                >;
+              }
+              if (typeof pullRequest.isCrossRepository === "boolean") {
+                summary.isCrossRepository = pullRequest.isCrossRepository;
+              }
+              if (
+                pullRequest.headRepository &&
+                typeof pullRequest.headRepository === "object" &&
+                typeof (pullRequest.headRepository as { nameWithOwner?: unknown }).nameWithOwner ===
+                  "string"
+              ) {
+                summary.headRepositoryNameWithOwner = (
+                  pullRequest.headRepository as { nameWithOwner: string }
+                ).nameWithOwner;
+              }
+              if (
+                pullRequest.headRepositoryOwner &&
+                typeof pullRequest.headRepositoryOwner === "object" &&
+                typeof (pullRequest.headRepositoryOwner as { login?: unknown }).login === "string"
+              ) {
+                summary.headRepositoryOwnerLogin = (
+                  pullRequest.headRepositoryOwner as { login: string }
+                ).login;
+              }
+              return summary;
+            });
           }),
         ),
       createPullRequest: (input) =>
