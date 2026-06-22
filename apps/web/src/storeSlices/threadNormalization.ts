@@ -34,6 +34,19 @@ import { persistedProjectOrderCwds, projectCwdKey } from "../storePersistence/hy
 type ReadModelThread = OrchestrationReadModel["threads"][number];
 type ShellSnapshotThread = OrchestrationShellSnapshot["threads"][number];
 
+function normalizeReadModelArray<T>(
+  incoming: readonly T[] | undefined,
+  previous: T[] | undefined,
+): T[] | undefined {
+  if (incoming === undefined) {
+    return previous;
+  }
+  if (previous && deepEqualJson(previous, incoming)) {
+    return previous;
+  }
+  return [...incoming];
+}
+
 function readModelSessionFromThreadSession(
   previousSession: ThreadSession,
   previousThread: Thread | undefined,
@@ -366,6 +379,9 @@ export function normalizeThreadFromReadModel(
     previous?.runtime && incoming.runtime && deepEqualJson(previous.runtime, incoming.runtime)
       ? previous.runtime
       : (incoming.runtime ?? null);
+  const pinnedMessages = normalizeReadModelArray(incoming.pinnedMessages, previous?.pinnedMessages);
+  const threadMarkers = normalizeReadModelArray(incoming.threadMarkers, previous?.threadMarkers);
+  const notes = incoming.notes !== undefined ? incoming.notes : previous?.notes;
   const turnDiffSummaries = normalizeTurnDiffSummaries(
     incoming.checkpoints,
     previous?.turnDiffSummaries,
@@ -440,6 +456,9 @@ export function normalizeThreadFromReadModel(
     (previous.associatedWorktreeBranch ?? null) === nextAssociatedWorktreeBranch &&
     (previous.associatedWorktreeRef ?? null) === nextAssociatedWorktreeRef &&
     (previous.createBranchFlowCompleted ?? false) === resolvedCreateBranchFlowCompleted &&
+    deepEqualJson(previous.pinnedMessages ?? null, pinnedMessages ?? null) &&
+    deepEqualJson(previous.threadMarkers ?? null, threadMarkers ?? null) &&
+    previous.notes === notes &&
     previous.latestUserMessageAt === resolvedLatestUserMessageAt &&
     previous.hasPendingApprovals === resolvedHasPendingApprovals &&
     previous.hasPendingUserInput === resolvedHasPendingUserInput &&
@@ -486,6 +505,9 @@ export function normalizeThreadFromReadModel(
     associatedWorktreeBranch: nextAssociatedWorktreeBranch,
     associatedWorktreeRef: nextAssociatedWorktreeRef,
     createBranchFlowCompleted: resolvedCreateBranchFlowCompleted,
+    ...(pinnedMessages !== undefined ? { pinnedMessages } : {}),
+    ...(threadMarkers !== undefined ? { threadMarkers } : {}),
+    ...(notes !== undefined ? { notes } : {}),
     forkSourceThreadId: incoming.forkSourceThreadId ?? null,
     sidechatSourceThreadId: incoming.sidechatSourceThreadId ?? null,
     lastKnownPr,
@@ -540,6 +562,9 @@ export function normalizeThreadShellSnapshot(
     previous?.runtime && incoming.runtime && deepEqualJson(previous.runtime, incoming.runtime)
       ? previous.runtime
       : (incoming.runtime ?? null);
+  const pinnedMessages = normalizeReadModelArray(incoming.pinnedMessages, previous?.pinnedMessages);
+  const threadMarkers = normalizeReadModelArray(incoming.threadMarkers, previous?.threadMarkers);
+  const notes = incoming.notes !== undefined ? incoming.notes : previous?.notes;
   const error = normalizeThreadErrorMessage(incoming.session?.lastError);
   const lastVisitedAt = previous?.lastVisitedAt ?? incoming.updatedAt;
   const nextWorktreePath = incoming.worktreePath;
@@ -577,6 +602,9 @@ export function normalizeThreadShellSnapshot(
     archivedAt: incoming.archivedAt ?? null,
     updatedAt: incoming.updatedAt,
     isPinned: incoming.isPinned ?? false,
+    ...(pinnedMessages !== undefined ? { pinnedMessages } : {}),
+    ...(threadMarkers !== undefined ? { threadMarkers } : {}),
+    ...(notes !== undefined ? { notes } : {}),
     envMode: incoming.envMode ?? "local",
     branch: resolvedBranch,
     worktreePath: nextWorktreePath,

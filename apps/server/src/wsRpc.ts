@@ -880,6 +880,14 @@ export const makeWsRpcLayer = () =>
           rpcEffect(reviewSubmission.submit(input), "Failed to submit review"),
         [WS_METHODS.reviewLoadRemoteThreads]: (input) =>
           rpcEffect(reviewSubmission.loadThreads(input), "Failed to load remote review threads"),
+        [WS_METHODS.reviewResolveThread]: (input) =>
+          rpcEffect(reviewSubmission.resolveThread(input), "Failed to resolve review thread"),
+        [WS_METHODS.reviewReplyThread]: (input) =>
+          rpcEffect(reviewSubmission.replyThread(input), "Failed to post review reply"),
+        [WS_METHODS.reviewUpdateThreadComment]: (input) =>
+          rpcEffect(reviewSubmission.updateThreadComment(input), "Failed to edit review comment"),
+        [WS_METHODS.reviewDeleteThreadComment]: (input) =>
+          rpcEffect(reviewSubmission.deleteThreadComment(input), "Failed to delete review comment"),
         [WS_METHODS.reviewRunAgent]: (input) =>
           rpcEffect(reviewSource.runAgentReview(input), "Failed to run agent review"),
         [WS_METHODS.reviewCheckProjectAccess]: (input) =>

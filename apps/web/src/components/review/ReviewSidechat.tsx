@@ -26,10 +26,14 @@ import {
 } from "~/composer-editor-mentions";
 import {
   deriveCompactChatTimelineEntries,
+  derivePendingApprovals,
   deriveWorkLogEntries,
   type CompactChatTimelineEntry,
   type WorkLogEntry,
 } from "~/session-logic";
+import { ComposerPendingApprovalActions } from "../chat/ComposerPendingApprovalActions";
+import { ComposerPendingApprovalPanel } from "../chat/ComposerPendingApprovalPanel";
+import { useApprovalResponder } from "~/hooks/useApprovalResponder";
 import { ComposerPromptEditor } from "../ComposerPromptEditor";
 import {
   COMPOSER_EDITOR_PADDING_CLASS_NAME,
@@ -440,13 +444,7 @@ const ReviewSidechatComposer = memo(function ReviewSidechatComposer({
         setIsResolvingSkills(false);
       }
     },
-    [
-      draft,
-      isSendBlocked,
-      onDraftSkillMentionChange,
-      onResolveSkillsForQuestion,
-      onSendQuestion,
-    ],
+    [draft, isSendBlocked, onDraftSkillMentionChange, onResolveSkillsForQuestion, onSendQuestion],
   );
   const handleSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
@@ -588,6 +586,19 @@ export function ReviewSidechat(props: {
   const activeThread = useStore(selectActiveThread);
   const activeMessages = activeThread?.messages ?? emptyChatMessages;
   const activeActivities = activeThread?.activities ?? emptyThreadActivities;
+  const pendingApprovals = useMemo(
+    () => derivePendingApprovals(activeActivities),
+    [activeActivities],
+  );
+  // Only surfaces for providers without the server-side auto-approve; user-input requests are out of scope.
+  const activePendingApproval = pendingApprovals[0] ?? null;
+  const onApprovalError = useCallback((message: string) => {
+    toastManager.add({ type: "error", title: "Could not submit approval", description: message });
+  }, []);
+  const { respondingApprovalIds, respondToApproval } = useApprovalResponder({
+    threadId: activeThreadId,
+    onError: onApprovalError,
+  });
   const activeTurnState = activeThread?.latestTurn?.state ?? null;
   const activeTurnId = activeThread?.latestTurn?.turnId ?? undefined;
   const activeTurnStartedAt = activeThread?.latestTurn?.startedAt ?? null;
@@ -1051,6 +1062,21 @@ export function ReviewSidechat(props: {
       </div>
       {props.bodyAfterMessages ? (
         <div className="min-h-0 flex-1 overflow-y-auto">{props.bodyAfterMessages}</div>
+      ) : null}
+      {activePendingApproval ? (
+        <div className="shrink-0 border-t border-border/25 bg-background/80">
+          <ComposerPendingApprovalPanel
+            approval={activePendingApproval}
+            pendingCount={pendingApprovals.length}
+          />
+          <div className="flex flex-wrap items-center justify-end gap-1.5 px-5 pb-3 sm:px-6">
+            <ComposerPendingApprovalActions
+              requestId={activePendingApproval.requestId}
+              isResponding={respondingApprovalIds.includes(activePendingApproval.requestId)}
+              onRespondToApproval={respondToApproval}
+            />
+          </div>
+        </div>
       ) : null}
       <ReviewSidechatComposer
         compact={compact}

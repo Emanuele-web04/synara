@@ -492,36 +492,80 @@ layer("GitHubCliLive", (it) => {
 
   it.effect("loads lightweight review headers without commits reviews or checks", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          number: 42,
-          title: "Fast PR header",
-          url: "https://github.com/octocat/demo/pull/42",
-          state: "OPEN",
-          isDraft: false,
-          author: { login: "alice", avatarUrl: "https://avatars.example/alice.png" },
-          body: "Header body",
-          baseRefName: "main",
-          headRefName: "feature/review-header",
-          createdAt: "2026-06-07T11:00:00Z",
-          updatedAt: "2026-06-07T12:00:00Z",
-          mergedAt: null,
-          additions: 10,
-          deletions: 2,
-          changedFiles: 3,
-          reviewDecision: null,
-          mergeable: "MERGEABLE",
-          mergeStateStatus: "CLEAN",
-          milestone: null,
-          labels: [],
-          assignees: [],
-          reviewRequests: [{ login: "bob" }],
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify({
+            number: 42,
+            title: "Fast PR header",
+            url: "https://github.com/octocat/demo/pull/42",
+            state: "OPEN",
+            isDraft: false,
+            author: { login: "alice" },
+            body: "Header body",
+            baseRefName: "main",
+            headRefName: "feature/review-header",
+            createdAt: "2026-06-07T11:00:00Z",
+            updatedAt: "2026-06-07T12:00:00Z",
+            mergedAt: null,
+            additions: 10,
+            deletions: 2,
+            changedFiles: 3,
+            reviewDecision: null,
+            mergeable: "MERGEABLE",
+            mergeStateStatus: "CLEAN",
+            milestone: null,
+            labels: [],
+            assignees: [],
+            reviewRequests: [{ login: "bob" }, { name: "Review team", slug: "review-team" }],
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewRequests: {
+                    nodes: [
+                      {
+                        requestedReviewer: {
+                          __typename: "User",
+                          login: "bob",
+                          avatarUrl: "https://avatars.example/bob.png",
+                        },
+                      },
+                      {
+                        requestedReviewer: {
+                          __typename: "Team",
+                          name: "Review team",
+                          slug: "review-team",
+                          avatarUrl: "https://avatars.example/review-team.png",
+                        },
+                      },
+                    ],
+                  },
+                  latestReviews: {
+                    nodes: [],
+                  },
+                },
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "https://avatars.example/alice.png\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
 
       const result = yield* Effect.gen(function* () {
         const gh = yield* GitHubCli;
@@ -535,7 +579,43 @@ layer("GitHubCliLive", (it) => {
       expect(result.detail.title).toBe("Fast PR header");
       expect(result.detail.commitsCount).toBeUndefined();
       expect(result.detail.checksStatus).toBeUndefined();
-      expect(result.detail.reviewers).toEqual([{ login: "bob", state: "REVIEW_REQUIRED" }]);
+      expect(result.detail.authorAvatarUrl).toBe("https://avatars.example/alice.png");
+      expect(result.detail.reviewers).toEqual([
+        {
+          login: "bob",
+          avatarUrl: "https://avatars.example/bob.png",
+          state: "REVIEW_REQUIRED",
+        },
+        {
+          login: "Review team",
+          avatarUrl: "https://avatars.example/review-team.png",
+          state: "REVIEW_REQUIRED",
+        },
+      ]);
+      expect(mockedRunProcess).toHaveBeenCalledWith(
+        "gh",
+        expect.arrayContaining([
+          "api",
+          "graphql",
+          "-F",
+          "owner=octocat",
+          "-F",
+          "name=demo",
+          "-F",
+          "number=42",
+        ]),
+        expect.objectContaining({ cwd: "/repo" }),
+      );
+      expect(mockedRunProcess).toHaveBeenCalledWith(
+        "gh",
+        ["api", "users/alice", "--jq", ".avatar_url"],
+        expect.objectContaining({ cwd: "/repo" }),
+      );
+      expect(mockedRunProcess).not.toHaveBeenCalledWith(
+        "gh",
+        ["api", "users/bob", "--jq", ".avatar_url"],
+        expect.objectContaining({ cwd: "/repo" }),
+      );
     }),
   );
 
@@ -642,6 +722,104 @@ layer("GitHubCliLive", (it) => {
       }).pipe(Effect.flip);
 
       assert.equal(error.message.includes("Pull request not found"), true);
+    }),
+  );
+
+  it.effect("paginates review timeline events", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: "https://github.com/octocat/demo/pull/42\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  timelineItems: {
+                    pageInfo: { hasNextPage: true, endCursor: "timeline-cursor-1" },
+                    nodes: [
+                      {
+                        __typename: "LabeledEvent",
+                        actor: { login: "alice" },
+                        createdAt: "2026-06-07T12:00:00Z",
+                        label: { name: "bug" },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  timelineItems: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [
+                      {
+                        __typename: "ClosedEvent",
+                        actor: { login: "bob" },
+                        createdAt: "2026-06-07T12:01:00Z",
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.getReviewTimeline({
+          cwd: "/repo",
+          reference: "42",
+        });
+      });
+
+      assert.deepStrictEqual(result, [
+        {
+          kind: "labeled",
+          actor: "alice",
+          label: "bug",
+          added: true,
+          createdAt: "2026-06-07T12:00:00Z",
+        },
+        {
+          kind: "closed",
+          actor: "bob",
+          createdAt: "2026-06-07T12:01:00Z",
+        },
+      ]);
+      expect(mockedRunProcess).toHaveBeenCalledTimes(3);
+      expect(mockedRunProcess).toHaveBeenNthCalledWith(
+        2,
+        "gh",
+        expect.not.arrayContaining(["-F", "timelineCursor=timeline-cursor-1"]),
+        expect.objectContaining({ cwd: "/repo" }),
+      );
+      expect(mockedRunProcess).toHaveBeenNthCalledWith(
+        3,
+        "gh",
+        expect.arrayContaining(["-F", "timelineCursor=timeline-cursor-1"]),
+        expect.objectContaining({ cwd: "/repo" }),
+      );
     }),
   );
 

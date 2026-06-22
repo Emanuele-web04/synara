@@ -428,8 +428,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const activeSessions = Array.from(runtime.sessions.values()).filter(
       (sessionContext) => !sessionContext.stopping,
     );
-    if (activeSessions.length === 1) {
-      return activeSessions[0];
+    const [onlyActiveSession] = activeSessions;
+    if (activeSessions.length === 1 && onlyActiveSession !== undefined) {
+      return onlyActiveSession;
     }
     return context;
   }

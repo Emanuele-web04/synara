@@ -1,7 +1,7 @@
 import type { ReviewListSort, ReviewPullRequestSummary } from "@t3tools/contracts";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
-import { CheckIcon, ChevronDownIcon, SearchIcon, XIcon } from "~/lib/icons";
+import { AdjustmentsIcon, CheckIcon, ChevronDownIcon, SearchIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { parsePullRequestReference } from "~/pullRequestReference";
 import { Button } from "../ui/button";
@@ -47,22 +47,74 @@ function referenceLabel(reference: string): string {
   return numberMatch?.[1] ? `#${numberMatch[1]}` : "PR";
 }
 
-function FacetChip(props: {
-  def: ReviewFilterDefinition;
+function FilterOptionRow(props: {
+  option: ReviewFilterOption;
+  isOn: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={props.onToggle}
+      aria-pressed={props.isOn}
+      className="flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-[12px] text-foreground outline-none transition-colors hover:bg-[var(--sidebar-accent)] focus-visible:bg-[var(--sidebar-accent)]"
+    >
+      <span
+        className={cn(
+          "flex size-3.5 shrink-0 items-center justify-center rounded-[4px] border",
+          props.isOn ? "border-primary bg-primary text-primary-foreground" : "border-border",
+        )}
+      >
+        {props.isOn ? <CheckIcon className="size-2.5" /> : null}
+      </span>
+      <span className="min-w-0 flex-1 truncate">{props.option.label}</span>
+    </button>
+  );
+}
+
+// One Filter popover instead of one chip per facet: a category rail on the left,
+// the selected facet's options on the right. Keeps the toolbar calm at rest while
+// every facet stays one click away.
+function ReviewFilterMenu(props: {
+  defs: ReadonlyArray<ReviewFilterDefinition>;
   items: ReadonlyArray<ReviewPullRequestSummary>;
-  options?: ReadonlyArray<ReviewFilterOption>;
+  optionsByFieldId?: ReviewFilterOptionsById;
   activeFilters: ReadonlyArray<ActiveReviewFilter>;
   onChange: (next: ActiveReviewFilter[]) => void;
 }) {
-  const options = useMemo(
-    () => props.options ?? props.def.extractOptions(props.items),
-    [props.options, props.def, props.items],
+  const categories = useMemo(
+    () =>
+      props.defs
+        .map((def) => ({
+          def,
+          options: props.optionsByFieldId?.get(def.id) ?? def.extractOptions(props.items),
+        }))
+        .filter((category) => category.options.length > 0),
+    [props.defs, props.optionsByFieldId, props.items],
   );
-  const selected = valuesFor(props.activeFilters, props.def.id);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  if (options.length === 0) {
-    return null;
+  const totalActive = props.activeFilters.reduce((sum, filter) => sum + filter.values.size, 0);
+
+  // Keep Filter visible even with nothing to filter yet (empty repo, mid-sync), so
+  // it never appears to vanish; just disable it until facet options arrive.
+  if (categories.length === 0) {
+    return (
+      <Button
+        type="button"
+        size="xs"
+        variant="ghost"
+        disabled
+        className="h-8 shrink-0 rounded-full bg-background/40 px-3 text-[12px] text-muted-foreground/60 ring-1 ring-border/45"
+      >
+        <AdjustmentsIcon className="size-3.5 opacity-70" />
+        Filter
+      </Button>
+    );
   }
+
+  const active = categories.find((category) => category.def.id === selectedId) ?? categories[0]!;
+  const activeValues = valuesFor(props.activeFilters, active.def.id);
 
   return (
     <Popover>
@@ -75,42 +127,61 @@ function FacetChip(props: {
             className={cn(
               "h-8 shrink-0 rounded-full px-3 text-[12px] text-muted-foreground",
               "bg-background/55 ring-1 ring-border/55 transition-[background-color,color,border-color] hover:bg-background/90 hover:text-foreground",
-              selected.size > 0 && "bg-primary/10 text-foreground ring-primary/35",
+              totalActive > 0 && "bg-primary/10 text-foreground ring-primary/35",
             )}
           />
         }
       >
-        {props.def.label}
-        {selected.size > 0 ? <CountChip count={selected.size} /> : null}
+        <AdjustmentsIcon className="size-3.5 opacity-80" />
+        Filter
+        {totalActive > 0 ? <CountChip count={totalActive} /> : null}
         <ChevronDownIcon className="size-3 opacity-70" />
       </PopoverTrigger>
-      <PopoverPopup align="start" side="bottom" sideOffset={8} className="w-56 rounded-2xl p-1.5">
-        <ul className="flex max-h-64 flex-col gap-0.5 overflow-y-auto">
-          {options.map((option) => {
-            const isOn = selected.has(option.value);
-            return (
-              <li key={option.value}>
-                <button
-                  type="button"
-                  onClick={() =>
-                    props.onChange(toggleValue(props.activeFilters, props.def.id, option.value))
-                  }
-                  className="flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-[12px] text-foreground outline-none transition-colors hover:bg-[var(--sidebar-accent)] focus-visible:bg-[var(--sidebar-accent)]"
-                >
-                  <span
+      <PopoverPopup
+        align="start"
+        side="bottom"
+        sideOffset={8}
+        className="w-[30rem] max-w-[calc(100vw-2rem)] rounded-2xl p-0"
+      >
+        <div className="flex min-h-0">
+          <ul className="flex w-36 shrink-0 flex-col gap-0.5 border-e border-border/60 p-1.5">
+            {categories.map((category) => {
+              const count = valuesFor(props.activeFilters, category.def.id).size;
+              const isActive = category.def.id === active.def.id;
+              return (
+                <li key={category.def.id}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedId(category.def.id)}
+                    aria-pressed={isActive}
                     className={cn(
-                      "flex size-3.5 shrink-0 items-center justify-center rounded-[4px] border",
-                      isOn ? "border-primary bg-primary text-primary-foreground" : "border-border",
+                      "flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-[12px] outline-none transition-colors",
+                      isActive
+                        ? "bg-[var(--sidebar-accent)] text-foreground"
+                        : "text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground focus-visible:bg-[var(--sidebar-accent)]",
                     )}
                   >
-                    {isOn ? <CheckIcon className="size-2.5" /> : null}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                </button>
+                    <span className="min-w-0 flex-1 truncate">{category.def.label}</span>
+                    {count > 0 ? <CountChip count={count} /> : null}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <ul className="flex max-h-72 min-w-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1.5">
+            {active.options.map((option) => (
+              <li key={option.value}>
+                <FilterOptionRow
+                  option={option}
+                  isOn={activeValues.has(option.value)}
+                  onToggle={() =>
+                    props.onChange(toggleValue(props.activeFilters, active.def.id, option.value))
+                  }
+                />
               </li>
-            );
-          })}
-        </ul>
+            ))}
+          </ul>
+        </div>
       </PopoverPopup>
     </Popover>
   );
@@ -178,16 +249,15 @@ export function ReviewFilterBar(props: {
         </Button>
       ) : null}
 
-      {props.defs.map((def) => (
-        <FacetChip
-          key={def.id}
-          def={def}
-          items={props.items}
-          options={props.optionsByFieldId?.get(def.id)}
-          activeFilters={props.activeFilters}
-          onChange={props.onActiveFiltersChange}
-        />
-      ))}
+      <ReviewFilterMenu
+        defs={props.defs}
+        items={props.items}
+        {...(props.optionsByFieldId !== undefined
+          ? { optionsByFieldId: props.optionsByFieldId }
+          : {})}
+        activeFilters={props.activeFilters}
+        onChange={props.onActiveFiltersChange}
+      />
 
       {props.sortOptions && props.sortOptions.length > 0 && props.onSortChange ? (
         <Popover>
@@ -231,7 +301,7 @@ export function ReviewFilterBar(props: {
       ) : null}
 
       <span
-        className="hidden h-8 shrink-0 items-center rounded-full bg-muted/28 px-2.5 text-[11px] font-medium text-muted-foreground tabular-nums ring-1 ring-border/40 sm:inline-flex"
+        className="ms-auto hidden h-8 shrink-0 items-center px-1 text-[11px] font-medium text-muted-foreground/80 tabular-nums sm:inline-flex"
         title={resultCountTitle}
         aria-label={
           props.resultCountIsIncomplete

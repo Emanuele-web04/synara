@@ -9,6 +9,7 @@ import type {
   ReviewProjectBoard,
   ReviewRemoveCommentInput,
   ReviewPullRequestHeader,
+  ReviewPullRequestOverview,
   ReviewPullRequestSurfaceInput,
   ReviewPullRequestSurfaceResult,
   ReviewRunAgentInput,
@@ -22,8 +23,8 @@ import { type QueryClient, mutationOptions, queryOptions } from "@tanstack/react
 import { serializeReviewTargetKey } from "@t3tools/shared/reviewTargetKey";
 import { ensureNativeApi } from "../nativeApi";
 
-const REVIEW_LIST_STALE_TIME_MS = 30_000;
-const REVIEW_BOARD_LANES_STALE_TIME_MS = 30_000;
+const REVIEW_LIST_STALE_TIME_MS = 300_000;
+const REVIEW_BOARD_LANES_STALE_TIME_MS = 300_000;
 const REVIEW_LIST_REFETCH_INTERVAL_MS = 300_000;
 const REVIEW_VIEWER_STALE_TIME_MS = 600_000;
 const REVIEW_CHANGESET_STALE_TIME_MS = 30_000;
@@ -44,6 +45,12 @@ export function reviewSourceKey(source: ReviewSourceRef): string {
   return source._tag === "pullRequest"
     ? `pullRequest:${source.reference}`
     : `branchRange:${source.base}...${source.head}`;
+}
+
+function pullRequestHeaderFromOverview(
+  overview: ReviewPullRequestOverview,
+): ReviewPullRequestHeader {
+  return { detail: overview.detail };
 }
 
 function reviewPullRequestListState(state?: ReviewListState): ReviewListState {
@@ -117,6 +124,10 @@ export function applyReviewUpdatedPayload(
       reviewQueryKeys.pullRequest(payload.cwd, payload.reference),
       payload.data,
     );
+    queryClient.setQueryData(
+      reviewQueryKeys.pullRequestHeader(payload.cwd, payload.reference),
+      pullRequestHeaderFromOverview(payload.data),
+    );
     return;
   }
   if (payload._tag === "pullRequestConversation") {
@@ -124,6 +135,15 @@ export function applyReviewUpdatedPayload(
       reviewQueryKeys.conversation(payload.cwd, payload.reference),
       payload.data,
     );
+    return;
+  }
+  if (payload._tag === "boardLanes") {
+    void queryClient.invalidateQueries({
+      queryKey: reviewQueryKeys.boardLanesByCwd(payload.cwd),
+    });
+    void queryClient.invalidateQueries({
+      queryKey: reviewQueryKeys.pullRequestLists(payload.cwd),
+    });
     return;
   }
   queryClient.setQueryData(
@@ -144,6 +164,10 @@ export function applyReviewPullRequestSurfacePayload(
     reviewQueryKeys.pullRequest(input.cwd, input.reference),
     payload.overview,
   );
+  queryClient.setQueryData(
+    reviewQueryKeys.pullRequestHeader(input.cwd, input.reference),
+    pullRequestHeaderFromOverview(payload.overview),
+  );
   if (payload.conversation !== undefined) {
     queryClient.setQueryData(
       reviewQueryKeys.conversation(input.cwd, input.reference),
@@ -162,28 +186,29 @@ export const reviewQueryKeys = {
   all: ["review"] as const,
   viewer: (cwd: string | null) => ["review", "viewer", "avatar-v2", cwd] as const,
   pullRequestLists: (cwd: string | null) => ["review", "pull-requests", cwd] as const,
+  boardLanesByCwd: (cwd: string | null) => ["review", "board-lanes", cwd] as const,
   boardLanes: (cwd: string | null, limit?: number) =>
     ["review", "board-lanes", cwd, reviewPullRequestListLimit(limit)] as const,
   pullRequests: (input: {
     cwd: string | null;
-    state?: ReviewListState;
-    limit?: number;
-    search?: string;
-    author?: string;
-    authors?: ReadonlyArray<string>;
-    reviewRequested?: string;
-    baseBranch?: string;
-    baseBranches?: ReadonlyArray<string>;
-    headBranch?: string;
-    headBranches?: ReadonlyArray<string>;
-    label?: string;
-    labels?: ReadonlyArray<string>;
-    assignee?: string;
-    assignees?: ReadonlyArray<string>;
-    draft?: boolean;
-    columns?: ReadonlyArray<ReviewListColumn>;
-    checks?: ReadonlyArray<ReviewListChecksStatus>;
-    sort?: ReviewListSortId;
+    state?: ReviewListState | undefined;
+    limit?: number | undefined;
+    search?: string | undefined;
+    author?: string | undefined;
+    authors?: ReadonlyArray<string> | undefined;
+    reviewRequested?: string | undefined;
+    baseBranch?: string | undefined;
+    baseBranches?: ReadonlyArray<string> | undefined;
+    headBranch?: string | undefined;
+    headBranches?: ReadonlyArray<string> | undefined;
+    label?: string | undefined;
+    labels?: ReadonlyArray<string> | undefined;
+    assignee?: string | undefined;
+    assignees?: ReadonlyArray<string> | undefined;
+    draft?: boolean | undefined;
+    columns?: ReadonlyArray<ReviewListColumn> | undefined;
+    checks?: ReadonlyArray<ReviewListChecksStatus> | undefined;
+    sort?: ReviewListSortId | undefined;
   }) =>
     [
       ...reviewQueryKeys.pullRequestLists(input.cwd),
@@ -272,7 +297,7 @@ export function reviewListPullRequestsQueryOptions(input: {
     },
     enabled: input.cwd !== null,
     staleTime: REVIEW_LIST_STALE_TIME_MS,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: false,
     refetchOnReconnect: true,
     refetchInterval: REVIEW_LIST_REFETCH_INTERVAL_MS,
   });
@@ -291,7 +316,7 @@ export function reviewLoadBoardLanesQueryOptions(input: { cwd: string | null; li
     },
     enabled: input.cwd !== null,
     staleTime: REVIEW_BOARD_LANES_STALE_TIME_MS,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: false,
     refetchOnReconnect: true,
     refetchInterval: REVIEW_LIST_REFETCH_INTERVAL_MS,
   });
@@ -610,6 +635,109 @@ export function reviewRemoveCommentMutationOptions(input: { queryClient: QueryCl
     mutationFn: async (args: ReviewRemoveCommentInput) =>
       ensureNativeApi().review.removeComment(args),
     onSettled: (_data, _error, args) => invalidateReviewComments(input.queryClient, args.target),
+  });
+}
+
+export function reviewResolveThreadMutationOptions(input: {
+  queryClient: QueryClient;
+  cwd: string | null;
+  reference: string | null;
+}) {
+  return mutationOptions({
+    mutationKey: ["review", "resolve-thread"],
+    mutationFn: async (args: { threadId: string; resolved: boolean }) => {
+      if (!input.cwd || !input.reference) {
+        throw new Error("Review thread is unavailable.");
+      }
+      return ensureNativeApi().review.resolveThread({
+        cwd: input.cwd,
+        reference: input.reference,
+        threadId: args.threadId,
+        resolved: args.resolved,
+      });
+    },
+    onSettled: () => {
+      void input.queryClient.invalidateQueries({
+        queryKey: reviewQueryKeys.remoteThreads(input.cwd, input.reference),
+      });
+    },
+  });
+}
+
+export function reviewReplyThreadMutationOptions(input: {
+  queryClient: QueryClient;
+  cwd: string | null;
+  reference: string | null;
+}) {
+  return mutationOptions({
+    mutationKey: ["review", "reply-thread"],
+    mutationFn: async (args: { threadId: string; body: string }) => {
+      if (!input.cwd || !input.reference) {
+        throw new Error("Review thread is unavailable.");
+      }
+      return ensureNativeApi().review.replyThread({
+        cwd: input.cwd,
+        reference: input.reference,
+        threadId: args.threadId,
+        body: args.body,
+      });
+    },
+    onSettled: () => {
+      void input.queryClient.invalidateQueries({
+        queryKey: reviewQueryKeys.remoteThreads(input.cwd, input.reference),
+      });
+    },
+  });
+}
+
+export function reviewUpdateThreadCommentMutationOptions(input: {
+  queryClient: QueryClient;
+  cwd: string | null;
+  reference: string | null;
+}) {
+  return mutationOptions({
+    mutationKey: ["review", "update-thread-comment"],
+    mutationFn: async (args: { commentId: string; body: string }) => {
+      if (!input.cwd || !input.reference) {
+        throw new Error("Review comment is unavailable.");
+      }
+      return ensureNativeApi().review.updateThreadComment({
+        cwd: input.cwd,
+        reference: input.reference,
+        commentId: args.commentId,
+        body: args.body,
+      });
+    },
+    onSettled: () => {
+      void input.queryClient.invalidateQueries({
+        queryKey: reviewQueryKeys.remoteThreads(input.cwd, input.reference),
+      });
+    },
+  });
+}
+
+export function reviewDeleteThreadCommentMutationOptions(input: {
+  queryClient: QueryClient;
+  cwd: string | null;
+  reference: string | null;
+}) {
+  return mutationOptions({
+    mutationKey: ["review", "delete-thread-comment"],
+    mutationFn: async (args: { commentId: string }) => {
+      if (!input.cwd || !input.reference) {
+        throw new Error("Review comment is unavailable.");
+      }
+      return ensureNativeApi().review.deleteThreadComment({
+        cwd: input.cwd,
+        reference: input.reference,
+        commentId: args.commentId,
+      });
+    },
+    onSettled: () => {
+      void input.queryClient.invalidateQueries({
+        queryKey: reviewQueryKeys.remoteThreads(input.cwd, input.reference),
+      });
+    },
   });
 }
 

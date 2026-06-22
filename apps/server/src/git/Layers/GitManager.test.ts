@@ -506,6 +506,13 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             detail: "getReviewConversation not stubbed in test",
           }),
         ),
+      getReviewTimeline: () =>
+        Effect.fail(
+          new GitHubCliError({
+            operation: "execute",
+            detail: "getReviewTimeline not stubbed in test",
+          }),
+        ),
       listOpenPullRequests: (input) =>
         execute({
           cwd: input.cwd,
@@ -613,6 +620,34 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
       submitPullRequestReview: () => Effect.void,
       createPullRequestReviewWithComments: () => Effect.succeed({}),
       getPullRequestThreads: () => Effect.succeed([]),
+      setPullRequestThreadResolution: () =>
+        Effect.fail(
+          new GitHubCliError({
+            operation: "execute",
+            detail: "setPullRequestThreadResolution not stubbed in test",
+          }),
+        ),
+      addPullRequestThreadReply: () =>
+        Effect.fail(
+          new GitHubCliError({
+            operation: "execute",
+            detail: "addPullRequestThreadReply not stubbed in test",
+          }),
+        ),
+      updatePullRequestThreadComment: () =>
+        Effect.fail(
+          new GitHubCliError({
+            operation: "execute",
+            detail: "updatePullRequestThreadComment not stubbed in test",
+          }),
+        ),
+      deletePullRequestThreadComment: () =>
+        Effect.fail(
+          new GitHubCliError({
+            operation: "execute",
+            detail: "deletePullRequestThreadComment not stubbed in test",
+          }),
+        ),
       getRepositoryCloneUrls: (input) =>
         execute({
           cwd: input.cwd,

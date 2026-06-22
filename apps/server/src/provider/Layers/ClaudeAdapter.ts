@@ -491,6 +491,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           lastKnownTokenUsage: undefined,
           lastAssistantUuid: resumeState?.resumeSessionAt,
           lastThreadStartedId: undefined,
+          lastThinkingItemId: undefined,
+          lastEmittedThinkingTokens: undefined,
           stopped: false,
           warnedUnhandledSdkKinds: new Set(),
         };
@@ -615,12 +617,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           items: [],
           assistantTextBlocks: new Map(),
           assistantTextBlockOrder: [],
+          reasoningBlocks: new Map(),
           capturedProposedPlanKeys: new Set(),
           sawFileChange: false,
           nextSyntheticAssistantBlockIndex: -1,
         };
 
         const updatedAt = yield* nowIso;
+        context.lastThinkingItemId = undefined;
+        context.lastEmittedThinkingTokens = undefined;
         context.turnState = turnState;
         context.session = {
           ...context.session,

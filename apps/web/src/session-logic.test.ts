@@ -28,6 +28,7 @@ import {
   isLatestTurnSettled,
   isProviderFileEditWorkLogEntry,
 } from "./session-logic";
+import { extractCollabAction, extractCollabSubagents } from "./session-logic.workLog.collab";
 
 function makeActivity(overrides: {
   id?: string;
@@ -710,6 +711,221 @@ describe("findSidebarProposedPlan", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("renders provider-unhandled activity as compact source metadata", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "provider-unhandled",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "provider.unhandled",
+          summary: "Unhandled provider event",
+          tone: "info",
+          payload: {
+            provider: "claudeAgent",
+            source: "claude.sdk.message",
+            method: "system:thinking_tokens",
+            nativeEventName: "system:thinking_tokens",
+            preview: "Unhandled Claude system message subtype 'thinking_tokens'.",
+            raw: {
+              hidden: "raw payload should not render",
+            },
+          },
+          turnId: "turn-live",
+        }),
+      ],
+      TurnId.makeUnsafe("turn-live"),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.label).toBe("Unhandled provider event");
+    expect(entries[0]?.preview).toBeUndefined();
+    expect(entries[0]?.detail).toBe(
+      "claude.sdk.message / system:thinking_tokens / system:thinking_tokens",
+    );
+    expect(entries[0]?.command).toBeUndefined();
+    expect(JSON.stringify(entries[0])).not.toContain(
+      "Unhandled Claude system message subtype 'thinking_tokens'.",
+    );
+    expect(JSON.stringify(entries[0])).not.toContain("raw payload should not render");
+  });
+
+  it("renders normalized Claude and Codex stream variants without leaking raw previews", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "reasoning-summary",
+          kind: "reasoning.delta",
+          summary: "Thinking summary",
+          tone: "info",
+          payload: {
+            streamKind: "reasoning_summary_text",
+            detail: "  summary with leading space",
+          },
+          turnId: "turn-live",
+        }),
+        makeActivity({
+          id: "file-output",
+          kind: "tool.output.delta",
+          summary: "File-change output",
+          tone: "tool",
+          payload: {
+            streamKind: "file_change_output",
+            detail: "patched apps/web/src/session-logic.ts",
+            itemId: "file-change-1",
+          },
+          turnId: "turn-live",
+        }),
+        makeActivity({
+          id: "unknown-tool-output",
+          kind: "tool.output.delta",
+          summary: "Tool output",
+          tone: "tool",
+          payload: {
+            streamKind: "unknown",
+            detail: "opaque tool bytes",
+            itemId: "tool-unknown-1",
+          },
+          turnId: "turn-live",
+        }),
+        makeActivity({
+          id: "provider-unhandled-message-type",
+          kind: "provider.unhandled",
+          summary: "Unhandled provider event",
+          tone: "info",
+          payload: {
+            provider: "claudeAgent",
+            source: "claude.sdk.message",
+            messageType: "system:future_message",
+            nativeEventName: "system:future_message",
+            preview: "redacted payload preview should stay hidden",
+          },
+          turnId: "turn-live",
+        }),
+      ],
+      TurnId.makeUnsafe("turn-live"),
+    );
+
+    const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
+    expect(entriesById.get(EventId.makeUnsafe("reasoning-summary"))).toMatchObject({
+      id: EventId.makeUnsafe("reasoning-summary"),
+      label: "Thinking summary",
+      tone: "thinking",
+      detail: "  summary with leading space",
+      streamKind: "reasoning_summary_text",
+    });
+    expect(entriesById.get(EventId.makeUnsafe("file-output"))).toMatchObject({
+      id: EventId.makeUnsafe("file-output"),
+      label: "File-change output",
+      tone: "tool",
+      detail: "patched apps/web/src/session-logic.ts",
+      streamKind: "file_change_output",
+      toolCallId: "file-change-1",
+    });
+    expect(entriesById.get(EventId.makeUnsafe("unknown-tool-output"))).toMatchObject({
+      id: EventId.makeUnsafe("unknown-tool-output"),
+      label: "Tool output",
+      tone: "tool",
+      detail: "opaque tool bytes",
+      streamKind: "unknown",
+      toolCallId: "tool-unknown-1",
+    });
+    expect(entriesById.get(EventId.makeUnsafe("provider-unhandled-message-type"))).toMatchObject({
+      id: EventId.makeUnsafe("provider-unhandled-message-type"),
+      label: "Unhandled provider event",
+      detail: "claude.sdk.message / system:future_message / system:future_message",
+    });
+    expect(
+      entriesById.get(EventId.makeUnsafe("provider-unhandled-message-type"))?.preview,
+    ).toBeUndefined();
+    expect(JSON.stringify(entries)).not.toContain("redacted payload preview should stay hidden");
+  });
+
+  it("collapses repeated MCP status updates into one compact work entry", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "mcp-status-1",
+          kind: "mcp.status.updated",
+          summary: "MCP server status",
+          tone: "info",
+          payload: {
+            provider: "codex",
+            data: {
+              name: "github",
+              status: "starting",
+            },
+          },
+          turnId: "turn-live",
+        }),
+        makeActivity({
+          id: "mcp-status-2",
+          kind: "mcp.status.updated",
+          summary: "MCP server status",
+          tone: "info",
+          payload: {
+            provider: "codex",
+            data: {
+              name: "github",
+              status: "ready",
+            },
+          },
+          turnId: "turn-live",
+        }),
+      ],
+      TurnId.makeUnsafe("turn-live"),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: EventId.makeUnsafe("mcp-status-2"),
+      label: "MCP server status",
+      tone: "info",
+    });
+  });
+
+  it("collapses repeated provider-unhandled fallback rows with the same source", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "provider-unhandled-1",
+          kind: "provider.unhandled",
+          summary: "Unhandled provider event",
+          tone: "info",
+          payload: {
+            provider: "codex",
+            source: "codex.app-server.notification",
+            method: "mcpServer/startupStatus/updated",
+            nativeEventName: "mcpServer/startupStatus/updated",
+          },
+          turnId: "turn-live",
+        }),
+        makeActivity({
+          id: "provider-unhandled-2",
+          kind: "provider.unhandled",
+          summary: "Unhandled provider event",
+          tone: "info",
+          payload: {
+            provider: "codex",
+            source: "codex.app-server.notification",
+            method: "mcpServer/startupStatus/updated",
+            nativeEventName: "mcpServer/startupStatus/updated",
+          },
+          turnId: "turn-live",
+        }),
+      ],
+      TurnId.makeUnsafe("turn-live"),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: EventId.makeUnsafe("provider-unhandled-2"),
+      label: "Unhandled provider event",
+      detail:
+        "codex.app-server.notification / mcpServer/startupStatus/updated / mcpServer/startupStatus/updated",
+      tone: "info",
+    });
+  });
+
   it("renders reasoning deltas as thinking work entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -736,6 +952,53 @@ describe("deriveWorkLogEntries", () => {
         },
       }),
       makeActivity({
+        id: "turnless-tool-output",
+        createdAt: "2026-02-23T00:00:01.600Z",
+        kind: "tool.output.delta",
+        summary: "Command output",
+        tone: "tool",
+        payload: {
+          streamKind: "command_output",
+          detail: "turnless output",
+          itemId: "cmd-turnless",
+        },
+      }),
+      makeActivity({
+        id: "turnless-plan-delta",
+        createdAt: "2026-02-23T00:00:01.700Z",
+        kind: "plan.delta",
+        summary: "Plan update",
+        tone: "info",
+        payload: {
+          streamKind: "plan_text",
+          detail: "turnless plan",
+        },
+      }),
+      makeActivity({
+        id: "turnless-provider-content",
+        createdAt: "2026-02-23T00:00:01.800Z",
+        kind: "provider.content.delta",
+        summary: "Provider output",
+        tone: "info",
+        payload: {
+          streamKind: "unknown",
+          detail: "turnless provider output",
+        },
+      }),
+      makeActivity({
+        id: "turnless-provider-unhandled",
+        createdAt: "2026-02-23T00:00:01.900Z",
+        kind: "provider.unhandled",
+        summary: "Unhandled provider event",
+        tone: "info",
+        payload: {
+          provider: "codex",
+          source: "codex.app-server",
+          method: "future/event",
+          nativeEventName: "future/event",
+        },
+      }),
+      makeActivity({
         id: "reasoning-delta",
         createdAt: "2026-02-23T00:00:02.000Z",
         kind: "reasoning.delta",
@@ -759,6 +1022,33 @@ describe("deriveWorkLogEntries", () => {
         detail: "turnless live reasoning",
       },
       {
+        id: EventId.makeUnsafe("turnless-tool-output"),
+        label: "Command output",
+        tone: "tool",
+        detail: "turnless output",
+        streamKind: "command_output",
+      },
+      {
+        id: EventId.makeUnsafe("turnless-plan-delta"),
+        label: "Plan update",
+        tone: "info",
+        detail: "turnless plan",
+        streamKind: "plan_text",
+      },
+      {
+        id: EventId.makeUnsafe("turnless-provider-content"),
+        label: "Provider output",
+        tone: "info",
+        detail: "turnless provider output",
+        streamKind: "unknown",
+      },
+      {
+        id: EventId.makeUnsafe("turnless-provider-unhandled"),
+        label: "Unhandled provider event",
+        tone: "info",
+        detail: "codex.app-server / future/event / future/event",
+      },
+      {
         id: EventId.makeUnsafe("reasoning-delta"),
         label: "Thinking",
         tone: "thinking",
@@ -767,8 +1057,203 @@ describe("deriveWorkLogEntries", () => {
     ]);
     expect(entries.map((entry) => entry.id)).toEqual([
       EventId.makeUnsafe("turnless-reasoning-delta"),
+      EventId.makeUnsafe("turnless-tool-output"),
+      EventId.makeUnsafe("turnless-plan-delta"),
+      EventId.makeUnsafe("turnless-provider-content"),
+      EventId.makeUnsafe("turnless-provider-unhandled"),
       EventId.makeUnsafe("reasoning-delta"),
     ]);
+  });
+
+  it("renders reasoning progress and output deltas as compact work entries", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "thinking-progress-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "reasoning.progress",
+        summary: "Thinking",
+        tone: "info",
+        payload: {
+          itemType: "reasoning",
+          status: "inProgress",
+          detail: "50 estimated thinking tokens",
+          data: {
+            estimatedTokens: 50,
+            estimatedTokensDelta: 50,
+          },
+        },
+        turnId: "turn-reasoning",
+      }),
+      makeActivity({
+        id: "thinking-progress-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "reasoning.progress",
+        summary: "Thinking",
+        tone: "info",
+        payload: {
+          itemType: "reasoning",
+          status: "inProgress",
+          detail: "150 estimated thinking tokens",
+          data: {
+            estimatedTokens: 150,
+            estimatedTokensDelta: 100,
+          },
+        },
+        turnId: "turn-reasoning",
+      }),
+      makeActivity({
+        id: "command-output",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.output.delta",
+        summary: "Command output",
+        tone: "tool",
+        payload: {
+          streamKind: "command_output",
+          detail: "test output",
+          itemId: "cmd-1",
+        },
+        turnId: "turn-reasoning",
+      }),
+      makeActivity({
+        id: "command-output-tail",
+        createdAt: "2026-02-23T00:00:03.500Z",
+        kind: "tool.output.delta",
+        summary: "Command output",
+        tone: "tool",
+        payload: {
+          streamKind: "command_output",
+          detail: "\n  ",
+          itemId: "cmd-1",
+        },
+        turnId: "turn-reasoning",
+      }),
+      makeActivity({
+        id: "command-whitespace-output",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        kind: "tool.output.delta",
+        summary: "Command output",
+        tone: "tool",
+        payload: {
+          streamKind: "command_output",
+          detail: "\n  ",
+          itemId: "cmd-space",
+        },
+        turnId: "turn-reasoning",
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-reasoning"));
+
+    expect(entries).toMatchObject([
+      {
+        id: EventId.makeUnsafe("thinking-progress-1"),
+        label: "Thinking",
+        tone: "thinking",
+        detail: "50 estimated thinking tokens",
+      },
+      {
+        id: EventId.makeUnsafe("thinking-progress-2"),
+        label: "Thinking",
+        tone: "thinking",
+        detail: "150 estimated thinking tokens",
+      },
+      {
+        id: EventId.makeUnsafe("command-output-tail"),
+        label: "Command output",
+        tone: "tool",
+        detail: "test output\n  ",
+        streamKind: "command_output",
+        toolCallId: "cmd-1",
+      },
+      {
+        id: EventId.makeUnsafe("command-whitespace-output"),
+        label: "Command output",
+        tone: "tool",
+        detail: "\n  ",
+        preview: "Whitespace output: \\n\\s\\s",
+        streamKind: "command_output",
+        toolCallId: "cmd-space",
+      },
+    ]);
+  });
+
+  it("excludes non-live turnless work when scoped to the latest turn", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "current-tool-complete",
+          kind: "tool.completed",
+          summary: "Read",
+          tone: "tool",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Read",
+            detail: "Read package.json",
+          },
+          turnId: "turn-2",
+        }),
+        makeActivity({
+          id: "stale-tool-complete",
+          kind: "tool.completed",
+          summary: "Read",
+          tone: "tool",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Read",
+            detail: "Read stale package.json",
+          },
+          turnId: "turn-1",
+        }),
+        makeActivity({
+          id: "turnless-reasoning-live",
+          kind: "reasoning.delta",
+          summary: "Thinking",
+          tone: "info",
+          payload: {
+            streamKind: "reasoning_text",
+            detail: "still thinking",
+          },
+        }),
+        makeActivity({
+          id: "turnless-plan-live",
+          kind: "plan.delta",
+          summary: "Plan update",
+          tone: "info",
+          payload: {
+            streamKind: "plan_text",
+            detail: "still planning",
+          },
+        }),
+        makeActivity({
+          id: "turnless-tool-started",
+          kind: "tool.started",
+          summary: "Read started",
+          tone: "tool",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Read",
+          },
+        }),
+        makeActivity({
+          id: "turnless-runtime-error",
+          kind: "runtime.error",
+          summary: "Provider runtime error",
+          tone: "error",
+          payload: {
+            message: "old error",
+          },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-2"),
+    );
+
+    expect(new Set(entries.map((entry) => entry.id))).toEqual(
+      new Set([
+        EventId.makeUnsafe("turnless-reasoning-live"),
+        EventId.makeUnsafe("turnless-plan-live"),
+        EventId.makeUnsafe("current-tool-complete"),
+      ]),
+    );
   });
 
   it("formats compact work entry labels and details", () => {
@@ -834,6 +1319,71 @@ describe("deriveWorkLogEntries", () => {
 
     const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries.map((entry) => entry.id)).toEqual(["task-progress"]);
+  });
+
+  it("renders terminal task completions with explicit status", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "task-complete-terminal",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          kind: "task.completed",
+          summary: "Task completed",
+          tone: "info",
+          payload: {
+            taskId: "task-1",
+            status: "completed",
+            detail: "Status: completed",
+          },
+        }),
+        makeActivity({
+          id: "task-failed-terminal",
+          createdAt: "2026-02-23T00:00:04.000Z",
+          kind: "task.completed",
+          summary: "Task failed",
+          tone: "error",
+          payload: {
+            taskId: "task-2",
+            status: "failed",
+            detail: "Task update failed",
+          },
+        }),
+        makeActivity({
+          id: "task-stopped-terminal",
+          createdAt: "2026-02-23T00:00:05.000Z",
+          kind: "task.completed",
+          summary: "Task stopped",
+          tone: "info",
+          payload: {
+            taskId: "task-3",
+            status: "stopped",
+            detail: "Status: killed",
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toMatchObject([
+      {
+        id: EventId.makeUnsafe("task-complete-terminal"),
+        label: "Task completed",
+        tone: "info",
+        detail: "Status: completed",
+      },
+      {
+        id: EventId.makeUnsafe("task-failed-terminal"),
+        label: "Task failed",
+        tone: "error",
+        detail: "Task update failed",
+      },
+      {
+        id: EventId.makeUnsafe("task-stopped-terminal"),
+        label: "Task stopped",
+        tone: "info",
+        detail: "Status: killed",
+      },
+    ]);
   });
 
   it("omits quiet turn lifecycle entries while keeping failed turn state visible", () => {
@@ -1103,9 +1653,121 @@ describe("deriveWorkLogEntries", () => {
       {
         id: "cursor-read",
         toolTitle: "Read",
-        detail: "Read 2 lines",
+        detail: "one\ntwo\n",
+        streamKind: "unknown",
       },
     ]);
+  });
+
+  it("preserves Claude tool result block arrays and raw stdout/stderr output", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "claude-tool-result-blocks",
+        kind: "tool.updated",
+        summary: "Grep",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Grep",
+          data: {
+            result: {
+              tool_use_id: "tool-grep-1",
+              content: [
+                { type: "text", text: "src/a.ts:1:foo" },
+                { type: "text", text: "src/b.ts:2:bar" },
+              ],
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "raw-stdio-output",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            rawOutput: {
+              stdout: "out",
+              stderr: "err",
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      {
+        id: "claude-tool-result-blocks",
+        detail: "src/a.ts:1:foo\nsrc/b.ts:2:bar",
+        streamKind: "unknown",
+      },
+      {
+        id: "raw-stdio-output",
+        detail: "out\nerr",
+        streamKind: "unknown",
+      },
+    ]);
+  });
+
+  it("preserves raw output string, JSON fallback, and Claude result string payloads", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "claude-result-string",
+        kind: "tool.updated",
+        summary: "Read",
+        payload: {
+          itemType: "dynamic_tool_call",
+          data: {
+            result: {
+              content: "  exact claude result  ",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "raw-output-string",
+        kind: "tool.completed",
+        summary: "Tool output",
+        payload: {
+          itemType: "dynamic_tool_call",
+          data: {
+            rawOutput: "raw string body",
+          },
+        },
+      }),
+      makeActivity({
+        id: "raw-output-json",
+        kind: "tool.completed",
+        summary: "Tool output",
+        payload: {
+          itemType: "dynamic_tool_call",
+          data: {
+            rawOutput: {
+              records: [{ path: "apps/web/src/session-logic.ts" }],
+              status: "ok",
+            },
+          },
+        },
+      }),
+    ];
+
+    const entriesById = new Map(
+      deriveWorkLogEntries(activities, undefined).map((entry) => [entry.id, entry]),
+    );
+    expect(entriesById.get("claude-result-string")).toMatchObject({
+      detail: "exact claude result",
+      streamKind: "unknown",
+    });
+    expect(entriesById.get("raw-output-string")).toMatchObject({
+      detail: "raw string body",
+      streamKind: "unknown",
+    });
+    expect(entriesById.get("raw-output-json")).toMatchObject({
+      detail:
+        '{\n  "records": [\n    {\n      "path": "apps/web/src/session-logic.ts"\n    }\n  ],\n  "status": "ok"\n}',
+      streamKind: "unknown",
+    });
   });
 
   it("recovers readable Cursor labels from older generic Tool projections", () => {
@@ -1574,6 +2236,96 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
+  it("rebuilds command action previews from sparse Codex action metadata", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-search-query-only",
+        kind: "tool.started",
+        summary: "Ran command started",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            item: {
+              command: "rg Todo",
+              commandActions: [null, { type: "search", query: "Todo" }],
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "codex-search-path-only",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            item: {
+              command: "rg Todo apps/web/src",
+              commandActions: [{ type: "search", path: "apps/web/src" }],
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "codex-list-parent",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            item: {
+              command: "ls ..",
+              commandActions: [{ type: "list_files", path: ".." }],
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "codex-read-long-path",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            item: {
+              command: "sed -n 1,5 apps/web/src/components/chat/workEntryRow.tsx",
+              commandActions: [
+                {
+                  type: "read",
+                  path: "apps/web/src/components/chat/workEntryRow.tsx",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ];
+
+    const entriesById = new Map(
+      deriveWorkLogEntries(activities, undefined).map((entry) => [entry.id, entry]),
+    );
+    expect(entriesById.get("codex-search-query-only")).toMatchObject({
+      toolTitle: "Searching",
+      preview: "for Todo",
+    });
+    expect(entriesById.get("codex-search-path-only")).toMatchObject({
+      toolTitle: "Searched",
+      preview: "in web/src",
+    });
+    expect(entriesById.get("codex-list-parent")).toMatchObject({
+      toolTitle: "Listed",
+      preview: "parent directory",
+    });
+    expect(entriesById.get("codex-read-long-path")).toMatchObject({
+      toolTitle: "Read",
+      preview: "chat/workEntryRow.tsx",
+    });
+  });
+
   it("keeps compact Codex tool metadata used for icons and labels", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -1631,6 +2383,55 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.changedFiles).toEqual([
       "apps/web/src/components/ChatView.tsx",
       "apps/web/src/session-logic.ts",
+    ]);
+  });
+
+  it("extracts nested changed files once and caps runaway file lists", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "nested-file-tool",
+        kind: "tool.completed",
+        summary: "File change",
+        payload: {
+          itemType: "file_change",
+          data: {
+            patch: {
+              operations: [
+                { filePath: "apps/web/src/a.ts" },
+                { filePath: "apps/web/src/a.ts" },
+                { newPath: "apps/web/src/b.ts" },
+                { oldPath: "apps/web/src/c.ts" },
+                { path: "apps/web/src/d.ts" },
+                { file: "apps/web/src/e.ts" },
+                { filepath: "apps/web/src/f.ts" },
+                { relativePath: "apps/web/src/g.ts" },
+                { filename: "apps/web/src/h.ts" },
+                { path: "apps/web/src/i.ts" },
+                { path: "apps/web/src/j.ts" },
+                { path: "apps/web/src/k.ts" },
+                { path: "apps/web/src/l.ts" },
+                { path: "apps/web/src/m.ts" },
+              ],
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.changedFiles).toEqual([
+      "apps/web/src/a.ts",
+      "apps/web/src/b.ts",
+      "apps/web/src/c.ts",
+      "apps/web/src/d.ts",
+      "apps/web/src/e.ts",
+      "apps/web/src/f.ts",
+      "apps/web/src/g.ts",
+      "apps/web/src/h.ts",
+      "apps/web/src/i.ts",
+      "apps/web/src/j.ts",
+      "apps/web/src/k.ts",
+      "apps/web/src/l.ts",
     ]);
   });
 
@@ -2138,6 +2939,77 @@ describe("deriveWorkLogEntries", () => {
       }),
     ]);
     expect(deriveWorkLogEntries(activities, undefined)[0]?.detail).toBeUndefined();
+  });
+
+  it("extracts collab subagents from nested source identity hints", () => {
+    const payload = {
+      itemType: "collab_agent_tool_call",
+      status: "inProgress",
+      data: {
+        item: {
+          source: {
+            subAgent: {
+              thread_spawn: {
+                threadId: "subagent:thread-1:agent-source",
+                agentId: "agent-source",
+                name: "Locke",
+                agentType: "explorer",
+              },
+            },
+          },
+        },
+      },
+    };
+    const subagents = extractCollabSubagents(payload);
+
+    expect(subagents).toEqual([
+      expect.objectContaining({
+        threadId: "subagent:thread-1:agent-source",
+        providerThreadId: "subagent:thread-1:agent-source",
+        agentId: "agent-source",
+        nickname: "Locke",
+        role: "explorer",
+      }),
+    ]);
+    expect(extractCollabAction(payload, subagents)).toEqual(
+      expect.objectContaining({
+        tool: "spawnAgent",
+        summaryText: "Spawning 1 agent",
+      }),
+    );
+  });
+
+  it("summarizes collab action variants and model aliases", () => {
+    const makePayload = (item: Record<string, unknown>) => ({
+      itemType: "collab_agent_tool_call",
+      data: { item },
+    });
+
+    expect(extractCollabAction(makePayload({ type: "wait" }), [])).toMatchObject({
+      tool: "waitAgent",
+      summaryText: "Waiting on 1 agent",
+    });
+    expect(
+      extractCollabAction(makePayload({ type: "close" }), [{ threadId: "a" }, { threadId: "b" }]),
+    ).toMatchObject({
+      tool: "closeAgent",
+      summaryText: "Closing 2 agents",
+    });
+    expect(
+      extractCollabAction(makePayload({ type: "resume", input: { model_name: "gpt-5.4" } }), []),
+    ).toMatchObject({
+      tool: "resumeAgent",
+      model: "gpt-5.4",
+      summaryText: "Resuming 1 agent",
+    });
+    expect(
+      extractCollabAction(makePayload({ type: "interaction", modelName: "gpt-5.5" }), []),
+    ).toMatchObject({
+      tool: "sendInput",
+      model: "gpt-5.5",
+      summaryText: "Updating agent",
+    });
+    expect(extractCollabAction(makePayload({}), [])).toBeUndefined();
   });
 
   it("uses completed generic agent task output instead of truncated task wrapper text", () => {

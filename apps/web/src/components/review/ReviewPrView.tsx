@@ -1,5 +1,6 @@
 import type {
   ReviewCheck,
+  ReviewCommit,
   ReviewSourceRef,
   ReviewTimelineEvent,
   ThreadId,
@@ -10,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   reviewLoadConversationQueryOptions,
   reviewLoadPullRequestHeaderQueryOptions,
+  reviewLoadPullRequestQueryOptions,
   reviewLoadPullRequestSurfaceQueryOptions,
   reviewSourceKey,
 } from "~/lib/reviewReactQuery";
@@ -24,6 +26,7 @@ import { ArrowLeftIcon, GitPullRequestIcon } from "~/lib/icons";
 import { useStore } from "~/store";
 import { createReviewChatThreadIdSelector } from "~/storeSelectors";
 import { Button } from "../ui/button";
+import { ReviewCommits } from "./ReviewCommits";
 import { ReviewConversation } from "./ReviewConversation";
 import { ReviewPrHeader } from "./ReviewPrHeader";
 import {
@@ -38,9 +41,10 @@ import { EmptyState } from "./reviewPrimitives";
 import { buildReviewSidechatContextPayload } from "./reviewSidechatContext";
 import type { ReviewSidechatContextPayload } from "./reviewSidechatContext";
 
-type PrTab = "conversation" | "files";
+type PrTab = "conversation" | "files" | "commits";
 
 const EMPTY_CHECKS: ReadonlyArray<ReviewCheck> = [];
+const EMPTY_COMMITS: ReadonlyArray<ReviewCommit> = [];
 const EMPTY_EVENTS: ReadonlyArray<ReviewTimelineEvent> = [];
 
 function reviewConversationHydrationKey(input: {
@@ -164,6 +168,13 @@ export function ReviewPrView(props: {
     enabled:
       props.cwd !== null && headerDetail !== null && isSurfaceHydrationReady && tab === "files",
   });
+  const overviewQuery = useQuery({
+    ...reviewLoadPullRequestQueryOptions({
+      cwd: props.cwd,
+      reference: headerDetail ? props.reference : null,
+    }),
+    enabled: props.cwd !== null && headerDetail !== null && isSurfaceHydrationReady,
+  });
   const conversationQuery = useQuery({
     ...reviewLoadConversationQueryOptions({
       cwd: props.cwd,
@@ -175,29 +186,31 @@ export function ReviewPrView(props: {
       isSurfaceHydrationReady &&
       tab === "conversation",
   });
-  const overview = surfaceQuery.data?.overview ?? null;
+  const overview = surfaceQuery.data?.overview ?? overviewQuery.data ?? null;
   const detail = overview?.detail ?? headerDetail;
+  const surfaceChangeset = surfaceQuery.data?.changeset;
   const changesetState = useMemo(
     () => ({
-      data: surfaceQuery.data?.changeset,
+      data: surfaceChangeset,
       isLoading:
         detail !== null &&
         tab === "files" &&
         isSurfaceHydrationReady &&
         surfaceQuery.isLoading &&
-        surfaceQuery.data?.changeset === undefined,
-      error: surfaceQuery.data?.changeset === undefined ? surfaceQuery.error : null,
+        surfaceChangeset === undefined,
+      error: surfaceChangeset === undefined ? surfaceQuery.error : null,
     }),
     [
       detail,
       isSurfaceHydrationReady,
-      surfaceQuery.data?.changeset,
+      surfaceChangeset,
       surfaceQuery.error,
       surfaceQuery.isLoading,
       tab,
     ],
   );
   const checks = overview?.checks ?? EMPTY_CHECKS;
+  const commits = overview?.commits ?? EMPTY_COMMITS;
   const events = conversationQuery.data?.events ?? EMPTY_EVENTS;
   const sidechatContext = useMemo(() => {
     if (!detail) {
@@ -213,7 +226,7 @@ export function ReviewPrView(props: {
       source: props.source,
       target: changesetState.data?.target ?? null,
       headSha: changesetState.data?.headSha ?? null,
-      currentView: tab,
+      currentView: tab === "files" ? "files" : "conversation",
       selectedFilePath,
     });
   }, [
@@ -347,26 +360,34 @@ export function ReviewPrView(props: {
                   <ReviewPrHeader
                     detail={detail}
                     variant="full"
-                    reviewMode={tab}
+                    reviewMode="conversation"
                     contentClassName={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}
                     onReviewChanges={() => setTab("files")}
                     onOverview={() => setTab("conversation")}
+                    commitsActive={tab === "commits"}
+                    onCommits={() => setTab(tab === "commits" ? "conversation" : "commits")}
                   />
-                  <ReviewConversation
-                    detail={detail}
-                    cwd={props.cwd}
-                    reference={props.reference}
-                    events={events}
-                    isLoading={
-                      (detail !== null && tab === "conversation" && !isSurfaceHydrationReady) ||
-                      (detail !== null &&
-                        tab === "conversation" &&
-                        isSurfaceHydrationReady &&
-                        conversationQuery.isLoading &&
-                        conversationQuery.data === undefined)
-                    }
-                    className={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}
-                  />
+                  {tab === "commits" ? (
+                    <div className={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}>
+                      <ReviewCommits commits={commits} />
+                    </div>
+                  ) : (
+                    <ReviewConversation
+                      detail={detail}
+                      cwd={props.cwd}
+                      reference={props.reference}
+                      events={events}
+                      isLoading={
+                        (detail !== null && tab === "conversation" && !isSurfaceHydrationReady) ||
+                        (detail !== null &&
+                          tab === "conversation" &&
+                          isSurfaceHydrationReady &&
+                          conversationQuery.isLoading &&
+                          conversationQuery.data === undefined)
+                      }
+                      className={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}
+                    />
+                  )}
                 </main>
               )}
             </div>
@@ -375,7 +396,7 @@ export function ReviewPrView(props: {
                 detail={detail}
                 checks={checks}
                 events={events}
-                mode={tab}
+                mode={tab === "files" ? "files" : "conversation"}
                 cwd={props.cwd}
                 source={props.source}
                 target={changesetState.data?.target ?? null}

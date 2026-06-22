@@ -4,39 +4,49 @@ export type ReviewColumnId = "draft" | "needs-review" | "changes-requested" | "a
 
 export type ReviewBoardView = "needs-my-review" | "mine" | "merged" | "all";
 
+// Per-column accent reinforces review state at a glance; the text label still
+// carries the meaning, so color is never the sole signal (a11y color-not-only).
+export type ReviewColumnAccent = "attention" | "warning" | "success" | "muted" | "merged";
+
 export const REVIEW_BOARD_COLUMNS: ReadonlyArray<{
   id: ReviewColumnId;
   label: string;
+  accent: ReviewColumnAccent;
   emptyTitle: string;
   emptyHint: string;
 }> = [
   {
     id: "needs-review",
     label: "Needs Review",
+    accent: "attention",
     emptyTitle: "All caught up",
     emptyHint: "Nothing waiting on a first review.",
   },
   {
     id: "changes-requested",
     label: "Changes Requested",
+    accent: "warning",
     emptyTitle: "No change requests",
     emptyHint: "Nothing sent back for changes.",
   },
   {
     id: "approved",
     label: "Approved",
+    accent: "success",
     emptyTitle: "None approved yet",
     emptyHint: "Approved PRs collect here.",
   },
   {
     id: "draft",
     label: "Draft",
+    accent: "muted",
     emptyTitle: "No drafts",
     emptyHint: "Draft PRs show up here.",
   },
   {
     id: "merged",
     label: "Merged",
+    accent: "merged",
     emptyTitle: "Nothing merged",
     emptyHint: "Recently merged PRs land here.",
   },

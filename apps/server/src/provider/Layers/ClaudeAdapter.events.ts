@@ -137,7 +137,17 @@ export function isClaudeInterruptedMessage(message: string): boolean {
   return (
     normalized.includes("all fibers interrupted without error") ||
     normalized.includes("request was aborted") ||
-    normalized.includes("interrupted by user")
+    normalized.includes("interrupted by user") ||
+    isClaudeProcessStoppedMessage(message)
+  );
+}
+
+export function isClaudeProcessStoppedMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("process exited with code 143") ||
+    normalized.includes("exited with code 143") ||
+    normalized.includes("exit code 143")
   );
 }
 
@@ -154,6 +164,9 @@ export function messageFromClaudeStreamCause(cause: Cause.Cause<Error>, fallback
 
 export function interruptionMessageFromClaudeCause(cause: Cause.Cause<Error>): string {
   const message = messageFromClaudeStreamCause(cause, "Claude runtime interrupted.");
+  if (isClaudeProcessStoppedMessage(message)) {
+    return "Claude runtime stopped and will resume on your next message.";
+  }
   return isClaudeInterruptedMessage(message) ? "Claude runtime interrupted." : message;
 }
 
@@ -650,7 +663,7 @@ export function toolResultStreamKind(
     case "file_change":
       return "file_change_output";
     default:
-      return undefined;
+      return "unknown";
   }
 }
 

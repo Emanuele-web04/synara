@@ -61,6 +61,13 @@ import {
   ReviewLoadBoardLanesInput,
   ReviewLoadChangesetInput,
   ReviewLoadRemoteThreadsInput,
+  ReviewResolveThreadInput,
+  ReviewResolveThreadResult,
+  ReviewReplyThreadInput,
+  ReviewReplyThreadResult,
+  ReviewUpdateThreadCommentInput,
+  ReviewDeleteThreadCommentInput,
+  ReviewThreadCommentMutationResult,
   ReviewLocalComment,
   ReviewPullRequestOverview,
   ReviewPullRequestHeader,
@@ -577,6 +584,30 @@ export const WsReviewLoadRemoteThreadsRpc = Rpc.make(WS_METHODS.reviewLoadRemote
   error: WsRpcError,
 });
 
+export const WsReviewResolveThreadRpc = Rpc.make(WS_METHODS.reviewResolveThread, {
+  payload: ReviewResolveThreadInput,
+  success: ReviewResolveThreadResult,
+  error: WsRpcError,
+});
+
+export const WsReviewReplyThreadRpc = Rpc.make(WS_METHODS.reviewReplyThread, {
+  payload: ReviewReplyThreadInput,
+  success: ReviewReplyThreadResult,
+  error: WsRpcError,
+});
+
+export const WsReviewUpdateThreadCommentRpc = Rpc.make(WS_METHODS.reviewUpdateThreadComment, {
+  payload: ReviewUpdateThreadCommentInput,
+  success: ReviewThreadCommentMutationResult,
+  error: WsRpcError,
+});
+
+export const WsReviewDeleteThreadCommentRpc = Rpc.make(WS_METHODS.reviewDeleteThreadComment, {
+  payload: ReviewDeleteThreadCommentInput,
+  success: ReviewThreadCommentMutationResult,
+  error: WsRpcError,
+});
+
 export const WsReviewRunAgentRpc = Rpc.make(WS_METHODS.reviewRunAgent, {
   payload: ReviewRunAgentInput,
   success: ReviewAgentResult,
@@ -918,6 +949,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsReviewRemoveCommentRpc,
   WsReviewSubmitRpc,
   WsReviewLoadRemoteThreadsRpc,
+  WsReviewResolveThreadRpc,
+  WsReviewReplyThreadRpc,
+  WsReviewUpdateThreadCommentRpc,
+  WsReviewDeleteThreadCommentRpc,
   WsReviewRunAgentRpc,
   WsReviewCheckProjectAccessRpc,
   WsReviewListProjectsRpc,

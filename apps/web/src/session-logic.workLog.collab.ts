@@ -74,16 +74,23 @@ export function extractCollabAction(
   }
 
   const item = collabPayloadItem(payload);
+  const input = asRecord(item?.input);
   const tool = inferSubagentActionTool(item);
-  const status = asTrimmedString(item?.status ?? payload?.status) ?? "in_progress";
+  const state = asRecord(item?.state);
+  const status = asTrimmedString(item?.status ?? state?.status ?? payload?.status) ?? "in_progress";
   const model = asTrimmedString(
     item?.model ??
       item?.modelName ??
       item?.model_name ??
       item?.requestedModel ??
-      item?.requested_model,
+      item?.requested_model ??
+      input?.model ??
+      input?.modelName ??
+      input?.model_name,
   );
-  const prompt = asTrimmedString(item?.prompt ?? item?.task ?? item?.message);
+  const prompt = asTrimmedString(
+    item?.prompt ?? item?.task ?? item?.message ?? input?.prompt ?? input?.description,
+  );
   const agentStates = decodeSubagentAgentStates(item);
   const receiverThreadIds = decodeSubagentReceiverThreadIds(item);
   const count = Math.max(

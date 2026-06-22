@@ -216,6 +216,23 @@ const HEADER_DETAIL = {
   reviewers: DETAIL.reviewers,
 } satisfies ReviewPullRequestHeaderDetail;
 
+function activeInfoOption(): HTMLElement {
+  const option = document.querySelector<HTMLElement>(
+    '[data-uidotsh-option$=" (current)"]:not([hidden])',
+  );
+  expect(option).toBeTruthy();
+  expect(option?.hidden).toBe(false);
+  return option!;
+}
+
+function exactTextElementWithin(root: HTMLElement, text: string): HTMLElement {
+  const element = Array.from(root.querySelectorAll<HTMLElement>("*")).find(
+    (candidate) => candidate.textContent?.trim() === text,
+  );
+  expect(element).toBeTruthy();
+  return element!;
+}
+
 describe("ReviewPrView performance", () => {
   afterEach(() => {
     nativeApiMock.loadPullRequest.mockClear();
@@ -238,10 +255,10 @@ describe("ReviewPrView performance", () => {
   });
 
   it("defers conversation hydration until after the first overview frame", async () => {
-    await page.viewport(1200, 800);
-    let queuedFrame: FrameRequestCallback | null = null;
+    await page.viewport(1440, 800);
+    const queuedFrame: { current: FrameRequestCallback | null } = { current: null };
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      queuedFrame = callback;
+      queuedFrame.current = callback;
       return 1;
     });
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
@@ -275,18 +292,26 @@ describe("ReviewPrView performance", () => {
       expect(nativeApiMock.loadConversation).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadPullRequest).toHaveBeenCalledTimes(0);
       expect(reviewChatThreadMock.prewarmReviewChatThread).toHaveBeenCalledTimes(1);
-      expect(queuedFrame).not.toBeNull();
+      expect(queuedFrame.current).not.toBeNull();
 
-      queuedFrame?.(performance.now());
+      queuedFrame.current?.(performance.now());
 
       await expect.poll(() => nativeApiMock.loadConversation.mock.calls.length).toBe(1);
+      await expect.poll(() => nativeApiMock.loadPullRequest.mock.calls.length).toBe(1);
       expect(nativeApiMock.loadConversation).toHaveBeenCalledWith({
+        cwd: CWD,
+        reference: REFERENCE,
+      });
+      expect(nativeApiMock.loadPullRequest).toHaveBeenCalledWith({
         cwd: CWD,
         reference: REFERENCE,
       });
       expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadChangeset).toHaveBeenCalledTimes(0);
-      expect(nativeApiMock.loadPullRequest).toHaveBeenCalledTimes(0);
+      await page.getByRole("tab", { name: "Info" }).click();
+      const commitsRow = exactTextElementWithin(activeInfoOption(), "Commits").closest("div");
+      expect(commitsRow?.textContent).toContain("1");
+      expect(commitsRow?.textContent).not.toContain("Loading");
     } finally {
       await screen.unmount();
       queryClient.clear();
@@ -296,9 +321,9 @@ describe("ReviewPrView performance", () => {
 
   it("hydrates files through the aggregate surface query after the first overview frame", async () => {
     await page.viewport(1200, 800);
-    let queuedFrame: FrameRequestCallback | null = null;
+    const queuedFrame: { current: FrameRequestCallback | null } = { current: null };
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      queuedFrame = callback;
+      queuedFrame.current = callback;
       return 1;
     });
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
@@ -323,10 +348,12 @@ describe("ReviewPrView performance", () => {
 
     try {
       await expect.element(page.getByRole("heading", { name: DETAIL.title })).toBeVisible();
-      expect(queuedFrame).not.toBeNull();
-      queuedFrame?.(performance.now());
+      expect(queuedFrame.current).not.toBeNull();
+      queuedFrame.current?.(performance.now());
       await expect.poll(() => nativeApiMock.loadConversation.mock.calls.length).toBe(1);
+      await expect.poll(() => nativeApiMock.loadPullRequest.mock.calls.length).toBe(1);
       nativeApiMock.loadPullRequestSurface.mockClear();
+      nativeApiMock.loadPullRequest.mockClear();
       nativeApiMock.loadConversation.mockClear();
 
       await page.getByRole("button", { name: "Review changes" }).click();

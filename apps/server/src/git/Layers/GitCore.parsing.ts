@@ -164,11 +164,28 @@ export function sanitizeRemoteName(value: string): string {
 }
 
 export function normalizeRemoteUrl(value: string): string {
+  const normalized = stripRemoteUrlDecorators(value.trim()).toLowerCase();
+
+  try {
+    const parsed = new URL(normalized);
+    const host = parsed.port.length > 0 ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
+    const pathname = stripRemoteUrlDecorators(parsed.pathname.replace(/^\/+/g, ""));
+    return pathname.length > 0 ? `${host}/${pathname}` : host;
+  } catch {
+    const scpLikeUrl = /^(?:[^@/]+@)?([^:/]+):(.+)$/.exec(normalized);
+    if (scpLikeUrl) {
+      const [, host = "", pathname = ""] = scpLikeUrl;
+      return stripRemoteUrlDecorators(`${host}/${pathname}`);
+    }
+    return normalized;
+  }
+}
+
+function stripRemoteUrlDecorators(value: string): string {
   return value
-    .trim()
     .replace(/\/+$/g, "")
     .replace(/\.git$/i, "")
-    .toLowerCase();
+    .replace(/\/+$/g, "");
 }
 
 export function parseRemoteFetchUrls(stdout: string): Map<string, string> {

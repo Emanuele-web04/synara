@@ -117,13 +117,16 @@ export function ReviewAvatar(props: {
   login: string;
   avatarUrl?: string | undefined;
   className?: string;
+  presentation?: "decorative" | "informative";
 }) {
   const initial = props.login.trim().charAt(0).toUpperCase() || "?";
+  const decorative = props.presentation === "decorative";
   if (props.avatarUrl && props.avatarUrl.length > 0) {
     return (
       <img
         src={props.avatarUrl}
-        alt={props.login}
+        alt={decorative ? "" : props.login}
+        aria-hidden={decorative ? true : undefined}
         className={cn("size-4 shrink-0 rounded-full border border-border/60", props.className)}
         loading="lazy"
       />
@@ -131,11 +134,13 @@ export function ReviewAvatar(props: {
   }
   return (
     <span
+      role={decorative ? undefined : "img"}
+      aria-label={decorative ? undefined : props.login}
       className={cn(
         "inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-muted font-medium text-[9px] text-foreground/80",
         props.className,
       )}
-      aria-hidden="true"
+      aria-hidden={decorative ? true : undefined}
     >
       {initial}
     </span>

@@ -299,7 +299,7 @@ export function setThreadTerminalMetadata(
   const currentLabel = normalized.terminalLabelsById[terminalId] ?? "";
   const currentTitleOverride = normalized.terminalTitleOverridesById[terminalId]?.trim() ?? "";
   const currentCliKind = normalized.terminalCliKindsById[terminalId] ?? null;
-  const nextCliKind = metadata.cliKind ?? currentCliKind;
+  const nextCliKind = metadata.cliKind;
   const nextLabel =
     currentTitleOverride.length > 0
       ? currentLabel

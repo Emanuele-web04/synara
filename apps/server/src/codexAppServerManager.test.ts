@@ -3028,9 +3028,9 @@ describe("Codex protocol over an in-memory transport", () => {
         ephemeral: true,
         serviceName: "synara_review_chat",
       });
-      expect(
-        harness.outboundFrames.some((frame) => frame.method === "skills/extraRoots/set"),
-      ).toBe(false);
+      expect(harness.outboundFrames.some((frame) => frame.method === "skills/extraRoots/set")).toBe(
+        false,
+      );
       await waitFor(
         () =>
           harness.outboundFrames.some((frame) => frame.method === "model/list") &&
@@ -3072,9 +3072,9 @@ describe("Codex protocol over an in-memory transport", () => {
         runtimeMode: "approval-required",
       });
 
-      expect(
-        harness.outboundFrames.some((frame) => frame.method === "skills/extraRoots/set"),
-      ).toBe(false);
+      expect(harness.outboundFrames.some((frame) => frame.method === "skills/extraRoots/set")).toBe(
+        false,
+      );
 
       const turn = await harness.manager.sendTurn({
         threadId: asThreadId("thread_mem_review_skill_turn"),
@@ -3100,6 +3100,8 @@ describe("Codex protocol over an in-memory transport", () => {
       const turnStartFrame = harness.outboundFrames[turnStartIndex];
       expect(turnStartFrame?.params).toMatchObject({
         threadId: "provider_thread_1",
+        approvalPolicy: "never",
+        sandboxPolicy: { type: "dangerFullAccess" },
         input: [
           {
             type: "text",

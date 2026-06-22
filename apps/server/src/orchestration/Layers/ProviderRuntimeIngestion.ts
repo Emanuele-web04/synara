@@ -1,7 +1,6 @@
 import {
   MessageId,
   type AssistantDeliveryMode,
-  type OrchestrationProjectShell,
   CheckpointRef,
   ThreadId,
   TurnId,
@@ -18,11 +17,10 @@ import {
 } from "@t3tools/shared/subagents";
 
 import { generatedImagePathFromRuntimeEvent } from "../../codexGeneratedImages.ts";
+import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
-import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
-import { isGitRepository } from "../../git/isRepo.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -67,19 +65,6 @@ import type {
 // Exports: ProviderRuntimeIngestionLive
 // Depends on: ProviderRuntimeEvent contracts, OrchestrationEngine, Projection repositories
 
-export function appendCappedBufferedText(existingText: string, delta: string, maxChars: number): string {
-  const nextText = `${existingText}${delta}`;
-  if (nextText.length <= maxChars) {
-    return nextText;
-  }
-
-  const marker = "... [truncated]";
-  if (maxChars <= marker.length) {
-    return marker.slice(0, maxChars);
-  }
-  return `${nextText.slice(0, maxChars - marker.length)}${marker}`;
-}
-
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
@@ -88,6 +73,10 @@ const make = Effect.gen(function* () {
 
   const pendingAssistantDeliveryModesByThread = new Map<string, AssistantDeliveryMode>();
   const assistantDeliveryModesByTurn = new Map<string, AssistantDeliveryMode>();
+  const providerDiffPlaceholdersByTurn = new Map<
+    string,
+    { readonly checkpointRef: CheckpointRef; readonly checkpointTurnCount: number }
+  >();
 
   const state = yield* makeIngestionState();
   const {
@@ -125,36 +114,12 @@ const make = Effect.gen(function* () {
         assistantDeliveryModesByTurn.delete(key);
       }
     }
+    for (const key of providerDiffPlaceholdersByTurn.keys()) {
+      if (key.startsWith(prefix)) {
+        providerDiffPlaceholdersByTurn.delete(key);
+      }
+    }
   };
-
-  const getProjectShell = Effect.fnUntraced(function* (
-    thread: Pick<OrchestrationThread, "projectId">,
-  ): Effect.fn.Return<OrchestrationProjectShell | undefined> {
-    return Option.getOrUndefined(
-      yield* projectionSnapshotQuery
-        .getProjectShellById(thread.projectId)
-        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
-    );
-  });
-
-  const isGitRepoForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
-    const thread = yield* getThreadDetail(threadId);
-    if (!thread) {
-      return false;
-    }
-    const project = yield* getProjectShell(thread);
-    if (!project) {
-      return false;
-    }
-    const workspaceCwd = resolveThreadWorkspaceCwd({
-      thread,
-      projects: [project],
-    });
-    if (!workspaceCwd) {
-      return false;
-    }
-    return isGitRepository(workspaceCwd);
-  });
 
   const {
     resolveAssistantCompletionMessageId,
@@ -541,15 +506,17 @@ const make = Effect.gen(function* () {
           : undefined;
 
       if (assistantCompletion) {
-        const turnId = toTurnId(event.turnId);
+        const eventCompletionTurnId = toTurnId(event.turnId);
         const assistantMessageId = yield* resolveAssistantCompletionMessageId({
           event,
           thread,
-          ...(turnId ? { turnId } : {}),
+          ...(eventCompletionTurnId ? { turnId: eventCompletionTurnId } : {}),
         });
         const existingAssistantMessage = thread.messages.find(
           (entry) => entry.id === assistantMessageId,
         );
+        const turnId =
+          toTurnId(existingAssistantMessage?.turnId ?? undefined) ?? eventCompletionTurnId;
         const shouldApplyFallbackCompletionText =
           !existingAssistantMessage || existingAssistantMessage.text.length === 0;
         if (turnId) {
@@ -621,6 +588,7 @@ const make = Effect.gen(function* () {
           ).pipe(Effect.asVoid);
           yield* clearAssistantMessageIdsForTurn(thread.id, finalizedTurnId);
           assistantDeliveryModesByTurn.delete(deliveryModeKey(thread.id, finalizedTurnId));
+          providerDiffPlaceholdersByTurn.delete(deliveryModeKey(thread.id, finalizedTurnId));
 
           yield* finalizeBufferedProposedPlan({
             event,
@@ -699,18 +667,38 @@ const make = Effect.gen(function* () {
 
       if (event.type === "turn.diff.updated") {
         const turnId = toTurnId(event.turnId);
-        if (turnId && (yield* isGitRepoForThread(thread.id))) {
-          // Skip if a checkpoint already exists for this turn. A real
-          // (non-placeholder) capture from CheckpointReactor should not
-          // be clobbered, and dispatching a duplicate placeholder for the
-          // same turnId would produce an unstable checkpointTurnCount.
-          if (thread.checkpoints.some((c) => c.turnId === turnId)) {
-            // Already tracked; no-op.
-          } else {
-            const maxTurnCount = thread.checkpoints.reduce(
+        if (turnId) {
+          const placeholderKey = deliveryModeKey(thread.id, turnId);
+          const currentThread = (yield* getThreadDetail(thread.id)) ?? thread;
+          const existingCheckpoint = currentThread.checkpoints.find((checkpoint) =>
+            sameId(checkpoint.turnId, turnId),
+          );
+          const rememberedPlaceholder = providerDiffPlaceholdersByTurn.get(placeholderKey);
+          const canUpdateExistingPlaceholder =
+            existingCheckpoint?.status === "missing" &&
+            existingCheckpoint.checkpointRef.startsWith("provider-diff:");
+          if (existingCheckpoint === undefined || canUpdateExistingPlaceholder) {
+            const capabilities = yield* providerService.getCapabilities(event.provider);
+            const files =
+              capabilities.supportsLiveTurnDiffPatch === true
+                ? parseCheckpointFilesFromUnifiedDiff(event.payload.unifiedDiff)
+                : [];
+            const maxTurnCount = currentThread.checkpoints.reduce(
               (max, c) => Math.max(max, c.checkpointTurnCount),
               0,
             );
+            const checkpointRef =
+              existingCheckpoint?.checkpointRef ??
+              rememberedPlaceholder?.checkpointRef ??
+              CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`);
+            const checkpointTurnCount =
+              existingCheckpoint?.checkpointTurnCount ??
+              rememberedPlaceholder?.checkpointTurnCount ??
+              maxTurnCount + 1;
+            providerDiffPlaceholdersByTurn.set(placeholderKey, {
+              checkpointRef,
+              checkpointTurnCount,
+            });
             // Leave assistantMessageId undefined on the placeholder: the real
             // capture performed by CheckpointReactor will resolve the actual
             // assistant MessageId once the message is finalized. Emitting a
@@ -722,11 +710,11 @@ const make = Effect.gen(function* () {
               threadId: thread.id,
               turnId,
               completedAt: now,
-              checkpointRef: CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`),
+              checkpointRef,
               status: "missing",
-              files: [],
+              files,
               assistantMessageId: undefined,
-              checkpointTurnCount: maxTurnCount + 1,
+              checkpointTurnCount,
               createdAt: now,
             });
           }

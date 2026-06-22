@@ -358,6 +358,7 @@ export function UserMessageRow({
               terminalContexts={terminalContexts}
               chatTypographyStyle={userMessageTypographyStyle}
               resolvedTheme={resolvedTheme}
+              {...(row.message.mentions ? { mentionReferences: row.message.mentions } : {})}
             />
             {userMessagePreview.collapsible && (
               <button

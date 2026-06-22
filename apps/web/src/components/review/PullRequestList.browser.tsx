@@ -9,7 +9,11 @@ import { render } from "vitest-browser-react";
 import { PullRequestList } from "./PullRequestList";
 
 const nativeApiMock = vi.hoisted(() => ({
-  listPullRequests: vi.fn(async () => ({ pullRequests: [] as ReviewPullRequestSummary[] })),
+  listPullRequests: vi.fn(
+    async (): Promise<ReviewListPullRequestsResult> => ({
+      pullRequests: [] as ReviewPullRequestSummary[],
+    }),
+  ),
 }));
 
 vi.mock("~/nativeApi", () => ({
@@ -48,7 +52,8 @@ function pullRequest(input: {
 async function mountList(
   result: ReviewListPullRequestsResult | ReadonlyArray<ReviewPullRequestSummary>,
 ) {
-  const listResult = Array.isArray(result) ? { pullRequests: result } : result;
+  const listResult: ReviewListPullRequestsResult =
+    "pullRequests" in result ? result : { pullRequests: result };
   nativeApiMock.listPullRequests.mockResolvedValue(listResult);
   const host = document.createElement("div");
   host.className = "h-[700px] bg-background text-foreground";
@@ -104,6 +109,7 @@ describe("PullRequestList filters", () => {
       await expect.element(page.getByText("Bug labeled work")).toBeVisible();
       await expect.element(page.getByText("Feature labeled work")).toBeVisible();
 
+      await page.getByRole("button", { name: "Filter" }).click();
       await page.getByRole("button", { name: "Label", exact: true }).click();
       await page.getByText("bug", { exact: true }).click();
       await vi.waitFor(() => {
@@ -240,9 +246,9 @@ describe("PullRequestList filters", () => {
   });
 
   it("loads a larger review window when the list scrolls near the bottom", async () => {
-    let resolveNextWindow:
-      | ((value: ReviewListPullRequestsResult) => void)
-      | null = null;
+    const nextWindow: { resolve: ((value: ReviewListPullRequestsResult) => void) | null } = {
+      resolve: null,
+    };
     const mounted = await mountList({
       pullRequests: Array.from({ length: 50 }, (_, index) =>
         pullRequest({
@@ -267,7 +273,7 @@ describe("PullRequestList filters", () => {
       nativeApiMock.listPullRequests.mockImplementationOnce(
         () =>
           new Promise<ReviewListPullRequestsResult>((resolve) => {
-            resolveNextWindow = resolve;
+            nextWindow.resolve = resolve;
           }),
       );
 
@@ -290,7 +296,7 @@ describe("PullRequestList filters", () => {
       ]);
       expect(document.querySelectorAll('[role="listitem"]').length).toBeGreaterThan(0);
 
-      resolveNextWindow?.({
+      nextWindow.resolve?.({
         pullRequests: Array.from({ length: 100 }, (_, index) =>
           pullRequest({
             number: index + 1,

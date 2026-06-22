@@ -218,9 +218,7 @@ function syncReadyReviewChatSession(input: {
   readonly reviewChatTarget: ReturnType<typeof buildReviewChatTarget>;
   readonly modelSelection: ModelSelection;
 }): void {
-  const previousThread = useStore
-    .getState()
-    .threads.find((thread) => thread.id === input.threadId);
+  const previousThread = useStore.getState().threads.find((thread) => thread.id === input.threadId);
   useStore.getState().syncServerShellSnapshot(
     makeShellSnapshot({
       existingThreadId: input.threadId,
@@ -268,7 +266,7 @@ function syncReadyReviewChatSessionForEnsure(input: {
 
 function makeReadyReviewChatSnapshot(input: {
   readonly commands: readonly ClientOrchestrationCommand[];
-  readonly reviewChatTarget: ReturnType<typeof buildReviewChatTarget>;
+  readonly reviewChatTarget?: ReturnType<typeof buildReviewChatTarget> | undefined;
 }): OrchestrationShellSnapshot {
   const createCommand = input.commands.find(isThreadCreateCommand);
   const ensureCommand = input.commands.find(isThreadSessionEnsureCommand);
@@ -339,7 +337,7 @@ describe("reviewChatThread", () => {
     expect(createCommand?.reviewChatTarget?.headSha).toBe("abc123");
     expect(createCommand?.runtimeMode).toBe("approval-required");
     expect(turnCommand?.threadId).toBe(createCommand?.threadId);
-    expect(turnCommand?.message.text).toContain("Do not create a new worktree");
+    expect(turnCommand?.message.text).toContain("gh pr diff");
     expect(turnCommand?.message.text).toContain("What should I review first?");
     expect(commands.map((command) => command.type)).toEqual([
       "thread.create",
@@ -606,7 +604,7 @@ describe("reviewChatThread", () => {
     expect(result.status === "sent" ? result.turnRequestedAt : null).toBeTruthy();
     expect(commands.find(isThreadCreateCommand)).toBeUndefined();
     expect(turnCommand?.threadId).toBe(selectedThreadId);
-    expect(turnCommand?.message.text).toContain("Do not create a new worktree");
+    expect(turnCommand?.message.text).toContain("gh pr diff");
     expect(turnCommand?.message.text).toContain("Focus on the risky file");
   });
 
@@ -778,9 +776,7 @@ describe("reviewChatThread", () => {
           syncReadyReviewChatSessionForEnsure({ command, commands });
           return { sequence: commands.length };
         }),
-        getShellSnapshot: vi.fn(async () =>
-          makeReadyReviewChatSnapshot({ commands, reviewChatTarget: target }),
-        ),
+        getShellSnapshot: vi.fn(async () => makeReadyReviewChatSnapshot({ commands })),
         subscribeThread: vi.fn(async () => undefined),
       },
     };
@@ -821,9 +817,7 @@ describe("reviewChatThread", () => {
           syncReadyReviewChatSessionForEnsure({ command, commands });
           return { sequence: commands.length };
         }),
-        getShellSnapshot: vi.fn(async () =>
-          makeReadyReviewChatSnapshot({ commands, reviewChatTarget: target }),
-        ),
+        getShellSnapshot: vi.fn(async () => makeReadyReviewChatSnapshot({ commands })),
         subscribeThread: vi.fn(async () => undefined),
       },
     };
@@ -867,9 +861,7 @@ describe("reviewChatThread", () => {
           syncReadyReviewChatSessionForEnsure({ command, commands });
           return { sequence: commands.length };
         }),
-        getShellSnapshot: vi.fn(async () =>
-          makeReadyReviewChatSnapshot({ commands, reviewChatTarget: target }),
-        ),
+        getShellSnapshot: vi.fn(async () => makeReadyReviewChatSnapshot({ commands })),
         subscribeThread: vi.fn(async () => undefined),
       },
     };
@@ -921,9 +913,7 @@ describe("reviewChatThread", () => {
           }
           return { sequence: commands.length };
         }),
-        getShellSnapshot: vi.fn(async () =>
-          makeReadyReviewChatSnapshot({ commands, reviewChatTarget: target }),
-        ),
+        getShellSnapshot: vi.fn(async () => makeReadyReviewChatSnapshot({ commands })),
         subscribeThread: vi.fn(async () => undefined),
       },
     };

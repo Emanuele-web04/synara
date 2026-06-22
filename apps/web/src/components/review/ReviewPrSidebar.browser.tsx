@@ -74,6 +74,7 @@ const nativeApiMock = vi.hoisted(() => ({
       state: "open" as const,
       isDraft: false,
       author: "Tbsheff",
+      authorAvatarUrl: "https://avatars.example/tbsheff.png",
       baseBranch: "main",
       headBranch: "test-speed/06-harness-docs",
       body: "",
@@ -82,12 +83,23 @@ const nativeApiMock = vi.hoisted(() => ({
       additions: 251,
       deletions: 0,
       changedFiles: 2,
-      reviewDecision: null,
+      reviewDecision: "REVIEW_REQUIRED" as const,
       mergeable: "MERGEABLE" as const,
       milestone: null,
       labels: [],
       assignees: [],
-      reviewers: [],
+      reviewers: [
+        {
+          login: "global-approver",
+          avatarUrl: "https://avatars.example/global-approver.png",
+          state: "REVIEW_REQUIRED" as const,
+        },
+        {
+          login: "tech-lead",
+          avatarUrl: "https://avatars.example/tech-lead.png",
+          state: "APPROVED" as const,
+        },
+      ],
     },
   })),
   loadConversation: vi.fn(async () => ({ events: [] })),
@@ -129,6 +141,7 @@ const DETAIL = {
   state: "open",
   isDraft: false,
   author: "Tbsheff",
+  authorAvatarUrl: "https://avatars.example/tbsheff.png",
   baseBranch: "main",
   headBranch: "test-speed/06-harness-docs",
   body: "",
@@ -138,18 +151,29 @@ const DETAIL = {
   deletions: 0,
   changedFiles: 2,
   commitsCount: 1,
-  reviewDecision: null,
+  reviewDecision: "REVIEW_REQUIRED",
   mergeable: "MERGEABLE",
   checksStatus: "failing",
   milestone: null,
   labels: [],
   assignees: [],
-  reviewers: [],
+  reviewers: [
+    {
+      login: "global-approver",
+      avatarUrl: "https://avatars.example/global-approver.png",
+      state: "REVIEW_REQUIRED",
+    },
+    {
+      login: "tech-lead",
+      avatarUrl: "https://avatars.example/tech-lead.png",
+      state: "APPROVED",
+    },
+  ],
 } satisfies ReviewPullRequestDetail;
 
 const CHECKS = [
-  { name: "test", state: "failure", workflow: "CI" },
   { name: "lint", state: "success", workflow: "CI" },
+  { name: "test", state: "failure", workflow: "CI" },
 ] satisfies ReadonlyArray<ReviewCheck>;
 
 async function mountSidebar() {
@@ -220,6 +244,23 @@ async function renderWithQueryClient(
   };
 }
 
+function activeInfoOption(): HTMLElement {
+  const option = document.querySelector<HTMLElement>(
+    '[data-uidotsh-option$=" (current)"]:not([hidden])',
+  );
+  expect(option).toBeTruthy();
+  expect(option?.hidden).toBe(false);
+  return option!;
+}
+
+function exactTextElementWithin(root: HTMLElement, text: string): HTMLElement {
+  const element = Array.from(root.querySelectorAll<HTMLElement>("*")).find(
+    (candidate) => candidate.textContent?.trim() === text,
+  );
+  expect(element).toBeTruthy();
+  return element!;
+}
+
 describe("ReviewPrSidebar", () => {
   afterEach(() => {
     document.body.innerHTML = "";
@@ -237,14 +278,24 @@ describe("ReviewPrSidebar", () => {
       await expect.element(page.getByRole("tab", { name: "Info" })).toBeInTheDocument();
       await expect.element(page.getByRole("heading", { name: "Ask Devin" })).toBeInTheDocument();
       await page.getByRole("tab", { name: "Info" }).click();
-      await expect.element(page.getByText("test")).toBeInTheDocument();
-      await expect.element(page.getByText("Details")).toBeInTheDocument();
-      const checksTop = page
-        .getByText("Checks", { exact: true })
-        .element()
-        .getBoundingClientRect().top;
-      const detailsTop = page.getByText("Details").element().getBoundingClientRect().top;
-      expect(checksTop).toBeLessThan(detailsTop);
+      await vi.waitFor(() => {
+        const infoOption = activeInfoOption();
+        expect(infoOption.textContent).toContain("test");
+        expect(infoOption.textContent).toContain("1 failing");
+        expect(infoOption.textContent).toContain("CI is blocking this PR.");
+        expect(infoOption.textContent).toContain("Reviewers");
+        expect(infoOption.textContent).toContain("global-approver");
+      });
+      const infoOption = activeInfoOption();
+      expect(infoOption.querySelectorAll('[aria-label^="Reviewers:"]').length).toBeGreaterThan(1);
+      const failedCheckTop = exactTextElementWithin(infoOption, "test").getBoundingClientRect().top;
+      const passedCheckTop = exactTextElementWithin(infoOption, "lint").getBoundingClientRect().top;
+      expect(failedCheckTop).toBeLessThan(passedCheckTop);
+      expect(infoOption.textContent).toContain("Activity");
+      const ciTop = exactTextElementWithin(infoOption, "CI").getBoundingClientRect().top;
+      const activityTop = exactTextElementWithin(infoOption, "Activity").getBoundingClientRect()
+        .top;
+      expect(ciTop).toBeLessThan(activityTop);
 
       await page.getByRole("tab", { name: "Chat" }).click();
       await expect
@@ -372,10 +423,12 @@ describe("ReviewPrSidebar", () => {
   });
 
   it("shows thinking after a queued PR chat turn is accepted before assistant text arrives", async () => {
-    let sendInput: Parameters<typeof sendReviewChatQuestion>[0] | null = null;
+    const sendInput: { current: Parameters<typeof sendReviewChatQuestion>[0] | null } = {
+      current: null,
+    };
     const queuedAt = new Date().toISOString();
     sendReviewChatQuestionMock.mockImplementationOnce(async (input) => {
-      sendInput = input;
+      sendInput.current = input;
       return {
         status: "queued",
         threadId: ThreadId.makeUnsafe("thread-review-chat-queued-thinking"),
@@ -391,7 +444,7 @@ describe("ReviewPrSidebar", () => {
       await page.getByRole("button", { name: "Send PR chat question" }).click();
 
       await expect.element(page.getByText("Starting review agent...")).toBeVisible();
-      sendInput?.onQueuedTurnStarted?.(
+      sendInput.current?.onQueuedTurnStarted?.(
         ThreadId.makeUnsafe("thread-review-chat-queued-thinking"),
         queuedAt,
       );
@@ -402,10 +455,12 @@ describe("ReviewPrSidebar", () => {
   });
 
   it("shows thinking once a queued PR chat turn is handed to the provider", async () => {
-    let sendInput: Parameters<typeof sendReviewChatQuestion>[0] | null = null;
+    const sendInput: { current: Parameters<typeof sendReviewChatQuestion>[0] | null } = {
+      current: null,
+    };
     const queuedAt = new Date().toISOString();
     sendReviewChatQuestionMock.mockImplementationOnce(async (input) => {
-      sendInput = input;
+      sendInput.current = input;
       return {
         status: "queued",
         threadId: ThreadId.makeUnsafe("thread-review-chat-provider-starting"),
@@ -421,7 +476,7 @@ describe("ReviewPrSidebar", () => {
       await page.getByRole("button", { name: "Send PR chat question" }).click();
 
       await expect.element(page.getByText("Starting review agent...")).toBeVisible();
-      sendInput?.onQueuedProviderStartRequested?.(
+      sendInput.current?.onQueuedProviderStartRequested?.(
         ThreadId.makeUnsafe("thread-review-chat-provider-starting"),
         queuedAt,
       );
@@ -816,7 +871,7 @@ describe("ReviewPrSidebar", () => {
 
     try {
       await expect.element(page.getByRole("tab", { name: "Info" })).toBeVisible();
-      await expect.element(page.getByText("test")).toBeVisible();
+      expect(activeInfoOption().textContent).toContain("test");
       await page.getByRole("tab", { name: "Chat" }).click();
       await expect.element(page.getByRole("heading", { name: "Ask Devin" })).toBeVisible();
       await page.getByRole("button", { name: "Collapse AI chat sidebar" }).click();

@@ -28,6 +28,7 @@ import {
 } from "./codexAppServer.protocol.ts";
 import {
   buildCodexInitializeParams,
+  CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES,
   ensureIsolatedScratchWorkspace,
   mapCodexRuntimeMode,
   normalizeCodexModelSlug,
@@ -243,6 +244,11 @@ export async function startSession(
     const discoveryCacheKey =
       input.createTransport === undefined ? `${codexBinaryPath}${codexHomePath ?? ""}` : undefined;
     const usesReviewProfile = input.reviewProfile === "review-chat";
+    // dangerFullAccess is the only sandbox with the network gh needs; no-mutation is enforced by
+    // the PR-context prompt, not the sandbox.
+    if (usesReviewProfile) {
+      context.sessionApprovalOverride = CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES;
+    }
     const deferStartupDiscovery = input.createTransport === undefined && usesReviewProfile;
     const usedDiscoveryCache =
       !deferStartupDiscovery &&
@@ -424,10 +430,11 @@ export async function startSession(
       skillCount: null,
     }).pipe(deps.runPromise);
     if (deferStartupDiscovery) {
+      const startedContext = context;
       void deps
-        .resolveStartupDiscovery(context, discoveryCacheKey)
+        .resolveStartupDiscovery(startedContext, discoveryCacheKey)
         .then((deferredDiscovery) => {
-          applyCodexAccountSnapshot(context, deferredDiscovery.account);
+          applyCodexAccountSnapshot(startedContext, deferredDiscovery.account);
         })
         .catch((error: unknown) => {
           console.log("codex deferred startup discovery failed", error);

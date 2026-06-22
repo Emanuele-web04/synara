@@ -8,12 +8,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useCallback, useMemo, useState } from "react";
 
-import { GitPullRequestIcon } from "~/lib/icons";
-import {
-  reviewListPullRequestsQueryOptions,
-  reviewQueryKeys,
-} from "~/lib/reviewReactQuery";
+import { GitPullRequestIcon, RefreshCwIcon, TriangleAlertIcon, XIcon } from "~/lib/icons";
+import { reviewListPullRequestsQueryOptions, reviewQueryKeys } from "~/lib/reviewReactQuery";
 import { rpcErrorMessage } from "~/lib/rpcErrorMessage";
+import { cn } from "~/lib/utils";
+import { Button } from "../ui/button";
 import { EmptyState } from "./reviewPrimitives";
 import { PullRequestRow } from "./PullRequestRow";
 import { ReviewFilterBar } from "./ReviewFilterBar";
@@ -51,17 +50,13 @@ export function PullRequestList(props: {
     scopeKey: string;
     limit: number;
   } | null>(null);
-  const serverFilters = useMemo(
-    () => toReviewServerListFilters(activeFilters),
-    [activeFilters],
-  );
+  const serverFilters = useMemo(() => toReviewServerListFilters(activeFilters), [activeFilters]);
   const serverSort = sortId === "updated" ? undefined : sortId;
   const listScopeKey = useMemo(
     () => JSON.stringify([props.cwd, serverSearch.trim(), serverFilters, serverSort]),
     [props.cwd, serverSearch, serverFilters, serverSort],
   );
-  const resultLimit =
-    resultLimitState?.scopeKey === listScopeKey ? resultLimitState.limit : null;
+  const resultLimit = resultLimitState?.scopeKey === listScopeKey ? resultLimitState.limit : null;
   const pullRequestsQuery = useQuery({
     ...reviewListPullRequestsQueryOptions({
       cwd: props.cwd,
@@ -134,11 +129,36 @@ export function PullRequestList(props: {
     });
   };
 
+  const hasRefinement = activeFilters.length > 0 || search.trim().length > 0;
+  const clearRefinement = useCallback(() => {
+    setActiveFilters([]);
+    setSearch("");
+  }, []);
+
   if (pullRequestsQuery.isError) {
     return (
-      <p className="px-3 py-6 text-center text-[11px] text-destructive">
-        {rpcErrorMessage(pullRequestsQuery.error) ?? "Failed to load pull requests."}
-      </p>
+      <EmptyState
+        icon={<TriangleAlertIcon className="text-destructive" />}
+        title="Couldn't load pull requests"
+        action={
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 rounded-full bg-background/72 px-3 text-[12px] shadow-none"
+            onClick={() => void pullRequestsQuery.refetch()}
+            disabled={pullRequestsQuery.isFetching}
+          >
+            <RefreshCwIcon
+              className={cn("size-4", pullRequestsQuery.isFetching && "animate-spin")}
+            />
+            Try again
+          </Button>
+        }
+      >
+        {rpcErrorMessage(pullRequestsQuery.error) ??
+          "GitHub didn't return a result. Check your connection and retry."}
+      </EmptyState>
     );
   }
 
@@ -177,8 +197,27 @@ export function PullRequestList(props: {
       />
       {isRefreshing ? <ReviewSyncStatusStrip className="rounded-[1.15rem]" /> : null}
       {visible.length === 0 ? (
-        <EmptyState icon={<GitPullRequestIcon />} title="No matches">
-          No pull requests match your filters.
+        <EmptyState
+          icon={<GitPullRequestIcon />}
+          title="No matches"
+          action={
+            hasRefinement ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-8 rounded-full bg-background/72 px-3 text-[12px] shadow-none"
+                onClick={clearRefinement}
+              >
+                <XIcon className="size-4" />
+                Clear filters
+              </Button>
+            ) : undefined
+          }
+        >
+          {search.trim().length > 0
+            ? "No pull requests match your search and filters."
+            : "No pull requests match your filters."}
         </EmptyState>
       ) : (
         <VirtualizedPullRequestRows
@@ -194,6 +233,11 @@ export function PullRequestList(props: {
           )}
         />
       )}
+      {visible.length > 0 && resultCountIsIncomplete && !canLoadMore ? (
+        <p className="px-3 pt-0.5 text-center text-[11px] text-muted-foreground/70">
+          Showing the first {visible.length}. Refine search or filters to narrow the results.
+        </p>
+      ) : null}
     </div>
   );
 }

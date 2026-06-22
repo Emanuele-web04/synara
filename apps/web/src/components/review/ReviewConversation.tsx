@@ -24,6 +24,40 @@ import { ReviewPill, formatRelativeReviewTime, reviewTextareaClassName } from ".
 type CommentEvent = Extract<ReviewTimelineEvent, { _tag: "comment" }>;
 type ReviewEvent = Extract<ReviewTimelineEvent, { _tag: "review" }>;
 type CommitEvent = Extract<ReviewTimelineEvent, { _tag: "commit" }>;
+type StateEvent = Exclude<ReviewTimelineEvent, CommentEvent | ReviewEvent | CommitEvent>;
+
+function describeStateEvent(event: StateEvent): string {
+  const actor = event.actor || "someone";
+  switch (event._tag) {
+    case "labeled":
+      return `${actor} ${event.added ? "added" : "removed"} label ${event.label}`;
+    case "assigned":
+      return `${actor} ${event.added ? "assigned" : "unassigned"} ${event.assignee}`;
+    case "milestoned":
+      return `${actor} ${event.added ? "added this to" : "removed this from"} milestone ${event.milestone}`;
+    case "reviewRequested":
+      return `${actor} requested review from ${event.requestedReviewer}`;
+    case "merged":
+      return `${actor} merged this`;
+    case "closed":
+      return `${actor} closed this`;
+    case "reopened":
+      return `${actor} reopened this`;
+    case "headRefForcePushed":
+      return `${actor} force-pushed`;
+  }
+}
+
+function TimelineStateEvent(props: { event: StateEvent }) {
+  const when = formatRelativeReviewTime(props.event.createdAt);
+  return (
+    <div className="flex min-w-0 items-center gap-2 px-1 text-[11px] text-muted-foreground">
+      <span className="size-1.5 shrink-0 rounded-full bg-border" aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate">{describeStateEvent(props.event)}</span>
+      {when ? <span className="shrink-0 tabular-nums">{when}</span> : null}
+    </div>
+  );
+}
 
 function CommentCard(props: {
   author: string;
@@ -53,6 +87,7 @@ function CommentCard(props: {
         <ChatMarkdown
           text={props.body}
           cwd={props.cwd ?? undefined}
+          allowHtml
           className="chat-markdown text-[13px]"
         />
       ) : null}
@@ -71,6 +106,7 @@ function SummaryCard(props: { body: string; cwd: string | null }) {
       <ChatMarkdown
         text={props.body.trim().length > 0 ? props.body : "_No description provided._"}
         cwd={props.cwd ?? undefined}
+        allowHtml
         className="chat-markdown text-[13px] leading-relaxed"
       />
     </article>
@@ -334,7 +370,7 @@ export function ReviewConversation(props: {
         </div>
       ) : null}
 
-      {props.events.map((event) => {
+      {props.events.map((event, index) => {
         switch (event._tag) {
           case "comment":
             return <TimelineComment key={event.id} event={event} cwd={props.cwd} />;
@@ -343,7 +379,7 @@ export function ReviewConversation(props: {
           case "commit":
             return <TimelineCommit key={event.oid} event={event} />;
           default:
-            return null;
+            return <TimelineStateEvent key={`${event._tag}-${String(index)}`} event={event} />;
         }
       })}
 

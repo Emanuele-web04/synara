@@ -968,6 +968,84 @@ describe("store pure functions", () => {
     ]);
   });
 
+  it("keeps streamed assistant text intact when provider-unhandled activity interleaves chunks", () => {
+    const assistantId = MessageId.makeUnsafe("assistant-interleaved");
+    const turnId = TurnId.makeUnsafe("turn-interleaved");
+    const threadId = ThreadId.makeUnsafe("thread-1");
+
+    const next = applyOrchestrationEvents(makeState(makeThread()), [
+      makeDomainEvent(
+        "thread.message-sent",
+        {
+          threadId,
+          messageId: assistantId,
+          role: "assistant",
+          text: "Token A",
+          turnId,
+          streaming: true,
+          createdAt: "2026-02-27T00:01:05.000Z",
+          updatedAt: "2026-02-27T00:01:05.000Z",
+          attachments: [],
+          source: "native",
+        },
+        { sequence: 1 },
+      ),
+      makeDomainEvent(
+        "thread.activity-appended",
+        {
+          threadId,
+          activity: makeActivity({
+            id: "activity-provider-unhandled",
+            kind: "provider.unhandled",
+            summary: "Unhandled provider event",
+            tone: "info",
+            turnId: String(turnId),
+            payload: {
+              provider: "codex",
+              source: "codex.app-server",
+              method: "future/event",
+              nativeEventName: "future/event",
+              preview: "Unhandled Codex future event.",
+              reason: "no_mapper",
+            },
+          }),
+        },
+        { sequence: 2 },
+      ),
+      makeDomainEvent(
+        "thread.message-sent",
+        {
+          threadId,
+          messageId: assistantId,
+          role: "assistant",
+          text: " token B",
+          turnId,
+          streaming: true,
+          createdAt: "2026-02-27T00:01:05.000Z",
+          updatedAt: "2026-02-27T00:01:05.050Z",
+          attachments: [],
+          source: "native",
+        },
+        { sequence: 3 },
+      ),
+    ]);
+
+    expect(next.threads[0]?.messages).toMatchObject([
+      {
+        id: assistantId,
+        text: "Token A token B",
+        streaming: true,
+      },
+    ]);
+    expect(next.threads[0]?.activities).toHaveLength(1);
+    expect(next.threads[0]?.activities[0]).toMatchObject({
+      id: EventId.makeUnsafe("activity-provider-unhandled"),
+      kind: "provider.unhandled",
+      summary: "Unhandled provider event",
+      tone: "info",
+    });
+  });
+
   it("replaces a non-streaming user message when an active-tail edit reuses its message id", () => {
     const userId = MessageId.makeUnsafe("user-active-edit");
     const initialState = makeState(

@@ -172,18 +172,7 @@ export function getVisibleSidebarEntriesForPreview<
   visibleEntries: T[];
 } {
   const { activeEntryId, entries, isExpanded, previewLimit } = input;
-  const orderedRootRowIds: Thread["id"][] = [];
-  const seenRootRowIds = new Set<Thread["id"]>();
-
-  for (const entry of entries) {
-    if (seenRootRowIds.has(entry.rootRowId)) {
-      continue;
-    }
-    seenRootRowIds.add(entry.rootRowId);
-    orderedRootRowIds.push(entry.rootRowId);
-  }
-
-  const hasHiddenEntries = orderedRootRowIds.length > previewLimit;
+  const hasHiddenEntries = entries.length > previewLimit;
   if (!hasHiddenEntries || isExpanded) {
     return {
       hasHiddenEntries,
@@ -191,19 +180,30 @@ export function getVisibleSidebarEntriesForPreview<
     };
   }
 
-  const visibleRootRowIds = new Set(orderedRootRowIds.slice(0, previewLimit));
+  const previewEntries = entries.slice(0, previewLimit);
   const activeRootRowId =
     activeEntryId !== undefined
       ? (entries.find((entry) => entry.rowId === activeEntryId)?.rootRowId ?? null)
       : null;
 
-  if (activeRootRowId) {
-    visibleRootRowIds.add(activeRootRowId);
+  if (
+    !activeRootRowId ||
+    previewEntries.some(
+      (entry) => entry.rowId === activeEntryId || entry.rootRowId === activeRootRowId,
+    )
+  ) {
+    return {
+      hasHiddenEntries: true,
+      visibleEntries: previewEntries,
+    };
   }
 
+  const visibleRowIds = new Set(previewEntries.map((entry) => entry.rowId));
   return {
     hasHiddenEntries: true,
-    visibleEntries: entries.filter((entry) => visibleRootRowIds.has(entry.rootRowId)),
+    visibleEntries: entries.filter(
+      (entry) => visibleRowIds.has(entry.rowId) || entry.rootRowId === activeRootRowId,
+    ),
   };
 }
 

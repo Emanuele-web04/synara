@@ -42,10 +42,7 @@ function SyncStepIcon(props: { state: ReviewInitialSyncStepState }) {
     );
   }
   return (
-    <GitPullRequestIcon
-      className="size-4 shrink-0 text-muted-foreground/55"
-      aria-hidden="true"
-    />
+    <GitPullRequestIcon className="size-4 shrink-0 text-muted-foreground/55" aria-hidden="true" />
   );
 }
 

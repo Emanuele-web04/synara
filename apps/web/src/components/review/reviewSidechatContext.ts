@@ -64,7 +64,12 @@ export interface ReviewSidechatContextPayload {
 }
 
 type ReviewSidechatRecentConversation = ReviewSidechatContextPayload["recentConversation"][number];
-type ReviewSidechatPromptIntent = "summary" | "checks" | "review-order" | "conversation" | "focused";
+type ReviewSidechatPromptIntent =
+  | "summary"
+  | "checks"
+  | "review-order"
+  | "conversation"
+  | "focused";
 
 function reviewCheckPromptRank(state: string): number {
   if (state === "failure") return 0;
@@ -131,7 +136,7 @@ function formatReviewFiles(payload: ReviewSidechatContextPayload, limit: number)
 
 function reviewFilesFallback(payload: ReviewSidechatContextPayload): string {
   if (payload.stats.files > 0) {
-    return `- File list not loaded yet. This PR reports ${String(payload.stats.files)} changed files; open Review changes for file-level context.`;
+    return `- Changed-file list not in this packet (${String(payload.stats.files)} files reported). Run \`gh pr diff ${String(payload.number)} --name-only\` to list them, or \`gh pr diff ${String(payload.number)}\` for the full diff.`;
   }
   return "- No changed files reported";
 }
@@ -168,8 +173,8 @@ function formatRecentConversation(payload: ReviewSidechatContextPayload, limit: 
 function promptBaseLines(payload: ReviewSidechatContextPayload): string[] {
   return [
     `PR #${payload.number}: ${payload.title}`,
-    "Role: PR review assistant in Synara. Do not create a new worktree, do not switch branches, and do not mutate files.",
-    "Answer concisely from this focused PR packet and existing repo context. Ask for more context instead of running setup.",
+    "Role: PR review assistant in Synara, running in the repository working directory with read-only git and gh access. Do not create a worktree, switch branches, or mutate files.",
+    `Inspect the real changes before answering file- or diff-level questions: run \`gh pr diff ${String(payload.number)}\` for the full diff, or \`gh pr view ${String(payload.number)} --json files,title,body,additions,deletions,commits\` for metadata and the changed-file list. The packet below is a summary, not the full change -- read the diff instead of guessing at structure.`,
     `Repository: ${payload.repositoryId ?? "unknown"}`,
     `URL: ${payload.url}`,
     `Branch: ${payload.headBranch} -> ${payload.baseBranch}`,

@@ -598,6 +598,9 @@ function normalizeReviewThreadComment(
   if (comment.url) {
     Object.assign(normalized, { url: comment.url });
   }
+  if (comment.id) {
+    Object.assign(normalized, { id: comment.id });
+  }
   return normalized;
 }
 
@@ -744,6 +747,7 @@ export function decodeGitHubJson<S extends Schema.Top>(
     | "listRepositoryPullRequests"
     | "getReviewPullRequestHeader"
     | "getReviewPullRequestOverview"
+    | "getReviewPullRequestAvatars"
     | "getReviewConversation"
     | "createPullRequestReviewWithComments"
     | "getPullRequestThreads"

@@ -59,7 +59,7 @@ export type MessagesTimelineRow =
       createdAt: string;
       proposedPlan: ProposedPlan;
     }
-  | { kind: "working"; id: string; createdAt: string | null };
+  | { kind: "working"; id: string; createdAt: string | null; label?: string };
 
 export interface StableMessagesTimelineRowsState {
   byId: Map<string, MessagesTimelineRow>;
@@ -103,6 +103,17 @@ export function resolveAssistantMessageCopyState({
     text: normalizedText,
     visible: showCopyButton && normalizedText !== null && !streaming,
   };
+}
+
+function deriveWorkingRowLabel(row: MessagesTimelineRow | undefined): string | undefined {
+  if (row?.kind !== "work") {
+    return undefined;
+  }
+  const latestEntry = row.groupedEntries.at(-1);
+  if (latestEntry?.tone === "thinking") {
+    return "Thinking";
+  }
+  return undefined;
 }
 
 // Builds the "Files changed" lookup keyed by the last assistant row in the
@@ -333,10 +344,12 @@ export function deriveMessagesTimelineRows(input: {
   flushPendingWorkGroup();
 
   if (input.isWorking) {
+    const workingLabel = deriveWorkingRowLabel(nextRows.at(-1));
     nextRows.push({
       kind: "working",
       id: "working-indicator-row",
       createdAt: input.activeTurnStartedAt,
+      ...(workingLabel ? { label: workingLabel } : {}),
     });
   }
 
@@ -554,6 +567,7 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
     a.command === b.command &&
     a.rawCommand === b.rawCommand &&
     a.preview === b.preview &&
+    a.streamKind === b.streamKind &&
     a.tone === b.tone &&
     a.itemType === b.itemType &&
     a.requestKind === b.requestKind &&
@@ -609,7 +623,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
   switch (a.kind) {
     case "working":
-      return a.createdAt === (b as typeof a).createdAt;
+      return a.createdAt === (b as typeof a).createdAt && a.label === (b as typeof a).label;
 
     case "proposed-plan":
       return a.proposedPlan === (b as typeof a).proposedPlan;

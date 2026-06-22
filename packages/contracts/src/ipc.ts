@@ -80,6 +80,13 @@ import type {
   ReviewProjectAccessResult,
   ReviewProjectBoard,
   ReviewRemoteThreadsResult,
+  ReviewResolveThreadInput,
+  ReviewResolveThreadResult,
+  ReviewReplyThreadInput,
+  ReviewReplyThreadResult,
+  ReviewUpdateThreadCommentInput,
+  ReviewDeleteThreadCommentInput,
+  ReviewThreadCommentMutationResult,
   ReviewRemoveCommentInput,
   ReviewRemoveCommentResult,
   ReviewRunAgentInput,
@@ -500,6 +507,14 @@ export interface NativeApi {
     removeComment: (input: ReviewRemoveCommentInput) => Promise<ReviewRemoveCommentResult>;
     submit: (input: ReviewSubmitInput) => Promise<ReviewSubmitResult>;
     loadRemoteThreads: (input: ReviewLoadRemoteThreadsInput) => Promise<ReviewRemoteThreadsResult>;
+    resolveThread: (input: ReviewResolveThreadInput) => Promise<ReviewResolveThreadResult>;
+    replyThread: (input: ReviewReplyThreadInput) => Promise<ReviewReplyThreadResult>;
+    updateThreadComment: (
+      input: ReviewUpdateThreadCommentInput,
+    ) => Promise<ReviewThreadCommentMutationResult>;
+    deleteThreadComment: (
+      input: ReviewDeleteThreadCommentInput,
+    ) => Promise<ReviewThreadCommentMutationResult>;
     runAgent: (input: ReviewRunAgentInput) => Promise<ReviewAgentResult>;
     checkProjectAccess: (
       input: ReviewCheckProjectAccessInput,

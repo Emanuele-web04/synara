@@ -49,8 +49,11 @@ vi.mock("~/nativeApi", () => ({
   }),
 }));
 
-function makePullRequests(count: number): ReviewPullRequestSummary[] {
-  return Array.from({ length: count }, (_, index) => ({
+function makePullRequest(
+  index: number,
+  overrides: Partial<ReviewPullRequestSummary> = {},
+): ReviewPullRequestSummary {
+  return {
     number: index + 1,
     title: `Review perf PR ${String(index + 1)}`,
     url: `https://github.com/acme/repo/pull/${String(index + 1)}`,
@@ -67,13 +70,19 @@ function makePullRequests(count: number): ReviewPullRequestSummary[] {
     reviewRequests: index % 7 === 0 ? ["tyler"] : [],
     labels: [],
     assignees: [],
-  }));
+    ...overrides,
+  };
+}
+
+function makePullRequests(count: number): ReviewPullRequestSummary[] {
+  return Array.from({ length: count }, (_, index) => makePullRequest(index));
 }
 
 async function mountBoard(
   result: ReviewListPullRequestsResult | ReadonlyArray<ReviewPullRequestSummary>,
 ) {
-  const listResult = Array.isArray(result) ? { pullRequests: result } : result;
+  const listResult: ReviewListPullRequestsResult =
+    "pullRequests" in result ? result : { pullRequests: result };
   await page.viewport(1440, 900);
   nativeApiMock.getViewer.mockResolvedValue({ login: "tyler" });
   nativeApiMock.loadBoardLanes.mockResolvedValue(boardLanesResult(listResult));
@@ -267,7 +276,9 @@ describe("ReviewBoard performance", () => {
 
   it("loads a larger review window when a board column scrolls near the bottom", async () => {
     const firstWindow = makePullRequests(50);
-    let resolveNextWindow: ((value: ReviewListPullRequestsResult) => void) | null = null;
+    const nextWindow: { resolve: ((value: ReviewListPullRequestsResult) => void) | null } = {
+      resolve: null,
+    };
     const mounted = await mountBoard({
       pullRequests: firstWindow,
       meta: {
@@ -286,7 +297,7 @@ describe("ReviewBoard performance", () => {
       nativeApiMock.listPullRequests.mockImplementationOnce(
         () =>
           new Promise<ReviewListPullRequestsResult>((resolve) => {
-            resolveNextWindow = resolve;
+            nextWindow.resolve = resolve;
           }),
       );
 
@@ -308,7 +319,7 @@ describe("ReviewBoard performance", () => {
       expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledTimes(1);
       expect(nativeApiMock.listPullRequests.mock.calls).toHaveLength(1);
 
-      resolveNextWindow?.({
+      nextWindow.resolve?.({
         pullRequests: makePullRequests(100),
         meta: {
           requestedLimit: 100,
@@ -328,11 +339,10 @@ describe("ReviewBoard performance", () => {
 
   it("trusts server search results after the debounced query catches up", async () => {
     const pullRequests = [
-      {
-        ...makePullRequests(1)[0],
+      makePullRequest(0, {
         number: 31,
         title: "Returned by GitHub body search",
-      },
+      }),
     ];
     const mounted = await mountBoard(pullRequests);
 
@@ -358,12 +368,11 @@ describe("ReviewBoard performance", () => {
 
   it("pushes the needs-my-review view to the server without emptying local results", async () => {
     const pullRequests = [
-      {
-        ...makePullRequests(1)[0],
+      makePullRequest(0, {
         number: 42,
         title: "Needs reviewer attention",
         reviewRequests: ["tyler"],
-      },
+      }),
     ];
     const mounted = await mountBoard(pullRequests);
 
@@ -388,12 +397,11 @@ describe("ReviewBoard performance", () => {
 
   it("queries merged pull requests when the merged view is selected", async () => {
     const pullRequests = [
-      {
-        ...makePullRequests(1)[0],
+      makePullRequest(0, {
         number: 88,
         title: "Merged review surface work",
         state: "merged",
-      },
+      }),
     ];
     const mounted = await mountBoard(pullRequests);
 
@@ -416,20 +424,18 @@ describe("ReviewBoard performance", () => {
 
   it("pushes status and check facets into the server list request", async () => {
     const pullRequests = [
-      {
-        ...makePullRequests(1)[0],
+      makePullRequest(0, {
         number: 51,
         title: "Approved passing work",
         reviewDecision: "APPROVED",
         checksStatus: "passing",
-      },
-      {
-        ...makePullRequests(1)[0],
+      }),
+      makePullRequest(0, {
         number: 52,
         title: "Pending review work",
         reviewDecision: null,
         checksStatus: "pending",
-      },
+      }),
     ];
     const mounted = await mountBoard(pullRequests);
 
@@ -466,18 +472,16 @@ describe("ReviewBoard performance", () => {
 
   it("pushes a single draft status facet into the server list request", async () => {
     const pullRequests = [
-      {
-        ...makePullRequests(1)[0],
+      makePullRequest(0, {
         number: 55,
         title: "Draft review work",
         isDraft: true,
-      },
-      {
-        ...makePullRequests(1)[0],
+      }),
+      makePullRequest(0, {
         number: 56,
         title: "Ready review work",
         isDraft: false,
-      },
+      }),
     ];
     const mounted = await mountBoard(pullRequests);
 
@@ -504,18 +508,16 @@ describe("ReviewBoard performance", () => {
 
   it("pushes a single base branch facet into the server list request", async () => {
     const pullRequests = [
-      {
-        ...makePullRequests(1)[0],
+      makePullRequest(0, {
         number: 53,
         title: "Main branch work",
         baseBranch: "main",
-      },
-      {
-        ...makePullRequests(1)[0],
+      }),
+      makePullRequest(0, {
         number: 54,
         title: "Release branch work",
         baseBranch: "release",
-      },
+      }),
     ];
     const mounted = await mountBoard(pullRequests);
 
@@ -542,19 +544,17 @@ describe("ReviewBoard performance", () => {
 
   it("pushes a single head branch facet into the server list request", async () => {
     const pullRequests = [
-      {
-        ...makePullRequests(1)[0],
+      makePullRequest(0, {
         number: 55,
         title: "Review board branch work",
         headBranch: "feature/review-board",
         headSelector: "octocat:feature/review-board",
-      },
-      {
-        ...makePullRequests(1)[0],
+      }),
+      makePullRequest(0, {
         number: 56,
         title: "Search branch work",
         headBranch: "bugfix/search",
-      },
+      }),
     ];
     const mounted = await mountBoard(pullRequests);
 
@@ -581,18 +581,16 @@ describe("ReviewBoard performance", () => {
 
   it("pushes a single label facet into the server list request", async () => {
     const pullRequests = [
-      {
-        ...makePullRequests(1)[0],
+      makePullRequest(0, {
         number: 57,
         title: "Bug labeled work",
         labels: ["bug"],
-      },
-      {
-        ...makePullRequests(1)[0],
+      }),
+      makePullRequest(0, {
         number: 58,
         title: "Feature labeled work",
         labels: ["feature"],
-      },
+      }),
     ];
     const mounted = await mountBoard(pullRequests);
 
@@ -621,18 +619,16 @@ describe("ReviewBoard performance", () => {
 
   it("pushes multi-label facets into the server list request", async () => {
     const pullRequests = [
-      {
-        ...makePullRequests(1)[0],
+      makePullRequest(0, {
         number: 57,
         title: "Bug labeled work",
         labels: ["bug"],
-      },
-      {
-        ...makePullRequests(1)[0],
+      }),
+      makePullRequest(0, {
         number: 58,
         title: "Feature labeled work",
         labels: ["feature"],
-      },
+      }),
     ];
     const mounted = await mountBoard(pullRequests);
 
@@ -669,18 +665,16 @@ describe("ReviewBoard performance", () => {
 
   it("pushes multi-author facets into the server list request", async () => {
     const pullRequests = [
-      {
-        ...makePullRequests(1)[0],
+      makePullRequest(0, {
         number: 59,
         title: "Alice authored work",
         author: "alice",
-      },
-      {
-        ...makePullRequests(1)[0],
+      }),
+      makePullRequest(0, {
         number: 60,
         title: "Bob authored work",
         author: "bob",
-      },
+      }),
     ];
     const mounted = await mountBoard(pullRequests);
 
@@ -719,18 +713,16 @@ describe("ReviewBoard performance", () => {
 
   it("pushes a single assignee facet into the server list request", async () => {
     const pullRequests = [
-      {
-        ...makePullRequests(1)[0],
+      makePullRequest(0, {
         number: 59,
         title: "Assigned review work",
         assignees: ["alice"],
-      },
-      {
-        ...makePullRequests(1)[0],
+      }),
+      makePullRequest(0, {
         number: 60,
         title: "Other assigned work",
         assignees: ["bob"],
-      },
+      }),
     ];
     const mounted = await mountBoard(pullRequests);
 
@@ -757,13 +749,12 @@ describe("ReviewBoard performance", () => {
 
   it("marks capped server-filtered counts as incomplete", async () => {
     const pullRequests = [
-      {
-        ...makePullRequests(1)[0],
+      makePullRequest(0, {
         number: 61,
         title: "Approved capped work",
         reviewDecision: "APPROVED",
         checksStatus: "passing",
-      },
+      }),
     ];
     const mounted = await mountBoard({
       pullRequests,

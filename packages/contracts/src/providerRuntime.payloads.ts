@@ -352,3 +352,11 @@ export const RuntimeErrorPayload = Schema.Struct({
   detail: Schema.optional(Schema.Unknown),
 });
 export type RuntimeErrorPayload = typeof RuntimeErrorPayload.Type;
+
+export const ProviderUnhandledPayload = Schema.Struct({
+  nativeEventName: TrimmedNonEmptyStringSchema,
+  reason: TrimmedNonEmptyStringSchema,
+  redactedPayloadPreview: Schema.optional(Schema.String),
+  detail: Schema.optional(Schema.Unknown),
+});
+export type ProviderUnhandledPayload = typeof ProviderUnhandledPayload.Type;

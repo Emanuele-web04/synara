@@ -294,7 +294,9 @@ export function registerMainIpc(ipcMain: IpcMain, deps: MainIpcDeps): void {
   });
 
   ipcMain.removeHandler(WINDOW_GET_STATE_CHANNEL);
-  ipcMain.handle(WINDOW_GET_STATE_CHANNEL, async () => getDesktopWindowState(getTargetWindow(deps)));
+  ipcMain.handle(WINDOW_GET_STATE_CHANNEL, async () =>
+    getDesktopWindowState(getTargetWindow(deps)),
+  );
 
   ipcMain.removeAllListeners(ZOOM_FACTOR_CHANNEL);
   ipcMain.on(ZOOM_FACTOR_CHANNEL, (event: IpcMainEvent) => {

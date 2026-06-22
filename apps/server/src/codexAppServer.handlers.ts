@@ -119,7 +119,11 @@ export function handleStdoutLine(
   }
 
   if (isServerNotification(parsed)) {
-    handleServerNotification(deps, deps.resolveInboundContext?.(context, parsed) ?? context, parsed);
+    handleServerNotification(
+      deps,
+      deps.resolveInboundContext?.(context, parsed) ?? context,
+      parsed,
+    );
     return;
   }
 

@@ -2,6 +2,7 @@ import { it } from "@effect/vitest";
 import type {
   ReviewBoardLanesResult,
   ReviewListPullRequestsResult,
+  ReviewPullRequestOverview,
   ReviewPullRequestSummary,
   ReviewUpdatedPayload,
 } from "@t3tools/contracts";
@@ -25,9 +26,121 @@ import {
   type ReviewCacheStoreShape,
   type ReviewCacheWrite,
 } from "../Services/ReviewCacheStore.ts";
-import { ReviewSource } from "../Services/ReviewSource.ts";
+import {
+  ReviewPullRequestStore,
+  type ReviewPullRequestStoreShape,
+} from "../Services/ReviewPullRequestStore.ts";
+import { ReviewSource, type ReviewSourceShape } from "../Services/ReviewSource.ts";
+import { ReviewSync, type ReviewSyncShape } from "../Services/ReviewSync.ts";
 import { ReviewUpdateBus } from "../Services/ReviewUpdateBus.ts";
+import { deriveReviewLane } from "../reviewLane.ts";
 import { ReviewSourceLive } from "./ReviewSource.ts";
+
+function boardSummary(
+  overrides: Partial<ReviewPullRequestSummary> & { number: number },
+): ReviewPullRequestSummary {
+  return {
+    number: overrides.number,
+    title: overrides.title ?? `PR ${String(overrides.number)}`,
+    url: overrides.url ?? `https://github.com/acme/repo/pull/${String(overrides.number)}`,
+    baseBranch: overrides.baseBranch ?? "main",
+    headBranch: overrides.headBranch ?? `branch-${String(overrides.number)}`,
+    ...(overrides.headSelector !== undefined ? { headSelector: overrides.headSelector } : {}),
+    author: overrides.author ?? "alice",
+    updatedAt: overrides.updatedAt ?? "2026-06-16T00:00:00.000Z",
+    state: overrides.state ?? "open",
+    reviewDecision: overrides.reviewDecision ?? null,
+    isDraft: overrides.isDraft ?? false,
+    additions: overrides.additions ?? 1,
+    deletions: overrides.deletions ?? 0,
+    checksStatus: overrides.checksStatus ?? "none",
+    reviewRequests: overrides.reviewRequests ?? [],
+    labels: overrides.labels ?? [],
+    assignees: overrides.assignees ?? [],
+  };
+}
+
+function fakePullRequestStore(
+  pullRequests: ReadonlyArray<ReviewPullRequestSummary>,
+  tokenIdentity = "gh-user-v2:tyler",
+): ReviewPullRequestStoreShape {
+  const byLane = new Map<string, ReviewPullRequestSummary[]>();
+  for (const pullRequest of pullRequests) {
+    const lane = deriveReviewLane(pullRequest);
+    if (lane === "merged") {
+      continue;
+    }
+    const existing = byLane.get(lane) ?? [];
+    existing.push(pullRequest);
+    byLane.set(lane, existing);
+  }
+  for (const lane of byLane.values()) {
+    lane.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  }
+  return {
+    upsertPullRequest: () => Effect.void,
+    upsertPullRequests: () => Effect.void,
+    hasOpenPullRequests: () => Effect.succeed(pullRequests.length > 0),
+    getLane: (input) => Effect.succeed((byLane.get(input.lane) ?? []).slice(0, input.limit)),
+    queryPullRequests: (input) => {
+      const matched = pullRequests.filter((pr) => {
+        if (input.state !== "all" && pr.state !== input.state) return false;
+        if ((input.lanes?.length ?? 0) > 0 && !input.lanes!.includes(deriveReviewLane(pr)))
+          return false;
+        if ((input.authors?.length ?? 0) > 0 && !input.authors!.includes(pr.author)) return false;
+        if ((input.baseBranches?.length ?? 0) > 0 && !input.baseBranches!.includes(pr.baseBranch))
+          return false;
+        if (
+          (input.headBranches?.length ?? 0) > 0 &&
+          !input.headBranches!.includes(pr.headBranch) &&
+          !(pr.headSelector !== undefined && input.headBranches!.includes(pr.headSelector))
+        )
+          return false;
+        if (input.draft === true && !pr.isDraft) return false;
+        if (
+          (input.labels?.length ?? 0) > 0 &&
+          !(pr.labels ?? []).some((label) => input.labels!.includes(label))
+        )
+          return false;
+        if (
+          (input.assignees?.length ?? 0) > 0 &&
+          !(pr.assignees ?? []).some((login) => input.assignees!.includes(login))
+        )
+          return false;
+        if (
+          input.reviewRequested !== undefined &&
+          !(pr.reviewRequests ?? []).includes(input.reviewRequested)
+        )
+          return false;
+        return true;
+      });
+      const sorted = [...matched].sort((a, b) =>
+        input.sort === "size"
+          ? b.additions + b.deletions - (a.additions + a.deletions)
+          : Date.parse(b.updatedAt) - Date.parse(a.updatedAt),
+      );
+      return Effect.succeed(sorted.slice(0, input.limit));
+    },
+    getOpenContentHashes: () =>
+      Effect.succeed(new Map(pullRequests.map((pr) => [pr.number, String(pr.number)] as const))),
+    tombstoneExcept: () => Effect.void,
+    clearRepository: () => Effect.void,
+    getSyncState: () =>
+      Effect.succeed(
+        Option.some({
+          repositoryId: "repo",
+          tokenIdentity,
+          lastSeenUpdatedAt: null,
+          lastSyncedAt: Number.MAX_SAFE_INTEGER,
+          fullResyncedAt: null,
+          lastGraphqlCost: null,
+          pointsRemaining: null,
+          rateResetAt: null,
+        }),
+      ),
+    upsertSyncState: () => Effect.void,
+  };
+}
 
 interface RecordedListCall {
   readonly cwd: string;
@@ -57,6 +170,25 @@ interface RecordedCacheWrite {
   readonly tokenIdentity: string;
 }
 
+interface RecordedSyncCall {
+  readonly cwd: string;
+  readonly repositoryId: string;
+  readonly tokenIdentity: string;
+  readonly mode?: "delta" | "full";
+}
+
+const fakeReviewSync: ReviewSyncShape = {
+  syncRepository: () =>
+    Effect.succeed({
+      upserted: 0,
+      skippedUnchanged: 0,
+      pagesFetched: 0,
+      reconciled: false,
+      stopReason: "end",
+      pointsRemaining: null,
+    }),
+};
+
 function unexpected(method: string): never {
   throw new Error(`Unexpected ReviewSource test call: ${method}`);
 }
@@ -69,7 +201,6 @@ function ghPr(
   overrides: Partial<GitHubReviewPullRequest> & { readonly number: number },
 ): GitHubReviewPullRequest {
   return {
-    number: overrides.number,
     title: "Pull request",
     url: `https://github.com/acme/demo/pull/${String(overrides.number)}`,
     baseRefName: "main",
@@ -92,21 +223,26 @@ function ghPr(
 function makeLayer(options: {
   readonly pullRequests: ReadonlyArray<GitHubReviewPullRequest>;
   readonly viewerLogin?: string;
+  readonly boardLanes?: ReadonlyArray<ReviewPullRequestSummary>;
+  readonly mirrorTokenIdentity?: string;
 }) {
   const recorded = {
     listCalls: [] as RecordedListCall[],
     cacheWrites: [] as RecordedCacheWrite[],
     published: [] as ReviewUpdatedPayload[],
+    syncCalls: [] as RecordedSyncCall[],
     authenticatedUserCalls: 0,
     repositoryIdCalls: 0,
   };
+  const viewerLogin = options.viewerLogin ?? "tyler";
+  const tokenIdentity = `gh-user-v2:${viewerLogin}`;
 
   const gitHubCli: GitHubCliShape = {
     getAuthenticatedUser: () =>
       Effect.sync(() => {
         recorded.authenticatedUserCalls += 1;
         return {
-          login: options.viewerLogin ?? "tyler",
+          login: viewerLogin,
           avatarUrl: "https://avatar.test",
         };
       }),
@@ -126,12 +262,18 @@ function makeLayer(options: {
       Effect.fail(new GitHubCliError({ operation: "test", detail: "unexpected header" })),
     getReviewConversation: () =>
       Effect.fail(new GitHubCliError({ operation: "test", detail: "unexpected conversation" })),
+    getReviewTimeline: () =>
+      Effect.fail(new GitHubCliError({ operation: "test", detail: "unexpected timeline" })),
     getPullRequestDiff: () => unexpected("GitHubCli.getPullRequestDiff"),
     getPullRequestHeadSha: () => unexpected("GitHubCli.getPullRequestHeadSha"),
     submitPullRequestReview: () => unexpected("GitHubCli.submitPullRequestReview"),
     createPullRequestReviewWithComments: () =>
       unexpected("GitHubCli.createPullRequestReviewWithComments"),
     getPullRequestThreads: () => unexpected("GitHubCli.getPullRequestThreads"),
+    setPullRequestThreadResolution: () => unexpected("GitHubCli.setPullRequestThreadResolution"),
+    addPullRequestThreadReply: () => unexpected("GitHubCli.addPullRequestThreadReply"),
+    updatePullRequestThreadComment: () => unexpected("GitHubCli.updatePullRequestThreadComment"),
+    deletePullRequestThreadComment: () => unexpected("GitHubCli.deletePullRequestThreadComment"),
     getRepositoryCloneUrls: () => unexpected("GitHubCli.getRepositoryCloneUrls"),
     createPullRequest: () => unexpected("GitHubCli.createPullRequest"),
     getDefaultBranch: () => unexpected("GitHubCli.getDefaultBranch"),
@@ -252,12 +394,37 @@ function makeLayer(options: {
     generateThreadRecap: () => unexpectedEffect("TextGeneration.generateThreadRecap"),
   };
 
+  const reviewSync: ReviewSyncShape = {
+    syncRepository: (input) =>
+      Effect.sync(() => {
+        recorded.syncCalls.push({
+          cwd: input.cwd,
+          repositoryId: input.repositoryId,
+          tokenIdentity: input.tokenIdentity,
+          ...(input.mode !== undefined ? { mode: input.mode } : {}),
+        });
+        return {
+          upserted: 0,
+          skippedUnchanged: 0,
+          pagesFetched: 0,
+          reconciled: false,
+          stopReason: "end" as const,
+          pointsRemaining: null,
+        };
+      }),
+  };
+
   const depsLayer = Layer.mergeAll(
     Layer.succeed(GitHubCli, gitHubCli),
     Layer.succeed(GitCore, gitCore),
     Layer.succeed(GitManager, gitManager),
     Layer.succeed(TextGeneration, textGeneration),
     Layer.succeed(ReviewCacheStore, cacheStore),
+    Layer.succeed(
+      ReviewPullRequestStore,
+      fakePullRequestStore(options.boardLanes ?? [], options.mirrorTokenIdentity ?? tokenIdentity),
+    ),
+    Layer.succeed(ReviewSync, reviewSync),
     Layer.succeed(ReviewUpdateBus, {
       publish: (payload: ReviewUpdatedPayload) => {
         recorded.published.push(payload);
@@ -275,7 +442,7 @@ function makeLayer(options: {
 
 const runList = (
   layer: Layer.Layer<ReviewSource>,
-  input: Parameters<ReviewSource["listPullRequests"]>[0],
+  input: Parameters<ReviewSourceShape["listPullRequests"]>[0],
 ) =>
   Effect.gen(function* () {
     const reviewSource = yield* ReviewSource;
@@ -284,7 +451,7 @@ const runList = (
 
 const runBoardLanes = (
   layer: Layer.Layer<ReviewSource>,
-  input: Parameters<ReviewSource["loadBoardLanes"]>[0],
+  input: Parameters<ReviewSourceShape["loadBoardLanes"]>[0],
 ) =>
   Effect.gen(function* () {
     const reviewSource = yield* ReviewSource;
@@ -299,7 +466,12 @@ function laneNumbers(result: ReviewBoardLanesResult, lane: keyof ReviewBoardLane
   return numbers(result[lane]);
 }
 
-function makeSurfaceLayer() {
+function makeSurfaceLayer(
+  options: {
+    readonly overview?: GitHubReviewPullRequestOverview;
+    readonly cachedOverview?: ReviewPullRequestOverview;
+  } = {},
+) {
   const recorded = {
     activeGitHubCalls: 0,
     maxActiveGitHubCalls: 0,
@@ -324,34 +496,37 @@ function makeSurfaceLayer() {
       });
     });
 
-  const overview = {
-    detail: {
-      number: 42,
-      title: "Parallel review surface",
-      url: "https://github.com/acme/demo/pull/42",
-      state: "open",
-      isDraft: false,
-      author: "alice",
-      baseBranch: "main",
-      headBranch: "feature/review-surface",
-      body: "Review body",
-      createdAt: "2026-06-16T00:00:00.000Z",
-      updatedAt: "2026-06-16T00:00:00.000Z",
-      additions: 10,
-      deletions: 2,
-      changedFiles: 3,
-      commitsCount: 1,
-      reviewDecision: null,
-      mergeable: "MERGEABLE",
-      checksStatus: "passing",
-      milestone: null,
-      labels: [],
-      assignees: [],
-      reviewers: [],
-    },
-    commits: [],
-    checks: [],
-  } satisfies GitHubReviewPullRequestOverview;
+  const overview =
+    options.overview ??
+    ({
+      detail: {
+        number: 42,
+        title: "Parallel review surface",
+        url: "https://github.com/acme/demo/pull/42",
+        state: "open",
+        isDraft: false,
+        author: "alice",
+        authorAvatarUrl: "https://avatars.example/alice.png",
+        baseBranch: "main",
+        headBranch: "feature/review-surface",
+        body: "Review body",
+        createdAt: "2026-06-16T00:00:00.000Z",
+        updatedAt: "2026-06-16T00:00:00.000Z",
+        additions: 10,
+        deletions: 2,
+        changedFiles: 3,
+        commitsCount: 1,
+        reviewDecision: null,
+        mergeable: "MERGEABLE",
+        checksStatus: "passing",
+        milestone: null,
+        labels: [],
+        assignees: [],
+        reviewers: [],
+      },
+      commits: [],
+      checks: [],
+    } satisfies GitHubReviewPullRequestOverview);
   const conversation = [
     {
       kind: "comment",
@@ -370,6 +545,7 @@ function makeSurfaceLayer() {
       }),
     getReviewPullRequestOverview: () => trackGitHubCall("overview", overview),
     getReviewConversation: () => trackGitHubCall("conversation", conversation),
+    getReviewTimeline: () => Effect.succeed([]),
     execute: () => unexpected("GitHubCli.execute"),
     listRepositoryPullRequests: () => unexpected("GitHubCli.listRepositoryPullRequests"),
     listOpenPullRequests: () => unexpected("GitHubCli.listOpenPullRequests"),
@@ -382,6 +558,10 @@ function makeSurfaceLayer() {
     createPullRequestReviewWithComments: () =>
       unexpected("GitHubCli.createPullRequestReviewWithComments"),
     getPullRequestThreads: () => unexpected("GitHubCli.getPullRequestThreads"),
+    setPullRequestThreadResolution: () => unexpected("GitHubCli.setPullRequestThreadResolution"),
+    addPullRequestThreadReply: () => unexpected("GitHubCli.addPullRequestThreadReply"),
+    updatePullRequestThreadComment: () => unexpected("GitHubCli.updatePullRequestThreadComment"),
+    deletePullRequestThreadComment: () => unexpected("GitHubCli.deletePullRequestThreadComment"),
     getRepositoryCloneUrls: () => unexpected("GitHubCli.getRepositoryCloneUrls"),
     createPullRequest: () => unexpected("GitHubCli.createPullRequest"),
     getDefaultBranch: () => unexpected("GitHubCli.getDefaultBranch"),
@@ -438,7 +618,21 @@ function makeSurfaceLayer() {
   const cacheStore: ReviewCacheStoreShape = {
     getPullRequestList: () => unexpected("ReviewCacheStore.getPullRequestList"),
     upsertPullRequestList: () => unexpected("ReviewCacheStore.upsertPullRequestList"),
-    getPullRequestOverview: () => Effect.succeed(Option.none()),
+    getPullRequestOverview: () =>
+      options.cachedOverview
+        ? Effect.succeed(
+            Option.some({
+              data: options.cachedOverview,
+              fetchedAt: Date.now(),
+              lastValidatedAt: Date.now(),
+              ttlMs: 30_000,
+              etag: null,
+              lastModified: null,
+              tokenIdentity: "gh-user-v2:tyler",
+              headSha: null,
+            } satisfies ReviewCacheEnvelope<ReviewPullRequestOverview>),
+          )
+        : Effect.succeed(Option.none()),
     upsertPullRequestOverview: () => Effect.void,
     getPullRequestConversation: () => Effect.succeed(Option.none()),
     upsertPullRequestConversation: () => Effect.void,
@@ -472,6 +666,8 @@ function makeSurfaceLayer() {
     Layer.succeed(GitManager, gitManager),
     Layer.succeed(TextGeneration, textGeneration),
     Layer.succeed(ReviewCacheStore, cacheStore),
+    Layer.succeed(ReviewPullRequestStore, fakePullRequestStore([])),
+    Layer.succeed(ReviewSync, fakeReviewSync),
     Layer.succeed(ReviewUpdateBus, {
       publish: () => Effect.void,
       stream: Stream.empty,
@@ -486,7 +682,11 @@ function makeSurfaceLayer() {
 
 it.effect("memoizes repository and auth preflight across repeated list requests", () => {
   const { layer, recorded } = makeLayer({
-    pullRequests: [ghPr({ number: 1 }), ghPr({ number: 2 })],
+    pullRequests: [],
+    boardLanes: [
+      boardSummary({ number: 1, updatedAt: "2026-06-16T00:01:00.000Z" }),
+      boardSummary({ number: 2, updatedAt: "2026-06-16T00:00:00.000Z" }),
+    ],
   });
 
   return Effect.gen(function* () {
@@ -496,6 +696,7 @@ it.effect("memoizes repository and auth preflight across repeated list requests"
 
     expect(numbers(first)).toEqual([1, 2]);
     expect(second).toEqual(first);
+    expect(recorded.listCalls).toEqual([]);
     expect(recorded.repositoryIdCalls).toBe(1);
     expect(recorded.authenticatedUserCalls).toBe(1);
   }).pipe(Effect.provide(layer));
@@ -519,6 +720,65 @@ it.effect("loads aggregate overview and conversation concurrently", () => {
     expect(recorded.started).toEqual(["overview", "conversation"]);
     expect(recorded.finished).toEqual(["overview", "conversation"]);
     expect(recorded.maxActiveGitHubCalls).toBe(2);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("bypasses overview cache entries without reviewer avatars", () => {
+  const cachedOverview = {
+    detail: {
+      number: 42,
+      title: "Cached review sidebar",
+      url: "https://github.com/acme/demo/pull/42",
+      state: "open",
+      isDraft: false,
+      author: "alice",
+      authorAvatarUrl: "https://avatars.example/alice.png",
+      baseBranch: "main",
+      headBranch: "feature/review-surface",
+      body: "Review body",
+      createdAt: "2026-06-16T00:00:00.000Z",
+      updatedAt: "2026-06-16T00:00:00.000Z",
+      additions: 10,
+      deletions: 2,
+      changedFiles: 3,
+      commitsCount: 1,
+      reviewDecision: null,
+      mergeable: "MERGEABLE",
+      checksStatus: "passing",
+      milestone: null,
+      labels: [],
+      assignees: [],
+      reviewers: [{ login: "global-approvers", state: "REVIEW_REQUIRED" }],
+    },
+    commits: [],
+    checks: [],
+  } satisfies ReviewPullRequestOverview;
+  const refreshedOverview = {
+    ...cachedOverview,
+    detail: {
+      ...cachedOverview.detail,
+      reviewers: [
+        {
+          login: "global-approvers",
+          avatarUrl: "https://avatars.example/global-approvers.png",
+          state: "REVIEW_REQUIRED",
+        },
+      ],
+    },
+  } satisfies ReviewPullRequestOverview & GitHubReviewPullRequestOverview;
+  const { layer, recorded } = makeSurfaceLayer({
+    cachedOverview,
+    overview: refreshedOverview,
+  });
+
+  return Effect.gen(function* () {
+    const reviewSource = yield* ReviewSource;
+    const result = yield* reviewSource.loadPullRequest({ cwd: "/repo", reference: "42" });
+
+    expect(result.detail.reviewers[0]?.avatarUrl).toBe(
+      "https://avatars.example/global-approvers.png",
+    );
+    expect(recorded.started).toEqual(["overview"]);
   }).pipe(Effect.provide(layer));
 });
 
@@ -586,13 +846,14 @@ it.effect("pushes text search to GitHub and caches the normalized filter key", (
 
 it.effect("keeps owner-qualified head selectors distinct for fork pull requests", () => {
   const { layer, recorded } = makeLayer({
-    pullRequests: [
-      ghPr({ number: 1, title: "Fork one", headRefName: "feature/shared" }),
-      ghPr({
+    pullRequests: [],
+    boardLanes: [
+      boardSummary({ number: 1, title: "Fork one", headBranch: "feature/shared" }),
+      boardSummary({
         number: 2,
         title: "Fork two",
-        headRefName: "feature/shared",
-        headRepositoryOwnerLogin: "octocat",
+        headBranch: "feature/shared",
+        headSelector: "octocat:feature/shared",
       }),
     ],
   });
@@ -610,14 +871,7 @@ it.effect("keeps owner-qualified head selectors distinct for fork pull requests"
         headSelector: "octocat:feature/shared",
       },
     ]);
-    expect(recorded.listCalls).toEqual([
-      {
-        cwd: "/repo",
-        state: "open",
-        limit: 50,
-        headBranch: "octocat:feature/shared",
-      },
-    ]);
+    expect(recorded.listCalls).toEqual([]);
   });
 });
 
@@ -642,38 +896,27 @@ it.effect("trusts pull requests returned by GitHub search", () => {
   });
 });
 
-it.effect("loads default board lanes from one expanded open candidate window", () => {
-  const pullRequests = [
-    ghPr({ number: 1, reviewDecision: null, updatedAt: "2026-06-16T00:04:00.000Z" }),
-    ghPr({
+it.effect("loads default board lanes from the local mirror, newest first per lane", () => {
+  const boardLanes = [
+    boardSummary({ number: 1, reviewDecision: null, updatedAt: "2026-06-16T00:04:00.000Z" }),
+    boardSummary({
       number: 2,
       reviewDecision: "CHANGES_REQUESTED",
       updatedAt: "2026-06-16T00:03:00.000Z",
     }),
-    ghPr({ number: 3, reviewDecision: "APPROVED", updatedAt: "2026-06-16T00:02:00.000Z" }),
-    ghPr({ number: 4, isDraft: true, updatedAt: "2026-06-16T00:01:00.000Z" }),
-    ghPr({ number: 5, reviewDecision: null, updatedAt: "2026-06-16T00:00:00.000Z" }),
+    boardSummary({ number: 3, reviewDecision: "APPROVED", updatedAt: "2026-06-16T00:02:00.000Z" }),
+    boardSummary({ number: 4, isDraft: true, updatedAt: "2026-06-16T00:01:00.000Z" }),
+    boardSummary({ number: 5, reviewDecision: null, updatedAt: "2026-06-16T00:00:00.000Z" }),
   ];
-  const { layer, recorded } = makeLayer({ pullRequests });
+  const { layer } = makeLayer({ pullRequests: [], boardLanes });
 
   return Effect.gen(function* () {
     const result = yield* runBoardLanes(layer, { cwd: "/repo", limit: 1 });
 
-    expect(recorded.listCalls).toEqual([{ cwd: "/repo", state: "open", limit: 1000 }]);
     expect(laneNumbers(result, "needs-review")).toEqual([1]);
     expect(laneNumbers(result, "changes-requested")).toEqual([2]);
     expect(laneNumbers(result, "approved")).toEqual([3]);
     expect(laneNumbers(result, "draft")).toEqual([4]);
-    expect(result["needs-review"].meta).toEqual({
-      requestedLimit: 1,
-      resultLimit: 1,
-      candidateLimit: 1000,
-      candidateCount: 5,
-      candidateLimitReached: false,
-      matchedCount: 2,
-      returnedCount: 1,
-      bounded: true,
-    });
   });
 });
 
@@ -793,14 +1036,16 @@ it.effect("keeps a larger bounded candidate window when status still needs local
   });
 });
 
-it.effect("finds sparse local-filter matches beyond the first candidate page", () => {
-  const pullRequests = Array.from({ length: 1_500 }, (_, index) =>
-    ghPr({
+it.effect("serves label-filtered lists from the mirror up to the result limit", () => {
+  // Mixed labelled/unlabelled rows; the mirror filters by label and caps at the limit.
+  const boardLanes = Array.from({ length: 700 }, (_, index) =>
+    boardSummary({
       number: index + 1,
-      labels: index >= 1_000 ? ["needs,qa"] : ["routine"],
+      labels: index >= 100 ? ["needs,qa"] : ["routine"],
+      updatedAt: `2026-06-16T00:00:${String(index % 60).padStart(2, "0")}.000Z`,
     }),
   );
-  const { layer, recorded } = makeLayer({ pullRequests });
+  const { layer, recorded } = makeLayer({ pullRequests: [], boardLanes });
 
   return Effect.gen(function* () {
     const result = yield* runList(layer, {
@@ -810,19 +1055,18 @@ it.effect("finds sparse local-filter matches beyond the first candidate page", (
     });
 
     expect(numbers(result)).toHaveLength(500);
-    expect(numbers(result).at(0)).toBe(1_001);
-    expect(numbers(result).at(-1)).toBe(1_500);
+    expect(numbers(result).every((number) => number >= 101)).toBe(true);
     expect(result.meta).toEqual({
       requestedLimit: 500,
       resultLimit: 500,
-      candidateLimit: 5000,
-      candidateCount: 1500,
-      candidateLimitReached: false,
-      matchedCount: 500,
+      candidateLimit: 501,
+      candidateCount: 501,
+      candidateLimitReached: true,
+      matchedCount: 501,
       returnedCount: 500,
       bounded: true,
     });
-    expect(recorded.listCalls).toEqual([{ cwd: "/repo", state: "open", limit: 5000 }]);
+    expect(recorded.listCalls).toEqual([]);
   });
 });
 
@@ -933,11 +1177,12 @@ it.effect("bounds sorted candidate fetches to the local filter window", () => {
   });
 });
 
-it.effect("pushes a single changes-requested status to GitHub", () => {
+it.effect("serves a single changes-requested column from the mirror", () => {
   const { layer, recorded } = makeLayer({
-    pullRequests: [
-      ghPr({ number: 1, reviewDecision: "CHANGES_REQUESTED" }),
-      ghPr({ number: 2, reviewDecision: "APPROVED" }),
+    pullRequests: [],
+    boardLanes: [
+      boardSummary({ number: 1, reviewDecision: "CHANGES_REQUESTED" }),
+      boardSummary({ number: 2, reviewDecision: "APPROVED" }),
     ],
   });
 
@@ -948,15 +1193,30 @@ it.effect("pushes a single changes-requested status to GitHub", () => {
     });
 
     expect(numbers(result)).toEqual([1]);
-    expect(recorded.listCalls).toEqual([
-      {
-        cwd: "/repo",
-        state: "open",
-        limit: 50,
-        reviewStatus: "changes-requested",
-      },
-    ]);
-    expect(result.meta?.candidateLimit).toBe(50);
+    expect(recorded.listCalls).toEqual([]);
+    expect(result.meta).toBeUndefined();
+  });
+});
+
+it.effect("refreshes the mirror before serving rows from a previous GitHub identity", () => {
+  const { layer, recorded } = makeLayer({
+    pullRequests: [],
+    mirrorTokenIdentity: "gh-user-v2:previous",
+    boardLanes: [boardSummary({ number: 1 })],
+  });
+
+  return Effect.gen(function* () {
+    const result = yield* runList(layer, { cwd: "/repo" });
+
+    expect(numbers(result)).toEqual([1]);
+    expect(recorded.syncCalls).toHaveLength(1);
+    expect(recorded.syncCalls[0]).toMatchObject({
+      cwd: "/repo",
+      tokenIdentity: "gh-user-v2:tyler",
+      mode: "full",
+    });
+    expect(recorded.syncCalls[0]?.repositoryId).toMatch(/^[a-f0-9]+$/);
+    expect(recorded.listCalls).toEqual([]);
   });
 });
 
@@ -1016,11 +1276,12 @@ it.effect("pushes a single check filter to GitHub without the local candidate wi
   });
 });
 
-it.effect("pushes a single label filter to GitHub and keeps it in the cache key", () => {
+it.effect("serves a single label filter from the mirror", () => {
   const { layer, recorded } = makeLayer({
-    pullRequests: [
-      ghPr({ number: 1, title: "Bug fix", labels: ["bug"] }),
-      ghPr({ number: 2, title: "Feature work", labels: ["feature"] }),
+    pullRequests: [],
+    boardLanes: [
+      boardSummary({ number: 1, title: "Bug fix", labels: ["bug"] }),
+      boardSummary({ number: 2, title: "Feature work", labels: ["feature"] }),
     ],
   });
 
@@ -1031,42 +1292,18 @@ it.effect("pushes a single label filter to GitHub and keeps it in the cache key"
     });
 
     expect(numbers(result)).toEqual([1]);
-    expect(recorded.listCalls).toEqual([
-      {
-        cwd: "/repo",
-        state: "open",
-        limit: 50,
-        label: "bug",
-      },
-    ]);
-    expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
-      state: "open",
-      limit: 50,
-      search: null,
-      author: null,
-      authors: [],
-      reviewRequested: null,
-      baseBranch: null,
-      baseBranches: [],
-      headBranch: null,
-      headBranches: [],
-      label: "bug",
-      labels: [],
-      assignee: null,
-      assignees: [],
-      draft: null,
-      columns: [],
-      checks: [],
-    });
+    expect(recorded.listCalls).toEqual([]);
+    expect(recorded.cacheWrites).toEqual([]);
   });
 });
 
-it.effect("pushes safe multi-label OR filters to GitHub and keeps them in the cache key", () => {
+it.effect("serves multi-label OR filters from the mirror", () => {
   const { layer, recorded } = makeLayer({
-    pullRequests: [
-      ghPr({ number: 1, title: "Bug fix", labels: ["bug"] }),
-      ghPr({ number: 2, title: "Feature work", labels: ["feature"] }),
-      ghPr({ number: 3, title: "Docs work", labels: ["docs"] }),
+    pullRequests: [],
+    boardLanes: [
+      boardSummary({ number: 1, title: "Bug fix", labels: ["bug"] }),
+      boardSummary({ number: 2, title: "Feature work", labels: ["feature"] }),
+      boardSummary({ number: 3, title: "Docs work", labels: ["docs"] }),
     ],
   });
 
@@ -1076,43 +1313,20 @@ it.effect("pushes safe multi-label OR filters to GitHub and keeps them in the ca
       labels: ["feature", "bug"],
     });
 
-    expect(numbers(result)).toEqual([1, 2]);
-    expect(recorded.listCalls).toEqual([
-      {
-        cwd: "/repo",
-        state: "open",
-        limit: 50,
-        labels: ["bug", "feature"],
-      },
-    ]);
-    expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
-      state: "open",
-      limit: 50,
-      search: null,
-      author: null,
-      authors: [],
-      reviewRequested: null,
-      baseBranch: null,
-      baseBranches: [],
-      headBranch: null,
-      headBranches: [],
-      label: null,
-      labels: ["bug", "feature"],
-      assignee: null,
-      assignees: [],
-      draft: null,
-      columns: [],
-      checks: [],
-    });
+    expect(numbers(result).sort()).toEqual([1, 2]);
+    expect(recorded.listCalls).toEqual([]);
+    expect(recorded.cacheWrites).toEqual([]);
   });
 });
 
-it.effect("keeps unsafe multi-label OR filters on the local candidate window", () => {
+it.effect("serves comma-bearing multi-label OR filters from the mirror", () => {
+  // Commas only mattered for gh-search escaping; the mirror matches labels exactly.
   const { layer, recorded } = makeLayer({
-    pullRequests: [
-      ghPr({ number: 1, title: "Comma label", labels: ["needs,qa"] }),
-      ghPr({ number: 2, title: "Bug fix", labels: ["bug"] }),
-      ghPr({ number: 3, title: "Docs work", labels: ["docs"] }),
+    pullRequests: [],
+    boardLanes: [
+      boardSummary({ number: 1, title: "Comma label", labels: ["needs,qa"] }),
+      boardSummary({ number: 2, title: "Bug fix", labels: ["bug"] }),
+      boardSummary({ number: 3, title: "Docs work", labels: ["docs"] }),
     ],
   });
 
@@ -1122,23 +1336,18 @@ it.effect("keeps unsafe multi-label OR filters on the local candidate window", (
       labels: ["needs,qa", "bug"],
     });
 
-    expect(numbers(result)).toEqual([1, 2]);
-    expect(recorded.listCalls).toEqual([
-      {
-        cwd: "/repo",
-        state: "open",
-        limit: 1000,
-      },
-    ]);
-    expect(result.meta?.candidateLimit).toBe(1000);
+    expect(numbers(result).sort()).toEqual([1, 2]);
+    expect(recorded.listCalls).toEqual([]);
+    expect(result.meta).toBeUndefined();
   });
 });
 
-it.effect("pushes a single assignee filter to GitHub and keeps it in the cache key", () => {
+it.effect("serves a single assignee filter from the mirror", () => {
   const { layer, recorded } = makeLayer({
-    pullRequests: [
-      ghPr({ number: 1, title: "Assigned work", assignees: ["alice"] }),
-      ghPr({ number: 2, title: "Unassigned work", assignees: [] }),
+    pullRequests: [],
+    boardLanes: [
+      boardSummary({ number: 1, title: "Assigned work", assignees: ["alice"] }),
+      boardSummary({ number: 2, title: "Unassigned work", assignees: [] }),
     ],
   });
 
@@ -1149,63 +1358,40 @@ it.effect("pushes a single assignee filter to GitHub and keeps it in the cache k
     });
 
     expect(numbers(result)).toEqual([1]);
-    expect(recorded.listCalls).toEqual([
-      {
-        cwd: "/repo",
-        state: "open",
-        limit: 50,
-        assignee: "alice",
-      },
-    ]);
-    expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
-      state: "open",
-      limit: 50,
-      search: null,
-      author: null,
-      authors: [],
-      reviewRequested: null,
-      baseBranch: null,
-      baseBranches: [],
-      headBranch: null,
-      headBranches: [],
-      label: null,
-      labels: [],
-      assignee: "alice",
-      assignees: [],
-      draft: null,
-      columns: [],
-      checks: [],
-    });
+    expect(recorded.listCalls).toEqual([]);
+    expect(recorded.cacheWrites).toEqual([]);
   });
 });
 
-it.effect("pushes safe plural OR filters to GitHub and merges singular values", () => {
+it.effect("serves plural OR filters from the mirror, resolving @me and merging singulars", () => {
   const { layer, recorded } = makeLayer({
     viewerLogin: "tyler",
-    pullRequests: [
-      ghPr({
+    pullRequests: [],
+    boardLanes: [
+      boardSummary({
         number: 1,
         title: "Alice assigned work",
         author: "alice",
-        baseRefName: "main",
-        headRefName: "feature/shared",
+        baseBranch: "main",
+        headBranch: "feature/shared",
         assignees: ["bob"],
       }),
-      ghPr({
+      boardSummary({
         number: 2,
         title: "Viewer assigned fork work",
         author: "tyler",
-        baseRefName: "release",
-        headRefName: "feature/shared",
-        headRepositoryOwnerLogin: "octocat",
+        baseBranch: "release",
+        headBranch: "feature/shared",
+        headSelector: "octocat:feature/shared",
         assignees: ["tyler"],
+        updatedAt: "2026-06-16T00:01:00.000Z",
       }),
-      ghPr({
+      boardSummary({
         number: 3,
         title: "Wrong author",
         author: "carol",
-        baseRefName: "main",
-        headRefName: "feature/shared",
+        baseBranch: "main",
+        headBranch: "feature/shared",
         assignees: ["bob"],
       }),
     ],
@@ -1224,45 +1410,21 @@ it.effect("pushes safe plural OR filters to GitHub and merges singular values", 
       assignees: ["bob"],
     });
 
-    expect(numbers(result)).toEqual([1, 2]);
-    expect(recorded.listCalls).toEqual([
-      {
-        cwd: "/repo",
-        state: "open",
-        limit: 50,
-        authors: ["alice", "tyler"],
-        baseBranches: ["main", "release"],
-        headBranches: ["feature/shared", "octocat:feature/shared"],
-        assignees: ["bob", "tyler"],
-      },
-    ]);
-    expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
-      state: "open",
-      limit: 50,
-      search: null,
-      author: null,
-      authors: ["alice", "tyler"],
-      reviewRequested: null,
-      baseBranch: null,
-      baseBranches: ["main", "release"],
-      headBranch: null,
-      headBranches: ["feature/shared", "octocat:feature/shared"],
-      label: null,
-      labels: [],
-      assignee: null,
-      assignees: ["bob", "tyler"],
-      draft: null,
-      columns: [],
-      checks: [],
-    });
+    // @me -> "tyler"; PR1 matches author alice + assignee bob, PR2 matches author tyler +
+    // assignee tyler; PR3's author carol is filtered out.
+    expect(numbers(result).sort()).toEqual([1, 2]);
+    expect(recorded.listCalls).toEqual([]);
+    expect(recorded.cacheWrites).toEqual([]);
   });
 });
 
-it.effect("keeps unsafe plural OR filters on the local candidate window", () => {
+it.effect("serves author OR filters with unmatched names from the mirror", () => {
+  // "bad user" simply matches no row; the mirror does exact-membership author filtering.
   const { layer, recorded } = makeLayer({
-    pullRequests: [
-      ghPr({ number: 1, title: "Alice work", author: "alice" }),
-      ghPr({ number: 2, title: "Bob work", author: "bob" }),
+    pullRequests: [],
+    boardLanes: [
+      boardSummary({ number: 1, title: "Alice work", author: "alice" }),
+      boardSummary({ number: 2, title: "Bob work", author: "bob" }),
     ],
   });
 
@@ -1273,20 +1435,18 @@ it.effect("keeps unsafe plural OR filters on the local candidate window", () => 
     });
 
     expect(numbers(result)).toEqual([1]);
-    expect(recorded.listCalls).toEqual([
-      {
-        cwd: "/repo",
-        state: "open",
-        limit: 1000,
-      },
-    ]);
-    expect(result.meta?.candidateLimit).toBe(1000);
+    expect(recorded.listCalls).toEqual([]);
+    expect(result.meta).toBeUndefined();
   });
 });
 
-it.effect("pushes a single draft status to GitHub without the local candidate window", () => {
+it.effect("serves a single draft status from the mirror", () => {
   const { layer, recorded } = makeLayer({
-    pullRequests: [ghPr({ number: 1, isDraft: true }), ghPr({ number: 2, isDraft: false })],
+    pullRequests: [],
+    boardLanes: [
+      boardSummary({ number: 1, isDraft: true }),
+      boardSummary({ number: 2, isDraft: false }),
+    ],
   });
 
   return Effect.gen(function* () {
@@ -1298,52 +1458,19 @@ it.effect("pushes a single draft status to GitHub without the local candidate wi
     });
 
     expect(numbers(result)).toEqual([1]);
-    expect(result.meta).toEqual({
-      requestedLimit: 200,
-      resultLimit: 200,
-      candidateLimit: 200,
-      candidateCount: 2,
-      candidateLimitReached: false,
-      matchedCount: 1,
-      returnedCount: 1,
-      bounded: true,
-    });
-    expect(recorded.listCalls).toEqual([
-      {
-        cwd: "/repo",
-        state: "open",
-        limit: 200,
-        draft: true,
-      },
-    ]);
-    expect(JSON.parse(recorded.cacheWrites[0]?.listFilter ?? "{}")).toEqual({
-      state: "open",
-      limit: 200,
-      search: null,
-      author: null,
-      authors: [],
-      reviewRequested: null,
-      baseBranch: null,
-      baseBranches: [],
-      headBranch: null,
-      headBranches: [],
-      label: null,
-      labels: [],
-      assignee: null,
-      assignees: [],
-      draft: true,
-      columns: ["draft"],
-      checks: [],
-    });
+    expect(result.meta).toBeUndefined();
+    expect(recorded.listCalls).toEqual([]);
+    expect(recorded.cacheWrites).toEqual([]);
   });
 });
 
-it.effect("keeps mixed draft status filters on the local candidate window", () => {
+it.effect("serves mixed draft + approved column filters from the mirror", () => {
   const { layer, recorded } = makeLayer({
-    pullRequests: [
-      ghPr({ number: 1, isDraft: true }),
-      ghPr({ number: 2, reviewDecision: "APPROVED" }),
-      ghPr({ number: 3, isDraft: false, reviewDecision: null }),
+    pullRequests: [],
+    boardLanes: [
+      boardSummary({ number: 1, isDraft: true }),
+      boardSummary({ number: 2, reviewDecision: "APPROVED" }),
+      boardSummary({ number: 3, isDraft: false, reviewDecision: null }),
     ],
   });
 
@@ -1353,15 +1480,9 @@ it.effect("keeps mixed draft status filters on the local candidate window", () =
       columns: ["draft", "approved"],
     });
 
-    expect(numbers(result)).toEqual([1, 2]);
-    expect(recorded.listCalls).toEqual([
-      {
-        cwd: "/repo",
-        state: "open",
-        limit: 1000,
-      },
-    ]);
-    expect(result.meta?.candidateLimit).toBe(1000);
+    expect(numbers(result).sort()).toEqual([1, 2]);
+    expect(recorded.listCalls).toEqual([]);
+    expect(result.meta).toBeUndefined();
   });
 });
 
@@ -1577,13 +1698,14 @@ it.effect("bounds GitHub candidate fetches by 10x for large locally filtered lis
   });
 });
 
-it.effect("keeps GitHub @me author and reviewer filters after local re-filtering", () => {
+it.effect("serves @me author and requested-reviewer filters from the mirror", () => {
   const { layer, recorded } = makeLayer({
     viewerLogin: "tyler",
-    pullRequests: [
-      ghPr({ number: 1, author: "tyler", reviewRequests: ["tyler"] }),
-      ghPr({ number: 2, author: "alice", reviewRequests: ["tyler"] }),
-      ghPr({ number: 3, author: "tyler", reviewRequests: ["alice"] }),
+    pullRequests: [],
+    boardLanes: [
+      boardSummary({ number: 1, author: "tyler", reviewRequests: ["tyler"] }),
+      boardSummary({ number: 2, author: "alice", reviewRequests: ["tyler"] }),
+      boardSummary({ number: 3, author: "tyler", reviewRequests: ["alice"] }),
     ],
   });
 
@@ -1595,15 +1717,9 @@ it.effect("keeps GitHub @me author and reviewer filters after local re-filtering
       reviewRequested: "@me",
     });
 
+    // Both @me filters resolve to "tyler": PR1 is authored by tyler AND requests tyler;
+    // PR2 has the wrong author, PR3 requests the wrong reviewer.
     expect(numbers(result)).toEqual([1]);
-    expect(recorded.listCalls).toEqual([
-      {
-        cwd: "/repo",
-        state: "open",
-        limit: 50,
-        author: "tyler",
-        reviewRequested: "@me",
-      },
-    ]);
+    expect(recorded.listCalls).toEqual([]);
   });
 });

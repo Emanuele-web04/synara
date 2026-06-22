@@ -135,14 +135,16 @@ describe("VirtualizedPullRequestRows", () => {
 
       list.scrollTop = 1_000;
       list.dispatchEvent(new Event("scroll", { bubbles: true }));
-      await expect.poll(() => {
-        const rows = Array.from(document.querySelectorAll<HTMLElement>('[role="listitem"]'));
-        const listTop = list.getBoundingClientRect().top;
-        return rows.some((row) => {
-          const rect = row.getBoundingClientRect();
-          return rect.bottom > listTop && rect.top <= listTop + 4;
-        });
-      }).toBe(true);
+      await expect
+        .poll(() => {
+          const rows = Array.from(document.querySelectorAll<HTMLElement>('[role="listitem"]'));
+          const listTop = list.getBoundingClientRect().top;
+          return rows.some((row) => {
+            const rect = row.getBoundingClientRect();
+            return rect.bottom > listTop && rect.top <= listTop + 4;
+          });
+        })
+        .toBe(true);
     } finally {
       await mounted.cleanup();
     }

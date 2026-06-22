@@ -1,8 +1,10 @@
 import type { ReviewPullRequestSummary } from "@t3tools/contracts";
-import type { ReactNode, UIEvent } from "react";
+import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
+
+const SCROLL_VIEWPORT_CLASS = "overflow-y-auto overscroll-contain [scrollbar-gutter:stable]";
 
 export function VirtualizedPullRequestRows(props: {
   pullRequests: ReadonlyArray<ReviewPullRequestSummary>;
@@ -14,33 +16,65 @@ export function VirtualizedPullRequestRows(props: {
   threshold?: number;
   onEndReached?: () => void;
 }) {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLElement | null>(null);
+  const frameRef = useRef<number | null>(null);
+  const appliedRef = useRef({ startIndex: -1, viewportHeight: 0 });
   const threshold = props.threshold ?? 0;
   const shouldVirtualize = props.pullRequests.length > threshold;
   const [scrollWindow, setScrollWindow] = useState({
     scrollTop: 0,
     viewportHeight: props.estimateSize * 6,
   });
-  const handleScroll = (event: UIEvent<HTMLDivElement | HTMLUListElement>) => {
-    const element = event.currentTarget;
-    if (shouldVirtualize) {
-      setScrollWindow({
-        scrollTop: element.scrollTop,
-        viewportHeight: element.clientHeight || props.estimateSize * 6,
-      });
-    }
-    if (!props.onEndReached) {
+
+  useEffect(
+    () => () => {
+      if (frameRef.current !== null) {
+        cancelAnimationFrame(frameRef.current);
+      }
+    },
+    [],
+  );
+
+  const syncScroll = () => {
+    frameRef.current = null;
+    const element = scrollRef.current;
+    if (!element) {
       return;
     }
-    const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    if (distanceToBottom <= props.estimateSize * 3) {
-      props.onEndReached();
+    const scrollTop = element.scrollTop;
+    const viewportHeight = element.clientHeight || props.estimateSize * 6;
+    if (shouldVirtualize) {
+      const startIndex = Math.floor(scrollTop / props.estimateSize);
+      const applied = appliedRef.current;
+      if (startIndex !== applied.startIndex || viewportHeight !== applied.viewportHeight) {
+        appliedRef.current = { startIndex, viewportHeight };
+        setScrollWindow({ scrollTop, viewportHeight });
+      }
     }
+    if (props.onEndReached) {
+      const distanceToBottom = element.scrollHeight - scrollTop - element.clientHeight;
+      if (distanceToBottom <= props.estimateSize * 3) {
+        props.onEndReached();
+      }
+    }
+  };
+
+  const handleScroll = () => {
+    if (frameRef.current !== null) {
+      return;
+    }
+    frameRef.current = requestAnimationFrame(syncScroll);
   };
 
   if (!shouldVirtualize) {
     return (
-      <ul className={cn("overflow-y-auto", props.className)} onScroll={handleScroll}>
+      <ul
+        ref={(node) => {
+          scrollRef.current = node;
+        }}
+        className={cn(SCROLL_VIEWPORT_CLASS, props.className)}
+        onScroll={handleScroll}
+      >
         {props.pullRequests.map((pullRequest) => (
           <li key={pullRequest.number} className={props.rowClassName}>
             {props.renderPullRequest(pullRequest)}
@@ -61,12 +95,14 @@ export function VirtualizedPullRequestRows(props: {
 
   return (
     <div
-      ref={scrollRef}
+      ref={(node) => {
+        scrollRef.current = node;
+      }}
       role="list"
-      className={cn("overflow-y-auto", props.className)}
+      className={cn(SCROLL_VIEWPORT_CLASS, props.className)}
       onScroll={handleScroll}
     >
-      <div className="relative w-full" style={{ height: totalHeight }}>
+      <div className="relative w-full [contain:layout_paint]" style={{ height: totalHeight }}>
         {virtualPullRequests.map((pullRequest, offset) => {
           const index = startIndex + offset;
           return (

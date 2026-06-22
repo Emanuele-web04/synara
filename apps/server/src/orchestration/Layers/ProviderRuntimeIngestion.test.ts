@@ -16,7 +16,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
-  ProviderItemId,
+  RuntimeItemId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -34,6 +34,7 @@ import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
+import { runtimeEventToActivities } from "./ProviderRuntimeIngestion.mapping.activities.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -43,7 +44,7 @@ import { ServerConfig } from "../../config.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
-const asItemId = (value: string): ProviderItemId => ProviderItemId.makeUnsafe(value);
+const asItemId = (value: string): RuntimeItemId => RuntimeItemId.makeUnsafe(value);
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asMessageId = (value: string): MessageId => MessageId.makeUnsafe(value);
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
@@ -163,6 +164,147 @@ describe("ProviderRuntimeIngestion", () => {
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("maps every non-assistant content delta stream variant to visible activities", () => {
+    const now = "2026-06-22T10:20:00.000Z";
+    const base = {
+      provider: "codex" as const,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-stream"),
+    };
+
+    const activities = [
+      ...runtimeEventToActivities({
+        ...base,
+        type: "content.delta",
+        eventId: asEventId("evt-unknown-tool-output"),
+        itemId: asItemId("tool-1"),
+        payload: {
+          streamKind: "unknown",
+          delta: "raw tool output",
+          contentIndex: 2,
+          summaryIndex: 3,
+        },
+      }),
+      ...runtimeEventToActivities({
+        ...base,
+        type: "content.delta",
+        eventId: asEventId("evt-unknown-provider-output"),
+        payload: {
+          streamKind: "unknown",
+          delta: "raw provider output",
+          contentIndex: 4,
+        },
+      }),
+      ...runtimeEventToActivities({
+        ...base,
+        type: "content.delta",
+        eventId: asEventId("evt-plan-content-delta"),
+        payload: {
+          streamKind: "plan_text",
+          delta: "1. Inspect\n2. Patch",
+          contentIndex: 5,
+        },
+      }),
+      ...runtimeEventToActivities({
+        ...base,
+        type: "content.delta",
+        eventId: asEventId("evt-whitespace-reasoning-delta"),
+        itemId: asItemId("reasoning-1"),
+        payload: {
+          streamKind: "reasoning_text",
+          delta: "\n\t ",
+          contentIndex: 6,
+        },
+      }),
+    ];
+
+    expect(activities).toHaveLength(4);
+    expect(activities[0]).toMatchObject({
+      id: asEventId("evt-unknown-tool-output"),
+      kind: "tool.output.delta",
+      summary: "Tool output",
+      tone: "tool",
+      payload: {
+        streamKind: "unknown",
+        detail: "raw tool output",
+        itemId: "tool-1",
+        contentIndex: 2,
+        summaryIndex: 3,
+      },
+      turnId: asTurnId("turn-stream"),
+    });
+    expect(activities[1]).toMatchObject({
+      id: asEventId("evt-unknown-provider-output"),
+      kind: "provider.content.delta",
+      summary: "Provider output",
+      tone: "info",
+      payload: {
+        streamKind: "unknown",
+        detail: "raw provider output",
+        contentIndex: 4,
+      },
+      turnId: asTurnId("turn-stream"),
+    });
+    expect(activities[2]).toMatchObject({
+      id: asEventId("evt-plan-content-delta"),
+      kind: "plan.delta",
+      summary: "Plan update",
+      tone: "info",
+      payload: {
+        streamKind: "plan_text",
+        detail: "1. Inspect\n2. Patch",
+        contentIndex: 5,
+      },
+      turnId: asTurnId("turn-stream"),
+    });
+    expect(activities[3]).toMatchObject({
+      id: asEventId("evt-whitespace-reasoning-delta"),
+      kind: "reasoning.delta",
+      summary: "Thinking",
+      tone: "info",
+      payload: {
+        streamKind: "reasoning_text",
+        detail: "\n\t ",
+        deltaChars: 3,
+        contentIndex: 6,
+      },
+      turnId: asTurnId("turn-stream"),
+    });
+  });
+
+  it("projects MCP status updates into compact thread activities", () => {
+    const activities = runtimeEventToActivities({
+      type: "mcp.status.updated",
+      eventId: asEventId("evt-mcp-startup-status"),
+      provider: "codex",
+      createdAt: "2026-06-22T10:20:01.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: {
+        status: {
+          name: "github",
+          status: "starting",
+        },
+      },
+    });
+
+    expect(activities).toHaveLength(1);
+    expect(activities[0]).toMatchObject({
+      id: asEventId("evt-mcp-startup-status"),
+      kind: "mcp.status.updated",
+      summary: "MCP server status",
+      tone: "info",
+      payload: {
+        provider: "codex",
+        data: {
+          name: "github",
+          status: "starting",
+        },
+      },
+      turnId: null,
+    });
   });
 
   async function createHarness() {
@@ -1020,11 +1162,12 @@ describe("ProviderRuntimeIngestion", () => {
       kind: "reasoning.delta",
       summary: "Thinking",
       tone: "info",
-      payload: {
-        streamKind: "reasoning_text",
-        detail: "checking files",
-      },
       turnId: asTurnId("turn-reasoning"),
+    });
+    expect(reasoningActivity?.payload).toEqual({
+      streamKind: "reasoning_text",
+      detail: "checking files",
+      deltaChars: "checking files".length,
     });
     expect(thread.messages).toHaveLength(0);
   });
@@ -1069,6 +1212,296 @@ describe("ProviderRuntimeIngestion", () => {
       turnId: asTurnId("turn-reasoning"),
     });
     expect(thread.messages).toHaveLength(0);
+  });
+
+  it("projects reasoning progress updates as visible thinking work rows", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.updated",
+      eventId: asEventId("evt-reasoning-progress"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning-progress"),
+      payload: {
+        itemType: "reasoning",
+        status: "inProgress",
+        title: "Thinking",
+        detail: "150 estimated thinking tokens",
+        data: {
+          estimatedTokens: 150,
+          estimatedTokensDelta: 50,
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-progress",
+      ),
+    );
+
+    const reasoningActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-progress",
+    );
+    expect(reasoningActivity).toMatchObject({
+      kind: "reasoning.progress",
+      summary: "Thinking",
+      tone: "info",
+      payload: {
+        itemType: "reasoning",
+        status: "inProgress",
+        detail: "150 estimated thinking tokens",
+        data: {
+          estimatedTokens: 150,
+          estimatedTokensDelta: 50,
+        },
+      },
+      turnId: asTurnId("turn-reasoning-progress"),
+    });
+    expect(thread.messages).toHaveLength(0);
+  });
+
+  it("projects command and file output deltas as tool output activities", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-command-output"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-output"),
+      itemId: asItemId("cmd-1"),
+      payload: {
+        streamKind: "command_output",
+        delta: "test",
+      },
+    });
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-file-output"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-output"),
+      itemId: asItemId("file-1"),
+      payload: {
+        streamKind: "file_change_output",
+        delta: "edited src/app.ts",
+      },
+    });
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-command-output-2"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-output"),
+      itemId: asItemId("cmd-1"),
+      payload: {
+        streamKind: "command_output",
+        delta: " output",
+      },
+    });
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-command-output-3"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-output"),
+      itemId: asItemId("cmd-1"),
+      payload: {
+        streamKind: "command_output",
+        delta: "\n  ",
+      },
+    });
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-command-complete"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-output"),
+      itemId: asItemId("cmd-1"),
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        title: "Command",
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) => {
+      const commandActivities = entry.activities.filter((activity: ProviderRuntimeTestActivity) => {
+        const payload =
+          activity.payload && typeof activity.payload === "object"
+            ? (activity.payload as Record<string, unknown>)
+            : {};
+        return activity.kind === "tool.output.delta" && payload.itemId === "cmd-1";
+      });
+      const fileActivity = entry.activities.find((activity: ProviderRuntimeTestActivity) => {
+        const payload =
+          activity.payload && typeof activity.payload === "object"
+            ? (activity.payload as Record<string, unknown>)
+            : {};
+        return (
+          activity.kind === "tool.output.delta" &&
+          activity.summary === "File-change output" &&
+          payload.itemId === "file-1"
+        );
+      });
+      return commandActivities.length === 3 && Boolean(fileActivity);
+    });
+
+    const commandActivities = thread.activities.filter((activity: ProviderRuntimeTestActivity) => {
+      const payload =
+        activity.payload && typeof activity.payload === "object"
+          ? (activity.payload as Record<string, unknown>)
+          : {};
+      return activity.kind === "tool.output.delta" && payload.itemId === "cmd-1";
+    });
+    expect(commandActivities.map((activity) => activity.id)).toEqual([
+      asEventId("evt-command-output"),
+      asEventId("evt-command-output-2"),
+      asEventId("evt-command-output-3"),
+    ]);
+    expect(commandActivities.map((activity) => activity.payload)).toEqual([
+      {
+        streamKind: "command_output",
+        detail: "test",
+        itemId: "cmd-1",
+      },
+      {
+        streamKind: "command_output",
+        detail: " output",
+        itemId: "cmd-1",
+      },
+      {
+        streamKind: "command_output",
+        detail: "\n  ",
+        itemId: "cmd-1",
+      },
+    ]);
+    for (const activity of commandActivities) {
+      expect(activity).toMatchObject({
+        kind: "tool.output.delta",
+        summary: "Command output",
+        tone: "tool",
+        turnId: asTurnId("turn-output"),
+      });
+    }
+    expect(
+      thread.activities.find((activity: ProviderRuntimeTestActivity) => {
+        const payload =
+          activity.payload && typeof activity.payload === "object"
+            ? (activity.payload as Record<string, unknown>)
+            : {};
+        return activity.kind === "tool.output.delta" && payload.itemId === "file-1";
+      }),
+    ).toMatchObject({
+      kind: "tool.output.delta",
+      summary: "File-change output",
+      tone: "tool",
+      payload: {
+        streamKind: "file_change_output",
+        detail: "edited src/app.ts",
+        itemId: "file-1",
+      },
+      turnId: asTurnId("turn-output"),
+    });
+    expect(thread.messages).toHaveLength(0);
+  });
+
+  it("flushes buffered tool output before runtime.error marks the session errored", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-command-error-output-1"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-output-error"),
+      itemId: asItemId("cmd-error"),
+      payload: {
+        streamKind: "command_output",
+        delta: "partial",
+      },
+    });
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-command-error-output-2"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-output-error"),
+      itemId: asItemId("cmd-error"),
+      payload: {
+        streamKind: "command_output",
+        delta: " tail",
+      },
+    });
+
+    harness.emit({
+      type: "runtime.error",
+      eventId: asEventId("evt-command-output-runtime-error"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-output-error"),
+      payload: {
+        message: "command crashed",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.session?.status === "error" &&
+        entry.activities.filter((activity: ProviderRuntimeTestActivity) => {
+          const payload =
+            activity.payload && typeof activity.payload === "object"
+              ? (activity.payload as Record<string, unknown>)
+              : {};
+          return activity.kind === "tool.output.delta" && payload.itemId === "cmd-error";
+        }).length === 2,
+    );
+
+    const commandActivities = thread.activities.filter((activity: ProviderRuntimeTestActivity) => {
+      const payload =
+        activity.payload && typeof activity.payload === "object"
+          ? (activity.payload as Record<string, unknown>)
+          : {};
+      return activity.kind === "tool.output.delta" && payload.itemId === "cmd-error";
+    });
+    expect(commandActivities).toHaveLength(2);
+    expect(commandActivities.map((activity) => activity.id)).toEqual([
+      asEventId("evt-command-error-output-1"),
+      asEventId("evt-command-error-output-2"),
+    ]);
+    expect(commandActivities.map((activity) => activity.payload)).toEqual([
+      {
+        streamKind: "command_output",
+        detail: "partial",
+        itemId: "cmd-error",
+      },
+      {
+        streamKind: "command_output",
+        detail: " tail",
+        itemId: "cmd-error",
+      },
+    ]);
+    expect(thread.session?.lastError).toBe("command crashed");
   });
 
   it("projects MCP tool progress into thread activity with preserved tool metadata", async () => {
@@ -1757,6 +2190,23 @@ describe("ProviderRuntimeIngestion", () => {
         entry.id === "plan:thread-1:turn:turn-plan-buffer",
     );
     expect(proposedPlan?.planMarkdown).toBe("## Buffered plan\n\n- first\n- second");
+    const planDeltaActivities = thread.activities.filter(
+      (activity: ProviderRuntimeTestActivity) => activity.kind === "plan.delta",
+    );
+    expect(planDeltaActivities.map((activity) => activity.id)).toEqual([
+      asEventId("evt-plan-delta-1"),
+      asEventId("evt-plan-delta-2"),
+    ]);
+    expect(planDeltaActivities.map((activity) => activity.payload)).toEqual([
+      {
+        streamKind: "plan_text",
+        detail: "## Buffered plan\n\n- first",
+      },
+      {
+        streamKind: "plan_text",
+        detail: "\n- second",
+      },
+    ]);
   });
 
   it("buffers assistant deltas when buffered delivery is requested until completion", async () => {
@@ -3193,6 +3643,90 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.status).toBe("running");
     expect(thread.session?.activeTurnId).toBe("turn-warning");
     expect(thread.session?.lastError).toBeNull();
+  });
+
+  it("projects provider.unhandled as non-terminal activity with source refs", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-unhandled-turn-started"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-unhandled"),
+      payload: {},
+    });
+
+    harness.emit({
+      type: "provider.unhandled",
+      eventId: asEventId("evt-provider-unhandled"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-unhandled"),
+      providerRefs: {
+        providerThreadId: "provider-thread-1",
+        providerTurnId: "provider-turn-1",
+      },
+      sourceRef: {
+        runtimeEventId: asEventId("evt-provider-unhandled"),
+        nativeEventId: asEventId("native-provider-unhandled"),
+        nativeEventName: "system:thinking_tokens",
+        provider: "claudeAgent",
+        sourceSequence: 12,
+        runtimeSubsequence: 0,
+        turnId: asTurnId("turn-unhandled"),
+        itemId: null,
+        requestId: null,
+        contentIndex: null,
+      },
+      raw: {
+        source: "claude.sdk.message",
+        method: "system:thinking_tokens",
+        payload: {
+          subtype: "thinking_tokens",
+          hidden: "do not copy raw payload into activity",
+        },
+      },
+      payload: {
+        nativeEventName: "system:thinking_tokens",
+        reason: "no_mapper",
+        redactedPayloadPreview: "Unhandled Claude system message subtype 'thinking_tokens'.",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.session?.status === "running" &&
+        entry.session?.activeTurnId === "turn-unhandled" &&
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) =>
+            activity.id === "evt-provider-unhandled" && activity.kind === "provider.unhandled",
+        ),
+    );
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-provider-unhandled",
+    );
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : {};
+
+    expect(thread.session?.status).toBe("running");
+    expect(thread.session?.lastError).toBeNull();
+    expect(activity?.tone).toBe("info");
+    expect(payload.source).toBe("claude.sdk.message");
+    expect(payload.method).toBe("system:thinking_tokens");
+    expect(payload.preview).toBe("Unhandled Claude system message subtype 'thinking_tokens'.");
+    expect(payload.reason).toBe("no_mapper");
+    expect(payload.provider).toBe("claudeAgent");
+    expect((payload.sourceRef as Record<string, unknown> | undefined)?.provider).toBe(
+      "claudeAgent",
+    );
+    expect(JSON.stringify(payload)).not.toContain("do not copy raw payload");
   });
 
   it("labels Codex MCP auth warnings with actionable copy", async () => {

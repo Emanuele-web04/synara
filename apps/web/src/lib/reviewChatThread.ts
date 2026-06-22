@@ -874,7 +874,10 @@ export async function prewarmReviewChatThread(input: {
         reason: "Review chat session did not finish warming before the timeout.",
       };
     }
-    if (input.bootstrapReviewContext !== false && hasCompleteReviewBootstrapContext(input.payload)) {
+    if (
+      input.bootstrapReviewContext !== false &&
+      hasCompleteReviewBootstrapContext(input.payload)
+    ) {
       const threadBootstrapKey = `${bootstrapKey}\u001f${resolution.threadId}`;
       if (!reviewContextBootstrappedKeys.has(threadBootstrapKey)) {
         if (canInjectReviewContext(modelSelection)) {
@@ -916,10 +919,7 @@ export async function prewarmReviewChatThread(input: {
   return promise;
 }
 
-type VisibleSendPrewarmResolution =
-  | ReviewChatPrewarmResult
-  | { readonly status: "warming" }
-  | null;
+type VisibleSendPrewarmResolution = ReviewChatPrewarmResult | { readonly status: "warming" } | null;
 
 function waitForPrewarmVisibleSendBudget(
   promise: Promise<ReviewChatPrewarmResult>,
@@ -1150,12 +1150,11 @@ export async function sendReviewChatQuestion(input: {
   if (!target) {
     return { status: "unavailable", reason: "This review does not have a repository path." };
   }
-  const prewarmResolution =
-    await awaitInFlightPrewarmForVisibleSend({
-      target,
-      modelSelection,
-      ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
-    });
+  const prewarmResolution = await awaitInFlightPrewarmForVisibleSend({
+    target,
+    modelSelection,
+    ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+  });
   if (prewarmResolution?.status === "unavailable") {
     return prewarmResolution;
   }

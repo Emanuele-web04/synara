@@ -43,10 +43,10 @@ describe("buildReviewSidechatInitialPrompt", () => {
   it("keeps PR chat constrained to review context", () => {
     const prompt = buildReviewSidechatInitialPrompt(makePayload(), "What changed?");
 
-    expect(prompt).toContain("Do not create a new worktree");
-    expect(prompt).toContain("do not switch branches");
-    expect(prompt).toContain("do not mutate files");
-    expect(prompt).toContain("focused PR packet");
+    expect(prompt).toContain("Do not create a worktree");
+    expect(prompt).toContain("switch branches");
+    expect(prompt).toContain("mutate files");
+    expect(prompt).toContain("The packet below is a summary, not the full change");
     expect(prompt).toContain("What changed?");
   });
 
@@ -86,8 +86,8 @@ describe("buildReviewSidechatInitialPrompt", () => {
     const prompt = buildReviewSidechatInitialPrompt(makePayload(), "What changed?");
 
     expect(prompt).toContain("Changed files:");
-    expect(prompt).toContain("File list not loaded yet");
-    expect(prompt).toContain("24 changed files");
+    expect(prompt).toContain("Changed-file list not in this packet");
+    expect(prompt).toContain("24 files reported");
     expect(prompt).not.toContain("No files loaded");
   });
 

@@ -143,10 +143,7 @@ describe("buildReviewPullFilterOptions", () => {
       "priority 1",
     ]);
     expect(options.get("assignee")?.map((option) => option.value)).toEqual(["alice", "carol"]);
-    expect(options.get("status")?.map((option) => option.value)).toEqual([
-      "needs-review",
-      "draft",
-    ]);
+    expect(options.get("status")?.map((option) => option.value)).toEqual(["needs-review", "draft"]);
     expect(options.get("checks")?.map((option) => option.value)).toEqual(["passing", "failing"]);
   });
 });
@@ -247,9 +244,7 @@ describe("filterReviewPullRequests", () => {
       1,
     ]);
     expect(filterReviewPullRequests(items, "tyler", []).map((item) => item.number)).toEqual([1]);
-    expect(filterReviewPullRequests(items, "pull/221", []).map((item) => item.number)).toEqual([
-      2,
-    ]);
+    expect(filterReviewPullRequests(items, "pull/221", []).map((item) => item.number)).toEqual([2]);
     expect(filterReviewPullRequests(items, "reviewer", []).map((item) => item.number)).toEqual([3]);
   });
 });

@@ -597,6 +597,12 @@ export function createWsNativeApi(): NativeApi {
       removeComment: (input) => transport.request(WS_METHODS.reviewRemoveComment, input),
       submit: (input) => transport.request(WS_METHODS.reviewSubmit, input),
       loadRemoteThreads: (input) => transport.request(WS_METHODS.reviewLoadRemoteThreads, input),
+      resolveThread: (input) => transport.request(WS_METHODS.reviewResolveThread, input),
+      replyThread: (input) => transport.request(WS_METHODS.reviewReplyThread, input),
+      updateThreadComment: (input) =>
+        transport.request(WS_METHODS.reviewUpdateThreadComment, input),
+      deleteThreadComment: (input) =>
+        transport.request(WS_METHODS.reviewDeleteThreadComment, input),
       runAgent: (input) => transport.request(WS_METHODS.reviewRunAgent, input),
       checkProjectAccess: (input) => transport.request(WS_METHODS.reviewCheckProjectAccess, input),
       listProjects: (input) => transport.request(WS_METHODS.reviewListProjects, input),

@@ -31,12 +31,18 @@ import {
   type GitHubProjectBoardData,
   type GitHubProjectSummary,
   type GitHubReviewPullRequest,
+  type GitHubReviewStateEvent,
 } from "../../git/Services/GitHubCli.ts";
 import { GitManager } from "../../git/Services/GitManager.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { ReviewError, type ReviewServiceError } from "../Errors.ts";
 import { parseUnifiedDiff } from "../parseUnifiedDiff.ts";
 import { ReviewCacheStore, type ReviewCacheEnvelope } from "../Services/ReviewCacheStore.ts";
+import {
+  ReviewPullRequestStore,
+  type ReviewPullRequestQuery,
+} from "../Services/ReviewPullRequestStore.ts";
+import { ReviewSync } from "../Services/ReviewSync.ts";
 import { ReviewSource, type ReviewSourceShape } from "../Services/ReviewSource.ts";
 import { ReviewUpdateBus } from "../Services/ReviewUpdateBus.ts";
 import { validateInlineComments } from "../validateInlineComments.ts";
@@ -44,15 +50,17 @@ import { validateInlineComments } from "../validateInlineComments.ts";
 const PROJECT_ACCESS_DETAIL =
   "GitHub Projects access is not granted. Run `gh auth refresh -s project` and retry.";
 const REVIEW_CACHE_TTL_MS = 30_000;
-const REVIEW_CACHE_TOKEN_IDENTITY_PREFIX = "gh-user-v1";
+const REVIEW_CACHE_TOKEN_IDENTITY_PREFIX = "gh-user-v2";
 const REVIEW_PREFLIGHT_CACHE_TTL_MS = 2_000;
 const REVIEW_ANCHOR_KEY_SEPARATOR = "\u0000";
 const DEFAULT_REVIEW_LIST_RESULT_LIMIT = 50;
 const MAX_REVIEW_LIST_RESULT_LIMIT = 500;
+const REVIEW_BOARD_LANE_LIMIT = MAX_REVIEW_LIST_RESULT_LIMIT;
 const FILTERED_REVIEW_LIST_CANDIDATE_LIMIT = 1_000;
 const FILTERED_REVIEW_LIST_CANDIDATE_MULTIPLIER = 10;
-const REVIEW_BOARD_LANE_IDS = ["needs-review", "changes-requested", "approved", "draft"] as const;
+const REVIEW_BOARD_SYNC_STALE_MS = 60_000;
 const inFlightRefreshKeys = new Set<string>();
+const inFlightBoardSyncKeys = new Set<string>();
 
 interface ReviewCacheIdentity {
   readonly login: string;
@@ -518,6 +526,74 @@ function usesExpandedPullRequestListCache(
   return hasLocalListFilters(input, viewerLogin) || sortNeedsExpandedCandidates(input);
 }
 
+const MIRROR_SERVICEABLE_LANES: ReadonlySet<string> = new Set([
+  "draft",
+  "needs-review",
+  "changes-requested",
+  "approved",
+]);
+
+// The mirror holds only open, non-tombstoned rows, has no checks rollup, and can't
+// express "non-draft only" or a title sort. Those queries stay on the gh path.
+function canServeListFromMirror(input: ReviewListPullRequestsInput): boolean {
+  if (input.state !== undefined && input.state !== "open") {
+    return false;
+  }
+  if (normalizeOptionalText(input.search) !== null) {
+    return false;
+  }
+  if (normalizedSet(input.checks).size > 0) {
+    return false;
+  }
+  if (input.draft === false) {
+    return false;
+  }
+  const sort = input.sort;
+  if (sort !== undefined && sort !== "updated" && sort !== "size") {
+    return false;
+  }
+  const columns = [...normalizedSet(input.columns)];
+  if (columns.some((column) => !MIRROR_SERVICEABLE_LANES.has(column))) {
+    return false;
+  }
+  return true;
+}
+
+function toMirrorQuery(
+  input: ReviewListPullRequestsInput,
+  repositoryId: string,
+  viewerLogin: string,
+  limit = resultListLimit(input),
+): ReviewPullRequestQuery {
+  const lanes = [...normalizedSet(input.columns)];
+  const authors = [...resolvedAliasMergedSet(input.author, input.authors, viewerLogin)];
+  const baseBranches = [...mergedSet(input.baseBranch, input.baseBranches)];
+  const headBranches = [...mergedSet(input.headBranch, input.headBranches)];
+  const labels = [...mergedSet(input.label, input.labels)];
+  const assignees = [...resolvedAliasMergedSet(input.assignee, input.assignees, viewerLogin)];
+  const resolvedReviewRequested = normalizeOptionalText(
+    resolveViewerAlias(normalizeOptionalText(input.reviewRequested), viewerLogin) ?? undefined,
+  );
+  return {
+    repositoryId,
+    state: "open",
+    ...(lanes.length > 0 ? { lanes } : {}),
+    ...(authors.length > 0 ? { authors } : {}),
+    ...(baseBranches.length > 0 ? { baseBranches } : {}),
+    ...(headBranches.length > 0 ? { headBranches } : {}),
+    ...(labels.length > 0 ? { labels } : {}),
+    ...(assignees.length > 0 ? { assignees } : {}),
+    ...(resolvedReviewRequested ? { reviewRequested: resolvedReviewRequested } : {}),
+    ...(input.draft === true ? { draft: true } : {}),
+    sort: input.sort === "size" ? "size" : "updated",
+    limit,
+  };
+}
+
+function mirrorListCandidateLimit(resultLimit: number): number {
+  return resultLimit + 1;
+}
+
 function pullRequestListCacheFilter(
   input: ReviewListPullRequestsInput,
   viewerLogin: string,
@@ -553,29 +629,6 @@ function slicePullRequestListResult(
   };
 }
 
-function boardLaneResult(
-  pullRequests: ReadonlyArray<ReviewPullRequestSummary>,
-  input: ReviewLoadBoardLanesInput,
-  candidateCount: number,
-  candidateLimit: number,
-): ReviewListPullRequestsResult {
-  const resultLimit = normalizedResultListLimit(input.limit);
-  const returnedPullRequests = pullRequests.slice(0, resultLimit);
-  return {
-    pullRequests: returnedPullRequests,
-    meta: {
-      ...(input.limit !== undefined ? { requestedLimit: input.limit } : {}),
-      resultLimit,
-      candidateLimit,
-      candidateCount,
-      candidateLimitReached: candidateCount >= candidateLimit,
-      matchedCount: pullRequests.length,
-      returnedCount: returnedPullRequests.length,
-      bounded: true,
-    },
-  };
-}
-
 function isUsableCacheEnvelope<T>(
   envelope: ReviewCacheEnvelope<T>,
   tokenIdentity: string,
@@ -583,8 +636,31 @@ function isUsableCacheEnvelope<T>(
   return envelope.tokenIdentity === tokenIdentity;
 }
 
+function hasAvatar(value: string | undefined): boolean {
+  return value !== undefined && value.trim().length > 0;
+}
+
+function hasCompleteReviewSidebarAvatars(overview: ReviewPullRequestOverview): boolean {
+  return (
+    hasAvatar(overview.detail.authorAvatarUrl) &&
+    overview.detail.reviewers.every((reviewer) => hasAvatar(reviewer.avatarUrl)) &&
+    overview.detail.assignees.every((assignee) => hasAvatar(assignee.avatarUrl))
+  );
+}
+
+function isUsablePullRequestOverviewCacheEnvelope(
+  envelope: ReviewCacheEnvelope<ReviewPullRequestOverview>,
+  tokenIdentity: string,
+): boolean {
+  return (
+    isUsableCacheEnvelope(envelope, tokenIdentity) && hasCompleteReviewSidebarAvatars(envelope.data)
+  );
+}
+
 const makeReviewSource = Effect.gen(function* () {
   const cacheStore = yield* ReviewCacheStore;
+  const pullRequestStore = yield* ReviewPullRequestStore;
+  const reviewSync = yield* ReviewSync;
   const gitCore = yield* GitCore;
   const gitHubCli = yield* GitHubCli;
   const gitManager = yield* GitManager;
@@ -772,12 +848,114 @@ const makeReviewSource = Effect.gen(function* () {
       );
     });
 
+  const forkBoardSync = (
+    cwd: string,
+    repositoryId: string,
+    tokenIdentity: string,
+    now: number,
+    mode: "delta" | "full",
+  ) =>
+    Effect.gen(function* () {
+      if (inFlightBoardSyncKeys.has(repositoryId)) {
+        return;
+      }
+      inFlightBoardSyncKeys.add(repositoryId);
+      yield* reviewSync.syncRepository({ cwd, repositoryId, tokenIdentity, now, mode }).pipe(
+        // reconciled counts as a change: a full reconcile can drop merged/closed PRs without upserting.
+        Effect.flatMap((result) =>
+          result.upserted > 0 || result.reconciled
+            ? reviewUpdateBus.publish({ _tag: "boardLanes", cwd, repositoryId, fetchedAt: now })
+            : Effect.void,
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            inFlightBoardSyncKeys.delete(repositoryId);
+          }),
+        ),
+        Effect.catch((error: unknown) =>
+          Effect.logWarning(`ReviewSource.forkBoardSync(${mode}) failed: ${String(error)}`),
+        ),
+        Effect.forkDetach,
+      );
+    });
+
+  // Background refresh runs full, not delta: an open-only delta can't observe PRs that left the open set.
+  const ensureMirrorFresh = (
+    cwd: string,
+    repositoryId: string,
+    tokenIdentity: string,
+    now: number,
+  ) =>
+    Effect.gen(function* () {
+      const syncState = yield* pullRequestStore.getSyncState({ repositoryId });
+      const syncedIdentity = Option.isSome(syncState) ? syncState.value.tokenIdentity : null;
+      if (syncedIdentity !== tokenIdentity) {
+        yield* reviewSync.syncRepository({ cwd, repositoryId, tokenIdentity, now, mode: "full" });
+        return;
+      }
+
+      const hasRows = yield* pullRequestStore.hasOpenPullRequests({ repositoryId });
+      if (!hasRows) {
+        yield* reviewSync.syncRepository({ cwd, repositoryId, tokenIdentity, now, mode: "full" });
+        return;
+      }
+
+      const lastSyncedAt = Option.isSome(syncState) ? syncState.value.lastSyncedAt : null;
+      if (lastSyncedAt === null) {
+        yield* reviewSync.syncRepository({ cwd, repositoryId, tokenIdentity, now, mode: "full" });
+        return;
+      }
+
+      if (now - lastSyncedAt >= REVIEW_BOARD_SYNC_STALE_MS) {
+        yield* forkBoardSync(cwd, repositoryId, tokenIdentity, now, "full");
+      }
+    });
+
+  const listPullRequestsFromMirror = (
+    input: ReviewListPullRequestsInput,
+    repositoryId: string,
+    cacheIdentity: ReviewCacheIdentity,
+    now: number,
+  ) =>
+    Effect.gen(function* () {
+      yield* ensureMirrorFresh(input.cwd, repositoryId, cacheIdentity.tokenIdentity, now);
+      const resultLimit = resultListLimit(input);
+      const candidateLimit = mirrorListCandidateLimit(resultLimit);
+      const pullRequests = yield* pullRequestStore.queryPullRequests(
+        toMirrorQuery(input, repositoryId, cacheIdentity.login, candidateLimit),
+      );
+      const returnedPullRequests = pullRequests.slice(0, resultLimit);
+      if (pullRequests.length < candidateLimit) {
+        return { pullRequests: returnedPullRequests } satisfies ReviewListPullRequestsResult;
+      }
+      return {
+        pullRequests: returnedPullRequests,
+        meta: {
+          ...(input.limit !== undefined ? { requestedLimit: input.limit } : {}),
+          resultLimit,
+          candidateLimit,
+          candidateCount: pullRequests.length,
+          candidateLimitReached: pullRequests.length >= candidateLimit,
+          matchedCount: pullRequests.length,
+          returnedCount: returnedPullRequests.length,
+          bounded: true,
+        },
+      } satisfies ReviewListPullRequestsResult;
+    }).pipe(
+      Effect.mapError((error) =>
+        reviewError("listPullRequests", "Could not list pull requests.", error),
+      ),
+    );
+
   const listPullRequests: ReviewSourceShape["listPullRequests"] = (input) =>
     Effect.gen(function* () {
-      const [repositoryId, cacheIdentity] = yield* Effect.all(
-        [resolveRepositoryId(input.cwd), readCacheIdentity(input.cwd)],
+      const [repositoryId, cacheIdentity, now] = yield* Effect.all(
+        [resolveRepositoryId(input.cwd), readCacheIdentity(input.cwd), cacheWriteClock],
         { concurrency: "unbounded" },
       );
+      if (canServeListFromMirror(input)) {
+        return yield* listPullRequestsFromMirror(input, repositoryId, cacheIdentity, now);
+      }
       const useExpandedCache = usesExpandedPullRequestListCache(input, cacheIdentity.login);
       const listFilter = pullRequestListCacheFilter(input, cacheIdentity.login);
       const cached = yield* cacheStore
@@ -819,67 +997,36 @@ const makeReviewSource = Effect.gen(function* () {
     });
 
   const loadBoardLanes: ReviewSourceShape["loadBoardLanes"] = (input) =>
-    gitHubCli
-      .listRepositoryPullRequests({
-        cwd: input.cwd,
-        state: "open",
-        limit: FILTERED_REVIEW_LIST_CANDIDATE_LIMIT,
-      })
-      .pipe(
-        Effect.map((pullRequests): ReviewBoardLanesResult => {
-          const lanes: Record<(typeof REVIEW_BOARD_LANE_IDS)[number], ReviewPullRequestSummary[]> =
-            {
-              "needs-review": [],
-              "changes-requested": [],
-              approved: [],
-              draft: [],
-            };
-          const summaries = pullRequests
-            .map(toPullRequestSummary)
-            .filter((summary): summary is ReviewPullRequestSummary => summary !== null)
-            .sort(compareReviewPullRequestSummaries("updated"));
-          for (const summary of summaries) {
-            const lane = reviewColumn(summary);
-            if (lane === "merged") {
-              continue;
-            }
-            lanes[lane].push(summary);
-          }
-          return {
-            "needs-review": boardLaneResult(
-              lanes["needs-review"],
-              input,
-              pullRequests.length,
-              FILTERED_REVIEW_LIST_CANDIDATE_LIMIT,
-            ),
-            "changes-requested": boardLaneResult(
-              lanes["changes-requested"],
-              input,
-              pullRequests.length,
-              FILTERED_REVIEW_LIST_CANDIDATE_LIMIT,
-            ),
-            approved: boardLaneResult(
-              lanes.approved,
-              input,
-              pullRequests.length,
-              FILTERED_REVIEW_LIST_CANDIDATE_LIMIT,
-            ),
-            draft: boardLaneResult(
-              lanes.draft,
-              input,
-              pullRequests.length,
-              FILTERED_REVIEW_LIST_CANDIDATE_LIMIT,
-            ),
-          };
-        }),
-        Effect.mapError((error) =>
-          reviewError(
-            "loadBoardLanes",
-            `Could not load review board lanes: ${error.message}`,
-            error,
-          ),
-        ),
+    Effect.gen(function* () {
+      const [repositoryId, cacheIdentity, now] = yield* Effect.all(
+        [resolveRepositoryId(input.cwd), readCacheIdentity(input.cwd), cacheWriteClock],
+        { concurrency: "unbounded" },
       );
+      yield* ensureMirrorFresh(input.cwd, repositoryId, cacheIdentity.tokenIdentity, now);
+      const limit =
+        input.limit !== undefined
+          ? normalizedResultListLimit(input.limit)
+          : REVIEW_BOARD_LANE_LIMIT;
+      const [needsReview, changesRequested, approved, draft] = yield* Effect.all(
+        [
+          pullRequestStore.getLane({ repositoryId, lane: "needs-review", limit }),
+          pullRequestStore.getLane({ repositoryId, lane: "changes-requested", limit }),
+          pullRequestStore.getLane({ repositoryId, lane: "approved", limit }),
+          pullRequestStore.getLane({ repositoryId, lane: "draft", limit }),
+        ],
+        { concurrency: "unbounded" },
+      );
+      return {
+        "needs-review": { pullRequests: needsReview },
+        "changes-requested": { pullRequests: changesRequested },
+        approved: { pullRequests: approved },
+        draft: { pullRequests: draft },
+      } satisfies ReviewBoardLanesResult;
+    }).pipe(
+      Effect.mapError((error) =>
+        reviewError("loadBoardLanes", "Could not load review board lanes.", error),
+      ),
+    );
 
   const getViewer: ReviewSourceShape["getViewer"] = (input) =>
     gitHubCli.getAuthenticatedUser({ cwd: input.cwd }).pipe(
@@ -1054,7 +1201,10 @@ const makeReviewSource = Effect.gen(function* () {
       const cached = yield* cacheStore
         .getPullRequestOverview({ repositoryId, reference: input.reference })
         .pipe(Effect.catch(() => Effect.succeed(Option.none())));
-      if (Option.isSome(cached) && isUsableCacheEnvelope(cached.value, tokenIdentity)) {
+      if (
+        Option.isSome(cached) &&
+        isUsablePullRequestOverviewCacheEnvelope(cached.value, tokenIdentity)
+      ) {
         yield* forkRefreshIfStale(
           `pr-overview:${repositoryId}:${input.reference}`,
           cached.value,
@@ -1084,7 +1234,10 @@ const makeReviewSource = Effect.gen(function* () {
       const cached = yield* cacheStore
         .getPullRequestOverview({ repositoryId, reference: input.reference })
         .pipe(Effect.catch(() => Effect.succeed(Option.none())));
-      if (Option.isSome(cached) && isUsableCacheEnvelope(cached.value, tokenIdentity)) {
+      if (
+        Option.isSome(cached) &&
+        isUsablePullRequestOverviewCacheEnvelope(cached.value, tokenIdentity)
+      ) {
         yield* forkRefreshIfStale(
           `pr-overview:${repositoryId}:${input.reference}`,
           cached.value,
@@ -1098,47 +1251,112 @@ const makeReviewSource = Effect.gen(function* () {
     });
 
   const loadConversationUncached: ReviewSourceShape["loadConversation"] = (input) =>
-    gitHubCli.getReviewConversation({ cwd: input.cwd, reference: input.reference }).pipe(
-      Effect.map((events) => ({
-        events: events.map((event): ReviewTimelineEvent => {
-          if (event.kind === "comment") {
-            return {
-              _tag: "comment",
-              id: event.id,
-              author: event.author,
-              ...(event.authorAvatarUrl !== undefined
-                ? { authorAvatarUrl: event.authorAvatarUrl }
-                : {}),
-              body: event.body,
-              createdAt: event.createdAt,
-              ...(event.url !== undefined ? { url: event.url } : {}),
-            };
-          }
-          if (event.kind === "review") {
-            return {
-              _tag: "review",
-              id: event.id,
-              author: event.author,
-              ...(event.authorAvatarUrl !== undefined
-                ? { authorAvatarUrl: event.authorAvatarUrl }
-                : {}),
-              state: event.state,
-              body: event.body,
-              createdAt: event.createdAt,
-              ...(event.url !== undefined ? { url: event.url } : {}),
-            };
-          }
+    Effect.gen(function* () {
+      const [conversation, stateEvents] = yield* Effect.all(
+        [
+          gitHubCli.getReviewConversation({ cwd: input.cwd, reference: input.reference }),
+          // State events are best-effort: a timeline failure must not drop the
+          // comments/reviews/commits the conversation already loads.
+          gitHubCli
+            .getReviewTimeline({ cwd: input.cwd, reference: input.reference })
+            .pipe(
+              Effect.catchTag("GitHubCliError", () =>
+                Effect.succeed([] as ReadonlyArray<GitHubReviewStateEvent>),
+              ),
+            ),
+        ],
+        { concurrency: "unbounded" },
+      );
+      const conversationEvents = conversation.map((event): ReviewTimelineEvent => {
+        if (event.kind === "comment") {
           return {
-            _tag: "commit",
-            oid: event.oid,
-            abbreviatedOid: event.abbreviatedOid,
-            messageHeadline: event.messageHeadline,
+            _tag: "comment",
+            id: event.id,
             author: event.author,
+            ...(event.authorAvatarUrl !== undefined
+              ? { authorAvatarUrl: event.authorAvatarUrl }
+              : {}),
+            body: event.body,
             createdAt: event.createdAt,
+            ...(event.url !== undefined ? { url: event.url } : {}),
           };
-        }),
-      })),
-    );
+        }
+        if (event.kind === "review") {
+          return {
+            _tag: "review",
+            id: event.id,
+            author: event.author,
+            ...(event.authorAvatarUrl !== undefined
+              ? { authorAvatarUrl: event.authorAvatarUrl }
+              : {}),
+            state: event.state,
+            body: event.body,
+            createdAt: event.createdAt,
+            ...(event.url !== undefined ? { url: event.url } : {}),
+          };
+        }
+        return {
+          _tag: "commit",
+          oid: event.oid,
+          abbreviatedOid: event.abbreviatedOid,
+          messageHeadline: event.messageHeadline,
+          author: event.author,
+          createdAt: event.createdAt,
+        };
+      });
+      const stateTimeline = stateEvents.map((event): ReviewTimelineEvent => {
+        switch (event.kind) {
+          case "labeled":
+            return {
+              _tag: "labeled",
+              actor: event.actor,
+              label: { name: event.label, color: "" },
+              added: event.added,
+              createdAt: event.createdAt,
+            };
+          case "assigned":
+            return {
+              _tag: "assigned",
+              actor: event.actor,
+              assignee: event.assignee,
+              added: event.added,
+              createdAt: event.createdAt,
+            };
+          case "milestoned":
+            return {
+              _tag: "milestoned",
+              actor: event.actor,
+              milestone: event.milestone,
+              added: event.added,
+              createdAt: event.createdAt,
+            };
+          case "reviewRequested":
+            return {
+              _tag: "reviewRequested",
+              actor: event.actor,
+              requestedReviewer: event.requestedReviewer,
+              createdAt: event.createdAt,
+            };
+          case "merged":
+            return {
+              _tag: "merged",
+              actor: event.actor,
+              ...(event.commitOid !== undefined ? { commitOid: event.commitOid } : {}),
+              createdAt: event.createdAt,
+            };
+          case "closed":
+            return { _tag: "closed", actor: event.actor, createdAt: event.createdAt };
+          case "reopened":
+            return { _tag: "reopened", actor: event.actor, createdAt: event.createdAt };
+          case "headRefForcePushed":
+            return { _tag: "headRefForcePushed", actor: event.actor, createdAt: event.createdAt };
+        }
+      });
+      const events = [...conversationEvents, ...stateTimeline].sort(
+        (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
+      );
+      return { events };
+    });
 
   const loadConversation: ReviewSourceShape["loadConversation"] = (input) =>
     Effect.gen(function* () {

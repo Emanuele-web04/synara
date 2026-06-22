@@ -465,6 +465,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                     textFontSizePx={normalizedChatFontSizePx}
                     density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
+                    markdownCwd={markdownCwd}
                     {...(onOpenThread ? { onOpenThread } : {})}
                   />
                 ))}
@@ -557,10 +558,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         <div
           className="pt-0.5 text-muted-foreground/70 font-system-ui"
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
+          aria-live="off"
         >
           {row.createdAt ? (
             <>
-              Working for{" "}
+              {row.label ?? "Working"} for{" "}
               {nowIso ? (
                 (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
               ) : (
@@ -568,7 +570,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               )}
             </>
           ) : (
-            "Working..."
+            `${row.label ?? "Working"}...`
           )}
         </div>
       )}
@@ -614,6 +616,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         onTouchStart={onMessagesTouchStart}
         onWheel={onMessagesWheel}
         data-chat-scroll-container="true"
+        role="log"
+        aria-label="Chat transcript"
+        aria-live={activeTurnInProgress ? "polite" : "off"}
+        aria-relevant="additions text"
         ListFooterComponent={listFooter}
         {...(listScrollStyle ? { style: listScrollStyle } : {})}
         className={cn(

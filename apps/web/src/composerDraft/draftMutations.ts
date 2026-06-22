@@ -6,7 +6,11 @@
 import type { ThreadId } from "@t3tools/contracts";
 import { normalizeAssistantSelections, normalizeTerminalContextsForThread } from "./normalize";
 import { shouldRemoveDraft } from "./cleanup";
-import type { ComposerDraftStoreState, ComposerThreadDraftState } from "../composerDraftStore";
+import type {
+  ComposerDraftStoreState,
+  ComposerImageAttachment,
+  ComposerThreadDraftState,
+} from "../composerDraftStore";
 
 export function createEmptyThreadDraft(): ComposerThreadDraftState {
   return {
@@ -27,6 +31,17 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
   };
 }
 
+function copyComposerImage(image: ComposerImageAttachment): ComposerImageAttachment {
+  const previewUrl =
+    typeof URL !== "undefined" && typeof URL.createObjectURL === "function"
+      ? URL.createObjectURL(image.file)
+      : image.previewUrl;
+  return {
+    ...image,
+    previewUrl,
+  };
+}
+
 export function buildTransferredComposerDraft(input: {
   sourceDraft: ComposerThreadDraftState;
   targetDraft: ComposerThreadDraftState | undefined;
@@ -34,9 +49,18 @@ export function buildTransferredComposerDraft(input: {
 }): ComposerThreadDraftState {
   const { sourceDraft, targetDraft, targetThreadId } = input;
   const base = targetDraft ?? createEmptyThreadDraft();
+  const images = sourceDraft.images.map(copyComposerImage);
+  const imageIds = new Set(images.map((image) => image.id));
   return {
     ...base,
     prompt: sourceDraft.prompt,
+    images,
+    nonPersistedImageIds: sourceDraft.nonPersistedImageIds.filter((imageId) =>
+      imageIds.has(imageId),
+    ),
+    persistedAttachments: sourceDraft.persistedAttachments.filter((attachment) =>
+      imageIds.has(attachment.id),
+    ),
     assistantSelections: normalizeAssistantSelections(sourceDraft.assistantSelections),
     fileComments: sourceDraft.fileComments.map((comment) => ({ ...comment })),
     skills: [...sourceDraft.skills],

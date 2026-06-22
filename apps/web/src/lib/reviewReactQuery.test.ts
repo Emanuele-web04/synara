@@ -11,6 +11,7 @@ import type {
 
 import {
   applyReviewPullRequestSurfacePayload,
+  applyReviewUpdatedPayload,
   buildReviewListPullRequestsRequest,
   reviewQueryKeys,
   reviewSourceKey,
@@ -110,9 +111,9 @@ describe("reviewQueryKeys.pullRequests", () => {
     expect(reviewQueryKeys.pullRequests({ cwd: "/repo" })).not.toEqual(
       reviewQueryKeys.pullRequests({ cwd: "/repo", search: "body-only-match" }),
     );
-    expect(
-      reviewQueryKeys.pullRequests({ cwd: "/repo", search: "body-only-match" }),
-    ).not.toEqual(reviewQueryKeys.pullRequests({ cwd: "/repo", search: "other" }));
+    expect(reviewQueryKeys.pullRequests({ cwd: "/repo", search: "body-only-match" })).not.toEqual(
+      reviewQueryKeys.pullRequests({ cwd: "/repo", search: "other" }),
+    );
   });
 
   it("separates non-default sort modes into distinct list cache keys", () => {
@@ -176,12 +177,62 @@ describe("applyReviewPullRequestSurfacePayload", () => {
     expect(queryClient.getQueryData(reviewQueryKeys.pullRequest("/repo", "42"))).toBe(
       REVIEW_OVERVIEW,
     );
+    expect(queryClient.getQueryData(reviewQueryKeys.pullRequestHeader("/repo", "42"))).toEqual({
+      detail: REVIEW_OVERVIEW.detail,
+    });
     expect(queryClient.getQueryData(reviewQueryKeys.conversation("/repo", "42"))).toBe(
       REVIEW_CONVERSATION,
     );
     expect(
       queryClient.getQueryData(reviewQueryKeys.changeset("/repo", reviewSourceKey(REVIEW_SOURCE))),
     ).toBe(REVIEW_CHANGESET);
+  });
+});
+
+describe("applyReviewUpdatedPayload", () => {
+  it("primes the lightweight header cache when an overview update arrives", () => {
+    const queryClient = new QueryClient();
+
+    applyReviewUpdatedPayload(queryClient, {
+      _tag: "pullRequestOverview",
+      cwd: "/repo",
+      repositoryId: "repo",
+      reference: "42",
+      data: REVIEW_OVERVIEW,
+      fetchedAt: 123,
+    });
+
+    expect(queryClient.getQueryData(reviewQueryKeys.pullRequest("/repo", "42"))).toBe(
+      REVIEW_OVERVIEW,
+    );
+    expect(queryClient.getQueryData(reviewQueryKeys.pullRequestHeader("/repo", "42"))).toEqual({
+      detail: REVIEW_OVERVIEW.detail,
+    });
+  });
+
+  it("invalidates board-lane and list queries for the repo on a boardLanes signal", () => {
+    const queryClient = new QueryClient();
+    const laneKey = reviewQueryKeys.boardLanes("/repo");
+    const listKey = reviewQueryKeys.pullRequests({ cwd: "/repo" });
+    queryClient.setQueryData(laneKey, {
+      "needs-review": { pullRequests: [] },
+      "changes-requested": { pullRequests: [] },
+      approved: { pullRequests: [] },
+      draft: { pullRequests: [] },
+    });
+    queryClient.setQueryData(listKey, { pullRequests: [] });
+    expect(queryClient.getQueryState(laneKey)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(false);
+
+    applyReviewUpdatedPayload(queryClient, {
+      _tag: "boardLanes",
+      cwd: "/repo",
+      repositoryId: "repo",
+      fetchedAt: 123,
+    });
+
+    expect(queryClient.getQueryState(laneKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
   });
 });
 

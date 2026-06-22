@@ -322,17 +322,83 @@ export function runtimeEventToActivities(
       : {};
   })();
   switch (event.type) {
+    case "turn.proposed.delta": {
+      const delta = event.payload.delta;
+      if (delta.length === 0) {
+        return [];
+      }
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "plan.delta",
+          summary: "Plan update",
+          payload: toActivityPayload({
+            streamKind: "plan_text",
+            detail: delta,
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "content.delta": {
+      if (event.payload.streamKind === "assistant_text") {
+        return [];
+      }
+      const delta = event.payload.delta;
+      if (delta.length === 0) {
+        return [];
+      }
+
       if (
         event.payload.streamKind !== "reasoning_text" &&
         event.payload.streamKind !== "reasoning_summary_text"
       ) {
-        return [];
+        const outputCopy: {
+          readonly kind: OrchestrationThreadActivity["kind"];
+          readonly summary: string;
+          readonly tone: OrchestrationThreadActivity["tone"];
+        } =
+          event.payload.streamKind === "command_output"
+            ? { kind: "tool.output.delta", summary: "Command output", tone: "tool" }
+            : event.payload.streamKind === "file_change_output"
+              ? { kind: "tool.output.delta", summary: "File-change output", tone: "tool" }
+              : event.payload.streamKind === "unknown" && event.itemId !== undefined
+                ? { kind: "tool.output.delta", summary: "Tool output", tone: "tool" }
+                : event.payload.streamKind === "plan_text"
+                  ? { kind: "plan.delta", summary: "Plan update", tone: "info" }
+                  : {
+                      kind: "provider.content.delta",
+                      summary: "Provider output",
+                      tone: "info",
+                    };
+        return [
+          {
+            id: event.eventId,
+            createdAt: event.createdAt,
+            tone: outputCopy.tone,
+            kind: outputCopy.kind,
+            summary: outputCopy.summary,
+            payload: toActivityPayload({
+              streamKind: event.payload.streamKind,
+              detail: delta,
+              ...(event.itemId !== undefined ? { itemId: event.itemId } : {}),
+              ...(event.payload.contentIndex !== undefined
+                ? { contentIndex: event.payload.contentIndex }
+                : {}),
+              ...(event.payload.summaryIndex !== undefined
+                ? { summaryIndex: event.payload.summaryIndex }
+                : {}),
+            }),
+            turnId: toTurnId(event.turnId) ?? null,
+            ...maybeSequence,
+          },
+        ];
       }
-      const delta = event.payload.delta.trim();
-      if (delta.length === 0) {
-        return [];
-      }
+
       return [
         {
           id: event.eventId,
@@ -343,7 +409,8 @@ export function runtimeEventToActivities(
             event.payload.streamKind === "reasoning_summary_text" ? "Thinking summary" : "Thinking",
           payload: toActivityPayload({
             streamKind: event.payload.streamKind,
-            detail: truncateDetail(delta),
+            detail: delta,
+            deltaChars: delta.length,
             ...(event.payload.contentIndex !== undefined
               ? { contentIndex: event.payload.contentIndex }
               : {}),
@@ -468,6 +535,67 @@ export function runtimeEventToActivities(
             message: copy.message,
             ...(copy.detail !== undefined ? { detail: copy.detail } : {}),
             ...(event.payload.detail !== undefined ? { rawDetail: event.payload.detail } : {}),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "mcp.status.updated": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "mcp.status.updated",
+          summary: "MCP server status",
+          payload: toActivityPayload({
+            provider: event.provider,
+            ...activityDataField(event.payload.status),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "provider.unhandled": {
+      const sourceRef = event.sourceRef;
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "provider.unhandled",
+          summary: "Unhandled provider event",
+          payload: toActivityPayload({
+            provider: event.provider,
+            nativeEventName: event.payload.nativeEventName,
+            reason: event.payload.reason,
+            ...(event.raw?.source ? { source: event.raw.source } : {}),
+            ...(event.raw?.method ? { method: event.raw.method } : {}),
+            ...(event.raw?.messageType ? { messageType: event.raw.messageType } : {}),
+            ...(event.payload.redactedPayloadPreview
+              ? { preview: truncateDetail(event.payload.redactedPayloadPreview, 500) }
+              : {}),
+            ...(event.providerRefs ? { providerRefs: event.providerRefs } : {}),
+            ...(sourceRef
+              ? {
+                  sourceRef: {
+                    provider: sourceRef.provider,
+                    runtimeEventId: sourceRef.runtimeEventId,
+                    nativeEventId: sourceRef.nativeEventId,
+                    nativeEventName: sourceRef.nativeEventName,
+                    sourceSequence: sourceRef.sourceSequence,
+                    runtimeSubsequence: sourceRef.runtimeSubsequence,
+                    turnId: sourceRef.turnId ?? null,
+                    itemId: sourceRef.itemId ?? null,
+                    requestId: sourceRef.requestId ?? null,
+                    contentIndex: sourceRef.contentIndex ?? null,
+                  },
+                }
+              : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -646,6 +774,25 @@ export function runtimeEventToActivities(
     }
 
     case "item.updated": {
+      if (event.payload.itemType === "reasoning") {
+        return [
+          {
+            id: event.eventId,
+            createdAt: event.createdAt,
+            tone: "info",
+            kind: "reasoning.progress",
+            summary: event.payload.title ?? "Thinking",
+            payload: toActivityPayload({
+              itemType: event.payload.itemType,
+              ...(event.payload.status ? { status: event.payload.status } : {}),
+              ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+              ...activityDataField(event.payload.data),
+            }),
+            turnId: toTurnId(event.turnId) ?? null,
+            ...maybeSequence,
+          },
+        ];
+      }
       if (event.payload.itemType === "context_compaction") {
         return [
           {

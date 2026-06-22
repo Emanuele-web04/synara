@@ -21,7 +21,7 @@ export type ClaudeTextStreamKind = Extract<
 >;
 export type ClaudeToolResultStreamKind = Extract<
   RuntimeContentStreamKind,
-  "command_output" | "file_change_output"
+  "command_output" | "file_change_output" | "unknown"
 >;
 
 export type PromptQueueItem =
@@ -47,6 +47,7 @@ export interface ClaudeTurnState {
   readonly items: Array<unknown>;
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
+  readonly reasoningBlocks: Map<number, ReasoningBlockState>;
   readonly capturedProposedPlanKeys: Set<string>;
   readonly sawFileChange: boolean;
   nextSyntheticAssistantBlockIndex: number;
@@ -57,6 +58,14 @@ export interface AssistantTextBlockState {
   readonly blockIndex: number;
   emittedTextDelta: boolean;
   fallbackText: string;
+  streamClosed: boolean;
+  completionEmitted: boolean;
+}
+
+export interface ReasoningBlockState {
+  readonly itemId: string;
+  readonly blockIndex: number;
+  emittedTextDelta: boolean;
   streamClosed: boolean;
   completionEmitted: boolean;
 }

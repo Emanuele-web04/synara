@@ -305,9 +305,7 @@ export function buildReviewPullFilterOptions(
 }
 
 function sortedTextOptions(values: ReadonlySet<string>): ReadonlyArray<ReviewFilterOption> {
-  return [...values]
-    .sort((a, b) => a.localeCompare(b))
-    .map((value) => ({ value, label: value }));
+  return [...values].sort((a, b) => a.localeCompare(b)).map((value) => ({ value, label: value }));
 }
 
 export function applyReviewFilters(

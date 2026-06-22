@@ -347,6 +347,8 @@ export function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessage
       dispatchMode: payload.dispatchMode,
       turnId: payload.turnId,
       attachments: payload.attachments ?? [],
+      ...(payload.skills ? { skills: payload.skills } : {}),
+      ...(payload.mentions ? { mentions: payload.mentions } : {}),
       streaming: payload.streaming,
       source: payload.source,
       createdAt: payload.createdAt,

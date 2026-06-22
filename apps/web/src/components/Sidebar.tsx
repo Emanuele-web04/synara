@@ -280,8 +280,7 @@ export default function Sidebar() {
   const isOnWorkspace = pathname.startsWith("/workspace");
   const isOnReview = pathname.startsWith("/review");
   const { settings: appSettings, updateSettings } = useAppSettings();
-  const isMacDesktop =
-    typeof navigator !== "undefined" ? isMacPlatform(navigator.platform) : false;
+  const isMacDesktop = typeof navigator !== "undefined" ? isMacPlatform(navigator.platform) : false;
   const shouldReserveOpenSidebarTrafficLightGutter =
     isElectron && isMacDesktop && appSettings.sidebarSide === "left";
   const { handleNewThread } = useHandleNewThread();

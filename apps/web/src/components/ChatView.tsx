@@ -271,10 +271,7 @@ import {
   appendAssistantSelectionsToPrompt,
   formatAssistantSelectionTitleSeed,
 } from "../lib/assistantSelections";
-import {
-  appendFileCommentsToPrompt,
-  formatFileCommentTitleSeed,
-} from "../lib/fileComments";
+import { appendFileCommentsToPrompt, formatFileCommentTitleSeed } from "../lib/fileComments";
 import {
   deriveContextWindowSelectionStatus,
   deriveCumulativeCostUsd,
@@ -396,6 +393,7 @@ import {
   revokeUserMessagePreviewUrls,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { useApprovalResponder } from "~/hooks/useApprovalResponder";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
 import { useFeatureFlags } from "../featureFlags";
 import { collapseCursorModelVariants } from "../cursorModelVariants";
@@ -615,7 +613,6 @@ export default function ChatView({
   const [isLocalConnecting, _setIsLocalConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
-  const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
     ApprovalRequestId[]
   >([]);
@@ -1677,6 +1674,14 @@ export default function ChatView({
   const activeTurnLayoutKey =
     activeThreadId === null ? null : `${activeThreadId}:${activeLatestTurn?.turnId ?? "idle"}`;
   const activeTurnInProgress = activeTurnLayoutLive || keepSettledActiveTurnLayout;
+  const activeLiveTurnId = activeLatestTurn?.turnId ?? activeThread?.session?.activeTurnId ?? null;
+  const hasLiveStreamOutput =
+    activeTurnInProgress &&
+    workLogEntries.some(
+      (entry) =>
+        entry.streamKind !== undefined &&
+        (activeLiveTurnId === null || entry.turnId === activeLiveTurnId || entry.turnId == null),
+    );
   const isComposerApprovalState = activePendingApproval !== null;
   const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
   const handoffDisabled = !(
@@ -5207,40 +5212,32 @@ export default function ChatView({
     return turnStartSucceeded;
   };
 
-  const onRespondToApproval = useCallback(
-    async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
-      const api = readNativeApi();
-      if (!api || !activeThreadId) return;
-
-      setRespondingRequestIds((existing) =>
-        existing.includes(requestId) ? existing : [...existing, requestId],
-      );
+  const onApprovalError = useCallback(
+    (message: string) => {
+      if (activeThreadId) {
+        setStoreThreadError(activeThreadId, message);
+      }
+    },
+    [activeThreadId, setStoreThreadError],
+  );
+  const onApprovalBeforeDispatch = useCallback(
+    (decision: ProviderApprovalDecision) => {
       // Durably persist "always allow" client-side so the next turn (after an
       // idle-stop or runtime restart) keeps full-access instead of asking again.
       // The server's session override only covers the current live turn.
       const durableRuntimeMode = resolveRuntimeModeAfterApprovalDecision(runtimeMode, decision);
-      if (durableRuntimeMode) {
+      if (durableRuntimeMode && activeThreadId) {
         setComposerDraftRuntimeMode(activeThreadId, durableRuntimeMode);
       }
-      await api.orchestration
-        .dispatchCommand({
-          type: "thread.approval.respond",
-          commandId: newCommandId(),
-          threadId: activeThreadId,
-          requestId,
-          decision,
-          createdAt: new Date().toISOString(),
-        })
-        .catch((err: unknown) => {
-          setStoreThreadError(
-            activeThreadId,
-            err instanceof Error ? err.message : "Failed to submit approval decision.",
-          );
-        });
-      setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
     },
-    [activeThreadId, runtimeMode, setComposerDraftRuntimeMode, setStoreThreadError],
+    [activeThreadId, runtimeMode, setComposerDraftRuntimeMode],
   );
+  const { respondingApprovalIds: respondingRequestIds, respondToApproval: onRespondToApproval } =
+    useApprovalResponder({
+      threadId: activeThreadId,
+      onError: onApprovalError,
+      beforeDispatch: onApprovalBeforeDispatch,
+    });
 
   const onRespondToUserInput = useCallback(
     async (requestId: ApprovalRequestId, answers: ProviderUserInputAnswers) => {
@@ -7208,7 +7205,7 @@ export default function ChatView({
                     onEditUserMessage={onEditUserMessage}
                     isRevertingCheckpoint={isRevertingCheckpoint}
                     onExpandTimelineImage={onExpandTimelineImage}
-                    followLiveOutput={hasStreamingAssistantText}
+                    followLiveOutput={hasStreamingAssistantText || hasLiveStreamOutput}
                     onIsAtEndChange={onIsAtEndChange}
                     markdownCwd={threadWorkspaceCwd ?? undefined}
                     resolvedTheme={resolvedTheme}

@@ -64,9 +64,10 @@ export interface ClaudeSessionContext {
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
+  lastThinkingItemId: string | undefined;
+  lastEmittedThinkingTokens: number | undefined;
   stopped: boolean;
-  // Unrecognized SDK message kinds already surfaced as a runtime warning. Newer
-  // Claude SDKs stream high-frequency telemetry (e.g. `thinking_tokens`); de-duping
+  // Unrecognized SDK message kinds already surfaced as a runtime warning; de-duping
   // here keeps a single unknown kind from flooding the conversation timeline.
   readonly warnedUnhandledSdkKinds: Set<string>;
 }

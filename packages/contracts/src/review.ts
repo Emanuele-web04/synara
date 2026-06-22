@@ -62,10 +62,8 @@ export const ReviewPullRequestSummary = Schema.Struct({
   deletions: NonNegativeInt,
   checksStatus: ReviewChecksStatus,
   reviewRequests: Schema.Array(Schema.String),
-  labels: Schema.optional(Schema.Array(Schema.String)).pipe(Schema.withDecodingDefault(() => [])),
-  assignees: Schema.optional(Schema.Array(Schema.String)).pipe(
-    Schema.withDecodingDefault(() => []),
-  ),
+  labels: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(() => [])),
+  assignees: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(() => [])),
 });
 export type ReviewPullRequestSummary = typeof ReviewPullRequestSummary.Type;
 
@@ -248,6 +246,7 @@ export const ReviewSubmitResult = Schema.Struct({
 export type ReviewSubmitResult = typeof ReviewSubmitResult.Type;
 
 export const ReviewRemoteThreadComment = Schema.Struct({
+  id: Schema.optional(TrimmedNonEmptyStringSchema),
   author: Schema.String,
   authorAvatarUrl: Schema.optional(Schema.String),
   body: Schema.String,
@@ -276,6 +275,53 @@ export const ReviewRemoteThreadsResult = Schema.Struct({
   threads: Schema.Array(ReviewRemoteThread),
 });
 export type ReviewRemoteThreadsResult = typeof ReviewRemoteThreadsResult.Type;
+
+export const ReviewResolveThreadInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  reference: GitPullRequestReference,
+  threadId: TrimmedNonEmptyStringSchema,
+  resolved: Schema.Boolean,
+});
+export type ReviewResolveThreadInput = typeof ReviewResolveThreadInput.Type;
+
+export const ReviewResolveThreadResult = Schema.Struct({
+  threadId: TrimmedNonEmptyStringSchema,
+  isResolved: Schema.Boolean,
+});
+export type ReviewResolveThreadResult = typeof ReviewResolveThreadResult.Type;
+
+export const ReviewReplyThreadInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  reference: GitPullRequestReference,
+  threadId: TrimmedNonEmptyStringSchema,
+  body: TrimmedNonEmptyStringSchema,
+});
+export type ReviewReplyThreadInput = typeof ReviewReplyThreadInput.Type;
+
+export const ReviewReplyThreadResult = Schema.Struct({
+  threadId: TrimmedNonEmptyStringSchema,
+});
+export type ReviewReplyThreadResult = typeof ReviewReplyThreadResult.Type;
+
+export const ReviewUpdateThreadCommentInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  reference: GitPullRequestReference,
+  commentId: TrimmedNonEmptyStringSchema,
+  body: TrimmedNonEmptyStringSchema,
+});
+export type ReviewUpdateThreadCommentInput = typeof ReviewUpdateThreadCommentInput.Type;
+
+export const ReviewDeleteThreadCommentInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  reference: GitPullRequestReference,
+  commentId: TrimmedNonEmptyStringSchema,
+});
+export type ReviewDeleteThreadCommentInput = typeof ReviewDeleteThreadCommentInput.Type;
+
+export const ReviewThreadCommentMutationResult = Schema.Struct({
+  commentId: TrimmedNonEmptyStringSchema,
+});
+export type ReviewThreadCommentMutationResult = typeof ReviewThreadCommentMutationResult.Type;
 
 export const ReviewFindingSeverity = Schema.Literals(["blocker", "major", "minor", "nit"]);
 export type ReviewFindingSeverity = typeof ReviewFindingSeverity.Type;
@@ -694,6 +740,12 @@ export const ReviewUpdatedPayload = Schema.Union([
     repositoryId: ReviewRepositoryId,
     reference: ReviewPullRequestReference,
     data: ReviewChangesetResult,
+    fetchedAt: NonNegativeInt,
+  }),
+  // Signal-only: no lane data (lanes are limit-keyed); the client refetches its board-lane query.
+  Schema.TaggedStruct("boardLanes", {
+    cwd: TrimmedNonEmptyStringSchema,
+    repositoryId: ReviewRepositoryId,
     fetchedAt: NonNegativeInt,
   }),
 ]);
