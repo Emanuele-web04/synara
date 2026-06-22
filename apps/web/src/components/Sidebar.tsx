@@ -1237,6 +1237,7 @@ export default function Sidebar() {
   const isOnSettings = useLocation({
     select: (loc) => loc.pathname === "/settings",
   });
+  const isOnReview = pathname.startsWith("/review");
   const isOnWorkspace = pathname.startsWith("/workspace");
   const isOnKanban = pathname.startsWith("/kanban");
   const isOnAutomations = pathname.startsWith("/automations");
@@ -5785,6 +5786,19 @@ export default function Sidebar() {
       usageSettingsShortcutLabel,
     ],
   );
+  const handleOpenPullRequestReference = useCallback(
+    (reference: string) => {
+      const cwd = currentProjectShortcutTargetId
+        ? (projectCwdById.get(currentProjectShortcutTargetId) ?? null)
+        : null;
+      void navigate({
+        to: "/review/$reference",
+        params: { reference },
+        ...(cwd ? { search: { cwd } } : {}),
+      });
+    },
+    [currentProjectShortcutTargetId, navigate, projectCwdById],
+  );
 
   const handleDesktopUpdateButtonClick = useCallback(() => {
     const bridge = window.desktopBridge;
@@ -6114,6 +6128,14 @@ export default function Sidebar() {
                         setSearchPaletteOpen(true);
                       }}
                       shortcutLabel={searchShortcutLabel}
+                    />
+                    <SidebarPrimaryAction
+                      icon={GitPullRequestIcon}
+                      label="Reviews"
+                      active={isOnReview}
+                      onClick={() => {
+                        void navigate({ to: "/review" });
+                      }}
                     />
                     <SidebarPrimaryAction
                       icon={KanbanIcon}
@@ -6902,6 +6924,7 @@ export default function Sidebar() {
             });
           }}
           onOpenProject={handleOpenProjectFromSearch}
+          onOpenPullRequestReference={handleOpenPullRequestReference}
           onImportThread={handleImportThread}
           onOpenThread={(threadId) => {
             activateThreadFromSidebarIntent(ThreadId.makeUnsafe(threadId));
@@ -6928,6 +6951,7 @@ function SidebarSearchPaletteController(props: {
   onOpenSettings: () => void;
   onOpenUsageSettings: () => void;
   onOpenProject: (projectId: string) => void;
+  onOpenPullRequestReference: (reference: string) => void;
   onImportThread: (provider: ImportProviderKind, externalId: string) => Promise<void>;
   onOpenThread: (threadId: string) => void;
 }) {
@@ -6987,6 +7011,7 @@ function SidebarSearchPaletteController(props: {
       onOpenSettings={props.onOpenSettings}
       onOpenUsageSettings={props.onOpenUsageSettings}
       onOpenProject={props.onOpenProject}
+      onOpenPullRequestReference={props.onOpenPullRequestReference}
       importProviders={importProviders}
       onImportThread={props.onImportThread}
       onOpenThread={props.onOpenThread}
