@@ -171,4 +171,38 @@ describe("parseUnifiedDiff", () => {
       { path: "src/eol.ts", insertions: 1, deletions: 1, status: "modified" },
     ]);
   });
+
+  it("decodes git-quoted UTF-8 paths", () => {
+    const patch = [
+      'diff --git "a/src/caf\\303\\251.ts" "b/src/caf\\303\\251.ts"',
+      "index 1111111..2222222 100644",
+      '--- "a/src/caf\\303\\251.ts"',
+      '+++ "b/src/caf\\303\\251.ts"',
+      "@@ -1,1 +1,1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+
+    expect(parseUnifiedDiff(patch)).toEqual([
+      { path: "src/café.ts", insertions: 1, deletions: 1, status: "modified" },
+    ]);
+  });
+
+  it("keeps paths with literal b segments aligned with the patch", () => {
+    const patch = [
+      "diff --git a/dir/ b/name.txt b/dir/ b/name.txt",
+      "index 1111111..2222222 100644",
+      "--- a/dir/ b/name.txt",
+      "+++ b/dir/ b/name.txt",
+      "@@ -1,1 +1,1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+
+    expect(parseUnifiedDiff(patch)).toEqual([
+      { path: "dir/ b/name.txt", insertions: 1, deletions: 1, status: "modified" },
+    ]);
+  });
 });

@@ -10,12 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
-import {
-  buildFileDiffRenderKey,
-  getRenderablePatch,
-  resolveFileDiffPath,
-  sortFileDiffsByPath,
-} from "~/lib/diffRendering";
+import { getRenderablePatch } from "~/lib/diffRendering";
 import {
   Columns2Icon,
   EllipsisIcon,
@@ -43,8 +38,10 @@ import { DiffStat } from "../chat/DiffStatLabel";
 import { PanelStateMessage } from "../chat/PanelStateMessage";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
-import { ReviewFileDiffBlock } from "./ReviewFileDiffBlock";
+import { ReviewVirtualizedDiffFiles } from "./ReviewVirtualizedDiffFiles";
 import { ReviewCommentThread, type ReviewCommentThreadActions } from "./ReviewCommentThread";
+import { buildReviewDiffFileRows } from "./reviewDiffFileRows";
+import { ReviewFileJumpControl } from "./ReviewFileJumpControl";
 import {
   annotationAnchorKey,
   type ReviewLineAnnotationData,
@@ -54,12 +51,6 @@ import {
 type DiffRenderMode = "stacked" | "split";
 
 type FileAnnotationMap = Map<string, DiffLineAnnotation<ReviewLineAnnotationData>[]>;
-
-const EMPTY_ANNOTATIONS: DiffLineAnnotation<ReviewLineAnnotationData>[] = [];
-const INITIAL_HYDRATED_FILE_COUNT = 4;
-const HYDRATION_BATCH_SIZE = 8;
-const HYDRATION_IDLE_TIMEOUT_MS = 80;
-type IdleCallbackHandle = ReturnType<typeof requestIdleCallback>;
 
 export function ReviewDiffPane(props: {
   patch: string | undefined;
@@ -98,9 +89,13 @@ export function ReviewDiffPane(props: {
 
   const commentsQuery = useQuery(reviewListCommentsQueryOptions({ target }));
   const viewerQuery = useQuery(reviewViewerQueryOptions({ cwd: props.cwd ?? null }));
-  const viewerIdentity = viewerQuery.data
-    ? `${viewerQuery.data.login}:${viewerQuery.data.avatarUrl ?? ""}`
-    : "viewer-pending";
+  const viewerIdentity = useMemo(
+    () =>
+      viewerQuery.data
+        ? `${viewerQuery.data.login}:${viewerQuery.data.avatarUrl ?? ""}`
+        : "viewer-pending",
+    [viewerQuery.data],
+  );
   const remoteThreadsEnabled = target?._tag === "pullRequest";
   const remoteThreadsQuery = useQuery(
     reviewLoadRemoteThreadsQueryOptions({
@@ -159,62 +154,20 @@ export function ReviewDiffPane(props: {
     }
   }, [target, serverComments, reconcile]);
 
-  const renderablePatch = useMemo(
-    () => getRenderablePatch(props.patch, `review:${resolvedTheme}`),
-    [props.patch, resolvedTheme],
+  const renderableFiles = useMemo(
+    () => buildReviewDiffFileRows(props.files ?? [], props.patch),
+    [props.files, props.patch],
   );
-  const renderableFiles = useMemo(() => {
-    if (!renderablePatch || renderablePatch.kind !== "files") {
-      return [];
+  const renderablePatch = useMemo(() => {
+    if (renderableFiles.length > 0) {
+      return null;
     }
-    return sortFileDiffsByPath(renderablePatch.files);
-  }, [renderablePatch]);
-  const renderableFileSignature = useMemo(
-    () => renderableFiles.map((fileDiff) => buildFileDiffRenderKey(fileDiff)).join("\n"),
-    [renderableFiles],
-  );
-  const [hydratedFileCount, setHydratedFileCount] = useState(INITIAL_HYDRATED_FILE_COUNT);
-
-  useEffect(() => {
-    setHydratedFileCount(INITIAL_HYDRATED_FILE_COUNT);
-  }, [renderableFileSignature]);
-
-  useEffect(() => {
-    if (hydratedFileCount >= renderableFiles.length) {
-      return;
-    }
-
-    const hydrateNextBatch = () => {
-      setHydratedFileCount((count) =>
-        Math.min(renderableFiles.length, count + HYDRATION_BATCH_SIZE),
-      );
-    };
-
-    if (typeof requestIdleCallback === "function") {
-      const idleId: IdleCallbackHandle = requestIdleCallback(hydrateNextBatch, {
-        timeout: HYDRATION_IDLE_TIMEOUT_MS,
-      });
-      return () => cancelIdleCallback(idleId);
-    }
-
-    const timeoutId = setTimeout(hydrateNextBatch, HYDRATION_IDLE_TIMEOUT_MS);
-    return () => clearTimeout(timeoutId);
-  }, [hydratedFileCount, renderableFiles.length]);
-
+    return getRenderablePatch(props.patch, `review:${resolvedTheme}`);
+  }, [props.patch, renderableFiles.length, resolvedTheme]);
   const annotationsByFile = useMemo(
     () => buildAnnotationsByFile(serverComments ?? [], drafts, remoteThreads ?? [], agentFindings),
     [serverComments, drafts, remoteThreads, agentFindings],
   );
-
-  useEffect(() => {
-    if (!props.selectedFilePath || !patchViewportRef.current) {
-      return;
-    }
-    const scrollTarget = Array.from(
-      patchViewportRef.current.querySelectorAll<HTMLElement>("[data-diff-file-path]"),
-    ).find((element) => element.dataset.diffFilePath === props.selectedFilePath);
-    scrollTarget?.scrollIntoView({ block: "start" });
-  }, [props.selectedFilePath, renderableFiles]);
 
   const isFileCollapsed = useCallback(
     (fileKey: string, filePath: string) =>
@@ -446,23 +399,13 @@ export function ReviewDiffPane(props: {
                     </span>
                   </div>
                   {fileOptions.length > 0 && onSelectFile ? (
-                    <select
-                      aria-label="Jump to changed file"
-                      value={selectedFilePath ?? ""}
-                      title={selectedFileLabel}
-                      onChange={(event) => onSelectFile(event.currentTarget.value || null)}
-                      className={cn(
-                        "h-7 min-w-0 flex-1 truncate rounded-lg border border-border/35 bg-muted/25 px-2.5 font-mono text-[11px] text-foreground outline-none",
-                        "transition-[background-color,border-color,color,box-shadow] duration-150 hover:bg-card/55 focus-visible:border-border/75 focus-visible:ring-2 focus-visible:ring-ring",
-                      )}
-                    >
-                      <option value="">All files</option>
-                      {fileOptions.map((file) => (
-                        <option key={file.path} value={file.path}>
-                          {file.path}
-                        </option>
-                      ))}
-                    </select>
+                    <ReviewFileJumpControl
+                      files={fileOptions}
+                      selectedFilePath={selectedFilePath}
+                      selectedFileLabel={selectedFileLabel}
+                      density="page"
+                      onSelectFile={onSelectFile}
+                    />
                   ) : (
                     <span
                       className="min-w-0 flex-1 truncate rounded-lg border border-border/30 bg-muted/20 px-2.5 py-1 font-mono text-[11px] text-muted-foreground"
@@ -505,22 +448,13 @@ export function ReviewDiffPane(props: {
                     />
                   </span>
                   {fileOptions.length > 0 && onSelectFile ? (
-                    <select
-                      aria-label="Jump to changed file"
-                      value={selectedFilePath ?? ""}
-                      onChange={(event) => onSelectFile(event.currentTarget.value || null)}
-                      className={cn(
-                        "min-h-7 min-w-0 flex-1 truncate rounded-lg border border-border/45 bg-card/30 px-2 py-0.5 font-mono text-[11px] text-muted-foreground outline-none transition-colors hover:bg-card/55 hover:text-foreground focus-visible:border-border/80 focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
-                        "max-w-72",
-                      )}
-                    >
-                      <option value="">All files</option>
-                      {fileOptions.map((file) => (
-                        <option key={file.path} value={file.path}>
-                          {file.path}
-                        </option>
-                      ))}
-                    </select>
+                    <ReviewFileJumpControl
+                      files={fileOptions}
+                      selectedFilePath={selectedFilePath}
+                      selectedFileLabel={selectedFileLabel}
+                      density="dock"
+                      onSelectFile={onSelectFile}
+                    />
                   ) : null}
                 </>
               )}
@@ -577,7 +511,34 @@ export function ReviewDiffPane(props: {
             </p>
           </div>
         ) : null}
-        {!renderablePatch ? (
+        {renderableFiles.length > 0 ? (
+          <div
+            className={cn(
+              "flex min-h-0 flex-1 flex-col overflow-visible",
+              density === "page" ? "min-h-full px-0 py-0" : "px-1",
+            )}
+          >
+            <ReviewVirtualizedDiffFiles
+              files={renderableFiles}
+              scrollRef={patchViewportRef}
+              density={density}
+              theme={resolvedTheme}
+              viewerIdentity={viewerIdentity}
+              diffRenderMode={diffRenderMode}
+              diffWordWrap={diffWordWrap}
+              selectedFilePath={selectedFilePath}
+              commentsEnabled={commentsEnabled}
+              annotationsByFile={annotationsByFile}
+              viewedPaths={viewedPaths}
+              onToggleViewed={props.onToggleViewed}
+              isFileCollapsed={isFileCollapsed}
+              onToggleFileCollapsed={toggleFileCollapsed}
+              onStartDraft={handleStartDraft}
+              renderAnnotation={renderAnnotation}
+            />
+            <div aria-hidden="true" className="h-3 shrink-0" />
+          </div>
+        ) : !renderablePatch ? (
           props.isLoading ? (
             <DiffPaneLoadingState density={density} />
           ) : (
@@ -585,85 +546,7 @@ export function ReviewDiffPane(props: {
               No changes to review in this changeset.
             </PanelStateMessage>
           )
-        ) : renderablePatch.kind === "files" ? (
-          <div
-            className={cn(
-              "flex min-h-0 flex-1 flex-col overflow-visible",
-              density === "page" ? "min-h-full px-0 py-0" : "px-1",
-            )}
-          >
-            <div className="shrink-0">
-              {renderableFiles.map((fileDiff, index) => {
-                const filePath = resolveFileDiffPath(fileDiff);
-                const fileKey = buildFileDiffRenderKey(fileDiff);
-                const themedFileKey = `${fileKey}:${resolvedTheme}:${viewerIdentity}`;
-                const isCollapsed = isFileCollapsed(fileKey, filePath);
-                const fileAnnotations = commentsEnabled
-                  ? (annotationsByFile.get(filePath) ?? EMPTY_ANNOTATIONS)
-                  : EMPTY_ANNOTATIONS;
-                const shouldHydrate =
-                  index < hydratedFileCount || props.selectedFilePath === filePath;
-                const toggleViewedForFile = props.onToggleViewed;
-                const onToggleReviewed = toggleViewedForFile
-                  ? () => toggleViewedForFile(filePath)
-                  : undefined;
-                return (
-                  <div
-                    key={themedFileKey}
-                    data-diff-file-path={filePath}
-                    className={cn(
-                      density === "page"
-                        ? "diff-render-file scroll-mt-12"
-                        : "diff-render-file mb-3 scroll-mt-16 last:mb-0",
-                      selectedFilePath === filePath && "outline outline-1 outline-primary/30",
-                    )}
-                    onClickCapture={(event) => {
-                      const nativeEvent = event.nativeEvent as MouseEvent;
-                      const composedPath = nativeEvent.composedPath?.() ?? [];
-                      const clickedInteractive = composedPath.some((node) => {
-                        if (!(node instanceof Element)) return false;
-                        return Boolean(
-                          node.closest(
-                            'button,a,input,textarea,select,[role="button"],[contenteditable="true"]',
-                          ),
-                        );
-                      });
-                      if (clickedInteractive) return;
-                      const clickedHeader = composedPath.some((node) => {
-                        if (!(node instanceof Element)) return false;
-                        return (
-                          node.hasAttribute("data-diffs-header") ||
-                          node.hasAttribute("data-file-info")
-                        );
-                      });
-                      if (!clickedHeader) return;
-                      event.stopPropagation();
-                      toggleFileCollapsed(fileKey, filePath);
-                    }}
-                  >
-                    {shouldHydrate ? (
-                      <ReviewFileDiffBlock
-                        fileDiff={fileDiff}
-                        theme={resolvedTheme}
-                        diffStyle={diffRenderMode === "split" ? "split" : "unified"}
-                        overflow={diffWordWrap ? "wrap" : "scroll"}
-                        collapsed={isCollapsed}
-                        reviewed={viewedPaths?.has(filePath) ?? false}
-                        lineAnnotations={fileAnnotations}
-                        {...(onToggleReviewed ? { onToggleReviewed } : {})}
-                        onStartDraft={handleStartDraft}
-                        renderAnnotation={renderAnnotation}
-                      />
-                    ) : (
-                      <DiffFilePlaceholder filePath={filePath} />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            <div aria-hidden="true" className="h-3 shrink-0" />
-          </div>
-        ) : (
+        ) : renderablePatch?.kind === "raw" ? (
           <div className="h-full min-w-0 overflow-auto p-2">
             <div className="flex min-w-0 flex-col gap-2">
               <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground/80">
@@ -682,6 +565,10 @@ export function ReviewDiffPane(props: {
               </pre>
             </div>
           </div>
+        ) : (
+          <PanelStateMessage density="compact" fill="flex">
+            No renderable file diffs are available for this changeset.
+          </PanelStateMessage>
         )}
       </div>
     </div>
@@ -726,25 +613,6 @@ function DiffPaneLoadingState(props: { density: "page" | "dock" }) {
           </div>
         </section>
       ))}
-    </div>
-  );
-}
-
-function DiffFilePlaceholder(props: { filePath: string }) {
-  return (
-    <div className="overflow-hidden border-b border-border/45 bg-muted/18">
-      <div className="flex h-8 items-center gap-2 border-b border-border/55 bg-muted/30 px-3">
-        <span className="size-3.5 shrink-0 rounded-md bg-muted" />
-        <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
-          {props.filePath}
-        </span>
-        <span className="ms-auto h-4 w-16 shrink-0 rounded-full bg-muted/70" />
-      </div>
-      <div className="space-y-1.5 p-2" aria-hidden="true">
-        <div className="h-3 w-full rounded-full bg-muted/55" />
-        <div className="h-3 w-11/12 rounded-full bg-muted/45" />
-        <div className="h-3 w-4/5 rounded-full bg-muted/35" />
-      </div>
     </div>
   );
 }

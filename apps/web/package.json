@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "benchmark:review": "vitest run --config vitest.browser.config.ts src/components/review/ReviewSurfacePerformance.browser.tsx --reporter=verbose",
+    "benchmark:review": "vitest run --config vitest.browser.config.ts src/components/review/ReviewSurfacePerformance.browser.tsx src/components/review/ReviewDiffPane.performance.browser.tsx src/components/review/ReviewFileTree.performance.browser.tsx --reporter=verbose",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:browser:install": "playwright install --with-deps chromium"
   },
