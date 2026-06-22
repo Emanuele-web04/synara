@@ -1779,35 +1779,48 @@ export const AutomationServiceLive = Layer.effect(
         return { activeRuns, pendingCompletionEvaluations };
       });
 
-    const restartExhaustedBoundedDefinition = (definition: AutomationDefinition, now: string) => {
-      if (
-        definition.maxIterations === null ||
-        definition.iterationCount < definition.maxIterations
-      ) {
-        return Effect.succeed(definition);
-      }
-      const nextRunAt =
-        definition.schedule.type === "manual"
-          ? null
-          : computeNextAutomationRunAtAfter(definition.schedule, now, now);
-      // One-shot automations can be manually rerun, but they should not become
-      // active forever when there is no future scheduled occurrence to wait for.
-      const enabled = definition.schedule.type !== "once" || nextRunAt !== null;
-      const restarted = {
-        ...definition,
-        enabled,
-        iterationCount: 0,
-        nextRunAt,
-        updatedAt: now,
-      };
-      return automationRepository
-        .restartDefinitionLoop({ id: definition.id, enabled, nextRunAt, updatedAt: now })
-        .pipe(
-          Effect.mapError(toServiceError("Failed to restart automation loop.")),
-          Effect.as(restarted),
-          Effect.tap((definition) => publish({ type: "definition-upserted", definition })),
-        );
-    };
+    const restartExhaustedBoundedDefinition = (definition: AutomationDefinition, now: string) =>
+      Effect.gen(function* () {
+        if (
+          definition.maxIterations === null ||
+          definition.iterationCount < definition.maxIterations
+        ) {
+          return definition;
+        }
+        const computedNextRunAt =
+          definition.schedule.type === "manual"
+            ? null
+            : computeNextAutomationRunAtAfter(definition.schedule, now, now);
+        // Manual reruns should not revive legacy definitions that cannot pass today's
+        // active-schedule policy, such as oversized sub-minute loops.
+        let canBecomeEnabled = false;
+        if (definition.schedule.type === "manual" || computedNextRunAt !== null) {
+          canBecomeEnabled = yield* validateSchedulePolicy({
+            schedule: definition.schedule,
+            enabled: true,
+            maxIterations: definition.maxIterations,
+            minimumIntervalSeconds: definition.minimumIntervalSeconds,
+            acknowledgedRisks: definition.acknowledgedRisks,
+            now,
+          }).pipe(Effect.as(true), Effect.catch(() => Effect.succeed(false)));
+        }
+        const enabled = canBecomeEnabled;
+        const nextRunAt = enabled ? computedNextRunAt : null;
+        const restarted = {
+          ...definition,
+          enabled,
+          iterationCount: 0,
+          nextRunAt,
+          updatedAt: now,
+        };
+        return yield* automationRepository
+          .restartDefinitionLoop({ id: definition.id, enabled, nextRunAt, updatedAt: now })
+          .pipe(
+            Effect.mapError(toServiceError("Failed to restart automation loop.")),
+            Effect.as(restarted),
+            Effect.tap((definition) => publish({ type: "definition-upserted", definition })),
+          );
+      });
 
     const runNow: AutomationServiceShape["runNow"] = (input) =>
       Effect.gen(function* () {

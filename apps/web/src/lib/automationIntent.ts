@@ -193,7 +193,10 @@ function extractExecutionScope(value: string): ParsedExecutionScope | null {
     },
     { executionScope: "standalone", pattern: /\bstandalone(?:\s+automation)?\b/i },
     { executionScope: "standalone", pattern: /\bseparate\s+(?:run|automation|task)\b/i },
-    { executionScope: "standalone", pattern: /\b(?:new|separate)\s+run\b/i },
+    {
+      executionScope: "standalone",
+      pattern: /\b(?:as|in|into|inside|within)\s+(?:a\s+)?(?:new|separate)\s+run\b/i,
+    },
     {
       executionScope: "standalone",
       pattern: /\bfor\s+(?:every|each|all)\s+(?:new\s+)?chats?\b/i,

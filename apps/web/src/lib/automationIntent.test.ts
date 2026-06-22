@@ -190,6 +190,24 @@ describe("parseChatAutomationIntent", () => {
       schedule: { type: "interval", everySeconds: 300 },
       executionScope: "worktree",
     });
+
+    expect(
+      parseChatAutomationIntent("/automation every 5m check whether the new run finished"),
+    ).toMatchObject({
+      cadenceLabel: "Every 5m",
+      prompt: "check whether the new run finished",
+      schedule: { type: "interval", everySeconds: 300 },
+      executionScope: "thread",
+    });
+
+    expect(
+      parseChatAutomationIntent("/automation every 5m check CI as a new run"),
+    ).toMatchObject({
+      cadenceLabel: "Every 5m",
+      prompt: "check CI",
+      schedule: { type: "interval", everySeconds: 300 },
+      executionScope: "standalone",
+    });
   });
 
   it("extracts English stop clauses into first-class completion policies", () => {

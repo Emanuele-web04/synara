@@ -2427,6 +2427,7 @@ layer("AutomationService", (it) => {
           mode: "heartbeat",
           targetThreadId,
           maxIterations: 3,
+          acknowledgedRisks: ["fast-interval", "local-checkout"],
         },
         now: "2026-06-16T10:00:00.000Z",
       });
@@ -2462,6 +2463,47 @@ layer("AutomationService", (it) => {
       assert.strictEqual(definition?.iterationCount, 1);
       assert.strictEqual(definition?.maxIterations, 3);
       assert.isNotNull(definition?.nextRunAt ?? null);
+    }),
+  );
+
+  it.effect("keeps legacy fast loops over the hard cap disabled after a manual rerun", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        schedule: { type: "interval", everySeconds: 15 },
+        maxIterations: 10,
+        acknowledgedRisks: ["fast-interval", "local-checkout"],
+      });
+      const automationId = created.id;
+      yield* repository.saveDefinition({ ...created, maxIterations: 25 });
+      yield* Effect.forEach(
+        Array.from({ length: 25 }),
+        () =>
+          repository.incrementDefinitionIterationCount({
+            id: automationId,
+            now: "2026-06-16T10:00:00.000Z",
+          }),
+        { discard: true },
+      );
+      yield* repository.disableDefinition({
+        id: automationId,
+        now: "2026-06-16T10:01:00.000Z",
+      });
+
+      const result = yield* service.runNow({ automationId });
+      const listed = yield* service.list({ projectId });
+      const definition = listed.definitions.find((entry) => entry.id === automationId);
+
+      assert.strictEqual(result.run.status, "running");
+      assert.strictEqual(result.run.trigger.type, "manual");
+      assert.strictEqual(definition?.enabled, false);
+      assert.strictEqual(definition?.nextRunAt, null);
+      assert.strictEqual(definition?.iterationCount, 1);
+      assert.strictEqual(definition?.maxIterations, 25);
     }),
   );
 
