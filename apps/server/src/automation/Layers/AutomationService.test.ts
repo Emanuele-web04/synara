@@ -143,16 +143,18 @@ function makeThreadDetailForRun(input: {
   readonly messageId: MessageId;
   readonly userText: string;
   readonly assistantText: string | null;
-  readonly extraMessages?: ReadonlyArray<{
-    readonly id: MessageId;
-    readonly role: string;
-    readonly text: string;
-    readonly turnId: TurnId | null;
-    readonly streaming: boolean;
-    readonly source: string;
-    readonly createdAt: string;
-    readonly updatedAt: string;
-  }>;
+  readonly extraMessages?:
+    | ReadonlyArray<{
+        readonly id: MessageId;
+        readonly role: string;
+        readonly text: string;
+        readonly turnId: TurnId | null;
+        readonly streaming: boolean;
+        readonly source: string;
+        readonly createdAt: string;
+        readonly updatedAt: string;
+      }>
+    | undefined;
 }) {
   return {
     ...makeThreadShell({
@@ -790,6 +792,46 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("keeps exhausted one-shot automations disabled after a manual rerun", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-once-manual-rerun");
+      const runAt = "2026-06-16T10:00:15.000Z";
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "once", runAt },
+          maxIterations: 1,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const scheduled = yield* service.runDueOnce({
+        now: runAt,
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const manual = yield* service.runNow({ automationId });
+      const listed = yield* service.list({ projectId });
+      const definition = listed.definitions.find((entry) => entry.id === automationId);
+
+      assert.strictEqual(scheduled.length, 1);
+      assert.strictEqual(manual.run.status, "running");
+      assert.strictEqual(manual.run.trigger.type, "manual");
+      assert.strictEqual(definition?.enabled, false);
+      assert.strictEqual(definition?.nextRunAt, null);
+      assert.strictEqual(definition?.iterationCount, 1);
+      assert.strictEqual(
+        listed.runs.filter((entry) => entry.automationId === automationId).length,
+        2,
+      );
+    }),
+  );
+
   it.effect("reconciles a completed turn into a succeeded run", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -1250,7 +1292,9 @@ layer("AutomationService", (it) => {
       });
 
       const reconciled = yield* Effect.race(
-        service.reconcileThread({ threadId: targetThreadId }).pipe(Effect.as("reconciled" as const)),
+        service
+          .reconcileThread({ threadId: targetThreadId })
+          .pipe(Effect.as("reconciled" as const)),
         realDelay(50).pipe(Effect.as("timeout" as const)),
       );
       assert.strictEqual(reconciled, "reconciled");
@@ -1375,7 +1419,10 @@ layer("AutomationService", (it) => {
           listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
             ?.stopMatched === true,
       });
-      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, false);
+      assert.strictEqual(
+        listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+        false,
+      );
     }),
   );
 
@@ -1420,8 +1467,7 @@ layer("AutomationService", (it) => {
         service,
         description: "stale-policy stop evaluation",
         predicate: (listed) =>
-          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
-            ?.reason ===
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation?.reason ===
           "Stop check ignored because the automation changed before evaluation finished.",
       });
       const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
@@ -1487,8 +1533,7 @@ layer("AutomationService", (it) => {
         service,
         description: "stale-definition stop evaluation",
         predicate: (listed) =>
-          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
-            ?.reason ===
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation?.reason ===
           "Stop check ignored because the automation changed before evaluation finished.",
       });
       const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
@@ -1597,8 +1642,8 @@ layer("AutomationService", (it) => {
         service,
         description: "missing-thread stop evaluation",
         predicate: (listed) =>
-          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
-            ?.reason === "Stop check skipped because the target thread could not be found.",
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation?.reason ===
+          "Stop check skipped because the target thread could not be found.",
       });
       const updatedRun = listed.runs.find((entry) => entry.id === run.id);
       assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
@@ -1691,10 +1736,12 @@ layer("AutomationService", (it) => {
           listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
             ?.stopMatched === false,
       });
-      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, true);
       assert.strictEqual(
-        listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
-          ?.stopMatched,
+        listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+        true,
+      );
+      assert.strictEqual(
+        listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation?.stopMatched,
         false,
       );
       assert.strictEqual(
@@ -1803,14 +1850,14 @@ layer("AutomationService", (it) => {
         },
       });
       const updatedRun = listed.runs.find((entry) => entry.id === run.id);
-      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, true);
+      assert.strictEqual(
+        listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+        true,
+      );
       assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
       assert.strictEqual(updatedRun?.result?.unread, false);
       assert.strictEqual(updatedRun?.result?.archivedAt, archived.run.result?.archivedAt);
-      assert.isAtLeast(
-        Date.parse(updatedRun?.updatedAt ?? ""),
-        Date.parse(archived.run.updatedAt),
-      );
+      assert.isAtLeast(Date.parse(updatedRun?.updatedAt ?? ""), Date.parse(archived.run.updatedAt));
     }),
   );
 
@@ -1851,7 +1898,10 @@ layer("AutomationService", (it) => {
             ?.confidence === 0.52,
       });
       const updatedRun = listed.runs.find((entry) => entry.id === run.id);
-      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, true);
+      assert.strictEqual(
+        listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+        true,
+      );
       assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, true);
       assert.strictEqual(updatedRun?.result?.completionEvaluation?.confidence, 0.52);
       assert.strictEqual(
@@ -1861,44 +1911,52 @@ layer("AutomationService", (it) => {
     }),
   );
 
-  it.effect("keeps a heartbeat automation active and records history when stop evaluation fails", () =>
-    Effect.gen(function* () {
-      resetHarness();
-      const service = yield* AutomationService;
-      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-evaluator-failure");
-      const automationTurnId = TurnId.makeUnsafe("turn-stop-evaluator-failure");
-      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
-      completionEvaluationFailure = new Error("provider unavailable");
+  it.effect(
+    "keeps a heartbeat automation active and records history when stop evaluation fails",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        const service = yield* AutomationService;
+        const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-evaluator-failure");
+        const automationTurnId = TurnId.makeUnsafe("turn-stop-evaluator-failure");
+        threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+        completionEvaluationFailure = new Error("provider unavailable");
 
-      const created = yield* service.create({
-        ...createInput("local"),
-        mode: "heartbeat",
-        targetThreadId,
-        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
-      });
-      const { run } = yield* service.runNow({ automationId: created.id });
-      yield* completeHeartbeatRun({
-        run,
-        threadId: targetThreadId,
-        turnId: automationTurnId,
-      });
+        const created = yield* service.create({
+          ...createInput("local"),
+          mode: "heartbeat",
+          targetThreadId,
+          completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+        });
+        const { run } = yield* service.runNow({ automationId: created.id });
+        yield* completeHeartbeatRun({
+          run,
+          threadId: targetThreadId,
+          turnId: automationTurnId,
+        });
 
-      yield* service.reconcileThread({ threadId: targetThreadId });
+        yield* service.reconcileThread({ threadId: targetThreadId });
 
-      const listed = yield* waitForAutomationList({
-        service,
-        description: "failed stop evaluation",
-        predicate: (listed) =>
-          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
-            ?.confidence === 0,
-      });
-      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
-      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, true);
-      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
-      assert.strictEqual(updatedRun?.result?.completionEvaluation?.confidence, 0);
-      assert.include(updatedRun?.result?.summary ?? "", "Stop check failed:");
-      assert.include(updatedRun?.result?.completionEvaluation?.reason ?? "", "Stop check failed:");
-    }),
+        const listed = yield* waitForAutomationList({
+          service,
+          description: "failed stop evaluation",
+          predicate: (listed) =>
+            listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+              ?.confidence === 0,
+        });
+        const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+        assert.strictEqual(
+          listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+          true,
+        );
+        assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
+        assert.strictEqual(updatedRun?.result?.completionEvaluation?.confidence, 0);
+        assert.include(updatedRun?.result?.summary ?? "", "Stop check failed:");
+        assert.include(
+          updatedRun?.result?.completionEvaluation?.reason ?? "",
+          "Stop check failed:",
+        );
+      }),
   );
 
   it.effect("does not auto-stop a heartbeat automation without a completion policy", () =>
@@ -1930,7 +1988,10 @@ layer("AutomationService", (it) => {
 
       const listed = yield* service.list({ projectId });
       const updatedRun = listed.runs.find((entry) => entry.id === run.id);
-      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, true);
+      assert.strictEqual(
+        listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+        true,
+      );
       assert.isUndefined(updatedRun?.result?.completionEvaluation);
     }),
   );
@@ -1966,6 +2027,36 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("rejects creating a standalone automation for an unknown project", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const error = yield* service
+        .create({
+          ...createInput("local"),
+          projectId: ProjectId.makeUnsafe("missing-project"),
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /project was not found/);
+    }),
+  );
+
+  it.effect("rejects moving a standalone automation to an unknown project", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create(createInput("local"));
+
+      const error = yield* service
+        .update({ id: created.id, projectId: ProjectId.makeUnsafe("missing-project") })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /project was not found/);
+    }),
+  );
+
   it.effect("rejects moving a heartbeat automation away from its target thread project", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -1997,7 +2088,7 @@ layer("AutomationService", (it) => {
     }),
   );
 
-  it.effect("clears heartbeat max iterations when switching back to standalone", () =>
+  it.effect("preserves max iterations when switching back to standalone", () =>
     Effect.gen(function* () {
       resetHarness();
       const service = yield* AutomationService;
@@ -2017,7 +2108,13 @@ layer("AutomationService", (it) => {
       });
 
       assert.strictEqual(updated.mode, "standalone");
-      assert.strictEqual(updated.maxIterations, null);
+      assert.strictEqual(updated.maxIterations, 3);
+
+      const cleared = yield* service.update({
+        id: created.id,
+        maxIterations: null,
+      });
+      assert.strictEqual(cleared.maxIterations, null);
     }),
   );
 
@@ -2046,11 +2143,114 @@ layer("AutomationService", (it) => {
       const created = yield* service.create({
         ...createInput("local"),
         schedule: { type: "interval", everySeconds: 15 },
+        maxIterations: 10,
         acknowledgedRisks: ["fast-interval", "local-checkout"],
       });
 
       assert.strictEqual(created.schedule.type, "interval");
+      assert.strictEqual(created.maxIterations, 10);
       assert.deepStrictEqual(created.acknowledgedRisks, ["fast-interval", "local-checkout"]);
+    }),
+  );
+
+  it.effect("rejects acknowledged fast recurring intervals without a hard iteration cap", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const error = yield* service
+        .create({
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 15 },
+          acknowledgedRisks: ["fast-interval", "local-checkout"],
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /max iterations.*10 runs or fewer/);
+    }),
+  );
+
+  it.effect("rejects acknowledged fast recurring intervals above the hard iteration cap", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const error = yield* service
+        .create({
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 15 },
+          maxIterations: 25,
+          acknowledgedRisks: ["fast-interval", "local-checkout"],
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /max iterations.*10 runs or fewer/);
+    }),
+  );
+
+  it.effect("does not treat heartbeat stop policies as a hard fast-interval bound", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("fast-stop-policy-thread");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      const error = yield* service
+        .create({
+          ...createInput("local"),
+          mode: "heartbeat",
+          targetThreadId,
+          schedule: { type: "interval", everySeconds: 15 },
+          completionPolicy: heartbeatCompletionPolicy("the condition is met"),
+          acknowledgedRisks: ["fast-interval", "local-checkout"],
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /max iterations.*10 runs or fewer/);
+    }),
+  );
+
+  it.effect("rejects updates that remove the hard cap from fast recurring intervals", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create({
+        ...createInput("local"),
+        schedule: { type: "interval", everySeconds: 15 },
+        maxIterations: 3,
+        acknowledgedRisks: ["fast-interval", "local-checkout"],
+      });
+
+      const error = yield* service
+        .update({ id: created.id, maxIterations: null })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /max iterations.*10 runs or fewer/);
+    }),
+  );
+
+  it.effect("allows pausing legacy acknowledged fast intervals without an iteration cap", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const created = yield* service.create({
+        ...createInput("local"),
+        schedule: { type: "interval", everySeconds: 15 },
+        maxIterations: 3,
+        acknowledgedRisks: ["fast-interval", "local-checkout"],
+      });
+      yield* repository.saveDefinition({ ...created, maxIterations: null });
+
+      const paused = yield* service.update({ id: created.id, enabled: false });
+
+      assert.strictEqual(paused.enabled, false);
+      assert.strictEqual(paused.maxIterations, null);
+
+      const reenableError = yield* service
+        .update({ id: created.id, enabled: true })
+        .pipe(Effect.flip);
+      assert.match(reenableError.message, /max iterations.*10 runs or fewer/);
     }),
   );
 
@@ -2151,6 +2351,23 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("rejects retry policies on update until retry attempts are modeled", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create(createInput("local"));
+
+      const error = yield* service
+        .update({
+          id: created.id,
+          retryPolicy: { type: "fixed", maxAttempts: 3, delaySeconds: 30 },
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /retry policies are not supported/);
+    }),
+  );
+
   it.effect("disables a scheduled automation that has reached its iteration cap", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -2189,6 +2406,104 @@ layer("AutomationService", (it) => {
         reloaded.runs.filter((entry) => entry.automationId === automationId).length,
         0,
       );
+    }),
+  );
+
+  it.effect("restarts an exhausted bounded loop when run manually", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-manual-restart-max-iters");
+      const targetThreadId = ThreadId.makeUnsafe("thread-manual-restart-max-iters");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          name: "Say hi",
+          prompt: "say hi",
+          schedule: { type: "interval", everySeconds: 15 },
+          mode: "heartbeat",
+          targetThreadId,
+          maxIterations: 3,
+          acknowledgedRisks: ["fast-interval", "local-checkout"],
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      yield* Effect.forEach(
+        [0, 1, 2],
+        () =>
+          repository.incrementDefinitionIterationCount({
+            id: automationId,
+            now: "2026-06-16T10:00:00.000Z",
+          }),
+        { discard: true },
+      );
+      yield* repository.disableDefinition({
+        id: automationId,
+        now: "2026-06-16T10:01:00.000Z",
+      });
+
+      const result = yield* service.runNow({ automationId });
+      const turnStart = dispatchedCommands.find((command) => command.type === "thread.turn.start");
+
+      assert.strictEqual(result.run.status, "running");
+      assert.strictEqual(result.run.trigger.type, "manual");
+      assert.strictEqual(turnStart?.type, "thread.turn.start");
+      if (turnStart?.type !== "thread.turn.start") {
+        assert.fail("Expected thread.turn.start command.");
+      }
+      assert.strictEqual(turnStart.threadId, targetThreadId);
+      assert.strictEqual(turnStart.message.text, "say hi");
+
+      const reloaded = yield* service.list({ projectId });
+      const definition = reloaded.definitions.find((entry) => entry.id === automationId);
+      assert.strictEqual(definition?.enabled, true);
+      assert.strictEqual(definition?.iterationCount, 1);
+      assert.strictEqual(definition?.maxIterations, 3);
+      assert.isNotNull(definition?.nextRunAt ?? null);
+    }),
+  );
+
+  it.effect("keeps legacy fast loops over the hard cap disabled after a manual rerun", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        schedule: { type: "interval", everySeconds: 15 },
+        maxIterations: 10,
+        acknowledgedRisks: ["fast-interval", "local-checkout"],
+      });
+      const automationId = created.id;
+      yield* repository.saveDefinition({ ...created, maxIterations: 25 });
+      yield* Effect.forEach(
+        Array.from({ length: 25 }),
+        () =>
+          repository.incrementDefinitionIterationCount({
+            id: automationId,
+            now: "2026-06-16T10:00:00.000Z",
+          }),
+        { discard: true },
+      );
+      yield* repository.disableDefinition({
+        id: automationId,
+        now: "2026-06-16T10:01:00.000Z",
+      });
+
+      const result = yield* service.runNow({ automationId });
+      const listed = yield* service.list({ projectId });
+      const definition = listed.definitions.find((entry) => entry.id === automationId);
+
+      assert.strictEqual(result.run.status, "running");
+      assert.strictEqual(result.run.trigger.type, "manual");
+      assert.strictEqual(definition?.enabled, false);
+      assert.strictEqual(definition?.nextRunAt, null);
+      assert.strictEqual(definition?.iterationCount, 1);
+      assert.strictEqual(definition?.maxIterations, 25);
     }),
   );
 

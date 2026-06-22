@@ -29,6 +29,18 @@ export const SIDEBAR_GLYPH = {
 
 export type SidebarGlyphVariant = keyof typeof SIDEBAR_GLYPH;
 
+// Trailing thread-row icons (meta chips, pin, archive) share one optical size so the
+// right-side cluster reads as a uniform set. Tailwind can only scan literal class strings,
+// so the plain and slot-forced forms are spelled out here; keep their px values in step —
+// this is the single place to retune the trailing-icon size.
+//
+// The forced form targets BOTH `<svg>` glyphs (lucide / react-icons) and Central icons,
+// which render as a masked `<span data-slot=central-icon>` rather than an svg — without the
+// second selector those (e.g. the worktree glyph) keep their smaller base size and look off.
+export const SIDEBAR_TRAILING_ICON_CLASS = "size-[15px] shrink-0";
+export const SIDEBAR_TRAILING_ICON_FORCE_CLASS =
+  "[&_svg]:size-[15px] [&_[data-slot=central-icon]]:size-[15px]";
+
 export function sidebarGlyphClass(variant: SidebarGlyphVariant, className?: string) {
   return cn(SIDEBAR_GLYPH[variant], className);
 }

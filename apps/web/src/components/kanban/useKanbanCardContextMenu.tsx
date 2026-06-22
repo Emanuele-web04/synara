@@ -155,8 +155,7 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
       });
       void reconcileDeletedThreadFromClient({
         threadId: card.threadId,
-        removeDeletedThreadFromClientState:
-          useStore.getState().removeDeletedThreadFromClientState,
+        removeDeletedThreadFromClientState: useStore.getState().removeDeletedThreadFromClientState,
       });
       clearDraftThread(card.threadId);
       clearProjectDraftThreadById(thread.projectId, thread.id);

@@ -125,12 +125,11 @@ import {
   readFileAsDataUrl,
 } from "../lib/composerSend";
 import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
+import { extractChatAutomationInvocation } from "../lib/automationIntent";
 import {
-  extractChatAutomationInvocation,
-  parseChatAutomationInvocation,
-  resolveChatAutomationIntent,
-} from "../lib/automationIntent";
-import { stopWhenFromCompletionPolicy } from "../lib/automationCompletionPolicy";
+  buildComposerAutomationDraft,
+  resolveComposerAutomationRequest,
+} from "../lib/composerAutomation";
 import {
   acknowledgedRiskIdsForDraft,
   buildAutomationDraftWarnings,
@@ -389,13 +388,13 @@ import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import {
   acknowledgedRiskIdsForFormWarnings,
-  applyScheduleToForm,
   AutomationDialog,
   automationQueryKey,
   buildAutomationFormWarnings,
   createInputFromForm,
   formatCadence,
   formFromDefinition,
+  heartbeatAutomationsForThread,
   isFormSubmittable,
   providerOptionsForAutomationEdit,
   projectModelSelection as automationProjectModelSelection,
@@ -1356,10 +1355,7 @@ export default function ChatView({
   );
   const automationProjects = useStore((state) => state.projects);
   const automationThreads = useStore((state) => state.threads);
-  const {
-    data: automationData,
-    updateMutation: automationUpdateMutation,
-  } = useAutomations();
+  const { data: automationData, updateMutation: automationUpdateMutation } = useAutomations();
   const [automationDraftForm, setAutomationDraftForm] = useState<AutomationFormState | null>(null);
   const [automationEditingDefinition, setAutomationEditingDefinition] =
     useState<AutomationDefinition | null>(null);
@@ -1427,9 +1423,9 @@ export default function ChatView({
       deriveAssociatedWorktreeMetadata({
         branch: activeThread?.branch ?? null,
         worktreePath: activeThread?.worktreePath ?? null,
-        associatedWorktreePath: activeThread?.associatedWorktreePath ?? null,
-        associatedWorktreeBranch: activeThread?.associatedWorktreeBranch ?? null,
-        associatedWorktreeRef: activeThread?.associatedWorktreeRef ?? null,
+        associatedWorktreePath: activeThread?.associatedWorktreePath,
+        associatedWorktreeBranch: activeThread?.associatedWorktreeBranch,
+        associatedWorktreeRef: activeThread?.associatedWorktreeRef,
       }),
     [
       activeThread?.associatedWorktreeBranch,
@@ -5845,9 +5841,10 @@ export default function ChatView({
       readonly warnings: readonly AutomationDraftWarning[];
       readonly acknowledgedWarningIds: ReadonlySet<AutomationDraftWarningId>;
       readonly providerOptions?: ProviderStartOptions;
+      readonly activityThreadId?: ThreadId | null;
     }): Promise<boolean> => {
       const api = readNativeApi();
-      if (!api || !activeThread || !activeProject) {
+      if (!api || !activeProject) {
         return false;
       }
       if (automationDraftSubmittingRef.current) {
@@ -5863,23 +5860,26 @@ export default function ChatView({
         input.warnings,
         input.acknowledgedWarningIds,
       );
+      const activityThreadId =
+        input.activityThreadId ?? (isServerThread ? (activeThread?.id ?? null) : null);
       const createdAt = new Date().toISOString();
       const automationInput = createInputFromForm(
         input.form,
         input.providerOptions ?? providerOptionsForDispatch,
         acknowledgedRisks,
+        activityThreadId,
       );
       automationDraftSubmittingRef.current = true;
       setIsAutomationDraftSubmitting(true);
       try {
         const definition = await api.automation.create(automationInput);
-        if (isServerThread) {
+        if (activityThreadId) {
           void (async () => {
             try {
               await api.orchestration.dispatchCommand({
                 type: "thread.activity.append",
                 commandId: newCommandId(),
-                threadId: activeThread.id,
+                threadId: activityThreadId,
                 activity: {
                   id: EventId.makeUnsafe(randomUUID()),
                   tone: "info",
@@ -5909,7 +5909,7 @@ export default function ChatView({
           })();
         }
         void queryClient.invalidateQueries({ queryKey: automationQueryKey });
-        clearComposerInput(activeThread.id);
+        clearComposerInput(activeThread?.id ?? threadId);
         resetAutomationDraftState();
         toastManager.add({
           type: "success",
@@ -5938,6 +5938,127 @@ export default function ChatView({
       providerOptionsForDispatch,
       queryClient,
       resetAutomationDraftState,
+      threadId,
+    ],
+  );
+
+  const ensureAutomationTargetThread = useCallback(
+    async (input: {
+      readonly titleSeed: string;
+      readonly threadModelSelection: ModelSelection;
+      readonly threadRuntimeMode: RuntimeMode;
+      readonly threadInteractionMode: ProviderInteractionMode;
+    }): Promise<ThreadId | null> => {
+      const api = readNativeApi();
+      if (!api || !activeProject || !activeThread) {
+        toastManager.add({
+          type: "warning",
+          title: "Chat required",
+          description: "Open a chat before creating a chat-bound automation.",
+        });
+        return null;
+      }
+      if (isServerThread) {
+        return activeThread.id;
+      }
+
+      const title = buildPromptThreadTitleFallback(input.titleSeed || GENERIC_CHAT_THREAD_TITLE);
+      try {
+        const result = await promoteThreadCreate(
+          {
+            type: "thread.create",
+            commandId: newCommandId(),
+            threadId: activeThread.id,
+            projectId: activeProject.id,
+            title,
+            modelSelection: input.threadModelSelection,
+            runtimeMode: input.threadRuntimeMode,
+            interactionMode: input.threadInteractionMode,
+            envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
+            branch: activeThread.branch ?? null,
+            worktreePath: activeThread.worktreePath ?? null,
+            associatedWorktreePath: activeThreadAssociatedWorktree.associatedWorktreePath,
+            associatedWorktreeBranch: activeThreadAssociatedWorktree.associatedWorktreeBranch,
+            associatedWorktreeRef: activeThreadAssociatedWorktree.associatedWorktreeRef,
+            lastKnownPr: activeThread.lastKnownPr ?? null,
+            createdAt: activeThread.createdAt,
+          },
+          api,
+          { force: true },
+        );
+        if (result === "unavailable") {
+          toastManager.add({
+            type: "error",
+            title: "Could not create chat",
+            description: "Synara could not promote this draft before saving the automation.",
+          });
+          return null;
+        }
+
+        const inheritedProjectInstructions =
+          useProjectInstructionsStore.getState().instructionsByProjectId[activeProject.id] ?? "";
+        const inheritedThreadNotes = mergeProjectInstructionsIntoThreadNotes({
+          threadNotes,
+          projectInstructions: inheritedProjectInstructions,
+        });
+        if (inheritedThreadNotes !== threadNotes && inheritedThreadNotes.trim().length > 0) {
+          void dispatchThreadNotes(activeThread.id, inheritedThreadNotes).catch(() => undefined);
+        }
+
+        return activeThread.id;
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not create chat",
+          description:
+            error instanceof Error
+              ? error.message
+              : "Synara could not promote this draft before saving the automation.",
+        });
+        return null;
+      }
+    },
+    [activeProject, activeThread, activeThreadAssociatedWorktree, isServerThread, threadNotes],
+  );
+
+  const prepareAutomationFormForCreate = useCallback(
+    async (
+      form: AutomationFormState,
+    ): Promise<{
+      readonly form: AutomationFormState;
+      readonly activityThreadId: ThreadId | null;
+    } | null> => {
+      const activityThreadId = isServerThread ? (activeThread?.id ?? null) : null;
+      if (form.mode !== "heartbeat" || !activeThread) {
+        return { form, activityThreadId };
+      }
+      if (isServerThread || form.targetThreadId !== activeThread.id) {
+        return { form, activityThreadId };
+      }
+
+      // Draft review can keep the local draft ID in the form; promote it only when
+      // the automation is actually submitted so cancelling review leaves no empty thread.
+      const targetThreadId = await ensureAutomationTargetThread({
+        titleSeed: form.prompt || form.name,
+        threadModelSelection: selectedModelSelection,
+        threadRuntimeMode: runtimeMode,
+        threadInteractionMode: interactionMode,
+      });
+      if (!targetThreadId) {
+        return null;
+      }
+      return {
+        form: { ...form, targetThreadId },
+        activityThreadId: targetThreadId,
+      };
+    },
+    [
+      activeThread,
+      ensureAutomationTargetThread,
+      interactionMode,
+      isServerThread,
+      runtimeMode,
+      selectedModelSelection,
     ],
   );
 
@@ -6027,10 +6148,21 @@ export default function ChatView({
       });
       return;
     }
+    if (
+      !isFormSubmittable(automationDraftForm) ||
+      hasBlockingAutomationDraftWarnings(automationDraftWarnings, acknowledgedAutomationWarnings)
+    ) {
+      return;
+    }
+    const preparedCreate = await prepareAutomationFormForCreate(automationDraftForm);
+    if (!preparedCreate) {
+      return;
+    }
     await createAutomationFromForm({
-      form: automationDraftForm,
+      form: preparedCreate.form,
       warnings: automationDraftWarnings,
       acknowledgedWarningIds: acknowledgedAutomationWarnings,
+      activityThreadId: preparedCreate.activityThreadId,
     });
   }, [
     acknowledgedAutomationWarnings,
@@ -6038,6 +6170,7 @@ export default function ChatView({
     automationDraftForm,
     automationDraftWarnings,
     createAutomationFromForm,
+    prepareAutomationFormForCreate,
     updateAutomationFromForm,
   ]);
 
@@ -6279,101 +6412,55 @@ export default function ChatView({
     }
     if (!activeProject) return false;
     if (queuedChatTurn === null) {
-      // Explicit automation triggers create a saved automation instead of sending a provider turn.
-      const automationInvocation = extractChatAutomationInvocation(trimmed);
-      if (automationInvocation !== null) {
-        const automationMessage = automationInvocation.trim();
-        const nowIso = new Date().toISOString();
-        const deterministicAutomationIntent = parseChatAutomationInvocation(automationInvocation, {
-          nowIso,
-        });
-        const generatedAutomationIntent =
-          !deterministicAutomationIntent && automationMessage.length > 0
-            ? await api.server
-                .generateAutomationIntent({
-                  cwd: activeProject.cwd,
-                  message: automationMessage,
-                  defaultMode: isServerThread ? "heartbeat" : "standalone",
-                  nowIso,
-                })
-                .catch(() => null)
-            : null;
-        const automationResolution = resolveChatAutomationIntent({
-          deterministicIntent: deterministicAutomationIntent,
-          generatedIntent: generatedAutomationIntent,
-          isServerThread,
-        });
-        if (!automationResolution) {
+      const automationRequest = await resolveComposerAutomationRequest({
+        message: trimmed,
+        cwd: activeProject.cwd,
+        generateIntent: (request) => api.server.generateAutomationIntent(request),
+      });
+      if (automationRequest.type !== "normal-chat") {
+        if (automationRequest.type === "missing-schedule") {
           toastManager.add({
             type: "warning",
             title: "Automation schedule needed",
             description:
-              generatedAutomationIntent?.reason ??
+              automationRequest.reason ??
               "Try /automation every 6h check the page, or @automation daily at 9:00.",
           });
           return true;
         }
-        const { intent: automationIntent, mode: automationMode } = automationResolution;
-        const automationStopWhen = stopWhenFromCompletionPolicy(automationIntent.completionPolicy);
-        const baseForm = formFromDefinition(
-          null,
-          activeProject.id,
-          automationProjectModelSelection(automationProjects, activeProject.id),
-        );
-        // Chat-created automations should not inherit live Full access; escalating scheduled
-        // runs stays an explicit review step in the automation dialog.
-        const chatAutomationRuntimeMode: RuntimeMode = "approval-required";
-        const nextForm = applyScheduleToForm(
-          {
-            ...baseForm,
-            name: automationIntent.name,
-            prompt: automationIntent.prompt,
-            projectId: activeProject.id,
-            modelSelection: selectedModelSelectionForSend,
-            runtimeMode: chatAutomationRuntimeMode,
-            worktreeMode: "auto",
-            mode: automationMode,
-            targetThreadId: automationMode === "heartbeat" && isServerThread ? activeThread.id : "",
-            maxIterations: "",
-            stopOnError: true,
-            stopWhen: automationMode === "heartbeat" ? automationStopWhen : "",
-          },
-          automationIntent.schedule,
-        );
-        const warnings = buildAutomationDraftWarnings({
-          schedule: automationIntent.schedule,
-          mode: nextForm.mode,
-          runtimeMode: nextForm.runtimeMode,
-          worktreeMode: nextForm.worktreeMode,
+
+        const automationIntent = automationRequest.resolution.intent;
+        const automationTargetThreadId =
+          automationIntent.executionScope === "thread" ? activeThread.id : null;
+        const automationDraft = buildComposerAutomationDraft({
+          resolution: automationRequest.resolution,
+          projectId: activeProject.id,
+          projectModelSelection: automationProjectModelSelection(
+            automationProjects,
+            activeProject.id,
+          ),
+          selectedModelSelection: selectedModelSelectionForSend,
+          targetThreadId: automationTargetThreadId,
           hasEphemeralContext: !hasPromptOnlySendableContent,
-          generatedConfidence: automationResolution.generatedConfidence,
-          generatedNeedsConfirmation: automationResolution.generatedNeedsConfirmation,
-          prompt: automationIntent.prompt,
         });
-        const warningContext = {
-          hasEphemeralContext: !hasPromptOnlySendableContent,
-          generatedConfidence: automationResolution.generatedConfidence,
-          generatedNeedsConfirmation: automationResolution.generatedNeedsConfirmation,
-        };
-        const acknowledgedWarningIds = new Set<AutomationDraftWarningId>();
-        const needsDraftReview =
-          automationResolution.requiresReview ||
-          automationResolution.generatedNeedsConfirmation ||
-          !isFormSubmittable(nextForm) ||
-          hasBlockingAutomationDraftWarnings(warnings, acknowledgedWarningIds);
-        if (needsDraftReview) {
+        if (automationDraft.needsDraftReview) {
           setAutomationEditingDefinition(null);
-          setAutomationDraftWarningContext(warningContext);
-          setAutomationDraftForm(nextForm);
-          setAutomationDraftWarnings(warnings);
-          setAcknowledgedAutomationWarnings(acknowledgedWarningIds);
+          setAutomationDraftWarningContext(automationDraft.warningContext);
+          setAutomationDraftForm(automationDraft.form);
+          setAutomationDraftWarnings(automationDraft.warnings);
+          setAcknowledgedAutomationWarnings(automationDraft.acknowledgedWarningIds);
           setAutomationDraftOpen(true);
           return true;
         }
+        const preparedAutomation = await prepareAutomationFormForCreate(automationDraft.form);
+        if (!preparedAutomation) {
+          return true;
+        }
         await createAutomationFromForm({
-          form: nextForm,
-          warnings,
-          acknowledgedWarningIds,
+          form: preparedAutomation.form,
+          warnings: automationDraft.warnings,
+          acknowledgedWarningIds: automationDraft.acknowledgedWarningIds,
+          activityThreadId: preparedAutomation.activityThreadId,
           ...(providerOptionsForDispatchForSend
             ? { providerOptions: providerOptionsForDispatchForSend }
             : {}),
@@ -8845,13 +8932,10 @@ export default function ChatView({
       </div>
     ) : null;
 
-  const threadAutomationItems = automationData.definitions
-    .filter(
-      (definition) =>
-        definition.mode === "heartbeat" && definition.targetThreadId === activeThread.id,
-    )
-    .sort((left, right) => left.name.localeCompare(right.name))
-    .map((definition) => ({ definition }));
+  const threadAutomationItems = heartbeatAutomationsForThread(
+    automationData.definitions,
+    activeThread.id,
+  ).map((definition) => ({ definition }));
 
   // Shared inputs for both Environment panel surfaces (the header Popover when the dock is
   // open, and the docked right column when it is closed) so the two never drift.

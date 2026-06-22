@@ -6,14 +6,11 @@ import {
   type AutomationMode,
   type AutomationRun,
   type AutomationRunResult,
-  type AutomationSchedule,
   type AutomationStreamEvent,
   type AutomationUpdateInput,
   type AutomationWorktreeMode,
   type ModelSelection,
-  type ProjectId,
   type ProviderKind,
-  type ProviderStartOptions,
   type RuntimeMode,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -44,27 +41,48 @@ import {
 import { TimePicker } from "~/components/ui/time-picker";
 import { toastManager } from "~/components/ui/toast";
 import {
-  acknowledgedRiskIdsForDraft,
-  buildAutomationDraftWarnings,
   hasBlockingAutomationDraftWarnings,
   type AutomationDraftWarning,
   type AutomationDraftWarningId,
 } from "~/lib/automationDraft";
 import {
-  completionPolicyFromStopWhen,
-  stopWhenFromCompletionPolicy,
-} from "~/lib/automationCompletionPolicy";
-import {
-  BrainIcon,
-  ChevronDownIcon,
-  ClockIcon,
-  FolderIcon,
-  InfoIcon,
-  SkillCubeIcon,
-  WorktreeIcon,
-  XIcon,
-} from "~/lib/icons";
+  acknowledgedRiskIdsForFormWarnings,
+  applyScheduleToForm,
+  automationFastIntervalLimitMessage,
+  buildAutomationFormWarnings,
+  createInputFromForm,
+  datetimeLocalFromIso,
+  defaultModelSelection,
+  formatCadence,
+  formatClockTime,
+  formatDateTime,
+  formatSchedule,
+  formFromDefinition,
+  groupHeartbeatAutomationsByTargetThread,
+  heartbeatAutomationsForThread,
+  isFormSubmittable,
+  isoFromDatetimeLocal,
+  modelSelectionForProjectChange,
+  projectModelSelection,
+  providerOptionsForAutomationEdit,
+  providerOptionsForAutomationModelSelection,
+  scheduleFromForm,
+  scheduleFromKind,
+  scheduleKindFromSchedule,
+  SCHEDULE_KIND_OPTIONS,
+  TIME_OF_DAY_PATTERN,
+  updateInputFromForm,
+  updateWeeklyScheduleDay,
+  updateWeeklyScheduleTime,
+  weekdayLabel,
+  type AutomationFormState,
+  type IntervalUnit,
+  type ScheduleKind,
+} from "~/lib/automationForm";
+import { SkillCubeIcon, WorktreeIcon } from "~/lib/icons";
+import { CentralIcon } from "~/lib/central-icons";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
+import { cn } from "~/lib/utils";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { ensureNativeApi } from "~/nativeApi";
 import { buildModelSelection } from "~/providerModelOptions";
@@ -74,13 +92,42 @@ import { useStore } from "~/store";
 import { resolveThreadPickerTitle } from "./-chatThreadRoute.logic";
 
 export const automationQueryKey = ["automations"] as const;
-export const defaultModelSelection: ModelSelection = {
-  provider: "codex",
-  model: "gpt-5-codex",
-};
 export const EMPTY_AUTOMATION_LIST: AutomationListResult = { definitions: [], runs: [] };
-export const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
-const LEGACY_WALL_CLOCK_TIMEZONE = "UTC";
+
+export {
+  acknowledgedRiskIdsForFormWarnings,
+  applyScheduleToForm,
+  automationFastIntervalLimitMessage,
+  buildAutomationFormWarnings,
+  createInputFromForm,
+  datetimeLocalFromIso,
+  defaultModelSelection,
+  formatCadence,
+  formatClockTime,
+  formatDateTime,
+  formatSchedule,
+  formFromDefinition,
+  groupHeartbeatAutomationsByTargetThread,
+  heartbeatAutomationsForThread,
+  isFormSubmittable,
+  isoFromDatetimeLocal,
+  modelSelectionForProjectChange,
+  projectModelSelection,
+  providerOptionsForAutomationEdit,
+  providerOptionsForAutomationModelSelection,
+  scheduleFromForm,
+  scheduleFromKind,
+  scheduleKindFromSchedule,
+  SCHEDULE_KIND_OPTIONS,
+  TIME_OF_DAY_PATTERN,
+  updateInputFromForm,
+  updateWeeklyScheduleDay,
+  updateWeeklyScheduleTime,
+  weekdayLabel,
+  type AutomationFormState,
+  type IntervalUnit,
+  type ScheduleKind,
+};
 
 /** Starter prompts surfaced behind the composer's "Use template" button. */
 export const AUTOMATION_TEMPLATES: readonly {
@@ -107,245 +154,6 @@ export const AUTOMATION_TEMPLATES: readonly {
   },
 ];
 
-/** UI-level cadence options shown in the schedule picker (each maps onto an AutomationSchedule). */
-export type ScheduleKind =
-  | "manual"
-  | "once"
-  | "hourly"
-  | "daily"
-  | "weekdays"
-  | "weekly"
-  | "custom"
-  | "cron";
-
-export const SCHEDULE_KIND_OPTIONS: readonly { value: ScheduleKind; label: string }[] = [
-  { value: "manual", label: "Manual" },
-  { value: "once", label: "Once" },
-  { value: "hourly", label: "Hourly" },
-  { value: "daily", label: "Daily" },
-  { value: "weekdays", label: "Weekdays" },
-  { value: "weekly", label: "Weekly" },
-  { value: "custom", label: "Custom" },
-  { value: "cron", label: "Cron" },
-];
-
-/** Pick the schedule option that represents a stored schedule (interval 1h reads as "Hourly"). */
-export function scheduleKindFromSchedule(schedule: AutomationSchedule): ScheduleKind {
-  switch (schedule.type) {
-    case "daily":
-      return "daily";
-    case "weekdays":
-      return "weekdays";
-    case "weekly":
-      return "weekly";
-    case "interval":
-      return schedule.everySeconds === 3600 ? "hourly" : "custom";
-    case "manual":
-      return "manual";
-    case "once":
-      return "once";
-    case "cron":
-      return "cron";
-  }
-}
-
-/** Build a schedule for the chosen kind, reusing time/day/interval from `current` where it applies. */
-export function scheduleFromKind(
-  kind: ScheduleKind,
-  current: AutomationSchedule,
-  fallbackTimezone: string = localTimezone(),
-): AutomationSchedule {
-  const timeOfDay =
-    current.type === "daily" || current.type === "weekly" || current.type === "weekdays"
-      ? current.timeOfDay
-      : "09:00";
-  const timezone = scheduleTimezone(current, fallbackTimezone);
-  switch (kind) {
-    case "manual":
-      return { type: "manual" };
-    case "once":
-      return { type: "once", runAt: new Date(Date.now() + 15 * 60_000).toISOString() };
-    case "hourly":
-      return { type: "interval", everySeconds: 3600 };
-    case "custom":
-      return {
-        type: "interval",
-        everySeconds:
-          current.type === "interval" && current.everySeconds !== 3600
-            ? current.everySeconds
-            : 1800,
-      };
-    case "daily":
-      return { type: "daily", timeOfDay, timezone };
-    case "weekdays":
-      return { type: "weekdays", timeOfDay, timezone };
-    case "weekly":
-      return {
-        type: "weekly",
-        dayOfWeek: current.type === "weekly" ? current.dayOfWeek : 1,
-        timeOfDay,
-        timezone,
-      };
-    case "cron":
-      return {
-        type: "cron",
-        expression: current.type === "cron" ? current.expression : "0 9 * * *",
-        timezone,
-      };
-  }
-}
-
-export type AutomationFormState = {
-  readonly name: string;
-  readonly projectId: string;
-  readonly prompt: string;
-  readonly enabled: boolean;
-  readonly scheduleKind: ScheduleKind;
-  readonly intervalAmount: string;
-  readonly intervalUnit: IntervalUnit;
-  readonly timeOfDay: string;
-  readonly dayOfWeek: string;
-  readonly onceRunAt: string;
-  readonly cronExpression: string;
-  readonly timezone: string;
-  readonly runtimeMode: RuntimeMode;
-  readonly worktreeMode: AutomationWorktreeMode;
-  readonly modelSelection: ModelSelection;
-  readonly mode: AutomationMode;
-  readonly targetThreadId: string;
-  readonly maxIterations: string;
-  readonly stopOnError: boolean;
-  readonly stopWhen: string;
-};
-
-type IntervalUnit = "seconds" | "minutes";
-
-function localTimezone(): string {
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-}
-
-function scheduleTimezone(schedule: AutomationSchedule, fallbackTimezone: string): string {
-  return (
-    (schedule.type === "daily" ||
-    schedule.type === "weekly" ||
-    schedule.type === "weekdays" ||
-    schedule.type === "cron"
-      ? schedule.timezone
-      : undefined) ?? fallbackTimezone
-  );
-}
-
-export function datetimeLocalFromIso(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const offsetMs = date.getTimezoneOffset() * 60_000;
-  const localIso = new Date(date.getTime() - offsetMs).toISOString();
-  return localIso.slice(0, date.getSeconds() === 0 && date.getMilliseconds() === 0 ? 16 : 19);
-}
-
-export function isoFromDatetimeLocal(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? new Date(Date.now() + 15 * 60_000).toISOString()
-    : date.toISOString();
-}
-
-export function updateWeeklyScheduleDay(
-  schedule: Extract<AutomationSchedule, { type: "weekly" }>,
-  dayOfWeek: number,
-): AutomationSchedule {
-  return { ...schedule, dayOfWeek };
-}
-
-export function updateWeeklyScheduleTime(
-  schedule: Extract<AutomationSchedule, { type: "weekly" }>,
-  timeOfDay: string,
-): AutomationSchedule {
-  return { ...schedule, timeOfDay };
-}
-
-export function formatDateTime(value: string | null): string {
-  if (!value) return "Not scheduled";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return `${new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date)}`;
-}
-
-function timezoneSuffix(schedule: AutomationSchedule): string {
-  if (
-    (schedule.type === "daily" ||
-      schedule.type === "weekdays" ||
-      schedule.type === "weekly" ||
-      schedule.type === "cron") &&
-    schedule.timezone
-  ) {
-    return ` ${schedule.timezone}`;
-  }
-  return " UTC";
-}
-
-function formatIntervalSchedule(seconds: number): string {
-  return seconds % 60 === 0 ? `Every ${seconds / 60} min` : `Every ${seconds} sec`;
-}
-
-function formatIntervalCadence(seconds: number): string {
-  if (seconds === 3600) return "Hourly";
-  if (seconds % 3600 === 0) return `Every ${seconds / 3600}h`;
-  if (seconds % 60 === 0) return `Every ${seconds / 60}m`;
-  return `Every ${seconds}s`;
-}
-
-export function formatSchedule(schedule: AutomationSchedule): string {
-  switch (schedule.type) {
-    case "manual":
-      return "Manual";
-    case "once":
-      return `Once ${formatDateTime(schedule.runAt)}`;
-    case "interval":
-      return formatIntervalSchedule(schedule.everySeconds);
-    case "daily":
-      return `Daily ${schedule.timeOfDay}${timezoneSuffix(schedule)}`;
-    case "weekdays":
-      return `Weekdays ${schedule.timeOfDay}${timezoneSuffix(schedule)}`;
-    case "weekly":
-      return `Weekly ${weekdayLabel(schedule.dayOfWeek)} ${schedule.timeOfDay}${timezoneSuffix(schedule)}`;
-    case "cron":
-      return `Cron ${schedule.expression} ${schedule.timezone}`;
-  }
-}
-
-/** "09:00" -> "9:00": drops the leading zero on the hour for friendlier cadence labels. */
-export function formatClockTime(timeOfDay: string): string {
-  const [hours, minutes] = timeOfDay.split(":");
-  const hour = Number.parseInt(hours ?? "", 10);
-  if (Number.isNaN(hour)) return timeOfDay;
-  return `${hour}:${minutes ?? "00"}`;
-}
-
-export function formatCadence(schedule: AutomationSchedule): string {
-  switch (schedule.type) {
-    case "manual":
-      return "Manual";
-    case "once":
-      return formatDateTime(schedule.runAt);
-    case "interval":
-      return formatIntervalCadence(schedule.everySeconds);
-    case "daily":
-      return `Daily at ${formatClockTime(schedule.timeOfDay)}`;
-    case "weekdays":
-      return `Weekdays at ${formatClockTime(schedule.timeOfDay)}`;
-    case "weekly":
-      return `${weekdayLabel(schedule.dayOfWeek)} at ${formatClockTime(schedule.timeOfDay)}`;
-    case "cron":
-      return `Cron ${schedule.expression}`;
-  }
-}
-
 export function formatRelativeTime(iso: string | null): string {
   if (!iso) return "";
   const date = new Date(iso);
@@ -361,10 +169,6 @@ export function formatRelativeTime(iso: string | null): string {
   const weeks = Math.floor(days / 7);
   if (weeks < 4) return `${weeks}w`;
   return `${Math.floor(days / 30)}mo`;
-}
-
-export function weekdayLabel(value: number): string {
-  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][value] ?? "Sun";
 }
 
 export function runStatusVariant(
@@ -385,6 +189,55 @@ export function runStatusVariant(
     case "pending":
       return "info";
   }
+}
+
+/** Status-colored dot/icon class for a single run, shared by the detail history and triage rows. */
+export function runStatusDotClassName(status: AutomationRun["status"]): string {
+  switch (runStatusVariant(status)) {
+    case "success":
+      return "text-emerald-500";
+    case "error":
+      return "text-destructive";
+    case "warning":
+      return "text-amber-500";
+    case "info":
+      return "text-blue-500";
+    case "outline":
+      return "text-muted-foreground/50";
+  }
+}
+
+/**
+ * Leading status glyph for a single run row: a quiet check for success, otherwise a
+ * status-colored dot. Shared by the detail history and the list triage rows so both
+ * surfaces read identically.
+ */
+export function RunStatusIndicator({
+  status,
+  className,
+}: {
+  readonly status: AutomationRun["status"];
+  readonly className?: string;
+}) {
+  if (runStatusVariant(status) === "success") {
+    return (
+      <CentralIcon
+        name="circle-check"
+        className={cn("size-3.5 shrink-0 text-muted-foreground/70", className)}
+      />
+    );
+  }
+  return (
+    <span
+      className={cn(
+        "flex size-3.5 shrink-0 items-center justify-center",
+        runStatusDotClassName(status),
+        className,
+      )}
+    >
+      <span className="block size-1.5 rounded-full bg-current" />
+    </span>
+  );
 }
 
 export function isTriageRun(run: AutomationRun): boolean {
@@ -485,275 +338,6 @@ export function automationStatusDotClass(
   }
   if (latestRun && isTriageRun(latestRun)) return "text-destructive";
   return "text-emerald-500";
-}
-
-function intervalFormPartsFromSeconds(everySeconds: number): {
-  readonly amount: string;
-  readonly unit: IntervalUnit;
-} {
-  return everySeconds >= 60 && everySeconds % 60 === 0
-    ? { amount: String(everySeconds / 60), unit: "minutes" }
-    : { amount: String(everySeconds), unit: "seconds" };
-}
-
-export function formFromDefinition(
-  definition: AutomationDefinition | null,
-  fallbackProjectId: string,
-  fallbackModelSelection: ModelSelection = defaultModelSelection,
-): AutomationFormState {
-  // New automations default to a daily schedule (the most common automation cadence);
-  // existing definitions keep whatever schedule they were saved with.
-  const schedule = definition?.schedule ?? { type: "daily" as const, timeOfDay: "09:00" };
-  const timezone = scheduleTimezone(
-    schedule,
-    definition ? LEGACY_WALL_CLOCK_TIMEZONE : localTimezone(),
-  );
-  return {
-    name: definition?.name ?? "",
-    projectId: definition?.projectId ?? fallbackProjectId,
-    prompt: definition?.prompt ?? "",
-    enabled: definition?.enabled ?? true,
-    scheduleKind: scheduleKindFromSchedule(schedule),
-    intervalAmount:
-      schedule.type === "interval" && schedule.everySeconds !== 3600
-        ? intervalFormPartsFromSeconds(schedule.everySeconds).amount
-        : "30",
-    intervalUnit:
-      schedule.type === "interval" && schedule.everySeconds !== 3600
-        ? intervalFormPartsFromSeconds(schedule.everySeconds).unit
-        : "minutes",
-    timeOfDay:
-      schedule.type === "daily" || schedule.type === "weekly" || schedule.type === "weekdays"
-        ? schedule.timeOfDay
-        : "09:00",
-    dayOfWeek: schedule.type === "weekly" ? String(schedule.dayOfWeek) : "1",
-    onceRunAt:
-      schedule.type === "once"
-        ? datetimeLocalFromIso(schedule.runAt)
-        : datetimeLocalFromIso(new Date(Date.now() + 15 * 60_000).toISOString()),
-    cronExpression: schedule.type === "cron" ? schedule.expression : "0 9 * * *",
-    timezone,
-    runtimeMode: definition?.runtimeMode ?? "approval-required",
-    worktreeMode: definition?.worktreeMode ?? "auto",
-    modelSelection: definition?.modelSelection ?? fallbackModelSelection,
-    mode: definition?.mode ?? "standalone",
-    targetThreadId: definition?.targetThreadId ?? "",
-    maxIterations: definition?.maxIterations != null ? String(definition.maxIterations) : "",
-    stopOnError: definition?.stopOnError ?? true,
-    stopWhen: definition ? stopWhenFromCompletionPolicy(definition.completionPolicy) : "",
-  };
-}
-
-export function applyScheduleToForm(
-  form: AutomationFormState,
-  schedule: AutomationSchedule,
-  fallbackTimezone: string = localTimezone(),
-): AutomationFormState {
-  const timezone = scheduleTimezone(schedule, fallbackTimezone);
-  return {
-    ...form,
-    scheduleKind: scheduleKindFromSchedule(schedule),
-    intervalAmount:
-      schedule.type === "interval" && schedule.everySeconds !== 3600
-        ? intervalFormPartsFromSeconds(schedule.everySeconds).amount
-        : form.intervalAmount,
-    intervalUnit:
-      schedule.type === "interval" && schedule.everySeconds !== 3600
-        ? intervalFormPartsFromSeconds(schedule.everySeconds).unit
-        : form.intervalUnit,
-    timeOfDay:
-      schedule.type === "daily" || schedule.type === "weekly" || schedule.type === "weekdays"
-        ? schedule.timeOfDay
-        : form.timeOfDay,
-    dayOfWeek: schedule.type === "weekly" ? String(schedule.dayOfWeek) : form.dayOfWeek,
-    onceRunAt: schedule.type === "once" ? datetimeLocalFromIso(schedule.runAt) : form.onceRunAt,
-    cronExpression: schedule.type === "cron" ? schedule.expression : form.cronExpression,
-    timezone,
-  };
-}
-
-export function scheduleFromForm(form: AutomationFormState): AutomationSchedule {
-  const timezone = form.timezone.trim();
-  switch (form.scheduleKind) {
-    case "hourly":
-      return { type: "interval", everySeconds: 3600 };
-    case "manual":
-      return { type: "manual" };
-    case "once":
-      return { type: "once", runAt: isoFromDatetimeLocal(form.onceRunAt) };
-    case "custom": {
-      const amount = Math.max(1, Number.parseInt(form.intervalAmount, 10) || 1);
-      return {
-        type: "interval",
-        everySeconds: form.intervalUnit === "seconds" ? amount : amount * 60,
-      };
-    }
-    case "daily":
-      return { type: "daily", timeOfDay: form.timeOfDay, timezone };
-    case "weekdays":
-      return { type: "weekdays", timeOfDay: form.timeOfDay, timezone };
-    case "weekly": {
-      const dayOfWeek = Math.min(6, Math.max(0, Number.parseInt(form.dayOfWeek, 10) || 0));
-      return { type: "weekly", dayOfWeek, timeOfDay: form.timeOfDay, timezone };
-    }
-    case "cron":
-      return {
-        type: "cron",
-        expression: form.cronExpression.trim() || "0 9 * * *",
-        timezone,
-      };
-  }
-}
-
-export function projectModelSelection(
-  projects: ReturnType<typeof useStore.getState>["projects"],
-  projectId: string,
-) {
-  return (
-    projects.find((project) => project.id === projectId)?.defaultModelSelection ??
-    defaultModelSelection
-  );
-}
-
-function modelSelectionsMatch(left: ModelSelection, right: ModelSelection): boolean {
-  const leftOptions = "options" in left ? left.options : undefined;
-  const rightOptions = "options" in right ? right.options : undefined;
-  return (
-    left.provider === right.provider &&
-    left.model === right.model &&
-    JSON.stringify(leftOptions ?? null) === JSON.stringify(rightOptions ?? null)
-  );
-}
-
-// Automation edits keep their saved provider options unless the user changes models.
-// On model changes, an empty object intentionally clears stale provider-specific options.
-export function providerOptionsForAutomationModelSelection(
-  definition: Pick<AutomationDefinition, "modelSelection" | "providerOptions">,
-  nextModelSelection: ModelSelection,
-  currentProviderOptions?: ProviderStartOptions,
-): ProviderStartOptions | undefined {
-  return modelSelectionsMatch(definition.modelSelection, nextModelSelection)
-    ? definition.providerOptions
-    : (currentProviderOptions ?? {});
-}
-
-export function providerOptionsForAutomationEdit(
-  definition: Pick<AutomationDefinition, "modelSelection" | "providerOptions">,
-  form: Pick<AutomationFormState, "modelSelection">,
-  currentProviderOptions?: ProviderStartOptions,
-): ProviderStartOptions | undefined {
-  return providerOptionsForAutomationModelSelection(
-    definition,
-    form.modelSelection,
-    currentProviderOptions,
-  );
-}
-
-export function modelSelectionForProjectChange(
-  projects: ReturnType<typeof useStore.getState>["projects"],
-  currentProjectId: string,
-  nextProjectId: string,
-  currentModelSelection: ModelSelection,
-): ModelSelection {
-  const currentDefaultModelSelection = projectModelSelection(projects, currentProjectId);
-  const nextDefaultModelSelection = projectModelSelection(projects, nextProjectId);
-  return modelSelectionsMatch(currentModelSelection, currentDefaultModelSelection)
-    ? nextDefaultModelSelection
-    : currentModelSelection;
-}
-
-export function createInputFromForm(
-  form: AutomationFormState,
-  providerOptions?: ProviderStartOptions,
-  acknowledgedRisks?: AutomationCreateInput["acknowledgedRisks"],
-): AutomationCreateInput {
-  const maxIterations = form.maxIterations.trim() ? Number.parseInt(form.maxIterations, 10) : null;
-  const stopWhen = form.stopWhen.trim();
-  return {
-    name: form.name.trim(),
-    projectId: form.projectId as ProjectId,
-    prompt: form.prompt.trim(),
-    schedule: scheduleFromForm(form),
-    enabled: form.enabled,
-    modelSelection: form.modelSelection,
-    runtimeMode: form.runtimeMode,
-    interactionMode: "default",
-    worktreeMode: form.worktreeMode,
-    ...(providerOptions ? { providerOptions } : {}),
-    mode: form.mode,
-    targetThreadId: form.mode === "heartbeat" ? (form.targetThreadId as ThreadId) : null,
-    ...(form.mode === "heartbeat"
-      ? {
-          maxIterations,
-          stopOnError: form.stopOnError,
-          completionPolicy: completionPolicyFromStopWhen(stopWhen),
-        }
-      : { completionPolicy: { type: "none" as const } }),
-    ...(acknowledgedRisks ? { acknowledgedRisks } : {}),
-  };
-}
-
-export function updateInputFromForm(
-  definition: AutomationDefinition,
-  form: AutomationFormState,
-  providerOptions?: ProviderStartOptions,
-  acknowledgedRisks?: AutomationCreateInput["acknowledgedRisks"],
-): AutomationUpdateInput {
-  return {
-    id: definition.id,
-    ...createInputFromForm(form, providerOptions, acknowledgedRisks),
-  };
-}
-
-export function buildAutomationFormWarnings(form: AutomationFormState) {
-  return buildAutomationDraftWarnings({
-    schedule: scheduleFromForm(form),
-    mode: form.mode,
-    runtimeMode: form.runtimeMode,
-    worktreeMode: form.worktreeMode,
-    hasEphemeralContext: false,
-    generatedConfidence: null,
-    generatedNeedsConfirmation: false,
-    prompt: form.prompt,
-  });
-}
-
-export function acknowledgedRiskIdsForFormWarnings(
-  warnings: readonly AutomationDraftWarning[],
-  acknowledgedWarningIds: ReadonlySet<AutomationDraftWarningId>,
-) {
-  return acknowledgedRiskIdsForDraft(warnings, acknowledgedWarningIds);
-}
-
-export function isFormSubmittable(form: AutomationFormState): boolean {
-  if (!form.name.trim() || !form.prompt.trim() || !form.projectId) return false;
-  if (form.mode === "heartbeat" && !form.targetThreadId) return false;
-  if (
-    form.scheduleKind === "custom" &&
-    (!form.intervalAmount.trim() || Number.parseInt(form.intervalAmount, 10) <= 0)
-  ) {
-    return false;
-  }
-  if (form.scheduleKind === "cron" && !form.cronExpression.trim()) return false;
-  if (form.scheduleKind === "once" && !form.onceRunAt.trim()) return false;
-  if (
-    (form.scheduleKind === "daily" ||
-      form.scheduleKind === "weekdays" ||
-      form.scheduleKind === "cron" ||
-      form.scheduleKind === "weekly") &&
-    !form.timezone.trim()
-  ) {
-    return false;
-  }
-  if (
-    (form.scheduleKind === "daily" ||
-      form.scheduleKind === "weekdays" ||
-      form.scheduleKind === "weekly") &&
-    !TIME_OF_DAY_PATTERN.test(form.timeOfDay)
-  ) {
-    return false;
-  }
-  return true;
 }
 
 const deletedAutomationIdsInCache = new Set<string>();
@@ -1005,6 +589,20 @@ const MAX_ITERATION_PRESETS: readonly CadenceOption[] = [
   { value: "250", label: "250 runs" },
 ];
 
+function maxIterationLabel(value: string): string {
+  return value === "1" ? "1 run" : `${value} runs`;
+}
+
+export function maxIterationOptions(
+  currentValue: string | number | null | undefined,
+): readonly { readonly value: string; readonly label: string }[] {
+  const value = currentValue == null ? "" : String(currentValue).trim();
+  if (!/^\d+$/.test(value) || MAX_ITERATION_PRESETS.some((preset) => preset.value === value)) {
+    return MAX_ITERATION_PRESETS;
+  }
+  return [{ value, label: maxIterationLabel(value) }, ...MAX_ITERATION_PRESETS];
+}
+
 export function AutomationModelPicker({
   value,
   projectCwd,
@@ -1084,12 +682,14 @@ export function AutomationDialog({
   const projectThreads = threads.filter((thread) => thread.projectId === form.projectId);
   const selectedProject = projects.find((project) => project.id === form.projectId);
   const schedule = scheduleFromForm(form);
+  const fastIntervalLimitMessage = automationFastIntervalLimitMessage(form);
   const hasBlockingWarning = hasBlockingAutomationDraftWarnings(warnings, acknowledgedWarningIds);
   const submittable = isFormSubmittable(form) && !hasBlockingWarning;
   const intervalValue = intervalOptionValue({
     amount: form.intervalAmount,
     unit: form.intervalUnit,
   });
+  const maxIterationPresets = maxIterationOptions(form.maxIterations);
   const intervalPresets = INTERVAL_PRESETS.some(
     (preset) => intervalOptionValue(preset) === intervalValue,
   )
@@ -1160,7 +760,7 @@ export function AutomationDialog({
               aria-label="About automations"
               title="Automations run this prompt on a schedule and open the result as a thread."
             >
-              <InfoIcon className="size-4" />
+              <CentralIcon name="info-simple" className="size-4" />
             </Button>
             <Menu>
               <MenuTrigger render={<Button variant="outline" size="sm" />}>
@@ -1182,12 +782,12 @@ export function AutomationDialog({
               disabled={busy}
               onClick={() => onOpenChange(false)}
             >
-              <XIcon className="size-4" />
+              <CentralIcon name="cross-small" className="size-4" />
             </Button>
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 px-5 py-3">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-3">
           <textarea
             value={form.prompt}
             onChange={(event) => setField("prompt", event.target.value)}
@@ -1199,35 +799,40 @@ export function AutomationDialog({
             }}
             placeholder="Add prompt e.g. look for crashes in $sentry"
             aria-label="Automation prompt"
-            className="max-h-[42vh] min-h-[15rem] w-full resize-none overflow-y-auto bg-transparent font-system-ui text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/50"
+            className="min-h-[15rem] w-full flex-1 resize-none overflow-y-auto bg-transparent font-system-ui text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/50"
           />
-        </div>
 
-        {warnings.length > 0 ? (
-          <div className="mx-5 mb-2 flex flex-col gap-1.5 rounded-lg border border-border/70 bg-[var(--color-background-elevated-secondary)] p-3">
-            {warnings.map((warning) => (
-              <label
-                key={warning.id}
-                className="flex items-start gap-2 text-xs text-muted-foreground"
-              >
-                {warning.requiresAcknowledgement ? (
-                  <input
-                    type="checkbox"
-                    checked={acknowledgedWarningIds.has(warning.id)}
-                    onChange={(event) => onToggleWarning?.(warning.id, event.target.checked)}
-                    className="mt-0.5"
-                  />
-                ) : (
-                  <span className="mt-1 size-1.5 shrink-0 rounded-full bg-amber-500" />
-                )}
-                <span className="min-w-0">
-                  <span className="font-medium text-foreground">{warning.title}</span>
-                  <span className="block">{warning.detail}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-        ) : null}
+          {warnings.length > 0 ? (
+            <div className="mt-2 flex flex-col gap-1.5 border-t border-border/50 pt-3">
+              {warnings.map((warning) => (
+                <label
+                  key={warning.id}
+                  className="flex items-start gap-2 text-xs text-muted-foreground"
+                >
+                  {warning.requiresAcknowledgement ? (
+                    <input
+                      type="checkbox"
+                      checked={acknowledgedWarningIds.has(warning.id)}
+                      onChange={(event) => onToggleWarning?.(warning.id, event.target.checked)}
+                      className="mt-0.5"
+                    />
+                  ) : (
+                    <span className="mt-1 size-1.5 shrink-0 rounded-full bg-amber-500" />
+                  )}
+                  <span className="min-w-0">
+                    <span className="font-medium text-foreground">{warning.title}</span>
+                    <span className="block">{warning.detail}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          ) : null}
+          {fastIntervalLimitMessage ? (
+            <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-700 dark:text-amber-300">
+              {fastIntervalLimitMessage}
+            </div>
+          ) : null}
+        </div>
 
         <div className="flex flex-wrap items-center gap-2 px-4 pb-4 pt-1">
           <div className="flex flex-1 flex-wrap items-center gap-0.5">
@@ -1236,7 +841,7 @@ export function AutomationDialog({
                 <MenuTrigger render={<Button variant="ghost" size="sm" className={CHIP_CLASS} />}>
                   <WorktreeIcon className="size-4" />
                   <span className="capitalize">{form.worktreeMode}</span>
-                  <ChevronDownIcon className="size-3.5 opacity-60" />
+                  <CentralIcon name="chevron-down-small" className="size-3.5 opacity-60" />
                 </MenuTrigger>
                 <ComposerPickerMenuPopup align="start" className="w-40">
                   <MenuRadioGroup
@@ -1257,11 +862,11 @@ export function AutomationDialog({
 
             <Menu>
               <MenuTrigger render={<Button variant="ghost" size="sm" className={CHIP_CLASS} />}>
-                <FolderIcon className="size-4" />
+                <CentralIcon name="folder-2" className="size-4" />
                 <span className="max-w-[10rem] truncate">
                   {selectedProject?.name ?? "Select project"}
                 </span>
-                <ChevronDownIcon className="size-3.5 opacity-60" />
+                <CentralIcon name="chevron-down-small" className="size-3.5 opacity-60" />
               </MenuTrigger>
               <ComposerPickerMenuPopup align="start" className="w-56">
                 <MenuRadioGroup value={form.projectId} onValueChange={chooseProject}>
@@ -1282,9 +887,9 @@ export function AutomationDialog({
 
             <Menu>
               <MenuTrigger render={<Button variant="ghost" size="sm" className={CHIP_CLASS} />}>
-                <ClockIcon className="size-4" />
+                <CentralIcon name="clock" className="size-4" />
                 <span>{formatCadence(schedule)}</span>
-                <ChevronDownIcon className="size-3.5 opacity-60" />
+                <CentralIcon name="chevron-down-small" className="size-3.5 opacity-60" />
               </MenuTrigger>
               <ComposerPickerMenuPopup align="start" className="w-56">
                 <MenuGroup>
@@ -1487,20 +1092,6 @@ export function AutomationDialog({
                       </div>
                     </MenuGroup>
                     <MenuSeparator />
-                    <MenuGroup>
-                      <MenuGroupLabel>Max iterations</MenuGroupLabel>
-                      <MenuRadioGroup
-                        value={form.maxIterations}
-                        onValueChange={(value) => setField("maxIterations", value)}
-                      >
-                        {MAX_ITERATION_PRESETS.map((preset) => (
-                          <MenuRadioItem key={preset.value || "unlimited"} value={preset.value}>
-                            {preset.label}
-                          </MenuRadioItem>
-                        ))}
-                      </MenuRadioGroup>
-                    </MenuGroup>
-                    <MenuSeparator />
                     <MenuCheckboxItem
                       checked={form.stopOnError}
                       onCheckedChange={(checked) => setField("stopOnError", checked)}
@@ -1509,6 +1100,20 @@ export function AutomationDialog({
                     </MenuCheckboxItem>
                   </>
                 ) : null}
+                <MenuSeparator />
+                <MenuGroup>
+                  <MenuGroupLabel>Max iterations</MenuGroupLabel>
+                  <MenuRadioGroup
+                    value={form.maxIterations}
+                    onValueChange={(value) => setField("maxIterations", value)}
+                  >
+                    {maxIterationPresets.map((preset) => (
+                      <MenuRadioItem key={preset.value || "unlimited"} value={preset.value}>
+                        {preset.label}
+                      </MenuRadioItem>
+                    ))}
+                  </MenuRadioGroup>
+                </MenuGroup>
               </ComposerPickerMenuPopup>
             </Menu>
 
@@ -1524,7 +1129,7 @@ export function AutomationDialog({
                   />
                 }
               >
-                <BrainIcon className="size-4" />
+                <CentralIcon name="brain" className="size-4" />
               </MenuTrigger>
               <ComposerPickerMenuPopup align="start" className="w-48">
                 <MenuRadioGroup

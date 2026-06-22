@@ -4,6 +4,7 @@ import {
   AutomationId,
   AutomationRunId,
   CommandId,
+  DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS,
   DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS,
   MessageId,
   ThreadId,
@@ -123,9 +124,7 @@ function isSameAiCompletionPolicy(
   left: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
   right: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
 ): boolean {
-  return (
-    left.stopWhen === right.stopWhen && left.confidenceThreshold === right.confidenceThreshold
-  );
+  return left.stopWhen === right.stopWhen && left.confidenceThreshold === right.confidenceThreshold;
 }
 
 function isSameCompletionPolicy(
@@ -141,15 +140,34 @@ function isSameCompletionPolicy(
   return right.type === "ai-evaluated" && isSameAiCompletionPolicy(left, right);
 }
 
+const DEFAULT_COMPLETION_POLICY = { type: "none" } as const satisfies AutomationCompletionPolicy;
+
+function completionPolicyForDefinition(
+  definition: AutomationDefinition,
+): AutomationCompletionPolicy {
+  return definition.completionPolicy ?? DEFAULT_COMPLETION_POLICY;
+}
+
+function completionPolicyVersionForDefinition(definition: AutomationDefinition): number {
+  return definition.completionPolicyVersion ?? 1;
+}
+
+function completionPolicyUpdatedAtForDefinition(definition: AutomationDefinition): string {
+  return definition.completionPolicyUpdatedAt ?? definition.createdAt;
+}
+
 function runUsesCurrentCompletionPolicy(
   run: AutomationRun,
   definition: AutomationDefinition,
 ): boolean {
   if (run.permissionSnapshot.completionPolicyVersion !== undefined) {
-    return run.permissionSnapshot.completionPolicyVersion === definition.completionPolicyVersion;
+    return (
+      run.permissionSnapshot.completionPolicyVersion ===
+      completionPolicyVersionForDefinition(definition)
+    );
   }
   const runPolicyAnchorMs = Date.parse(run.startedAt ?? run.createdAt);
-  const policyUpdatedAtMs = Date.parse(definition.completionPolicyUpdatedAt);
+  const policyUpdatedAtMs = Date.parse(completionPolicyUpdatedAtForDefinition(definition));
   return (
     Number.isFinite(runPolicyAnchorMs) &&
     Number.isFinite(policyUpdatedAtMs) &&
@@ -222,7 +240,7 @@ function makePermissionSnapshot(definition: AutomationDefinition, now: string) {
     provider: definition.modelSelection.provider,
     modelSelection: definition.modelSelection,
     ...(definition.providerOptions ? { providerOptions: definition.providerOptions } : {}),
-    completionPolicyVersion: definition.completionPolicyVersion,
+    completionPolicyVersion: completionPolicyVersionForDefinition(definition),
     runtimeMode: definition.runtimeMode,
     interactionMode: definition.interactionMode,
     worktreeMode: definition.worktreeMode,
@@ -325,14 +343,20 @@ function mergeDefinitionUpdate(
         : (current.nextRunAt ?? safeComputeNextRunAt(schedule, now, null));
   const providerOptions = input.providerOptions ?? current.providerOptions;
   const mode = input.mode ?? current.mode;
+  const currentCompletionPolicy = completionPolicyForDefinition(current);
   const completionPolicy =
     mode === "standalone"
       ? { type: "none" as const }
-      : (input.completionPolicy ?? current.completionPolicy);
+      : (input.completionPolicy ?? currentCompletionPolicy);
   const completionPolicyChanged = !isSameCompletionPolicy(
-    current.completionPolicy,
+    currentCompletionPolicy,
     completionPolicy,
   );
+  // Run caps apply to both standalone and heartbeat definitions; chat parsing uses
+  // them for bounded requests like "every 15 seconds for 3 times".
+  const maxIterations = hasOwn(input, "maxIterations")
+    ? ((input.maxIterations as AutomationDefinition["maxIterations"] | undefined) ?? null)
+    : current.maxIterations;
   const nextDefinition: AutomationDefinition = {
     ...current,
     projectId: input.projectId ?? current.projectId,
@@ -352,18 +376,15 @@ function mergeDefinitionUpdate(
     targetThreadId: hasOwn(input, "targetThreadId")
       ? ((input.targetThreadId as AutomationDefinition["targetThreadId"] | undefined) ?? null)
       : current.targetThreadId,
-    maxIterations:
-      mode === "standalone"
-        ? null
-        : hasOwn(input, "maxIterations")
-          ? ((input.maxIterations as AutomationDefinition["maxIterations"] | undefined) ?? null)
-          : current.maxIterations,
+    maxIterations,
     stopOnError: input.stopOnError ?? current.stopOnError,
     completionPolicy,
     completionPolicyVersion: completionPolicyChanged
-      ? current.completionPolicyVersion + 1
-      : current.completionPolicyVersion,
-    completionPolicyUpdatedAt: completionPolicyChanged ? now : current.completionPolicyUpdatedAt,
+      ? completionPolicyVersionForDefinition(current) + 1
+      : completionPolicyVersionForDefinition(current),
+    completionPolicyUpdatedAt: completionPolicyChanged
+      ? now
+      : completionPolicyUpdatedAtForDefinition(current),
     minimumIntervalSeconds: input.minimumIntervalSeconds ?? current.minimumIntervalSeconds,
     maxRuntimeSeconds: hasOwn(input, "maxRuntimeSeconds")
       ? ((input.maxRuntimeSeconds as AutomationDefinition["maxRuntimeSeconds"] | undefined) ?? null)
@@ -511,6 +532,7 @@ export const AutomationServiceLive = Layer.effect(
     const validateSchedulePolicy = (input: {
       readonly schedule: AutomationDefinition["schedule"];
       readonly enabled: boolean;
+      readonly maxIterations: AutomationDefinition["maxIterations"];
       readonly minimumIntervalSeconds: number;
       readonly acknowledgedRisks: readonly string[];
       readonly now: string;
@@ -518,6 +540,26 @@ export const AutomationServiceLive = Layer.effect(
       Effect.try({
         try: () => {
           const spacingSeconds = computeAutomationScheduleSpacingSeconds(input.schedule, input.now);
+          if (
+            spacingSeconds !== null &&
+            spacingSeconds < DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS
+          ) {
+            if (!input.acknowledgedRisks.includes("fast-interval")) {
+              throw new Error(
+                `Automation schedule must run at least ${DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS} seconds apart.`,
+              );
+            }
+            const exceedsFastIterationCap =
+              input.maxIterations === null ||
+              input.maxIterations > DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS;
+            // Pausing a legacy fast loop must always remain possible; enforce the new
+            // hard cap only for definitions that will continue running.
+            if (input.enabled && exceedsFastIterationCap) {
+              throw new Error(
+                `Fast interval automations must set max iterations to ${DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS} runs or fewer.`,
+              );
+            }
+          }
           const minimumIntervalSeconds = effectiveMinimumIntervalSeconds(input);
           if (spacingSeconds !== null && spacingSeconds < minimumIntervalSeconds) {
             throw new Error(
@@ -1072,12 +1114,16 @@ export const AutomationServiceLive = Layer.effect(
     const shouldUseStopPolicyForDefinition = (
       definition: AutomationDefinition,
       policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
-    ): boolean =>
-      definition.mode === "heartbeat" &&
-      definition.enabled &&
-      definition.archivedAt === null &&
-      definition.completionPolicy.type === "ai-evaluated" &&
-      isSameAiCompletionPolicy(definition.completionPolicy, policy);
+    ): boolean => {
+      const currentPolicy = completionPolicyForDefinition(definition);
+      return (
+        definition.mode === "heartbeat" &&
+        definition.enabled &&
+        definition.archivedAt === null &&
+        currentPolicy.type === "ai-evaluated" &&
+        isSameAiCompletionPolicy(currentPolicy, policy)
+      );
+    };
 
     const loadCurrentStopDefinition = (
       definition: AutomationDefinition,
@@ -1136,9 +1182,8 @@ export const AutomationServiceLive = Layer.effect(
           run,
           thread,
         });
-        const textGenerationInput = yield* resolveAutomationCompletionTextGenerationInput(
-          definition,
-        );
+        const textGenerationInput =
+          yield* resolveAutomationCompletionTextGenerationInput(definition);
         const evaluationRaw = yield* textGeneration
           .evaluateAutomationCompletion({
             cwd: project.workspaceRoot,
@@ -1250,10 +1295,11 @@ export const AutomationServiceLive = Layer.effect(
           Option.match(definitionOption, {
             onNone: () => Effect.void,
             onSome: (definition) => {
-              if (definition.completionPolicy.type !== "ai-evaluated") {
+              const policy = completionPolicyForDefinition(definition);
+              if (policy.type !== "ai-evaluated") {
                 return Effect.void;
               }
-              if (!shouldUseStopPolicyForDefinition(definition, definition.completionPolicy)) {
+              if (!shouldUseStopPolicyForDefinition(definition, policy)) {
                 return Effect.void;
               }
               if (!runUsesCurrentCompletionPolicy(run, definition)) {
@@ -1262,7 +1308,7 @@ export const AutomationServiceLive = Layer.effect(
               return enqueueCompletionEvaluationJob({
                 definition,
                 run,
-                policy: definition.completionPolicy,
+                policy,
               });
             },
           }),
@@ -1327,16 +1373,17 @@ export const AutomationServiceLive = Layer.effect(
               const reachedMax =
                 definition.maxIterations !== null &&
                 definition.iterationCount >= definition.maxIterations;
+              const completionPolicy = completionPolicyForDefinition(definition);
               const enqueueAiStop =
                 !reachedMax &&
                 status === "succeeded" &&
                 definition.mode === "heartbeat" &&
-                definition.completionPolicy.type === "ai-evaluated" &&
+                completionPolicy.type === "ai-evaluated" &&
                 runUsesCurrentCompletionPolicy(run, definition)
                   ? enqueueCompletionEvaluationJob({
                       definition,
                       run,
-                      policy: definition.completionPolicy,
+                      policy: completionPolicy,
                     })
                   : Effect.void;
               return enqueueAiStop.pipe(
@@ -1592,9 +1639,11 @@ export const AutomationServiceLive = Layer.effect(
     const create: AutomationServiceShape["create"] = (input) =>
       Effect.gen(function* () {
         const now = isoNow();
+        yield* requireProject(input.projectId);
         yield* validateSchedulePolicy({
           schedule: input.schedule,
           enabled: input.enabled ?? true,
+          maxIterations: input.maxIterations ?? null,
           minimumIntervalSeconds:
             input.minimumIntervalSeconds ?? DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS,
           acknowledgedRisks: input.acknowledgedRisks ?? [],
@@ -1629,9 +1678,11 @@ export const AutomationServiceLive = Layer.effect(
         const now = isoNow();
         const current = yield* requireDefinition(input.id);
         const updated = mergeDefinitionUpdate(current, input, now);
+        yield* requireProject(updated.projectId);
         yield* validateSchedulePolicy({
           schedule: updated.schedule,
           enabled: updated.enabled,
+          maxIterations: updated.maxIterations,
           minimumIntervalSeconds: updated.minimumIntervalSeconds,
           acknowledgedRisks: updated.acknowledgedRisks,
           now,
@@ -1723,16 +1774,58 @@ export const AutomationServiceLive = Layer.effect(
         const pendingCompletionEvaluations = yield* automationRepository
           .countPendingCompletionEvaluationsForThread({ threadId })
           .pipe(
-            Effect.mapError(
-              toServiceError("Failed to count pending automation stop evaluations."),
-            ),
+            Effect.mapError(toServiceError("Failed to count pending automation stop evaluations.")),
           );
         return { activeRuns, pendingCompletionEvaluations };
+      });
+
+    const restartExhaustedBoundedDefinition = (definition: AutomationDefinition, now: string) =>
+      Effect.gen(function* () {
+        if (
+          definition.maxIterations === null ||
+          definition.iterationCount < definition.maxIterations
+        ) {
+          return definition;
+        }
+        const computedNextRunAt =
+          definition.schedule.type === "manual"
+            ? null
+            : computeNextAutomationRunAtAfter(definition.schedule, now, now);
+        // Manual reruns should not revive legacy definitions that cannot pass today's
+        // active-schedule policy, such as oversized sub-minute loops.
+        let canBecomeEnabled = false;
+        if (definition.schedule.type === "manual" || computedNextRunAt !== null) {
+          canBecomeEnabled = yield* validateSchedulePolicy({
+            schedule: definition.schedule,
+            enabled: true,
+            maxIterations: definition.maxIterations,
+            minimumIntervalSeconds: definition.minimumIntervalSeconds,
+            acknowledgedRisks: definition.acknowledgedRisks,
+            now,
+          }).pipe(Effect.as(true), Effect.catch(() => Effect.succeed(false)));
+        }
+        const enabled = canBecomeEnabled;
+        const nextRunAt = enabled ? computedNextRunAt : null;
+        const restarted = {
+          ...definition,
+          enabled,
+          iterationCount: 0,
+          nextRunAt,
+          updatedAt: now,
+        };
+        return yield* automationRepository
+          .restartDefinitionLoop({ id: definition.id, enabled, nextRunAt, updatedAt: now })
+          .pipe(
+            Effect.mapError(toServiceError("Failed to restart automation loop.")),
+            Effect.as(restarted),
+            Effect.tap((definition) => publish({ type: "definition-upserted", definition })),
+          );
       });
 
     const runNow: AutomationServiceShape["runNow"] = (input) =>
       Effect.gen(function* () {
         const definition = yield* requireDefinition(input.automationId);
+        const now = isoNow();
         // Heartbeat automations continue a single shared thread, so a manual run must not
         // race a scheduled (or earlier manual) run that is still in flight. Standalone
         // automations spawn independent threads, so concurrent manual runs are fine.
@@ -1760,8 +1853,13 @@ export const AutomationServiceLive = Layer.effect(
             );
           }
         }
-        const now = isoNow();
-        const { run, inserted } = yield* createPendingRun(definition, { type: "manual" }, now, now);
+        const runnableDefinition = yield* restartExhaustedBoundedDefinition(definition, now);
+        const { run, inserted } = yield* createPendingRun(
+          runnableDefinition,
+          { type: "manual" },
+          now,
+          now,
+        );
         if (!inserted) {
           return yield* Effect.fail(
             new AutomationServiceError({
@@ -1770,9 +1868,9 @@ export const AutomationServiceLive = Layer.effect(
           );
         }
         yield* automationRepository
-          .incrementDefinitionIterationCount({ id: definition.id, now })
+          .incrementDefinitionIterationCount({ id: runnableDefinition.id, now })
           .pipe(Effect.mapError(toServiceError("Failed to update automation iteration count.")));
-        return yield* dispatchRun(definition, run, now);
+        return yield* dispatchRun(runnableDefinition, run, now);
       });
 
     const cancelRun: AutomationServiceShape["cancelRun"] = (input) =>

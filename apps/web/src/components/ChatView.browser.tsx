@@ -2,6 +2,9 @@
 import "../index.css";
 
 import {
+  AutomationId,
+  type AutomationCreateInput,
+  type AutomationDefinition,
   EventId,
   MessageId,
   ORCHESTRATION_WS_METHODS,
@@ -490,6 +493,45 @@ function addThreadToSnapshot(
   };
 }
 
+function createAutomationDefinitionFromCreateRequest(
+  body: WsRequestEnvelope["body"],
+): AutomationDefinition {
+  const input = body as unknown as AutomationCreateInput;
+  const definition: AutomationDefinition = {
+    id: AutomationId.makeUnsafe(`automation-${wsRequests.length}`),
+    projectId: input.projectId,
+    sourceThreadId: input.sourceThreadId ?? null,
+    name: input.name,
+    prompt: input.prompt,
+    schedule: input.schedule,
+    enabled: input.enabled ?? true,
+    nextRunAt: null,
+    modelSelection: input.modelSelection,
+    runtimeMode: input.runtimeMode ?? "approval-required",
+    interactionMode: input.interactionMode ?? "default",
+    worktreeMode: input.worktreeMode ?? "auto",
+    mode: input.mode ?? "standalone",
+    targetThreadId: input.targetThreadId ?? null,
+    maxIterations: input.maxIterations ?? null,
+    stopOnError: input.stopOnError ?? true,
+    completionPolicy: input.completionPolicy ?? { type: "none" },
+    completionPolicyVersion: 1,
+    completionPolicyUpdatedAt: NOW_ISO,
+    minimumIntervalSeconds: input.minimumIntervalSeconds ?? 60,
+    maxRuntimeSeconds: input.maxRuntimeSeconds ?? 3_600,
+    retryPolicy: input.retryPolicy ?? { type: "none" },
+    misfirePolicy: input.misfirePolicy ?? "coalesce",
+    acknowledgedRisks: input.acknowledgedRisks ?? [],
+    iterationCount: 0,
+    createdAt: NOW_ISO,
+    updatedAt: NOW_ISO,
+    archivedAt: null,
+  };
+  return input.providerOptions === undefined
+    ? definition
+    : { ...definition, providerOptions: input.providerOptions };
+}
+
 function createDraftOnlySnapshot(): OrchestrationReadModel {
   const snapshot = createSnapshotForTargetUser({
     targetMessageId: "msg-user-draft-target" as MessageId,
@@ -808,6 +850,9 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   if (tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
     return { sequence: fixture.snapshot.snapshotSequence + 1 };
   }
+  if (tag === WS_METHODS.automationCreate) {
+    return createAutomationDefinitionFromCreateRequest(body);
+  }
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
   }
@@ -1047,6 +1092,21 @@ async function waitForSendButton(): Promise<HTMLButtonElement> {
     () => document.querySelector<HTMLButtonElement>('button[aria-label="Send message"]'),
     "Unable to find send button.",
   );
+}
+
+function readDispatchedCommand(request: WsRequestEnvelope["body"]): Record<string, unknown> | null {
+  if (
+    request._tag !== ORCHESTRATION_WS_METHODS.dispatchCommand ||
+    typeof request.command !== "object" ||
+    request.command === null
+  ) {
+    return null;
+  }
+  return request.command as Record<string, unknown>;
+}
+
+function hasDispatchedCommandType(type: string): boolean {
+  return wsRequests.some((request) => readDispatchedCommand(request)?.type === type);
 }
 
 async function waitForEnvironmentModeButton(label: string): Promise<HTMLButtonElement> {
@@ -1708,6 +1768,316 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(layout.distanceFromBottomPx).toBeLessThanOrEqual(AUTO_SCROLL_BOTTOM_THRESHOLD_PX);
         },
         { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("sends unmarked automation questions as normal chat messages", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-automation-question" as MessageId,
+        targetText: "automation question target",
+      }),
+    });
+
+    try {
+      const prompt = "how do automations work every day?";
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditor.textContent ?? "").toContain(prompt);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      wsRequests.length = 0;
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const turnStartRequest = wsRequests.find((request) => {
+            const command = readDispatchedCommand(request);
+            return command?.type === "thread.turn.start";
+          });
+          expect(turnStartRequest).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      expect(wsRequests.some((request) => request._tag === WS_METHODS.automationCreate)).toBe(
+        false,
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("creates composer automations as heartbeat runs on the current chat", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-current-chat-automation" as MessageId,
+        targetText: "current chat automation target",
+      }),
+    });
+
+    try {
+      useComposerDraftStore
+        .getState()
+        .setPrompt(THREAD_ID, "/automation say hi every 15 seconds 3 times total");
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditor.textContent ?? "").toContain("say hi every 15 seconds");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      wsRequests.length = 0;
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const automationCreateRequest = wsRequests.find(
+            (request) => request._tag === WS_METHODS.automationCreate,
+          );
+          expect(automationCreateRequest).toMatchObject({
+            _tag: WS_METHODS.automationCreate,
+            mode: "heartbeat",
+            targetThreadId: THREAD_ID,
+            sourceThreadId: THREAD_ID,
+            worktreeMode: "auto",
+            maxIterations: 3,
+            prompt: "say hi",
+            schedule: { type: "interval", everySeconds: 15 },
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await waitForLayout();
+
+      expect(hasDispatchedCommandType("thread.create")).toBe(false);
+      expect(hasDispatchedCommandType("thread.turn.start")).toBe(false);
+      expect(wsRequests.some((request) => request._tag === WS_METHODS.gitCreateWorktree)).toBe(
+        false,
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("creates polite composer automation requests as heartbeat runs", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-polite-chat-automation" as MessageId,
+        targetText: "polite current chat automation target",
+      }),
+    });
+
+    try {
+      useComposerDraftStore
+        .getState()
+        .setPrompt(THREAD_ID, "could you say hi every 15 seconds for 3 times");
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditor.textContent ?? "").toContain("could you say hi");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      wsRequests.length = 0;
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const automationCreateRequest = wsRequests.find(
+            (request) => request._tag === WS_METHODS.automationCreate,
+          );
+          expect(automationCreateRequest).toMatchObject({
+            _tag: WS_METHODS.automationCreate,
+            mode: "heartbeat",
+            targetThreadId: THREAD_ID,
+            sourceThreadId: THREAD_ID,
+            worktreeMode: "auto",
+            maxIterations: 3,
+            prompt: "say hi",
+            schedule: { type: "interval", everySeconds: 15 },
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await waitForLayout();
+
+      expect(hasDispatchedCommandType("thread.create")).toBe(false);
+      expect(hasDispatchedCommandType("thread.turn.start")).toBe(false);
+      expect(wsRequests.some((request) => request._tag === WS_METHODS.gitCreateWorktree)).toBe(
+        false,
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("promotes draft chats before creating composer heartbeat automations", async () => {
+    useComposerDraftStore.setState({
+      draftThreadsByThreadId: {
+        [THREAD_ID]: {
+          projectId: PROJECT_ID,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: "feature/draft-automation",
+          worktreePath: "/repo/worktrees/draft-automation",
+          envMode: "worktree",
+        },
+      },
+      projectDraftThreadIdByProjectId: {
+        [PROJECT_ID]: THREAD_ID,
+      },
+    });
+    useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
+      provider: "codex",
+      model: "gpt-5.4",
+      options: {
+        reasoningEffort: "low",
+      },
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+    });
+
+    try {
+      useComposerDraftStore
+        .getState()
+        .setPrompt(THREAD_ID, "/automation say hi every 15 seconds for 3 times");
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditor.textContent ?? "").toContain("say hi every 15 seconds");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      wsRequests.length = 0;
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      await sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const createThreadIndex = wsRequests.findIndex((request) => {
+            const command = readDispatchedCommand(request);
+            return command?.type === "thread.create" && command.threadId === THREAD_ID;
+          });
+          const automationCreateIndex = wsRequests.findIndex(
+            (request) => request._tag === WS_METHODS.automationCreate,
+          );
+          expect(createThreadIndex).toBeGreaterThanOrEqual(0);
+          expect(automationCreateIndex).toBeGreaterThan(createThreadIndex);
+
+          const createThreadCommand = readDispatchedCommand(wsRequests[createThreadIndex]!);
+          expect(createThreadCommand).toMatchObject({
+            type: "thread.create",
+            threadId: THREAD_ID,
+            envMode: "worktree",
+            branch: "feature/draft-automation",
+            worktreePath: "/repo/worktrees/draft-automation",
+            associatedWorktreePath: "/repo/worktrees/draft-automation",
+            associatedWorktreeBranch: "feature/draft-automation",
+            associatedWorktreeRef: "feature/draft-automation",
+            modelSelection: {
+              provider: "codex",
+              model: "gpt-5.4",
+              options: {
+                reasoningEffort: "low",
+              },
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          });
+
+          expect(wsRequests[automationCreateIndex]).toMatchObject({
+            _tag: WS_METHODS.automationCreate,
+            mode: "heartbeat",
+            targetThreadId: THREAD_ID,
+            sourceThreadId: THREAD_ID,
+            worktreeMode: "auto",
+            maxIterations: 3,
+            prompt: "say hi",
+            schedule: { type: "interval", everySeconds: 15 },
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await waitForLayout();
+
+      expect(hasDispatchedCommandType("thread.turn.start")).toBe(false);
+      expect(wsRequests.some((request) => request._tag === WS_METHODS.gitCreateWorktree)).toBe(
+        false,
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not promote draft chats until a reviewed automation is submitted", async () => {
+    useComposerDraftStore.setState({
+      draftThreadsByThreadId: {
+        [THREAD_ID]: {
+          projectId: PROJECT_ID,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+        },
+      },
+      projectDraftThreadIdByProjectId: {
+        [PROJECT_ID]: THREAD_ID,
+      },
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "/automation say hi every 15 seconds");
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditor.textContent ?? "").toContain("say hi every 15 seconds");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      wsRequests.length = 0;
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      await sendButton.click();
+
+      await expect.element(page.getByText("Fast recurring loop")).toBeInTheDocument();
+      expect(hasDispatchedCommandType("thread.create")).toBe(false);
+      expect(wsRequests.some((request) => request._tag === WS_METHODS.automationCreate)).toBe(
+        false,
       );
     } finally {
       await mounted.cleanup();

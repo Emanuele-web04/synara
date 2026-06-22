@@ -97,6 +97,30 @@ describe("computeNextAutomationRunAt", () => {
     ).toBe("2026-06-08T09:00:00.000Z");
   });
 
+  it("accepts 7 as Sunday in cron day-of-week fields", () => {
+    expect(
+      computeNextAutomationRunAt(
+        { type: "cron", expression: "0 9 * * 7", timezone: "UTC" },
+        "2026-06-21T08:00:00.000Z",
+      ),
+    ).toBe("2026-06-21T09:00:00.000Z");
+  });
+
+  it("accepts named cron day-of-week fields", () => {
+    expect(
+      computeNextAutomationRunAt(
+        { type: "cron", expression: "0 9 * * SUN", timezone: "UTC" },
+        "2026-06-21T08:00:00.000Z",
+      ),
+    ).toBe("2026-06-21T09:00:00.000Z");
+    expect(
+      computeNextAutomationRunAt(
+        { type: "cron", expression: "0 9 * * MON-FRI", timezone: "UTC" },
+        "2026-06-21T10:00:00.000Z",
+      ),
+    ).toBe("2026-06-22T09:00:00.000Z");
+  });
+
   it("treats stepped cron day wildcards as restricted day fields", () => {
     expect(
       computeNextAutomationRunAt(

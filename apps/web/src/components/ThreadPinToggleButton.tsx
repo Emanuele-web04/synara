@@ -10,6 +10,7 @@ import type React from "react";
 import { PinIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { IconButton } from "./ui/icon-button";
+import { SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
 
 export function ThreadPinToggleButton({
   pinned,
@@ -53,7 +54,7 @@ export function ThreadPinToggleButton({
       }}
       onClick={onToggle}
     >
-      <PinIcon className="size-3.5" />
+      <PinIcon className={SIDEBAR_TRAILING_ICON_CLASS} />
     </IconButton>
   );
 }

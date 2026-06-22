@@ -739,7 +739,7 @@ layer("AutomationRepository", (it) => {
           stopWhen: "the PR is ready",
           confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
         },
-        completionPolicyVersion: definition.completionPolicyVersion + 1,
+        completionPolicyVersion: (definition.completionPolicyVersion ?? 1) + 1,
         completionPolicyUpdatedAt: "2026-06-16T10:02:00.000Z",
         updatedAt: "2026-06-16T10:02:00.000Z",
       });

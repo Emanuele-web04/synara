@@ -45,6 +45,7 @@ import {
   MarkAutomationRunStartedInput,
   MarkAutomationRunSucceededInput,
   MarkAutomationRunWaitingForApprovalInput,
+  RestartAutomationDefinitionLoopInput,
   SetAutomationDefinitionNextRunAtInput,
 } from "../Services/AutomationRepository.ts";
 
@@ -1064,6 +1065,19 @@ const makeAutomationRepository = Effect.gen(function* () {
       `,
   });
 
+  const restartDefinitionLoopRow = SqlSchema.void({
+    Request: RestartAutomationDefinitionLoopInput,
+    execute: ({ id, enabled, nextRunAt, updatedAt }) =>
+      sql`
+        UPDATE automation_definitions
+        SET enabled = ${enabled ? 1 : 0},
+            iteration_count = 0,
+            next_run_at = ${nextRunAt},
+            updated_at = ${updatedAt}
+        WHERE automation_id = ${id}
+      `,
+  });
+
   const acquireLease = SqlSchema.findAll({
     Request: AcquireAutomationSchedulerLeaseInput,
     Result: Schema.Struct({ changed: Schema.Number }),
@@ -1137,6 +1151,9 @@ const makeAutomationRepository = Effect.gen(function* () {
       enabled: definition.enabled ? 1 : 0,
       stopOnError: definition.stopOnError ? 1 : 0,
       providerOptions: definition.providerOptions ?? null,
+      completionPolicy: definition.completionPolicy ?? { type: "none" },
+      completionPolicyVersion: definition.completionPolicyVersion ?? 1,
+      completionPolicyUpdatedAt: definition.completionPolicyUpdatedAt ?? definition.createdAt,
     }).pipe(
       Effect.mapError(toPersistenceSqlError("AutomationRepository.createDefinition:query")),
       Effect.as(definition),
@@ -1149,6 +1166,9 @@ const makeAutomationRepository = Effect.gen(function* () {
       enabled: definition.enabled ? 1 : 0,
       stopOnError: definition.stopOnError ? 1 : 0,
       providerOptions: definition.providerOptions ?? null,
+      completionPolicy: definition.completionPolicy ?? { type: "none" },
+      completionPolicyVersion: definition.completionPolicyVersion ?? 1,
+      completionPolicyUpdatedAt: definition.completionPolicyUpdatedAt ?? definition.createdAt,
     }).pipe(
       Effect.mapError(toPersistenceSqlError("AutomationRepository.saveDefinition:update")),
       Effect.as(definition),
@@ -1374,9 +1394,7 @@ const makeAutomationRepository = Effect.gen(function* () {
     (input) =>
       listRunsNeedingCompletionEvaluationRows(input).pipe(
         Effect.mapError(
-          toPersistenceSqlError(
-            "AutomationRepository.listRunsNeedingCompletionEvaluation:query",
-          ),
+          toPersistenceSqlError("AutomationRepository.listRunsNeedingCompletionEvaluation:query"),
         ),
         Effect.flatMap((rows) => Effect.forEach(rows, toRun, { concurrency: "unbounded" })),
       );
@@ -1460,14 +1478,15 @@ const makeAutomationRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("AutomationRepository.disableDefinition:update")),
     );
 
-  const disableDefinitionIfUnchanged: AutomationRepositoryShape["disableDefinitionIfUnchanged"] =
-    (input) =>
-      disableDefinitionIfUnchangedRow(input).pipe(
-        Effect.mapError(
-          toPersistenceSqlError("AutomationRepository.disableDefinitionIfUnchanged:update"),
-        ),
-        Effect.map((rows) => rows.length > 0),
-      );
+  const disableDefinitionIfUnchanged: AutomationRepositoryShape["disableDefinitionIfUnchanged"] = (
+    input,
+  ) =>
+    disableDefinitionIfUnchangedRow(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("AutomationRepository.disableDefinitionIfUnchanged:update"),
+      ),
+      Effect.map((rows) => rows.length > 0),
+    );
 
   const incrementDefinitionIterationCount: AutomationRepositoryShape["incrementDefinitionIterationCount"] =
     (input) =>
@@ -1476,6 +1495,11 @@ const makeAutomationRepository = Effect.gen(function* () {
           toPersistenceSqlError("AutomationRepository.incrementDefinitionIterationCount:update"),
         ),
       );
+
+  const restartDefinitionLoop: AutomationRepositoryShape["restartDefinitionLoop"] = (input) =>
+    restartDefinitionLoopRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.restartDefinitionLoop:update")),
+    );
 
   const tryAcquireSchedulerLease: AutomationRepositoryShape["tryAcquireSchedulerLease"] = (input) =>
     acquireLease(input).pipe(
@@ -1514,6 +1538,7 @@ const makeAutomationRepository = Effect.gen(function* () {
     disableDefinition,
     disableDefinitionIfUnchanged,
     incrementDefinitionIterationCount,
+    restartDefinitionLoop,
     tryAcquireSchedulerLease,
   } satisfies AutomationRepositoryShape;
 });

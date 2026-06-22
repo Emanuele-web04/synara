@@ -65,6 +65,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  type AutomationDefinition,
   type AutomationListResult,
   MAX_PINNED_PROJECTS,
   type DesktopUpdateState,
@@ -144,6 +145,8 @@ import {
   applyAutomationEvent,
   automationAttentionCount,
   automationQueryKey,
+  formatCadence,
+  groupHeartbeatAutomationsByTargetThread,
 } from "../routes/-automations.shared";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
@@ -155,7 +158,7 @@ import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarMetaChipStack } from "./SidebarMetaChip";
 import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
-import { SidebarGlyph, sidebarGlyphClass } from "./sidebarGlyphs";
+import { SidebarGlyph, sidebarGlyphClass, SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
 import { RenameDialog } from "./RenameDialog";
@@ -546,7 +549,9 @@ function threadRowTimestampSlotClassName(
     "mr-1 flex shrink-0 items-center justify-end leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
     isSubagentThread
       ? "w-[1.2rem] text-[10px]"
-      : "w-[1.625rem] text-[length:var(--app-font-size-ui-meta,11px)]",
+      : // Nudge the timestamp a hair above the meta scale while still tracking the user's
+        // typography setting (the CSS var is always set; the 11px is just an SSR fallback).
+        "w-[1.625rem] text-[length:calc(var(--app-font-size-ui-meta,11px)+0.5px)]",
     toneClassName ?? (isSubagentThread ? "text-muted-foreground/26" : "text-muted-foreground/38"),
   );
 }
@@ -561,7 +566,7 @@ function resolveWorktreeBadgeLabel(
 }
 
 type ThreadMetaChip = {
-  id: "handoff" | "fork" | "worktree";
+  id: "automation" | "handoff" | "fork" | "worktree";
   tooltip: string;
   icon: ReactNode;
 };
@@ -582,9 +587,34 @@ function resolveThreadRowMetaChips(input: {
    * pair, the trailing handoff chip is a redundant double icon and is dropped.
    */
   handoffShownInAvatar?: boolean;
+  /** Heartbeat automations targeting this thread; surfaced as an at-a-glance clock chip. */
+  threadAutomations?: readonly AutomationDefinition[] | undefined;
 }): ThreadMetaChip[] {
   const chips: ThreadMetaChip[] = [];
   const isSidechatThread = Boolean(input.thread.sidechatSourceThreadId);
+
+  const threadAutomations = input.threadAutomations;
+  if (threadAutomations && threadAutomations.length > 0) {
+    const anyEnabled = threadAutomations.some((automation) => automation.enabled);
+    const firstAutomation = threadAutomations[0]!;
+    const tooltip =
+      threadAutomations.length === 1
+        ? `${firstAutomation.name} · ${
+            firstAutomation.enabled ? formatCadence(firstAutomation.schedule) : "Paused"
+          }`
+        : `${threadAutomations.length} automations`;
+    chips.push({
+      id: "automation",
+      tooltip,
+      icon: (
+        <SidebarGlyph
+          icon={ClockIcon}
+          variant="meta"
+          className={anyEnabled ? "text-muted-foreground/55" : "text-muted-foreground/40"}
+        />
+      ),
+    });
+  }
 
   const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(input.thread);
   if (input.includeHandoffBadge && !input.handoffShownInAvatar && handoffBadgeLabel) {
@@ -1258,6 +1288,12 @@ export default function Sidebar() {
     if (!data) return 0;
     return automationAttentionCount(data.runs);
   }, [automationListQuery.data]);
+  // Heartbeat automations grouped by their target thread, so each thread row can show a
+  // clock chip indicating an automation is attached (mirrors the Environment panel section).
+  const automationsByThreadId = useMemo(
+    () => groupHeartbeatAutomationsByTargetThread(automationListQuery.data?.definitions ?? []),
+    [automationListQuery.data],
+  );
   const { settings: appSettings, updateSettings } = useAppSettings();
   // The Threads/Projects tab is always available; only the optional Workspace tab
   // and the standalone Chats footer list can be hidden from Settings.
@@ -3113,8 +3149,7 @@ export default function Sidebar() {
 
       void reconcileDeletedThreadsFromClient({
         threadIds: successfullyDeletedIds,
-        removeDeletedThreadFromClientState:
-          useStore.getState().removeDeletedThreadFromClientState,
+        removeDeletedThreadFromClientState: useStore.getState().removeDeletedThreadFromClientState,
       });
       removeFromSelection([...deletedIds]);
 
@@ -4531,7 +4566,9 @@ export default function Sidebar() {
         title="Archive thread"
         data-testid={`thread-archive-${threadId}`}
         size={compact ? "sm" : "md"}
-        glyph={compact ? "compact" : "meta"}
+        // Match the pin and the right-side meta chips (shared trailing-icon size); subagent
+        // rows stay on the denser "compact" scale.
+        iconClassName={compact ? sidebarGlyphClass("compact") : SIDEBAR_TRAILING_ICON_CLASS}
         className={cn("hover:text-foreground/89", toneClassName)}
         onMouseDown={(event) => {
           event.preventDefault();
@@ -4583,7 +4620,7 @@ export default function Sidebar() {
             <span>Confirm</span>
           </button>
         ) : (
-          <div className="pointer-events-auto inline-flex items-center gap-1">
+          <div className="pointer-events-auto inline-flex items-center gap-2">
             {includePinToggle ? (
               <ThreadPinToggleButton
                 pinned={input.isPinned}
@@ -4675,6 +4712,7 @@ export default function Sidebar() {
         threadEntryPoint !== "terminal" &&
         !isGenericChatThreadTitle(thread.title) &&
         Boolean(thread.handoff?.sourceProvider),
+      threadAutomations: automationsByThreadId.get(thread.id),
     });
     const threadStatus = resolveThreadStatusForSidebar(thread);
     const isSubagentThread = Boolean(thread.parentThreadId);
@@ -4856,6 +4894,7 @@ export default function Sidebar() {
         threadEntryPoint !== "terminal" &&
         !isGenericChatThreadTitle(thread.title) &&
         Boolean(thread.handoff?.sourceProvider),
+      threadAutomations: automationsByThreadId.get(thread.id),
     });
     const isSubagentThread = Boolean(thread.parentThreadId);
     const leadingPrStatus =

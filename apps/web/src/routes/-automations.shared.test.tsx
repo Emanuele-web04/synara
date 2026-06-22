@@ -22,6 +22,7 @@ import {
   allVisibleTriageRuns,
   applyAutomationEvent,
   automationAttentionCount,
+  automationFastIntervalLimitMessage,
   canCancelAutomationRun,
   createInputFromForm,
   datetimeLocalFromIso,
@@ -30,6 +31,7 @@ import {
   formFromDefinition,
   isoFromDatetimeLocal,
   isFormSubmittable,
+  maxIterationOptions,
   modelSelectionForProjectChange,
   providerOptionsForAutomationEdit,
   providerOptionsForAutomationModelSelection,
@@ -233,6 +235,30 @@ describe("automation shared route helpers", () => {
     expect(formatCadence(schedule)).toBe("Every 90s");
   });
 
+  it("requires a hard iteration cap for sub-minute interval forms", () => {
+    const form = {
+      ...applyScheduleToForm(formFromDefinition(null, "project-1"), {
+        type: "interval",
+        everySeconds: 15,
+      }),
+      name: "Say hi",
+      prompt: "Say hi.",
+    };
+    const cappedForm = { ...form, maxIterations: "10" };
+
+    expect(automationFastIntervalLimitMessage(form)).toBe(
+      "Intervals under one minute need max iterations set to 10 runs or fewer.",
+    );
+    expect(isFormSubmittable(form)).toBe(false);
+    expect(automationFastIntervalLimitMessage(cappedForm)).toBeNull();
+    expect(isFormSubmittable(cappedForm)).toBe(true);
+  });
+
+  it("keeps custom max-iteration caps visible in picker options", () => {
+    expect(maxIterationOptions("3")[0]).toEqual({ value: "3", label: "3 runs" });
+    expect(maxIterationOptions(10)[0]).toEqual({ value: "", label: "Unlimited" });
+  });
+
   it("refreshes the default model when the current model came from the old project", () => {
     const projects = [
       {
@@ -340,6 +366,36 @@ describe("automation shared route helpers", () => {
     });
   });
 
+  it("serializes standalone max iterations when chat parsing supplies a run limit", () => {
+    const form = {
+      ...formFromDefinition(null, "project-1"),
+      name: "Say hi",
+      prompt: "Say hi.",
+      mode: "standalone" as const,
+      maxIterations: "3",
+    };
+
+    expect(createInputFromForm(form)).toMatchObject({
+      mode: "standalone",
+      maxIterations: 3,
+      completionPolicy: { type: "none" },
+    });
+  });
+
+  it("serializes composer source thread provenance on create inputs", () => {
+    const form = {
+      ...formFromDefinition(null, "project-1"),
+      name: "Say hi",
+      prompt: "Say hi.",
+    };
+
+    expect(
+      createInputFromForm(form, undefined, undefined, threadId("thread-source")),
+    ).toMatchObject({
+      sourceThreadId: "thread-source",
+    });
+  });
+
   it("preserves saved provider options when editing without changing models", () => {
     const savedProviderOptions: ProviderStartOptions = {
       opencode: { binaryPath: "/old/opencode", serverUrl: "http://old.example" },
@@ -378,6 +434,35 @@ describe("automation shared route helpers", () => {
         currentProviderOptions,
       ),
     ).toEqual(currentProviderOptions);
+  });
+
+  it("preserves saved provider options when only model capability options change", () => {
+    const savedProviderOptions: ProviderStartOptions = {
+      codex: { binaryPath: "/old/codex", homePath: "/old/home" },
+    };
+    const currentProviderOptions: ProviderStartOptions = {
+      codex: { binaryPath: "/new/codex", homePath: "/new/home" },
+    };
+    const definition = definitionWith({
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+        options: { reasoningEffort: "medium" },
+      },
+      providerOptions: savedProviderOptions,
+    });
+
+    expect(
+      providerOptionsForAutomationModelSelection(
+        definition,
+        {
+          provider: "codex",
+          model: "gpt-5-codex",
+          options: { reasoningEffort: "high" },
+        },
+        currentProviderOptions,
+      ),
+    ).toEqual(savedProviderOptions);
   });
 
   it("clears stale provider options when an automation edit changes models without current options", () => {

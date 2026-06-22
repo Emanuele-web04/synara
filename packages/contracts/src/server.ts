@@ -315,6 +315,9 @@ export const ServerGenerateAutomationIntentResult = Schema.Struct({
   taskPrompt: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(64_000))),
   schedule: Schema.NullOr(AutomationSchedule),
   mode: Schema.NullOr(AutomationMode),
+  maxIterations: Schema.optional(Schema.NullOr(PositiveInt)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   completionPolicy: Schema.optional(AutomationCompletionPolicy).pipe(
     Schema.withDecodingDefault(() => ({ type: "none" as const })),
   ),
