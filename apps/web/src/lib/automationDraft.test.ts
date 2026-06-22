@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  acknowledgedWarningIdsForAutomaticChatAutomation,
   acknowledgedRiskIdsForDraft,
   buildAutomationDraftWarnings,
   hasBlockingAutomationDraftWarnings,
@@ -124,6 +125,54 @@ describe("automation draft warnings", () => {
         new Set(["fast-recurring-interval", "full-access", "local-checkout"]),
       ),
     ).toBe(false);
+  });
+
+  it("auto-acknowledges bounded thread fast loops without hiding standalone risks", () => {
+    const threadWarnings = buildAutomationDraftWarnings({
+      schedule: { type: "interval", everySeconds: 15 },
+      mode: "heartbeat",
+      runtimeMode: "approval-required",
+      worktreeMode: "auto",
+      hasEphemeralContext: false,
+      generatedConfidence: null,
+      generatedNeedsConfirmation: false,
+      prompt: "Say hi.",
+    });
+
+    const boundedIds = acknowledgedWarningIdsForAutomaticChatAutomation({
+      warnings: threadWarnings,
+      maxIterations: 3,
+      executionScope: "thread",
+    });
+    expect(Array.from(boundedIds)).toEqual(["fast-recurring-interval"]);
+    expect(hasBlockingAutomationDraftWarnings(threadWarnings, boundedIds)).toBe(false);
+    expect(acknowledgedRiskIdsForDraft(threadWarnings, boundedIds)).toEqual(["fast-interval"]);
+
+    const unboundedIds = acknowledgedWarningIdsForAutomaticChatAutomation({
+      warnings: threadWarnings,
+      maxIterations: null,
+      executionScope: "thread",
+    });
+    expect(Array.from(unboundedIds)).toEqual([]);
+    expect(hasBlockingAutomationDraftWarnings(threadWarnings, unboundedIds)).toBe(true);
+
+    const standaloneWarnings = buildAutomationDraftWarnings({
+      schedule: { type: "interval", everySeconds: 15 },
+      mode: "standalone",
+      runtimeMode: "approval-required",
+      worktreeMode: "auto",
+      hasEphemeralContext: false,
+      generatedConfidence: null,
+      generatedNeedsConfirmation: false,
+      prompt: "Say hi.",
+    });
+    const standaloneIds = acknowledgedWarningIdsForAutomaticChatAutomation({
+      warnings: standaloneWarnings,
+      maxIterations: 3,
+      executionScope: "standalone",
+    });
+    expect(Array.from(standaloneIds)).toEqual([]);
+    expect(hasBlockingAutomationDraftWarnings(standaloneWarnings, standaloneIds)).toBe(true);
   });
 
   it("does not show worktree cleanup risk for heartbeat runs", () => {

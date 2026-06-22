@@ -10,8 +10,10 @@ interface DeletedThreadClientReconciliationInput {
   removeDeletedThreadFromClientState: (threadId: ThreadId) => void;
 }
 
-interface DeletedThreadClientReconciliationSingleInput
-  extends Omit<DeletedThreadClientReconciliationInput, "threadIds"> {
+interface DeletedThreadClientReconciliationSingleInput extends Omit<
+  DeletedThreadClientReconciliationInput,
+  "threadIds"
+> {
   threadId: ThreadId;
 }
 

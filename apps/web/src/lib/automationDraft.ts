@@ -4,6 +4,7 @@
 // Exports: AutomationCreationDraft plus pure warning/skill helpers.
 // Depends on: automation contracts shared with the native API.
 
+import { DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS } from "@t3tools/contracts";
 import type {
   AutomationMode,
   AutomationSchedule,
@@ -14,6 +15,8 @@ import type {
   RuntimeMode,
   ThreadId,
 } from "@t3tools/contracts";
+
+import type { ChatAutomationExecutionScope } from "./automationIntent";
 
 export type AutomationCreationDraftSource = "slash" | "mention" | "dialog" | "generated";
 
@@ -187,4 +190,26 @@ export function hasBlockingAutomationDraftWarnings(
       warning.id === "missing-schedule" ||
       (warning.requiresAcknowledgement && !acknowledgedWarningIds.has(warning.id)),
   );
+}
+
+// Thread-bound chat creation can accept bounded fast loops without reopening the form.
+export function acknowledgedWarningIdsForAutomaticChatAutomation(input: {
+  readonly warnings: readonly AutomationDraftWarning[];
+  readonly maxIterations: number | null;
+  readonly executionScope: ChatAutomationExecutionScope;
+}): ReadonlySet<AutomationDraftWarningId> {
+  const ids = new Set<AutomationDraftWarningId>();
+  if (input.executionScope !== "thread") {
+    return ids;
+  }
+  for (const warning of input.warnings) {
+    if (
+      warning.id === "fast-recurring-interval" &&
+      input.maxIterations !== null &&
+      input.maxIterations <= DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS
+    ) {
+      ids.add(warning.id);
+    }
+  }
+  return ids;
 }

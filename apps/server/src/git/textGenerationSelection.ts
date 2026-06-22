@@ -24,7 +24,9 @@ export function resolveTextGenerationInputForSelection(
     return {
       modelSelection,
       ...(providerOptions ? { providerOptions } : {}),
-      ...(providerOptions?.codex?.homePath ? { codexHomePath: providerOptions.codex.homePath } : {}),
+      ...(providerOptions?.codex?.homePath
+        ? { codexHomePath: providerOptions.codex.homePath }
+        : {}),
     };
   }
 

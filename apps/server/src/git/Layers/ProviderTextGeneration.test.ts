@@ -59,14 +59,13 @@ function createTextGenerationDouble(label: string) {
       reason: null,
     }),
   );
-  const evaluateAutomationCompletion = vi.fn<
-    TextGenerationShape["evaluateAutomationCompletion"]
-  >(() =>
-    Effect.succeed({
-      stopMatched: false,
-      confidence: 0.2,
-      reason: `${label} completion`,
-    }),
+  const evaluateAutomationCompletion = vi.fn<TextGenerationShape["evaluateAutomationCompletion"]>(
+    () =>
+      Effect.succeed({
+        stopMatched: false,
+        confidence: 0.2,
+        reason: `${label} completion`,
+      }),
   );
 
   return {

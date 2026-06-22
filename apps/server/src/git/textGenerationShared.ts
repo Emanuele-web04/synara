@@ -397,13 +397,35 @@ export function buildAutomationIntentPrompt(input: {
       "- confidence: number from 0 to 1.",
       "- language: detected user language, or null.",
       "- name: short automation name, <= 160 chars, or null.",
-      "- taskPrompt: the actual recurring instruction to save, without /automation, @automation, or schedule scaffolding.",
+      "- taskPrompt: the detailed, self-contained recurring instruction to save, without /automation, @automation, schedule, stop, or run-count scaffolding.",
+      "- Expand terse tasks into a clear saved automation prompt only using facts the user provided.",
+      "- Preserve concrete user-provided workspace paths, commands, files, commit/push rules, verification steps, URLs, accounts, and constraints.",
+      "- Do not invent repo-specific files, commands, services, tests, tickets, product context, credentials, or success criteria.",
+      "- If the user only gave a tiny task, keep taskPrompt clear and short instead of padding it with fake details.",
       "- schedule: automation cadence, or null when missing/ambiguous.",
       "- mode: heartbeat or standalone.",
+      "- maxIterations: positive integer only when the user explicitly says for N times/runs/iterations/volte; otherwise null.",
       `- completionPolicy: use {"type":"ai-evaluated","stopWhen":"...","confidenceThreshold":${DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD}} only when the user explicitly says until/stop when/if X stop/fino a quando/finche. Otherwise use {"type":"none"}.`,
       "- missingFields: include schedule, taskPrompt, name, or mode when that field is null or too unclear.",
       "- needsConfirmation: true when schedule/task/mode is missing, ambiguous, or confidence < 0.75.",
       "- reason: short explanation when isAutomation=false or needsConfirmation=true; otherwise null.",
+      "",
+      "Task prompt quality checklist:",
+      "- Objective: state the concrete recurring task.",
+      "- Source of truth: keep any user-provided URLs, accounts, APIs, commands, files, or public-source constraints.",
+      "- Scope: name files, directories, branches, or repositories only when the user provided them.",
+      "- Procedure: preserve user-provided commands and ordered steps.",
+      "- Decision gates: include what to do when there is no change, ambiguity, failure, or conflicting evidence if the user specified it.",
+      "- Verification: preserve explicit build/lint/test checks and whether they are conditional.",
+      "- Publish rules: preserve explicit commit, push, branch, PR, or no-commit rules.",
+      "- Non-goals: preserve constraints like do not use APIs, do not change architecture, and do not stage unrelated files.",
+      "- Reporting: include concise output expectations when the user asked for them.",
+      "",
+      "Task prompt examples:",
+      '- User: "every day update my follower count without using the API, only the static file, build, commit and push if changed"',
+      '- taskPrompt: "Update the manually maintained follower count from a user-visible public source only. Do not use API credentials or existing runtime data code. Update only the specified static file when the count changes, run the requested build check, and commit/push only if there is an actual count change. Preserve unrelated working tree changes."',
+      '- User: "every 6h check this product URL until the black variant is available"',
+      '- taskPrompt: "Check the provided product URL and report whether the black variant is purchasable or pre-orderable. Treat conflicting page/session evidence as ambiguous instead of stopping early."',
       "",
       "Schedule rules:",
       '- For \'in N seconds/minutes/hours/days\', \'tra N secondi/minuti/ore/giorni\', or \'fra ...\', use {"type":"once","runAt":"<ISO timestamp>"} calculated from the current timestamp.',
@@ -418,7 +440,7 @@ export function buildAutomationIntentPrompt(input: {
       "- heartbeat means continue/report in the current thread on each run.",
       "- standalone means create independent scheduled runs.",
       "- Use the default unless the user clearly asks for the other behavior.",
-      "- Stop clauses are currently supported only for heartbeat automations; if mode is standalone, use completionPolicy {\"type\":\"none\"}.",
+      '- Stop clauses are currently supported only for heartbeat automations; if mode is standalone, use completionPolicy {"type":"none"}.',
       "",
       "User message:",
       limitSection(input.message, 16_000),
@@ -435,7 +457,7 @@ export function buildAutomationCompletionEvaluationPrompt(input: {
   readonly stopWhen: string;
   readonly runUserMessage: string;
   readonly runAssistantText: string;
-  readonly threadContext?: string;
+  readonly threadContext?: string | undefined;
 }) {
   return {
     prompt: [

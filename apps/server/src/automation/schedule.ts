@@ -211,7 +211,40 @@ function parseCronInteger(
   return Number(raw);
 }
 
-function parseCronField(raw: string, min: number, max: number, name: string): CronField {
+const CRON_DAY_OF_WEEK_NAMES = new Map([
+  ["sun", 0],
+  ["mon", 1],
+  ["tue", 2],
+  ["wed", 3],
+  ["thu", 4],
+  ["fri", 5],
+  ["sat", 6],
+]);
+
+function parseCronDayOfWeekValue(
+  raw: string | undefined,
+  name: string,
+  errorReason: "bad step" | "out of range",
+): number {
+  const namedValue = raw ? CRON_DAY_OF_WEEK_NAMES.get(raw.toLowerCase()) : undefined;
+  if (namedValue !== undefined) {
+    return namedValue;
+  }
+  return parseCronInteger(raw, name, errorReason);
+}
+
+function normalizeCronDayOfWeekValue(value: number): number {
+  return value === 7 ? 0 : value;
+}
+
+function parseCronField(
+  raw: string,
+  min: number,
+  max: number,
+  name: string,
+  parseValue = parseCronInteger,
+  normalizeValue = (value: number) => value,
+): CronField {
   const values = new Set<number>();
   let isWildcard = false;
   for (const token of raw.split(",")) {
@@ -237,8 +270,8 @@ function parseCronField(raw: string, min: number, max: number, name: string): Cr
       throw new Error(`Invalid cron ${name}: out of range`);
     }
     const [startRaw, endRaw] = rangeParts;
-    const start = parseCronInteger(startRaw, name, "out of range");
-    const end = parseCronInteger(endRaw ?? startRaw, name, "out of range");
+    const start = parseValue(startRaw, name, "out of range");
+    const end = parseValue(endRaw ?? startRaw, name, "out of range");
     if (
       !Number.isInteger(start) ||
       !Number.isInteger(end) ||
@@ -249,7 +282,7 @@ function parseCronField(raw: string, min: number, max: number, name: string): Cr
       throw new Error(`Invalid cron ${name}: out of range`);
     }
     for (let value = start; value <= end; value += step) {
-      values.add(value);
+      values.add(normalizeValue(value));
     }
   }
   return { values, isWildcard };
@@ -265,7 +298,14 @@ function parseCronExpression(expression: string) {
     hour: parseCronField(fields[1] ?? "", 0, 23, "hour"),
     dayOfMonth: parseCronField(fields[2] ?? "", 1, 31, "day-of-month"),
     month: parseCronField(fields[3] ?? "", 1, 12, "month"),
-    dayOfWeek: parseCronField(fields[4] ?? "", 0, 6, "day-of-week"),
+    dayOfWeek: parseCronField(
+      fields[4] ?? "",
+      0,
+      7,
+      "day-of-week",
+      parseCronDayOfWeekValue,
+      normalizeCronDayOfWeekValue,
+    ),
   };
 }
 

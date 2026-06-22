@@ -781,14 +781,13 @@ export const ChatHeader = memo(function ChatHeader({
             </ComposerPickerMenuPopup>
           </Menu>
         ) : null}
-        {/* Keep the shared project-action dialog mounted for the Open-in picker,
-            but do not render the header play/chevron runner. */}
+        {/* Keep the shared project-action dialog mounted for the Open-in picker while
+            preserving the header's quick run button for saved project scripts. */}
         {!isDisposableThread && activeProjectScripts ? (
           <ProjectScriptsControl
             scripts={activeProjectScripts}
             keybindings={keybindings}
             preferredScriptId={preferredScriptId}
-            showInlineControls={false}
             openAddActionNonce={openAddActionNonce}
             onRunScript={onRunProjectScript}
             onAddScript={onAddProjectScript}
