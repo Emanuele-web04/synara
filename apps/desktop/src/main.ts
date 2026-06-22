@@ -27,6 +27,7 @@ import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions } from
 import * as Effect from "effect/Effect";
 import { autoUpdater, CancellationToken } from "electron-updater";
 import { NetService } from "@t3tools/shared/Net";
+import { getMacTrafficLightPosition } from "@t3tools/shared/desktopChrome";
 import { RotatingFileSink } from "@t3tools/shared/logging";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
@@ -103,9 +104,7 @@ syncShellEnvironment();
 
 function isBrokenStdIoError(error: unknown): boolean {
   return (
-    error instanceof Error &&
-    "code" in error &&
-    (error as NodeJS.ErrnoException).code === "EIO"
+    error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EIO"
   );
 }
 
@@ -1169,7 +1168,7 @@ function createWindow(): BrowserWindow {
     ...getIconOption(),
     title: APP_DISPLAY_NAME,
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 16, y: 18 },
+    trafficLightPosition: getMacTrafficLightPosition(),
     ...getWindowMaterialOptions(),
     webPreferences: {
       preload: Path.join(__dirname, "preload.js"),

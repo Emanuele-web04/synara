@@ -35,7 +35,7 @@ import {
   nativeProviderRefs,
 } from "./ClaudeAdapter.runtime.ts";
 import { normalizeClaudeTokenUsage } from "./ClaudeAdapter.token.ts";
-import type { AssistantTextBlockState, ToolInFlight } from "./ClaudeAdapter.types.ts";
+import type { ReasoningBlockState, ToolInFlight } from "./ClaudeAdapter.types.ts";
 
 export interface ClaudeMessageHandlersDeps {
   readonly emitters: ClaudeEmitters;
@@ -49,6 +49,63 @@ export interface ClaudeMessageHandlers {
     context: ClaudeSessionContext,
     message: SDKMessage,
   ) => EffectType.Effect<void>;
+}
+
+type ClaudeTaskUpdatedMessage = Extract<
+  SDKMessage,
+  { readonly type: "system"; readonly subtype: "task_updated" }
+>;
+
+function describeClaudeTaskUpdate(message: ClaudeTaskUpdatedMessage): string {
+  const description = message.patch.description?.trim();
+  if (description) {
+    return description;
+  }
+
+  switch (message.patch.status) {
+    case "pending":
+      return "Task pending";
+    case "running":
+      return "Task running";
+    case "completed":
+      return "Task completed";
+    case "failed":
+      return message.patch.error?.trim() || "Task failed";
+    case "killed":
+      return "Task stopped";
+    case "paused":
+      return "Task paused";
+    default:
+      return "Task updated";
+  }
+}
+
+function summarizeClaudeTaskUpdate(message: ClaudeTaskUpdatedMessage): string | undefined {
+  if (message.patch.error?.trim()) {
+    return message.patch.error.trim();
+  }
+  if (message.patch.status) {
+    return `Status: ${message.patch.status}`;
+  }
+  if (message.patch.is_backgrounded !== undefined) {
+    return message.patch.is_backgrounded ? "Moved to background" : "Returned to foreground";
+  }
+  return undefined;
+}
+
+function completedClaudeTaskStatus(
+  status: ClaudeTaskUpdatedMessage["patch"]["status"],
+): "completed" | "failed" | "stopped" | undefined {
+  switch (status) {
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "killed":
+      return "stopped";
+    default:
+      return undefined;
+  }
 }
 
 export function makeClaudeMessageHandlers(deps: ClaudeMessageHandlersDeps): ClaudeMessageHandlers {
@@ -66,6 +123,96 @@ export function makeClaudeMessageHandlers(deps: ClaudeMessageHandlersDeps): Clau
     emitTodoTasksUpdated,
     completeTurn,
   } = deps.emitters;
+
+  const ensureReasoningBlock = (
+    context: ClaudeSessionContext,
+    blockIndex: number,
+    raw: { readonly method: string; readonly payload: SDKMessage },
+  ): Effect.Effect<ReasoningBlockState> =>
+    Effect.gen(function* () {
+      const turnState = context.turnState;
+      if (!turnState) {
+        throw new Error("Cannot create Claude reasoning block without an active turn.");
+      }
+      const existing = turnState.reasoningBlocks.get(blockIndex);
+      if (existing) {
+        context.lastThinkingItemId = existing.itemId;
+        return existing;
+      }
+
+      const itemId = `claude-reasoning:${turnState.turnId}:${blockIndex}`;
+      const block: ReasoningBlockState = {
+        itemId,
+        blockIndex,
+        completionEmitted: false,
+      };
+      turnState.reasoningBlocks.set(blockIndex, block);
+      context.lastThinkingItemId = itemId;
+
+      const stamp = yield* makeEventStamp();
+      yield* offerRuntimeEvent({
+        type: "item.started",
+        eventId: stamp.eventId,
+        provider: PROVIDER,
+        createdAt: stamp.createdAt,
+        threadId: context.session.threadId,
+        turnId: turnState.turnId,
+        itemId: asRuntimeItemId(itemId),
+        payload: {
+          itemType: "reasoning",
+          status: "inProgress",
+          title: "Thinking",
+          data: {
+            contentIndex: blockIndex,
+          },
+        },
+        providerRefs: nativeProviderRefs(context, { providerItemId: itemId }),
+        raw: {
+          source: "claude.sdk.message",
+          method: raw.method,
+          payload: raw.payload,
+        },
+      });
+      return block;
+    });
+
+  const completeReasoningBlock = (
+    context: ClaudeSessionContext,
+    block: ReasoningBlockState,
+    raw: { readonly method: string; readonly payload: SDKMessage },
+  ): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const turnState = context.turnState;
+      if (!turnState || block.completionEmitted) {
+        return;
+      }
+      block.completionEmitted = true;
+      const stamp = yield* makeEventStamp();
+      yield* offerRuntimeEvent({
+        type: "item.completed",
+        eventId: stamp.eventId,
+        provider: PROVIDER,
+        createdAt: stamp.createdAt,
+        threadId: context.session.threadId,
+        turnId: turnState.turnId,
+        itemId: asRuntimeItemId(block.itemId),
+        payload: {
+          itemType: "reasoning",
+          status: "completed",
+          title: "Thinking",
+          data: {
+            contentIndex: block.blockIndex,
+          },
+        },
+        providerRefs: nativeProviderRefs(context, { providerItemId: block.itemId }),
+        raw: {
+          source: "claude.sdk.message",
+          method: raw.method,
+          payload: raw.payload,
+        },
+      });
+      turnState.reasoningBlocks.delete(block.blockIndex);
+    });
 
   const handleStreamEvent = (
     context: ClaudeSessionContext,
@@ -96,17 +243,18 @@ export function makeClaudeMessageHandlers(deps: ClaudeMessageHandlersDeps): Clau
           const assistantBlockEntry =
             event.delta.type === "text_delta"
               ? yield* ensureAssistantTextBlock(context, event.index)
-              : context.turnState.assistantTextBlocks.get(event.index)
-                ? {
-                    blockIndex: event.index,
-                    block: context.turnState.assistantTextBlocks.get(
-                      event.index,
-                    ) as AssistantTextBlockState,
-                  }
-                : undefined;
+              : undefined;
+          const reasoningBlock =
+            event.delta.type === "thinking_delta"
+              ? yield* ensureReasoningBlock(context, event.index, {
+                  method: "claude/stream_event/content_block_delta",
+                  payload: message,
+                })
+              : undefined;
           if (assistantBlockEntry?.block && event.delta.type === "text_delta") {
             assistantBlockEntry.block.emittedTextDelta = true;
           }
+          const streamItemId = assistantBlockEntry?.block.itemId ?? reasoningBlock?.itemId;
           const stamp = yield* makeEventStamp();
           yield* offerRuntimeEvent({
             type: "content.delta",
@@ -115,14 +263,15 @@ export function makeClaudeMessageHandlers(deps: ClaudeMessageHandlersDeps): Clau
             createdAt: stamp.createdAt,
             threadId: context.session.threadId,
             turnId: context.turnState.turnId,
-            ...(assistantBlockEntry?.block
-              ? { itemId: asRuntimeItemId(assistantBlockEntry.block.itemId) }
-              : {}),
+            ...(streamItemId ? { itemId: asRuntimeItemId(streamItemId) } : {}),
             payload: {
               streamKind,
               delta: deltaText,
+              contentIndex: event.index,
             },
-            providerRefs: nativeProviderRefs(context),
+            providerRefs: streamItemId
+              ? nativeProviderRefs(context, { providerItemId: streamItemId })
+              : nativeProviderRefs(context),
             raw: {
               source: "claude.sdk.message",
               method: "claude/stream_event/content_block_delta",
@@ -294,6 +443,14 @@ export function makeClaudeMessageHandlers(deps: ClaudeMessageHandlersDeps): Clau
           });
           return;
         }
+        const reasoningBlock = context.turnState?.reasoningBlocks.get(index);
+        if (reasoningBlock) {
+          yield* completeReasoningBlock(context, reasoningBlock, {
+            method: "claude/stream_event/content_block_stop",
+            payload: message,
+          });
+          return;
+        }
         const tool = context.inFlightTools.get(index);
         if (!tool) {
           return;
@@ -433,10 +590,12 @@ export function makeClaudeMessageHandlers(deps: ClaudeMessageHandlersDeps): Clau
           items: [],
           assistantTextBlocks: new Map(),
           assistantTextBlockOrder: [],
+          reasoningBlocks: new Map(),
           capturedProposedPlanKeys: new Set(),
           sawFileChange: false,
           nextSyntheticAssistantBlockIndex: -1,
         };
+        context.lastThinkingItemId = undefined;
         context.session = {
           ...context.session,
           status: "running",
@@ -578,15 +737,6 @@ export function makeClaudeMessageHandlers(deps: ClaudeMessageHandlersDeps): Clau
         return;
       }
 
-      // Benign high-frequency telemetry we intentionally don't project. `thinking_tokens`
-      // streams on every reasoning tick while extended thinking is active; `task_updated`
-      // is an incremental task patch already covered by task_started/progress/completed.
-      // Short-circuit before allocating an event stamp so they can't flood the timeline
-      // (or churn allocations) with "Runtime warning" entries.
-      if (message.subtype === "thinking_tokens" || message.subtype === "task_updated") {
-        return;
-      }
-
       const stamp = yield* makeEventStamp();
       const base = {
         eventId: stamp.eventId,
@@ -604,6 +754,63 @@ export function makeClaudeMessageHandlers(deps: ClaudeMessageHandlersDeps): Clau
       };
 
       switch (message.subtype) {
+        case "thinking_tokens":
+          yield* offerRuntimeEvent({
+            ...base,
+            type: "item.updated",
+            ...(context.lastThinkingItemId
+              ? {
+                  itemId: asRuntimeItemId(context.lastThinkingItemId),
+                  providerRefs: nativeProviderRefs(context, {
+                    providerItemId: context.lastThinkingItemId,
+                  }),
+                }
+              : {}),
+            payload: {
+              itemType: "reasoning",
+              status: "inProgress",
+              title: "Thinking",
+              detail: `${message.estimated_tokens} estimated thinking tokens`,
+              data: {
+                estimatedTokens: message.estimated_tokens,
+                estimatedTokensDelta: message.estimated_tokens_delta,
+              },
+            },
+          });
+          return;
+        case "task_updated":
+          {
+            const completedStatus = completedClaudeTaskStatus(message.patch.status);
+            const summary = summarizeClaudeTaskUpdate(message);
+            if (completedStatus) {
+              yield* offerRuntimeEvent({
+                ...base,
+                type: "task.completed",
+                payload: {
+                  taskId: RuntimeTaskId.makeUnsafe(message.task_id),
+                  status: completedStatus,
+                  ...(summary ? { summary } : {}),
+                  usage: {
+                    patch: message.patch,
+                  },
+                },
+              });
+              return;
+            }
+            yield* offerRuntimeEvent({
+              ...base,
+              type: "task.progress",
+              payload: {
+                taskId: RuntimeTaskId.makeUnsafe(message.task_id),
+                description: describeClaudeTaskUpdate(message),
+                ...(summary ? { summary } : {}),
+                usage: {
+                  patch: message.patch,
+                },
+              },
+            });
+          }
+          return;
         case "init":
           yield* offerRuntimeEvent({
             ...base,

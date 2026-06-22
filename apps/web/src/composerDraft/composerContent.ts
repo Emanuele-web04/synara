@@ -269,12 +269,9 @@ export function clearAssistantSelectionsReducer(
 }
 
 function fileCommentDedupKey(comment: FileCommentSelection): string {
-  return [
-    comment.path,
-    String(comment.startLine),
-    String(comment.endLine),
-    comment.text,
-  ].join("\u0000");
+  return [comment.path, String(comment.startLine), String(comment.endLine), comment.text].join(
+    "\u0000",
+  );
 }
 
 export function addFileCommentReducer(
@@ -483,6 +480,8 @@ export function clearComposerContentReducer(
     assistantSelections: [],
     terminalContexts: [],
     fileComments: [],
+    skills: [],
+    mentions: [],
   };
   return commitDraft(state, threadId, nextDraft);
 }

@@ -61,6 +61,8 @@ import Migration0042 from "./Migrations/042_BackfillRuntimeWarningSummaries.ts";
 import Migration0043 from "./Migrations/043_ReconcileProjectionThreadAnnotations.ts";
 import Migration0044 from "./Migrations/044_ReconcileProjectionProjectsPinned.ts";
 import Migration0045 from "./Migrations/045_ProfileStatsIndexes.ts";
+import Migration0046 from "./Migrations/046_ReviewPullRequests.ts";
+import Migration0047 from "./Migrations/047_ReviewReviewRequests.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -118,6 +120,8 @@ export const migrationEntries = [
   [43, "ReconcileProjectionThreadAnnotations", Migration0043],
   [44, "ReconcileProjectionProjectsPinned", Migration0044],
   [45, "ProfileStatsIndexes", Migration0045],
+  [46, "ReviewPullRequests", Migration0046],
+  [47, "ReviewReviewRequests", Migration0047],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

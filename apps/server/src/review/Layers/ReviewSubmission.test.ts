@@ -124,11 +124,25 @@ function makeFakes(options: FakeOptions = {}): {
           detail: "getReviewPullRequestOverview not stubbed in test",
         }),
       ),
+    getReviewPullRequestHeader: () =>
+      Effect.fail(
+        new GitHubCliError({
+          operation: "execute",
+          detail: "getReviewPullRequestHeader not stubbed in test",
+        }),
+      ),
     getReviewConversation: () =>
       Effect.fail(
         new GitHubCliError({
           operation: "execute",
           detail: "getReviewConversation not stubbed in test",
+        }),
+      ),
+    getReviewTimeline: () =>
+      Effect.fail(
+        new GitHubCliError({
+          operation: "execute",
+          detail: "getReviewTimeline not stubbed in test",
         }),
       ),
     getPullRequestHeadSha: (input) => {
@@ -180,6 +194,10 @@ function makeFakes(options: FakeOptions = {}): {
     listRepositoryPullRequests: () => unexpected("GitHubCli.listRepositoryPullRequests"),
     getAuthenticatedUser: () => unexpected("GitHubCli.getAuthenticatedUser"),
     getPullRequestThreads: () => unexpected("GitHubCli.getPullRequestThreads"),
+    setPullRequestThreadResolution: () => unexpected("GitHubCli.setPullRequestThreadResolution"),
+    addPullRequestThreadReply: () => unexpected("GitHubCli.addPullRequestThreadReply"),
+    updatePullRequestThreadComment: () => unexpected("GitHubCli.updatePullRequestThreadComment"),
+    deletePullRequestThreadComment: () => unexpected("GitHubCli.deletePullRequestThreadComment"),
     getRepositoryCloneUrls: () => unexpected("GitHubCli.getRepositoryCloneUrls"),
     createPullRequest: () => unexpected("GitHubCli.createPullRequest"),
     getDefaultBranch: () => unexpected("GitHubCli.getDefaultBranch"),

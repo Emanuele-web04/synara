@@ -24,8 +24,10 @@ function makeSummary(overrides: Partial<ReviewPullRequestSummary> = {}): ReviewP
     deletions: 2,
     checksStatus: "passing",
     reviewRequests: [],
+    labels: [],
+    assignees: [],
     ...overrides,
-  } as ReviewPullRequestSummary;
+  };
 }
 
 describe("deriveReviewColumn", () => {

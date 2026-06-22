@@ -25,6 +25,8 @@ import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import { defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { openInPreferredEditor } from "../editorPreferences";
@@ -73,6 +75,9 @@ interface ChatMarkdownProps {
   style?: CSSProperties | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
   markers?: readonly ThreadMarker[] | undefined;
+  // Render the GitHub-flavored HTML subset (sanitized). Enable only for externally
+  // authored content such as PR/review comment bodies.
+  allowHtml?: boolean | undefined;
 }
 
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
@@ -122,6 +127,37 @@ function rehypeRestoreLiteralDollars() {
 }
 
 const MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [
+  [rehypeKatex, { output: "htmlAndMathml", strict: false, throwOnError: false }],
+  rehypeRestoreLiteralDollars,
+];
+
+// GitHub renders a subset of raw HTML in comment bodies (collapsible <details>,
+// responsive <picture>/<source>, etc.). Mirror that subset so bot comments don't
+// leak their tags as literal text, while still scrubbing anything executable.
+// `className` is allow-listed only with remark-math's marker values so rehype-katex
+// (which runs after sanitize) can still find inline/display math nodes.
+const MARKDOWN_SANITIZE_SCHEMA = {
+  ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), "details", "summary", "picture", "source"],
+  attributes: {
+    ...defaultSchema.attributes,
+    span: [
+      ...(defaultSchema.attributes?.span ?? []),
+      ["className", "math", "math-inline", "math-display"],
+    ],
+    div: [
+      ...(defaultSchema.attributes?.div ?? []),
+      ["className", "math", "math-inline", "math-display"],
+    ],
+    img: [...(defaultSchema.attributes?.img ?? []), "srcSet", "sizes"],
+    source: ["srcSet", "media", "type", "sizes", "src"],
+    details: [...(defaultSchema.attributes?.details ?? []), "open"],
+  },
+};
+
+const MARKDOWN_REHYPE_PLUGINS_WITH_HTML: MarkdownRehypePlugins = [
+  rehypeRaw,
+  [rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA],
   [rehypeKatex, { output: "htmlAndMathml", strict: false, throwOnError: false }],
   rehypeRestoreLiteralDollars,
 ];
@@ -833,6 +869,7 @@ function ChatMarkdown({
   style,
   onImageExpand,
   markers,
+  allowHtml = false,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
@@ -942,7 +979,7 @@ function ChatMarkdown({
     <div className={`chat-markdown w-full min-w-0 ${className} text-foreground`} style={style}>
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
-        rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+        rehypePlugins={allowHtml ? MARKDOWN_REHYPE_PLUGINS_WITH_HTML : MARKDOWN_REHYPE_PLUGINS}
         components={markdownComponents}
         urlTransform={markdownUrlTransform}
       >

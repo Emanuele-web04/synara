@@ -82,23 +82,16 @@ export function shouldFlushDomainEventImmediately(
   immediatelyFlushedStreamKeys: Set<string>,
 ): boolean {
   if (event.type === "thread.message-sent" && event.payload.role === "user") {
-    clearReasoningFlushKeysForThread(immediatelyFlushedStreamKeys, event.payload.threadId);
+    clearActivityStreamFlushKeysForThread(immediatelyFlushedStreamKeys, event.payload.threadId);
     return false;
   }
 
-  if (
-    event.type === "thread.activity-appended" &&
-    event.payload.activity.kind === "reasoning.delta"
-  ) {
-    const streamKey = [
-      "reasoning",
-      event.payload.threadId,
-      event.payload.activity.turnId ?? "turnless",
-    ].join(":");
-    if (immediatelyFlushedStreamKeys.has(streamKey)) {
+  const activityStreamKey = activityImmediateFlushKey(event);
+  if (activityStreamKey) {
+    if (immediatelyFlushedStreamKeys.has(activityStreamKey)) {
       return false;
     }
-    immediatelyFlushedStreamKeys.add(streamKey);
+    immediatelyFlushedStreamKeys.add(activityStreamKey);
     return true;
   }
 
@@ -120,8 +113,46 @@ export function shouldFlushDomainEventImmediately(
   return true;
 }
 
-function clearReasoningFlushKeysForThread(keys: Set<string>, threadId: ThreadId): void {
-  const prefix = `reasoning:${threadId}:`;
+function activityImmediateFlushKey(event: OrchestrationEvent): string | null {
+  if (event.type !== "thread.activity-appended") {
+    return null;
+  }
+  const { activity } = event.payload;
+  if (
+    activity.kind !== "reasoning.delta" &&
+    activity.kind !== "reasoning.progress" &&
+    activity.kind !== "tool.output.delta" &&
+    activity.kind !== "plan.delta" &&
+    activity.kind !== "provider.content.delta"
+  ) {
+    return null;
+  }
+
+  const payload =
+    activity.payload && typeof activity.payload === "object"
+      ? (activity.payload as Record<string, unknown>)
+      : {};
+  const streamKind = typeof payload.streamKind === "string" ? payload.streamKind : "streamless";
+  const itemId = typeof payload.itemId === "string" ? payload.itemId : "itemless";
+  const contentIndex =
+    typeof payload.contentIndex === "number" ? String(payload.contentIndex) : "contentless";
+  const summaryIndex =
+    typeof payload.summaryIndex === "number" ? String(payload.summaryIndex) : "summaryless";
+
+  return [
+    "activity-stream",
+    event.payload.threadId,
+    activity.kind,
+    activity.turnId ?? "turnless",
+    streamKind,
+    itemId,
+    contentIndex,
+    summaryIndex,
+  ].join(":");
+}
+
+function clearActivityStreamFlushKeysForThread(keys: Set<string>, threadId: ThreadId): void {
+  const prefix = `activity-stream:${threadId}:`;
   for (const key of keys) {
     if (key.startsWith(prefix)) {
       keys.delete(key);

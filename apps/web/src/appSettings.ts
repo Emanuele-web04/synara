@@ -44,10 +44,7 @@ import {
   SANDBOX_APP_SETTINGS_KEYS,
   sandboxSettingsToAppSettings,
 } from "./sandboxSettings";
-import {
-  DEFAULT_UI_DENSITY,
-  UI_DENSITY_MODES,
-} from "./lib/appDensity";
+import { DEFAULT_UI_DENSITY, UI_DENSITY_MODES } from "./lib/appDensity";
 
 export {
   type AppModelOption,
@@ -677,9 +674,7 @@ export function getProviderStartOptions(
             ...(settings.openCodeServerPassword
               ? { serverPassword: settings.openCodeServerPassword }
               : {}),
-            ...(settings.openCodeExperimentalWebSockets
-              ? { experimentalWebSockets: true }
-              : {}),
+            ...(settings.openCodeExperimentalWebSockets ? { experimentalWebSockets: true } : {}),
           },
         }
       : {}),

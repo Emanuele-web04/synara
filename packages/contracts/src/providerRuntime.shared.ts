@@ -3,7 +3,8 @@
 // Layer: contracts (schema-only). Consumed by providerRuntime.payloads, .events, and re-exported from providerRuntime.
 // Exports: RuntimeEventRawSource, RuntimeEventRaw, ProviderRequestId, ProviderRefs, runtime state/status
 //   literals, tool-lifecycle/canonical item & request types, ProviderRuntimeEventType,
-//   ThreadTokenUsageSnapshot, ProviderRuntimeEventBase, and shared helpers.
+//   ProviderRuntimeSourceRef, ThreadTokenUsageSnapshot, ProviderRuntimeEventBase,
+//   and shared helpers.
 import { Schema } from "effect";
 import {
   EventId,
@@ -17,7 +18,7 @@ import {
   TrimmedNonEmptyString,
   TurnId,
 } from "./baseSchemas";
-import { ProviderKind } from "./orchestration";
+import { ProviderKind } from "./providerKind";
 
 export const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 export const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -211,8 +212,23 @@ export const ProviderRuntimeEventType = Schema.Literals([
   "files.persisted",
   "runtime.warning",
   "runtime.error",
+  "provider.unhandled",
 ]);
 export type ProviderRuntimeEventType = typeof ProviderRuntimeEventType.Type;
+
+export const ProviderRuntimeSourceRef = Schema.Struct({
+  runtimeEventId: EventId,
+  nativeEventId: EventId,
+  nativeEventName: TrimmedNonEmptyStringSchema,
+  provider: ProviderKind,
+  sourceSequence: NonNegativeInt,
+  runtimeSubsequence: NonNegativeInt,
+  turnId: Schema.optional(Schema.NullOr(TurnId)),
+  itemId: Schema.optional(Schema.NullOr(RuntimeItemId)),
+  requestId: Schema.optional(Schema.NullOr(RuntimeRequestId)),
+  contentIndex: Schema.optional(Schema.NullOr(NonNegativeInt)),
+});
+export type ProviderRuntimeSourceRef = typeof ProviderRuntimeSourceRef.Type;
 
 export const ThreadTokenUsageSnapshot = Schema.Struct({
   usedTokens: NonNegativeInt,
@@ -246,6 +262,7 @@ export const ProviderRuntimeEventBase = Schema.Struct({
   itemId: Schema.optional(RuntimeItemId),
   requestId: Schema.optional(RuntimeRequestId),
   providerRefs: Schema.optional(ProviderRefs),
+  sourceRef: Schema.optional(ProviderRuntimeSourceRef),
   raw: Schema.optional(RuntimeEventRaw),
 });
 export type ProviderRuntimeEventBase = typeof ProviderRuntimeEventBase.Type;

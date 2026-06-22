@@ -16,6 +16,26 @@ type ReadModelMessage = OrchestrationReadModel["threads"][number]["messages"][nu
 
 export const MAX_THREAD_MESSAGES = 2_000;
 
+function normalizeProviderReferences<T extends { readonly name: string; readonly path: string }>(
+  incoming: readonly T[] | undefined,
+  previous: T[] | undefined,
+): T[] | undefined {
+  if (!incoming || incoming.length === 0) {
+    return undefined;
+  }
+  if (
+    previous &&
+    previous.length === incoming.length &&
+    previous.every((entry, index) => {
+      const next = incoming[index];
+      return next !== undefined && entry.name === next.name && entry.path === next.path;
+    })
+  ) {
+    return previous;
+  }
+  return [...incoming];
+}
+
 function attachmentPreviewRoutePath(attachmentId: string): string {
   return `/attachments/${encodeURIComponent(attachmentId)}`;
 }
@@ -86,6 +106,8 @@ export function normalizeChatMessage(
 ): ChatMessage {
   const attachments = normalizeChatAttachments(incoming.attachments, previous?.attachments);
   const completedAt = incoming.streaming ? undefined : incoming.updatedAt;
+  const skills = normalizeProviderReferences(incoming.skills, previous?.skills);
+  const mentions = normalizeProviderReferences(incoming.mentions, previous?.mentions);
   if (
     previous &&
     previous.role === incoming.role &&
@@ -96,7 +118,9 @@ export function normalizeChatMessage(
     previous.streaming === incoming.streaming &&
     previous.source === incoming.source &&
     previous.completedAt === completedAt &&
-    previous.attachments === attachments
+    previous.attachments === attachments &&
+    previous.skills === skills &&
+    previous.mentions === mentions
   ) {
     return previous;
   }
@@ -112,6 +136,8 @@ export function normalizeChatMessage(
     source: incoming.source,
     ...(completedAt ? { completedAt } : {}),
     ...(attachments ? { attachments } : {}),
+    ...(skills ? { skills } : {}),
+    ...(mentions ? { mentions } : {}),
   };
 }
 
@@ -163,6 +189,8 @@ export function readModelMessageFromChatMessage(
     createdAt: message.createdAt,
     updatedAt: message.completedAt ?? message.createdAt,
     attachments: readModelAttachmentsFromChatMessage(message.attachments),
+    ...(message.skills ? { skills: message.skills } : {}),
+    ...(message.mentions ? { mentions: message.mentions } : {}),
   };
 }
 
@@ -328,6 +356,8 @@ export function mergeStreamingMessage(
       ? incomingMessage.dispatchMode
       : existingMessage.dispatchMode;
   const nextSource = incomingMessage.source ?? existingMessage.source;
+  const nextSkills = incomingMessage.skills ?? existingMessage.skills;
+  const nextMentions = incomingMessage.mentions ?? existingMessage.mentions;
 
   if (
     existingMessage.text === nextText &&
@@ -336,7 +366,9 @@ export function mergeStreamingMessage(
     existingMessage.completedAt === nextCompletedAt &&
     existingMessage.turnId === nextTurnId &&
     existingMessage.dispatchMode === nextDispatchMode &&
-    existingMessage.source === nextSource
+    existingMessage.source === nextSource &&
+    existingMessage.skills === nextSkills &&
+    existingMessage.mentions === nextMentions
   ) {
     return null;
   }
@@ -349,6 +381,8 @@ export function mergeStreamingMessage(
     ...(nextTurnId !== undefined ? { turnId: nextTurnId } : {}),
     ...(nextDispatchMode !== undefined ? { dispatchMode: nextDispatchMode } : {}),
     ...(nextSource !== undefined ? { source: nextSource } : {}),
+    ...(nextSkills !== undefined ? { skills: nextSkills } : {}),
+    ...(nextMentions !== undefined ? { mentions: nextMentions } : {}),
     ...(nextCompletedAt !== undefined ? { completedAt: nextCompletedAt } : {}),
   };
 }

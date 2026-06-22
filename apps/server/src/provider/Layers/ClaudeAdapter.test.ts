@@ -25,6 +25,9 @@ import { ProviderAdapterValidationError } from "../Errors.ts";
 import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
 import { makeClaudeAdapterLive, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
 
+type ProviderRuntimeContentDeltaEvent = Extract<ProviderRuntimeEvent, { type: "content.delta" }>;
+type ProviderRuntimeItemUpdatedEvent = Extract<ProviderRuntimeEvent, { type: "item.updated" }>;
+
 class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   private readonly queue: Array<SDKMessage> = [];
   private readonly waiters: Array<{
@@ -689,7 +692,7 @@ describe("ClaudeAdapterLive", () => {
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 10).pipe(
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 12).pipe(
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -782,6 +785,23 @@ describe("ClaudeAdapterLive", () => {
       } as unknown as SDKMessage);
 
       harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-1",
+        uuid: "user-tool-result-1",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-1",
+              content: "file-a.ts\nfile-b.ts",
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
         type: "assistant",
         session_id: "sdk-session-1",
         uuid: "assistant-1",
@@ -813,6 +833,8 @@ describe("ClaudeAdapterLive", () => {
           "content.delta",
           "item.completed",
           "item.started",
+          "item.updated",
+          "content.delta",
           "item.completed",
           "turn.completed",
         ],
@@ -835,6 +857,17 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(toolStarted?.type, "item.started");
       if (toolStarted?.type === "item.started") {
         assert.equal(toolStarted.payload.itemType, "command_execution");
+      }
+
+      const commandOutputDelta = runtimeEvents.find(
+        (event) =>
+          event.type === "content.delta" &&
+          event.payload.streamKind === "command_output" &&
+          String(event.itemId) === "tool-1",
+      );
+      assert.equal(commandOutputDelta?.type, "content.delta");
+      if (commandOutputDelta?.type === "content.delta") {
+        assert.equal(commandOutputDelta.payload.delta, "file-a.ts\nfile-b.ts");
       }
 
       const assistantCompletedIndex = runtimeEvents.findIndex(
@@ -861,12 +894,110 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("keeps streaming deltas flowing after an unhandled top-level Claude SDK event", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 7).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "future_sdk_message",
+        session_id: "sdk-session-unhandled-before-delta",
+        uuid: "system-unhandled-before-delta",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "future_sdk_message",
+        session_id: "sdk-session-unhandled-before-delta",
+        uuid: "system-unhandled-before-delta-repeat",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-unhandled-before-delta",
+        uuid: "stream-after-unhandled-start",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "text",
+            text: "",
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-unhandled-before-delta",
+        uuid: "stream-after-unhandled-delta",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "text_delta",
+            text: "still streaming",
+          },
+        },
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.deepEqual(
+        runtimeEvents.map((event) => event.type),
+        [
+          "session.started",
+          "session.configured",
+          "session.state.changed",
+          "turn.started",
+          "thread.started",
+          "provider.unhandled",
+          "content.delta",
+        ],
+      );
+
+      const unhandled = runtimeEvents[5];
+      assert.equal(unhandled?.type, "provider.unhandled");
+      if (unhandled?.type === "provider.unhandled") {
+        assert.equal(String(unhandled.turnId), String(turn.turnId));
+        assert.equal(unhandled.payload.nativeEventName, "type:future_sdk_message");
+      }
+
+      const delta = runtimeEvents[6];
+      assert.equal(delta?.type, "content.delta");
+      if (delta?.type === "content.delta") {
+        assert.equal(String(delta.turnId), String(turn.turnId));
+        assert.equal(delta.payload.streamKind, "assistant_text");
+        assert.equal(delta.payload.delta, "still streaming");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("maps Claude reasoning deltas, streamed tool inputs, and tool results", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 11).pipe(
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 13).pipe(
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -976,14 +1107,24 @@ describe("ClaudeAdapterLive", () => {
           "session.state.changed",
           "turn.started",
           "thread.started",
+          "item.started",
           "content.delta",
           "item.started",
           "item.updated",
           "item.updated",
+          "content.delta",
           "item.completed",
-          "turn.completed",
+          "item.completed",
         ],
       );
+
+      const reasoningStarted = runtimeEvents.find(
+        (event) => event.type === "item.started" && event.payload.itemType === "reasoning",
+      );
+      assert.equal(reasoningStarted?.type, "item.started");
+      if (reasoningStarted?.type === "item.started") {
+        assert.equal(String(reasoningStarted.itemId), `claude-reasoning:${turn.turnId}:0`);
+      }
 
       const reasoningDelta = runtimeEvents.find(
         (event) => event.type === "content.delta" && event.payload.streamKind === "reasoning_text",
@@ -991,10 +1132,14 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(reasoningDelta?.type, "content.delta");
       if (reasoningDelta?.type === "content.delta") {
         assert.equal(reasoningDelta.payload.delta, "Let");
+        assert.equal(reasoningDelta.payload.contentIndex, 0);
+        assert.equal(String(reasoningDelta.itemId), `claude-reasoning:${turn.turnId}:0`);
         assert.equal(String(reasoningDelta.turnId), String(turn.turnId));
       }
 
-      const toolStarted = runtimeEvents.find((event) => event.type === "item.started");
+      const toolStarted = runtimeEvents.find(
+        (event) => event.type === "item.started" && event.payload.itemType === "dynamic_tool_call",
+      );
       assert.equal(toolStarted?.type, "item.started");
       if (toolStarted?.type === "item.started") {
         assert.equal(toolStarted.payload.itemType, "dynamic_tool_call");
@@ -1034,6 +1179,260 @@ describe("ClaudeAdapterLive", () => {
           "src/example.ts:1:foo",
         );
       }
+
+      const toolResultDelta = runtimeEvents.find(
+        (event) => event.type === "content.delta" && String(event.itemId) === "tool-grep-1",
+      );
+      assert.equal(toolResultDelta?.type, "content.delta");
+      if (toolResultDelta?.type === "content.delta") {
+        assert.equal(toolResultDelta.payload.delta, "src/example.ts:1:foo");
+      }
+
+      const reasoningCompleted = runtimeEvents.find(
+        (event) => event.type === "item.completed" && event.payload.itemType === "reasoning",
+      );
+      assert.equal(reasoningCompleted?.type, "item.completed");
+      if (reasoningCompleted?.type === "item.completed") {
+        assert.equal(String(reasoningCompleted.itemId), `claude-reasoning:${turn.turnId}:0`);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "reuses Claude reasoning items across deltas and completes them once on block stop",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 10).pipe(
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+
+        const turn = yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "hello",
+          attachments: [],
+        });
+
+        for (const [uuid, thinking] of [
+          ["stream-thinking-1", "First"],
+          ["stream-thinking-2", " second"],
+        ] as const) {
+          harness.query.emit({
+            type: "stream_event",
+            session_id: "sdk-session-reasoning-stop",
+            uuid,
+            parent_tool_use_id: null,
+            event: {
+              type: "content_block_delta",
+              index: 0,
+              delta: {
+                type: "thinking_delta",
+                thinking,
+              },
+            },
+          } as unknown as SDKMessage);
+        }
+
+        harness.query.emit({
+          type: "stream_event",
+          session_id: "sdk-session-reasoning-stop",
+          uuid: "stream-thinking-stop",
+          parent_tool_use_id: null,
+          event: {
+            type: "content_block_stop",
+            index: 0,
+          },
+        } as unknown as SDKMessage);
+
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          errors: [],
+          session_id: "sdk-session-reasoning-stop",
+          uuid: "result-reasoning-stop",
+        } as unknown as SDKMessage);
+
+        const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+        const reasoningItemId = `claude-reasoning:${turn.turnId}:0`;
+        const reasoningStarted = runtimeEvents.filter(
+          (event) => event.type === "item.started" && String(event.itemId) === reasoningItemId,
+        );
+        const reasoningDeltas = runtimeEvents.filter(
+          (event) =>
+            event.type === "content.delta" &&
+            event.payload.streamKind === "reasoning_text" &&
+            String(event.itemId) === reasoningItemId,
+        );
+        const reasoningCompleted = runtimeEvents.filter(
+          (event) => event.type === "item.completed" && String(event.itemId) === reasoningItemId,
+        );
+
+        assert.equal(reasoningStarted.length, 1);
+        assert.deepEqual(
+          reasoningDeltas.map((event) =>
+            event.type === "content.delta" ? event.payload.delta : "",
+          ),
+          ["First", " second"],
+        );
+        assert.equal(reasoningCompleted.length, 1);
+        assert.equal(reasoningCompleted[0]?.type, "item.completed");
+        if (reasoningCompleted[0]?.type === "item.completed") {
+          assert.equal(reasoningCompleted[0].payload.itemType, "reasoning");
+          assert.equal(reasoningCompleted[0].payload.status, "completed");
+          assert.deepEqual(reasoningCompleted[0].payload.data, { contentIndex: 0 });
+        }
+        assert.equal(runtimeEvents.at(-1)?.type, "turn.completed");
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect("completes open Claude reasoning blocks as failed when the result fails", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 10).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-reasoning-failed",
+        uuid: "stream-thinking-failed",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "thinking_delta",
+            thinking: "Trying",
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: ["Claude runtime failed."],
+        session_id: "sdk-session-reasoning-failed",
+        uuid: "result-reasoning-failed",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const reasoningItemId = `claude-reasoning:${turn.turnId}:0`;
+      const reasoningCompleted = runtimeEvents.find(
+        (event) => event.type === "item.completed" && String(event.itemId) === reasoningItemId,
+      );
+
+      assert.equal(reasoningCompleted?.type, "item.completed");
+      if (reasoningCompleted?.type === "item.completed") {
+        assert.equal(reasoningCompleted.payload.itemType, "reasoning");
+        assert.equal(reasoningCompleted.payload.status, "failed");
+        assert.deepEqual(reasoningCompleted.payload.data, { contentIndex: 0 });
+      }
+      const turnCompleted = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.equal(turnCompleted?.type, "turn.completed");
+      if (turnCompleted?.type === "turn.completed") {
+        assert.equal(turnCompleted.payload.state, "failed");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("attaches Claude thinking token progress to the active reasoning item", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 8).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-thinking-progress",
+        uuid: "stream-thinking-progress",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "thinking_delta",
+            thinking: "Inspecting",
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "thinking_tokens",
+        estimated_tokens: 75,
+        estimated_tokens_delta: 25,
+        session_id: "sdk-session-thinking-progress",
+        uuid: "thinking-progress-active",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const reasoningItemId = `claude-reasoning:${turn.turnId}:0`;
+      const tokenProgress = runtimeEvents.find(
+        (event) => event.type === "item.updated" && event.payload.itemType === "reasoning",
+      );
+
+      assert.equal(tokenProgress?.type, "item.updated");
+      if (tokenProgress?.type === "item.updated") {
+        assert.equal(String(tokenProgress.itemId), reasoningItemId);
+        assert.equal(tokenProgress.payload.detail, "75 estimated thinking tokens");
+        assert.deepEqual(tokenProgress.payload.data, {
+          estimatedTokens: 75,
+          estimatedTokensDelta: 25,
+        });
+        assert.equal(tokenProgress.providerRefs?.providerItemId, reasoningItemId);
+      }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -1045,7 +1444,8 @@ describe("ClaudeAdapterLive", () => {
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 13).pipe(
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -1178,6 +1578,17 @@ describe("ClaudeAdapterLive", () => {
       if (diffUpdated?.type === "turn.diff.updated") {
         assert.equal(String(diffUpdated.turnId), String(turn.turnId));
         assert.equal(diffUpdated.payload.unifiedDiff, "");
+      }
+
+      const fileChangeOutputDelta = runtimeEvents.find(
+        (event) =>
+          event.type === "content.delta" &&
+          event.payload.streamKind === "file_change_output" &&
+          String(event.itemId) === "tool-edit-1",
+      );
+      assert.equal(fileChangeOutputDelta?.type, "content.delta");
+      if (fileChangeOutputDelta?.type === "content.delta") {
+        assert.equal(fileChangeOutputDelta.payload.delta, "Updated src/example.ts");
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -1637,14 +2048,17 @@ describe("ClaudeAdapterLive", () => {
   });
 
   it.effect(
-    "suppresses thinking_tokens/task_updated telemetry and de-dupes each unknown Claude subtype once",
+    "projects every thinking_tokens/task_updated telemetry event and de-dupes each unknown Claude subtype once",
     () => {
       const harness = makeHarness();
       return Effect.gen(function* () {
         const adapter = yield* ClaudeAdapter;
 
         const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
-          Stream.takeUntil((event) => event.type === "task.progress"),
+          Stream.takeUntil(
+            (event) =>
+              event.type === "task.progress" && String(event.payload.taskId) === "task-sentinel",
+          ),
           Stream.runCollect,
           Effect.forkChild,
         );
@@ -1655,30 +2069,49 @@ describe("ClaudeAdapterLive", () => {
           runtimeMode: "full-access",
         });
 
-        // High-frequency reasoning telemetry — must never reach the timeline.
-        for (let i = 0; i < 3; i += 1) {
+        // High-frequency reasoning telemetry should be available as progress
+        // metadata on every native event, not assistant text.
+        const thinkingTokenEvents = [
+          { estimatedTokens: 50, estimatedTokensDelta: 50 },
+          { estimatedTokens: 150, estimatedTokensDelta: 100 },
+          { estimatedTokens: 350, estimatedTokensDelta: 200 },
+        ] as const;
+        for (const [i, event] of thinkingTokenEvents.entries()) {
           harness.query.emit({
             type: "system",
             subtype: "thinking_tokens",
-            estimated_tokens: 50 * (i + 1),
-            estimated_tokens_delta: 50,
+            estimated_tokens: event.estimatedTokens,
+            estimated_tokens_delta: event.estimatedTokensDelta,
             session_id: "sdk-session-thinking",
             uuid: `thinking-${i}`,
           } as unknown as SDKMessage);
         }
 
-        // Incremental task patches we intentionally drop — must not warn either.
-        for (let i = 0; i < 3; i += 1) {
+        // Incremental task patches should update task lifecycle without warning.
+        const taskUpdateEvents = [
+          { status: "running", description: "Task update 0" },
+          { status: "running", description: "Task update 1" },
+          { status: "completed", description: "Task update 2" },
+          { status: "failed", description: "Task update 3", error: "Task update failed" },
+          { status: "killed", description: "Task update 4" },
+        ] as const;
+        for (const [i, event] of taskUpdateEvents.entries()) {
           harness.query.emit({
             type: "system",
             subtype: "task_updated",
+            task_id: `task-updated-${i}`,
+            patch: {
+              status: event.status,
+              description: event.description,
+              ...("error" in event ? { error: event.error } : {}),
+            },
             session_id: "sdk-session-task-updated",
             uuid: `task-updated-${i}`,
           } as unknown as SDKMessage);
         }
 
         // Two distinct unknown subtypes, each emitted twice — each must surface
-        // exactly one warning (per-kind de-dup), so two warnings in total.
+        // exactly one provider fallback (per-kind de-dupe), so two events total.
         for (const subtype of ["future_unknown_subtype", "another_unknown_subtype"]) {
           for (let i = 0; i < 2; i += 1) {
             harness.query.emit({
@@ -1702,25 +2135,69 @@ describe("ClaudeAdapterLive", () => {
         } as unknown as SDKMessage);
 
         const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
-        const warningMessages = runtimeEvents.flatMap((event) =>
-          event.type === "runtime.warning" ? [event.payload.message] : [],
+        const thinkingProgressEvents = runtimeEvents.filter(
+          (event): event is ProviderRuntimeItemUpdatedEvent =>
+            event.type === "item.updated" && event.payload.itemType === "reasoning",
+        );
+        const taskProgressEvents = runtimeEvents.filter(
+          (event) =>
+            event.type === "task.progress" &&
+            String(event.payload.taskId).startsWith("task-updated"),
+        );
+        const taskCompletedEvents = runtimeEvents.filter(
+          (event) =>
+            event.type === "task.completed" &&
+            String(event.payload.taskId).startsWith("task-updated"),
+        );
+        const unhandledEventNames = runtimeEvents.flatMap((event) =>
+          event.type === "provider.unhandled" ? [event.payload.nativeEventName] : [],
         );
 
-        assert.equal(warningMessages.length, 2);
+        assert.equal(thinkingProgressEvents.length, 3);
+        assert.deepEqual(
+          thinkingProgressEvents.map((event) => event.payload.data),
+          thinkingTokenEvents.map((event) => ({
+            estimatedTokens: event.estimatedTokens,
+            estimatedTokensDelta: event.estimatedTokensDelta,
+          })),
+        );
+        assert.equal(taskProgressEvents.length, 2);
+        assert.equal(taskCompletedEvents.length, 3);
+        const taskCompletedStatusById = new Map(
+          taskCompletedEvents.flatMap((event) =>
+            event.type === "task.completed"
+              ? [[String(event.payload.taskId), event.payload.status] as const]
+              : [],
+          ),
+        );
+        assert.deepEqual(Array.from(taskCompletedStatusById.entries()), [
+          ["task-updated-2", "completed"],
+          ["task-updated-3", "failed"],
+          ["task-updated-4", "stopped"],
+        ]);
+        const failedTaskEvent = taskCompletedEvents.find(
+          (event) =>
+            event.type === "task.completed" && String(event.payload.taskId) === "task-updated-3",
+        );
+        assert.equal(failedTaskEvent?.type, "task.completed");
+        if (failedTaskEvent?.type === "task.completed") {
+          assert.equal(failedTaskEvent.payload.summary, "Task update failed");
+        }
+        assert.equal(unhandledEventNames.length, 2);
         assert.equal(
-          warningMessages.some((message) => message.includes("thinking_tokens")),
+          unhandledEventNames.some((name) => name.includes("thinking_tokens")),
           false,
         );
         assert.equal(
-          warningMessages.some((message) => message.includes("task_updated")),
+          unhandledEventNames.some((name) => name.includes("task_updated")),
           false,
         );
         assert.equal(
-          warningMessages.some((message) => message.includes("future_unknown_subtype")),
+          unhandledEventNames.some((name) => name.includes("future_unknown_subtype")),
           true,
         );
         assert.equal(
-          warningMessages.some((message) => message.includes("another_unknown_subtype")),
+          unhandledEventNames.some((name) => name.includes("another_unknown_subtype")),
           true,
         );
       }).pipe(
@@ -1729,6 +2206,70 @@ describe("ClaudeAdapterLive", () => {
       );
     },
   );
+
+  it.effect("emits thinking token progress again when the estimate counter resets", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) =>
+            event.type === "task.progress" &&
+            String(event.payload.taskId) === "task-reset-sentinel",
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      for (const [i, event] of [
+        { estimatedTokens: 400, estimatedTokensDelta: 400 },
+        { estimatedTokens: 100, estimatedTokensDelta: 100 },
+      ].entries()) {
+        harness.query.emit({
+          type: "system",
+          subtype: "thinking_tokens",
+          estimated_tokens: event.estimatedTokens,
+          estimated_tokens_delta: event.estimatedTokensDelta,
+          session_id: "sdk-session-thinking-reset",
+          uuid: `thinking-reset-${i}`,
+        } as unknown as SDKMessage);
+      }
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-reset-sentinel",
+        description: "sentinel",
+        usage: { total_tokens: 1, tool_uses: 0, duration_ms: 1 },
+        session_id: "sdk-session-thinking-reset",
+        uuid: "task-progress-reset-sentinel",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const thinkingProgressEvents = runtimeEvents.filter(
+        (event) => event.type === "item.updated" && event.payload.itemType === "reasoning",
+      );
+
+      assert.equal(thinkingProgressEvents.length, 2);
+      assert.equal(thinkingProgressEvents[1]?.type, "item.updated");
+      if (thinkingProgressEvents[1]?.type === "item.updated") {
+        assert.deepEqual(thinkingProgressEvents[1].payload.data, {
+          estimatedTokens: 100,
+          estimatedTokensDelta: 100,
+        });
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 
   it.effect("maps Claude TodoWrite tool input into shared turn plan updates", () => {
     const harness = makeHarness();
@@ -2793,10 +3334,10 @@ describe("ClaudeAdapterLive", () => {
           "item.completed",
           "item.started",
           "item.updated",
+          "content.delta",
           "item.completed",
           "content.delta",
           "item.completed",
-          "turn.completed",
         ],
       );
 
@@ -2804,6 +3345,14 @@ describe("ClaudeAdapterLive", () => {
         (event) => event.type === "content.delta" && event.payload.streamKind === "assistant_text",
       );
       assert.equal(assistantTextDeltas.length, 2);
+      const toolOutputDelta = runtimeEvents.find(
+        (event): event is ProviderRuntimeContentDeltaEvent =>
+          event.type === "content.delta" &&
+          event.payload.streamKind === "unknown" &&
+          String(event.itemId) === "tool-interleaved-1",
+      );
+      assert.equal(toolOutputDelta?.type, "content.delta");
+      assert.equal(toolOutputDelta?.payload.delta, "src/example.ts:1:assistant");
       if (assistantTextDeltas.length !== 2) {
         return;
       }
@@ -3264,13 +3813,7 @@ describe("ClaudeAdapterLive", () => {
       const threadStarted = yield* Fiber.join(threadStartedFiber);
       assert.equal(threadStarted._tag, "Some");
       if (threadStarted._tag === "Some" && threadStarted.value.type === "thread.started") {
-        const rawPayload =
-          threadStarted.value.raw?.payload &&
-          typeof threadStarted.value.raw.payload === "object" &&
-          "session_id" in threadStarted.value.raw.payload
-            ? threadStarted.value.raw.payload.session_id
-            : undefined;
-        assert.equal(threadStarted.value.payload?.providerThreadId ?? rawPayload, durableSessionId);
+        assert.equal(threadStarted.value.payload?.providerThreadId, durableSessionId);
       }
 
       const activeSessions = yield* adapter.listSessions();

@@ -22,6 +22,7 @@ import {
   ZapIcon,
 } from "~/lib/icons";
 import { DiffStatLabel } from "./DiffStatLabel";
+import ChatMarkdown from "../ChatMarkdown";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 import {
@@ -115,10 +116,19 @@ function workEntryPreview(
     | "changedFiles"
     | "requestKind"
     | "itemType"
+    | "streamKind"
     | "subagents"
     | "subagentAction"
   >,
 ): string | null {
+  const streamBody = streamBodyText(workEntry);
+  if (streamBody && workEntry.detail && workEntry.detail.trim().length > 0) {
+    return null;
+  }
+  if (shouldRenderAgentTaskMarkdown(workEntry)) {
+    return null;
+  }
+
   const isFileRelated =
     workEntry.requestKind === "file-read" ||
     workEntry.requestKind === "file-change" ||
@@ -169,6 +179,49 @@ function workEntryPreview(
   }
 
   return null;
+}
+
+function shouldRenderAgentTaskMarkdown(
+  workEntry: Pick<WorkLogEntry, "detail" | "itemType">,
+): boolean {
+  if (workEntry.itemType !== "collab_agent_tool_call") {
+    return false;
+  }
+  const detail = workEntry.detail?.trim() ?? "";
+  return /(^|\n)(#{1,6}\s|```|[-*]\s|\d+\.\s)/u.test(detail);
+}
+
+function shouldRenderStreamBody(workEntry: Pick<WorkLogEntry, "detail" | "streamKind">): boolean {
+  if (workEntry.detail === undefined || workEntry.detail.length === 0) {
+    return false;
+  }
+  switch (workEntry.streamKind) {
+    case "reasoning_text":
+    case "reasoning_summary_text":
+    case "plan_text":
+    case "command_output":
+    case "file_change_output":
+    case "unknown":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function visibleWhitespace(value: string): string {
+  return value
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n\n")
+    .replace(/\t/g, "\\t")
+    .replace(/ /g, "\u00b7");
+}
+
+function streamBodyText(workEntry: Pick<WorkLogEntry, "detail" | "streamKind">): string | null {
+  if (!shouldRenderStreamBody(workEntry)) {
+    return null;
+  }
+  const detail = workEntry.detail ?? "";
+  return detail.trim().length > 0 ? detail : visibleWhitespace(detail);
 }
 
 export function workEntryIcon(workEntry: WorkLogEntry): LucideIcon {
@@ -336,6 +389,7 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   density?: "default" | "compact";
   fileDiffStatByPath?: ReadonlyMap<string, { additions: number; deletions: number }>;
   turnId?: TurnId;
+  markdownCwd?: string | undefined;
   onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
   onOpenThread?: (threadId: ThreadId) => void;
 }) {
@@ -346,6 +400,7 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     density = "default",
     fileDiffStatByPath,
     turnId,
+    markdownCwd,
     onOpenTurnDiff,
     onOpenThread,
   } = props;
@@ -377,6 +432,9 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   );
   const subagentSummary = subagentCardSummary(workEntry);
   const subagentMeta = subagentCardMeta(workEntry);
+  const streamBody = streamBodyText(workEntry);
+  const agentTaskMarkdown =
+    shouldRenderAgentTaskMarkdown(workEntry) && workEntry.detail ? workEntry.detail.trim() : null;
 
   // Use the text font size (matching the UI settings) for tool call rows
   const rowFontSizePx = textFontSizePx;
@@ -670,17 +728,51 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             </div>
           );
 
-          if (!rawCommand) {
-            return rowContent;
-          }
-
-          return (
+          const renderedRow = rawCommand ? (
             <Tooltip>
               <TooltipTrigger render={rowContent} />
               <TooltipPopup side="top" align="start" className="max-w-96 whitespace-normal">
                 {commandTooltipContent(rawCommand, displayText)}
               </TooltipPopup>
             </Tooltip>
+          ) : (
+            rowContent
+          );
+
+          if (!streamBody && !agentTaskMarkdown) {
+            return renderedRow;
+          }
+
+          return (
+            <div className="min-w-0 space-y-1">
+              {renderedRow}
+              {agentTaskMarkdown ? (
+                <div className="min-w-0 pl-0.5 text-foreground/90">
+                  <ChatMarkdown
+                    text={agentTaskMarkdown}
+                    cwd={markdownCwd}
+                    isStreaming={false}
+                    className="text-sm leading-relaxed"
+                    style={{
+                      fontSize: `${rowFontSizePx}px`,
+                      lineHeight: `${Math.round(rowFontSizePx * 1.5)}px`,
+                    }}
+                  />
+                </div>
+              ) : null}
+              {streamBody ? (
+                <pre
+                  aria-live="off"
+                  className={cn(
+                    "max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/35 bg-background/55 font-chat-code text-muted-foreground/78",
+                    compact ? "px-2 py-1.5" : "px-2.5 py-2",
+                  )}
+                  style={{ fontSize: `${Math.max(11, rowFontSizePx - 1)}px` }}
+                >
+                  {streamBody}
+                </pre>
+              ) : null}
+            </div>
           );
         })()
       )}

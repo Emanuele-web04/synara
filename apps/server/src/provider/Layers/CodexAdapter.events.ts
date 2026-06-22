@@ -37,6 +37,31 @@ import {
   toTurnStatus,
 } from "./CodexAdapter.events.tokens.ts";
 
+function optionalIndex(...values: ReadonlyArray<unknown>): number | undefined {
+  for (const value of values) {
+    const number = asNumber(value);
+    if (number !== undefined && Number.isInteger(number) && number >= 0) {
+      return number;
+    }
+  }
+  return undefined;
+}
+
+function sessionStateChangedEvent(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+  state: "starting" | "ready",
+): ProviderRuntimeEvent {
+  return {
+    ...runtimeEventBase(event, canonicalThreadId),
+    type: "session.state.changed",
+    payload: {
+      state,
+      ...(event.message ? { reason: event.message } : {}),
+    },
+  };
+}
+
 export function mapToRuntimeEvents(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
@@ -117,30 +142,12 @@ export function mapToRuntimeEvents(
     ];
   }
 
-  if (event.method === "session/connecting") {
-    return [
-      {
-        ...runtimeEventBase(event, canonicalThreadId),
-        type: "session.state.changed",
-        payload: {
-          state: "starting",
-          ...(event.message ? { reason: event.message } : {}),
-        },
-      },
-    ];
+  if (event.method === "session/connecting" || event.method === "session/threadOpenRequested") {
+    return [sessionStateChangedEvent(event, canonicalThreadId, "starting")];
   }
 
-  if (event.method === "session/ready") {
-    return [
-      {
-        ...runtimeEventBase(event, canonicalThreadId),
-        type: "session.state.changed",
-        payload: {
-          state: "ready",
-          ...(event.message ? { reason: event.message } : {}),
-        },
-      },
-    ];
+  if (event.method === "session/ready" || event.method === "session/threadOpenResolved") {
+    return [sessionStateChangedEvent(event, canonicalThreadId, "ready")];
   }
 
   if (event.method === "session/started") {
@@ -223,6 +230,18 @@ export function mapToRuntimeEvents(
                   ? "compacted"
                   : toThreadState(asObject(payload?.thread)?.state ?? payload?.state),
           ...(event.payload !== undefined ? { detail: event.payload } : {}),
+        },
+      },
+    ];
+  }
+
+  if (event.method === "thread/settings/updated") {
+    return [
+      {
+        type: "session.configured",
+        ...runtimeEventBase(event, canonicalThreadId),
+        payload: {
+          config: asObject(event.payload) ?? {},
         },
       },
     ];
@@ -424,6 +443,8 @@ export function mapToRuntimeEvents(
     if (!delta || delta.length === 0) {
       return [];
     }
+    const contentIndex = optionalIndex(payload?.contentIndex, payload?.content_index);
+    const summaryIndex = optionalIndex(payload?.summaryIndex, payload?.summary_index);
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
@@ -431,12 +452,8 @@ export function mapToRuntimeEvents(
         payload: {
           streamKind: contentStreamKindFromMethod(event.method),
           delta,
-          ...(typeof payload?.contentIndex === "number"
-            ? { contentIndex: payload.contentIndex }
-            : {}),
-          ...(typeof payload?.summaryIndex === "number"
-            ? { summaryIndex: payload.summaryIndex }
-            : {}),
+          ...(contentIndex !== undefined ? { contentIndex } : {}),
+          ...(summaryIndex !== undefined ? { summaryIndex } : {}),
         },
       },
     ];
@@ -580,19 +597,17 @@ export function mapToRuntimeEvents(
     if (!delta) {
       return [];
     }
+    const summaryIndex = optionalIndex(msg?.summary_index, msg?.summaryIndex);
+    const contentIndex = optionalIndex(msg?.content_index, msg?.contentIndex);
     return [
       {
         ...codexEventBase(event, canonicalThreadId),
         type: "content.delta",
         payload: {
-          streamKind:
-            asNumber(msg?.summary_index) !== undefined
-              ? "reasoning_summary_text"
-              : "reasoning_text",
+          streamKind: summaryIndex !== undefined ? "reasoning_summary_text" : "reasoning_text",
           delta,
-          ...(asNumber(msg?.summary_index) !== undefined
-            ? { summaryIndex: asNumber(msg?.summary_index) }
-            : {}),
+          ...(contentIndex !== undefined ? { contentIndex } : {}),
+          ...(summaryIndex !== undefined ? { summaryIndex } : {}),
         },
       },
     ];
@@ -659,6 +674,18 @@ export function mapToRuntimeEvents(
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
           rateLimits: event.payload ?? {},
+        },
+      },
+    ];
+  }
+
+  if (event.method === "mcpServer/startupStatus/updated") {
+    return [
+      {
+        type: "mcp.status.updated",
+        ...runtimeEventBase(event, canonicalThreadId),
+        payload: {
+          status: event.payload ?? {},
         },
       },
     ];
@@ -740,6 +767,19 @@ export function mapToRuntimeEvents(
     ];
   }
 
+  if (event.method === "warning") {
+    return [
+      {
+        type: "runtime.warning",
+        ...runtimeEventBase(event, canonicalThreadId),
+        payload: {
+          message: event.message ?? "Codex warning",
+          ...(event.payload !== undefined ? { detail: event.payload } : {}),
+        },
+      },
+    ];
+  }
+
   if (event.method === "error") {
     const message =
       asString(asObject(payload?.error)?.message) ?? event.message ?? "Provider runtime error";
@@ -802,5 +842,15 @@ export function mapToRuntimeEvents(
     ];
   }
 
-  return [];
+  return [
+    {
+      ...runtimeEventBase(event, canonicalThreadId),
+      type: "provider.unhandled",
+      payload: {
+        nativeEventName: event.method ?? event.kind,
+        reason: "no_mapper",
+        ...(event.message ? { redactedPayloadPreview: event.message } : {}),
+      },
+    },
+  ];
 }

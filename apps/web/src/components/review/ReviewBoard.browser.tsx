@@ -1,0 +1,785 @@
+import "../../index.css";
+
+import type {
+  ReviewBoardLanesResult,
+  ReviewListPullRequestsInput,
+  ReviewListPullRequestsResult,
+  ReviewPullRequestSummary,
+} from "@t3tools/contracts";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { page } from "vitest/browser";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { render } from "vitest-browser-react";
+
+import { ReviewBoard } from "./ReviewBoard";
+
+const navigateMock = vi.hoisted(() => vi.fn());
+const nativeApiMock = vi.hoisted(() => ({
+  getViewer: vi.fn(async () => ({ login: "tyler" })),
+  loadBoardLanes: vi.fn(
+    async (): Promise<ReviewBoardLanesResult> => ({
+      "needs-review": { pullRequests: [] },
+      "changes-requested": { pullRequests: [] },
+      approved: { pullRequests: [] },
+      draft: { pullRequests: [] },
+    }),
+  ),
+  listPullRequests: vi.fn(
+    async (_input: ReviewListPullRequestsInput): Promise<ReviewListPullRequestsResult> => ({
+      pullRequests: [],
+    }),
+  ),
+}));
+
+vi.mock("@tanstack/react-router", async (importActual) => {
+  const actual = await importActual<typeof import("@tanstack/react-router")>();
+  return {
+    ...actual,
+    useNavigate: () => navigateMock,
+  };
+});
+
+vi.mock("~/nativeApi", () => ({
+  ensureNativeApi: () => ({
+    review: {
+      getViewer: nativeApiMock.getViewer,
+      loadBoardLanes: nativeApiMock.loadBoardLanes,
+      listPullRequests: nativeApiMock.listPullRequests,
+    },
+  }),
+}));
+
+function makePullRequest(
+  index: number,
+  overrides: Partial<ReviewPullRequestSummary> = {},
+): ReviewPullRequestSummary {
+  return {
+    number: index + 1,
+    title: `Review perf PR ${String(index + 1)}`,
+    url: `https://github.com/acme/repo/pull/${String(index + 1)}`,
+    baseBranch: "main",
+    headBranch: `branch-${String(index + 1)}`,
+    author: index % 5 === 0 ? "tyler" : "alice",
+    updatedAt: "2026-06-16T00:00:00.000Z",
+    state: "open",
+    reviewDecision: null,
+    isDraft: false,
+    additions: 1,
+    deletions: 0,
+    checksStatus: "pending",
+    reviewRequests: index % 7 === 0 ? ["tyler"] : [],
+    labels: [],
+    assignees: [],
+    ...overrides,
+  };
+}
+
+function makePullRequests(count: number): ReviewPullRequestSummary[] {
+  return Array.from({ length: count }, (_, index) => makePullRequest(index));
+}
+
+async function mountBoard(
+  result: ReviewListPullRequestsResult | ReadonlyArray<ReviewPullRequestSummary>,
+) {
+  const listResult: ReviewListPullRequestsResult =
+    "pullRequests" in result ? result : { pullRequests: result };
+  await page.viewport(1440, 900);
+  nativeApiMock.getViewer.mockResolvedValue({ login: "tyler" });
+  nativeApiMock.loadBoardLanes.mockResolvedValue(boardLanesResult(listResult));
+  nativeApiMock.listPullRequests.mockResolvedValue(listResult);
+  const host = document.createElement("div");
+  host.className = "h-[900px] bg-background text-foreground";
+  document.body.append(host);
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  const screen = await render(
+    <QueryClientProvider client={queryClient}>
+      <ReviewBoard cwd="/repo" />
+    </QueryClientProvider>,
+    { container: host },
+  );
+
+  return {
+    cleanup: async () => {
+      await screen.unmount();
+      queryClient.clear();
+      host.remove();
+    },
+  };
+}
+
+function listPullRequestCalls(): ReadonlyArray<ReviewListPullRequestsInput> {
+  return nativeApiMock.listPullRequests.mock.calls.map(([input]) => input);
+}
+
+function expectListPullRequestCall(input: ReviewListPullRequestsInput): void {
+  expect(listPullRequestCalls()).toContainEqual(input);
+}
+
+function expectInitialOpenColumnCalls(): void {
+  expect(listPullRequestCalls()).toEqual(
+    expect.arrayContaining([
+      { cwd: "/repo", state: "open", columns: ["needs-review"] },
+      { cwd: "/repo", state: "open", columns: ["changes-requested"] },
+      { cwd: "/repo", state: "open", columns: ["approved"] },
+      { cwd: "/repo", state: "open", columns: ["draft"], draft: true },
+    ]),
+  );
+}
+
+function boardLanesResult(result: ReviewListPullRequestsResult): ReviewBoardLanesResult {
+  const lanes: Record<keyof ReviewBoardLanesResult, ReviewPullRequestSummary[]> = {
+    "needs-review": [],
+    "changes-requested": [],
+    approved: [],
+    draft: [],
+  };
+  for (const pullRequest of result.pullRequests) {
+    if (pullRequest.isDraft) {
+      lanes.draft.push(pullRequest);
+    } else if (pullRequest.reviewDecision === "CHANGES_REQUESTED") {
+      lanes["changes-requested"].push(pullRequest);
+    } else if (pullRequest.reviewDecision === "APPROVED") {
+      lanes.approved.push(pullRequest);
+    } else {
+      lanes["needs-review"].push(pullRequest);
+    }
+  }
+  const laneResult = (
+    pullRequests: ReadonlyArray<ReviewPullRequestSummary>,
+  ): ReviewListPullRequestsResult => ({
+    pullRequests,
+    ...(result.meta ? { meta: { ...result.meta, returnedCount: pullRequests.length } } : {}),
+  });
+  return {
+    "needs-review": laneResult(lanes["needs-review"]),
+    "changes-requested": laneResult(lanes["changes-requested"]),
+    approved: laneResult(lanes.approved),
+    draft: laneResult(lanes.draft),
+  };
+}
+
+describe("ReviewBoard performance", () => {
+  afterEach(() => {
+    nativeApiMock.getViewer.mockClear();
+    nativeApiMock.loadBoardLanes.mockClear();
+    nativeApiMock.listPullRequests.mockClear();
+    navigateMock.mockClear();
+    document.body.innerHTML = "";
+  });
+
+  it("keeps board DOM and list queries bounded for 1000 pull requests", async () => {
+    const pullRequests = makePullRequests(1000);
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+      await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
+
+      expect(nativeApiMock.getViewer).toHaveBeenCalledTimes(0);
+      expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledTimes(1);
+      expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledWith({ cwd: "/repo" });
+      expect(nativeApiMock.listPullRequests).toHaveBeenCalledTimes(0);
+      expect(document.querySelectorAll('[role="listitem"]').length).toBeLessThanOrEqual(
+        Math.ceil(pullRequests.length / 10),
+      );
+      expect(document.body.textContent).not.toContain("Review perf PR 1000");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps virtualized board cards equal-height without vertical overlap", async () => {
+    const pullRequests = makePullRequests(80).map((pullRequest) => ({
+      ...pullRequest,
+      title: `${pullRequest.title} with a long title that should truncate instead of resizing the card`,
+      headBranch: `very-long-owner/very-long-branch-name-${String(pullRequest.number)}-with-extra-context`,
+      additions: 1000 + pullRequest.number,
+      deletions: 900 + pullRequest.number,
+    }));
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+      let cards: HTMLElement[] = [];
+      await vi.waitFor(() => {
+        cards = Array.from(
+          document.querySelectorAll<HTMLElement>('[data-slot="review-card-shell"]'),
+        );
+        expect(cards.length).toBeGreaterThan(3);
+      });
+      expect(cards.length).toBeGreaterThan(3);
+
+      const heights = cards
+        .slice(0, 8)
+        .map((card) => Math.round(card.getBoundingClientRect().height));
+      expect(new Set(heights)).toEqual(new Set([120]));
+
+      const orderedRects = cards
+        .slice(0, 8)
+        .map((card) => card.getBoundingClientRect())
+        .sort((a, b) => a.top - b.top);
+      for (let index = 1; index < orderedRects.length; index += 1) {
+        expect(orderedRects[index]!.top).toBeGreaterThanOrEqual(orderedRects[index - 1]!.bottom);
+      }
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps vertical scrolling inside each populated board column", async () => {
+    const mounted = await mountBoard(makePullRequests(120));
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+      await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
+
+      expect(document.querySelector("[data-radix-scroll-area-viewport]")).toBeNull();
+      const columnLists = Array.from(document.querySelectorAll<HTMLElement>('[role="list"]'));
+      expect(columnLists.length).toBeGreaterThan(0);
+      for (const list of columnLists) {
+        expect(getComputedStyle(list).overflowY).toBe("auto");
+        expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
+      }
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps cards visible while a manual sync refreshes GitHub data", async () => {
+    const mounted = await mountBoard(makePullRequests(3));
+
+    try {
+      await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
+      nativeApiMock.loadBoardLanes.mockImplementationOnce(
+        () => new Promise<ReviewBoardLanesResult>(() => undefined),
+      );
+
+      await page.getByRole("button", { name: "Sync" }).click();
+
+      await expect.element(page.getByText("Updating from GitHub")).toBeVisible();
+      await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("loads a larger review window when a board column scrolls near the bottom", async () => {
+    const firstWindow = makePullRequests(50);
+    const nextWindow: { resolve: ((value: ReviewListPullRequestsResult) => void) | null } = {
+      resolve: null,
+    };
+    const mounted = await mountBoard({
+      pullRequests: firstWindow,
+      meta: {
+        resultLimit: 50,
+        candidateLimit: 50,
+        candidateCount: 50,
+        candidateLimitReached: true,
+        matchedCount: 50,
+        returnedCount: 50,
+        bounded: true,
+      },
+    });
+
+    try {
+      await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
+      nativeApiMock.listPullRequests.mockImplementationOnce(
+        () =>
+          new Promise<ReviewListPullRequestsResult>((resolve) => {
+            nextWindow.resolve = resolve;
+          }),
+      );
+
+      const list = document.querySelector<HTMLElement>('[role="list"]');
+      expect(list).not.toBeNull();
+      list!.scrollTop = list!.scrollHeight - list!.clientHeight;
+      list!.dispatchEvent(new Event("scroll", { bubbles: true }));
+      list!.dispatchEvent(new Event("scroll", { bubbles: true }));
+      list!.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+      await vi.waitFor(() => {
+        expectListPullRequestCall({
+          cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
+          limit: 100,
+        });
+      });
+      expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledTimes(1);
+      expect(nativeApiMock.listPullRequests.mock.calls).toHaveLength(1);
+
+      nextWindow.resolve?.({
+        pullRequests: makePullRequests(100),
+        meta: {
+          requestedLimit: 100,
+          resultLimit: 100,
+          candidateLimit: 100,
+          candidateCount: 100,
+          candidateLimitReached: false,
+          matchedCount: 100,
+          returnedCount: 100,
+          bounded: true,
+        },
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("trusts server search results after the debounced query catches up", async () => {
+    const pullRequests = [
+      makePullRequest(0, {
+        number: 31,
+        title: "Returned by GitHub body search",
+      }),
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+      await page.getByPlaceholder("Search PRs, #7870, or a GitHub URL").fill("body-only-match");
+
+      await vi.waitFor(() => {
+        expectListPullRequestCall({
+          cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
+          search: "body-only-match",
+        });
+      });
+      await expect.element(page.getByText("Returned by GitHub body search")).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("pushes the needs-my-review view to the server without emptying local results", async () => {
+    const pullRequests = [
+      makePullRequest(0, {
+        number: 42,
+        title: "Needs reviewer attention",
+        reviewRequests: ["tyler"],
+      }),
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+      await page.getByRole("tab", { name: "Needs my review" }).click();
+      await expect.element(page.getByText("Needs reviewer attention")).toBeVisible();
+
+      expect(nativeApiMock.getViewer).toHaveBeenCalledTimes(1);
+      expectListPullRequestCall({
+        cwd: "/repo",
+        state: "open",
+        columns: ["needs-review"],
+        reviewRequested: "tyler",
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("queries merged pull requests when the merged view is selected", async () => {
+    const pullRequests = [
+      makePullRequest(0, {
+        number: 88,
+        title: "Merged review surface work",
+        state: "merged",
+      }),
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+      await page.getByRole("tab", { name: "Merged" }).click();
+      await expect.element(page.getByText("Merged review surface work")).toBeVisible();
+
+      expectListPullRequestCall({
+        cwd: "/repo",
+        state: "merged",
+        columns: ["merged"],
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("pushes status and check facets into the server list request", async () => {
+    const pullRequests = [
+      makePullRequest(0, {
+        number: 51,
+        title: "Approved passing work",
+        reviewDecision: "APPROVED",
+        checksStatus: "passing",
+      }),
+      makePullRequest(0, {
+        number: 52,
+        title: "Pending review work",
+        reviewDecision: null,
+        checksStatus: "pending",
+      }),
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+
+      await page.getByRole("button", { name: "Filter" }).click();
+      await page.getByRole("button", { name: "Status", exact: true }).click();
+      await page.getByRole("button", { name: "Approved", exact: true }).click();
+      await vi.waitFor(() => {
+        expectListPullRequestCall({
+          cwd: "/repo",
+          state: "open",
+          columns: ["approved"],
+        });
+      });
+
+      await page.getByRole("button", { name: "Checks", exact: true }).click();
+      await page.getByRole("button", { name: "Passing", exact: true }).click();
+      await vi.waitFor(() => {
+        expectListPullRequestCall({
+          cwd: "/repo",
+          state: "open",
+          columns: ["approved"],
+          checks: ["passing"],
+        });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("pushes a single draft status facet into the server list request", async () => {
+    const pullRequests = [
+      makePullRequest(0, {
+        number: 55,
+        title: "Draft review work",
+        isDraft: true,
+      }),
+      makePullRequest(0, {
+        number: 56,
+        title: "Ready review work",
+        isDraft: false,
+      }),
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+
+      await page.getByRole("button", { name: "Filter" }).click();
+      await page.getByRole("button", { name: "Status", exact: true }).click();
+      await page.getByRole("button", { name: "Draft", exact: true }).click();
+      await vi.waitFor(() => {
+        expectListPullRequestCall({
+          cwd: "/repo",
+          state: "open",
+          draft: true,
+          columns: ["draft"],
+        });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("pushes a single base branch facet into the server list request", async () => {
+    const pullRequests = [
+      makePullRequest(0, {
+        number: 53,
+        title: "Main branch work",
+        baseBranch: "main",
+      }),
+      makePullRequest(0, {
+        number: 54,
+        title: "Release branch work",
+        baseBranch: "release",
+      }),
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+
+      await page.getByRole("button", { name: "Filter" }).click();
+      await page.getByRole("button", { name: "Base", exact: true }).click();
+      await page.getByRole("button", { name: "main", exact: true }).click();
+      await vi.waitFor(() => {
+        expectListPullRequestCall({
+          cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
+          baseBranch: "main",
+        });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("pushes a single head branch facet into the server list request", async () => {
+    const pullRequests = [
+      makePullRequest(0, {
+        number: 55,
+        title: "Review board branch work",
+        headBranch: "feature/review-board",
+        headSelector: "octocat:feature/review-board",
+      }),
+      makePullRequest(0, {
+        number: 56,
+        title: "Search branch work",
+        headBranch: "bugfix/search",
+      }),
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+
+      await page.getByRole("button", { name: "Filter" }).click();
+      await page.getByRole("button", { name: "Head", exact: true }).click();
+      await page.getByRole("button", { name: "octocat:feature/review-board", exact: true }).click();
+      await vi.waitFor(() => {
+        expectListPullRequestCall({
+          cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
+          headBranch: "octocat:feature/review-board",
+        });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("pushes a single label facet into the server list request", async () => {
+    const pullRequests = [
+      makePullRequest(0, {
+        number: 57,
+        title: "Bug labeled work",
+        labels: ["bug"],
+      }),
+      makePullRequest(0, {
+        number: 58,
+        title: "Feature labeled work",
+        labels: ["feature"],
+      }),
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+      await expect.element(page.getByText("Bug labeled work")).toBeVisible();
+      await expect.element(page.getByText("Feature labeled work")).toBeVisible();
+
+      await page.getByRole("button", { name: "Filter" }).click();
+      await page.getByRole("button", { name: "Label", exact: true }).click();
+      await page.getByText("bug", { exact: true }).click();
+      await vi.waitFor(() => {
+        expectListPullRequestCall({
+          cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
+          label: "bug",
+        });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("pushes multi-label facets into the server list request", async () => {
+    const pullRequests = [
+      makePullRequest(0, {
+        number: 57,
+        title: "Bug labeled work",
+        labels: ["bug"],
+      }),
+      makePullRequest(0, {
+        number: 58,
+        title: "Feature labeled work",
+        labels: ["feature"],
+      }),
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+      await expect.element(page.getByText("Bug labeled work")).toBeVisible();
+
+      await page.getByRole("button", { name: "Filter" }).click();
+      await page.getByRole("button", { name: "Label", exact: true }).click();
+      await page.getByText("bug", { exact: true }).click();
+      await vi.waitFor(() => {
+        expectListPullRequestCall({
+          cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
+          label: "bug",
+        });
+      });
+      await page.getByText("feature", { exact: true }).click();
+      await vi.waitFor(() => {
+        expectListPullRequestCall({
+          cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
+          labels: ["bug", "feature"],
+        });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("pushes multi-author facets into the server list request", async () => {
+    const pullRequests = [
+      makePullRequest(0, {
+        number: 59,
+        title: "Alice authored work",
+        author: "alice",
+      }),
+      makePullRequest(0, {
+        number: 60,
+        title: "Bob authored work",
+        author: "bob",
+      }),
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+      await expect.element(page.getByText("Alice authored work")).toBeVisible();
+      await expect.element(page.getByText("Bob authored work")).toBeVisible();
+
+      await page.getByRole("button", { name: "Filter" }).click();
+      await page.getByRole("button", { name: "Author", exact: true }).click();
+      await page.getByRole("button", { name: "alice", exact: true }).click();
+      await vi.waitFor(() => {
+        expectListPullRequestCall({
+          cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
+          author: "alice",
+        });
+      });
+
+      await page.getByRole("button", { name: "bob", exact: true }).click();
+      await vi.waitFor(() => {
+        expectListPullRequestCall({
+          cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
+          authors: ["alice", "bob"],
+        });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("pushes a single assignee facet into the server list request", async () => {
+    const pullRequests = [
+      makePullRequest(0, {
+        number: 59,
+        title: "Assigned review work",
+        assignees: ["alice"],
+      }),
+      makePullRequest(0, {
+        number: 60,
+        title: "Other assigned work",
+        assignees: ["bob"],
+      }),
+    ];
+    const mounted = await mountBoard(pullRequests);
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+
+      await page.getByRole("button", { name: "Filter" }).click();
+      await page.getByRole("button", { name: "Assignee", exact: true }).click();
+      await page.getByRole("button", { name: "alice", exact: true }).click();
+      await vi.waitFor(() => {
+        expectListPullRequestCall({
+          cwd: "/repo",
+          state: "open",
+          columns: ["needs-review"],
+          assignee: "alice",
+        });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("marks capped server-filtered counts as incomplete", async () => {
+    const pullRequests = [
+      makePullRequest(0, {
+        number: 61,
+        title: "Approved capped work",
+        reviewDecision: "APPROVED",
+        checksStatus: "passing",
+      }),
+    ];
+    const mounted = await mountBoard({
+      pullRequests,
+      meta: {
+        resultLimit: 50,
+        candidateLimit: 1000,
+        candidateCount: 1000,
+        candidateLimitReached: true,
+        matchedCount: 61,
+        returnedCount: 1,
+        bounded: true,
+      },
+    });
+
+    try {
+      await expect
+        .element(page.getByRole("toolbar", { name: "Pull request review controls" }))
+        .toBeVisible();
+      await page.getByRole("button", { name: "Filter" }).click();
+      await page.getByRole("button", { name: "Status", exact: true }).click();
+      await page.getByRole("button", { name: "Approved", exact: true }).click();
+
+      await expect.element(page.getByText("1+ PRs", { exact: true })).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+});

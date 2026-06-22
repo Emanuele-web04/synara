@@ -9,7 +9,17 @@ const ReviewPullRequestReference = TrimmedNonEmptyStringSchema;
 const GitPullRequestReference = TrimmedNonEmptyStringSchema;
 const ReviewRepositoryId = TrimmedNonEmptyStringSchema;
 const ReviewPullRequestState = Schema.Literals(["open", "closed", "merged"]);
-const ReviewListState = Schema.Literals(["open", "closed", "all"]);
+const ReviewListState = Schema.Literals(["open", "closed", "merged", "all"]);
+const ReviewListColumn = Schema.Literals([
+  "draft",
+  "needs-review",
+  "changes-requested",
+  "approved",
+  "merged",
+]);
+const ReviewChecksStatus = Schema.Literals(["passing", "failing", "pending", "none"]);
+const ReviewListSort = Schema.Literals(["updated", "title", "size"]);
+export type ReviewListSort = typeof ReviewListSort.Type;
 
 export const ReviewSourceRef = Schema.Union([
   Schema.TaggedStruct("pullRequest", {
@@ -41,6 +51,7 @@ export const ReviewPullRequestSummary = Schema.Struct({
   url: Schema.String,
   baseBranch: TrimmedNonEmptyStringSchema,
   headBranch: TrimmedNonEmptyStringSchema,
+  headSelector: Schema.optional(TrimmedNonEmptyStringSchema),
   author: Schema.String,
   authorAvatarUrl: Schema.optional(Schema.String),
   updatedAt: Schema.String,
@@ -49,8 +60,10 @@ export const ReviewPullRequestSummary = Schema.Struct({
   isDraft: Schema.Boolean,
   additions: NonNegativeInt,
   deletions: NonNegativeInt,
-  checksStatus: Schema.Literals(["passing", "failing", "pending", "none"]),
+  checksStatus: ReviewChecksStatus,
   reviewRequests: Schema.Array(Schema.String),
+  labels: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(() => [])),
+  assignees: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(() => [])),
 });
 export type ReviewPullRequestSummary = typeof ReviewPullRequestSummary.Type;
 
@@ -68,13 +81,55 @@ export const ReviewListPullRequestsInput = Schema.Struct({
     Schema.withConstructorDefault(() => Option.some("open" as const)),
   ),
   limit: Schema.optional(PositiveInt),
+  search: Schema.optional(TrimmedNonEmptyStringSchema),
+  author: Schema.optional(TrimmedNonEmptyStringSchema),
+  authors: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+  reviewRequested: Schema.optional(TrimmedNonEmptyStringSchema),
+  baseBranch: Schema.optional(TrimmedNonEmptyStringSchema),
+  baseBranches: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+  headBranch: Schema.optional(TrimmedNonEmptyStringSchema),
+  headBranches: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+  label: Schema.optional(TrimmedNonEmptyStringSchema),
+  labels: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+  assignee: Schema.optional(TrimmedNonEmptyStringSchema),
+  assignees: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+  draft: Schema.optional(Schema.Boolean),
+  columns: Schema.optional(Schema.Array(ReviewListColumn)),
+  checks: Schema.optional(Schema.Array(ReviewChecksStatus)),
+  sort: Schema.optional(ReviewListSort),
 });
 export type ReviewListPullRequestsInput = typeof ReviewListPullRequestsInput.Type;
 
 export const ReviewListPullRequestsResult = Schema.Struct({
   pullRequests: Schema.Array(ReviewPullRequestSummary),
+  meta: Schema.optional(
+    Schema.Struct({
+      requestedLimit: Schema.optional(PositiveInt),
+      resultLimit: PositiveInt,
+      candidateLimit: PositiveInt,
+      candidateCount: NonNegativeInt,
+      candidateLimitReached: Schema.Boolean,
+      matchedCount: NonNegativeInt,
+      returnedCount: NonNegativeInt,
+      bounded: Schema.Boolean,
+    }),
+  ),
 });
 export type ReviewListPullRequestsResult = typeof ReviewListPullRequestsResult.Type;
+
+export const ReviewLoadBoardLanesInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  limit: Schema.optional(PositiveInt),
+});
+export type ReviewLoadBoardLanesInput = typeof ReviewLoadBoardLanesInput.Type;
+
+export const ReviewBoardLanesResult = Schema.Struct({
+  "needs-review": ReviewListPullRequestsResult,
+  "changes-requested": ReviewListPullRequestsResult,
+  approved: ReviewListPullRequestsResult,
+  draft: ReviewListPullRequestsResult,
+});
+export type ReviewBoardLanesResult = typeof ReviewBoardLanesResult.Type;
 
 export const ReviewGetViewerInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
@@ -191,6 +246,7 @@ export const ReviewSubmitResult = Schema.Struct({
 export type ReviewSubmitResult = typeof ReviewSubmitResult.Type;
 
 export const ReviewRemoteThreadComment = Schema.Struct({
+  id: Schema.optional(TrimmedNonEmptyStringSchema),
   author: Schema.String,
   authorAvatarUrl: Schema.optional(Schema.String),
   body: Schema.String,
@@ -219,6 +275,53 @@ export const ReviewRemoteThreadsResult = Schema.Struct({
   threads: Schema.Array(ReviewRemoteThread),
 });
 export type ReviewRemoteThreadsResult = typeof ReviewRemoteThreadsResult.Type;
+
+export const ReviewResolveThreadInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  reference: GitPullRequestReference,
+  threadId: TrimmedNonEmptyStringSchema,
+  resolved: Schema.Boolean,
+});
+export type ReviewResolveThreadInput = typeof ReviewResolveThreadInput.Type;
+
+export const ReviewResolveThreadResult = Schema.Struct({
+  threadId: TrimmedNonEmptyStringSchema,
+  isResolved: Schema.Boolean,
+});
+export type ReviewResolveThreadResult = typeof ReviewResolveThreadResult.Type;
+
+export const ReviewReplyThreadInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  reference: GitPullRequestReference,
+  threadId: TrimmedNonEmptyStringSchema,
+  body: TrimmedNonEmptyStringSchema,
+});
+export type ReviewReplyThreadInput = typeof ReviewReplyThreadInput.Type;
+
+export const ReviewReplyThreadResult = Schema.Struct({
+  threadId: TrimmedNonEmptyStringSchema,
+});
+export type ReviewReplyThreadResult = typeof ReviewReplyThreadResult.Type;
+
+export const ReviewUpdateThreadCommentInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  reference: GitPullRequestReference,
+  commentId: TrimmedNonEmptyStringSchema,
+  body: TrimmedNonEmptyStringSchema,
+});
+export type ReviewUpdateThreadCommentInput = typeof ReviewUpdateThreadCommentInput.Type;
+
+export const ReviewDeleteThreadCommentInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  reference: GitPullRequestReference,
+  commentId: TrimmedNonEmptyStringSchema,
+});
+export type ReviewDeleteThreadCommentInput = typeof ReviewDeleteThreadCommentInput.Type;
+
+export const ReviewThreadCommentMutationResult = Schema.Struct({
+  commentId: TrimmedNonEmptyStringSchema,
+});
+export type ReviewThreadCommentMutationResult = typeof ReviewThreadCommentMutationResult.Type;
 
 export const ReviewFindingSeverity = Schema.Literals(["blocker", "major", "minor", "nit"]);
 export type ReviewFindingSeverity = typeof ReviewFindingSeverity.Type;
@@ -356,6 +459,15 @@ export const ReviewPullRequestQueryInput = Schema.Struct({
 });
 export type ReviewPullRequestQueryInput = typeof ReviewPullRequestQueryInput.Type;
 
+export const ReviewPullRequestSurfaceInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  reference: ReviewPullRequestReference,
+  source: ReviewSourceRef,
+  includeConversation: Schema.optional(Schema.Boolean),
+  includeChangeset: Schema.optional(Schema.Boolean),
+});
+export type ReviewPullRequestSurfaceInput = typeof ReviewPullRequestSurfaceInput.Type;
+
 export const ReviewLabel = Schema.Struct({
   name: TrimmedNonEmptyStringSchema,
   // 6-digit hex without a leading '#', as GitHub returns it.
@@ -416,6 +528,39 @@ export const ReviewPullRequestDetail = Schema.Struct({
   reviewers: Schema.Array(ReviewReviewer),
 });
 export type ReviewPullRequestDetail = typeof ReviewPullRequestDetail.Type;
+
+export const ReviewPullRequestHeaderDetail = Schema.Struct({
+  number: PositiveInt,
+  title: TrimmedNonEmptyStringSchema,
+  url: Schema.String,
+  state: ReviewPullRequestState,
+  isDraft: Schema.Boolean,
+  author: Schema.String,
+  authorAvatarUrl: Schema.optional(Schema.String),
+  baseBranch: TrimmedNonEmptyStringSchema,
+  headBranch: TrimmedNonEmptyStringSchema,
+  body: Schema.String,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  additions: NonNegativeInt,
+  deletions: NonNegativeInt,
+  changedFiles: NonNegativeInt,
+  commitsCount: Schema.optional(NonNegativeInt),
+  reviewDecision: Schema.NullOr(Schema.String),
+  mergeable: ReviewMergeableState,
+  mergeStateStatus: Schema.optional(Schema.String),
+  checksStatus: Schema.optional(Schema.Literals(["passing", "failing", "pending", "none"])),
+  milestone: Schema.NullOr(Schema.String),
+  labels: Schema.Array(ReviewLabel),
+  assignees: Schema.Array(ReviewUserRef),
+  reviewers: Schema.optional(Schema.Array(ReviewReviewer)),
+});
+export type ReviewPullRequestHeaderDetail = typeof ReviewPullRequestHeaderDetail.Type;
+
+export const ReviewPullRequestHeader = Schema.Struct({
+  detail: ReviewPullRequestHeaderDetail,
+});
+export type ReviewPullRequestHeader = typeof ReviewPullRequestHeader.Type;
 
 export const ReviewCommit = Schema.Struct({
   oid: TrimmedNonEmptyStringSchema,
@@ -544,12 +689,35 @@ export const ReviewConversationResult = Schema.Struct({
 });
 export type ReviewConversationResult = typeof ReviewConversationResult.Type;
 
+export const ReviewPullRequestSurfaceResult = Schema.Struct({
+  overview: ReviewPullRequestOverview,
+  conversation: Schema.optional(ReviewConversationResult),
+  changeset: Schema.optional(ReviewChangesetResult),
+});
+export type ReviewPullRequestSurfaceResult = typeof ReviewPullRequestSurfaceResult.Type;
+
 export const ReviewUpdatedPayload = Schema.Union([
   Schema.TaggedStruct("pullRequestList", {
     cwd: TrimmedNonEmptyStringSchema,
     repositoryId: ReviewRepositoryId,
     state: ReviewListState,
     limit: Schema.optional(PositiveInt),
+    search: Schema.optional(TrimmedNonEmptyStringSchema),
+    author: Schema.optional(TrimmedNonEmptyStringSchema),
+    authors: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+    reviewRequested: Schema.optional(TrimmedNonEmptyStringSchema),
+    baseBranch: Schema.optional(TrimmedNonEmptyStringSchema),
+    baseBranches: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+    headBranch: Schema.optional(TrimmedNonEmptyStringSchema),
+    headBranches: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+    label: Schema.optional(TrimmedNonEmptyStringSchema),
+    labels: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+    assignee: Schema.optional(TrimmedNonEmptyStringSchema),
+    assignees: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+    draft: Schema.optional(Schema.Boolean),
+    columns: Schema.optional(Schema.Array(ReviewListColumn)),
+    checks: Schema.optional(Schema.Array(ReviewChecksStatus)),
+    sort: Schema.optional(ReviewListSort),
     data: ReviewListPullRequestsResult,
     fetchedAt: NonNegativeInt,
   }),
@@ -572,6 +740,12 @@ export const ReviewUpdatedPayload = Schema.Union([
     repositoryId: ReviewRepositoryId,
     reference: ReviewPullRequestReference,
     data: ReviewChangesetResult,
+    fetchedAt: NonNegativeInt,
+  }),
+  // Signal-only: no lane data (lanes are limit-keyed); the client refetches its board-lane query.
+  Schema.TaggedStruct("boardLanes", {
+    cwd: TrimmedNonEmptyStringSchema,
+    repositoryId: ReviewRepositoryId,
     fetchedAt: NonNegativeInt,
   }),
 ]);

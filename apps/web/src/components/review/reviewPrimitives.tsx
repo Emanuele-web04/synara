@@ -4,10 +4,25 @@ import { useRender } from "@base-ui/react/use-render";
 import type { ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
-import { ArrowRightIcon } from "~/lib/icons";
+import { ArrowRightIcon, GitBranchIcon } from "~/lib/icons";
 import { DiffStat } from "../chat/DiffStatLabel";
 import { Skeleton } from "../ui/skeleton";
 import { ReviewAvatar } from "./reviewPrPrimitives";
+
+const DEFAULT_BASE_BRANCHES = new Set(["main", "master"]);
+
+const CONVENTIONAL_COMMIT_PREFIX = /^([a-z]+(?:\([^)]*\))?!?:)\s+(.*)$/i;
+
+export function splitConventionalCommitTitle(title: string): {
+  prefix: string | null;
+  rest: string;
+} {
+  const match = CONVENTIONAL_COMMIT_PREFIX.exec(title);
+  if (!match || match[2]!.length === 0) {
+    return { prefix: null, rest: title };
+  }
+  return { prefix: match[1]!, rest: match[2]! };
+}
 
 const RELATIVE_TIME_FORMATTER = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
 
@@ -104,6 +119,7 @@ export function ReviewPullRequestMeta(props: {
   const relativeUpdatedAt = formatRelativeReviewTime(pullRequest.updatedAt);
   const state = prStatePill(pullRequest.state);
   const decision = reviewDecisionPill(pullRequest.reviewDecision);
+  const showBaseBranch = !DEFAULT_BASE_BRANCHES.has(pullRequest.baseBranch.toLowerCase());
 
   return (
     <div className={cn("flex min-w-0 flex-col gap-1.5", props.className)}>
@@ -112,26 +128,30 @@ export function ReviewPullRequestMeta(props: {
           className="flex min-w-0 items-center gap-1 text-muted-foreground"
           title={`${pullRequest.headBranch} -> ${pullRequest.baseBranch}`}
         >
+          <GitBranchIcon className="size-3 shrink-0 opacity-60" />
           <span className="truncate font-mono">{pullRequest.headBranch}</span>
-          <ArrowRightIcon className="size-3 shrink-0 opacity-70" />
-          <span className="truncate font-mono">{pullRequest.baseBranch}</span>
+          {showBaseBranch ? (
+            <>
+              <ArrowRightIcon className="size-3 shrink-0 opacity-60" />
+              <span className="truncate font-mono">{pullRequest.baseBranch}</span>
+            </>
+          ) : null}
         </span>
-        {pullRequest.author.trim().length > 0 ? (
-          <span className="text-muted-foreground/70">by {pullRequest.author}</span>
-        ) : null}
         {relativeUpdatedAt ? (
           <span className="text-muted-foreground/70 tabular-nums">updated {relativeUpdatedAt}</span>
         ) : null}
       </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px]">
         <DiffStat additions={pullRequest.additions} deletions={pullRequest.deletions} />
-        {props.showState === true ? <ReviewPill tone={state.tone}>{state.label}</ReviewPill> : null}
+        {props.showState === true && pullRequest.state !== "open" ? (
+          <ReviewPill tone={state.tone}>{state.label}</ReviewPill>
+        ) : null}
         {pullRequest.isDraft ? <ReviewPill tone="muted">Draft</ReviewPill> : null}
         {props.showDecision !== false && decision ? (
           <ReviewPill tone={decision.tone}>{decision.label}</ReviewPill>
         ) : null}
         {pullRequest.author.trim().length > 0 ? (
-          <span className="inline-flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
+          <span className="ms-auto inline-flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
             <ReviewAvatar
               login={pullRequest.author}
               {...(pullRequest.authorAvatarUrl !== undefined
@@ -227,6 +247,7 @@ export function EmptyState(props: {
   children: ReactNode;
   title?: ReactNode;
   icon?: ReactNode;
+  action?: ReactNode;
   className?: string;
 }) {
   return (
@@ -249,6 +270,7 @@ export function EmptyState(props: {
       ) : (
         <span className="text-balance">{props.children}</span>
       )}
+      {props.action ? <span className="mt-1.5 inline-flex shrink-0">{props.action}</span> : null}
     </div>
   );
 }
@@ -258,12 +280,11 @@ export function reviewCardShellClassName(opts?: {
   className?: string | undefined;
 }): string {
   return cn(
-    "group/card flex w-full flex-col gap-1.5 rounded-[1.15rem] border border-border/70 bg-card/90 px-3.5 py-3 text-left shadow-[0_8px_24px_-22px_var(--foreground)]",
-    "transition-[transform,border-color,background-color,box-shadow] duration-150 motion-reduce:transition-none",
-    "hover:border-border hover:bg-[var(--sidebar-accent)] hover:shadow-sm",
-    "active:scale-[0.985] motion-reduce:active:scale-100",
+    "group/card flex w-full flex-col gap-1.5 rounded-[0.625rem] border border-border/70 bg-card px-3.5 py-3 text-left",
+    "hover:border-border/90 hover:bg-[var(--sidebar-accent)]",
+    "active:bg-[var(--sidebar-accent)]",
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-    opts?.dragging && "z-10 opacity-80 shadow-lg",
+    opts?.dragging && "z-10 opacity-80 shadow-md",
     opts?.className,
   );
 }
@@ -306,8 +327,7 @@ export function ReviewColumn(props: {
     <section
       ref={props.innerRef}
       className={cn(
-        "flex h-full w-full shrink-0 flex-col gap-2 rounded-[1.5rem] border border-border/60 bg-card/55 p-2.5 shadow-sm md:w-72",
-        "transition-[background-color,box-shadow] duration-150 motion-reduce:transition-none",
+        "flex h-full w-full shrink-0 flex-col gap-2 rounded-xl border border-border/55 bg-card/40 p-2.5 md:w-72",
         props.isOver && "bg-primary/[0.04] ring-2 ring-ring ring-inset",
         props.className,
       )}
@@ -325,7 +345,9 @@ export function ReviewColumn(props: {
       {props.isEmpty ? (
         (props.empty ?? <EmptyState>No items in this column.</EmptyState>)
       ) : (
-        <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">{props.children}</ul>
+        <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain">
+          {props.children}
+        </ul>
       )}
     </section>
   );

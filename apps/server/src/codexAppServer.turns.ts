@@ -47,6 +47,7 @@ export interface CodexTurnDeps {
     context: CodexSessionContext,
     updates: Partial<CodexSessionContext["session"]>,
   ): void;
+  registerSynaraSkillsRoot(context: CodexSessionContext): Promise<void>;
   sendTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult>;
 }
 
@@ -96,6 +97,9 @@ export async function sendTurn(
   const turnInput = buildTurnInput(input);
   if (turnInput.length === 0) {
     throw new Error("Turn input must include text or attachments.");
+  }
+  if (input.skills && input.skills.length > 0) {
+    await deps.registerSynaraSkillsRoot(context);
   }
 
   const providerThreadId = readResumeThreadId({
@@ -214,6 +218,9 @@ export async function steerTurn(
   const turnInput = buildTurnInput(input);
   if (turnInput.length === 0) {
     throw new Error("Turn input must include text or attachments.");
+  }
+  if (input.skills && input.skills.length > 0) {
+    await deps.registerSynaraSkillsRoot(context);
   }
 
   const providerThreadId = readResumeThreadId({

@@ -38,6 +38,7 @@ function toRemoteThread(thread: GitHubReviewThread): ReviewRemoteThread {
     ...(thread.line !== undefined && thread.line > 0 ? { line: thread.line } : {}),
     ...(thread.side ? { side: thread.side } : {}),
     comments: thread.comments.map((comment) => ({
+      ...(comment.id ? { id: comment.id } : {}),
       author: comment.author,
       ...(comment.authorAvatarUrl ? { authorAvatarUrl: comment.authorAvatarUrl } : {}),
       body: comment.body,
@@ -169,9 +170,71 @@ const makeReviewSubmission = Effect.gen(function* () {
       ),
     );
 
+  const resolveThread: ReviewSubmissionShape["resolveThread"] = (input) =>
+    gitHubCli
+      .setPullRequestThreadResolution({
+        cwd: input.cwd,
+        threadId: input.threadId,
+        resolved: input.resolved,
+      })
+      .pipe(
+        Effect.map((thread) => ({ threadId: thread.id, isResolved: thread.isResolved })),
+        Effect.mapError((error) =>
+          reviewError("resolveThread", `Could not update review thread: ${error.message}`, error),
+        ),
+      );
+
+  const replyThread: ReviewSubmissionShape["replyThread"] = (input) =>
+    gitHubCli
+      .addPullRequestThreadReply({
+        cwd: input.cwd,
+        threadId: input.threadId,
+        body: input.body,
+      })
+      .pipe(
+        Effect.map((result) => ({ threadId: result.threadId })),
+        Effect.mapError((error) =>
+          reviewError("replyThread", `Could not post review reply: ${error.message}`, error),
+        ),
+      );
+
+  const updateThreadComment: ReviewSubmissionShape["updateThreadComment"] = (input) =>
+    gitHubCli
+      .updatePullRequestThreadComment({
+        cwd: input.cwd,
+        commentId: input.commentId,
+        body: input.body,
+      })
+      .pipe(
+        Effect.map((result) => ({ commentId: result.commentId })),
+        Effect.mapError((error) =>
+          reviewError(
+            "updateThreadComment",
+            `Could not edit review comment: ${error.message}`,
+            error,
+          ),
+        ),
+      );
+
+  const deleteThreadComment: ReviewSubmissionShape["deleteThreadComment"] = (input) =>
+    gitHubCli.deletePullRequestThreadComment({ cwd: input.cwd, commentId: input.commentId }).pipe(
+      Effect.map((result) => ({ commentId: result.commentId })),
+      Effect.mapError((error) =>
+        reviewError(
+          "deleteThreadComment",
+          `Could not delete review comment: ${error.message}`,
+          error,
+        ),
+      ),
+    );
+
   return {
     submit,
     loadThreads,
+    resolveThread,
+    replyThread,
+    updateThreadComment,
+    deleteThreadComment,
   } satisfies ReviewSubmissionShape;
 });
 

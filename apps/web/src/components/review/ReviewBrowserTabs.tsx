@@ -1,10 +1,7 @@
-import type { ReviewPullRequestSummary } from "@t3tools/contracts";
-import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { ChevronRightIcon, GitPullRequestIcon, PlusIcon, XIcon } from "~/lib/icons";
-import { reviewListPullRequestsQueryOptions } from "~/lib/reviewReactQuery";
 import { cn } from "~/lib/utils";
 
 const REVIEW_OPEN_TABS_STORAGE_PREFIX = "review:open-pr-tabs";
@@ -121,14 +118,8 @@ export function closeOpenReviewTab(
   };
 }
 
-function titleForReference(
-  reference: string,
-  summariesByReference: ReadonlyMap<string, ReviewPullRequestSummary>,
-  fallback: string | null,
-): string {
-  return (
-    summariesByReference.get(normalizeReference(reference))?.title ?? fallback ?? `#${reference}`
-  );
+function titleForReference(reference: string, fallback: string | null): string {
+  return fallback ?? `#${reference}`;
 }
 
 export function ReviewBrowserTabs(props: {
@@ -144,10 +135,6 @@ export function ReviewBrowserTabs(props: {
       ? upsertCurrentTab(readStoredTabs(props.cwd), normalizedReference, props.currentTitle)
       : readStoredTabs(props.cwd),
   );
-  const pullRequestsQuery = useQuery(
-    reviewListPullRequestsQueryOptions({ cwd: props.cwd, limit: 25 }),
-  );
-
   useEffect(() => {
     setOpenTabs(
       normalizedReference
@@ -159,13 +146,6 @@ export function ReviewBrowserTabs(props: {
   useEffect(() => {
     writeStoredTabs(props.cwd, openTabs);
   }, [props.cwd, openTabs]);
-
-  const summariesByReference = useMemo(() => {
-    const entries = (pullRequestsQuery.data?.pullRequests ?? []).map(
-      (pullRequest) => [String(pullRequest.number), pullRequest] as const,
-    );
-    return new Map(entries);
-  }, [pullRequestsQuery.data]);
 
   const navigateToReference = (reference: string) => {
     void navigate({
@@ -271,7 +251,7 @@ export function ReviewBrowserTabs(props: {
         {openTabs.map((tab) => {
           const tabReference = normalizeReference(tab.reference);
           const active = tabReference === normalizedReference;
-          const title = titleForReference(tabReference, summariesByReference, tab.title);
+          const title = titleForReference(tabReference, tab.title);
           return (
             <div
               key={tabReference}

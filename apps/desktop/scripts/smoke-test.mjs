@@ -9,8 +9,10 @@ const mainJs = resolve(desktopDir, "dist-electron/main.js");
 
 console.log("\nLaunching Electron smoke test...");
 
+const canKillProcessGroup = process.platform !== "win32";
 const child = spawn(electronBin, [mainJs], {
-  stdio: ["pipe", "pipe", "pipe"],
+  detached: canKillProcessGroup,
+  stdio: ["ignore", "pipe", "pipe"],
   env: {
     ...process.env,
     VITE_DEV_SERVER_URL: "",
@@ -26,12 +28,37 @@ child.stderr.on("data", (chunk) => {
   output += chunk.toString();
 });
 
-const timeout = setTimeout(() => {
-  child.kill();
-}, 8_000);
+let finished = false;
+let forceKillTimeout;
 
-child.on("exit", () => {
+function isNoSuchProcessError(error) {
+  return error instanceof Error && "code" in error && error.code === "ESRCH";
+}
+
+function killChild(signal) {
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  try {
+    if (canKillProcessGroup) {
+      process.kill(-child.pid, signal);
+      return;
+    }
+    child.kill(signal);
+  } catch (error) {
+    if (!isNoSuchProcessError(error)) {
+      throw error;
+    }
+  }
+}
+
+function finish() {
+  if (finished) {
+    return;
+  }
+  finished = true;
   clearTimeout(timeout);
+  clearTimeout(forceKillTimeout);
 
   const fatalPatterns = [
     "Cannot find module",
@@ -54,4 +81,14 @@ child.on("exit", () => {
 
   console.log("Desktop smoke test passed.");
   process.exit(0);
-});
+}
+
+const timeout = setTimeout(() => {
+  killChild("SIGTERM");
+  forceKillTimeout = setTimeout(() => {
+    killChild("SIGKILL");
+    finish();
+  }, 2_000);
+}, 8_000);
+
+child.on("exit", finish);

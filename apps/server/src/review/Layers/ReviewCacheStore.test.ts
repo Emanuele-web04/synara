@@ -66,6 +66,45 @@ describe("ReviewCacheStore", () => {
     expect(Exit.isFailure(exit)).toBe(true);
   });
 
+  it("bounds pull request list cache rows per repository", async () => {
+    const result = await Effect.gen(function* () {
+      yield* Migration0039;
+      const store = yield* ReviewCacheStore;
+      const sql = yield* SqlClient.SqlClient;
+
+      for (const index of Array.from({ length: 70 }, (_, value) => value)) {
+        yield* store.upsertPullRequestList({
+          repositoryId: "repo",
+          listFilter: JSON.stringify({ search: `query-${String(index)}` }),
+          data: { pullRequests: [] },
+          fetchedAt: 1_000 + index,
+          ttlMs: 30_000,
+          tokenIdentity: "gh",
+        });
+      }
+
+      const rows = yield* sql<{ count: number }>`
+        SELECT count(*) AS count
+        FROM review_cache_pr_list
+        WHERE repository_id = ${"repo"}
+      `;
+      const oldestRows = yield* sql<{ listFilter: string }>`
+        SELECT list_filter AS "listFilter"
+        FROM review_cache_pr_list
+        WHERE repository_id = ${"repo"}
+        ORDER BY fetched_at ASC
+        LIMIT 1
+      `;
+      return {
+        count: rows[0]?.count ?? 0,
+        oldestListFilter: oldestRows[0]?.listFilter ?? "",
+      };
+    }).pipe(Effect.provide(layer), Effect.runPromise);
+
+    expect(result.count).toBe(64);
+    expect(result.oldestListFilter).toBe(JSON.stringify({ search: "query-6" }));
+  });
+
   it("repairs legacy cached changesets that predate patch provenance fields", async () => {
     const result = await Effect.gen(function* () {
       yield* Migration0039;

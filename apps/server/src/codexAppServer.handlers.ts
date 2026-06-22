@@ -56,6 +56,10 @@ export interface CodexHandlerDeps {
     context: CodexSessionContext,
     updates: Partial<CodexSessionContext["session"]>,
   ): void;
+  resolveInboundContext?(
+    context: CodexSessionContext,
+    message: JsonRpcNotification | JsonRpcRequest,
+  ): CodexSessionContext;
 }
 
 export function handleStdoutLine(
@@ -110,12 +114,16 @@ export function handleStdoutLine(
   }
 
   if (isServerRequest(parsed)) {
-    handleServerRequest(deps, context, parsed);
+    handleServerRequest(deps, deps.resolveInboundContext?.(context, parsed) ?? context, parsed);
     return;
   }
 
   if (isServerNotification(parsed)) {
-    handleServerNotification(deps, context, parsed);
+    handleServerNotification(
+      deps,
+      deps.resolveInboundContext?.(context, parsed) ?? context,
+      parsed,
+    );
     return;
   }
 

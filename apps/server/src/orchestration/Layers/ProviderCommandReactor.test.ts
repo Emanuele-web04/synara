@@ -171,6 +171,12 @@ describe("ProviderCommandReactor", () => {
         turnId: asTurnId("turn-steer-1"),
       }),
     );
+    const startReview = vi.fn<ProviderServiceShape["startReview"]>((_: unknown) =>
+      Effect.succeed({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId: asTurnId("turn-review-1"),
+      }),
+    );
     const injectThreadItems = vi.fn<NonNullable<ProviderServiceShape["injectThreadItems"]>>(
       () => Effect.void,
     );
@@ -281,7 +287,7 @@ describe("ProviderCommandReactor", () => {
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       steerTurn: steerTurn as ProviderServiceShape["steerTurn"],
-      startReview: unsupported as ProviderServiceShape["startReview"],
+      startReview,
       injectThreadItems,
       forkThread,
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
@@ -388,6 +394,7 @@ describe("ProviderCommandReactor", () => {
       startSession,
       sendTurn,
       steerTurn,
+      startReview,
       injectThreadItems,
       forkThread,
       interruptTurn,
@@ -1152,6 +1159,37 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("routes thread.turn.start with a review target through native provider review", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-review-start-1"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-review-1"),
+          role: "user",
+          text: "Find review risks",
+          attachments: [],
+        },
+        reviewTarget: { type: "baseBranch", branch: "main" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.startReview.mock.calls.length === 1);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.startReview).toHaveBeenCalledWith({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      target: { type: "baseBranch", branch: "main" },
+    });
   });
 
   it("retries normal turn startup after clearing a stale Codex resume cursor", async () => {

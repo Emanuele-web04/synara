@@ -14,6 +14,7 @@ import {
   type GitHubProjectBoardData,
   type GitHubProjectItem,
   type GitHubProjectSummary,
+  type GitHubReviewStateEvent,
   type GitHubReviewThread,
 } from "../Services/GitHubCli.ts";
 import {
@@ -31,11 +32,21 @@ import {
   normalizeReviewChecks,
   normalizeReviewCommit,
   normalizeReviewDetail,
+  normalizeReviewHeaderDetail,
   normalizeReviewPullRequest,
   reviewEventFlag,
   reviewEventName,
 } from "./GitHubCli.parsing.ts";
-import { enrichConversationAvatars, fetchPullRequestReviewThreads } from "./GitHubCli.commands.ts";
+import {
+  enrichConversationAvatars,
+  enrichReviewDetailAvatars,
+  addReviewThreadReply,
+  deleteReviewThreadComment,
+  fetchPullRequestReviewThreads,
+  fetchPullRequestTimeline,
+  setReviewThreadResolution,
+  updateReviewThreadComment,
+} from "./GitHubCli.commands.ts";
 import {
   DEFAULT_REVIEW_PULL_REQUEST_LIST_LIMIT,
   DEFAULT_TIMEOUT_MS,
@@ -51,6 +62,189 @@ import {
   RawProjectItemListSchema,
   RawProjectListSchema,
 } from "./GitHubCli.types.ts";
+
+function optionalTrimmed(value: string | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizedSearchValues(values: ReadonlyArray<string> | undefined): ReadonlyArray<string> {
+  return [...new Set((values ?? []).map((value) => value.trim()))]
+    .filter((value) => value.length > 0)
+    .sort();
+}
+
+function isSafeSearchQualifierValue(value: string): boolean {
+  return !/[\s,"\\()]/.test(value) && !/^(AND|OR|NOT)$/i.test(value);
+}
+
+function mergedSearchValues(
+  value: string | undefined,
+  values: ReadonlyArray<string> | undefined,
+): ReadonlyArray<string> {
+  return normalizedSearchValues([...(value !== undefined ? [value] : []), ...(values ?? [])]);
+}
+
+function searchQualifierOrGroup(
+  qualifier: string,
+  values: ReadonlyArray<string> | undefined,
+): string | null {
+  const normalized = normalizedSearchValues(values);
+  if (normalized.length === 0 || normalized.some((value) => !isSafeSearchQualifierValue(value))) {
+    return null;
+  }
+  const terms = normalized.map((value) => `${qualifier}:${value}`);
+  const [firstTerm] = terms;
+  return terms.length === 1 && firstTerm !== undefined ? firstTerm : `(${terms.join(" OR ")})`;
+}
+
+function pullRequestListSearch(input: {
+  readonly search?: string;
+  readonly authors?: ReadonlyArray<string>;
+  readonly reviewRequested?: string;
+  readonly baseBranches?: ReadonlyArray<string>;
+  readonly headBranches?: ReadonlyArray<string>;
+  readonly labels?: ReadonlyArray<string>;
+  readonly assignees?: ReadonlyArray<string>;
+  readonly checksStatuses?: ReadonlyArray<"passing" | "failing" | "pending">;
+  readonly reviewStatus?: "approved" | "changes-requested";
+}): string | null {
+  const search = optionalTrimmed(input.search);
+  const reviewRequested = optionalTrimmed(input.reviewRequested);
+  const authorsSearch = searchQualifierOrGroup("author", input.authors);
+  const baseBranchesSearch = searchQualifierOrGroup("base", input.baseBranches);
+  const headBranchesSearch = searchQualifierOrGroup("head", input.headBranches);
+  const labelSearch = pullRequestLabelSearch(input.labels);
+  const assigneesSearch = searchQualifierOrGroup("assignee", input.assignees);
+  const checksStatusTerms = [...new Set(input.checksStatuses ?? [])]
+    .map((status) =>
+      status === "passing"
+        ? "status:success"
+        : status === "failing"
+          ? "status:failure"
+          : "status:pending",
+    )
+    .sort();
+  const checksStatusSearch =
+    checksStatusTerms.length === 0
+      ? null
+      : checksStatusTerms.length === 1
+        ? checksStatusTerms[0]
+        : `(${checksStatusTerms.join(" OR ")})`;
+  const reviewStatusSearch =
+    input.reviewStatus === "approved"
+      ? "review:approved"
+      : input.reviewStatus === "changes-requested"
+        ? "review:changes_requested"
+        : null;
+  return (
+    [
+      search,
+      authorsSearch,
+      reviewRequested ? `review-requested:${reviewRequested}` : null,
+      baseBranchesSearch,
+      headBranchesSearch,
+      labelSearch,
+      assigneesSearch,
+      checksStatusSearch,
+      reviewStatusSearch,
+    ]
+      .filter((value): value is string => value !== null)
+      .join(" ") || null
+  );
+}
+
+function pullRequestLabelSearch(labels: ReadonlyArray<string> | undefined): string | null {
+  const normalized = normalizedSearchValues(labels);
+  if (
+    normalized.length === 0 ||
+    normalized.some((label) => label.includes(",") || label.includes('"') || label.includes("\\"))
+  ) {
+    return null;
+  }
+  return `label:${normalized.map((label) => `"${label}"`).join(",")}`;
+}
+
+function repositoryPullRequestListArgs(
+  input: Parameters<GitHubCliShape["listRepositoryPullRequests"]>[0],
+): string[] {
+  const args = [
+    "pr",
+    "list",
+    "--state",
+    input.state,
+    "--limit",
+    String(input.limit ?? DEFAULT_REVIEW_PULL_REQUEST_LIST_LIMIT),
+  ];
+  const authors = mergedSearchValues(input.author, input.authors);
+  const baseBranches = mergedSearchValues(input.baseBranch, input.baseBranches);
+  const headBranches = mergedSearchValues(input.headBranch, input.headBranches);
+  const labels = mergedSearchValues(input.label, input.labels);
+  const assignees = mergedSearchValues(input.assignee, input.assignees);
+  const [firstAuthor] = authors;
+  if (authors.length === 1 && firstAuthor !== undefined) {
+    args.push("--author", firstAuthor);
+  }
+  const [firstAssignee] = assignees;
+  if (assignees.length === 1 && firstAssignee !== undefined) {
+    args.push("--assignee", firstAssignee);
+  }
+  const [firstBaseBranch] = baseBranches;
+  if (baseBranches.length === 1 && firstBaseBranch !== undefined) {
+    args.push("--base", firstBaseBranch);
+  }
+  const [firstHeadBranch] = headBranches;
+  if (
+    headBranches.length === 1 &&
+    firstHeadBranch !== undefined &&
+    !firstHeadBranch.includes(":")
+  ) {
+    args.push("--head", firstHeadBranch);
+  }
+  const [firstLabel] = labels;
+  if (labels.length === 1 && firstLabel !== undefined) {
+    args.push("--label", firstLabel);
+  }
+  if (input.draft === true) {
+    args.push("--draft");
+  }
+  const search = pullRequestListSearch({
+    ...(input.search !== undefined ? { search: input.search } : {}),
+    ...(input.reviewRequested !== undefined ? { reviewRequested: input.reviewRequested } : {}),
+    ...(authors.length > 1 ? { authors } : {}),
+    ...(baseBranches.length > 1 ? { baseBranches } : {}),
+    ...(headBranches.length > 1 || headBranches[0]?.includes(":") ? { headBranches } : {}),
+    ...(labels.length > 1 ? { labels } : {}),
+    ...(assignees.length > 1 ? { assignees } : {}),
+    ...(input.checksStatuses !== undefined ? { checksStatuses: input.checksStatuses } : {}),
+    ...(input.reviewStatus !== undefined ? { reviewStatus: input.reviewStatus } : {}),
+  });
+  if (search) {
+    args.push("--search", search);
+  }
+  const jsonFields = [
+    "number",
+    "title",
+    "author",
+    "updatedAt",
+    "state",
+    "mergedAt",
+    "reviewDecision",
+    "baseRefName",
+    "headRefName",
+    "headRepositoryOwner",
+    "url",
+    "isDraft",
+    "additions",
+    "deletions",
+    "statusCheckRollup",
+    "labels",
+    "assignees",
+    ...(optionalTrimmed(input.reviewRequested) ? ["reviewRequests"] : []),
+  ];
+  args.push("--json", jsonFields.join(","));
+  return args;
+}
 
 const makeGitHubCli = Effect.sync(() => {
   const execute: GitHubCliShape["execute"] = (input) =>
@@ -120,16 +314,7 @@ const makeGitHubCli = Effect.sync(() => {
     listRepositoryPullRequests: (input) =>
       execute({
         cwd: input.cwd,
-        args: [
-          "pr",
-          "list",
-          "--state",
-          input.state,
-          "--limit",
-          String(input.limit ?? DEFAULT_REVIEW_PULL_REQUEST_LIST_LIMIT),
-          "--json",
-          "number,title,author,updatedAt,state,mergedAt,reviewDecision,baseRefName,headRefName,url,isDraft,additions,deletions",
-        ],
+        args: repositoryPullRequestListArgs(input),
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>
@@ -143,6 +328,33 @@ const makeGitHubCli = Effect.sync(() => {
               ),
         ),
         Effect.map((pullRequests) => pullRequests.map(normalizeReviewPullRequest)),
+      ),
+    getReviewPullRequestHeader: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: [
+          "pr",
+          "view",
+          input.reference,
+          "--json",
+          "number,title,url,state,isDraft,author,body,baseRefName,headRefName,createdAt,updatedAt,mergedAt,additions,deletions,changedFiles,reviewDecision,mergeable,mergeStateStatus,milestone,labels,assignees,reviewRequests",
+        ],
+      }).pipe(
+        Effect.map((result) => result.stdout.trim()),
+        Effect.flatMap((raw) =>
+          decodeGitHubJson(
+            raw,
+            RawGitHubReviewDetailSchema,
+            "getReviewPullRequestHeader",
+            "GitHub CLI returned invalid pull request header JSON.",
+          ),
+        ),
+        Effect.flatMap((raw) =>
+          enrichReviewDetailAvatars(execute, input.cwd, raw, normalizeReviewHeaderDetail),
+        ),
+        Effect.map((raw) => ({
+          detail: raw,
+        })),
       ),
     getReviewPullRequestOverview: (input) =>
       execute({
@@ -164,8 +376,13 @@ const makeGitHubCli = Effect.sync(() => {
             "GitHub CLI returned invalid pull request detail JSON.",
           ),
         ),
-        Effect.map((raw) => ({
-          detail: normalizeReviewDetail(raw),
+        Effect.flatMap((raw) =>
+          enrichReviewDetailAvatars(execute, input.cwd, raw, normalizeReviewDetail).pipe(
+            Effect.map((detail) => ({ raw, detail })),
+          ),
+        ),
+        Effect.map(({ raw, detail }) => ({
+          detail,
           commits: (raw.commits ?? []).map(normalizeReviewCommit),
           checks: normalizeReviewChecks(raw.statusCheckRollup ?? []),
         })),
@@ -274,6 +491,22 @@ const makeGitHubCli = Effect.sync(() => {
                 cwd: input.cwd,
                 pullRequest: parsed,
               }),
+        ),
+      ),
+    setPullRequestThreadResolution: (input) => setReviewThreadResolution(execute, input),
+    addPullRequestThreadReply: (input) => addReviewThreadReply(execute, input),
+    updatePullRequestThreadComment: (input) => updateReviewThreadComment(execute, input),
+    deletePullRequestThreadComment: (input) => deleteReviewThreadComment(execute, input),
+    getReviewTimeline: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: ["pr", "view", input.reference, "--json", "url", "-q", ".url"],
+      }).pipe(
+        Effect.map((result) => parsePullRequestUrl(result.stdout.trim())),
+        Effect.flatMap((parsed) =>
+          parsed === null
+            ? Effect.succeed([] as ReadonlyArray<GitHubReviewStateEvent>)
+            : fetchPullRequestTimeline(execute, { cwd: input.cwd, pullRequest: parsed }),
         ),
       ),
     getRepositoryCloneUrls: (input) =>

@@ -3,7 +3,10 @@
 // Layer: Web appearance domain logic
 // Exports: DEFAULT_CHROME_THEME_BY_VARIANT plus the CSS variable / resolved-token builders.
 
-import { normalizeFontFamilyCssValue } from "../lib/fontFamily";
+import {
+  normalizeFontFamilyCssValue,
+  normalizeMonospaceFontFamilyCssValue,
+} from "../lib/fontFamily";
 import {
   BLACK,
   formatHex,
@@ -179,7 +182,7 @@ export function buildThemeCssVariables(
     "--sidebar-foreground": readCodexVariable("--color-text-foreground"),
     "--success": pack.theme.semanticColors.diffAdded,
     "--success-foreground": pack.theme.semanticColors.diffAdded,
-    "--theme-font-code-family": normalizeFontFamilyCssValue(pack.theme.fonts.code) ?? "",
+    "--theme-font-code-family": normalizeMonospaceFontFamilyCssValue(pack.theme.fonts.code) ?? "",
     "--theme-font-ui-family": normalizeFontFamilyCssValue(pack.theme.fonts.ui) ?? "",
     "--warning": warningColor,
     "--warning-foreground": warningColor,
@@ -208,7 +211,7 @@ export function buildResolvedThemeTokens(
   const codexVariables = buildCodexCssVariables(computedTheme, derived, panel);
 
   return {
-    aliases: buildThemeTokenAliases(codexVariables),
+    aliases: buildThemeTokenAliases(codexVariables, computedTheme),
     codexVariables,
     computed: {
       contrast: computedTheme.contrast,
@@ -308,8 +311,23 @@ function buildCodexCssVariables(
   };
 }
 
-function buildThemeTokenAliases(codexVariables: Record<string, string>): Record<string, string> {
+function buildThemeTokenAliases(
+  codexVariables: Record<string, string>,
+  theme: ReturnType<typeof buildComputedTheme>,
+): Record<string, string> {
   const readCodexVariable = (name: string) => getRequiredVariable(codexVariables, name);
+  const warningColor = theme.variant === "dark" ? "#f5b44a" : "#d97706";
+  const terminalAnsiGreen =
+    theme.variant === "dark"
+      ? formatHex(mixRgb(parseHexColor(theme.theme.semanticColors.diffAdded), BLACK, 0.18))
+      : theme.theme.semanticColors.diffAdded;
+  const terminalPalette = {
+    ansiBlue: theme.theme.accent,
+    ansiGreen: terminalAnsiGreen,
+    ansiMagenta: theme.theme.semanticColors.skill,
+    ansiRed: theme.theme.semanticColors.diffRemoved,
+    foreground: readCodexVariable("--color-text-foreground"),
+  };
 
   return {
     "--color-token-badge-background": readCodexVariable("--color-background-accent"),
@@ -357,7 +375,18 @@ function buildThemeTokenAliases(codexVariables: Record<string, string>): Record<
     "--color-token-scrollbar-slider-active-background": readCodexVariable("--color-border-heavy"),
     "--color-token-scrollbar-slider-background": readCodexVariable("--color-border-light"),
     "--color-token-scrollbar-slider-hover-background": readCodexVariable("--color-border"),
-    "--color-token-side-bar-background": readCodexVariable("--color-background-surface-under"),
+    "--color-token-side-bar-background": readCodexVariable("--color-background-surface"),
+    "--color-token-terminal-ansi-black": readCodexVariable("--color-text-foreground-tertiary"),
+    "--color-token-terminal-ansi-blue": terminalPalette.ansiBlue,
+    "--color-token-terminal-ansi-bright-black": readCodexVariable(
+      "--color-text-foreground-secondary",
+    ),
+    "--color-token-terminal-ansi-green": terminalPalette.ansiGreen,
+    "--color-token-terminal-ansi-magenta": terminalPalette.ansiMagenta,
+    "--color-token-terminal-ansi-red": terminalPalette.ansiRed,
+    "--color-token-terminal-ansi-yellow": warningColor,
+    "--color-token-terminal-background": readCodexVariable("--color-background-surface"),
+    "--color-token-terminal-foreground": terminalPalette.foreground,
     "--color-token-text-code-block-background": readCodexVariable(
       "--color-background-elevated-secondary-opaque",
     ),
@@ -371,6 +400,11 @@ function buildThemeTokenAliases(codexVariables: Record<string, string>): Record<
     ),
     "--color-token-editor-background": readCodexVariable("--color-background-editor-opaque"),
     "--color-token-editor-foreground": readCodexVariable("--color-text-foreground"),
+    "--vscode-terminal-ansiBlue": terminalPalette.ansiBlue,
+    "--vscode-terminal-ansiGreen": terminalPalette.ansiGreen,
+    "--vscode-terminal-ansiMagenta": terminalPalette.ansiMagenta,
+    "--vscode-terminal-ansiRed": terminalPalette.ansiRed,
+    "--vscode-terminal-foreground": terminalPalette.foreground,
   };
 }
 

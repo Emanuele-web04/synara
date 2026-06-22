@@ -22,6 +22,10 @@ export interface ReviewCommentThreadActions {
   startReply: (anchor: ReviewLocalDraftAnnotation) => void;
   convertFinding: (finding: ReviewFinding) => void;
   dismissFinding: (finding: ReviewFinding) => void;
+  resolveRemoteThread: (thread: ReviewRemoteThread, resolved: boolean) => void;
+  replyRemoteThread: (thread: ReviewRemoteThread, body: string) => void;
+  editRemoteComment: (commentId: string, body: string) => void;
+  deleteRemoteComment: (commentId: string) => void;
 }
 
 const BUBBLE_SHELL_CLASS =
@@ -191,38 +195,126 @@ function SavedCommentBubble(props: {
   );
 }
 
-function SubmittedThread(props: { thread: ReviewRemoteThread }) {
-  const { thread } = props;
+function SubmittedThreadComment(props: {
+  comment: ReviewRemoteThread["comments"][number];
+  canManage: boolean;
+  actions: ReviewCommentThreadActions;
+}) {
+  const { comment, actions } = props;
+  const [editing, setEditing] = useState(false);
+  const commentId = comment.id;
+
+  if (editing && commentId !== undefined) {
+    return (
+      <div className="p-2.5">
+        <InlineCommentForm
+          initialBody={comment.body}
+          saveLabel="Update"
+          onCancel={() => setEditing(false)}
+          onSave={(body) => {
+            actions.editRemoteComment(commentId, body);
+            setEditing(false);
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="group/comment relative flex flex-col gap-1.5 px-3 py-2.5">
+      <div className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground">
+        <ReviewAvatar
+          login={comment.author || "unknown"}
+          {...(comment.authorAvatarUrl !== undefined ? { avatarUrl: comment.authorAvatarUrl } : {})}
+          className="size-4"
+        />
+        <span className="min-w-0 truncate font-medium text-foreground">
+          {comment.author || "unknown"}
+        </span>
+        <span className="shrink-0 tabular-nums">{formatTimestamp(comment.createdAt)}</span>
+        {props.canManage && commentId !== undefined ? (
+          <div className="ms-auto flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/comment:opacity-100 group-focus-within/comment:opacity-100 motion-reduce:transition-none">
+            <button
+              type="button"
+              title="Edit"
+              aria-label="Edit comment"
+              className={ICON_BUTTON_CLASS}
+              onClick={() => setEditing(true)}
+            >
+              <SquarePenIcon className="size-3" />
+            </button>
+            <button
+              type="button"
+              title="Delete"
+              aria-label="Delete comment"
+              className={cn(ICON_BUTTON_CLASS, "hover:bg-destructive/10 hover:text-destructive")}
+              onClick={() => actions.deleteRemoteComment(commentId)}
+            >
+              <Trash2 className="size-3" />
+            </button>
+          </div>
+        ) : null}
+      </div>
+      <p className="whitespace-pre-wrap break-words ps-5 text-[13px] leading-relaxed text-foreground/88">
+        {comment.body}
+      </p>
+    </div>
+  );
+}
+
+function SubmittedThread(props: {
+  thread: ReviewRemoteThread;
+  actions: ReviewCommentThreadActions;
+  viewer: ReviewViewerResult | null;
+}) {
+  const { thread, actions } = props;
+  const [replying, setReplying] = useState(false);
+  const viewerLogin = props.viewer?.login.trim() ?? "";
   return (
     <div className={cn(BUBBLE_SHELL_CLASS, "divide-y divide-border/45 bg-card/95")}>
       <div className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-muted-foreground">
         <MessageCircleIcon className="size-3.5 shrink-0" />
         <span className="font-medium uppercase tracking-wide">Submitted</span>
         {thread.isResolved ? <ReviewPill tone="success">Resolved</ReviewPill> : null}
+        <button
+          type="button"
+          className={cn(THREAD_ACTION_CLASS, "ms-auto")}
+          onClick={() => actions.resolveRemoteThread(thread, !thread.isResolved)}
+        >
+          <CheckIcon className="size-3" />
+          {thread.isResolved ? "Unresolve" : "Resolve"}
+        </button>
       </div>
       {thread.comments.map((comment, index) => (
-        <div
-          key={`${comment.author}:${comment.createdAt}:${index}`}
-          className="group/comment relative flex flex-col gap-1.5 px-3 py-2.5"
-        >
-          <div className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground">
-            <ReviewAvatar
-              login={comment.author || "unknown"}
-              {...(comment.authorAvatarUrl !== undefined
-                ? { avatarUrl: comment.authorAvatarUrl }
-                : {})}
-              className="size-4"
-            />
-            <span className="min-w-0 truncate font-medium text-foreground">
-              {comment.author || "unknown"}
-            </span>
-            <span className="shrink-0 tabular-nums">{formatTimestamp(comment.createdAt)}</span>
-          </div>
-          <p className="whitespace-pre-wrap break-words ps-5 text-[13px] leading-relaxed text-foreground/88">
-            {comment.body}
-          </p>
-        </div>
+        <SubmittedThreadComment
+          key={comment.id ?? `${comment.author}:${comment.createdAt}:${index}`}
+          comment={comment}
+          canManage={viewerLogin.length > 0 && comment.author === viewerLogin}
+          actions={actions}
+        />
       ))}
+      {replying ? (
+        <div className="p-2.5">
+          <InlineCommentForm
+            saveLabel="Reply"
+            placeholder="Reply to this thread..."
+            onCancel={() => setReplying(false)}
+            onSave={(body) => {
+              actions.replyRemoteThread(thread, body);
+              setReplying(false);
+            }}
+          />
+        </div>
+      ) : (
+        <button
+          type="button"
+          className={cn(THREAD_ACTION_CLASS, "m-2 self-start")}
+          onClick={() => setReplying(true)}
+        >
+          <MessageCircleIcon className="size-3" />
+          Reply
+        </button>
+      )}
     </div>
   );
 }
@@ -236,7 +328,7 @@ export function ReviewCommentThread(props: {
   const author = viewerAuthor(props.viewer ?? null);
 
   if (data.kind === "submitted-thread") {
-    return <SubmittedThread thread={data.thread} />;
+    return <SubmittedThread thread={data.thread} actions={actions} viewer={props.viewer ?? null} />;
   }
 
   if (data.kind === "agent-finding") {

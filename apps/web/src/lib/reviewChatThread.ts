@@ -5,6 +5,7 @@ import {
   type NativeApi,
   type OrchestrationMessageSource,
   type OrchestrationReviewChatTarget,
+  type ProviderReviewTarget,
   type ProviderSkillReference,
   type ProjectId,
   type ThreadId,
@@ -37,12 +38,29 @@ export type ReviewChatThreadResult =
   | { status: "unavailable"; reason: string };
 
 export type ReviewChatQuestionResult =
-  | { status: "sent"; threadId: ThreadId; created: boolean }
+  | { status: "sent"; threadId: ThreadId; created: boolean; turnRequestedAt: string }
+  | {
+      status: "queued";
+      threadId: ThreadId;
+      created: boolean;
+      queuedAt: string;
+      reason: "session_warming";
+    }
   | { status: "unavailable"; reason: string };
 
 export type ReviewChatPrewarmResult = ReviewChatThreadResult;
 
 export type ReviewChatThreadReadyHandler = (threadId: ThreadId, created: boolean) => void;
+export type ReviewChatQueuedTurnStartedHandler = (threadId: ThreadId, startedAt: string) => void;
+export type ReviewChatQueuedProviderStartRequestedHandler = (
+  threadId: ThreadId,
+  startedAt: string,
+) => void;
+export type ReviewChatQueuedTurnFailedHandler = (
+  threadId: ThreadId,
+  queuedAt: string,
+  reason: string,
+) => void;
 
 const inFlightCreateByTargetKey = new Map<string, Promise<ThreadId | null>>();
 const createdThreadByTargetKey = new Map<
@@ -61,10 +79,14 @@ const inFlightPrewarmByKey = new Map<
     readonly promise: Promise<ReviewChatPrewarmResult>;
   }
 >();
+const inFlightSessionReadyByKey = new Map<string, Promise<boolean>>();
+const queuedReviewTurnFlushByThreadId = new Map<string, Promise<void>>();
 const reviewContextBootstrappedKeys = new Set<string>();
-const VISIBLE_SEND_PREWARM_WAIT_MS = 250;
+const PREWARM_SESSION_READY_TIMEOUT_MS = 45_000;
+const VISIBLE_SEND_PREWARM_WAIT_MS = 150;
 const REVIEW_CONTEXT_BOOTSTRAP_QUESTION =
   "Reply exactly: ready. Do not summarize yet; just load this PR context for the next user question.";
+export const REVIEW_RISKS_NATIVE_REVIEW_QUESTION = "Find review risks";
 
 export function defaultReviewChatModelSelection(): ModelSelection {
   return {
@@ -94,6 +116,18 @@ function modelSelectionsEqual(
     left.provider === right.provider &&
     left.model === right.model &&
     JSON.stringify(left.options ?? null) === JSON.stringify(right.options ?? null)
+  );
+}
+
+function shouldUpdateThreadModelBeforeReviewTurn(input: {
+  readonly thread: Thread;
+  readonly modelSelection: ModelSelection;
+}): boolean {
+  if (modelSelectionsEqual(input.thread.modelSelection, input.modelSelection)) {
+    return false;
+  }
+  return (
+    input.thread.modelSelection.provider !== "codex" || input.modelSelection.provider !== "codex"
   );
 }
 
@@ -165,6 +199,18 @@ function reviewChatModelKey(modelSelection: ModelSelection): string {
   ].join("\u001f");
 }
 
+function reviewChatSessionPrewarmKey(input: {
+  target: OrchestrationReviewChatTarget;
+  modelSelection: ModelSelection;
+  threadId: ThreadId;
+}): string {
+  return [
+    reviewChatTargetKey(input.target),
+    reviewChatModelKey(input.modelSelection),
+    input.threadId,
+  ].join("\u001f");
+}
+
 function reviewChatContextCompletenessKey(payload: ReviewSidechatContextPayload): string {
   const hasCompleteBootstrapContext =
     payload.cwd !== null &&
@@ -233,6 +279,8 @@ export function clearReviewChatThreadCacheForTests(): void {
   inFlightCreateByTargetKey.clear();
   createdThreadByTargetKey.clear();
   inFlightPrewarmByKey.clear();
+  inFlightSessionReadyByKey.clear();
+  queuedReviewTurnFlushByThreadId.clear();
   reviewContextBootstrappedKeys.clear();
 }
 
@@ -241,6 +289,128 @@ function findReviewChatThreadInState(
   target: OrchestrationReviewChatTarget,
 ): Thread | null {
   return findReviewChatThread(state.threads, target);
+}
+
+function findThreadById(state: AppState, threadId: ThreadId): Thread | undefined {
+  return state.threads.find((thread) => thread.id === threadId);
+}
+
+function isReviewChatSessionReady(input: {
+  readonly thread: Thread | undefined;
+  readonly modelSelection: ModelSelection;
+}): boolean {
+  const session = input.thread?.session;
+  return (
+    session?.provider === input.modelSelection.provider &&
+    session.status === "ready" &&
+    (session.activeTurnId === undefined || session.activeTurnId === null)
+  );
+}
+
+function reviewChatSessionError(thread: Thread | undefined): string | null {
+  const session = thread?.session;
+  if (session?.status !== "error") {
+    return null;
+  }
+  return session.lastError ?? "Review chat session failed to start.";
+}
+
+function reviewChatUnavailableReason(error: unknown): string {
+  return error instanceof Error ? error.message : "Review chat session failed to start.";
+}
+
+function waitForReviewChatSessionReady(input: {
+  readonly threadId: ThreadId;
+  readonly modelSelection: ModelSelection;
+  readonly timeoutMs?: number;
+}): Promise<boolean> {
+  const timeoutMs = input.timeoutMs ?? PREWARM_SESSION_READY_TIMEOUT_MS;
+  return new Promise<boolean>((resolve, reject) => {
+    let settled = false;
+    let unsubscribe: (() => void) | null = null;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+
+    const finish = (result: { readonly ready: boolean } | { readonly error: Error }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      unsubscribe?.();
+      if ("error" in result) {
+        reject(result.error);
+      } else {
+        resolve(result.ready);
+      }
+    };
+
+    const check = () => {
+      const thread = findThreadById(useStore.getState(), input.threadId);
+      if (isReviewChatSessionReady({ thread, modelSelection: input.modelSelection })) {
+        finish({ ready: true });
+        return;
+      }
+      const error = reviewChatSessionError(thread);
+      if (error !== null) {
+        finish({ error: new Error(error) });
+      }
+    };
+
+    check();
+    if (settled) {
+      return;
+    }
+    timeout = setTimeout(() => finish({ ready: false }), timeoutMs);
+    unsubscribe = useStore.subscribe(check);
+  });
+}
+
+function ensureReviewChatSessionReady(input: {
+  readonly api: ReviewChatApi;
+  readonly target: OrchestrationReviewChatTarget;
+  readonly threadId: ThreadId;
+  readonly modelSelection: ModelSelection;
+  readonly createdAt: string;
+}): Promise<boolean> {
+  const currentThread = findThreadById(useStore.getState(), input.threadId);
+  if (isReviewChatSessionReady({ thread: currentThread, modelSelection: input.modelSelection })) {
+    return Promise.resolve(true);
+  }
+
+  const sessionPrewarmKey = reviewChatSessionPrewarmKey({
+    target: input.target,
+    modelSelection: input.modelSelection,
+    threadId: input.threadId,
+  });
+  const inFlight = inFlightSessionReadyByKey.get(sessionPrewarmKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const promise = (async (): Promise<boolean> => {
+    void input.api.orchestration
+      .subscribeThread({ threadId: input.threadId })
+      .catch(() => undefined);
+    await input.api.orchestration.dispatchCommand(
+      buildSessionEnsureCommand({
+        threadId: input.threadId,
+        modelSelection: input.modelSelection,
+        createdAt: input.createdAt,
+      }),
+    );
+    const sessionReady = await waitForReviewChatSessionReady({
+      threadId: input.threadId,
+      modelSelection: input.modelSelection,
+    });
+    return sessionReady;
+  })().finally(() => {
+    inFlightSessionReadyByKey.delete(sessionPrewarmKey);
+  });
+
+  inFlightSessionReadyByKey.set(sessionPrewarmKey, promise);
+  return promise;
 }
 
 async function refreshShellSnapshot(api: ReviewChatApi): Promise<AppState> {
@@ -298,6 +468,59 @@ function buildMetaUpdateCommand(input: {
   };
 }
 
+function hasReviewChatMetadata(payload: ReviewSidechatContextPayload): boolean {
+  return (
+    payload.url.trim().length > 0 &&
+    payload.title.trim().length > 0 &&
+    payload.baseBranch.trim().length > 0 &&
+    payload.headBranch.trim().length > 0 &&
+    payload.headBranch !== "unknown"
+  );
+}
+
+function buildReviewChatMetadataUpdateCommand(input: {
+  payload: ReviewSidechatContextPayload;
+  target: OrchestrationReviewChatTarget;
+  threadId: ThreadId;
+}): ThreadMetaUpdateCommand {
+  return {
+    type: "thread.meta.update",
+    commandId: newCommandId(),
+    threadId: input.threadId,
+    title: buildReviewChatTitle(input.payload),
+    branch: input.payload.baseBranch,
+    lastKnownPr: {
+      number: input.payload.number,
+      title: input.payload.title,
+      url: input.payload.url,
+      baseBranch: input.payload.baseBranch,
+      headBranch: input.payload.headBranch,
+      state: input.payload.state,
+    },
+    reviewChatTarget: input.target,
+  };
+}
+
+function refreshReviewChatMetadata(input: {
+  readonly api: ReviewChatApi;
+  readonly payload: ReviewSidechatContextPayload;
+  readonly target: OrchestrationReviewChatTarget;
+  readonly threadId: ThreadId;
+}): void {
+  if (!hasReviewChatMetadata(input.payload)) {
+    return;
+  }
+  void input.api.orchestration
+    .dispatchCommand(
+      buildReviewChatMetadataUpdateCommand({
+        payload: input.payload,
+        target: input.target,
+        threadId: input.threadId,
+      }),
+    )
+    .catch(() => undefined);
+}
+
 function buildSessionEnsureCommand(input: {
   threadId: ThreadId;
   modelSelection: ModelSelection;
@@ -319,6 +542,7 @@ function buildTurnStartCommand(input: {
   threadId: ThreadId;
   modelSelection: ModelSelection;
   skills?: readonly ProviderSkillReference[] | undefined;
+  reviewTarget?: ProviderReviewTarget | undefined;
   includeReviewContext: boolean;
   dispatchMode?: "queue" | "steer" | undefined;
   source?: OrchestrationMessageSource | undefined;
@@ -340,12 +564,28 @@ function buildTurnStartCommand(input: {
       ...(input.source !== undefined ? { source: input.source } : {}),
     },
     modelSelection: input.modelSelection,
+    ...(input.reviewTarget !== undefined ? { reviewTarget: input.reviewTarget } : {}),
     assistantDeliveryMode: "streaming",
     ...(input.dispatchMode !== undefined ? { dispatchMode: input.dispatchMode } : {}),
     runtimeMode: "approval-required",
     interactionMode: "default",
     createdAt: input.createdAt,
   };
+}
+
+function buildNativeReviewTargetForQuestion(input: {
+  readonly payload: ReviewSidechatContextPayload;
+  readonly question: string;
+  readonly skills?: readonly ProviderSkillReference[] | undefined;
+}): ProviderReviewTarget | null {
+  if (input.question !== REVIEW_RISKS_NATIVE_REVIEW_QUESTION) {
+    return null;
+  }
+  if (input.skills && input.skills.length > 0) {
+    return null;
+  }
+  const branch = input.payload.baseBranch.trim();
+  return branch.length > 0 ? { type: "baseBranch", branch } : null;
 }
 
 function shouldBootstrapReviewContext(thread: Thread | undefined): boolean {
@@ -569,6 +809,8 @@ export async function prewarmReviewChatThread(input: {
   payload: ReviewSidechatContextPayload;
   modelSelection?: ModelSelection | undefined;
   onThreadReady?: ReviewChatThreadReadyHandler | undefined;
+  bootstrapReviewContext?: boolean | undefined;
+  refreshMetadata?: boolean | undefined;
   api?: ReviewChatApi | undefined;
 }): Promise<ReviewChatPrewarmResult> {
   const api = input.api ?? readNativeApi();
@@ -607,18 +849,35 @@ export async function prewarmReviewChatThread(input: {
     if (prewarmEntry) {
       prewarmEntry.threadId = resolution.threadId;
     }
+    if (!resolution.created && input.refreshMetadata !== false) {
+      refreshReviewChatMetadata({
+        api,
+        payload: input.payload,
+        target,
+        threadId: resolution.threadId,
+      });
+    }
     input.onThreadReady?.(resolution.threadId, resolution.created);
     void api.orchestration
       .subscribeThread({ threadId: resolution.threadId })
       .catch(() => undefined);
-    await api.orchestration.dispatchCommand(
-      buildSessionEnsureCommand({
-        threadId: resolution.threadId,
-        modelSelection,
-        createdAt: new Date().toISOString(),
-      }),
-    );
-    if (hasCompleteReviewBootstrapContext(input.payload)) {
+    const sessionReady = await ensureReviewChatSessionReady({
+      api,
+      target,
+      threadId: resolution.threadId,
+      modelSelection,
+      createdAt: new Date().toISOString(),
+    });
+    if (!sessionReady) {
+      return {
+        status: "unavailable",
+        reason: "Review chat session did not finish warming before the timeout.",
+      };
+    }
+    if (
+      input.bootstrapReviewContext !== false &&
+      hasCompleteReviewBootstrapContext(input.payload)
+    ) {
       const threadBootstrapKey = `${bootstrapKey}\u001f${resolution.threadId}`;
       if (!reviewContextBootstrappedKeys.has(threadBootstrapKey)) {
         if (canInjectReviewContext(modelSelection)) {
@@ -660,9 +919,11 @@ export async function prewarmReviewChatThread(input: {
   return promise;
 }
 
+type VisibleSendPrewarmResolution = ReviewChatPrewarmResult | { readonly status: "warming" } | null;
+
 function waitForPrewarmVisibleSendBudget(
   promise: Promise<ReviewChatPrewarmResult>,
-): Promise<ReviewChatPrewarmResult | null> {
+): Promise<ReviewChatPrewarmResult | { readonly status: "warming" }> {
   return new Promise((resolve) => {
     let settled = false;
     const timeout = globalThis.setTimeout(() => {
@@ -670,7 +931,7 @@ function waitForPrewarmVisibleSendBudget(
         return;
       }
       settled = true;
-      resolve(null);
+      resolve({ status: "warming" });
     }, VISIBLE_SEND_PREWARM_WAIT_MS);
     promise
       .then((result) => {
@@ -681,13 +942,13 @@ function waitForPrewarmVisibleSendBudget(
         globalThis.clearTimeout(timeout);
         resolve(result);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (settled) {
           return;
         }
         settled = true;
         globalThis.clearTimeout(timeout);
-        resolve(null);
+        resolve({ status: "unavailable", reason: reviewChatUnavailableReason(error) });
       });
   });
 }
@@ -695,21 +956,173 @@ function waitForPrewarmVisibleSendBudget(
 async function awaitInFlightPrewarmForVisibleSend(input: {
   target: OrchestrationReviewChatTarget;
   modelSelection: ModelSelection;
-}): Promise<ReviewChatPrewarmResult | null> {
+  threadId?: ThreadId | undefined;
+}): Promise<VisibleSendPrewarmResolution> {
   const targetKey = reviewChatTargetKey(input.target);
   const modelKey = reviewChatModelKey(input.modelSelection);
   for (const prewarm of inFlightPrewarmByKey.values()) {
-    if (prewarm.targetKey === targetKey && prewarm.modelKey === modelKey) {
-      const settledPrewarm = await waitForPrewarmVisibleSendBudget(prewarm.promise);
-      if (settledPrewarm) {
-        return settledPrewarm;
-      }
-      return prewarm.threadId
-        ? { status: "ready", threadId: prewarm.threadId, created: false }
-        : null;
+    if (prewarm.targetKey !== targetKey || prewarm.modelKey !== modelKey) {
+      continue;
     }
+    if (
+      input.threadId !== undefined &&
+      prewarm.threadId !== null &&
+      prewarm.threadId !== input.threadId
+    ) {
+      continue;
+    }
+    const threadId = prewarm.threadId ?? input.threadId;
+    const thread = threadId ? findThreadById(useStore.getState(), threadId) : undefined;
+    if (threadId && isReviewChatSessionReady({ thread, modelSelection: input.modelSelection })) {
+      return { status: "ready", threadId, created: false };
+    }
+    const settledPrewarm = await waitForPrewarmVisibleSendBudget(prewarm.promise);
+    if (settledPrewarm.status === "warming") {
+      return settledPrewarm;
+    }
+    if (settledPrewarm.status !== "ready") {
+      return input.threadId === undefined ? settledPrewarm : null;
+    }
+    if (input.threadId === undefined || settledPrewarm.threadId === input.threadId) {
+      return settledPrewarm;
+    }
+    return null;
   }
   return null;
+}
+
+type ReadyReviewChatThreadResult = Extract<ReviewChatThreadResult, { status: "ready" }>;
+
+async function dispatchReviewChatTurn(input: {
+  readonly api: ReviewChatApi;
+  readonly payload: ReviewSidechatContextPayload;
+  readonly target: OrchestrationReviewChatTarget;
+  readonly resolution: ReadyReviewChatThreadResult;
+  readonly modelSelection: ModelSelection;
+  readonly question: string;
+  readonly skills?: readonly ProviderSkillReference[] | undefined;
+  readonly createdAt: string;
+}): Promise<void> {
+  const bootstrapKey = reviewChatBootstrapKey({ target: input.target, payload: input.payload });
+  const threadBootstrapKey = `${bootstrapKey}\u001f${input.resolution.threadId}`;
+  const thread = findThreadById(useStore.getState(), input.resolution.threadId);
+  if (
+    thread &&
+    shouldUpdateThreadModelBeforeReviewTurn({ thread, modelSelection: input.modelSelection })
+  ) {
+    await input.api.orchestration.dispatchCommand(
+      buildMetaUpdateCommand({
+        threadId: input.resolution.threadId,
+        modelSelection: input.modelSelection,
+      }),
+    );
+  }
+  const hasBootstrappedReviewContext =
+    hasCompleteReviewBootstrapContext(input.payload) &&
+    reviewContextBootstrappedKeys.has(threadBootstrapKey);
+  const reviewTarget = buildNativeReviewTargetForQuestion({
+    payload: input.payload,
+    question: input.question,
+    skills: input.skills,
+  });
+  const includeReviewContext =
+    reviewTarget === null &&
+    !hasBootstrappedReviewContext &&
+    (input.resolution.created || shouldBootstrapReviewContext(thread));
+  const dispatchMode = isReviewContextBootstrapRunning(thread) ? "steer" : undefined;
+  void input.api.orchestration
+    .subscribeThread({ threadId: input.resolution.threadId })
+    .catch(() => undefined);
+  await input.api.orchestration.dispatchCommand(
+    buildTurnStartCommand({
+      payload: input.payload,
+      question: input.question,
+      threadId: input.resolution.threadId,
+      modelSelection: input.modelSelection,
+      skills: input.skills,
+      ...(reviewTarget !== null ? { reviewTarget } : {}),
+      includeReviewContext,
+      dispatchMode,
+      createdAt: input.createdAt,
+    }),
+  );
+  if (includeReviewContext && hasCompleteReviewBootstrapContext(input.payload)) {
+    reviewContextBootstrappedKeys.add(threadBootstrapKey);
+  }
+  void refreshShellSnapshot(input.api).catch(() => undefined);
+}
+
+async function flushQueuedReviewTurn(input: {
+  readonly api: ReviewChatApi;
+  readonly payload: ReviewSidechatContextPayload;
+  readonly target: OrchestrationReviewChatTarget;
+  readonly resolution: ReadyReviewChatThreadResult;
+  readonly modelSelection: ModelSelection;
+  readonly question: string;
+  readonly skills?: readonly ProviderSkillReference[] | undefined;
+  readonly queuedAt: string;
+  readonly onQueuedProviderStartRequested?:
+    | ReviewChatQueuedProviderStartRequestedHandler
+    | undefined;
+  readonly onQueuedTurnStarted?: ReviewChatQueuedTurnStartedHandler | undefined;
+}): Promise<void> {
+  const sessionReady = await ensureReviewChatSessionReady({
+    api: input.api,
+    target: input.target,
+    threadId: input.resolution.threadId,
+    modelSelection: input.modelSelection,
+    createdAt: input.queuedAt,
+  });
+  if (!sessionReady) {
+    throw new Error("Review chat session did not finish warming before the timeout.");
+  }
+  input.onQueuedProviderStartRequested?.(input.resolution.threadId, input.queuedAt);
+  await dispatchReviewChatTurn({
+    api: input.api,
+    payload: input.payload,
+    target: input.target,
+    resolution: input.resolution,
+    modelSelection: input.modelSelection,
+    question: input.question,
+    skills: input.skills,
+    createdAt: input.queuedAt,
+  });
+  input.onQueuedTurnStarted?.(input.resolution.threadId, input.queuedAt);
+}
+
+function enqueueQueuedReviewTurn(input: {
+  readonly api: ReviewChatApi;
+  readonly payload: ReviewSidechatContextPayload;
+  readonly target: OrchestrationReviewChatTarget;
+  readonly resolution: ReadyReviewChatThreadResult;
+  readonly modelSelection: ModelSelection;
+  readonly question: string;
+  readonly skills?: readonly ProviderSkillReference[] | undefined;
+  readonly queuedAt: string;
+  readonly onQueuedProviderStartRequested?:
+    | ReviewChatQueuedProviderStartRequestedHandler
+    | undefined;
+  readonly onQueuedTurnStarted?: ReviewChatQueuedTurnStartedHandler | undefined;
+  readonly onQueuedTurnFailed?: ReviewChatQueuedTurnFailedHandler | undefined;
+}): void {
+  const queueKey = input.resolution.threadId;
+  const previousFlush = queuedReviewTurnFlushByThreadId.get(queueKey) ?? Promise.resolve();
+  const flush = previousFlush
+    .catch(() => undefined)
+    .then(() => flushQueuedReviewTurn(input))
+    .catch((error: unknown) => {
+      input.onQueuedTurnFailed?.(
+        input.resolution.threadId,
+        input.queuedAt,
+        reviewChatUnavailableReason(error),
+      );
+    })
+    .finally(() => {
+      if (queuedReviewTurnFlushByThreadId.get(queueKey) === flush) {
+        queuedReviewTurnFlushByThreadId.delete(queueKey);
+      }
+    });
+  queuedReviewTurnFlushByThreadId.set(queueKey, flush);
 }
 
 export async function sendReviewChatQuestion(input: {
@@ -719,6 +1132,9 @@ export async function sendReviewChatQuestion(input: {
   modelSelection?: ModelSelection | undefined;
   skills?: readonly ProviderSkillReference[] | undefined;
   onThreadReady?: ReviewChatThreadReadyHandler | undefined;
+  onQueuedProviderStartRequested?: ReviewChatQueuedProviderStartRequestedHandler | undefined;
+  onQueuedTurnStarted?: ReviewChatQueuedTurnStartedHandler | undefined;
+  onQueuedTurnFailed?: ReviewChatQueuedTurnFailedHandler | undefined;
   api?: ReviewChatApi | undefined;
 }): Promise<ReviewChatQuestionResult> {
   const api = input.api ?? readNativeApi();
@@ -734,77 +1150,84 @@ export async function sendReviewChatQuestion(input: {
   if (!target) {
     return { status: "unavailable", reason: "This review does not have a repository path." };
   }
-  const prewarmResolution =
-    input.threadId === undefined
-      ? await awaitInFlightPrewarmForVisibleSend({
-          target,
-          modelSelection,
-        })
-      : null;
+  const prewarmResolution = await awaitInFlightPrewarmForVisibleSend({
+    target,
+    modelSelection,
+    ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+  });
+  if (prewarmResolution?.status === "unavailable") {
+    return prewarmResolution;
+  }
+  const requestedThreadId = input.threadId;
   const requestedThread =
-    input.threadId !== undefined
-      ? useStore.getState().threads.find((candidate) => candidate.id === input.threadId)
+    requestedThreadId !== undefined
+      ? useStore.getState().threads.find((candidate) => candidate.id === requestedThreadId)
       : undefined;
   const canUseRequestedThread =
     requestedThread === undefined || isUsableReviewChatThread(requestedThread);
-  const resolution =
-    input.threadId !== undefined && canUseRequestedThread
-      ? ({
+  const resolution = await (async (): Promise<ReviewChatThreadResult> => {
+    if (prewarmResolution?.status === "ready") {
+      return prewarmResolution;
+    }
+    return requestedThreadId !== undefined && canUseRequestedThread
+      ? {
           status: "ready",
-          threadId: input.threadId,
+          threadId: requestedThreadId,
           created: false,
-        } satisfies ReviewChatThreadResult)
-      : await resolveOrCreateReviewChatThread({
+        }
+      : resolveOrCreateReviewChatThread({
           payload: input.payload,
           modelSelection,
           api,
         });
+  })();
   if (resolution.status !== "ready") {
     return resolution;
   }
   const adoptedPrewarm =
     prewarmResolution?.status === "ready" && prewarmResolution.threadId === resolution.threadId;
   input.onThreadReady?.(resolution.threadId, adoptedPrewarm ? false : resolution.created);
-  const bootstrapKey = reviewChatBootstrapKey({ target, payload: input.payload });
-  const threadBootstrapKey = `${bootstrapKey}\u001f${resolution.threadId}`;
-  const thread = useStore
-    .getState()
-    .threads.find((candidate) => candidate.id === resolution.threadId);
-  if (thread && !modelSelectionsEqual(thread.modelSelection, modelSelection)) {
-    await api.orchestration.dispatchCommand(
-      buildMetaUpdateCommand({
-        threadId: resolution.threadId,
-        modelSelection,
-      }),
-    );
-  }
-  const hasBootstrappedReviewContext =
-    hasCompleteReviewBootstrapContext(input.payload) &&
-    reviewContextBootstrappedKeys.has(threadBootstrapKey);
-  const includeReviewContext =
-    !hasBootstrappedReviewContext && (resolution.created || shouldBootstrapReviewContext(thread));
-  const dispatchMode = isReviewContextBootstrapRunning(thread) ? "steer" : undefined;
-  void api.orchestration.subscribeThread({ threadId: resolution.threadId }).catch(() => undefined);
+
   const createdAt = new Date().toISOString();
-  await api.orchestration.dispatchCommand(
-    buildTurnStartCommand({
+  const resolvedThread = findThreadById(useStore.getState(), resolution.threadId);
+  const sessionReady = isReviewChatSessionReady({ thread: resolvedThread, modelSelection });
+  if (!sessionReady || queuedReviewTurnFlushByThreadId.has(resolution.threadId)) {
+    enqueueQueuedReviewTurn({
+      api,
       payload: input.payload,
-      question: input.question,
-      threadId: resolution.threadId,
+      target,
+      resolution,
       modelSelection,
+      question: input.question,
       skills: input.skills,
-      includeReviewContext,
-      dispatchMode,
-      createdAt,
-    }),
-  );
-  if (includeReviewContext && hasCompleteReviewBootstrapContext(input.payload)) {
-    reviewContextBootstrappedKeys.add(threadBootstrapKey);
+      queuedAt: createdAt,
+      onQueuedProviderStartRequested: input.onQueuedProviderStartRequested,
+      onQueuedTurnStarted: input.onQueuedTurnStarted,
+      onQueuedTurnFailed: input.onQueuedTurnFailed,
+    });
+    return {
+      status: "queued",
+      threadId: resolution.threadId,
+      created: resolution.created,
+      queuedAt: createdAt,
+      reason: "session_warming",
+    };
   }
-  void refreshShellSnapshot(api).catch(() => undefined);
+
+  await dispatchReviewChatTurn({
+    api,
+    payload: input.payload,
+    target,
+    resolution,
+    modelSelection,
+    question: input.question,
+    skills: input.skills,
+    createdAt,
+  });
   return {
     status: "sent",
     threadId: resolution.threadId,
     created: resolution.created,
+    turnRequestedAt: createdAt,
   };
 }

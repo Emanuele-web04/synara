@@ -4,20 +4,31 @@
 
 import type { ReviewSourceRef } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { Suspense, lazy, useState } from "react";
 
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
   CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
 } from "../components/chat/composerPickerStyles";
+import { PanelStateMessage } from "../components/chat/PanelStateMessage";
 import { ReviewBoard } from "../components/review/ReviewBoard";
-import { ReviewEntryPanel } from "../components/review/ReviewEntryPanel";
 import { ReviewRouteChrome } from "../components/review/ReviewRouteChrome";
-import { ReviewSurface } from "../components/review/ReviewSurface";
 import { useReviewCwd } from "../components/review/useReviewCwd";
 import { Button } from "../components/ui/button";
 import { SidebarInset } from "../components/ui/sidebar";
 import { cn } from "../lib/utils";
+
+const ReviewEntryPanel = lazy(() =>
+  import("../components/review/ReviewEntryPanel").then((module) => ({
+    default: module.ReviewEntryPanel,
+  })),
+);
+
+const ReviewSurface = lazy(() =>
+  import("../components/review/ReviewSurface").then((module) => ({
+    default: module.ReviewSurface,
+  })),
+);
 
 export interface ReviewIndexSearch {
   cwd?: string | undefined;
@@ -101,9 +112,25 @@ function ReviewIndexRouteView() {
         </ReviewRouteChrome>
 
         {branchSource ? (
-          <ReviewSurface mode="page" cwd={resolvedCwd} source={branchSource} />
+          <Suspense
+            fallback={
+              <PanelStateMessage density="compact" fill="flex">
+                Loading review
+              </PanelStateMessage>
+            }
+          >
+            <ReviewSurface mode="page" cwd={resolvedCwd} source={branchSource} />
+          </Suspense>
         ) : showEntry ? (
-          <ReviewEntryPanel cwd={resolvedCwd} onSelectSource={handleSelectSource} />
+          <Suspense
+            fallback={
+              <PanelStateMessage density="compact" fill="flex">
+                Loading review picker
+              </PanelStateMessage>
+            }
+          >
+            <ReviewEntryPanel cwd={resolvedCwd} onSelectSource={handleSelectSource} />
+          </Suspense>
         ) : (
           <ReviewBoard cwd={resolvedCwd} />
         )}

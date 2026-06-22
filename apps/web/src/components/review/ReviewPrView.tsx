@@ -1,16 +1,19 @@
 import type {
   ReviewCheck,
+  ReviewCommit,
   ReviewSourceRef,
   ReviewTimelineEvent,
   ThreadId,
 } from "@t3tools/contracts";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  reviewLoadChangesetQueryOptions,
   reviewLoadConversationQueryOptions,
+  reviewLoadPullRequestHeaderQueryOptions,
   reviewLoadPullRequestQueryOptions,
+  reviewLoadPullRequestSurfaceQueryOptions,
+  reviewSourceKey,
 } from "~/lib/reviewReactQuery";
 import {
   buildReviewChatTarget,
@@ -23,6 +26,7 @@ import { ArrowLeftIcon, GitPullRequestIcon } from "~/lib/icons";
 import { useStore } from "~/store";
 import { createReviewChatThreadIdSelector } from "~/storeSelectors";
 import { Button } from "../ui/button";
+import { ReviewCommits } from "./ReviewCommits";
 import { ReviewConversation } from "./ReviewConversation";
 import { ReviewPrHeader } from "./ReviewPrHeader";
 import {
@@ -37,16 +41,21 @@ import { EmptyState } from "./reviewPrimitives";
 import { buildReviewSidechatContextPayload } from "./reviewSidechatContext";
 import type { ReviewSidechatContextPayload } from "./reviewSidechatContext";
 
-type PrTab = "conversation" | "files";
+type PrTab = "conversation" | "files" | "commits";
 
 const EMPTY_CHECKS: ReadonlyArray<ReviewCheck> = [];
+const EMPTY_COMMITS: ReadonlyArray<ReviewCommit> = [];
 const EMPTY_EVENTS: ReadonlyArray<ReviewTimelineEvent> = [];
 
-function reviewSourceKey(source: ReviewSourceRef): string {
-  if (source._tag === "pullRequest") {
-    return `pullRequest:${source.reference}`;
+function reviewConversationHydrationKey(input: {
+  readonly cwd: string | null;
+  readonly reference: string;
+  readonly sourceKey: string;
+}): string | null {
+  if (input.cwd === null) {
+    return null;
   }
-  return `branchRange:${source.base}:${source.head}`;
+  return [input.cwd, input.reference, input.sourceKey].join("\u001f");
 }
 
 function Centered(props: { children: React.ReactNode }) {
@@ -111,32 +120,97 @@ export function ReviewPrView(props: {
   const [tab, setTab] = useState<PrTab>("conversation");
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
+  const queryClient = useQueryClient();
   const projects = useStore((state) => state.projects);
   const prewarmedReviewChatKeyRef = useRef<string | null>(null);
+  const prewarmingReviewChatKeyRef = useRef<string | null>(null);
   const latestSidechatContextRef = useRef<ReviewSidechatContextPayload | null>(null);
   const sourceKey = reviewSourceKey(props.source);
+  const conversationHydrationKey = reviewConversationHydrationKey({
+    cwd: props.cwd,
+    reference: props.reference,
+    sourceKey,
+  });
   useEffect(() => {
     setTab("conversation");
     setSelectedFilePath(null);
   }, [props.reference, sourceKey]);
-  const overviewQuery = useQuery(
-    reviewLoadPullRequestQueryOptions({ cwd: props.cwd, reference: props.reference }),
-  );
-  const conversationQuery = useQuery(
-    reviewLoadConversationQueryOptions({
-      cwd: props.cwd,
-      reference: overviewQuery.data?.detail ? props.reference : null,
-    }),
-  );
-  const detail = overviewQuery.data?.detail ?? null;
-  const changesetQuery = useQuery({
-    ...reviewLoadChangesetQueryOptions({
-      cwd: props.cwd,
-      source: props.source,
-    }),
-    enabled: detail !== null && props.cwd !== null,
+  const [readySurfaceHydrationKey, setReadySurfaceHydrationKey] = useState<string | null>(null);
+  useEffect(() => {
+    setReadySurfaceHydrationKey(null);
+  }, [conversationHydrationKey]);
+  const headerQuery = useQuery({
+    ...reviewLoadPullRequestHeaderQueryOptions({ cwd: props.cwd, reference: props.reference }),
+    enabled: props.cwd !== null,
   });
-  const checks = overviewQuery.data?.checks ?? EMPTY_CHECKS;
+  const headerDetail = headerQuery.data?.detail ?? null;
+  useEffect(() => {
+    if (conversationHydrationKey === null || headerDetail === null) {
+      setReadySurfaceHydrationKey(null);
+      return;
+    }
+    const frame = window.requestAnimationFrame(() =>
+      setReadySurfaceHydrationKey(conversationHydrationKey),
+    );
+    return () => window.cancelAnimationFrame(frame);
+  }, [conversationHydrationKey, headerDetail]);
+  const isSurfaceHydrationReady =
+    readySurfaceHydrationKey !== null && readySurfaceHydrationKey === conversationHydrationKey;
+  const surfaceQuery = useQuery({
+    ...reviewLoadPullRequestSurfaceQueryOptions({
+      cwd: props.cwd,
+      reference: headerDetail ? props.reference : null,
+      source: props.source,
+      includeConversation: false,
+      includeChangeset: tab === "files",
+      queryClient,
+    }),
+    enabled:
+      props.cwd !== null && headerDetail !== null && isSurfaceHydrationReady && tab === "files",
+  });
+  const overviewQuery = useQuery({
+    ...reviewLoadPullRequestQueryOptions({
+      cwd: props.cwd,
+      reference: headerDetail ? props.reference : null,
+    }),
+    enabled: props.cwd !== null && headerDetail !== null && isSurfaceHydrationReady,
+  });
+  const conversationQuery = useQuery({
+    ...reviewLoadConversationQueryOptions({
+      cwd: props.cwd,
+      reference: headerDetail ? props.reference : null,
+    }),
+    enabled:
+      props.cwd !== null &&
+      headerDetail !== null &&
+      isSurfaceHydrationReady &&
+      tab === "conversation",
+  });
+  const overview = surfaceQuery.data?.overview ?? overviewQuery.data ?? null;
+  const detail = overview?.detail ?? headerDetail;
+  const surfaceChangeset = surfaceQuery.data?.changeset;
+  const changesetState = useMemo(
+    () => ({
+      data: surfaceChangeset,
+      isLoading:
+        detail !== null &&
+        tab === "files" &&
+        isSurfaceHydrationReady &&
+        surfaceQuery.isLoading &&
+        surfaceChangeset === undefined,
+      error: surfaceChangeset === undefined ? surfaceQuery.error : null,
+    }),
+    [
+      detail,
+      isSurfaceHydrationReady,
+      surfaceChangeset,
+      surfaceQuery.error,
+      surfaceQuery.isLoading,
+      tab,
+    ],
+  );
+  const checks = overview?.checks ?? EMPTY_CHECKS;
+  const commits = overview?.commits ?? EMPTY_COMMITS;
   const events = conversationQuery.data?.events ?? EMPTY_EVENTS;
   const sidechatContext = useMemo(() => {
     if (!detail) {
@@ -148,17 +222,17 @@ export function ReviewPrView(props: {
       detail,
       checks,
       events,
-      files: changesetQuery.data?.files ?? [],
+      files: changesetState.data?.files ?? [],
       source: props.source,
-      target: changesetQuery.data?.target ?? null,
-      headSha: changesetQuery.data?.headSha ?? null,
-      currentView: tab,
+      target: changesetState.data?.target ?? null,
+      headSha: changesetState.data?.headSha ?? null,
+      currentView: tab === "files" ? "files" : "conversation",
       selectedFilePath,
     });
   }, [
-    changesetQuery.data?.files,
-    changesetQuery.data?.headSha,
-    changesetQuery.data?.target,
+    changesetState.data?.files,
+    changesetState.data?.headSha,
+    changesetState.data?.target,
     checks,
     detail,
     events,
@@ -208,14 +282,28 @@ export function ReviewPrView(props: {
       return;
     }
     const modelSelection = defaultReviewChatModelSelection();
-    if (prewarmedReviewChatKeyRef.current === reviewChatPrewarmKey) {
+    if (
+      prewarmedReviewChatKeyRef.current === reviewChatPrewarmKey ||
+      prewarmingReviewChatKeyRef.current === reviewChatPrewarmKey
+    ) {
       return;
     }
-    prewarmedReviewChatKeyRef.current = reviewChatPrewarmKey;
+    prewarmingReviewChatKeyRef.current = reviewChatPrewarmKey;
     void prewarmReviewChatThread({
       payload: sidechatContext,
       modelSelection,
-    }).catch(() => undefined);
+    })
+      .then((result) => {
+        if (result.status === "ready") {
+          prewarmedReviewChatKeyRef.current = reviewChatPrewarmKey;
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (prewarmingReviewChatKeyRef.current === reviewChatPrewarmKey) {
+          prewarmingReviewChatKeyRef.current = null;
+        }
+      });
   }, [reviewChatPrewarmKey]);
   const reviewAction =
     tab === "files" ? (
@@ -223,8 +311,8 @@ export function ReviewPrView(props: {
         mode="header"
         cwd={props.cwd}
         reference={props.reference}
-        target={changesetQuery.data?.target ?? null}
-        expectedHeadSha={changesetQuery.data?.headSha ?? null}
+        target={changesetState.data?.target ?? null}
+        expectedHeadSha={changesetState.data?.headSha ?? null}
       />
     ) : undefined;
   const navigationAction =
@@ -263,7 +351,7 @@ export function ReviewPrView(props: {
                     onSelectedFilePathChange={setSelectedFilePath}
                     reviewAction={reviewAction}
                     navigationAction={navigationAction}
-                    changesetState={changesetQuery}
+                    changesetState={changesetState}
                   />
                 </main>
               ) : (
@@ -271,41 +359,56 @@ export function ReviewPrView(props: {
                   <ReviewPrHeader
                     detail={detail}
                     variant="full"
-                    reviewMode={tab}
+                    reviewMode="conversation"
                     contentClassName={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}
                     onReviewChanges={() => setTab("files")}
                     onOverview={() => setTab("conversation")}
+                    commitsActive={tab === "commits"}
+                    onCommits={() => setTab(tab === "commits" ? "conversation" : "commits")}
                   />
-                  <ReviewConversation
-                    detail={detail}
-                    cwd={props.cwd}
-                    reference={props.reference}
-                    events={conversationQuery.data?.events ?? []}
-                    isLoading={conversationQuery.isLoading}
-                    className={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}
-                  />
+                  {tab === "commits" ? (
+                    <div className={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}>
+                      <ReviewCommits commits={commits} />
+                    </div>
+                  ) : (
+                    <ReviewConversation
+                      detail={detail}
+                      cwd={props.cwd}
+                      reference={props.reference}
+                      events={events}
+                      isLoading={
+                        (detail !== null && tab === "conversation" && !isSurfaceHydrationReady) ||
+                        (detail !== null &&
+                          tab === "conversation" &&
+                          isSurfaceHydrationReady &&
+                          conversationQuery.isLoading &&
+                          conversationQuery.data === undefined)
+                      }
+                      className={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}
+                    />
+                  )}
                 </main>
               )}
             </div>
-            {sidechatContext ? (
+            {sidechatContext && detail ? (
               <ReviewPrSidebar
                 detail={detail}
                 checks={checks}
                 events={events}
-                mode={tab}
+                mode={tab === "files" ? "files" : "conversation"}
                 cwd={props.cwd}
                 source={props.source}
-                target={changesetQuery.data?.target ?? null}
+                target={changesetState.data?.target ?? null}
                 sidechatContext={sidechatContext}
                 hostThreadId={props.hostThreadId ?? null}
                 reviewThreadId={reviewChatThreadId}
-                sidechatOwnsPrewarm={false}
                 collapsed={sidebarCollapsed}
                 onCollapsedChange={updateSidebarCollapsed}
+                sidechatOwnsPrewarm={false}
               />
             ) : null}
           </div>
-        ) : overviewQuery.isLoading ? (
+        ) : headerQuery.isLoading ? (
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="shrink-0">
               <ReviewPrHeaderSkeleton />
@@ -317,10 +420,10 @@ export function ReviewPrView(props: {
               <ReviewPrSidebarSkeleton />
             </div>
           </div>
-        ) : overviewQuery.isError ? (
+        ) : headerQuery.isError ? (
           <div className="min-w-0 flex-1 overflow-y-auto">
             <EmptyState icon={<GitPullRequestIcon />} title="Unavailable">
-              {rpcErrorMessage(overviewQuery.error) ?? "Could not load this pull request."}
+              {rpcErrorMessage(headerQuery.error) ?? "Could not load this pull request."}
             </EmptyState>
           </div>
         ) : (

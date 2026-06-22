@@ -21,6 +21,12 @@ async function renderMarkdown(text: string, cwd = "C:\\Users\\LENOVO\\dpcode") {
   return renderToStaticMarkup(<ChatMarkdown text={text} cwd={cwd} isStreaming={false} />);
 }
 
+async function renderMarkdownWithHtml(text: string, cwd = "/Users/julius/project") {
+  const { default: ChatMarkdown } = await import("./ChatMarkdown");
+
+  return renderToStaticMarkup(<ChatMarkdown text={text} cwd={cwd} isStreaming={false} allowHtml />);
+}
+
 describe("ChatMarkdown", () => {
   it("uses the theme foreground token for markdown text", async () => {
     const markup = await renderMarkdown("Theme-aware text");
@@ -115,6 +121,48 @@ describe("ChatMarkdown", () => {
 
     expect(markup).toContain('data-chat-mermaid="pending"');
     expect(markup).not.toContain("chat-markdown-codeblock");
+  });
+
+  it("escapes raw HTML by default instead of rendering it", async () => {
+    const markup = await renderMarkdown(
+      "<details><summary>1 Skipped Deployment</summary>body</details>",
+    );
+
+    expect(markup).not.toContain("<details>");
+    expect(markup).toContain("&lt;details&gt;");
+  });
+
+  it("renders the GitHub HTML subset when allowHtml is set", async () => {
+    const markup = await renderMarkdownWithHtml(
+      "<details><summary>1 Skipped Deployment</summary>The body</details>",
+    );
+
+    expect(markup).toContain("<details>");
+    expect(markup).toContain("<summary>1 Skipped Deployment</summary>");
+    expect(markup).toContain("The body");
+  });
+
+  it("strips scripts and event handlers from allowed HTML", async () => {
+    const markup = await renderMarkdownWithHtml(
+      '<a href="https://example.com" onclick="steal()">link</a><script>evil()</script>',
+    );
+
+    expect(markup).not.toContain("<script>");
+    expect(markup).not.toContain("onclick");
+    expect(markup).not.toContain("evil()");
+    expect(markup).toContain('href="https://example.com"');
+  });
+
+  it("keeps KaTeX math working alongside sanitized HTML", async () => {
+    const markup = await renderMarkdownWithHtml(
+      ["<details><summary>Notes</summary>collapsible</details>", "", "Inline $x^2$ renders."].join(
+        "\n",
+      ),
+    );
+
+    expect(markup).toContain("<details>");
+    expect(markup).toContain('class="katex"');
+    expect(markup).not.toContain("$x^2$");
   });
 
   it("keeps plan and diff surfaces routed through the shared renderer", () => {

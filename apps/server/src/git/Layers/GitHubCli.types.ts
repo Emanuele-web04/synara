@@ -73,12 +73,82 @@ export const RawReviewAuthorSchema = Schema.Struct({
   avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
+const RawReviewRequestedReviewerSchema = Schema.Struct({
+  __typename: Schema.optional(Schema.NullOr(Schema.String)),
+  login: Schema.optional(Schema.NullOr(Schema.String)),
+  name: Schema.optional(Schema.NullOr(Schema.String)),
+  slug: Schema.optional(Schema.NullOr(Schema.String)),
+  avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+const RawReviewRequestNodeSchema = Schema.Struct({
+  requestedReviewer: Schema.optional(Schema.NullOr(RawReviewRequestedReviewerSchema)),
+});
+
+const RawReviewLatestReviewNodeSchema = Schema.Struct({
+  author: Schema.optional(Schema.NullOr(RawReviewAuthorSchema)),
+  state: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+const RawReviewRequestConnectionSchema = Schema.Struct({
+  nodes: Schema.optional(Schema.NullOr(Schema.Array(RawReviewRequestNodeSchema))),
+});
+
+const RawReviewLatestReviewConnectionSchema = Schema.Struct({
+  nodes: Schema.optional(Schema.NullOr(Schema.Array(RawReviewLatestReviewNodeSchema))),
+});
+
+export const RawReviewAvatarEnrichmentResponseSchema = Schema.Struct({
+  data: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        repository: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              pullRequest: Schema.optional(
+                Schema.NullOr(
+                  Schema.Struct({
+                    reviewRequests: Schema.optional(
+                      Schema.NullOr(RawReviewRequestConnectionSchema),
+                    ),
+                    latestReviews: Schema.optional(
+                      Schema.NullOr(RawReviewLatestReviewConnectionSchema),
+                    ),
+                  }),
+                ),
+              ),
+            }),
+          ),
+        ),
+      }),
+    ),
+  ),
+});
+
+export const RawReviewLabelSchema = Schema.Struct({
+  name: Schema.optional(Schema.NullOr(Schema.String)),
+  color: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+export const RawReviewUserSchema = Schema.Struct({
+  login: Schema.optional(Schema.NullOr(Schema.String)),
+  name: Schema.optional(Schema.NullOr(Schema.String)),
+  avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
 export const RawGitHubReviewPullRequestSchema = Schema.Struct({
   number: PositiveInt,
   title: Schema.String,
   url: Schema.String,
   baseRefName: Schema.String,
   headRefName: Schema.String,
+  headRepositoryOwner: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        login: Schema.String,
+      }),
+    ),
+  ),
   author: Schema.optional(Schema.NullOr(RawReviewAuthorSchema)),
   updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
   state: Schema.optional(Schema.NullOr(Schema.String)),
@@ -89,6 +159,8 @@ export const RawGitHubReviewPullRequestSchema = Schema.Struct({
   deletions: Schema.optional(Schema.NullOr(Schema.Number)),
   statusCheckRollup: Schema.optional(Schema.NullOr(Schema.Array(RawStatusCheckRollupEntrySchema))),
   reviewRequests: Schema.optional(Schema.NullOr(Schema.Array(RawReviewRequestSchema))),
+  labels: Schema.optional(Schema.NullOr(Schema.Array(RawReviewLabelSchema))),
+  assignees: Schema.optional(Schema.NullOr(Schema.Array(RawReviewUserSchema))),
 });
 
 export const FAILING_CHECK_STATES = new Set([
@@ -123,17 +195,6 @@ export const RawReviewCommitSchema = Schema.Struct({
   authoredDate: Schema.optional(Schema.NullOr(Schema.String)),
   committedDate: Schema.optional(Schema.NullOr(Schema.String)),
   authors: Schema.optional(Schema.NullOr(Schema.Array(RawReviewCommitAuthorSchema))),
-});
-
-export const RawReviewLabelSchema = Schema.Struct({
-  name: Schema.optional(Schema.NullOr(Schema.String)),
-  color: Schema.optional(Schema.NullOr(Schema.String)),
-});
-
-export const RawReviewUserSchema = Schema.Struct({
-  login: Schema.optional(Schema.NullOr(Schema.String)),
-  name: Schema.optional(Schema.NullOr(Schema.String)),
-  avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 export const RawReviewLatestReviewSchema = Schema.Struct({
@@ -172,6 +233,28 @@ export const RawGitHubReviewDetailSchema = Schema.Struct({
   commits: Schema.optional(Schema.NullOr(Schema.Array(RawReviewCommitSchema))),
   statusCheckRollup: Schema.optional(Schema.NullOr(Schema.Array(RawStatusCheckRollupEntrySchema))),
 });
+
+export const GRAPHQL_REVIEW_AVATARS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewRequests(first: 100) {
+        nodes {
+          requestedReviewer {
+            __typename
+            ... on User { login avatarUrl }
+            ... on Team { name slug avatarUrl }
+          }
+        }
+      }
+      latestReviews(first: 100) {
+        nodes {
+          author { login avatarUrl }
+          state
+        }
+      }
+    }
+  }
+}`;
 
 export const RawConversationCommentSchema = Schema.Struct({
   author: Schema.optional(Schema.NullOr(RawReviewAuthorSchema)),
@@ -219,6 +302,7 @@ export const GRAPHQL_REVIEW_THREADS_QUERY = `query($owner: String!, $repo: Strin
               endCursor
             }
             nodes {
+              id
               author { login avatarUrl }
               body
               createdAt
@@ -256,6 +340,7 @@ export const RawPageInfoSchema = Schema.Struct({
 });
 
 export const RawReviewThreadCommentSchema = Schema.Struct({
+  id: Schema.optional(Schema.NullOr(Schema.String)),
   author: Schema.optional(
     Schema.NullOr(
       Schema.Struct({

@@ -58,6 +58,7 @@ import {
 import {
   classifyCodexStderrLine,
   isIgnorableCodexProcessLine,
+  normalizeProviderThreadId,
   readCodexAccountSnapshot,
 } from "./codexAppServer.protocol.ts";
 import {
@@ -66,8 +67,12 @@ import {
   isTurnInterruptTimeout,
   parseModelListResponse,
   parseThreadSnapshot,
+  readObject,
+  readProviderConversationId,
+  readString,
 } from "./codexAppServer.parsers.ts";
 import {
+  buildCodexInitializeParams,
   CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES,
   readResumeThreadId,
   toCodexUserInputAnswers,
@@ -86,6 +91,7 @@ import type {
   CodexThreadTurnSnapshot,
   CodexTransportFactory,
   CodexTransportFactoryInput,
+  CodexWorkspaceRuntime,
   CodexVoiceTranscriptionAuthContext,
   CodexAppServerManagerEvents,
   CodexAppServerManagerOptions,
@@ -138,8 +144,19 @@ export type {
   CodexTransportFactoryInput,
 } from "./codexAppServer.types.ts";
 
+const DEFAULT_CODEX_REQUEST_TIMEOUT_MS = 20_000;
+const CODEX_THREAD_OPEN_REQUEST_TIMEOUT_MS = 90_000;
+
+function codexRequestTimeoutMs(method: string): number {
+  return method === "thread/start" || method === "thread/resume"
+    ? CODEX_THREAD_OPEN_REQUEST_TIMEOUT_MS
+    : DEFAULT_CODEX_REQUEST_TIMEOUT_MS;
+}
+
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
+  private readonly workspaceRuntimes = new Map<string, CodexWorkspaceRuntime>();
+  private readonly workspaceRuntimeInFlight = new Map<string, Promise<CodexWorkspaceRuntime>>();
   private readonly discoverySessions = new Map<string, CodexSessionContext>();
   private readonly discoverySessionIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly skillsCache = new Map<string, ProviderListSkillsResult>();
@@ -172,6 +189,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       emitErrorEvent: (context, method, message) => this.emitErrorEvent(context, method, message),
       writeMessage: (context, message) => this.writeMessage(context, message),
       updateSession: (context, updates) => this.updateSession(context, updates),
+      resolveInboundContext: (context, message) => this.resolveInboundContext(context, message),
     };
     this.discoverySessionDeps = {
       sessions: this.sessions,
@@ -201,6 +219,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       isContextAlive: (...args) => this.isContextAlive(...args),
       assertSupportedCodexCliVersion: (...args) => this.assertSupportedCodexCliVersion(...args),
       createTransport: (...args) => this.createTransport(...args),
+      canUseWorkspaceRuntime: (...args) => this.canUseWorkspaceRuntime(...args),
+      ensureWorkspaceRuntime: (...args) => this.ensureWorkspaceRuntime(...args),
       attachProcessListeners: (...args) => this.attachProcessListeners(...args),
       emitLifecycleEvent: (...args) => this.emitLifecycleEvent(...args),
       emitErrorEvent: (...args) => this.emitErrorEvent(...args),
@@ -216,6 +236,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       requireSession: (...args) => this.requireSession(...args),
       sendRequest: (...args) => this.sendRequest(...args),
       updateSession: (...args) => this.updateSession(...args),
+      registerSynaraSkillsRoot: (...args) => this.registerSynaraSkillsRoot(...args),
       sendTurn: (...args) => this.sendTurn(...args),
     };
     this.discoveryQueryDeps = {
@@ -225,6 +246,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       modelCache: this.modelCache,
       resolveContextForDiscovery: (...args) => this.resolveContextForDiscovery(...args),
       sendRequest: (...args) => this.sendRequest(...args),
+      registerSynaraSkillsRoot: (...args) => this.registerSynaraSkillsRoot(...args),
     };
   }
 
@@ -259,8 +281,162 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     );
   }
 
+  private workspaceRuntimeKey(input: {
+    readonly binaryPath: string;
+    readonly cwd: string;
+    readonly homePath?: string;
+  }): string {
+    return [input.binaryPath, input.homePath ?? "", input.cwd].join("\u001f");
+  }
+
+  private canUseWorkspaceRuntime(input: {
+    readonly binaryPath: string;
+    readonly cwd: string;
+    readonly homePath?: string;
+    readonly createTransport?: CodexTransportFactory;
+  }): boolean {
+    return (
+      input.createTransport === undefined &&
+      input.homePath === undefined &&
+      input.binaryPath === "codex" &&
+      input.cwd.trim().length > 0
+    );
+  }
+
+  private async ensureWorkspaceRuntime(input: {
+    readonly binaryPath: string;
+    readonly cwd: string;
+    readonly homePath?: string;
+  }): Promise<CodexWorkspaceRuntime> {
+    const key = this.workspaceRuntimeKey(input);
+    const existing = this.workspaceRuntimes.get(key);
+    if (
+      existing &&
+      !existing.rootContext.stopping &&
+      (await this.isContextAlive(existing.rootContext))
+    ) {
+      return existing;
+    }
+
+    const inFlight = this.workspaceRuntimeInFlight.get(key);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const promise = this.createWorkspaceRuntime(key, input);
+    this.workspaceRuntimeInFlight.set(key, promise);
+    try {
+      return await promise;
+    } finally {
+      this.workspaceRuntimeInFlight.delete(key);
+    }
+  }
+
+  private async createWorkspaceRuntime(
+    key: string,
+    input: {
+      readonly binaryPath: string;
+      readonly cwd: string;
+      readonly homePath?: string;
+    },
+  ): Promise<CodexWorkspaceRuntime> {
+    const now = new Date().toISOString();
+    const transport = await this.createTransport({
+      binaryPath: input.binaryPath,
+      cwd: input.cwd,
+      ...(input.homePath ? { homePath: input.homePath } : {}),
+    });
+    const rootContext: CodexSessionContext = {
+      session: {
+        provider: "codex",
+        status: "connecting",
+        runtimeMode: "full-access",
+        model: CODEX_DEFAULT_MODEL,
+        cwd: input.cwd,
+        threadId: ThreadId.makeUnsafe(`__codex_workspace__:${key}`),
+        createdAt: now,
+        updatedAt: now,
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: false,
+      },
+      transport,
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+      discovery: true,
+      workspaceRuntimeRoot: true,
+    };
+    const runtime: CodexWorkspaceRuntime = {
+      key,
+      cwd: input.cwd,
+      rootContext,
+      sessions: new Map(),
+      providerThreadIds: new Map(),
+    };
+    rootContext.workspaceRuntime = runtime;
+    this.workspaceRuntimes.set(key, runtime);
+    this.attachProcessListeners(rootContext);
+
+    try {
+      await this.sendRequest(rootContext, "initialize", buildCodexInitializeParams());
+      this.writeMessage(rootContext, { method: "initialized" });
+      this.updateSession(rootContext, { status: "ready" });
+      this.discoverySessions.set(input.cwd, rootContext);
+      return runtime;
+    } catch (error) {
+      if (this.workspaceRuntimes.get(key) === runtime) {
+        this.workspaceRuntimes.delete(key);
+      }
+      if (this.discoverySessions.get(input.cwd) === rootContext) {
+        this.discoverySessions.delete(input.cwd);
+      }
+      this.closeTransport(rootContext);
+      throw error;
+    }
+  }
+
+  private resolveInboundContext(
+    context: CodexSessionContext,
+    message: JsonRpcNotification | JsonRpcRequest,
+  ): CodexSessionContext {
+    const runtime = context.workspaceRuntime;
+    if (!runtime) {
+      return context;
+    }
+
+    const providerThreadId = normalizeProviderThreadId(readProviderConversationId(message.params));
+    if (providerThreadId) {
+      const threadId = runtime.providerThreadIds.get(providerThreadId);
+      const routedContext = threadId ? runtime.sessions.get(threadId) : undefined;
+      if (routedContext && !routedContext.stopping) {
+        return routedContext;
+      }
+    }
+
+    const activeSessions = Array.from(runtime.sessions.values()).filter(
+      (sessionContext) => !sessionContext.stopping,
+    );
+    const [onlyActiveSession] = activeSessions;
+    if (activeSessions.length === 1 && onlyActiveSession !== undefined) {
+      return onlyActiveSession;
+    }
+    return context;
+  }
+
   private async registerSynaraSkillsRoot(context: CodexSessionContext): Promise<void> {
+    if (context.synaraSkillsRootRegistered === true) {
+      return;
+    }
     if (!this.synaraSkillsDir) {
+      context.synaraSkillsRootRegistered = true;
       return;
     }
     try {
@@ -269,6 +445,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       });
     } catch (error) {
       console.log("codex skills/extraRoots/set unavailable", error);
+    } finally {
+      context.synaraSkillsRootRegistered = true;
     }
   }
 
@@ -291,28 +469,33 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       let account: CodexAccountSnapshot = {
         type: "unknown",
         planType: null,
-        sparkEnabled: true,
+        sparkEnabled: false,
       };
 
-      try {
-        const modelListResponse = await this.sendRequest(context, "model/list", {});
-        console.log("codex model/list response", modelListResponse);
-        advertisedModelSlugs = parseModelListResponse(modelListResponse).map((model) => model.slug);
-      } catch (error) {
-        console.log("codex model/list failed", error);
+      const [modelListResult, accountReadResult] = await Promise.allSettled([
+        this.sendRequest(context, "model/list", {}),
+        this.sendRequest(context, "account/read", {}),
+      ]);
+
+      if (modelListResult.status === "fulfilled") {
+        console.log("codex model/list response", modelListResult.value);
+        advertisedModelSlugs = parseModelListResponse(modelListResult.value).map(
+          (model) => model.slug,
+        );
+      } else {
+        console.log("codex model/list failed", modelListResult.reason);
       }
 
-      try {
-        const accountReadResponse = await this.sendRequest(context, "account/read", {});
-        console.log("codex account/read response", accountReadResponse);
-        account = readCodexAccountSnapshot(accountReadResponse);
+      if (accountReadResult.status === "fulfilled") {
+        console.log("codex account/read response", accountReadResult.value);
+        account = readCodexAccountSnapshot(accountReadResult.value);
         console.log("codex subscription status", {
           type: account.type,
           planType: account.planType,
           sparkEnabled: account.sparkEnabled,
         });
-      } catch (error) {
-        console.log("codex account/read failed", error);
+      } else {
+        console.log("codex account/read failed", accountReadResult.reason);
       }
 
       return { advertisedModelSlugs, account };
@@ -662,7 +845,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context.pendingApprovals.clear();
     context.pendingUserInputs.clear();
 
-    this.closeTransport(context);
+    if (context.workspaceRuntime && !context.workspaceRuntimeRoot) {
+      context.workspaceRuntime.sessions.delete(threadId);
+      for (const [providerThreadId, routedThreadId] of context.workspaceRuntime.providerThreadIds) {
+        if (routedThreadId === threadId) {
+          context.workspaceRuntime.providerThreadIds.delete(providerThreadId);
+        }
+      }
+    } else {
+      this.closeTransport(context);
+    }
 
     this.updateSession(context, {
       status: "closed",
@@ -686,6 +878,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     for (const threadId of this.sessions.keys()) {
       this.stopSession(threadId);
     }
+    for (const runtime of this.workspaceRuntimes.values()) {
+      runtime.rootContext.stopping = true;
+      this.closeTransport(runtime.rootContext);
+    }
+    this.workspaceRuntimes.clear();
+    this.workspaceRuntimeInFlight.clear();
     for (const discoveryKey of this.discoverySessions.keys()) {
       this.stopDiscoverySession(discoveryKey);
     }
@@ -764,6 +962,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private getOrCreateDiscoverySession(cwd: string): Promise<CodexSessionContext> {
+    if (this.canUseWorkspaceRuntime({ binaryPath: "codex", cwd })) {
+      return this.ensureWorkspaceRuntime({ binaryPath: "codex", cwd }).then(
+        (runtime) => runtime.rootContext,
+      );
+    }
     return getOrCreateDiscoverySessionFn(this.discoverySessionDeps, cwd);
   }
 
@@ -800,6 +1003,30 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
 
       const message = `codex app-server exited (code=${code ?? "null"}, signal=${signal ?? "null"}).`;
+      if (context.workspaceRuntimeRoot && context.workspaceRuntime) {
+        const runtime = context.workspaceRuntime;
+        context.stopping = true;
+        for (const sessionContext of runtime.sessions.values()) {
+          sessionContext.stopping = true;
+          this.updateSession(sessionContext, {
+            status: "closed",
+            activeTurnId: undefined,
+            lastError: code === 0 ? sessionContext.session.lastError : message,
+          });
+          this.emitLifecycleEvent(sessionContext, "session/exited", message);
+          this.sessions.delete(sessionContext.session.threadId);
+        }
+        runtime.sessions.clear();
+        runtime.providerThreadIds.clear();
+        if (this.workspaceRuntimes.get(runtime.key) === runtime) {
+          this.workspaceRuntimes.delete(runtime.key);
+        }
+        if (this.discoverySessions.get(runtime.cwd) === context) {
+          this.discoverySessions.delete(runtime.cwd);
+        }
+        return;
+      }
+
       this.updateSession(context, {
         status: "closed",
         activeTurnId: undefined,
@@ -808,7 +1035,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       this.emitLifecycleEvent(context, "session/exited", message);
       if (context.discovery) {
         const discoveryKey = context.session.cwd ?? "";
-        if (discoveryKey) {
+        if (discoveryKey && this.discoverySessions.get(discoveryKey) === context) {
           this.discoverySessions.delete(discoveryKey);
         }
       } else {
@@ -856,24 +1083,28 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
     method: string,
     params: unknown,
-    timeoutMs = 20_000,
+    timeoutMs = codexRequestTimeoutMs(method),
   ): Promise<TResponse> {
-    const id = context.nextRequestId;
-    context.nextRequestId += 1;
+    const requestContext =
+      context.workspaceRuntime && !context.workspaceRuntimeRoot
+        ? context.workspaceRuntime.rootContext
+        : context;
+    const id = requestContext.nextRequestId;
+    requestContext.nextRequestId += 1;
 
     const result = await new Promise<unknown>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        context.pending.delete(String(id));
+        requestContext.pending.delete(String(id));
         reject(new Error(`Timed out waiting for ${method}.`));
       }, timeoutMs);
 
-      context.pending.set(String(id), {
+      requestContext.pending.set(String(id), {
         method,
         timeout,
         resolve,
         reject,
       });
-      this.writeMessage(context, {
+      this.writeMessage(requestContext, {
         method,
         id,
         params,
@@ -884,11 +1115,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private writeMessage(context: CodexSessionContext, message: unknown): void {
+    const targetContext =
+      context.workspaceRuntime && !context.workspaceRuntimeRoot
+        ? context.workspaceRuntime.rootContext
+        : context;
     void this.runPromise(
-      context.transport.send(message).pipe(
+      targetContext.transport.send(message).pipe(
         Effect.catchTag("TransportClosedError", (error) =>
           Effect.sync(() => {
-            if (!context.stopping) {
+            if (!targetContext.stopping) {
               this.emitErrorEvent(context, "process/error", error.detail);
             }
           }),
@@ -898,7 +1133,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private emitLifecycleEvent(context: CodexSessionContext, method: string, message: string): void {
-    if (context.discovery) {
+    if (context.discovery || context.workspaceRuntimeRoot) {
       return;
     }
     this.emitEvent({
@@ -913,7 +1148,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private emitErrorEvent(context: CodexSessionContext, method: string, message: string): void {
-    if (context.discovery) {
+    if (context.discovery || context.workspaceRuntimeRoot) {
       return;
     }
     this.emitEvent({

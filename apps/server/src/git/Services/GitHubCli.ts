@@ -37,6 +37,7 @@ export interface GitHubReviewPullRequest {
   readonly url: string;
   readonly baseRefName: string;
   readonly headRefName: string;
+  readonly headRepositoryOwnerLogin?: string;
   readonly author: string;
   readonly authorAvatarUrl?: string;
   readonly updatedAt: string;
@@ -47,6 +48,8 @@ export interface GitHubReviewPullRequest {
   readonly deletions: number;
   readonly checksStatus: GitHubChecksStatus;
   readonly reviewRequests: ReadonlyArray<string>;
+  readonly labels: ReadonlyArray<string>;
+  readonly assignees: ReadonlyArray<string>;
 }
 
 export type GitHubReviewerState =
@@ -127,6 +130,37 @@ export interface GitHubReviewPullRequestDetail {
   readonly reviewers: ReadonlyArray<GitHubReviewer>;
 }
 
+export interface GitHubReviewPullRequestHeaderDetail {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly state: "open" | "closed" | "merged";
+  readonly isDraft: boolean;
+  readonly author: string;
+  readonly authorAvatarUrl?: string;
+  readonly baseBranch: string;
+  readonly headBranch: string;
+  readonly body: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changedFiles: number;
+  readonly commitsCount?: number;
+  readonly reviewDecision: string | null;
+  readonly mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+  readonly mergeStateStatus?: string;
+  readonly checksStatus?: GitHubChecksStatus;
+  readonly milestone: string | null;
+  readonly labels: ReadonlyArray<GitHubReviewLabel>;
+  readonly assignees: ReadonlyArray<GitHubReviewUserRef>;
+  readonly reviewers?: ReadonlyArray<GitHubReviewer>;
+}
+
+export interface GitHubReviewPullRequestHeader {
+  readonly detail: GitHubReviewPullRequestHeaderDetail;
+}
+
 export interface GitHubReviewPullRequestOverview {
   readonly detail: GitHubReviewPullRequestDetail;
   readonly commits: ReadonlyArray<GitHubReviewCommit>;
@@ -162,6 +196,44 @@ export type GitHubReviewTimelineEvent =
       readonly createdAt: string;
     };
 
+export type GitHubReviewStateEvent =
+  | {
+      readonly kind: "labeled";
+      readonly actor: string;
+      readonly label: string;
+      readonly added: boolean;
+      readonly createdAt: string;
+    }
+  | {
+      readonly kind: "assigned";
+      readonly actor: string;
+      readonly assignee: string;
+      readonly added: boolean;
+      readonly createdAt: string;
+    }
+  | {
+      readonly kind: "milestoned";
+      readonly actor: string;
+      readonly milestone: string;
+      readonly added: boolean;
+      readonly createdAt: string;
+    }
+  | {
+      readonly kind: "reviewRequested";
+      readonly actor: string;
+      readonly requestedReviewer: string;
+      readonly createdAt: string;
+    }
+  | {
+      readonly kind: "merged";
+      readonly actor: string;
+      readonly commitOid?: string;
+      readonly createdAt: string;
+    }
+  | { readonly kind: "closed"; readonly actor: string; readonly createdAt: string }
+  | { readonly kind: "reopened"; readonly actor: string; readonly createdAt: string }
+  | { readonly kind: "headRefForcePushed"; readonly actor: string; readonly createdAt: string };
+
 export type GitHubReviewEvent = "approve" | "request_changes" | "comment";
 
 export interface GitHubReviewInlineComment {
@@ -182,6 +254,7 @@ export interface GitHubAuthenticatedUser {
 }
 
 export interface GitHubReviewThreadComment {
+  readonly id?: string;
   readonly author: string;
   readonly authorAvatarUrl?: string;
   readonly body: string;
@@ -270,13 +343,38 @@ export interface GitHubCliShape {
    */
   readonly listRepositoryPullRequests: (input: {
     readonly cwd: string;
-    readonly state: "open" | "closed" | "all";
+    readonly state: "open" | "closed" | "merged" | "all";
     readonly limit?: number;
+    readonly search?: string;
+    readonly author?: string;
+    readonly authors?: ReadonlyArray<string>;
+    readonly reviewRequested?: string;
+    readonly baseBranch?: string;
+    readonly baseBranches?: ReadonlyArray<string>;
+    readonly headBranch?: string;
+    readonly headBranches?: ReadonlyArray<string>;
+    readonly label?: string;
+    readonly labels?: ReadonlyArray<string>;
+    readonly assignee?: string;
+    readonly assignees?: ReadonlyArray<string>;
+    readonly draft?: boolean;
+    readonly checksStatuses?: ReadonlyArray<
+      Extract<GitHubChecksStatus, "passing" | "failing" | "pending">
+    >;
+    readonly reviewStatus?: "approved" | "changes-requested";
   }) => Effect.Effect<ReadonlyArray<GitHubReviewPullRequest>, GitHubCliError>;
 
   /**
-   * Load the full PR overview — detail, commits, and per-check status — from a
-   * single `gh pr view` call for the review surface.
+   * Load the lightweight PR detail needed to paint the review header quickly.
+   */
+  readonly getReviewPullRequestHeader: (input: {
+    readonly cwd: string;
+    readonly reference: string;
+  }) => Effect.Effect<GitHubReviewPullRequestHeader, GitHubCliError>;
+
+  /**
+   * Load the full PR overview — detail, commits, reviews, and per-check status —
+   * from a single `gh pr view` call for hydrated review surfaces.
    */
   readonly getReviewPullRequestOverview: (input: {
     readonly cwd: string;
@@ -291,6 +389,15 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly reference: string;
   }) => Effect.Effect<ReadonlyArray<GitHubReviewTimelineEvent>, GitHubCliError>;
+
+  /**
+   * Load the PR state timeline (labels, assignees, milestones, review requests,
+   * merge/close/reopen, force-pushes) via the GraphQL timelineItems connection.
+   */
+  readonly getReviewTimeline: (input: {
+    readonly cwd: string;
+    readonly reference: string;
+  }) => Effect.Effect<ReadonlyArray<GitHubReviewStateEvent>, GitHubCliError>;
 
   /**
    * Resolve the authenticated GitHub user.
@@ -346,6 +453,37 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly reference: string;
   }) => Effect.Effect<ReadonlyArray<GitHubReviewThread>, GitHubCliError>;
+
+  /**
+   * Resolve or unresolve a review thread by its GraphQL node id.
+   */
+  readonly setPullRequestThreadResolution: (input: {
+    readonly cwd: string;
+    readonly threadId: string;
+    readonly resolved: boolean;
+  }) => Effect.Effect<{ readonly id: string; readonly isResolved: boolean }, GitHubCliError>;
+
+  /**
+   * Post a threaded reply to an existing review thread by its GraphQL node id.
+   */
+  readonly addPullRequestThreadReply: (input: {
+    readonly cwd: string;
+    readonly threadId: string;
+    readonly body: string;
+  }) => Effect.Effect<{ readonly threadId: string }, GitHubCliError>;
+
+  /**
+   * Edit or delete a review comment already on GitHub, by its GraphQL node id.
+   */
+  readonly updatePullRequestThreadComment: (input: {
+    readonly cwd: string;
+    readonly commentId: string;
+    readonly body: string;
+  }) => Effect.Effect<{ readonly commentId: string }, GitHubCliError>;
+  readonly deletePullRequestThreadComment: (input: {
+    readonly cwd: string;
+    readonly commentId: string;
+  }) => Effect.Effect<{ readonly commentId: string }, GitHubCliError>;
 
   /**
    * Resolve clone URLs for a GitHub repository.

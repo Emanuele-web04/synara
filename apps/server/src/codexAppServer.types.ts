@@ -87,6 +87,17 @@ export interface CodexSessionContext {
   nextRequestId: number;
   stopping: boolean;
   discovery?: boolean;
+  synaraSkillsRootRegistered?: boolean;
+  workspaceRuntime?: CodexWorkspaceRuntime;
+  workspaceRuntimeRoot?: boolean;
+}
+
+export interface CodexWorkspaceRuntime {
+  readonly key: string;
+  readonly cwd: string;
+  readonly rootContext: CodexSessionContext;
+  readonly sessions: Map<ThreadId, CodexSessionContext>;
+  readonly providerThreadIds: Map<string, ThreadId>;
 }
 
 export interface CodexSkillListInput {

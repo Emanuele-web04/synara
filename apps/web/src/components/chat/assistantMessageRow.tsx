@@ -286,6 +286,7 @@ export function AssistantMessageRow({
                       chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                       textFontSizePx={normalizedChatFontSizePx}
                       density={prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"}
+                      markdownCwd={markdownCwd}
                       {...(onOpenThread ? { onOpenThread } : {})}
                     />
                   ) : (
@@ -332,6 +333,7 @@ export function AssistantMessageRow({
                   textFontSizePx={normalizedChatFontSizePx}
                   density="compact"
                   fileDiffStatByPath={fileDiffStatByPath}
+                  markdownCwd={markdownCwd}
                   onOpenTurnDiff={onOpenTurnDiff}
                   {...(onOpenThread ? { onOpenThread } : {})}
                   {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
@@ -361,6 +363,7 @@ export function AssistantMessageRow({
                 chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                 textFontSizePx={normalizedChatFontSizePx}
                 density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
+                markdownCwd={markdownCwd}
                 {...(onOpenThread ? { onOpenThread } : {})}
               />
             ))}

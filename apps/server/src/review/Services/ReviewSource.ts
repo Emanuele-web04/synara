@@ -1,5 +1,6 @@
 import {
   ReviewAgentResult,
+  ReviewBoardLanesResult,
   ReviewChangesetResult,
   ReviewCheckProjectAccessInput,
   ReviewGetProjectBoardInput,
@@ -8,14 +9,18 @@ import {
   ReviewListProjectsResult,
   ReviewListPullRequestsInput,
   ReviewListPullRequestsResult,
+  ReviewLoadBoardLanesInput,
   ReviewLoadChangesetInput,
   ReviewMoveProjectCardInput,
   ReviewMoveProjectCardResult,
   ReviewProjectAccessResult,
   ReviewConversationResult,
   ReviewProjectBoard,
+  ReviewPullRequestHeader,
   ReviewPullRequestOverview,
   ReviewPullRequestQueryInput,
+  ReviewPullRequestSurfaceInput,
+  ReviewPullRequestSurfaceResult,
   ReviewRunAgentInput,
   ReviewViewerResult,
 } from "@t3tools/contracts";
@@ -29,6 +34,10 @@ export interface ReviewSourceShape {
     input: ReviewListPullRequestsInput,
   ) => Effect.Effect<ReviewListPullRequestsResult, ReviewServiceError>;
 
+  readonly loadBoardLanes: (
+    input: ReviewLoadBoardLanesInput,
+  ) => Effect.Effect<ReviewBoardLanesResult, ReviewServiceError>;
+
   readonly getViewer: (
     input: ReviewGetViewerInput,
   ) => Effect.Effect<ReviewViewerResult, ReviewServiceError>;
@@ -41,9 +50,17 @@ export interface ReviewSourceShape {
     input: ReviewPullRequestQueryInput,
   ) => Effect.Effect<ReviewPullRequestOverview, ReviewServiceError>;
 
+  readonly loadPullRequestHeader: (
+    input: ReviewPullRequestQueryInput,
+  ) => Effect.Effect<ReviewPullRequestHeader, ReviewServiceError>;
+
   readonly loadConversation: (
     input: ReviewPullRequestQueryInput,
   ) => Effect.Effect<ReviewConversationResult, ReviewServiceError>;
+
+  readonly loadPullRequestSurface: (
+    input: ReviewPullRequestSurfaceInput,
+  ) => Effect.Effect<ReviewPullRequestSurfaceResult, ReviewServiceError>;
 
   readonly runAgentReview: (
     input: ReviewRunAgentInput,

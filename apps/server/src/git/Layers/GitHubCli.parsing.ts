@@ -22,6 +22,7 @@ import type {
   GitHubReviewEvent,
   GitHubReviewPullRequest,
   GitHubReviewPullRequestDetail,
+  GitHubReviewPullRequestHeaderDetail,
   GitHubReviewThread,
   GitHubReviewTimelineEvent,
 } from "../Services/GitHubCli.ts";
@@ -41,6 +42,7 @@ import {
   RawProjectSummarySchema,
   RawReviewAuthorSchema,
   RawReviewCommitSchema,
+  RawReviewLabelSchema,
   RawReviewLatestReviewSchema,
   RawReviewRequestSchema,
   RawReviewThreadCommentSchema,
@@ -209,18 +211,50 @@ function normalizeReviewUserRef(
   return { login, ...(avatarUrl ? { avatarUrl } : {}) };
 }
 
+function normalizeReviewLabelNames(
+  rawLabels: ReadonlyArray<Schema.Schema.Type<typeof RawReviewLabelSchema>>,
+): ReadonlyArray<string> {
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const raw of rawLabels) {
+    const name = (raw.name ?? "").trim();
+    if (name.length > 0 && !seen.has(name)) {
+      seen.add(name);
+      labels.push(name);
+    }
+  }
+  return labels;
+}
+
+function normalizeReviewUserLogins(
+  rawUsers: ReadonlyArray<Schema.Schema.Type<typeof RawReviewUserSchema>>,
+): ReadonlyArray<string> {
+  const seen = new Set<string>();
+  const logins: string[] = [];
+  for (const raw of rawUsers) {
+    const login = (raw.login ?? raw.name ?? "").trim();
+    if (login.length > 0 && !seen.has(login)) {
+      seen.add(login);
+      logins.push(login);
+    }
+  }
+  return logins;
+}
+
 export function normalizeReviewPullRequest(
   raw: Schema.Schema.Type<typeof RawGitHubReviewPullRequestSchema>,
 ): GitHubReviewPullRequest {
   const author = raw.author?.login?.trim() ?? "";
   const authorAvatarUrl = normalizeAvatarUrl(raw.author?.avatarUrl);
   const reviewDecision = raw.reviewDecision?.trim() ?? "";
+  const headRepositoryOwnerLogin = raw.headRepositoryOwner?.login?.trim() ?? "";
   return {
     number: raw.number,
     title: raw.title,
     url: raw.url,
     baseRefName: raw.baseRefName,
     headRefName: raw.headRefName,
+    ...(headRepositoryOwnerLogin.length > 0 ? { headRepositoryOwnerLogin } : {}),
     author,
     ...(authorAvatarUrl ? { authorAvatarUrl } : {}),
     updatedAt: raw.updatedAt ?? "",
@@ -231,6 +265,8 @@ export function normalizeReviewPullRequest(
     deletions: nonNegativeInt(raw.deletions),
     checksStatus: rollupChecksStatus(raw.statusCheckRollup ?? []),
     reviewRequests: normalizeReviewRequests(raw.reviewRequests ?? []),
+    labels: normalizeReviewLabelNames(raw.labels ?? []),
+    assignees: normalizeReviewUserLogins(raw.assignees ?? []),
   };
 }
 
@@ -411,6 +447,50 @@ export function normalizeReviewDetail(
   };
 }
 
+export function normalizeReviewHeaderDetail(
+  raw: Schema.Schema.Type<typeof RawGitHubReviewDetailSchema>,
+): GitHubReviewPullRequestHeaderDetail {
+  const reviewDecision = (raw.reviewDecision ?? "").trim();
+  const milestone = (raw.milestone?.title ?? "").trim();
+  const mergeStateStatus = (raw.mergeStateStatus ?? "").trim();
+  const authorAvatarUrl = normalizeAvatarUrl(raw.author?.avatarUrl);
+  const reviewers = normalizeReviewers([], raw.reviewRequests ?? []);
+  return {
+    number: raw.number,
+    title: raw.title,
+    url: raw.url,
+    state: normalizePullRequestState({
+      state: raw.state,
+      mergedAt: raw.mergedAt,
+    }),
+    isDraft: raw.isDraft ?? false,
+    author: (raw.author?.login ?? "").trim(),
+    ...(authorAvatarUrl ? { authorAvatarUrl } : {}),
+    baseBranch: raw.baseRefName,
+    headBranch: raw.headRefName,
+    body: raw.body ?? "",
+    createdAt: raw.createdAt ?? "",
+    updatedAt: raw.updatedAt ?? "",
+    additions: nonNegativeInt(raw.additions),
+    deletions: nonNegativeInt(raw.deletions),
+    changedFiles: nonNegativeInt(raw.changedFiles),
+    reviewDecision: reviewDecision.length > 0 ? reviewDecision : null,
+    mergeable: normalizeReviewMergeable(raw.mergeable),
+    ...(mergeStateStatus.length > 0 ? { mergeStateStatus } : {}),
+    milestone: milestone.length > 0 ? milestone : null,
+    labels: (raw.labels ?? [])
+      .map((label) => ({
+        name: (label.name ?? "").trim(),
+        color: (label.color ?? "").trim(),
+      }))
+      .filter((label) => label.name.length > 0),
+    assignees: (raw.assignees ?? [])
+      .map(normalizeReviewUserRef)
+      .filter((user): user is NonNullable<typeof user> => user !== null),
+    ...(reviewers.length > 0 ? { reviewers } : {}),
+  };
+}
+
 export function normalizeConversation(
   raw: Schema.Schema.Type<typeof RawGitHubConversationSchema>,
 ): ReadonlyArray<GitHubReviewTimelineEvent> {
@@ -517,6 +597,9 @@ function normalizeReviewThreadComment(
   }
   if (comment.url) {
     Object.assign(normalized, { url: comment.url });
+  }
+  if (comment.id) {
+    Object.assign(normalized, { id: comment.id });
   }
   return normalized;
 }
@@ -662,7 +745,9 @@ export function decodeGitHubJson<S extends Schema.Top>(
     | "getPullRequest"
     | "getRepositoryCloneUrls"
     | "listRepositoryPullRequests"
+    | "getReviewPullRequestHeader"
     | "getReviewPullRequestOverview"
+    | "getReviewPullRequestAvatars"
     | "getReviewConversation"
     | "createPullRequestReviewWithComments"
     | "getPullRequestThreads"

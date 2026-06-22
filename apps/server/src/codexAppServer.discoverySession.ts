@@ -163,7 +163,7 @@ export async function getOrCreateDiscoverySession(
     account: {
       type: "unknown",
       planType: null,
-      sparkEnabled: true,
+      sparkEnabled: false,
     },
     transport,
     pending: new Map(),

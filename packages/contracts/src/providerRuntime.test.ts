@@ -166,4 +166,57 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.usage.usedTokens).toBe(31251);
     expect(parsed.payload.usage.usedPercent).toBe(15.6255);
   });
+
+  it("decodes provider.unhandled with source refs and bounded preview", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "provider.unhandled",
+      eventId: "event-provider-unhandled-1",
+      provider: "claudeAgent",
+      createdAt: "2026-02-28T00:00:05.000Z",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      providerRefs: {
+        providerThreadId: "provider-thread-1",
+        providerTurnId: "provider-turn-1",
+        providerItemId: "provider-item-1",
+        providerRequestId: "provider-request-1",
+      },
+      sourceRef: {
+        runtimeEventId: "event-provider-unhandled-1",
+        nativeEventId: "native-provider-event-1",
+        nativeEventName: "system:thinking_tokens",
+        provider: "claudeAgent",
+        sourceSequence: 7,
+        runtimeSubsequence: 0,
+        turnId: "turn-1",
+        itemId: null,
+        requestId: null,
+        contentIndex: null,
+      },
+      raw: {
+        source: "claude.sdk.message",
+        method: "system:thinking_tokens",
+        payload: {
+          type: "system",
+          subtype: "thinking_tokens",
+          hidden: "not part of the display payload",
+        },
+      },
+      payload: {
+        nativeEventName: "system:thinking_tokens",
+        reason: "no_mapper",
+        redactedPayloadPreview: "Unhandled Claude system message subtype 'thinking_tokens'.",
+      },
+    });
+
+    expect(parsed.type).toBe("provider.unhandled");
+    if (parsed.type !== "provider.unhandled") {
+      throw new Error("expected provider.unhandled");
+    }
+    expect(parsed.providerRefs?.providerThreadId).toBe("provider-thread-1");
+    expect(parsed.sourceRef?.nativeEventName).toBe("system:thinking_tokens");
+    expect(parsed.raw?.source).toBe("claude.sdk.message");
+    expect(parsed.payload.reason).toBe("no_mapper");
+    expect(parsed.payload).not.toHaveProperty("raw");
+  });
 });

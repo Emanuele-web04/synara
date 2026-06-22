@@ -30,12 +30,22 @@ import {
 } from "./sidebarSummaries";
 import { THREAD_SUMMARY_ACTIVITY_KINDS, normalizeActivities } from "./threadActivities";
 import { MAX_THREAD_MESSAGES } from "./threadMessages";
+import { removeThreadState } from "./threadProjection";
 
 type ThreadMessageSentEvent = Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
 type ThreadActivityAppendedEvent = Extract<
   OrchestrationEvent,
   { type: "thread.activity-appended" }
 >;
+
+function newerThreadUpdatedAt(
+  thread: Pick<Thread, "createdAt" | "updatedAt">,
+  updatedAt: string,
+): string {
+  return (thread.updatedAt ?? thread.createdAt) > updatedAt
+    ? (thread.updatedAt ?? thread.createdAt)
+    : updatedAt;
+}
 
 export type ApplyThreadUpdate = (
   state: AppState,
@@ -166,10 +176,7 @@ export function applyOrchestrationEvent(
             currentCreateBranchFlowCompleted: thread.createBranchFlowCompleted,
             nextCreateBranchFlowCompleted: event.payload.createBranchFlowCompleted,
           });
-          const nextUpdatedAt =
-            (thread.updatedAt ?? thread.createdAt) > event.payload.updatedAt
-              ? thread.updatedAt
-              : event.payload.updatedAt;
+          const nextUpdatedAt = newerThreadUpdatedAt(thread, event.payload.updatedAt);
           const cwdChanged = thread.worktreePath !== nextWorktreePath;
 
           if (
@@ -184,6 +191,11 @@ export function applyOrchestrationEvent(
             nextCreateBranchFlowCompleted === (thread.createBranchFlowCompleted ?? false) &&
             (event.payload.isPinned === undefined ||
               event.payload.isPinned === (thread.isPinned ?? false)) &&
+            (event.payload.pinnedMessages === undefined ||
+              deepEqualJson(event.payload.pinnedMessages, thread.pinnedMessages ?? null)) &&
+            (event.payload.threadMarkers === undefined ||
+              deepEqualJson(event.payload.threadMarkers, thread.threadMarkers ?? null)) &&
+            (event.payload.notes === undefined || event.payload.notes === thread.notes) &&
             (event.payload.parentThreadId === undefined ||
               (event.payload.parentThreadId ?? null) === (thread.parentThreadId ?? null)) &&
             (event.payload.subagentAgentId === undefined ||
@@ -218,6 +230,13 @@ export function applyOrchestrationEvent(
             associatedWorktreeRef: nextAssociatedWorktreeRef,
             createBranchFlowCompleted: nextCreateBranchFlowCompleted,
             ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
+            ...(event.payload.pinnedMessages !== undefined
+              ? { pinnedMessages: [...event.payload.pinnedMessages] }
+              : {}),
+            ...(event.payload.threadMarkers !== undefined
+              ? { threadMarkers: [...event.payload.threadMarkers] }
+              : {}),
+            ...(event.payload.notes !== undefined ? { notes: event.payload.notes } : {}),
             ...(event.payload.parentThreadId !== undefined
               ? { parentThreadId: event.payload.parentThreadId }
               : {}),
@@ -260,6 +279,231 @@ export function applyOrchestrationEvent(
           updateSidebarSummary:
             options?.updateSidebarSummary === true || threadMessageUpdatesSidebarSummary(event),
         },
+      );
+
+    case "thread.deleted":
+      return removeThreadState(state, event.payload.threadId);
+
+    case "thread.pinned-message-added":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const currentPins = thread.pinnedMessages ?? [];
+          const hasPin = currentPins.some((pin) => pin.messageId === event.payload.pin.messageId);
+          const pinnedMessages = hasPin
+            ? currentPins.map((pin) =>
+                pin.messageId === event.payload.pin.messageId ? event.payload.pin : pin,
+              )
+            : [...currentPins, event.payload.pin];
+          if (arraysShallowEqual(currentPins, pinnedMessages)) {
+            return thread;
+          }
+          return {
+            ...thread,
+            pinnedMessages,
+            updatedAt:
+              (thread.updatedAt ?? thread.createdAt) > event.payload.updatedAt
+                ? thread.updatedAt
+                : event.payload.updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: true },
+      );
+
+    case "thread.pinned-message-removed":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const currentPins = thread.pinnedMessages ?? [];
+          const pinnedMessages = currentPins.filter(
+            (pin) => pin.messageId !== event.payload.messageId,
+          );
+          if (pinnedMessages.length === currentPins.length) {
+            return thread;
+          }
+          return {
+            ...thread,
+            pinnedMessages,
+            updatedAt:
+              (thread.updatedAt ?? thread.createdAt) > event.payload.updatedAt
+                ? thread.updatedAt
+                : event.payload.updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: true },
+      );
+
+    case "thread.pinned-message-done-set":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          let changed = false;
+          const pinnedMessages = (thread.pinnedMessages ?? []).map((pin) => {
+            if (pin.messageId !== event.payload.messageId || pin.done === event.payload.done) {
+              return pin;
+            }
+            changed = true;
+            return { ...pin, done: event.payload.done };
+          });
+          if (!changed) {
+            return thread;
+          }
+          return {
+            ...thread,
+            pinnedMessages,
+            updatedAt:
+              (thread.updatedAt ?? thread.createdAt) > event.payload.updatedAt
+                ? thread.updatedAt
+                : event.payload.updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: true },
+      );
+
+    case "thread.pinned-message-label-set":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          let changed = false;
+          const pinnedMessages = (thread.pinnedMessages ?? []).map((pin) => {
+            if (pin.messageId !== event.payload.messageId || pin.label === event.payload.label) {
+              return pin;
+            }
+            changed = true;
+            return { ...pin, label: event.payload.label };
+          });
+          if (!changed) {
+            return thread;
+          }
+          return {
+            ...thread,
+            pinnedMessages,
+            updatedAt:
+              (thread.updatedAt ?? thread.createdAt) > event.payload.updatedAt
+                ? thread.updatedAt
+                : event.payload.updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: true },
+      );
+
+    case "thread.marker-added":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const currentMarkers = thread.threadMarkers ?? [];
+          const hasMarker = currentMarkers.some((marker) => marker.id === event.payload.marker.id);
+          const threadMarkers = hasMarker
+            ? currentMarkers.map((marker) =>
+                marker.id === event.payload.marker.id ? event.payload.marker : marker,
+              )
+            : [...currentMarkers, event.payload.marker];
+          if (arraysShallowEqual(currentMarkers, threadMarkers)) {
+            return thread;
+          }
+          return {
+            ...thread,
+            threadMarkers,
+            updatedAt:
+              (thread.updatedAt ?? thread.createdAt) > event.payload.updatedAt
+                ? thread.updatedAt
+                : event.payload.updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: true },
+      );
+
+    case "thread.marker-removed":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const currentMarkers = thread.threadMarkers ?? [];
+          const threadMarkers = currentMarkers.filter(
+            (marker) => marker.id !== event.payload.markerId,
+          );
+          if (threadMarkers.length === currentMarkers.length) {
+            return thread;
+          }
+          return {
+            ...thread,
+            threadMarkers,
+            updatedAt:
+              (thread.updatedAt ?? thread.createdAt) > event.payload.updatedAt
+                ? thread.updatedAt
+                : event.payload.updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: true },
+      );
+
+    case "thread.marker-done-set":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          let changed = false;
+          const threadMarkers = (thread.threadMarkers ?? []).map((marker) => {
+            if (marker.id !== event.payload.markerId || marker.done === event.payload.done) {
+              return marker;
+            }
+            changed = true;
+            return {
+              ...marker,
+              done: event.payload.done,
+              updatedAt: event.payload.updatedAt,
+            };
+          });
+          if (!changed) {
+            return thread;
+          }
+          return {
+            ...thread,
+            threadMarkers,
+            updatedAt:
+              (thread.updatedAt ?? thread.createdAt) > event.payload.updatedAt
+                ? thread.updatedAt
+                : event.payload.updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: true },
+      );
+
+    case "thread.marker-label-set":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          let changed = false;
+          const threadMarkers = (thread.threadMarkers ?? []).map((marker) => {
+            if (marker.id !== event.payload.markerId || marker.label === event.payload.label) {
+              return marker;
+            }
+            changed = true;
+            return {
+              ...marker,
+              label: event.payload.label,
+              updatedAt: event.payload.updatedAt,
+            };
+          });
+          if (!changed) {
+            return thread;
+          }
+          return {
+            ...thread,
+            threadMarkers,
+            updatedAt:
+              (thread.updatedAt ?? thread.createdAt) > event.payload.updatedAt
+                ? thread.updatedAt
+                : event.payload.updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: true },
       );
 
     case "thread.session-set":

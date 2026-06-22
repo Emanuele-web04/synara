@@ -1,4 +1,4 @@
-import type { ReviewPullRequestDetail } from "@t3tools/contracts";
+import type { ReviewPullRequestDetail, ReviewPullRequestHeaderDetail } from "@t3tools/contracts";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
@@ -83,7 +83,7 @@ function BranchChip(props: { name: string; compact?: boolean }) {
   );
 }
 
-function mergeReadiness(detail: ReviewPullRequestDetail): {
+function mergeReadiness(detail: ReviewPullRequestDetail | ReviewPullRequestHeaderDetail): {
   label: string;
   tone: "success" | "warning" | "danger" | "muted";
 } {
@@ -98,6 +98,9 @@ function mergeReadiness(detail: ReviewPullRequestDetail): {
   }
   if (detail.mergeable === "CONFLICTING") {
     return { label: "Conflicts must be resolved", tone: "danger" };
+  }
+  if (detail.checksStatus === undefined) {
+    return { label: "Checks loading", tone: "warning" };
   }
   if (detail.checksStatus === "failing") {
     return { label: "Checks are failing", tone: "danger" };
@@ -122,16 +125,31 @@ function MergeReadinessIcon(props: { tone: ReturnType<typeof mergeReadiness>["to
 }
 
 export function ReviewPrHeader(props: {
-  detail: ReviewPullRequestDetail;
+  detail: ReviewPullRequestDetail | ReviewPullRequestHeaderDetail;
   variant?: "full" | "compact";
   reviewMode?: "conversation" | "files";
   contentClassName?: string;
   onReviewChanges?: () => void;
   onOverview?: () => void;
+  onCommits?: () => void;
+  commitsActive?: boolean;
   reviewAction?: ReactNode;
 }) {
   const { detail } = props;
   const variant = props.variant ?? "full";
+  const commitStat = (
+    <>
+      <GitCommitIcon className="size-3.5 opacity-75" />
+      {detail.commitsCount === undefined ? (
+        <span className="font-medium text-foreground">Loading commits</span>
+      ) : (
+        <>
+          <span className="font-medium text-foreground tabular-nums">{detail.commitsCount}</span>
+          commit{detail.commitsCount === 1 ? "" : "s"}
+        </>
+      )}
+    </>
+  );
   const [copiedBranches, setCopiedBranches] = useState(false);
   const copyResetTimeout = useRef<number | null>(null);
   const updatedAt = formatRelativeReviewTime(detail.updatedAt);
@@ -324,11 +342,21 @@ export function ReviewPrHeader(props: {
               : "mt-7 min-h-12 rounded-[1.45rem] border border-border/45 bg-muted/25 px-4 py-2.5",
           )}
         >
-          <span className="inline-flex items-center gap-1.5">
-            <GitCommitIcon className="size-3.5 opacity-75" />
-            <span className="font-medium text-foreground tabular-nums">{detail.commitsCount}</span>
-            commit{detail.commitsCount === 1 ? "" : "s"}
-          </span>
+          {props.onCommits ? (
+            <button
+              type="button"
+              onClick={props.onCommits}
+              aria-pressed={props.commitsActive}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+                props.commitsActive && "text-foreground",
+              )}
+            >
+              {commitStat}
+            </button>
+          ) : (
+            <span className="inline-flex items-center gap-1.5">{commitStat}</span>
+          )}
           <span className="text-muted-foreground/70" aria-hidden="true">
             ·
           </span>

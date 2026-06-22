@@ -406,6 +406,12 @@ export function makeClaudeEmitters(deps: ClaudeEmitterDeps): ClaudeEmitters {
       if (typeof message.session_id !== "string" || message.session_id.length === 0) {
         return;
       }
+      if (
+        message.type === "system" &&
+        (message.subtype === "hook_started" || message.subtype === "hook_response")
+      ) {
+        return;
+      }
       const nextThreadId = message.session_id;
       context.resumeSessionId = message.session_id;
       yield* updateResumeCursor(context);
@@ -499,7 +505,27 @@ export function makeClaudeEmitters(deps: ClaudeEmitterDeps): ClaudeEmitters {
         return;
       }
       context.warnedUnhandledSdkKinds.add(kind);
-      yield* emitRuntimeWarning(context, message, detail);
+      const turnState = context.turnState;
+      const stamp = yield* makeEventStamp();
+      yield* offerRuntimeEvent({
+        type: "provider.unhandled",
+        eventId: stamp.eventId,
+        provider: PROVIDER,
+        createdAt: stamp.createdAt,
+        threadId: context.session.threadId,
+        ...(turnState ? { turnId: asCanonicalTurnId(turnState.turnId) } : {}),
+        payload: {
+          nativeEventName: kind,
+          reason: "no_mapper",
+          redactedPayloadPreview: message,
+        },
+        providerRefs: nativeProviderRefs(context),
+        raw: {
+          source: "claude.sdk.message",
+          method: kind,
+          payload: detail,
+        },
+      });
     });
 
   const emitProposedPlanCompleted = (
@@ -705,6 +731,38 @@ export function makeClaudeEmitters(deps: ClaudeEmitterDeps): ClaudeEmitters {
         });
       }
 
+      for (const block of turnState.reasoningBlocks.values()) {
+        if (block.completionEmitted) {
+          continue;
+        }
+        block.completionEmitted = true;
+        const reasoningStamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent({
+          type: "item.completed",
+          eventId: reasoningStamp.eventId,
+          provider: PROVIDER,
+          createdAt: reasoningStamp.createdAt,
+          threadId: context.session.threadId,
+          turnId: turnState.turnId,
+          itemId: asRuntimeItemId(block.itemId),
+          payload: {
+            itemType: "reasoning",
+            status: status === "completed" ? "completed" : "failed",
+            title: "Thinking",
+            data: {
+              contentIndex: block.blockIndex,
+            },
+          },
+          providerRefs: nativeProviderRefs(context, { providerItemId: block.itemId }),
+          raw: {
+            source: "claude.sdk.message",
+            method: "claude/result",
+            payload: result ?? { status },
+          },
+        });
+      }
+      turnState.reasoningBlocks.clear();
+
       context.turns.push({
         id: turnState.turnId,
         items: [...turnState.items],
@@ -773,6 +831,7 @@ export function makeClaudeEmitters(deps: ClaudeEmitterDeps): ClaudeEmitters {
       if (context.interruptRequestedTurnId === turnState.turnId) {
         context.interruptRequestedTurnId = undefined;
       }
+      context.lastThinkingItemId = undefined;
       context.turnState = undefined;
       context.session = {
         ...context.session,

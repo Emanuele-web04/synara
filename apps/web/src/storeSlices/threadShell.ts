@@ -40,6 +40,9 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     (left.archivedAt ?? null) === (right.archivedAt ?? null) &&
     left.updatedAt === right.updatedAt &&
     (left.isPinned ?? false) === (right.isPinned ?? false) &&
+    deepEqualJson(left.pinnedMessages ?? null, right.pinnedMessages ?? null) &&
+    deepEqualJson(left.threadMarkers ?? null, right.threadMarkers ?? null) &&
+    left.notes === right.notes &&
     left.envMode === right.envMode &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath &&
@@ -79,6 +82,9 @@ export function toThreadShell(thread: Thread): ThreadShell {
     archivedAt: thread.archivedAt ?? null,
     updatedAt: thread.updatedAt,
     isPinned: thread.isPinned ?? false,
+    ...(thread.pinnedMessages !== undefined ? { pinnedMessages: thread.pinnedMessages } : {}),
+    ...(thread.threadMarkers !== undefined ? { threadMarkers: thread.threadMarkers } : {}),
+    ...(thread.notes !== undefined ? { notes: thread.notes } : {}),
     envMode: thread.envMode,
     branch: thread.branch,
     worktreePath: thread.worktreePath,

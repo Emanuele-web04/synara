@@ -585,6 +585,338 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("maps Codex desktop startup notifications to canonical runtime events", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 5)).pipe(
+        Effect.forkChild,
+      );
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-thread-open-requested"),
+        kind: "session",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "session/threadOpenRequested",
+        message: "Starting a new Codex thread.",
+      } satisfies ProviderEvent);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-thread-open-resolved"),
+        kind: "session",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "session/threadOpenResolved",
+        message: "Codex thread/start resolved.",
+      } satisfies ProviderEvent);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-codex-warning"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "warning",
+        payload: {
+          warning: "MCP server reported a startup warning.",
+        },
+      } satisfies ProviderEvent);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-mcp-startup-status"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "mcpServer/startupStatus/updated",
+        payload: {
+          name: "github",
+          status: "starting",
+        },
+      } satisfies ProviderEvent);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-thread-settings-updated"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "thread/settings/updated",
+        payload: {
+          contextWindow: "200k",
+        },
+      } satisfies ProviderEvent);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.deepEqual(
+        events.map((event) => event.type),
+        [
+          "session.state.changed",
+          "session.state.changed",
+          "runtime.warning",
+          "mcp.status.updated",
+          "session.configured",
+        ],
+      );
+
+      assert.deepEqual(events[0]?.payload, {
+        state: "starting",
+        reason: "Starting a new Codex thread.",
+      });
+      assert.deepEqual(events[1]?.payload, {
+        state: "ready",
+        reason: "Codex thread/start resolved.",
+      });
+
+      const warning = events[2];
+      assert.equal(warning?.type, "runtime.warning");
+      if (warning?.type === "runtime.warning") {
+        assert.equal(warning.payload.message, "Codex warning");
+        assert.deepEqual(warning.payload.detail, {
+          warning: "MCP server reported a startup warning.",
+        });
+      }
+
+      const mcpStatus = events[3];
+      assert.equal(mcpStatus?.type, "mcp.status.updated");
+      if (mcpStatus?.type === "mcp.status.updated") {
+        assert.deepEqual(mcpStatus.payload.status, {
+          name: "github",
+          status: "starting",
+        });
+      }
+
+      const settings = events[4];
+      assert.equal(settings?.type, "session.configured");
+      if (settings?.type === "session.configured") {
+        assert.deepEqual(settings.payload.config, {
+          contextWindow: "200k",
+        });
+      }
+    }),
+  );
+
+  it.effect("maps unknown Codex provider events to provider.unhandled", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-codex-future-event"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "future/event",
+        message: "Codex shipped a new native event.",
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "provider.unhandled");
+      if (firstEvent.value.type !== "provider.unhandled") {
+        return;
+      }
+      assert.equal(firstEvent.value.payload.nativeEventName, "future/event");
+      assert.equal(firstEvent.value.payload.reason, "no_mapper");
+      assert.equal(
+        firstEvent.value.payload.redactedPayloadPreview,
+        "Codex shipped a new native event.",
+      );
+    }),
+  );
+
+  it.effect("keeps streaming deltas flowing after an unhandled Codex provider event", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 2)).pipe(
+        Effect.forkChild,
+      );
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-codex-future-event-before-delta"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: new Date().toISOString(),
+        method: "future/event",
+        message: "Codex shipped a new native event.",
+      } satisfies ProviderEvent);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-codex-agent-message-delta-after-fallback"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("item-assistant-1"),
+        createdAt: new Date().toISOString(),
+        method: "item/agentMessage/delta",
+        payload: {
+          delta: "still streaming",
+        },
+      } satisfies ProviderEvent);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.deepEqual(
+        events.map((event) => event.type),
+        ["provider.unhandled", "content.delta"],
+      );
+
+      const unhandled = events[0];
+      assert.equal(unhandled?.type, "provider.unhandled");
+      if (unhandled?.type === "provider.unhandled") {
+        assert.equal(unhandled.turnId, "turn-1");
+        assert.equal(unhandled.payload.nativeEventName, "future/event");
+      }
+
+      const delta = events[1];
+      assert.equal(delta?.type, "content.delta");
+      if (delta?.type === "content.delta") {
+        assert.equal(delta.turnId, "turn-1");
+        assert.equal(delta.itemId, "item-assistant-1");
+        assert.equal(delta.payload.streamKind, "assistant_text");
+        assert.equal(delta.payload.delta, "still streaming");
+      }
+    }),
+  );
+
+  it.effect("maps native Codex output and reasoning deltas with stream metadata", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 5)).pipe(
+        Effect.forkChild,
+      );
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-command-output-delta"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("cmd-1"),
+        createdAt: new Date().toISOString(),
+        method: "item/commandExecution/outputDelta",
+        payload: {
+          delta: "stdout chunk",
+        },
+      } satisfies ProviderEvent);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-file-output-delta"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("file-1"),
+        createdAt: new Date().toISOString(),
+        method: "item/fileChange/outputDelta",
+        payload: {
+          text: "patched apps/web/src/session-logic.ts",
+          contentIndex: 2,
+        },
+      } satisfies ProviderEvent);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-reasoning-text-delta"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("reasoning-1"),
+        createdAt: new Date().toISOString(),
+        method: "item/reasoning/textDelta",
+        payload: {
+          delta: "thinking",
+          content_index: 3,
+        },
+      } satisfies ProviderEvent);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-reasoning-summary-delta"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("reasoning-1"),
+        createdAt: new Date().toISOString(),
+        method: "item/reasoning/summaryTextDelta",
+        payload: {
+          text: "summary",
+          summaryIndex: 1,
+        },
+      } satisfies ProviderEvent);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-codex-reasoning-content-delta"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("reasoning-2"),
+        createdAt: new Date().toISOString(),
+        method: "codex/event/reasoning_content_delta",
+        payload: {
+          msg: {
+            type: "reasoning_content_delta",
+            delta: "structured thinking",
+            content_index: 4,
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.deepEqual(
+        events.map((event) => event.type),
+        ["content.delta", "content.delta", "content.delta", "content.delta", "content.delta"],
+      );
+
+      const [commandOutput, fileOutput, reasoningText, reasoningSummary, structuredReasoning] =
+        events;
+      assert.equal(commandOutput?.type, "content.delta");
+      if (commandOutput?.type === "content.delta") {
+        assert.equal(commandOutput.itemId, "cmd-1");
+        assert.equal(commandOutput.payload.streamKind, "command_output");
+        assert.equal(commandOutput.payload.delta, "stdout chunk");
+      }
+      assert.equal(fileOutput?.type, "content.delta");
+      if (fileOutput?.type === "content.delta") {
+        assert.equal(fileOutput.itemId, "file-1");
+        assert.equal(fileOutput.payload.streamKind, "file_change_output");
+        assert.equal(fileOutput.payload.delta, "patched apps/web/src/session-logic.ts");
+        assert.equal(fileOutput.payload.contentIndex, 2);
+      }
+      assert.equal(reasoningText?.type, "content.delta");
+      if (reasoningText?.type === "content.delta") {
+        assert.equal(reasoningText.itemId, "reasoning-1");
+        assert.equal(reasoningText.payload.streamKind, "reasoning_text");
+        assert.equal(reasoningText.payload.delta, "thinking");
+        assert.equal(reasoningText.payload.contentIndex, 3);
+      }
+      assert.equal(reasoningSummary?.type, "content.delta");
+      if (reasoningSummary?.type === "content.delta") {
+        assert.equal(reasoningSummary.itemId, "reasoning-1");
+        assert.equal(reasoningSummary.payload.streamKind, "reasoning_summary_text");
+        assert.equal(reasoningSummary.payload.delta, "summary");
+        assert.equal(reasoningSummary.payload.summaryIndex, 1);
+      }
+      assert.equal(structuredReasoning?.type, "content.delta");
+      if (structuredReasoning?.type === "content.delta") {
+        assert.equal(structuredReasoning.itemId, "reasoning-2");
+        assert.equal(structuredReasoning.payload.streamKind, "reasoning_text");
+        assert.equal(structuredReasoning.payload.delta, "structured thinking");
+        assert.equal(structuredReasoning.payload.contentIndex, 4);
+      }
+    }),
+  );
+
   it.effect("maps retryable Codex error notifications to runtime.warning", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

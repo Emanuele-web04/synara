@@ -854,14 +854,20 @@ export const makeWsRpcLayer = () =>
 
         [WS_METHODS.reviewListPullRequests]: (input) =>
           rpcEffect(reviewSource.listPullRequests(input), "Failed to list pull requests"),
+        [WS_METHODS.reviewLoadBoardLanes]: (input) =>
+          rpcEffect(reviewSource.loadBoardLanes(input), "Failed to load review board lanes"),
         [WS_METHODS.reviewGetViewer]: (input) =>
           rpcEffect(reviewSource.getViewer(input), "Failed to resolve GitHub viewer"),
         [WS_METHODS.reviewLoadChangeset]: (input) =>
           rpcEffect(reviewSource.loadChangeset(input), "Failed to load changeset"),
+        [WS_METHODS.reviewLoadPullRequestHeader]: (input) =>
+          rpcEffect(reviewSource.loadPullRequestHeader(input), "Failed to load pull request"),
         [WS_METHODS.reviewLoadPullRequest]: (input) =>
           rpcEffect(reviewSource.loadPullRequest(input), "Failed to load pull request"),
         [WS_METHODS.reviewLoadConversation]: (input) =>
           rpcEffect(reviewSource.loadConversation(input), "Failed to load conversation"),
+        [WS_METHODS.reviewLoadPullRequestSurface]: (input) =>
+          rpcEffect(reviewSource.loadPullRequestSurface(input), "Failed to load pull request"),
         [WS_METHODS.reviewListComments]: (input) =>
           rpcEffect(reviewCommentStore.list(input), "Failed to list review comments"),
         [WS_METHODS.reviewAddComment]: (input) =>
@@ -874,6 +880,14 @@ export const makeWsRpcLayer = () =>
           rpcEffect(reviewSubmission.submit(input), "Failed to submit review"),
         [WS_METHODS.reviewLoadRemoteThreads]: (input) =>
           rpcEffect(reviewSubmission.loadThreads(input), "Failed to load remote review threads"),
+        [WS_METHODS.reviewResolveThread]: (input) =>
+          rpcEffect(reviewSubmission.resolveThread(input), "Failed to resolve review thread"),
+        [WS_METHODS.reviewReplyThread]: (input) =>
+          rpcEffect(reviewSubmission.replyThread(input), "Failed to post review reply"),
+        [WS_METHODS.reviewUpdateThreadComment]: (input) =>
+          rpcEffect(reviewSubmission.updateThreadComment(input), "Failed to edit review comment"),
+        [WS_METHODS.reviewDeleteThreadComment]: (input) =>
+          rpcEffect(reviewSubmission.deleteThreadComment(input), "Failed to delete review comment"),
         [WS_METHODS.reviewRunAgent]: (input) =>
           rpcEffect(reviewSource.runAgentReview(input), "Failed to run agent review"),
         [WS_METHODS.reviewCheckProjectAccess]: (input) =>

@@ -582,16 +582,27 @@ export function createWsNativeApi(): NativeApi {
     },
     review: {
       listPullRequests: (input) => transport.request(WS_METHODS.reviewListPullRequests, input),
+      loadBoardLanes: (input) => transport.request(WS_METHODS.reviewLoadBoardLanes, input),
       getViewer: (input) => transport.request(WS_METHODS.reviewGetViewer, input),
       loadChangeset: (input) => transport.request(WS_METHODS.reviewLoadChangeset, input),
+      loadPullRequestHeader: (input) =>
+        transport.request(WS_METHODS.reviewLoadPullRequestHeader, input),
       loadPullRequest: (input) => transport.request(WS_METHODS.reviewLoadPullRequest, input),
       loadConversation: (input) => transport.request(WS_METHODS.reviewLoadConversation, input),
+      loadPullRequestSurface: (input) =>
+        transport.request(WS_METHODS.reviewLoadPullRequestSurface, input),
       listComments: (input) => transport.request(WS_METHODS.reviewListComments, input),
       addComment: (input) => transport.request(WS_METHODS.reviewAddComment, input),
       updateComment: (input) => transport.request(WS_METHODS.reviewUpdateComment, input),
       removeComment: (input) => transport.request(WS_METHODS.reviewRemoveComment, input),
       submit: (input) => transport.request(WS_METHODS.reviewSubmit, input),
       loadRemoteThreads: (input) => transport.request(WS_METHODS.reviewLoadRemoteThreads, input),
+      resolveThread: (input) => transport.request(WS_METHODS.reviewResolveThread, input),
+      replyThread: (input) => transport.request(WS_METHODS.reviewReplyThread, input),
+      updateThreadComment: (input) =>
+        transport.request(WS_METHODS.reviewUpdateThreadComment, input),
+      deleteThreadComment: (input) =>
+        transport.request(WS_METHODS.reviewDeleteThreadComment, input),
       runAgent: (input) => transport.request(WS_METHODS.reviewRunAgent, input),
       checkProjectAccess: (input) => transport.request(WS_METHODS.reviewCheckProjectAccess, input),
       listProjects: (input) => transport.request(WS_METHODS.reviewListProjects, input),

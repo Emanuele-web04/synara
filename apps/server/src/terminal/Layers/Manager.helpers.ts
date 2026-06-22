@@ -33,11 +33,7 @@ import { Effect, Encoding, Schema } from "effect";
 import { applyManagedTerminalAgentWrapperEnv } from "../managedTerminalWrappers";
 import { ShellCandidate, TerminalSessionState } from "../Services/Manager";
 import type { PtyAdapterShape, PtyProcess } from "../Services/PTY";
-import {
-  countCharacter,
-  TerminalHistoryBuffer,
-  type HistoryLimits,
-} from "../terminalHistory";
+import { countCharacter, TerminalHistoryBuffer, type HistoryLimits } from "../terminalHistory";
 
 export const DEFAULT_HISTORY_LINE_LIMIT = 5_000;
 export const DEFAULT_PERSIST_DEBOUNCE_MS = 40;
@@ -155,7 +151,10 @@ export function resolveShellCandidates(
   options: ShellResolutionOptions = {},
 ): ShellCandidate[] {
   const platform = options.platform ?? process.platform;
-  const requested = shellCandidateFromCommand(normalizeShellCommand(shellResolver(), platform), platform);
+  const requested = shellCandidateFromCommand(
+    normalizeShellCommand(shellResolver(), platform),
+    platform,
+  );
 
   if (platform === "win32") {
     return uniqueShellCandidates([
@@ -168,7 +167,10 @@ export function resolveShellCandidates(
 
   return uniqueShellCandidates([
     requested,
-    shellCandidateFromCommand(normalizeShellCommand(options.envShell ?? process.env.SHELL, platform), platform),
+    shellCandidateFromCommand(
+      normalizeShellCommand(options.envShell ?? process.env.SHELL, platform),
+      platform,
+    ),
     shellCandidateFromCommand("/bin/zsh", platform),
     shellCandidateFromCommand("/bin/bash", platform),
     shellCandidateFromCommand("/bin/sh", platform),
@@ -581,10 +583,7 @@ export function agentStateFromHookEvent(
   }
 }
 
-export function appendSessionHistory(
-  session: TerminalSessionState,
-  chunk: string,
-): void {
+export function appendSessionHistory(session: TerminalSessionState, chunk: string): void {
   if (chunk.length === 0) return;
   session.history.append(chunk);
 }

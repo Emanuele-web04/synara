@@ -6,6 +6,7 @@
 import { MAX_PINNED_PROJECTS, type ProjectId } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { createBrowserStateStorage } from "./lib/storage";
 import { normalizePinnedIds, pinId, prunePinnedIds, unpinId } from "./pinning.logic";
 
 interface PinnedProjectsStoreState {
@@ -60,7 +61,7 @@ export const usePinnedProjectsStore = create<PinnedProjectsStoreState>()(
     }),
     {
       name: PINNED_PROJECTS_STORAGE_KEY,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(createBrowserStateStorage),
       partialize: (state) => ({
         pinnedProjectIds: normalizePinnedIds(state.pinnedProjectIds, PINNED_PROJECTS_OPTIONS),
       }),

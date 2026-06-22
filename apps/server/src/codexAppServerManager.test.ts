@@ -744,6 +744,14 @@ describe("readCodexAccountSnapshot", () => {
       sparkEnabled: true,
     });
   });
+
+  it("treats unknown accounts as spark-disabled until account discovery succeeds", () => {
+    expect(readCodexAccountSnapshot({})).toEqual({
+      type: "unknown",
+      planType: null,
+      sparkEnabled: false,
+    });
+  });
 });
 
 describe("resolveCodexModelForAccount", () => {
@@ -765,6 +773,16 @@ describe("resolveCodexModelForAccount", () => {
         sparkEnabled: true,
       }),
     ).toBe("gpt-5.3-codex-spark");
+  });
+
+  it("falls back from spark while account eligibility is unknown", () => {
+    expect(
+      resolveCodexModelForAccount("gpt-5.3-codex-spark", {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: false,
+      }),
+    ).toBe("gpt-5.5");
   });
 });
 
@@ -981,6 +999,14 @@ describe("sendTurn", () => {
 
   it("adds selected skills as structured turn/start input items", async () => {
     const { manager, context, sendRequest } = createSendTurnHarness();
+    const registerSynaraSkillsRoot = vi
+      .spyOn(
+        manager as unknown as {
+          registerSynaraSkillsRoot: (...args: unknown[]) => Promise<void>;
+        },
+        "registerSynaraSkillsRoot",
+      )
+      .mockResolvedValue();
 
     await manager.sendTurn({
       threadId: asThreadId("thread_1"),
@@ -1010,6 +1036,10 @@ describe("sendTurn", () => {
       ],
       model: "gpt-5.3-codex",
     });
+    expect(registerSynaraSkillsRoot).toHaveBeenCalledWith(context);
+    expect(registerSynaraSkillsRoot.mock.invocationCallOrder[0]).toBeLessThan(
+      sendRequest.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
   it("adds selected plugin mentions as structured turn/start input items", async () => {
@@ -2844,6 +2874,7 @@ interface OutboundFrame {
  */
 function createInMemoryCodexHarness(options?: {
   readonly responders?: Record<string, (frame: OutboundFrame) => unknown | Promise<unknown>>;
+  readonly synaraSkillsDir?: string;
 }) {
   const built = Effect.runSync(makeInMemoryJsonRpcTransport());
   const controller: InMemoryTransportController = built.controller;
@@ -2851,9 +2882,14 @@ function createInMemoryCodexHarness(options?: {
 
   const outboundFrames: OutboundFrame[] = [];
   const events: ProviderEvent[] = [];
+  let transportFactoryCalls = 0;
 
   const manager = new CodexAppServerManager(undefined, {
-    createTransport: async () => built.transport,
+    createTransport: async () => {
+      transportFactoryCalls += 1;
+      return built.transport;
+    },
+    ...(options?.synaraSkillsDir ? { synaraSkillsDir: options.synaraSkillsDir } : {}),
   });
   manager.on("event", (event) => {
     events.push(event);
@@ -2893,6 +2929,7 @@ function createInMemoryCodexHarness(options?: {
     controller,
     events,
     outboundFrames,
+    getTransportFactoryCalls: () => transportFactoryCalls,
     pushInbound: (message: unknown) => Effect.runPromise(controller.pushInboundMessage(message)),
     pushStderr: (line: string) => Effect.runPromise(controller.pushStderr(line)),
     signalExit: (status: ProcessExit) => Effect.runPromise(controller.signalExit(status)),
@@ -2964,7 +3001,12 @@ describe("Codex protocol over an in-memory transport", () => {
   });
 
   it("uses review-only Codex thread/start params for review chat sessions", async () => {
-    const harness = createInMemoryCodexHarness();
+    const harness = createInMemoryCodexHarness({
+      synaraSkillsDir: "/tmp/synara-skills",
+      responders: {
+        "skills/list": () => ({ skills: [] }),
+      },
+    });
     try {
       await harness.manager.startSession({
         threadId: asThreadId("thread_mem_review_profile"),
@@ -2985,6 +3027,140 @@ describe("Codex protocol over an in-memory transport", () => {
         sandbox: "read-only",
         ephemeral: true,
         serviceName: "synara_review_chat",
+      });
+      expect(harness.outboundFrames.some((frame) => frame.method === "skills/extraRoots/set")).toBe(
+        false,
+      );
+      await waitFor(
+        () =>
+          harness.outboundFrames.some((frame) => frame.method === "model/list") &&
+          harness.outboundFrames.some((frame) => frame.method === "account/read"),
+        "deferred startup discovery",
+      );
+      const methods = harness.outboundFrames.map((frame) => frame.method);
+      expect(methods.indexOf("thread/start")).toBeLessThan(methods.indexOf("model/list"));
+      expect(methods.indexOf("thread/start")).toBeLessThan(methods.indexOf("account/read"));
+
+      await harness.manager.listSkills({ cwd: "/tmp/mem-workspace" });
+      const skillsRootFrame = harness.outboundFrames.find(
+        (frame) => frame.method === "skills/extraRoots/set",
+      );
+      expect(skillsRootFrame?.params).toEqual({ extraRoots: ["/tmp/synara-skills"] });
+      expect(methods.indexOf("thread/start")).toBeLessThan(
+        harness.outboundFrames.findIndex((frame) => frame.method === "skills/extraRoots/set"),
+      );
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("registers the Synara skills root before skill-bearing review chat turns", async () => {
+    const harness = createInMemoryCodexHarness({
+      synaraSkillsDir: "/tmp/synara-skills",
+      responders: {
+        "turn/start": () => ({ turn: { id: "turn_review_skill_1" } }),
+      },
+    });
+    try {
+      await harness.manager.startSession({
+        threadId: asThreadId("thread_mem_review_skill_turn"),
+        provider: "codex",
+        cwd: "/tmp/mem-workspace",
+        reviewProfile: "review-chat",
+        approvalPolicy: "never",
+        sandboxMode: "read-only",
+        runtimeMode: "approval-required",
+      });
+
+      expect(harness.outboundFrames.some((frame) => frame.method === "skills/extraRoots/set")).toBe(
+        false,
+      );
+
+      const turn = await harness.manager.sendTurn({
+        threadId: asThreadId("thread_mem_review_skill_turn"),
+        input: "Use $hallmark while reviewing this PR",
+        skills: [{ name: "hallmark", path: "/tmp/synara-skills/hallmark/SKILL.md" }],
+      });
+
+      expect(turn.turnId).toBe("turn_review_skill_1");
+      const skillsRootIndex = harness.outboundFrames.findIndex(
+        (frame) => frame.method === "skills/extraRoots/set",
+      );
+      const threadStartIndex = harness.outboundFrames.findIndex(
+        (frame) => frame.method === "thread/start",
+      );
+      const turnStartIndex = harness.outboundFrames.findIndex(
+        (frame) => frame.method === "turn/start",
+      );
+      expect(skillsRootIndex).toBeGreaterThan(threadStartIndex);
+      expect(skillsRootIndex).toBeLessThan(turnStartIndex);
+
+      const skillsRootFrame = harness.outboundFrames[skillsRootIndex];
+      expect(skillsRootFrame?.params).toEqual({ extraRoots: ["/tmp/synara-skills"] });
+      const turnStartFrame = harness.outboundFrames[turnStartIndex];
+      expect(turnStartFrame?.params).toMatchObject({
+        threadId: "provider_thread_1",
+        approvalPolicy: "never",
+        sandboxPolicy: { type: "dangerFullAccess" },
+        input: [
+          {
+            type: "text",
+            text: "Use $hallmark while reviewing this PR",
+            text_elements: [],
+          },
+          {
+            type: "skill",
+            name: "hallmark",
+            path: "/tmp/synara-skills/hallmark/SKILL.md",
+          },
+        ],
+      });
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("uses safe spark fallback before deferred review-chat account discovery updates the workspace", async () => {
+    const harness = createInMemoryCodexHarness();
+    try {
+      await harness.manager.startSession({
+        threadId: asThreadId("thread_mem_review_spark_first"),
+        provider: "codex",
+        cwd: "/tmp/mem-workspace",
+        model: "gpt-5.3-codex-spark",
+        reviewProfile: "review-chat",
+        approvalPolicy: "never",
+        sandboxMode: "read-only",
+        runtimeMode: "approval-required",
+      });
+
+      const firstThreadStart = harness.outboundFrames.find(
+        (frame) => frame.method === "thread/start",
+      );
+      expect(firstThreadStart?.params).toMatchObject({
+        model: "gpt-5.5",
+      });
+      await waitFor(
+        () => harness.outboundFrames.some((frame) => frame.method === "account/read"),
+        "deferred account discovery",
+      );
+
+      await harness.manager.startSession({
+        threadId: asThreadId("thread_mem_review_spark_second"),
+        provider: "codex",
+        cwd: "/tmp/mem-workspace",
+        model: "gpt-5.3-codex-spark",
+        reviewProfile: "review-chat",
+        approvalPolicy: "never",
+        sandboxMode: "read-only",
+        runtimeMode: "approval-required",
+      });
+
+      const threadStartFrames = harness.outboundFrames.filter(
+        (frame) => frame.method === "thread/start",
+      );
+      expect(threadStartFrames[1]?.params).toMatchObject({
+        model: "gpt-5.3-codex-spark",
       });
     } finally {
       await harness.stop();
@@ -3010,6 +3186,70 @@ describe("Codex protocol over an in-memory transport", () => {
       expect(methods.filter((method) => method === "initialize")).toHaveLength(1);
       expect(methods).toContain("skills/list");
       expect(methods).toContain("thread/start");
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("runs multiple Synara threads on one workspace app-server and routes by provider thread id", async () => {
+    let providerThreadCounter = 0;
+    const harness = createInMemoryCodexHarness({
+      responders: {
+        "thread/start": () => {
+          providerThreadCounter += 1;
+          return { thread: { id: `provider_thread_${providerThreadCounter}` } };
+        },
+        "turn/start": () => ({ turn: { id: "turn_workspace_2" } }),
+      },
+    });
+    try {
+      await harness.manager.startSession({
+        threadId: asThreadId("thread_workspace_1"),
+        provider: "codex",
+        cwd: "/tmp/mem-workspace",
+        runtimeMode: "full-access",
+      });
+      await harness.manager.startSession({
+        threadId: asThreadId("thread_workspace_2"),
+        provider: "codex",
+        cwd: "/tmp/mem-workspace",
+        runtimeMode: "full-access",
+      });
+
+      expect(harness.getTransportFactoryCalls()).toBe(1);
+      const methods = harness.outboundFrames.map((frame) => frame.method);
+      expect(methods.filter((method) => method === "initialize")).toHaveLength(1);
+      expect(methods.filter((method) => method === "thread/start")).toHaveLength(2);
+
+      await harness.pushInbound({
+        method: "turn/completed",
+        params: {
+          threadId: "provider_thread_2",
+          turn: { id: "turn_workspace_2", status: "completed" },
+        },
+      });
+
+      await waitFor(
+        () =>
+          harness.events.some(
+            (event) =>
+              event.kind === "notification" &&
+              event.method === "turn/completed" &&
+              event.threadId === "thread_workspace_2",
+          ),
+        "workspace runtime routed notification",
+      );
+
+      harness.manager.stopSession(asThreadId("thread_workspace_1"));
+      await harness.manager.sendTurn({
+        threadId: asThreadId("thread_workspace_2"),
+        input: "Still alive?",
+      });
+
+      const turnStartFrame = harness.outboundFrames.find((frame) => frame.method === "turn/start");
+      expect(turnStartFrame?.params).toMatchObject({
+        threadId: "provider_thread_2",
+      });
     } finally {
       await harness.stop();
     }

@@ -1,11 +1,17 @@
 import type {
   ReviewAddCommentInput,
+  ReviewBoardLanesResult,
   ReviewInlineComment,
   ReviewListPullRequestsInput,
+  ReviewListSort,
   ReviewLocalComment,
   ReviewMoveProjectCardInput,
   ReviewProjectBoard,
   ReviewRemoveCommentInput,
+  ReviewPullRequestHeader,
+  ReviewPullRequestOverview,
+  ReviewPullRequestSurfaceInput,
+  ReviewPullRequestSurfaceResult,
   ReviewRunAgentInput,
   ReviewSourceRef,
   ReviewSubmitInput,
@@ -17,7 +23,8 @@ import { type QueryClient, mutationOptions, queryOptions } from "@tanstack/react
 import { serializeReviewTargetKey } from "@t3tools/shared/reviewTargetKey";
 import { ensureNativeApi } from "../nativeApi";
 
-const REVIEW_LIST_STALE_TIME_MS = 30_000;
+const REVIEW_LIST_STALE_TIME_MS = 300_000;
+const REVIEW_BOARD_LANES_STALE_TIME_MS = 300_000;
 const REVIEW_LIST_REFETCH_INTERVAL_MS = 300_000;
 const REVIEW_VIEWER_STALE_TIME_MS = 600_000;
 const REVIEW_CHANGESET_STALE_TIME_MS = 30_000;
@@ -30,11 +37,20 @@ const REVIEW_PROJECTS_STALE_TIME_MS = 60_000;
 const REVIEW_PROJECT_BOARD_STALE_TIME_MS = 30_000;
 
 type ReviewListState = NonNullable<ReviewListPullRequestsInput["state"]>;
+type ReviewListColumn = NonNullable<ReviewListPullRequestsInput["columns"]>[number];
+type ReviewListChecksStatus = NonNullable<ReviewListPullRequestsInput["checks"]>[number];
+type ReviewListSortId = ReviewListSort;
 
-function reviewSourceKey(source: ReviewSourceRef): string {
+export function reviewSourceKey(source: ReviewSourceRef): string {
   return source._tag === "pullRequest"
     ? `pullRequest:${source.reference}`
     : `branchRange:${source.base}...${source.head}`;
+}
+
+function pullRequestHeaderFromOverview(
+  overview: ReviewPullRequestOverview,
+): ReviewPullRequestHeader {
+  return { detail: overview.detail };
 }
 
 function reviewPullRequestListState(state?: ReviewListState): ReviewListState {
@@ -45,13 +61,60 @@ function reviewPullRequestListLimit(limit?: number): number | null {
   return limit ?? null;
 }
 
+function reviewPullRequestListText(value?: string): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function reviewPullRequestListValues<T extends string>(
+  values?: ReadonlyArray<T>,
+): ReadonlyArray<T> {
+  if (!values || values.length === 0) {
+    return [];
+  }
+  return [...new Set(values)].sort();
+}
+
+function reviewPullRequestListTextValues(values?: ReadonlyArray<string>): ReadonlyArray<string> {
+  if (!values || values.length === 0) {
+    return [];
+  }
+  return [
+    ...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)),
+  ].sort();
+}
+
+function reviewPullRequestListSort(sort?: ReviewListSortId): ReviewListSortId | null {
+  return sort ?? null;
+}
+
 export function applyReviewUpdatedPayload(
   queryClient: QueryClient,
   payload: ReviewUpdatedPayload,
 ): void {
   if (payload._tag === "pullRequestList") {
     queryClient.setQueryData(
-      reviewQueryKeys.pullRequests(payload.cwd, payload.state, payload.limit),
+      reviewQueryKeys.pullRequests({
+        cwd: payload.cwd,
+        state: payload.state,
+        limit: payload.limit,
+        search: payload.search,
+        author: payload.author,
+        authors: payload.authors,
+        reviewRequested: payload.reviewRequested,
+        baseBranch: payload.baseBranch,
+        baseBranches: payload.baseBranches,
+        headBranch: payload.headBranch,
+        headBranches: payload.headBranches,
+        label: payload.label,
+        labels: payload.labels,
+        assignee: payload.assignee,
+        assignees: payload.assignees,
+        draft: payload.draft,
+        columns: payload.columns,
+        checks: payload.checks,
+        sort: payload.sort,
+      }),
       payload.data,
     );
     return;
@@ -61,6 +124,10 @@ export function applyReviewUpdatedPayload(
       reviewQueryKeys.pullRequest(payload.cwd, payload.reference),
       payload.data,
     );
+    queryClient.setQueryData(
+      reviewQueryKeys.pullRequestHeader(payload.cwd, payload.reference),
+      pullRequestHeaderFromOverview(payload.data),
+    );
     return;
   }
   if (payload._tag === "pullRequestConversation") {
@@ -68,6 +135,15 @@ export function applyReviewUpdatedPayload(
       reviewQueryKeys.conversation(payload.cwd, payload.reference),
       payload.data,
     );
+    return;
+  }
+  if (payload._tag === "boardLanes") {
+    void queryClient.invalidateQueries({
+      queryKey: reviewQueryKeys.boardLanesByCwd(payload.cwd),
+    });
+    void queryClient.invalidateQueries({
+      queryKey: reviewQueryKeys.pullRequestLists(payload.cwd),
+    });
     return;
   }
   queryClient.setQueryData(
@@ -79,21 +155,104 @@ export function applyReviewUpdatedPayload(
   );
 }
 
+export function applyReviewPullRequestSurfacePayload(
+  queryClient: QueryClient,
+  input: ReviewPullRequestSurfaceInput,
+  payload: ReviewPullRequestSurfaceResult,
+): void {
+  queryClient.setQueryData(
+    reviewQueryKeys.pullRequest(input.cwd, input.reference),
+    payload.overview,
+  );
+  queryClient.setQueryData(
+    reviewQueryKeys.pullRequestHeader(input.cwd, input.reference),
+    pullRequestHeaderFromOverview(payload.overview),
+  );
+  if (payload.conversation !== undefined) {
+    queryClient.setQueryData(
+      reviewQueryKeys.conversation(input.cwd, input.reference),
+      payload.conversation,
+    );
+  }
+  if (payload.changeset !== undefined) {
+    queryClient.setQueryData(
+      reviewQueryKeys.changeset(input.cwd, reviewSourceKey(input.source)),
+      payload.changeset,
+    );
+  }
+}
+
 export const reviewQueryKeys = {
   all: ["review"] as const,
   viewer: (cwd: string | null) => ["review", "viewer", "avatar-v2", cwd] as const,
-  pullRequests: (cwd: string | null, state?: ReviewListState, limit?: number) =>
+  pullRequestLists: (cwd: string | null) => ["review", "pull-requests", cwd] as const,
+  boardLanesByCwd: (cwd: string | null) => ["review", "board-lanes", cwd] as const,
+  boardLanes: (cwd: string | null, limit?: number) =>
+    ["review", "board-lanes", cwd, reviewPullRequestListLimit(limit)] as const,
+  pullRequests: (input: {
+    cwd: string | null;
+    state?: ReviewListState | undefined;
+    limit?: number | undefined;
+    search?: string | undefined;
+    author?: string | undefined;
+    authors?: ReadonlyArray<string> | undefined;
+    reviewRequested?: string | undefined;
+    baseBranch?: string | undefined;
+    baseBranches?: ReadonlyArray<string> | undefined;
+    headBranch?: string | undefined;
+    headBranches?: ReadonlyArray<string> | undefined;
+    label?: string | undefined;
+    labels?: ReadonlyArray<string> | undefined;
+    assignee?: string | undefined;
+    assignees?: ReadonlyArray<string> | undefined;
+    draft?: boolean | undefined;
+    columns?: ReadonlyArray<ReviewListColumn> | undefined;
+    checks?: ReadonlyArray<ReviewListChecksStatus> | undefined;
+    sort?: ReviewListSortId | undefined;
+  }) =>
     [
-      "review",
-      "pull-requests",
-      cwd,
-      reviewPullRequestListState(state),
-      reviewPullRequestListLimit(limit),
+      ...reviewQueryKeys.pullRequestLists(input.cwd),
+      reviewPullRequestListState(input.state),
+      reviewPullRequestListLimit(input.limit),
+      reviewPullRequestListText(input.search),
+      reviewPullRequestListText(input.author),
+      reviewPullRequestListTextValues(input.authors),
+      reviewPullRequestListText(input.reviewRequested),
+      reviewPullRequestListText(input.baseBranch),
+      reviewPullRequestListTextValues(input.baseBranches),
+      reviewPullRequestListText(input.headBranch),
+      reviewPullRequestListTextValues(input.headBranches),
+      reviewPullRequestListText(input.label),
+      reviewPullRequestListTextValues(input.labels),
+      reviewPullRequestListText(input.assignee),
+      reviewPullRequestListTextValues(input.assignees),
+      input.draft === true ? true : null,
+      reviewPullRequestListValues(input.columns),
+      reviewPullRequestListValues(input.checks),
+      reviewPullRequestListSort(input.sort),
     ] as const,
   changeset: (cwd: string | null, sourceKey: string | null) =>
     ["review", "changeset", cwd, sourceKey] as const,
   pullRequest: (cwd: string | null, reference: string | null) =>
     ["review", "pull-request", cwd, reference] as const,
+  pullRequestHeader: (cwd: string | null, reference: string | null) =>
+    ["review", "pull-request-header", cwd, reference] as const,
+  pullRequestSurface: (
+    cwd: string | null,
+    reference: string | null,
+    sourceKey: string | null,
+    includeConversation: boolean,
+    includeChangeset: boolean,
+  ) =>
+    [
+      "review",
+      "pull-request-surface",
+      cwd,
+      reference,
+      sourceKey,
+      includeConversation,
+      includeChangeset,
+    ] as const,
   conversation: (cwd: string | null, reference: string | null) =>
     ["review", "conversation", cwd, reference] as const,
   comments: (targetKey: string) => ["review", "comments", targetKey] as const,
@@ -110,24 +269,115 @@ export function reviewListPullRequestsQueryOptions(input: {
   cwd: string | null;
   state?: ReviewListState;
   limit?: number;
+  search?: string;
+  author?: string;
+  authors?: ReadonlyArray<string>;
+  reviewRequested?: string;
+  baseBranch?: string;
+  baseBranches?: ReadonlyArray<string>;
+  headBranch?: string;
+  headBranches?: ReadonlyArray<string>;
+  label?: string;
+  labels?: ReadonlyArray<string>;
+  assignee?: string;
+  assignees?: ReadonlyArray<string>;
+  draft?: boolean;
+  columns?: ReadonlyArray<ReviewListColumn>;
+  checks?: ReadonlyArray<ReviewListChecksStatus>;
+  sort?: ReviewListSortId;
 }) {
   return queryOptions({
-    queryKey: reviewQueryKeys.pullRequests(input.cwd, input.state, input.limit),
+    queryKey: reviewQueryKeys.pullRequests(input),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd) throw new Error("Pull request list is unavailable.");
-      return api.review.listPullRequests({
+      return api.review.listPullRequests(
+        buildReviewListPullRequestsRequest({ ...input, cwd: input.cwd }),
+      );
+    },
+    enabled: input.cwd !== null,
+    staleTime: REVIEW_LIST_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
+    refetchInterval: REVIEW_LIST_REFETCH_INTERVAL_MS,
+  });
+}
+
+export function reviewLoadBoardLanesQueryOptions(input: { cwd: string | null; limit?: number }) {
+  return queryOptions({
+    queryKey: reviewQueryKeys.boardLanes(input.cwd, input.limit),
+    queryFn: async (): Promise<ReviewBoardLanesResult> => {
+      const api = ensureNativeApi();
+      if (!input.cwd) throw new Error("Review board lanes are unavailable.");
+      return api.review.loadBoardLanes({
         cwd: input.cwd,
-        ...(input.state !== undefined ? { state: input.state } : {}),
         ...(input.limit !== undefined ? { limit: input.limit } : {}),
       });
     },
     enabled: input.cwd !== null,
-    staleTime: REVIEW_LIST_STALE_TIME_MS,
-    refetchOnWindowFocus: true,
+    staleTime: REVIEW_BOARD_LANES_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
     refetchOnReconnect: true,
     refetchInterval: REVIEW_LIST_REFETCH_INTERVAL_MS,
   });
+}
+
+export function buildReviewListPullRequestsRequest(input: {
+  cwd: string;
+  state?: ReviewListState;
+  limit?: number;
+  search?: string;
+  author?: string;
+  authors?: ReadonlyArray<string>;
+  reviewRequested?: string;
+  baseBranch?: string;
+  baseBranches?: ReadonlyArray<string>;
+  headBranch?: string;
+  headBranches?: ReadonlyArray<string>;
+  label?: string;
+  labels?: ReadonlyArray<string>;
+  assignee?: string;
+  assignees?: ReadonlyArray<string>;
+  draft?: boolean;
+  columns?: ReadonlyArray<ReviewListColumn>;
+  checks?: ReadonlyArray<ReviewListChecksStatus>;
+  sort?: ReviewListSortId;
+}): ReviewListPullRequestsInput {
+  const search = reviewPullRequestListText(input.search);
+  const author = reviewPullRequestListText(input.author);
+  const authors = reviewPullRequestListTextValues(input.authors);
+  const reviewRequested = reviewPullRequestListText(input.reviewRequested);
+  const baseBranch = reviewPullRequestListText(input.baseBranch);
+  const baseBranches = reviewPullRequestListTextValues(input.baseBranches);
+  const headBranch = reviewPullRequestListText(input.headBranch);
+  const headBranches = reviewPullRequestListTextValues(input.headBranches);
+  const label = reviewPullRequestListText(input.label);
+  const labels = reviewPullRequestListTextValues(input.labels);
+  const assignee = reviewPullRequestListText(input.assignee);
+  const assignees = reviewPullRequestListTextValues(input.assignees);
+  const columns = reviewPullRequestListValues(input.columns);
+  const checks = reviewPullRequestListValues(input.checks);
+  return {
+    cwd: input.cwd,
+    ...(input.state !== undefined ? { state: input.state } : {}),
+    ...(input.limit !== undefined ? { limit: input.limit } : {}),
+    ...(search !== null ? { search } : {}),
+    ...(author !== null ? { author } : {}),
+    ...(authors.length > 0 ? { authors } : {}),
+    ...(reviewRequested !== null ? { reviewRequested } : {}),
+    ...(baseBranch !== null ? { baseBranch } : {}),
+    ...(baseBranches.length > 0 ? { baseBranches } : {}),
+    ...(headBranch !== null ? { headBranch } : {}),
+    ...(headBranches.length > 0 ? { headBranches } : {}),
+    ...(label !== null ? { label } : {}),
+    ...(labels.length > 0 ? { labels } : {}),
+    ...(assignee !== null ? { assignee } : {}),
+    ...(assignees.length > 0 ? { assignees } : {}),
+    ...(input.draft === true ? { draft: true } : {}),
+    ...(columns.length > 0 ? { columns } : {}),
+    ...(checks.length > 0 ? { checks } : {}),
+    ...(input.sort !== undefined ? { sort: input.sort } : {}),
+  };
 }
 
 export function reviewViewerQueryOptions(input: { cwd: string | null }) {
@@ -186,6 +436,26 @@ export function reviewLoadPullRequestQueryOptions(input: {
   });
 }
 
+export function reviewLoadPullRequestHeaderQueryOptions(input: {
+  cwd: string | null;
+  reference: string | null;
+}) {
+  return queryOptions({
+    queryKey: reviewQueryKeys.pullRequestHeader(input.cwd, input.reference),
+    queryFn: async (): Promise<ReviewPullRequestHeader> => {
+      const api = ensureNativeApi();
+      if (!input.cwd || !input.reference) {
+        throw new Error("Pull request header is unavailable.");
+      }
+      return api.review.loadPullRequestHeader({ cwd: input.cwd, reference: input.reference });
+    },
+    enabled: input.cwd !== null && input.reference !== null,
+    staleTime: REVIEW_PULL_REQUEST_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
 export function reviewLoadConversationQueryOptions(input: {
   cwd: string | null;
   reference: string | null;
@@ -201,6 +471,50 @@ export function reviewLoadConversationQueryOptions(input: {
     },
     enabled: input.cwd !== null && input.reference !== null,
     staleTime: REVIEW_CONVERSATION_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
+export function reviewLoadPullRequestSurfaceQueryOptions(input: {
+  cwd: string | null;
+  reference: string | null;
+  source: ReviewSourceRef | null;
+  includeConversation: boolean;
+  includeChangeset: boolean;
+  queryClient: QueryClient;
+}) {
+  const sourceKey = input.source ? reviewSourceKey(input.source) : null;
+  return queryOptions({
+    queryKey: reviewQueryKeys.pullRequestSurface(
+      input.cwd,
+      input.reference,
+      sourceKey,
+      input.includeConversation,
+      input.includeChangeset,
+    ),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd || !input.reference || !input.source) {
+        throw new Error("Pull request surface is unavailable.");
+      }
+      const request: ReviewPullRequestSurfaceInput = {
+        cwd: input.cwd,
+        reference: input.reference,
+        source: input.source,
+        ...(input.includeConversation ? { includeConversation: true } : {}),
+        ...(input.includeChangeset ? { includeChangeset: true } : {}),
+      };
+      const payload = await api.review.loadPullRequestSurface(request);
+      applyReviewPullRequestSurfacePayload(input.queryClient, request, payload);
+      return payload;
+    },
+    enabled:
+      input.cwd !== null &&
+      input.reference !== null &&
+      input.source !== null &&
+      (input.includeConversation || input.includeChangeset),
+    staleTime: REVIEW_PULL_REQUEST_STALE_TIME_MS,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
@@ -321,6 +635,109 @@ export function reviewRemoveCommentMutationOptions(input: { queryClient: QueryCl
     mutationFn: async (args: ReviewRemoveCommentInput) =>
       ensureNativeApi().review.removeComment(args),
     onSettled: (_data, _error, args) => invalidateReviewComments(input.queryClient, args.target),
+  });
+}
+
+export function reviewResolveThreadMutationOptions(input: {
+  queryClient: QueryClient;
+  cwd: string | null;
+  reference: string | null;
+}) {
+  return mutationOptions({
+    mutationKey: ["review", "resolve-thread"],
+    mutationFn: async (args: { threadId: string; resolved: boolean }) => {
+      if (!input.cwd || !input.reference) {
+        throw new Error("Review thread is unavailable.");
+      }
+      return ensureNativeApi().review.resolveThread({
+        cwd: input.cwd,
+        reference: input.reference,
+        threadId: args.threadId,
+        resolved: args.resolved,
+      });
+    },
+    onSettled: () => {
+      void input.queryClient.invalidateQueries({
+        queryKey: reviewQueryKeys.remoteThreads(input.cwd, input.reference),
+      });
+    },
+  });
+}
+
+export function reviewReplyThreadMutationOptions(input: {
+  queryClient: QueryClient;
+  cwd: string | null;
+  reference: string | null;
+}) {
+  return mutationOptions({
+    mutationKey: ["review", "reply-thread"],
+    mutationFn: async (args: { threadId: string; body: string }) => {
+      if (!input.cwd || !input.reference) {
+        throw new Error("Review thread is unavailable.");
+      }
+      return ensureNativeApi().review.replyThread({
+        cwd: input.cwd,
+        reference: input.reference,
+        threadId: args.threadId,
+        body: args.body,
+      });
+    },
+    onSettled: () => {
+      void input.queryClient.invalidateQueries({
+        queryKey: reviewQueryKeys.remoteThreads(input.cwd, input.reference),
+      });
+    },
+  });
+}
+
+export function reviewUpdateThreadCommentMutationOptions(input: {
+  queryClient: QueryClient;
+  cwd: string | null;
+  reference: string | null;
+}) {
+  return mutationOptions({
+    mutationKey: ["review", "update-thread-comment"],
+    mutationFn: async (args: { commentId: string; body: string }) => {
+      if (!input.cwd || !input.reference) {
+        throw new Error("Review comment is unavailable.");
+      }
+      return ensureNativeApi().review.updateThreadComment({
+        cwd: input.cwd,
+        reference: input.reference,
+        commentId: args.commentId,
+        body: args.body,
+      });
+    },
+    onSettled: () => {
+      void input.queryClient.invalidateQueries({
+        queryKey: reviewQueryKeys.remoteThreads(input.cwd, input.reference),
+      });
+    },
+  });
+}
+
+export function reviewDeleteThreadCommentMutationOptions(input: {
+  queryClient: QueryClient;
+  cwd: string | null;
+  reference: string | null;
+}) {
+  return mutationOptions({
+    mutationKey: ["review", "delete-thread-comment"],
+    mutationFn: async (args: { commentId: string }) => {
+      if (!input.cwd || !input.reference) {
+        throw new Error("Review comment is unavailable.");
+      }
+      return ensureNativeApi().review.deleteThreadComment({
+        cwd: input.cwd,
+        reference: input.reference,
+        commentId: args.commentId,
+      });
+    },
+    onSettled: () => {
+      void input.queryClient.invalidateQueries({
+        queryKey: reviewQueryKeys.remoteThreads(input.cwd, input.reference),
+      });
+    },
   });
 }
 

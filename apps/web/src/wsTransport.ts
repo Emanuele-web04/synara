@@ -448,8 +448,7 @@ export class WsTransport {
       this.stopStream("server.providers");
     else if (channel === WS_CHANNELS.serverSettingsUpdated) this.stopStream("server.settings");
     else if (channel === WS_CHANNELS.terminalEvent) this.stopStream("terminal.events");
-    else if (channel === WS_CHANNELS.projectDevServerEvent)
-      this.stopStream("projects.dev-servers");
+    else if (channel === WS_CHANNELS.projectDevServerEvent) this.stopStream("projects.dev-servers");
     else if (channel === WS_CHANNELS.reviewUpdated) this.stopStream("review.updated");
     else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent)
       this.stopStream("orchestration.domain");

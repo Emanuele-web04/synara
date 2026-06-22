@@ -46,6 +46,7 @@ import {
 import {
   ReviewAddCommentInput,
   ReviewAgentResult,
+  ReviewBoardLanesResult,
   ReviewChangesetResult,
   ReviewCheckProjectAccessInput,
   ReviewCommentList,
@@ -57,11 +58,22 @@ import {
   ReviewListPullRequestsInput,
   ReviewListPullRequestsResult,
   ReviewConversationResult,
+  ReviewLoadBoardLanesInput,
   ReviewLoadChangesetInput,
   ReviewLoadRemoteThreadsInput,
+  ReviewResolveThreadInput,
+  ReviewResolveThreadResult,
+  ReviewReplyThreadInput,
+  ReviewReplyThreadResult,
+  ReviewUpdateThreadCommentInput,
+  ReviewDeleteThreadCommentInput,
+  ReviewThreadCommentMutationResult,
   ReviewLocalComment,
   ReviewPullRequestOverview,
+  ReviewPullRequestHeader,
   ReviewPullRequestQueryInput,
+  ReviewPullRequestSurfaceInput,
+  ReviewPullRequestSurfaceResult,
   ReviewMoveProjectCardInput,
   ReviewMoveProjectCardResult,
   ReviewProjectAccessResult,
@@ -494,6 +506,12 @@ export const WsReviewListPullRequestsRpc = Rpc.make(WS_METHODS.reviewListPullReq
   error: WsRpcError,
 });
 
+export const WsReviewLoadBoardLanesRpc = Rpc.make(WS_METHODS.reviewLoadBoardLanes, {
+  payload: ReviewLoadBoardLanesInput,
+  success: ReviewBoardLanesResult,
+  error: WsRpcError,
+});
+
 export const WsReviewGetViewerRpc = Rpc.make(WS_METHODS.reviewGetViewer, {
   payload: ReviewGetViewerInput,
   success: ReviewViewerResult,
@@ -506,6 +524,12 @@ export const WsReviewLoadChangesetRpc = Rpc.make(WS_METHODS.reviewLoadChangeset,
   error: WsRpcError,
 });
 
+export const WsReviewLoadPullRequestHeaderRpc = Rpc.make(WS_METHODS.reviewLoadPullRequestHeader, {
+  payload: ReviewPullRequestQueryInput,
+  success: ReviewPullRequestHeader,
+  error: WsRpcError,
+});
+
 export const WsReviewLoadPullRequestRpc = Rpc.make(WS_METHODS.reviewLoadPullRequest, {
   payload: ReviewPullRequestQueryInput,
   success: ReviewPullRequestOverview,
@@ -515,6 +539,12 @@ export const WsReviewLoadPullRequestRpc = Rpc.make(WS_METHODS.reviewLoadPullRequ
 export const WsReviewLoadConversationRpc = Rpc.make(WS_METHODS.reviewLoadConversation, {
   payload: ReviewPullRequestQueryInput,
   success: ReviewConversationResult,
+  error: WsRpcError,
+});
+
+export const WsReviewLoadPullRequestSurfaceRpc = Rpc.make(WS_METHODS.reviewLoadPullRequestSurface, {
+  payload: ReviewPullRequestSurfaceInput,
+  success: ReviewPullRequestSurfaceResult,
   error: WsRpcError,
 });
 
@@ -551,6 +581,30 @@ export const WsReviewSubmitRpc = Rpc.make(WS_METHODS.reviewSubmit, {
 export const WsReviewLoadRemoteThreadsRpc = Rpc.make(WS_METHODS.reviewLoadRemoteThreads, {
   payload: ReviewLoadRemoteThreadsInput,
   success: ReviewRemoteThreadsResult,
+  error: WsRpcError,
+});
+
+export const WsReviewResolveThreadRpc = Rpc.make(WS_METHODS.reviewResolveThread, {
+  payload: ReviewResolveThreadInput,
+  success: ReviewResolveThreadResult,
+  error: WsRpcError,
+});
+
+export const WsReviewReplyThreadRpc = Rpc.make(WS_METHODS.reviewReplyThread, {
+  payload: ReviewReplyThreadInput,
+  success: ReviewReplyThreadResult,
+  error: WsRpcError,
+});
+
+export const WsReviewUpdateThreadCommentRpc = Rpc.make(WS_METHODS.reviewUpdateThreadComment, {
+  payload: ReviewUpdateThreadCommentInput,
+  success: ReviewThreadCommentMutationResult,
+  error: WsRpcError,
+});
+
+export const WsReviewDeleteThreadCommentRpc = Rpc.make(WS_METHODS.reviewDeleteThreadComment, {
+  payload: ReviewDeleteThreadCommentInput,
+  success: ReviewThreadCommentMutationResult,
   error: WsRpcError,
 });
 
@@ -882,16 +936,23 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitUnstageFilesRpc,
   WsGitHandoffThreadRpc,
   WsReviewListPullRequestsRpc,
+  WsReviewLoadBoardLanesRpc,
   WsReviewGetViewerRpc,
   WsReviewLoadChangesetRpc,
+  WsReviewLoadPullRequestHeaderRpc,
   WsReviewLoadPullRequestRpc,
   WsReviewLoadConversationRpc,
+  WsReviewLoadPullRequestSurfaceRpc,
   WsReviewListCommentsRpc,
   WsReviewAddCommentRpc,
   WsReviewUpdateCommentRpc,
   WsReviewRemoveCommentRpc,
   WsReviewSubmitRpc,
   WsReviewLoadRemoteThreadsRpc,
+  WsReviewResolveThreadRpc,
+  WsReviewReplyThreadRpc,
+  WsReviewUpdateThreadCommentRpc,
+  WsReviewDeleteThreadCommentRpc,
   WsReviewRunAgentRpc,
   WsReviewCheckProjectAccessRpc,
   WsReviewListProjectsRpc,

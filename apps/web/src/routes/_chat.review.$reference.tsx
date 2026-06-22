@@ -4,17 +4,23 @@
 
 import type { ReviewSourceRef } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMemo } from "react";
+import { Suspense, lazy, useMemo } from "react";
 
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
   CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
 } from "../components/chat/composerPickerStyles";
-import { ReviewPrView } from "../components/review/ReviewPrView";
+import { PanelStateMessage } from "../components/chat/PanelStateMessage";
 import { ReviewRouteChrome } from "../components/review/ReviewRouteChrome";
 import { useReviewCwd } from "../components/review/useReviewCwd";
 import { SidebarInset } from "../components/ui/sidebar";
 import { cn } from "../lib/utils";
+
+const ReviewPrView = lazy(() =>
+  import("../components/review/ReviewPrView").then((module) => ({
+    default: module.ReviewPrView,
+  })),
+);
 
 export interface ReviewReferenceSearch {
   cwd?: string | undefined;
@@ -71,7 +77,15 @@ function ReviewReferenceRouteView() {
           }}
         />
 
-        <ReviewPrView cwd={resolvedCwd} reference={reference} source={source} />
+        <Suspense
+          fallback={
+            <PanelStateMessage density="compact" fill="flex">
+              Loading pull request
+            </PanelStateMessage>
+          }
+        >
+          <ReviewPrView cwd={resolvedCwd} reference={reference} source={source} />
+        </Suspense>
       </div>
     </SidebarInset>
   );

@@ -18,6 +18,7 @@ import {
   findProjectForReviewChat,
   prewarmReviewChatThread,
   reviewChatTargetsEqual,
+  REVIEW_RISKS_NATIVE_REVIEW_QUESTION,
   sendReviewChatQuestion,
   startNewReviewChatThread,
 } from "./reviewChatThread";
@@ -212,6 +213,81 @@ function makeShellSnapshot(input: {
   };
 }
 
+function syncReadyReviewChatSession(input: {
+  readonly threadId: ThreadId;
+  readonly reviewChatTarget: ReturnType<typeof buildReviewChatTarget>;
+  readonly modelSelection: ModelSelection;
+}): void {
+  const previousThread = useStore.getState().threads.find((thread) => thread.id === input.threadId);
+  useStore.getState().syncServerShellSnapshot(
+    makeShellSnapshot({
+      existingThreadId: input.threadId,
+      reviewChatTarget: input.reviewChatTarget,
+      existingModelSelection: previousThread?.modelSelection ?? input.modelSelection,
+      session: {
+        threadId: input.threadId,
+        status: "ready",
+        providerName: input.modelSelection.provider,
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: "2026-06-07T12:00:01.000Z",
+      },
+    }),
+  );
+}
+
+function syncReadyReviewChatSessionForEnsure(input: {
+  readonly command: ClientOrchestrationCommand;
+  readonly commands: readonly ClientOrchestrationCommand[];
+  readonly reviewChatTarget?: ReturnType<typeof buildReviewChatTarget>;
+}): void {
+  if (!isThreadSessionEnsureCommand(input.command)) {
+    return;
+  }
+  const modelSelection = input.command.modelSelection;
+  if (modelSelection === undefined) {
+    return;
+  }
+  const sessionEnsureCommand = input.command;
+  const createCommand = input.commands
+    .filter(isThreadCreateCommand)
+    .find((command) => command.threadId === sessionEnsureCommand.threadId);
+  const reviewChatTarget = input.reviewChatTarget ?? createCommand?.reviewChatTarget ?? null;
+  if (!reviewChatTarget) {
+    return;
+  }
+  syncReadyReviewChatSession({
+    threadId: sessionEnsureCommand.threadId,
+    reviewChatTarget,
+    modelSelection,
+  });
+}
+
+function makeReadyReviewChatSnapshot(input: {
+  readonly commands: readonly ClientOrchestrationCommand[];
+  readonly reviewChatTarget?: ReturnType<typeof buildReviewChatTarget> | undefined;
+}): OrchestrationShellSnapshot {
+  const createCommand = input.commands.find(isThreadCreateCommand);
+  const ensureCommand = input.commands.find(isThreadSessionEnsureCommand);
+  if (!createCommand || !ensureCommand?.modelSelection) {
+    return makeShellSnapshot({});
+  }
+  return makeShellSnapshot({
+    createCommand,
+    reviewChatTarget: input.reviewChatTarget,
+    session: {
+      threadId: createCommand.threadId,
+      status: "ready",
+      providerName: ensureCommand.modelSelection.provider,
+      runtimeMode: "approval-required",
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: "2026-06-07T12:00:01.000Z",
+    },
+  });
+}
+
 describe("reviewChatThread", () => {
   it("matches review chat threads by durable PR target", () => {
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
@@ -231,6 +307,7 @@ describe("reviewChatThread", () => {
         dispatchCommand: vi.fn(async (command) => {
           commands.push(command);
           events.push(command.type);
+          syncReadyReviewChatSessionForEnsure({ command, commands });
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => {
@@ -249,7 +326,10 @@ describe("reviewChatThread", () => {
       api,
     });
 
-    expect(result.status).toBe("sent");
+    expect(result.status).toBe("queued");
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
+    });
     const createCommand = commands.find(isThreadCreateCommand);
     const turnCommand = commands.find(isThreadTurnStartCommand);
     expect(createCommand?.worktreePath).toBeNull();
@@ -257,11 +337,49 @@ describe("reviewChatThread", () => {
     expect(createCommand?.reviewChatTarget?.headSha).toBe("abc123");
     expect(createCommand?.runtimeMode).toBe("approval-required");
     expect(turnCommand?.threadId).toBe(createCommand?.threadId);
-    expect(turnCommand?.message.text).toContain("Do not create a new worktree");
+    expect(turnCommand?.message.text).toContain("gh pr diff");
     expect(turnCommand?.message.text).toContain("What should I review first?");
-    expect(commands.map((command) => command.type)).toEqual(["thread.create", "thread.turn.start"]);
+    expect(commands.map((command) => command.type)).toEqual([
+      "thread.create",
+      "thread.session.ensure",
+      "thread.turn.start",
+    ]);
     expect(events.indexOf("thread.turn.start")).toBeGreaterThan(events.indexOf("thread.create"));
-    expect(events.indexOf("shell-snapshot")).toBeGreaterThan(events.indexOf("thread.turn.start"));
+    expect(events.indexOf("shell-snapshot")).toBeGreaterThan(events.indexOf("thread.create"));
+  });
+
+  it("routes the review risks suggestion through native base-branch review", async () => {
+    useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
+    const commands: ClientOrchestrationCommand[] = [];
+    const api: ReviewChatTestApi = {
+      orchestration: {
+        dispatchCommand: vi.fn(async (command) => {
+          commands.push(command);
+          syncReadyReviewChatSessionForEnsure({ command, commands });
+          return { sequence: commands.length };
+        }),
+        getShellSnapshot: vi.fn(async () => {
+          return makeShellSnapshot({
+            createCommand: commands.find(isThreadCreateCommand),
+          });
+        }),
+        subscribeThread: vi.fn(async () => undefined),
+      },
+    };
+
+    const result = await sendReviewChatQuestion({
+      payload: makePayload(),
+      question: REVIEW_RISKS_NATIVE_REVIEW_QUESTION,
+      api,
+    });
+
+    expect(result.status).toBe("queued");
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
+    });
+    const turnCommand = commands.find(isThreadTurnStartCommand);
+    expect(turnCommand?.reviewTarget).toEqual({ type: "baseBranch", branch: "main" });
+    expect(turnCommand?.message.text).toBe(REVIEW_RISKS_NATIVE_REVIEW_QUESTION);
   });
 
   it("passes selected skill references through review chat turns", async () => {
@@ -271,6 +389,7 @@ describe("reviewChatThread", () => {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
           commands.push(command);
+          syncReadyReviewChatSessionForEnsure({ command, commands });
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () =>
@@ -289,7 +408,10 @@ describe("reviewChatThread", () => {
       api,
     });
 
-    expect(result.status).toBe("sent");
+    expect(result.status).toBe("queued");
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
+    });
     expect(commands.find(isThreadTurnStartCommand)?.message.skills).toEqual([
       { name: "hallmark", path: "/Users/tylersheffield/.agents/skills/hallmark" },
     ]);
@@ -311,6 +433,7 @@ describe("reviewChatThread", () => {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
           commands.push(command);
+          syncReadyReviewChatSessionForEnsure({ command, commands, reviewChatTarget: target });
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () =>
@@ -326,10 +449,63 @@ describe("reviewChatThread", () => {
       api,
     });
 
-    expect(result).toEqual({ status: "sent", threadId: existingThreadId, created: false });
-    expect(commands.map((command) => command.type)).toEqual(["thread.turn.start"]);
+    expect(result).toMatchObject({ status: "queued", threadId: existingThreadId, created: false });
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
+    });
+    expect(commands.map((command) => command.type)).toEqual([
+      "thread.session.ensure",
+      "thread.turn.start",
+    ]);
     expect(commands.find(isThreadTurnStartCommand)?.threadId).toBe(existingThreadId);
-    expect(commands.find(isThreadTurnStartCommand)?.message.text).toBe("Summarize this PR");
+    expect(commands.find(isThreadTurnStartCommand)?.message.text).toContain("Summarize this PR");
+  });
+
+  it("notifies when a queued review turn is being dispatched to the provider", async () => {
+    const payload = makePayload();
+    const target = buildReviewChatTarget(payload, projectId);
+    const existingThreadId = ThreadId.makeUnsafe("thread-existing-review-chat-provider-start");
+    useStore.getState().syncServerShellSnapshot(
+      makeShellSnapshot({
+        existingThreadId,
+        reviewChatTarget: target,
+      }),
+    );
+    const events: string[] = [];
+    const api: ReviewChatTestApi = {
+      orchestration: {
+        dispatchCommand: vi.fn(async (command) => {
+          events.push(command.type);
+          syncReadyReviewChatSessionForEnsure({
+            command,
+            commands: [command],
+            reviewChatTarget: target,
+          });
+          return { sequence: events.length };
+        }),
+        getShellSnapshot: vi.fn(async () =>
+          makeShellSnapshot({ existingThreadId, reviewChatTarget: target }),
+        ),
+        subscribeThread: vi.fn(async () => undefined),
+      },
+    };
+
+    const result = await sendReviewChatQuestion({
+      payload,
+      question: "Summarize this PR",
+      api,
+      onQueuedProviderStartRequested: () => events.push("provider-start-requested"),
+    });
+
+    expect(result).toMatchObject({ status: "queued", threadId: existingThreadId, created: false });
+    await vi.waitFor(() => {
+      expect(events).toContain("thread.turn.start");
+    });
+    expect(events).toEqual([
+      "thread.session.ensure",
+      "provider-start-requested",
+      "thread.turn.start",
+    ]);
   });
 
   it("can start a fresh bound review thread even when one already exists", async () => {
@@ -348,6 +524,7 @@ describe("reviewChatThread", () => {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
           commands.push(command);
+          syncReadyReviewChatSessionForEnsure({ command, commands, reviewChatTarget: target });
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () =>
@@ -380,16 +557,37 @@ describe("reviewChatThread", () => {
 
   it("sends a review question to the explicitly selected review thread", async () => {
     const payload = makePayload();
+    const target = buildReviewChatTarget(payload, projectId);
     const selectedThreadId = ThreadId.makeUnsafe("thread-newly-selected-review-chat");
-    useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
+    useStore.getState().syncServerShellSnapshot(
+      makeShellSnapshot({
+        existingThreadId: selectedThreadId,
+        reviewChatTarget: target,
+        session: {
+          threadId: selectedThreadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-06-07T12:00:01.000Z",
+        },
+      }),
+    );
     const commands: ClientOrchestrationCommand[] = [];
     const api: ReviewChatTestApi = {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
           commands.push(command);
+          syncReadyReviewChatSessionForEnsure({ command, commands, reviewChatTarget: target });
           return { sequence: commands.length };
         }),
-        getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
+        getShellSnapshot: vi.fn(async () =>
+          makeShellSnapshot({
+            createCommand: commands.find(isThreadCreateCommand),
+            reviewChatTarget: target,
+          }),
+        ),
         subscribeThread: vi.fn(async () => undefined),
       },
     };
@@ -402,10 +600,80 @@ describe("reviewChatThread", () => {
     });
 
     const turnCommand = commands.find(isThreadTurnStartCommand);
-    expect(result).toEqual({ status: "sent", threadId: selectedThreadId, created: false });
+    expect(result).toMatchObject({ status: "sent", threadId: selectedThreadId, created: false });
+    expect(result.status === "sent" ? result.turnRequestedAt : null).toBeTruthy();
     expect(commands.find(isThreadCreateCommand)).toBeUndefined();
     expect(turnCommand?.threadId).toBe(selectedThreadId);
-    expect(turnCommand?.message.text).toContain("Do not create a new worktree");
+    expect(turnCommand?.message.text).toContain("gh pr diff");
+    expect(turnCommand?.message.text).toContain("Focus on the risky file");
+  });
+
+  it("queues a review question for an explicitly selected cold review thread", async () => {
+    const payload = makePayload();
+    const target = buildReviewChatTarget(payload, projectId);
+    const selectedThreadId = ThreadId.makeUnsafe("thread-selected-cold-review-chat");
+    useStore.getState().syncServerShellSnapshot(
+      makeShellSnapshot({
+        existingThreadId: selectedThreadId,
+        reviewChatTarget: target,
+      }),
+    );
+    const commands: ClientOrchestrationCommand[] = [];
+    let resolveSessionEnsure: () => void = () => {
+      throw new Error("session ensure was not requested");
+    };
+    const api: ReviewChatTestApi = {
+      orchestration: {
+        dispatchCommand: vi.fn(async (command) => {
+          commands.push(command);
+          if (isThreadSessionEnsureCommand(command)) {
+            await new Promise<void>((resolve) => {
+              resolveSessionEnsure = resolve;
+            });
+            if (target && command.modelSelection) {
+              syncReadyReviewChatSession({
+                threadId: command.threadId,
+                reviewChatTarget: target,
+                modelSelection: command.modelSelection,
+              });
+            }
+          }
+          return { sequence: commands.length };
+        }),
+        getShellSnapshot: vi.fn(async () =>
+          makeShellSnapshot({
+            createCommand: commands.find(isThreadCreateCommand),
+            reviewChatTarget: target,
+          }),
+        ),
+        subscribeThread: vi.fn(async () => undefined),
+      },
+    };
+
+    const result = await sendReviewChatQuestion({
+      payload,
+      threadId: selectedThreadId,
+      question: "Focus on the risky file",
+      api,
+    });
+
+    expect(result).toMatchObject({
+      status: "queued",
+      threadId: selectedThreadId,
+      created: false,
+      reason: "session_warming",
+    });
+    expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(0);
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadSessionEnsureCommand)).toHaveLength(1);
+    });
+
+    resolveSessionEnsure();
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
+    });
+    const turnCommand = commands.find(isThreadTurnStartCommand);
+    expect(turnCommand?.threadId).toBe(selectedThreadId);
     expect(turnCommand?.message.text).toContain("Focus on the risky file");
   });
 
@@ -425,6 +693,7 @@ describe("reviewChatThread", () => {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
           commands.push(command);
+          syncReadyReviewChatSessionForEnsure({ command, commands, reviewChatTarget: target });
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () =>
@@ -444,8 +713,14 @@ describe("reviewChatThread", () => {
       api,
     });
 
-    expect(result).toEqual({ status: "sent", threadId: existingThreadId, created: false });
-    expect(commands.map((command) => command.type)).toEqual(["thread.turn.start"]);
+    expect(result).toMatchObject({ status: "queued", threadId: existingThreadId, created: false });
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
+    });
+    expect(commands.map((command) => command.type)).toEqual([
+      "thread.session.ensure",
+      "thread.turn.start",
+    ]);
     expect(commands.find(isThreadCreateCommand)).toBeUndefined();
     expect(commands.find(isThreadTurnStartCommand)?.threadId).toBe(existingThreadId);
   });
@@ -464,6 +739,7 @@ describe("reviewChatThread", () => {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
           commands.push(command);
+          syncReadyReviewChatSessionForEnsure({ command, commands });
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () =>
@@ -482,7 +758,10 @@ describe("reviewChatThread", () => {
     });
 
     const createCommand = commands.find(isThreadCreateCommand);
-    expect(result.status).toBe("sent");
+    expect(result.status).toBe("queued");
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
+    });
     expect(createCommand?.threadId).not.toBe(existingThreadId);
     expect(createCommand?.reviewChatTarget?.headSha).toBe("def456");
   });
@@ -494,9 +773,10 @@ describe("reviewChatThread", () => {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
           commands.push(command);
+          syncReadyReviewChatSessionForEnsure({ command, commands });
           return { sequence: commands.length };
         }),
-        getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
+        getShellSnapshot: vi.fn(async () => makeReadyReviewChatSnapshot({ commands })),
         subscribeThread: vi.fn(async () => undefined),
       },
     };
@@ -512,10 +792,13 @@ describe("reviewChatThread", () => {
       api,
     });
 
+    expect(first.status).toBe("queued");
+    expect(["queued", "sent"]).toContain(second.status);
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(2);
+    });
     const createCommands = commands.filter(isThreadCreateCommand);
     const turnCommands = commands.filter(isThreadTurnStartCommand);
-    expect(first.status).toBe("sent");
-    expect(second.status).toBe("sent");
     expect(createCommands).toHaveLength(1);
     expect(turnCommands).toHaveLength(2);
     expect(turnCommands[0]?.threadId).toBe(createCommands[0]?.threadId);
@@ -531,9 +814,10 @@ describe("reviewChatThread", () => {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
           commands.push(command);
+          syncReadyReviewChatSessionForEnsure({ command, commands });
           return { sequence: commands.length };
         }),
-        getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
+        getShellSnapshot: vi.fn(async () => makeReadyReviewChatSnapshot({ commands })),
         subscribeThread: vi.fn(async () => undefined),
       },
     };
@@ -554,10 +838,13 @@ describe("reviewChatThread", () => {
       api,
     });
 
+    expect(first.status).toBe("queued");
+    expect(["queued", "sent"]).toContain(second.status);
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(2);
+    });
     const createCommands = commands.filter(isThreadCreateCommand);
     const turnCommands = commands.filter(isThreadTurnStartCommand);
-    expect(first.status).toBe("sent");
-    expect(second.status).toBe("sent");
     expect(createCommands).toHaveLength(1);
     expect(turnCommands).toHaveLength(2);
     expect(turnCommands[0]?.threadId).toBe(createCommands[0]?.threadId);
@@ -571,9 +858,10 @@ describe("reviewChatThread", () => {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
           commands.push(command);
+          syncReadyReviewChatSessionForEnsure({ command, commands });
           return { sequence: commands.length };
         }),
-        getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
+        getShellSnapshot: vi.fn(async () => makeReadyReviewChatSnapshot({ commands })),
         subscribeThread: vi.fn(async () => undefined),
       },
     };
@@ -594,10 +882,13 @@ describe("reviewChatThread", () => {
       api,
     });
 
+    expect(first.status).toBe("queued");
+    expect(["queued", "sent"]).toContain(second.status);
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(2);
+    });
     const createCommands = commands.filter(isThreadCreateCommand);
     const turnCommands = commands.filter(isThreadTurnStartCommand);
-    expect(first.status).toBe("sent");
-    expect(second.status).toBe("sent");
     expect(createCommands).toHaveLength(1);
     expect(turnCommands).toHaveLength(2);
     expect(turnCommands[0]?.threadId).toBe(createCommands[0]?.threadId);
@@ -605,35 +896,47 @@ describe("reviewChatThread", () => {
   });
 
   it("prewarms a review thread by injecting context and sends the first visible question on the same thread", async () => {
+    const payload = makePayload();
+    const target = buildReviewChatTarget(payload, projectId);
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
     const commands: ClientOrchestrationCommand[] = [];
     const api: ReviewChatTestApi = {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
           commands.push(command);
+          if (target && isThreadSessionEnsureCommand(command) && command.modelSelection) {
+            syncReadyReviewChatSession({
+              threadId: command.threadId,
+              reviewChatTarget: target,
+              modelSelection: command.modelSelection,
+            });
+          }
           return { sequence: commands.length };
         }),
-        getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
+        getShellSnapshot: vi.fn(async () => makeReadyReviewChatSnapshot({ commands })),
         subscribeThread: vi.fn(async () => undefined),
       },
     };
 
     const prewarm = await prewarmReviewChatThread({
-      payload: makePayload(),
+      payload,
       api,
     });
     const send = await sendReviewChatQuestion({
-      payload: makePayload(),
+      payload,
       question: "Summarize this PR",
       api,
     });
 
+    expect(prewarm.status).toBe("ready");
+    expect(["queued", "sent"]).toContain(send.status);
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
+    });
     const createCommands = commands.filter(isThreadCreateCommand);
     const ensureCommands = commands.filter(isThreadSessionEnsureCommand);
     const injectCommands = commands.filter(isThreadContextInjectCommand);
     const turnCommands = commands.filter(isThreadTurnStartCommand);
-    expect(prewarm.status).toBe("ready");
-    expect(send.status).toBe("sent");
     expect(createCommands).toHaveLength(1);
     expect(ensureCommands).toHaveLength(1);
     // Codex review chats no longer use thread.context.inject during prewarm
@@ -646,13 +949,72 @@ describe("reviewChatThread", () => {
     expect(turnCommands[0]?.message.text).toContain("Summarize this PR");
   });
 
-  it("injects review context only after complete context is available", async () => {
+  it("refreshes placeholder review chat metadata when full PR context arrives", async () => {
+    const payload = makePayload();
+    const target = buildReviewChatTarget(payload, projectId);
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
     const commands: ClientOrchestrationCommand[] = [];
     const api: ReviewChatTestApi = {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
           commands.push(command);
+          if (target && isThreadSessionEnsureCommand(command) && command.modelSelection) {
+            syncReadyReviewChatSession({
+              threadId: command.threadId,
+              reviewChatTarget: target,
+              modelSelection: command.modelSelection,
+            });
+          }
+          return { sequence: commands.length };
+        }),
+        getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
+        subscribeThread: vi.fn(async () => undefined),
+      },
+    };
+
+    const earlyPrewarm = await prewarmReviewChatThread({
+      payload: makeIncompletePayload(),
+      api,
+    });
+    const completePrewarm = await prewarmReviewChatThread({
+      payload,
+      api,
+    });
+
+    const metaUpdate = commands.find(isThreadMetaUpdateCommand);
+    expect(earlyPrewarm.status).toBe("ready");
+    expect(completePrewarm.status).toBe("ready");
+    expect(metaUpdate).toMatchObject({
+      title: "Review #7884: fix(wellsky): correct OT physical-assessment scale",
+      branch: "main",
+      lastKnownPr: {
+        number: 7884,
+        title: "fix(wellsky): correct OT physical-assessment scale",
+        url: "https://github.com/enzo-health/bonaparte/pull/7884",
+        baseBranch: "main",
+        headBranch: "fix/ot-eval-physical-assessment-scale",
+        state: "open",
+      },
+      reviewChatTarget: target,
+    });
+  });
+
+  it("revalidates session readiness when early and complete Codex prewarm targets differ", async () => {
+    const payload = makePayload();
+    const target = buildReviewChatTarget(payload, projectId);
+    useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
+    const commands: ClientOrchestrationCommand[] = [];
+    const api: ReviewChatTestApi = {
+      orchestration: {
+        dispatchCommand: vi.fn(async (command) => {
+          commands.push(command);
+          if (target && isThreadSessionEnsureCommand(command) && command.modelSelection) {
+            syncReadyReviewChatSession({
+              threadId: command.threadId,
+              reviewChatTarget: target,
+              modelSelection: command.modelSelection,
+            });
+          }
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
@@ -665,7 +1027,7 @@ describe("reviewChatThread", () => {
       api,
     });
     const complete = await prewarmReviewChatThread({
-      payload: makePayload(),
+      payload,
       api,
     });
 
@@ -679,8 +1041,10 @@ describe("reviewChatThread", () => {
     expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(0);
   });
 
-  it("does not wait indefinitely for an in-flight prewarm before sending the visible review question", async () => {
+  it("queues visible send while an in-flight prewarm finishes session readiness", async () => {
     vi.useFakeTimers();
+    const payload = makePayload();
+    const target = buildReviewChatTarget(payload, projectId);
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
     const commands: ClientOrchestrationCommand[] = [];
     let resolveSessionEnsure: () => void = () => {
@@ -694,6 +1058,13 @@ describe("reviewChatThread", () => {
             await new Promise<void>((resolve) => {
               resolveSessionEnsure = resolve;
             });
+            if (target && command.modelSelection) {
+              syncReadyReviewChatSession({
+                threadId: command.threadId,
+                reviewChatTarget: target,
+                modelSelection: command.modelSelection,
+              });
+            }
           }
           return { sequence: commands.length };
         }),
@@ -703,7 +1074,7 @@ describe("reviewChatThread", () => {
     };
 
     const prewarm = prewarmReviewChatThread({
-      payload: makePayload(),
+      payload,
       api,
     });
     prewarm.catch(() => undefined);
@@ -711,18 +1082,20 @@ describe("reviewChatThread", () => {
       expect(commands.some(isThreadSessionEnsureCommand)).toBe(true);
     });
     const send = sendReviewChatQuestion({
-      payload: makePayload(),
+      payload,
       question: "Summarize this PR",
       api,
     });
-    await vi.advanceTimersByTimeAsync(251);
+    expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(150);
+    await expect(send).resolves.toMatchObject({ status: "queued" });
+    expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(0);
+
+    resolveSessionEnsure();
     await vi.waitFor(() => {
       expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
     });
-
-    resolveSessionEnsure();
     await expect(prewarm).resolves.toMatchObject({ status: "ready" });
-    await expect(send).resolves.toMatchObject({ status: "sent" });
 
     const turnCommands = commands.filter(isThreadTurnStartCommand);
     expect(commands.filter(isThreadCreateCommand)).toHaveLength(1);
@@ -733,9 +1106,152 @@ describe("reviewChatThread", () => {
     vi.useRealTimers();
   });
 
-  it("does not block a visible review question behind a failed prewarm", async () => {
+  it("queues visible send when the selected shell thread is still warming", async () => {
+    vi.useFakeTimers();
+    const payload = makePayload();
+    const target = buildReviewChatTarget(payload, projectId);
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
     const commands: ClientOrchestrationCommand[] = [];
+    let resolveSessionEnsure: () => void = () => {
+      throw new Error("session ensure was not requested");
+    };
+    const api: ReviewChatTestApi = {
+      orchestration: {
+        dispatchCommand: vi.fn(async (command) => {
+          commands.push(command);
+          if (isThreadSessionEnsureCommand(command)) {
+            await new Promise<void>((resolve) => {
+              resolveSessionEnsure = resolve;
+            });
+            if (target && command.modelSelection) {
+              syncReadyReviewChatSession({
+                threadId: command.threadId,
+                reviewChatTarget: target,
+                modelSelection: command.modelSelection,
+              });
+            }
+          }
+          return { sequence: commands.length };
+        }),
+        getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
+        subscribeThread: vi.fn(async () => undefined),
+      },
+    };
+
+    let selectedShellThreadId: ThreadId | null = null;
+    const prewarm = prewarmReviewChatThread({
+      payload,
+      api,
+      onThreadReady: (threadId) => {
+        selectedShellThreadId = threadId;
+      },
+    });
+    prewarm.catch(() => undefined);
+    await vi.waitFor(() => {
+      expect(selectedShellThreadId).not.toBeNull();
+      expect(commands.some(isThreadSessionEnsureCommand)).toBe(true);
+    });
+
+    const send = sendReviewChatQuestion({
+      payload,
+      question: "Summarize this PR",
+      threadId: selectedShellThreadId ?? undefined,
+      api,
+    });
+    expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(150);
+    await expect(send).resolves.toMatchObject({
+      status: "queued",
+      threadId: selectedShellThreadId,
+    });
+    expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(0);
+
+    resolveSessionEnsure();
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
+    });
+    await expect(prewarm).resolves.toMatchObject({ status: "ready" });
+
+    const turnCommands = commands.filter(isThreadTurnStartCommand);
+    expect(commands.filter(isThreadCreateCommand)).toHaveLength(1);
+    expect(commands.filter(isThreadSessionEnsureCommand)).toHaveLength(1);
+    expect(turnCommands[0]?.threadId).toBe(selectedShellThreadId);
+    expect(turnCommands[0]?.message.text).toContain("Summarize this PR");
+    vi.useRealTimers();
+  });
+
+  it("returns queued instead of blocking visible send behind the full prewarm timeout", async () => {
+    vi.useFakeTimers();
+    const payload = makePayload();
+    const target = buildReviewChatTarget(payload, projectId);
+    useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
+    const commands: ClientOrchestrationCommand[] = [];
+    let resolveSessionEnsure: () => void = () => {
+      throw new Error("session ensure was not requested");
+    };
+    const api: ReviewChatTestApi = {
+      orchestration: {
+        dispatchCommand: vi.fn(async (command) => {
+          commands.push(command);
+          if (isThreadSessionEnsureCommand(command)) {
+            await new Promise<void>((resolve) => {
+              resolveSessionEnsure = resolve;
+            });
+            if (target && command.modelSelection) {
+              syncReadyReviewChatSession({
+                threadId: command.threadId,
+                reviewChatTarget: target,
+                modelSelection: command.modelSelection,
+              });
+            }
+          }
+          return { sequence: commands.length };
+        }),
+        getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
+        subscribeThread: vi.fn(async () => undefined),
+      },
+    };
+
+    const prewarm = prewarmReviewChatThread({
+      payload,
+      api,
+    });
+    prewarm.catch(() => undefined);
+    await vi.waitFor(() => {
+      expect(commands.some(isThreadSessionEnsureCommand)).toBe(true);
+    });
+
+    let sendSettled = false;
+    const send = sendReviewChatQuestion({
+      payload,
+      question: "Summarize this PR",
+      api,
+    });
+    send.finally(() => {
+      sendSettled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(149);
+    expect(sendSettled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(send).resolves.toMatchObject({
+      status: "queued",
+      reason: "session_warming",
+    });
+    expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(0);
+
+    resolveSessionEnsure();
+    await expect(prewarm).resolves.toMatchObject({ status: "ready" });
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
+    });
+    vi.useRealTimers();
+  });
+
+  it("reports queued review question failure without starting a turn after failed session warmup", async () => {
+    useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
+    const commands: ClientOrchestrationCommand[] = [];
+    const queuedFailures: string[] = [];
     const api: ReviewChatTestApi = {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
@@ -762,17 +1278,24 @@ describe("reviewChatThread", () => {
     const send = await sendReviewChatQuestion({
       payload: makePayload(),
       question: "Summarize this PR",
+      onQueuedTurnFailed: (_threadId, _queuedAt, reason) => {
+        queuedFailures.push(reason);
+      },
       api,
     });
 
     await expect(prewarm).rejects.toThrow("session ensure failed");
     const createCommands = commands.filter(isThreadCreateCommand);
     const turnCommands = commands.filter(isThreadTurnStartCommand);
-    expect(send.status).toBe("sent");
+    expect(send).toMatchObject({
+      status: "queued",
+      reason: "session_warming",
+    });
+    await vi.waitFor(() => {
+      expect(queuedFailures).toEqual(["session ensure failed"]);
+    });
     expect(createCommands).toHaveLength(1);
-    expect(turnCommands).toHaveLength(1);
-    expect(turnCommands[0]?.threadId).toBe(createCommands[0]?.threadId);
-    expect(turnCommands[0]?.message.text).toContain("Summarize this PR");
+    expect(turnCommands).toHaveLength(0);
   });
 
   it("skips stale stopped review threads when resolving the active PR chat", async () => {
@@ -800,6 +1323,7 @@ describe("reviewChatThread", () => {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
           commands.push(command);
+          syncReadyReviewChatSessionForEnsure({ command, commands, reviewChatTarget: target });
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
@@ -813,14 +1337,70 @@ describe("reviewChatThread", () => {
       api,
     });
 
+    expect(result.status).toBe("queued");
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
+    });
     const createCommand = commands.find(isThreadCreateCommand);
     const turnCommand = commands.find(isThreadTurnStartCommand);
-    expect(result.status).toBe("sent");
     expect(createCommand?.threadId).not.toBe(staleThreadId);
     expect(turnCommand?.threadId).toBe(createCommand?.threadId);
   });
 
-  it("updates the review chat model before starting a turn on an existing thread", async () => {
+  it("sends Codex review chat model changes with the turn start command", async () => {
+    const payload = makePayload();
+    const target = buildReviewChatTarget(payload, projectId);
+    const existingThreadId = ThreadId.makeUnsafe("thread-existing-review-chat-codex-model");
+    useStore.getState().syncServerShellSnapshot(
+      makeShellSnapshot({
+        existingThreadId,
+        reviewChatTarget: target,
+        existingModelSelection: {
+          provider: "codex",
+          model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          options: { reasoningEffort: "medium" },
+        },
+      }),
+    );
+    const commands: ClientOrchestrationCommand[] = [];
+    const api: ReviewChatTestApi = {
+      orchestration: {
+        dispatchCommand: vi.fn(async (command) => {
+          commands.push(command);
+          syncReadyReviewChatSessionForEnsure({ command, commands, reviewChatTarget: target });
+          return { sequence: commands.length };
+        }),
+        getShellSnapshot: vi.fn(async () =>
+          makeShellSnapshot({ existingThreadId, reviewChatTarget: target }),
+        ),
+        subscribeThread: vi.fn(async () => undefined),
+      },
+    };
+    const modelSelection = {
+      provider: "codex",
+      model: "gpt-5.3-codex-spark",
+      options: { reasoningEffort: "low" },
+    } as const;
+
+    const result = await sendReviewChatQuestion({
+      payload,
+      question: "Summarize this PR",
+      modelSelection,
+      api,
+    });
+
+    expect(result).toMatchObject({ status: "queued", threadId: existingThreadId, created: false });
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
+    });
+    expect(commands.map((command) => command.type)).toEqual([
+      "thread.session.ensure",
+      "thread.turn.start",
+    ]);
+    expect(commands.find(isThreadTurnStartCommand)?.modelSelection).toEqual(modelSelection);
+  });
+
+  it("updates the review chat model before starting a turn when switching provider", async () => {
     const payload = makePayload();
     const target = buildReviewChatTarget(payload, projectId);
     const existingThreadId = ThreadId.makeUnsafe("thread-existing-review-chat-model");
@@ -832,6 +1412,7 @@ describe("reviewChatThread", () => {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
           commands.push(command);
+          syncReadyReviewChatSessionForEnsure({ command, commands, reviewChatTarget: target });
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () =>
@@ -852,8 +1433,12 @@ describe("reviewChatThread", () => {
       api,
     });
 
-    expect(result).toEqual({ status: "sent", threadId: existingThreadId, created: false });
+    expect(result).toMatchObject({ status: "queued", threadId: existingThreadId, created: false });
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
+    });
     expect(commands.map((command) => command.type)).toEqual([
+      "thread.session.ensure",
       "thread.meta.update",
       "thread.turn.start",
     ]);
@@ -875,12 +1460,21 @@ describe("reviewChatThread", () => {
   });
 
   it("uses a bootstrap turn instead of context inject for non-Codex review chat prewarm", async () => {
+    const payload = makePayload();
+    const target = buildReviewChatTarget(payload, projectId);
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
     const commands: ClientOrchestrationCommand[] = [];
     const api: ReviewChatTestApi = {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
           commands.push(command);
+          if (target && isThreadSessionEnsureCommand(command) && command.modelSelection) {
+            syncReadyReviewChatSession({
+              threadId: command.threadId,
+              reviewChatTarget: target,
+              modelSelection: command.modelSelection,
+            });
+          }
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
@@ -893,7 +1487,7 @@ describe("reviewChatThread", () => {
     } as const;
 
     const prewarm = await prewarmReviewChatThread({
-      payload: makePayload(),
+      payload,
       modelSelection: claudeModelSelection,
       api,
     });

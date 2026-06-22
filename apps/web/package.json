@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
+    "benchmark:review": "vitest run --config vitest.browser.config.ts src/components/review/ReviewSurfacePerformance.browser.tsx --reporter=verbose",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:browser:install": "playwright install --with-deps chromium"
   },
@@ -57,6 +58,8 @@
     "react-icons": "^5.6.0",
     "react-markdown": "^10.1.0",
     "rehype-katex": "^7.0.1",
+    "rehype-raw": "^7",
+    "rehype-sanitize": "^6",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "shadcn": "^4.8.3",

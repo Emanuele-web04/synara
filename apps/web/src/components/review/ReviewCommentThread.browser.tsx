@@ -16,6 +16,10 @@ function buildActions(): ReviewCommentThreadActions {
     startReply: vi.fn(),
     convertFinding: vi.fn(),
     dismissFinding: vi.fn(),
+    resolveRemoteThread: vi.fn(),
+    replyRemoteThread: vi.fn(),
+    editRemoteComment: vi.fn(),
+    deleteRemoteComment: vi.fn(),
   };
 }
 

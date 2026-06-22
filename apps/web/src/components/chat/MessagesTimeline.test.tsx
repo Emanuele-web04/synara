@@ -113,6 +113,53 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
     expect(markup).toContain('data-timeline-row-kind="message"');
   }, 10_000);
 
+  it("renders provider-unhandled work rows without exposing raw provider payloads", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-provider-unhandled",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-provider-unhandled",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Unhandled provider event",
+              tone: "info",
+              detail: "claude.sdk.message / system:thinking_tokens / system:thinking_tokens",
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain('data-timeline-row-kind="work"');
+    expect(markup).toContain("provider event");
+    expect(markup).not.toContain("Unhandled provider event Unhandled claudeAgent event");
+    expect(markup).not.toContain(
+      "Unhandled Claude system message subtype &#x27;thinking_tokens&#x27;.",
+    );
+    expect(markup).not.toContain("raw payload should not render");
+  });
+
   it("renders assistant math through the shared markdown renderer", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -923,6 +970,47 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
     expect(markup).not.toContain("h-px flex-1 bg-border");
   });
 
+  it("uses thinking copy when the active tail work is thinking", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking
+        activeTurnInProgress
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={[
+          {
+            id: "entry-thinking",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-thinking",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Thinking",
+              tone: "thinking",
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Thinking for");
+    expect(markup).not.toContain("Working for");
+  });
+
   it("folds work log summaries above the next assistant message footer", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -975,8 +1063,8 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
 
     expect(markup).toContain(formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale"));
     expect(markup).toContain("Worked for 1.0s");
-    expect(markup).not.toContain("data-scroll-anchor-ignore");
-    expect(markup).not.toContain(
+    expect(markup).toContain("data-scroll-anchor-ignore");
+    expect(markup).toContain(
       `${formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale")} • 1.0s`,
     );
     expect(markup).not.toContain("Work log");
@@ -1204,10 +1292,10 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
       />,
     );
 
-    expect(markup).toContain(
-      '<span data-work-entry-display-text="true">Searched 2 files found</span>',
-    );
-    expect(markup).not.toContain("data-work-entry-action-word");
+    expect(markup).toContain('data-work-entry-display-text="true"');
+    expect(markup).toContain('data-work-entry-action-word="true"');
+    expect(markup).toContain("Searched");
+    expect(markup).toContain("2 files found");
   });
 
   it("renders Claude agent task output through the shared markdown renderer", async () => {
@@ -1663,7 +1751,7 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
     );
 
     expect(markup).toContain("Searched");
-    expect(markup).not.toContain("data-work-entry-action-word");
+    expect(markup).toContain('data-work-entry-action-word="true"');
     expect(markup).toContain("rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src");
     expect(markup).toContain(
       `title="/bin/zsh -lc &#x27;rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src&#x27;"`,
@@ -1714,7 +1802,7 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
     );
 
     expect(markup).toContain("Listed");
-    expect(markup).not.toContain("data-work-entry-action-word");
+    expect(markup).toContain('data-work-entry-action-word="true"');
     expect(markup).toContain("find apps/web/src -maxdepth 2 -type d");
     expect(markup).not.toContain(">Listed web<");
   });
@@ -1895,7 +1983,7 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
     );
 
     expect(markup).toContain("Codex Apps: Github Fetch Pr");
-    expect(markup).toContain('data-tool-icon="github"');
+    expect(markup).toContain('data-inline-tool-icon="github"');
   });
 
   it("shows an MCP icon next to compact non-GitHub MCP rows", async () => {
@@ -1939,7 +2027,7 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
     );
 
     expect(markup).toContain("Codex Apps: Slack Search");
-    expect(markup).toContain('data-tool-icon="mcp"');
+    expect(markup).toContain('data-inline-tool-icon="mcp"');
   });
 
   it("anchors the changed-files summary at the end of a collapsed file-change turn", async () => {

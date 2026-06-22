@@ -35,9 +35,9 @@ export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: 
   switch (provider) {
     case "codex":
       // Codex injects structured skill items only from roots it knows: its own
-      // folders plus `~/.synara/skills`, which Synara registers at session start
-      // via skills/extraRoots/set. Skills resolved from other providers' folders
-      // must be inlined.
+      // folders plus Synara roots registered via skills/extraRoots/set before
+      // skill-bearing turns. Skills resolved from other providers' folders must
+      // be inlined.
       return [".claude", ".cursor", ".agents"].some((dir) => segments.has(dir));
     case "cursor":
       // cursor-agent natively scans .cursor/.agents/.claude/.codex skill roots;

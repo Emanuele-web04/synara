@@ -13,6 +13,7 @@ describe("RIGHT_DOCK_PANE_KINDS (single source of truth)", () => {
     expect([...RIGHT_DOCK_PANE_KINDS]).toEqual([
       "browser",
       "diff",
+      "file",
       "terminal",
       "sidechat",
       "git",
@@ -20,17 +21,18 @@ describe("RIGHT_DOCK_PANE_KINDS (single source of truth)", () => {
     ]);
   });
 
-  it("derives singletons as every kind except sidechat", () => {
+  it("derives singletons as every kind except sidechat and file", () => {
     expect(SINGLETON_PANE_KINDS.has("sidechat")).toBe(false);
+    expect(SINGLETON_PANE_KINDS.has("file")).toBe(false);
     for (const kind of RIGHT_DOCK_PANE_KINDS) {
-      expect(SINGLETON_PANE_KINDS.has(kind)).toBe(kind !== "sidechat");
+      expect(SINGLETON_PANE_KINDS.has(kind)).toBe(kind !== "sidechat" && kind !== "file");
     }
   });
 });
 
 describe("isRightDockPaneKind", () => {
   it("accepts the known pane kinds", () => {
-    for (const kind of ["browser", "diff", "terminal", "sidechat", "git"]) {
+    for (const kind of RIGHT_DOCK_PANE_KINDS) {
       expect(isRightDockPaneKind(kind)).toBe(true);
     }
   });

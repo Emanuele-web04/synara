@@ -2,41 +2,51 @@ import type { ReviewPullRequestSummary } from "@t3tools/contracts";
 
 export type ReviewColumnId = "draft" | "needs-review" | "changes-requested" | "approved" | "merged";
 
-export type ReviewBoardView = "needs-my-review" | "mine" | "all";
+export type ReviewBoardView = "needs-my-review" | "mine" | "merged" | "all";
+
+// Per-column accent reinforces review state at a glance; the text label still
+// carries the meaning, so color is never the sole signal (a11y color-not-only).
+export type ReviewColumnAccent = "attention" | "warning" | "success" | "muted" | "merged";
 
 export const REVIEW_BOARD_COLUMNS: ReadonlyArray<{
   id: ReviewColumnId;
   label: string;
+  accent: ReviewColumnAccent;
   emptyTitle: string;
   emptyHint: string;
 }> = [
   {
     id: "needs-review",
     label: "Needs Review",
+    accent: "attention",
     emptyTitle: "All caught up",
     emptyHint: "Nothing waiting on a first review.",
   },
   {
     id: "changes-requested",
     label: "Changes Requested",
+    accent: "warning",
     emptyTitle: "No change requests",
     emptyHint: "Nothing sent back for changes.",
   },
   {
     id: "approved",
     label: "Approved",
+    accent: "success",
     emptyTitle: "None approved yet",
     emptyHint: "Approved PRs collect here.",
   },
   {
     id: "draft",
     label: "Draft",
+    accent: "muted",
     emptyTitle: "No drafts",
     emptyHint: "Draft PRs show up here.",
   },
   {
     id: "merged",
     label: "Merged",
+    accent: "merged",
     emptyTitle: "Nothing merged",
     emptyHint: "Recently merged PRs land here.",
   },
@@ -45,6 +55,7 @@ export const REVIEW_BOARD_COLUMNS: ReadonlyArray<{
 export const REVIEW_BOARD_VIEWS: ReadonlyArray<{ id: ReviewBoardView; label: string }> = [
   { id: "needs-my-review", label: "Needs my review" },
   { id: "mine", label: "My open PRs" },
+  { id: "merged", label: "Merged" },
   { id: "all", label: "All open" },
 ];
 
@@ -69,7 +80,7 @@ export function filterByView(
   view: ReviewBoardView,
   viewerLogin: string | null,
 ): readonly ReviewPullRequestSummary[] {
-  if (view === "all" || !viewerLogin) {
+  if (view === "all" || view === "merged" || !viewerLogin) {
     return summaries;
   }
   if (view === "mine") {
@@ -91,7 +102,14 @@ export function filterBySearch(
       summary.title.toLowerCase().includes(normalized) ||
       String(summary.number).includes(normalized) ||
       `#${summary.number}`.includes(normalized) ||
-      summary.author.toLowerCase().includes(normalized),
+      summary.author.toLowerCase().includes(normalized) ||
+      summary.baseBranch.toLowerCase().includes(normalized) ||
+      summary.headBranch.toLowerCase().includes(normalized) ||
+      (summary.headSelector?.toLowerCase().includes(normalized) ?? false) ||
+      summary.url.toLowerCase().includes(normalized) ||
+      summary.labels.some((label) => label.toLowerCase().includes(normalized)) ||
+      summary.assignees.some((assignee) => assignee.toLowerCase().includes(normalized)) ||
+      summary.reviewRequests.some((reviewer) => reviewer.toLowerCase().includes(normalized)),
   );
 }
 

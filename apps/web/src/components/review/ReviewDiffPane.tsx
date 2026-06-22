@@ -27,6 +27,10 @@ import {
   reviewAddCommentMutationOptions,
   reviewListCommentsQueryOptions,
   reviewLoadRemoteThreadsQueryOptions,
+  reviewReplyThreadMutationOptions,
+  reviewResolveThreadMutationOptions,
+  reviewUpdateThreadCommentMutationOptions,
+  reviewDeleteThreadCommentMutationOptions,
   reviewViewerQueryOptions,
   reviewRemoveCommentMutationOptions,
   reviewUpdateCommentMutationOptions,
@@ -117,6 +121,34 @@ export function ReviewDiffPane(props: {
   const addCommentMutation = useMutation(reviewAddCommentMutationOptions({ queryClient }));
   const updateCommentMutation = useMutation(reviewUpdateCommentMutationOptions({ queryClient }));
   const removeCommentMutation = useMutation(reviewRemoveCommentMutationOptions({ queryClient }));
+  const resolveThreadMutation = useMutation(
+    reviewResolveThreadMutationOptions({
+      queryClient,
+      cwd: props.cwd ?? null,
+      reference: props.reference ?? null,
+    }),
+  );
+  const replyThreadMutation = useMutation(
+    reviewReplyThreadMutationOptions({
+      queryClient,
+      cwd: props.cwd ?? null,
+      reference: props.reference ?? null,
+    }),
+  );
+  const updateThreadCommentMutation = useMutation(
+    reviewUpdateThreadCommentMutationOptions({
+      queryClient,
+      cwd: props.cwd ?? null,
+      reference: props.reference ?? null,
+    }),
+  );
+  const deleteThreadCommentMutation = useMutation(
+    reviewDeleteThreadCommentMutationOptions({
+      queryClient,
+      cwd: props.cwd ?? null,
+      reference: props.reference ?? null,
+    }),
+  );
 
   const serverComments = commentsQuery.data?.comments;
   const remoteThreads = remoteThreadsQuery.data?.threads;
@@ -277,6 +309,18 @@ export function ReviewDiffPane(props: {
       dismissFinding: (finding) => {
         if (target) dismissFinding(target, finding);
       },
+      resolveRemoteThread: (thread, resolved) => {
+        resolveThreadMutation.mutate({ threadId: thread.id, resolved });
+      },
+      replyRemoteThread: (thread, body) => {
+        replyThreadMutation.mutate({ threadId: thread.id, body });
+      },
+      editRemoteComment: (commentId, body) => {
+        updateThreadCommentMutation.mutate({ commentId, body });
+      },
+      deleteRemoteComment: (commentId) => {
+        deleteThreadCommentMutation.mutate({ commentId });
+      },
     }),
     [
       target,
@@ -289,6 +333,10 @@ export function ReviewDiffPane(props: {
       addCommentMutation,
       updateCommentMutation,
       removeCommentMutation,
+      resolveThreadMutation,
+      replyThreadMutation,
+      updateThreadCommentMutation,
+      deleteThreadCommentMutation,
       dismissFinding,
     ],
   );

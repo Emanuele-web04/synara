@@ -53,6 +53,87 @@ const sendReviewChatQuestionMock = vi.mocked(sendReviewChatQuestion);
 const initialStoreState = useStore.getState();
 type SendReviewChatResult = Awaited<ReturnType<typeof sendReviewChatQuestion>>;
 
+const nativeApiMock = vi.hoisted(() => ({
+  listSkills: vi.fn(async () => ({
+    skills: [
+      {
+        name: "hallmark",
+        description: "Check generated-code tells.",
+        path: "/Users/tylersheffield/.agents/skills/hallmark/SKILL.md",
+        enabled: true,
+      },
+    ],
+    source: "mock",
+    cached: false,
+  })),
+  loadPullRequestHeader: vi.fn(async () => ({
+    detail: {
+      number: 7866,
+      title: "docs(test): dashboard vitest harness research",
+      url: "https://github.com/enzo-health/bonaparte/pull/7866",
+      state: "open" as const,
+      isDraft: false,
+      author: "Tbsheff",
+      authorAvatarUrl: "https://avatars.example/tbsheff.png",
+      baseBranch: "main",
+      headBranch: "test-speed/06-harness-docs",
+      body: "",
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-07T00:00:00.000Z",
+      additions: 251,
+      deletions: 0,
+      changedFiles: 2,
+      reviewDecision: "REVIEW_REQUIRED" as const,
+      mergeable: "MERGEABLE" as const,
+      milestone: null,
+      labels: [],
+      assignees: [],
+      reviewers: [
+        {
+          login: "global-approver",
+          avatarUrl: "https://avatars.example/global-approver.png",
+          state: "REVIEW_REQUIRED" as const,
+        },
+        {
+          login: "tech-lead",
+          avatarUrl: "https://avatars.example/tech-lead.png",
+          state: "APPROVED" as const,
+        },
+      ],
+    },
+  })),
+  loadConversation: vi.fn(async () => ({ events: [] })),
+  loadChangeset: vi.fn(async () => ({
+    files: [],
+    target: null,
+    headSha: null,
+    patch: "",
+  })),
+}));
+
+vi.mock("~/nativeApi", () => ({
+  ensureNativeApi: () => ({
+    provider: {
+      listSkills: nativeApiMock.listSkills,
+    },
+    review: {
+      loadPullRequestHeader: nativeApiMock.loadPullRequestHeader,
+      loadConversation: nativeApiMock.loadConversation,
+      loadChangeset: nativeApiMock.loadChangeset,
+    },
+  }),
+  readNativeApi: () => ({
+    provider: {
+      listSkills: nativeApiMock.listSkills,
+    },
+    review: {
+      loadPullRequestHeader: nativeApiMock.loadPullRequestHeader,
+      loadConversation: nativeApiMock.loadConversation,
+      loadChangeset: nativeApiMock.loadChangeset,
+    },
+  }),
+}));
+
 const DETAIL = {
   number: 7866,
   title: "docs(test): dashboard vitest harness research",
@@ -60,6 +141,7 @@ const DETAIL = {
   state: "open",
   isDraft: false,
   author: "Tbsheff",
+  authorAvatarUrl: "https://avatars.example/tbsheff.png",
   baseBranch: "main",
   headBranch: "test-speed/06-harness-docs",
   body: "",
@@ -69,18 +151,29 @@ const DETAIL = {
   deletions: 0,
   changedFiles: 2,
   commitsCount: 1,
-  reviewDecision: null,
+  reviewDecision: "REVIEW_REQUIRED",
   mergeable: "MERGEABLE",
   checksStatus: "failing",
   milestone: null,
   labels: [],
   assignees: [],
-  reviewers: [],
+  reviewers: [
+    {
+      login: "global-approver",
+      avatarUrl: "https://avatars.example/global-approver.png",
+      state: "REVIEW_REQUIRED",
+    },
+    {
+      login: "tech-lead",
+      avatarUrl: "https://avatars.example/tech-lead.png",
+      state: "APPROVED",
+    },
+  ],
 } satisfies ReviewPullRequestDetail;
 
 const CHECKS = [
-  { name: "test", state: "failure", workflow: "CI" },
   { name: "lint", state: "success", workflow: "CI" },
+  { name: "test", state: "failure", workflow: "CI" },
 ] satisfies ReadonlyArray<ReviewCheck>;
 
 async function mountSidebar() {
@@ -151,12 +244,30 @@ async function renderWithQueryClient(
   };
 }
 
+function activeInfoOption(): HTMLElement {
+  const option = document.querySelector<HTMLElement>(
+    '[data-uidotsh-option$=" (current)"]:not([hidden])',
+  );
+  expect(option).toBeTruthy();
+  expect(option?.hidden).toBe(false);
+  return option!;
+}
+
+function exactTextElementWithin(root: HTMLElement, text: string): HTMLElement {
+  const element = Array.from(root.querySelectorAll<HTMLElement>("*")).find(
+    (candidate) => candidate.textContent?.trim() === text,
+  );
+  expect(element).toBeTruthy();
+  return element!;
+}
+
 describe("ReviewPrSidebar", () => {
   afterEach(() => {
     document.body.innerHTML = "";
     useStore.setState(initialStoreState, true);
     prewarmReviewChatThreadMock.mockClear();
     sendReviewChatQuestionMock.mockClear();
+    nativeApiMock.listSkills.mockClear();
   });
 
   it("shows checks and keeps PR chat on the PR-bound Synara thread path", async () => {
@@ -167,14 +278,24 @@ describe("ReviewPrSidebar", () => {
       await expect.element(page.getByRole("tab", { name: "Info" })).toBeInTheDocument();
       await expect.element(page.getByRole("heading", { name: "Ask Devin" })).toBeInTheDocument();
       await page.getByRole("tab", { name: "Info" }).click();
-      await expect.element(page.getByText("test")).toBeInTheDocument();
-      await expect.element(page.getByText("Details")).toBeInTheDocument();
-      const checksTop = page
-        .getByText("Checks", { exact: true })
-        .element()
-        .getBoundingClientRect().top;
-      const detailsTop = page.getByText("Details").element().getBoundingClientRect().top;
-      expect(checksTop).toBeLessThan(detailsTop);
+      await vi.waitFor(() => {
+        const infoOption = activeInfoOption();
+        expect(infoOption.textContent).toContain("test");
+        expect(infoOption.textContent).toContain("1 failing");
+        expect(infoOption.textContent).toContain("CI is blocking this PR.");
+        expect(infoOption.textContent).toContain("Reviewers");
+        expect(infoOption.textContent).toContain("global-approver");
+      });
+      const infoOption = activeInfoOption();
+      expect(infoOption.querySelectorAll('[aria-label^="Reviewers:"]').length).toBeGreaterThan(1);
+      const failedCheckTop = exactTextElementWithin(infoOption, "test").getBoundingClientRect().top;
+      const passedCheckTop = exactTextElementWithin(infoOption, "lint").getBoundingClientRect().top;
+      expect(failedCheckTop).toBeLessThan(passedCheckTop);
+      expect(infoOption.textContent).toContain("Activity");
+      const ciTop = exactTextElementWithin(infoOption, "CI").getBoundingClientRect().top;
+      const activityTop = exactTextElementWithin(infoOption, "Activity").getBoundingClientRect()
+        .top;
+      expect(ciTop).toBeLessThan(activityTop);
 
       await page.getByRole("tab", { name: "Chat" }).click();
       await expect
@@ -272,7 +393,94 @@ describe("ReviewPrSidebar", () => {
         status: "sent",
         threadId: ThreadId.makeUnsafe("thread-review-chat-optimistic"),
         created: true,
+        turnRequestedAt: new Date().toISOString(),
       });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the outgoing question visible when PR chat send is queued", async () => {
+    sendReviewChatQuestionMock.mockResolvedValueOnce({
+      status: "queued",
+      threadId: ThreadId.makeUnsafe("thread-review-chat-queued"),
+      created: true,
+      queuedAt: new Date().toISOString(),
+      reason: "session_warming",
+    });
+    const mounted = await mountSidebar();
+
+    try {
+      await page.getByTestId("composer-editor").fill("What changed?");
+      await page.getByRole("button", { name: "Send PR chat question" }).click();
+
+      await expect.element(page.getByText("What changed?")).toBeVisible();
+      await expect.element(page.getByText("Starting review agent...")).toBeVisible();
+      await expect.element(page.getByText("PR chat is unavailable")).not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows thinking after a queued PR chat turn is accepted before assistant text arrives", async () => {
+    const sendInput: { current: Parameters<typeof sendReviewChatQuestion>[0] | null } = {
+      current: null,
+    };
+    const queuedAt = new Date().toISOString();
+    sendReviewChatQuestionMock.mockImplementationOnce(async (input) => {
+      sendInput.current = input;
+      return {
+        status: "queued",
+        threadId: ThreadId.makeUnsafe("thread-review-chat-queued-thinking"),
+        created: true,
+        queuedAt,
+        reason: "session_warming",
+      };
+    });
+    const mounted = await mountSidebar();
+
+    try {
+      await page.getByTestId("composer-editor").fill("What changed?");
+      await page.getByRole("button", { name: "Send PR chat question" }).click();
+
+      await expect.element(page.getByText("Starting review agent...")).toBeVisible();
+      sendInput.current?.onQueuedTurnStarted?.(
+        ThreadId.makeUnsafe("thread-review-chat-queued-thinking"),
+        queuedAt,
+      );
+      await expect.element(page.getByText("Thinking...")).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows thinking once a queued PR chat turn is handed to the provider", async () => {
+    const sendInput: { current: Parameters<typeof sendReviewChatQuestion>[0] | null } = {
+      current: null,
+    };
+    const queuedAt = new Date().toISOString();
+    sendReviewChatQuestionMock.mockImplementationOnce(async (input) => {
+      sendInput.current = input;
+      return {
+        status: "queued",
+        threadId: ThreadId.makeUnsafe("thread-review-chat-provider-starting"),
+        created: true,
+        queuedAt,
+        reason: "session_warming",
+      };
+    });
+    const mounted = await mountSidebar();
+
+    try {
+      await page.getByTestId("composer-editor").fill("Find the issue");
+      await page.getByRole("button", { name: "Send PR chat question" }).click();
+
+      await expect.element(page.getByText("Starting review agent...")).toBeVisible();
+      sendInput.current?.onQueuedProviderStartRequested?.(
+        ThreadId.makeUnsafe("thread-review-chat-provider-starting"),
+        queuedAt,
+      );
+      await expect.element(page.getByText("Thinking...")).toBeVisible();
     } finally {
       await mounted.cleanup();
     }
@@ -326,6 +534,7 @@ describe("ReviewPrSidebar", () => {
         status: "sent",
         threadId: ThreadId.makeUnsafe("thread-review-chat"),
         created: false,
+        turnRequestedAt: new Date().toISOString(),
       });
     } finally {
       await mounted.cleanup();
@@ -357,6 +566,65 @@ describe("ReviewPrSidebar", () => {
       await page.getByRole("button", { name: "Find review risks" }).click();
       expect(sendReviewChatQuestionMock).toHaveBeenCalledTimes(1);
       expect(sendReviewChatQuestionMock.mock.calls[0]?.[0].question).toBe("Find review risks");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps skill discovery off plain PR chat sends", async () => {
+    const mounted = await mountSidebar();
+    try {
+      await expect.element(page.getByRole("heading", { name: "Ask Devin" })).toBeVisible();
+      expect(nativeApiMock.listSkills).toHaveBeenCalledTimes(0);
+
+      await page.getByRole("button", { name: "Find review risks" }).click();
+
+      expect(nativeApiMock.listSkills).toHaveBeenCalledTimes(0);
+      expect(sendReviewChatQuestionMock).toHaveBeenCalledTimes(1);
+      expect(sendReviewChatQuestionMock.mock.calls[0]?.[0].skills).toEqual([]);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("discovers skills only after a PR chat draft mentions one", async () => {
+    let resolveSkills = (_result: Awaited<ReturnType<typeof nativeApiMock.listSkills>>) => {};
+    nativeApiMock.listSkills.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSkills = resolve;
+        }),
+    );
+    const mounted = await mountSidebar();
+    try {
+      await page.getByTestId("composer-editor").fill("$hallmark Find review risks");
+      await page.getByRole("button", { name: "Send PR chat question" }).click();
+
+      expect(nativeApiMock.listSkills).toHaveBeenCalledTimes(1);
+      expect(sendReviewChatQuestionMock).toHaveBeenCalledTimes(0);
+      resolveSkills({
+        skills: [
+          {
+            name: "hallmark",
+            description: "Check generated-code tells.",
+            path: "/Users/tylersheffield/.agents/skills/hallmark/SKILL.md",
+            enabled: true,
+          },
+        ],
+        source: "mock",
+        cached: false,
+      });
+
+      await vi.waitFor(() => {
+        expect(sendReviewChatQuestionMock).toHaveBeenCalledTimes(1);
+      });
+      expect(sendReviewChatQuestionMock).toHaveBeenCalledTimes(1);
+      expect(sendReviewChatQuestionMock.mock.calls[0]?.[0].skills).toEqual([
+        {
+          name: "hallmark",
+          path: "/Users/tylersheffield/.agents/skills/hallmark/SKILL.md",
+        },
+      ]);
     } finally {
       await mounted.cleanup();
     }
@@ -603,7 +871,7 @@ describe("ReviewPrSidebar", () => {
 
     try {
       await expect.element(page.getByRole("tab", { name: "Info" })).toBeVisible();
-      await expect.element(page.getByText("test")).toBeVisible();
+      expect(activeInfoOption().textContent).toContain("test");
       await page.getByRole("tab", { name: "Chat" }).click();
       await expect.element(page.getByRole("heading", { name: "Ask Devin" })).toBeVisible();
       await page.getByRole("button", { name: "Collapse AI chat sidebar" }).click();
@@ -795,9 +1063,8 @@ async function mountReviewViewWithNormalizedReviewThread() {
     />,
     host,
     (queryClient) => {
-      queryClient.setQueryData(reviewQueryKeys.pullRequest("/repo", "7866"), {
+      queryClient.setQueryData(reviewQueryKeys.pullRequestHeader("/repo", "7866"), {
         detail: DETAIL,
-        checks: CHECKS,
       });
       queryClient.setQueryData(reviewQueryKeys.conversation("/repo", "7866"), {
         events: [],

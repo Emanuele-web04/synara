@@ -4,6 +4,7 @@
 // Exports: UserMessageBody, renderUserMessageInlineText, hasOnlyInlineSkillChips
 
 import { memo, type CSSProperties, type ReactNode } from "react";
+import type { ProviderMentionReference } from "@t3tools/contracts";
 import { MentionChipIcon } from "./MentionChipIcon";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { type ParsedTerminalContextEntry } from "~/lib/terminalContext";
@@ -69,6 +70,7 @@ export function renderUserMessageInlineText(
   text: string,
   keyPrefix: string,
   resolvedTheme: "light" | "dark",
+  mentionReferences: ReadonlyArray<ProviderMentionReference> = [],
 ): ReactNode[] {
   return splitPromptIntoDisplaySegments(text).flatMap((segment, index) => {
     const key = `${keyPrefix}:${index}`;
@@ -84,6 +86,7 @@ export function renderUserMessageInlineText(
           key={`${key}:mention`}
           path={segment.path}
           resolvedTheme={resolvedTheme}
+          mentionReferences={mentionReferences}
         />,
       ];
     }
@@ -103,11 +106,16 @@ export function renderUserMessageInlineText(
 const UserMessageInlineMentionChip = memo(function UserMessageInlineMentionChip(props: {
   path: string;
   resolvedTheme: "light" | "dark";
+  mentionReferences: ReadonlyArray<ProviderMentionReference>;
 }) {
   const label = basenameOfPath(props.path);
   return (
     <span className={COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME} title={props.path}>
-      <MentionChipIcon path={props.path} theme={props.resolvedTheme} />
+      <MentionChipIcon
+        path={props.path}
+        theme={props.resolvedTheme}
+        mentionReferences={props.mentionReferences}
+      />
       <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>{label}</span>
     </span>
   );
@@ -136,6 +144,7 @@ export const UserMessageBody = memo(function UserMessageBody(props: {
   terminalContexts: ParsedTerminalContextEntry[];
   chatTypographyStyle: CSSProperties;
   resolvedTheme: "light" | "dark";
+  mentionReferences?: ReadonlyArray<ProviderMentionReference>;
 }) {
   if (props.terminalContexts.length > 0) {
     const hasEmbeddedInlineLabels = textContainsInlineTerminalContextLabels(
@@ -161,6 +170,7 @@ export const UserMessageBody = memo(function UserMessageBody(props: {
               props.text.slice(cursor, matchIndex),
               `user-terminal-context-inline-before:${context.header}:${cursor}`,
               props.resolvedTheme,
+              props.mentionReferences,
             ),
           );
         }
@@ -180,6 +190,7 @@ export const UserMessageBody = memo(function UserMessageBody(props: {
               props.text.slice(cursor),
               `user-message-terminal-context-inline-rest:${cursor}`,
               props.resolvedTheme,
+              props.mentionReferences,
             ),
           );
         }
@@ -215,6 +226,7 @@ export const UserMessageBody = memo(function UserMessageBody(props: {
           props.text,
           "user-message-terminal-context-inline-text",
           props.resolvedTheme,
+          props.mentionReferences,
         ),
       );
     } else if (inlinePrefix.length === 0) {
@@ -245,6 +257,7 @@ export const UserMessageBody = memo(function UserMessageBody(props: {
           props.text,
           "user-message-inline-chip-only",
           props.resolvedTheme,
+          props.mentionReferences,
         )}
       </div>
     );
@@ -255,7 +268,12 @@ export const UserMessageBody = memo(function UserMessageBody(props: {
       className="block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui text-foreground"
       style={props.chatTypographyStyle}
     >
-      {renderUserMessageInlineText(props.text, "user-message-inline", props.resolvedTheme)}
+      {renderUserMessageInlineText(
+        props.text,
+        "user-message-inline",
+        props.resolvedTheme,
+        props.mentionReferences,
+      )}
     </div>
   );
 });

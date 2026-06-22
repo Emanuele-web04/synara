@@ -20,6 +20,7 @@ import {
   McpOauthCompletedPayload,
   McpStatusUpdatedPayload,
   ModelReroutedPayload,
+  ProviderUnhandledPayload,
   RequestOpenedPayload,
   RequestResolvedPayload,
   RuntimeErrorPayload,
@@ -100,6 +101,7 @@ const DeprecationNoticeType = Schema.Literal("deprecation.notice");
 const FilesPersistedType = Schema.Literal("files.persisted");
 const RuntimeWarningType = Schema.Literal("runtime.warning");
 const RuntimeErrorType = Schema.Literal("runtime.error");
+const ProviderUnhandledType = Schema.Literal("provider.unhandled");
 
 const ProviderRuntimeSessionStartedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
@@ -447,6 +449,13 @@ const ProviderRuntimeErrorEvent = Schema.Struct({
 });
 export type ProviderRuntimeErrorEvent = typeof ProviderRuntimeErrorEvent.Type;
 
+const ProviderRuntimeUnhandledEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: ProviderUnhandledType,
+  payload: ProviderUnhandledPayload,
+});
+export type ProviderRuntimeUnhandledEvent = typeof ProviderRuntimeUnhandledEvent.Type;
+
 export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeSessionStartedEvent,
   ProviderRuntimeSessionConfiguredEvent,
@@ -495,6 +504,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeFilesPersistedEvent,
   ProviderRuntimeWarningEvent,
   ProviderRuntimeErrorEvent,
+  ProviderRuntimeUnhandledEvent,
 ]);
 export type ProviderRuntimeEventV2 = typeof ProviderRuntimeEventV2.Type;
 
