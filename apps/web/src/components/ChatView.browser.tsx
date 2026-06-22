@@ -33,6 +33,7 @@ import {
 } from "../lib/terminalContext";
 import { isMacPlatform } from "../lib/utils";
 import { getRouter } from "../router";
+import { useRuntimePlanDraftStore } from "../runtimePlanDraftStore";
 import { useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
 import {
@@ -1044,7 +1045,20 @@ async function waitForComposerEditor(): Promise<HTMLElement> {
 
 async function waitForSendButton(): Promise<HTMLButtonElement> {
   return waitForElement(
-    () => document.querySelector<HTMLButtonElement>('button[aria-label="Send message"]'),
+    () =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>('button[aria-label="Send message"]'))
+        .filter((button) => button.closest('[data-chat-composer-form="true"]'))
+        .find((button) => {
+          const rect = button.getBoundingClientRect();
+          const style = window.getComputedStyle(button);
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            style.opacity !== "0"
+          );
+        }) ?? null,
     "Unable to find send button.",
   );
 }
@@ -1057,6 +1071,26 @@ async function waitForEnvironmentModeButton(label: string): Promise<HTMLButtonEl
       ) ?? null,
     `Unable to find ${label} environment button.`,
   );
+}
+
+function environmentModeButtonCount(label: string): number {
+  const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).filter(
+    (button) => {
+      if (button.textContent?.trim() !== label) {
+        return false;
+      }
+      const rect = button.getBoundingClientRect();
+      const style = window.getComputedStyle(button);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.opacity !== "0"
+      );
+    },
+  );
+  return buttons.length;
 }
 
 async function waitForServerConfigToApply(): Promise<void> {
@@ -1393,6 +1427,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       projectDraftThreadIdByProjectId: {},
       stickyModelSelectionByProvider: {},
       stickyActiveProvider: null,
+    });
+    useRuntimePlanDraftStore.setState({
+      draftByThreadId: {},
     });
     useStore.setState({
       projects: [],
@@ -2949,6 +2986,69 @@ describe("ChatView timeline estimator parity (full app)", () => {
             branch: createWorktreeRequest?.newBranch,
             worktreePath: `/repo/.codex/worktrees/project/${String(createWorktreeRequest?.newBranch).replaceAll("/", "-")}`,
           });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("offers Remote from an empty draft thread without duplicate target controls", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-empty-remote-test" as MessageId,
+        targetText: "empty remote test",
+      }),
+    });
+
+    try {
+      const newThreadButton = page.getByTestId("new-thread-button");
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      const environmentToggle = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            'button[aria-label="Toggle environment panel"]',
+          ),
+        "Unable to find environment panel toggle.",
+      );
+      environmentToggle.click();
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent ?? "").toContain("Environment");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const envPickerTrigger = await waitForEnvironmentModeButton("Local");
+      expect(environmentModeButtonCount("Local")).toBe(1);
+      envPickerTrigger.click();
+
+      const remoteOption = page.getByText("Remote");
+      await expect.element(remoteOption).toBeInTheDocument();
+      await remoteOption.click();
+
+      await vi.waitFor(
+        () => {
+          expect(useRuntimePlanDraftStore.getState().getDraft(newThreadId).enabled).toBe(true);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await vi.waitFor(
+        () => {
+          expect(environmentModeButtonCount("Remote")).toBe(1);
+          expect(environmentModeButtonCount("Local")).toBe(0);
         },
         { timeout: 8_000, interval: 16 },
       );

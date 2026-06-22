@@ -283,6 +283,8 @@ import {
   shouldPromptForTerminalClose,
 } from "~/lib/terminalCloseConfirmation";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
+import { buildRuntimePlanFromDefaults } from "~/lib/runtimePresentation";
+import { clearRuntimePlanDraft, readRuntimePlanDraft } from "~/runtimePlanDraftStore";
 import {
   getAppModelOptions,
   getCustomBinaryPathForProvider,
@@ -290,6 +292,7 @@ import {
   getProviderStartOptions,
   resolveAppModelSelection,
   resolveAssistantDeliveryMode,
+  runtimePlanDefaultsFromSettings,
   useAppSettings,
 } from "../appSettings";
 import { resolveTerminalNewAction } from "../lib/terminalNewAction";
@@ -6784,6 +6787,12 @@ export default function ChatView({
               DEFAULT_MODEL_BY_PROVIDER.codex,
         selectedModelSelectionForSend.options,
       );
+      const runtimePlan = readRuntimePlanDraft(threadIdForSend).enabled
+        ? buildRuntimePlanFromDefaults(
+            runtimePlanDefaultsFromSettings(settings),
+            selectedProviderForSend,
+          )
+        : null;
 
       if (isLocalDraftThread) {
         const inheritedProjectInstructions =
@@ -6807,6 +6816,7 @@ export default function ChatView({
             branch: nextThreadBranch,
             worktreePath: nextThreadWorktreePath,
             lastKnownPr: activeThread.lastKnownPr ?? null,
+            ...(runtimePlan ? { runtimePlan } : {}),
             createdAt: activeThread.createdAt,
           },
           api,
@@ -6900,6 +6910,7 @@ export default function ChatView({
         createdAt: messageCreatedAt,
       });
       turnStartSucceeded = true;
+      clearRuntimePlanDraft(threadIdForSend);
     })().catch(async (err: unknown) => {
       if (createdServerThreadForLocalDraft && !turnStartSucceeded) {
         // This rollback cleans up a retryable draft promotion; do not tombstone the draft id.
@@ -8869,7 +8880,7 @@ export default function ChatView({
     threadAutomations: threadAutomationItems,
     diffDisabledReason,
     diffTotals: repoDiffTotals,
-    branchToolbar: branchToolbarProps,
+    branchToolbar: showEmptyLandingBranchToolbar ? null : branchToolbarProps,
     recap: threadRecap,
     pinnedMessages,
     threadMarkers,
