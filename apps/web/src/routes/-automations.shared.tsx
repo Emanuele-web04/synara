@@ -208,6 +208,21 @@ export function runStatusDotClassName(status: AutomationRun["status"]): string {
 }
 
 /**
+ * True when a click/keydown originated from an interactive control nested inside a clickable
+ * row (delete button, link, input, etc.) rather than the row surface itself. Row components use
+ * it to let inner controls handle their own events without also triggering the row's action.
+ */
+export function isRowInteractiveEventTarget(
+  target: EventTarget | null,
+  currentTarget: HTMLElement,
+): boolean {
+  if (!(target instanceof HTMLElement) || target === currentTarget) {
+    return false;
+  }
+  return Boolean(target.closest("button,a,input,textarea,select,[contenteditable='true']"));
+}
+
+/**
  * Leading status glyph for a single run row: a quiet check for success, otherwise a
  * status-colored dot. Shared by the detail history and the list triage rows so both
  * surfaces read identically.

@@ -71,6 +71,47 @@ describe("composerAutomation", () => {
     });
   });
 
+  it("uses generation for explicit unmarked creation requests when local parsing is incomplete", async () => {
+    const generateIntent = vi.fn(async () => ({
+      isAutomation: true,
+      confidence: 0.91,
+      language: "en",
+      name: "Check queue",
+      taskPrompt: "Check the queue and report anything actionable.",
+      schedule: { type: "daily" as const, timeOfDay: "09:00" },
+      mode: "heartbeat" as const,
+      completionPolicy: { type: "none" as const },
+      missingFields: [],
+      needsConfirmation: false,
+      reason: null,
+    }));
+
+    const decision = await resolveComposerAutomationRequest({
+      message: "could you create an automation tomorrow morning to check the queue?",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent,
+    });
+
+    expect(generateIntent).toHaveBeenCalledWith({
+      cwd: "/tmp/project",
+      message: "create an automation tomorrow morning to check the queue",
+      defaultMode: "heartbeat",
+      nowIso: NOW_ISO,
+    });
+    expect(decision).toMatchObject({
+      type: "automation",
+      resolution: {
+        source: "generated",
+        mode: "heartbeat",
+        intent: {
+          prompt: "Check the queue and report anything actionable.",
+          schedule: { type: "daily", timeOfDay: "09:00" },
+        },
+      },
+    });
+  });
+
   it("accepts polite say requests as bounded thread automations", async () => {
     const generateIntent = vi.fn(async () => {
       throw new Error("bounded fast loops should not need generation");

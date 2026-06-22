@@ -68,6 +68,17 @@ const PLAIN_INVOCATION_ACTION_PREFIX_PATTERN =
   /^(?:check|verify|monitor|watch|remind(?:\s+me)?|notify(?:\s+me)?|alert(?:\s+me)?|tell\s+me|controlla|verifica|monitora|avvisami|ricordami)\b/i;
 const PLAIN_INVOCATION_POLITE_ACTION_PREFIX_PATTERN =
   /^(?:check|verify|monitor|watch|say|remind(?:\s+me)?|notify(?:\s+me)?|alert(?:\s+me)?|tell\s+me|controlla|verifica|monitora|avvisami|ricordami)\b/i;
+const PLAIN_INVOCATION_AUTOMATION_CREATION_PREFIX_PATTERN = new RegExp(
+  [
+    "^(?:please\\s+)?(?:",
+    "(?:make|create|set up|setup|add|start|build)\\s+(?:an?\\s+)?automation\\b",
+    "|schedule\\s+(?:an?\\s+)?(?:automation|task|job|check|monitor)\\b",
+    "|(?:crea|creare|aggiungi|imposta|fai)\\s+(?:un[' ]?)?",
+    "(?:automazione|task|controllo|monitoraggio)\\b",
+    ")",
+  ].join(""),
+  "i",
+);
 
 const WEEKDAY_BY_TOKEN: Record<string, number> = {
   sunday: 0,
@@ -164,7 +175,28 @@ function isLikelyPlainAutomationAction(value: string, politeRequest: boolean): b
   const pattern = politeRequest
     ? PLAIN_INVOCATION_POLITE_ACTION_PREFIX_PATTERN
     : PLAIN_INVOCATION_ACTION_PREFIX_PATTERN;
-  return pattern.test(normalizeInlineText(value));
+  const normalized = normalizeInlineText(value);
+  return (
+    pattern.test(normalized) || PLAIN_INVOCATION_AUTOMATION_CREATION_PREFIX_PATTERN.test(normalized)
+  );
+}
+
+// Clear creation phrasing may need AI fallback even when local schedule parsing is incomplete.
+export function extractPlainChatAutomationCreationInvocation(value: string): string | null {
+  const normalizedInvocation = normalizeInlineText(value);
+  if (!normalizedInvocation) {
+    return null;
+  }
+  const politeInvocation = stripPlainAutomationPoliteRequest(normalizedInvocation);
+  const candidate = politeInvocation ?? normalizedInvocation;
+  const candidateIsQuestion =
+    politeInvocation === null
+      ? isLikelyAutomationQuestionCandidate(normalizedInvocation)
+      : isLikelyAutomationQuestionCandidate(candidate);
+  if (candidateIsQuestion) {
+    return null;
+  }
+  return PLAIN_INVOCATION_AUTOMATION_CREATION_PREFIX_PATTERN.test(candidate) ? candidate : null;
 }
 
 function removeMatchedText(value: string, match: RegExpExecArray): string {

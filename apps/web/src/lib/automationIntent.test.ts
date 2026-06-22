@@ -7,6 +7,7 @@ import { DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD } from "@t3tools/contracts
 import { describe, expect, it } from "vitest";
 
 import {
+  extractPlainChatAutomationCreationInvocation,
   extractChatAutomationInvocation,
   formatAutomationIntentCadence,
   parseChatAutomationInvocation,
@@ -172,6 +173,36 @@ describe("parseChatAutomationIntent", () => {
     });
   });
 
+  it("accepts explicit unmarked automation creation requests", () => {
+    expect(
+      parsePlainChatAutomationInvocation(
+        "make an automation where you wake up every 6h and check if the black Fitbit is available",
+      ),
+    ).toMatchObject({
+      cadenceLabel: "Every 6h",
+      prompt: "check if the black Fitbit is available",
+      schedule: { type: "interval", everySeconds: 21_600 },
+      executionScope: "thread",
+    });
+
+    expect(
+      parsePlainChatAutomationInvocation(
+        "crea un'automazione ogni 6 ore che controlla se il Fitbit nero e disponibile",
+      ),
+    ).toMatchObject({
+      cadenceLabel: "Every 6h",
+      prompt: "controlla se il Fitbit nero e disponibile",
+      schedule: { type: "interval", everySeconds: 21_600 },
+      executionScope: "thread",
+    });
+
+    expect(
+      extractPlainChatAutomationCreationInvocation(
+        "could you create an automation tomorrow morning to check the queue?",
+      ),
+    ).toBe("create an automation tomorrow morning to check the queue");
+  });
+
   it("detects explicit standalone and worktree scopes without saving scope scaffolding", () => {
     expect(parseChatAutomationIntent("/automation run standalone every 5m check CI")).toMatchObject(
       {
@@ -200,9 +231,7 @@ describe("parseChatAutomationIntent", () => {
       executionScope: "thread",
     });
 
-    expect(
-      parseChatAutomationIntent("/automation every 5m check CI as a new run"),
-    ).toMatchObject({
+    expect(parseChatAutomationIntent("/automation every 5m check CI as a new run")).toMatchObject({
       cadenceLabel: "Every 5m",
       prompt: "check CI",
       schedule: { type: "interval", everySeconds: 300 },

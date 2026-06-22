@@ -31,6 +31,7 @@ import {
 import {
   detectChatAutomationExecutionScope,
   extractChatAutomationInvocation,
+  extractPlainChatAutomationCreationInvocation,
   parseChatAutomationInvocation,
   parsePlainChatAutomationInvocation,
   resolveChatAutomationIntent,
@@ -118,12 +119,16 @@ export async function resolveComposerAutomationRequest(input: {
 
   const explicitAutomationInvocation = extractChatAutomationInvocation(trimmed);
   const nowIso = input.nowIso ?? new Date().toISOString();
+  const plainCreationInvocation =
+    explicitAutomationInvocation === null
+      ? extractPlainChatAutomationCreationInvocation(trimmed)
+      : null;
   const automaticAutomationIntent =
     explicitAutomationInvocation === null
       ? parsePlainChatAutomationInvocation(trimmed, { nowIso })
       : null;
   const automationInvocation =
-    explicitAutomationInvocation ?? (automaticAutomationIntent ? trimmed : null);
+    explicitAutomationInvocation ?? (automaticAutomationIntent ? trimmed : plainCreationInvocation);
   if (automationInvocation === null) {
     return { type: "normal-chat" };
   }

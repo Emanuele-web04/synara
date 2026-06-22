@@ -16,6 +16,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { getProviderStartOptions, useAppSettings } from "~/appSettings";
 import {
+  CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
 } from "~/components/chat/chatHeaderControls";
@@ -37,12 +38,12 @@ import {
   completionPolicyFromStopWhen,
   stopWhenFromCompletionPolicy,
 } from "~/lib/automationCompletionPolicy";
+import { automationLifecycleState, canPauseAutomation } from "~/lib/automationStatus";
 import {
   useDesktopTopBarTrafficLightGutterClassName,
   useDesktopTopBarWindowControlsGutterClassName,
 } from "~/hooks/useDesktopTopBarGutter";
 import { CentralIcon } from "~/lib/central-icons";
-import { PencilIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import {
   buildModelSelection,
@@ -63,6 +64,7 @@ import {
   formatRelativeTime,
   formFromDefinition,
   isoFromDatetimeLocal,
+  isRowInteractiveEventTarget,
   isTriageRun,
   isFormSubmittable,
   maxIterationOptions,
@@ -114,6 +116,24 @@ function formatRunTimestamp(value: string | null): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+// Presentation for the Status pill: maps the shared lifecycle state to a label and dot color.
+// The state decision lives in ~/lib/automationStatus so this pill and the list never drift.
+function automationStatusDisplay(definition: AutomationDefinition): {
+  readonly label: string;
+  readonly dotClassName: string;
+} {
+  switch (automationLifecycleState(definition)) {
+    case "active":
+      return { label: "Active", dotClassName: "bg-emerald-500" };
+    case "paused":
+      return { label: "Paused", dotClassName: "bg-amber-500" };
+    case "scheduled":
+      return { label: "Scheduled", dotClassName: "bg-sky-500" };
+    case "done":
+      return { label: "Done", dotClassName: "bg-muted-foreground" };
+  }
 }
 
 type SelectOption = { readonly value: string; readonly label: string };
@@ -194,6 +214,7 @@ function AutomationDetailView() {
           <header
             className={cn(
               CHAT_SURFACE_HEADER_PADDING_X_CLASS,
+              CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
               "drag-region",
               desktopTopBarTrafficLightGutterClassName,
               desktopTopBarWindowControlsGutterClassName,
@@ -229,6 +250,7 @@ function AutomationDetailView() {
     : null;
   const lastRun = lastFinishedRun(runs);
   const schedule = definition.schedule;
+  const status = automationStatusDisplay(definition);
   const stopWhen = stopWhenFromCompletionPolicy(definition.completionPolicy ?? { type: "none" });
 
   const patch = (input: Omit<AutomationUpdateInput, "id">) =>
@@ -324,6 +346,7 @@ function AutomationDetailView() {
           <header
             className={cn(
               CHAT_SURFACE_HEADER_PADDING_X_CLASS,
+              CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
               "drag-region",
               desktopTopBarTrafficLightGutterClassName,
             )}
@@ -340,7 +363,10 @@ function AutomationDetailView() {
                 >
                   Automations
                 </button>
-                <span className="shrink-0 text-muted-foreground">/</span>
+                <CentralIcon
+                  name="chevron-right-small"
+                  className="size-3.5 shrink-0 text-muted-foreground"
+                />
                 <span className="truncate font-heading font-medium">{definition.name}</span>
               </div>
             </div>
@@ -358,12 +384,15 @@ function AutomationDetailView() {
           </main>
         </div>
 
-        {/* Right column: action header + details panel. The left border is the divider, so the
-            line runs continuously down through both the header and the panel below. */}
-        <div className="flex min-h-0 w-72 shrink-0 flex-col overflow-hidden border-l border-[var(--app-surface-divider)]">
+        {/* Right column: action header + details panel. The header carries the shared bottom
+            hairline (horizontal), and the body below carries the vertical seam — so the vertical
+            line starts at the header's bottom edge instead of running up through it. Both use the
+            same --app-surface-divider token and meet cleanly at the corner. */}
+        <div className="flex min-h-0 w-80 shrink-0 flex-col overflow-hidden">
           <header
             className={cn(
               CHAT_SURFACE_HEADER_PADDING_X_CLASS,
+              CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
               "drag-region",
               desktopTopBarWindowControlsGutterClassName,
             )}
@@ -375,26 +404,18 @@ function AutomationDetailView() {
               )}
             >
               <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label={definition.enabled ? "Pause" : "Resume"}
-                  title={definition.enabled ? "Pause" : "Resume"}
-                  onClick={togglePause}
-                >
-                  <CentralIcon name={definition.enabled ? "pause" : "play"} className="size-4" />
-                </Button>
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label="Edit"
-                  title="Edit"
-                  onClick={() => openEditDialog()}
-                >
-                  <PencilIcon className="size-4" />
-                </Button>
+                {canPauseAutomation(definition) ? (
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label={definition.enabled ? "Pause" : "Resume"}
+                    title={definition.enabled ? "Pause" : "Resume"}
+                    onClick={togglePause}
+                  >
+                    <CentralIcon name={definition.enabled ? "pause" : "play"} className="size-4" />
+                  </Button>
+                ) : null}
                 <Button
                   type="button"
                   size="icon-sm"
@@ -419,18 +440,13 @@ function AutomationDetailView() {
             </div>
           </header>
 
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <div className="flex flex-col gap-6 py-8 pl-4">
+          <div className="min-h-0 flex-1 overflow-y-auto border-l border-[var(--app-surface-divider)]">
+            <div className="flex flex-col gap-6 px-4 py-8">
               <DetailGroup title="Status">
                 <DetailRow label="Status">
                   <StatusValue>
-                    <span
-                      className={cn(
-                        "size-1.5 rounded-full",
-                        definition.enabled ? "bg-emerald-500" : "bg-amber-500",
-                      )}
-                    />
-                    {definition.enabled ? "Active" : "Paused"}
+                    <span className={cn("size-1.5 rounded-full", status.dotClassName)} />
+                    {status.label}
                   </StatusValue>
                 </DetailRow>
                 <DetailRow label="Next run">
@@ -753,8 +769,9 @@ function DetailRow({
   );
 }
 
-// Subtle pill used by the read-only Status group values (Active/Next run/Last ran), echoing
-// the reference layout where those values sit in quiet rounded chips flush to the right.
+// Read-only Status group values (Active/Next run/Last ran). The reference renders these as
+// plain right-aligned text — the status as foreground, timestamps muted — with no chip behind
+// them, so the value column stays quiet and flush to the right.
 function StatusValue({
   tone = "default",
   children,
@@ -765,7 +782,7 @@ function StatusValue({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-md bg-foreground/[0.05] px-2 py-0.5",
+        "inline-flex items-center gap-1.5",
         tone === "muted" ? "text-muted-foreground" : "text-foreground",
       )}
     >
@@ -966,13 +983,6 @@ function InlineCommitTextInput({
   );
 }
 
-function isInlineRunActionEventTarget(target: EventTarget | null, currentTarget: HTMLElement) {
-  if (!(target instanceof HTMLElement) || target === currentTarget) {
-    return false;
-  }
-  return Boolean(target.closest("button,a,input,textarea,select,[contenteditable='true']"));
-}
-
 function RunRow({
   run,
   onOpen,
@@ -1006,7 +1016,7 @@ function RunRow({
       onKeyDown={
         openable
           ? (event) => {
-              if (isInlineRunActionEventTarget(event.target, event.currentTarget)) {
+              if (isRowInteractiveEventTarget(event.target, event.currentTarget)) {
                 return;
               }
               if (event.key === "Enter" || event.key === " ") {

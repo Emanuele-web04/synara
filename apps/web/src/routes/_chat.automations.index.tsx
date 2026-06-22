@@ -21,12 +21,14 @@ import {
   type AutomationDraftWarning,
   type AutomationDraftWarningId,
 } from "~/lib/automationDraft";
+import { automationLifecycleState } from "~/lib/automationStatus";
 import {
   useDesktopTopBarTrafficLightGutterClassName,
   useDesktopTopBarWindowControlsGutterClassName,
 } from "~/hooks/useDesktopTopBarGutter";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
+import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
 import {
   type AutomationFormState,
@@ -40,6 +42,7 @@ import {
   formatRelativeTime,
   formFromDefinition,
   isFormSubmittable,
+  isRowInteractiveEventTarget,
   isTriageRun,
   providerOptionsForAutomationEdit,
   projectModelSelection,
@@ -86,6 +89,7 @@ function AutomationListRow({
   detail,
   meta,
   trailing,
+  onDelete,
 }: {
   readonly onClick: () => void;
   readonly leading: ReactNode;
@@ -93,12 +97,24 @@ function AutomationListRow({
   readonly detail: string;
   readonly meta?: ReactNode;
   readonly trailing?: ReactNode;
+  readonly onDelete?: () => void;
 }) {
   return (
-    <button
-      type="button"
+    // A div with role="button" (not a real <button>) so inline controls like the hover delete
+    // can be nested buttons; the keydown guard lets those controls handle their own events
+    // without also firing the row's navigation.
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
-      className="group flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-left transition-colors hover:bg-[var(--color-background-elevated-secondary)]"
+      onKeyDown={(event) => {
+        if (isRowInteractiveEventTarget(event.target, event.currentTarget)) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClick();
+        }
+      }}
+      className="group flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2 py-2 text-left transition-colors hover:bg-[var(--color-background-elevated-secondary)]"
     >
       {leading}
       <span className="min-w-0 max-w-[45%] truncate text-[0.8125rem] text-foreground">{title}</span>
@@ -106,8 +122,22 @@ function AutomationListRow({
       {meta == null ? null : (
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{meta}</span>
       )}
+      {onDelete ? (
+        <button
+          type="button"
+          aria-label="Delete automation"
+          title="Delete"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+          className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          <CentralIcon name="trash-can-simple" className="size-3.5" />
+        </button>
+      ) : null}
       {trailing}
-    </button>
+    </div>
   );
 }
 
@@ -116,9 +146,7 @@ function rowMeta(definition: AutomationDefinition, latestRun: AutomationRun | nu
   if (isLiveRun(latestRun)) return runStatusLabel(latestRun.status);
   if (latestRun && isTriageRun(latestRun)) return triageRunLabel(latestRun);
   if (!definition.enabled) {
-    return definition.schedule.type === "once" && latestRun?.status === "succeeded"
-      ? "Done"
-      : "Paused";
+    return automationLifecycleState(definition) === "done" ? "Done" : "Paused";
   }
   return formatCadence(definition.schedule);
 }
@@ -143,8 +171,15 @@ function AutomationsRouteView() {
     formFromDefinition(null, fallbackProjectId, projectModelSelection(projects, fallbackProjectId)),
   );
 
-  const { data, isLoading, refetch, createMutation, updateMutation, runsByAutomationId } =
-    useAutomations((threadId) => void navigate({ to: "/$threadId", params: { threadId } }));
+  const {
+    data,
+    isLoading,
+    refetch,
+    createMutation,
+    updateMutation,
+    deleteMutation,
+    runsByAutomationId,
+  } = useAutomations((threadId) => void navigate({ to: "/$threadId", params: { threadId } }));
   const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
 
   const updateDialogForm = (nextForm: AutomationFormState) => {
@@ -203,6 +238,12 @@ function AutomationsRouteView() {
     );
   };
 
+  const deleteDefinition = async (definition: AutomationDefinition) => {
+    const confirmed = await ensureNativeApi().dialogs.confirm(`Delete "${definition.name}"?`);
+    if (!confirmed) return;
+    deleteMutation.mutate(definition);
+  };
+
   const active = data.definitions.filter((definition) => definition.enabled);
   const inactive = data.definitions.filter((definition) => !definition.enabled);
   const allTriageRuns = allVisibleTriageRuns(data.runs);
@@ -254,6 +295,7 @@ function AutomationsRouteView() {
         title={definition.name}
         detail={subtitle(definition)}
         meta={rowMeta(definition, latestRun)}
+        onDelete={() => void deleteDefinition(definition)}
       />
     );
   };

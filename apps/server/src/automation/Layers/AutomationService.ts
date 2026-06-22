@@ -1802,7 +1802,10 @@ export const AutomationServiceLive = Layer.effect(
             minimumIntervalSeconds: definition.minimumIntervalSeconds,
             acknowledgedRisks: definition.acknowledgedRisks,
             now,
-          }).pipe(Effect.as(true), Effect.catch(() => Effect.succeed(false)));
+          }).pipe(
+            Effect.as(true),
+            Effect.catch(() => Effect.succeed(false)),
+          );
         }
         const enabled = canBecomeEnabled;
         const nextRunAt = enabled ? computedNextRunAt : null;
