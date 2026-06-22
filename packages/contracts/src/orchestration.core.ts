@@ -213,8 +213,10 @@ export type OrchestrationMessageSource = typeof OrchestrationMessageSource.Type;
 export const PROVIDER_SEND_TURN_MAX_INPUT_CHARS = 120_000;
 export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 8;
 export const PROVIDER_SEND_TURN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+export const PROVIDER_SEND_TURN_MAX_FILE_BYTES = 25 * 1024 * 1024;
 export const MAX_PINNED_PROJECTS = 3;
 const PROVIDER_SEND_TURN_MAX_IMAGE_DATA_URL_CHARS = 14_000_000;
+const PROVIDER_SEND_TURN_MAX_FILE_DATA_URL_CHARS = 35_000_000;
 const CHAT_ATTACHMENT_ID_MAX_CHARS = 128;
 export const CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS = 4_000;
 export const THREAD_NOTES_MAX_CHARS = 16_384;
@@ -242,6 +244,15 @@ export const ChatImageAttachment = Schema.Struct({
 });
 export type ChatImageAttachment = typeof ChatImageAttachment.Type;
 
+export const ChatFileAttachment = Schema.Struct({
+  type: Schema.Literal("file"),
+  id: ChatAttachmentId,
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+  mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
+  sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_FILE_BYTES)),
+});
+export type ChatFileAttachment = typeof ChatFileAttachment.Type;
+
 export const ChatAssistantSelectionAttachment = Schema.Struct({
   type: Schema.Literal("assistant-selection"),
   id: ChatAttachmentId,
@@ -261,6 +272,15 @@ const UploadChatImageAttachment = Schema.Struct({
 });
 export type UploadChatImageAttachment = typeof UploadChatImageAttachment.Type;
 
+export const UploadChatFileAttachment = Schema.Struct({
+  type: Schema.Literal("file"),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+  mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
+  sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_FILE_BYTES)),
+  dataUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_FILE_DATA_URL_CHARS)),
+});
+export type UploadChatFileAttachment = typeof UploadChatFileAttachment.Type;
+
 export const UploadChatAssistantSelectionAttachment = Schema.Struct({
   type: Schema.Literal("assistant-selection"),
   assistantMessageId: MessageId,
@@ -269,10 +289,15 @@ export const UploadChatAssistantSelectionAttachment = Schema.Struct({
 export type UploadChatAssistantSelectionAttachment =
   typeof UploadChatAssistantSelectionAttachment.Type;
 
-export const ChatAttachment = Schema.Union([ChatImageAttachment, ChatAssistantSelectionAttachment]);
+export const ChatAttachment = Schema.Union([
+  ChatImageAttachment,
+  ChatFileAttachment,
+  ChatAssistantSelectionAttachment,
+]);
 export type ChatAttachment = typeof ChatAttachment.Type;
 export const UploadChatAttachment = Schema.Union([
   UploadChatImageAttachment,
+  UploadChatFileAttachment,
   UploadChatAssistantSelectionAttachment,
 ]);
 export type UploadChatAttachment = typeof UploadChatAttachment.Type;

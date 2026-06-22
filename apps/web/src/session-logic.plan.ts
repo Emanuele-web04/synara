@@ -91,3 +91,16 @@ export function hasActionableProposedPlan(
 ): boolean {
   return proposedPlan !== null && proposedPlan.implementedAt === null;
 }
+
+export function buildSourceProposedPlanReference(input: {
+  threadId: ThreadId;
+  proposedPlan: Pick<ProposedPlan, "id"> | null | undefined;
+}): OrchestrationLatestTurn["sourceProposedPlan"] | undefined {
+  if (!input.proposedPlan) {
+    return undefined;
+  }
+  return {
+    threadId: input.threadId,
+    planId: input.proposedPlan.id,
+  };
+}

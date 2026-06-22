@@ -15,6 +15,7 @@ import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 import { readNativeApi } from "../nativeApi";
 import { useStore, type AppState } from "../store";
 import type { Project, Thread } from "../types";
+import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import { buildReviewSidechatInitialPrompt } from "../components/review/reviewSidechatContext";
 import type { ReviewSidechatContextPayload } from "../components/review/reviewSidechatContext";
 import { newCommandId, newMessageId, newThreadId } from "./utils";
@@ -288,11 +289,11 @@ function findReviewChatThreadInState(
   state: AppState,
   target: OrchestrationReviewChatTarget,
 ): Thread | null {
-  return findReviewChatThread(state.threads, target);
+  return findReviewChatThread(getThreadsFromState(state), target);
 }
 
 function findThreadById(state: AppState, threadId: ThreadId): Thread | undefined {
-  return state.threads.find((thread) => thread.id === threadId);
+  return getThreadFromState(state, threadId);
 }
 
 function isReviewChatSessionReady(input: {

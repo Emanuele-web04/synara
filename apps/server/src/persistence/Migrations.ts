@@ -53,16 +53,25 @@ import Migration0034 from "./Migrations/034_AuthAccessManagement.ts";
 import Migration0035 from "./Migrations/035_NormalizeLegacyModelSelectionOptions.ts";
 import Migration0036 from "./Migrations/036_ProjectionThreadsPinned.ts";
 import Migration0037 from "./Migrations/037_ProjectionSnapshotCapIndexes.ts";
-import Migration0038 from "./Migrations/038_ReconcileLegacySidechatSource.ts";
-import Migration0039 from "./Migrations/039_ReconcileLegacyPinnedThreads.ts";
-import Migration0040 from "./Migrations/040_ProjectionThreadsPinnedMessagesNotes.ts";
-import Migration0041 from "./Migrations/041_ProjectionProjectsPinned.ts";
-import Migration0042 from "./Migrations/042_ProjectionThreadsMarkers.ts";
-import Migration0043 from "./Migrations/043_ProfileStatsIndexes.ts";
-import Migration0044 from "./Migrations/044_Automations.ts";
-import Migration0045 from "./Migrations/045_AutomationPolicies.ts";
-import Migration0046 from "./Migrations/046_AutomationCompletionPolicy.ts";
-import Migration0047 from "./Migrations/047_AutomationCompletionPolicyVersion.ts";
+import Migration0038 from "./Migrations/038_ExecutionRuntimeTables.ts";
+import Migration0039 from "./Migrations/039_ReviewCache.ts";
+import Migration0040 from "./Migrations/040_ProjectionThreadsReviewChatTarget.ts";
+import Migration0041 from "./Migrations/041_BackfillReviewChangesetPatchSignature.ts";
+import Migration0042 from "./Migrations/042_BackfillRuntimeWarningSummaries.ts";
+import Migration0043 from "./Migrations/043_ReconcileProjectionThreadAnnotations.ts";
+import Migration0044 from "./Migrations/044_ReconcileProjectionProjectsPinned.ts";
+import Migration0045 from "./Migrations/045_ProfileStatsIndexes.ts";
+import Migration0046 from "./Migrations/046_ReviewPullRequests.ts";
+import Migration0047 from "./Migrations/047_ReviewReviewRequests.ts";
+import Migration0048 from "./Migrations/038_ReconcileLegacySidechatSource.ts";
+import Migration0049 from "./Migrations/039_ReconcileLegacyPinnedThreads.ts";
+import Migration0050 from "./Migrations/040_ProjectionThreadsPinnedMessagesNotes.ts";
+import Migration0051 from "./Migrations/041_ProjectionProjectsPinned.ts";
+import Migration0052 from "./Migrations/042_ProjectionThreadsMarkers.ts";
+import Migration0053 from "./Migrations/044_Automations.ts";
+import Migration0054 from "./Migrations/045_AutomationPolicies.ts";
+import Migration0055 from "./Migrations/046_AutomationCompletionPolicy.ts";
+import Migration0056 from "./Migrations/047_AutomationCompletionPolicyVersion.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -112,16 +121,25 @@ export const migrationEntries = [
   [35, "NormalizeLegacyModelSelectionOptions", Migration0035],
   [36, "ProjectionThreadsPinned", Migration0036],
   [37, "ProjectionSnapshotCapIndexes", Migration0037],
-  [38, "ReconcileLegacySidechatSource", Migration0038],
-  [39, "ReconcileLegacyPinnedThreads", Migration0039],
-  [40, "ProjectionThreadsPinnedMessagesNotes", Migration0040],
-  [41, "ProjectionProjectsPinned", Migration0041],
-  [42, "ProjectionThreadsMarkers", Migration0042],
-  [43, "ProfileStatsIndexes", Migration0043],
-  [44, "Automations", Migration0044],
-  [45, "AutomationPolicies", Migration0045],
-  [46, "AutomationCompletionPolicy", Migration0046],
-  [47, "AutomationCompletionPolicyVersion", Migration0047],
+  [38, "ExecutionRuntimeTables", Migration0038],
+  [39, "ReviewCache", Migration0039],
+  [40, "ProjectionThreadsReviewChatTarget", Migration0040],
+  [41, "BackfillReviewChangesetPatchSignature", Migration0041],
+  [42, "BackfillRuntimeWarningSummaries", Migration0042],
+  [43, "ReconcileProjectionThreadAnnotations", Migration0043],
+  [44, "ReconcileProjectionProjectsPinned", Migration0044],
+  [45, "ProfileStatsIndexes", Migration0045],
+  [46, "ReviewPullRequests", Migration0046],
+  [47, "ReviewReviewRequests", Migration0047],
+  [48, "ReconcileLegacySidechatSource", Migration0048],
+  [49, "ReconcileLegacyPinnedThreads", Migration0049],
+  [50, "ProjectionThreadsPinnedMessagesNotes", Migration0050],
+  [51, "ProjectionProjectsPinned", Migration0051],
+  [52, "ProjectionThreadsMarkers", Migration0052],
+  [53, "Automations", Migration0053],
+  [54, "AutomationPolicies", Migration0054],
+  [55, "AutomationCompletionPolicy", Migration0055],
+  [56, "AutomationCompletionPolicyVersion", Migration0056],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

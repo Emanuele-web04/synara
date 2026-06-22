@@ -17,6 +17,7 @@ export { derivePendingApprovals, derivePendingUserInputs } from "./session-logic
 
 export type { LatestProposedPlanState } from "./session-logic.plan";
 export {
+  buildSourceProposedPlanReference,
   findLatestProposedPlan,
   findSidebarProposedPlan,
   hasActionableProposedPlan,
@@ -95,6 +96,27 @@ export function formatElapsed(startIso: string, endIso: string | undefined): str
     return null;
   }
   return formatDuration(endedAt - startedAt);
+}
+
+export function formatClockDuration(durationMs: number): string {
+  const elapsedSeconds = Math.max(0, Math.floor(durationMs / 1_000));
+  if (elapsedSeconds < 60) return `${elapsedSeconds}s`;
+
+  const hours = Math.floor(elapsedSeconds / 3600);
+  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+  const seconds = elapsedSeconds % 60;
+  if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+export function formatClockElapsed(startIso: string, endIso: string | undefined): string | null {
+  if (!endIso) return null;
+  const startedAt = Date.parse(startIso);
+  const endedAt = Date.parse(endIso);
+  if (Number.isNaN(startedAt) || Number.isNaN(endedAt) || endedAt < startedAt) {
+    return null;
+  }
+  return formatClockDuration(endedAt - startedAt);
 }
 
 type LatestTurnTiming = Pick<

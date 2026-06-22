@@ -401,6 +401,8 @@ function threadShellsEqual(left: ThreadShell | undefined, right: ThreadShell): b
     (left.forkSourceThreadId ?? null) === (right.forkSourceThreadId ?? null) &&
     (left.sidechatSourceThreadId ?? null) === (right.sidechatSourceThreadId ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
+    deepEqualJson(left.reviewChatTarget ?? null, right.reviewChatTarget ?? null) &&
+    deepEqualJson(left.runtime ?? null, right.runtime ?? null) &&
     (left.handoff ?? null) === (right.handoff ?? null) &&
     deepEqualJson(left.pinnedMessages ?? null, right.pinnedMessages ?? null) &&
     deepEqualJson(left.threadMarkers ?? null, right.threadMarkers ?? null) &&
@@ -449,6 +451,8 @@ function toThreadShell(thread: Thread): ThreadShell {
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
     sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
+    reviewChatTarget: thread.reviewChatTarget ?? null,
+    runtime: thread.runtime ?? null,
     handoff: thread.handoff ?? null,
     ...(thread.pinnedMessages !== undefined ? { pinnedMessages: thread.pinnedMessages } : {}),
     ...(thread.threadMarkers !== undefined ? { threadMarkers: thread.threadMarkers } : {}),
@@ -1633,6 +1637,16 @@ function normalizeThreadFromReadModel(
     deepEqualJson(previous.lastKnownPr, incoming.lastKnownPr)
       ? previous.lastKnownPr
       : (incoming.lastKnownPr ?? null);
+  const reviewChatTarget =
+    previous?.reviewChatTarget &&
+    incoming.reviewChatTarget &&
+    deepEqualJson(previous.reviewChatTarget, incoming.reviewChatTarget)
+      ? previous.reviewChatTarget
+      : (incoming.reviewChatTarget ?? null);
+  const runtime =
+    previous?.runtime && incoming.runtime && deepEqualJson(previous.runtime, incoming.runtime)
+      ? previous.runtime
+      : (incoming.runtime ?? null);
   const pinnedMessages =
     previous?.pinnedMessages &&
     deepEqualJson(previous.pinnedMessages, incoming.pinnedMessages ?? null)
@@ -1724,6 +1738,8 @@ function normalizeThreadFromReadModel(
     (previous.forkSourceThreadId ?? null) === (incoming.forkSourceThreadId ?? null) &&
     (previous.sidechatSourceThreadId ?? null) === (incoming.sidechatSourceThreadId ?? null) &&
     deepEqualJson(previous.lastKnownPr ?? null, lastKnownPr) &&
+    deepEqualJson(previous.reviewChatTarget ?? null, reviewChatTarget) &&
+    deepEqualJson(previous.runtime ?? null, runtime) &&
     (previous.handoff ?? null) === handoff &&
     previous.pinnedMessages === pinnedMessages &&
     previous.threadMarkers === threadMarkers &&
@@ -1767,6 +1783,8 @@ function normalizeThreadFromReadModel(
     forkSourceThreadId: incoming.forkSourceThreadId ?? null,
     sidechatSourceThreadId: incoming.sidechatSourceThreadId ?? null,
     lastKnownPr,
+    reviewChatTarget,
+    runtime,
     handoff,
     ...(pinnedMessages !== undefined ? { pinnedMessages } : {}),
     ...(threadMarkers !== undefined ? { threadMarkers } : {}),
@@ -1809,6 +1827,16 @@ function normalizeThreadShellSnapshot(
     deepEqualJson(previous.lastKnownPr, incoming.lastKnownPr)
       ? previous.lastKnownPr
       : (incoming.lastKnownPr ?? null);
+  const reviewChatTarget =
+    previous?.reviewChatTarget &&
+    incoming.reviewChatTarget &&
+    deepEqualJson(previous.reviewChatTarget, incoming.reviewChatTarget)
+      ? previous.reviewChatTarget
+      : (incoming.reviewChatTarget ?? null);
+  const runtime =
+    previous?.runtime && incoming.runtime && deepEqualJson(previous.runtime, incoming.runtime)
+      ? previous.runtime
+      : (incoming.runtime ?? null);
   const error = normalizeThreadErrorMessage(incoming.session?.lastError);
   const lastVisitedAt = previous?.lastVisitedAt ?? incoming.updatedAt;
   const nextWorktreePath = incoming.worktreePath;
@@ -1860,6 +1888,8 @@ function normalizeThreadShellSnapshot(
     forkSourceThreadId: incoming.forkSourceThreadId ?? null,
     sidechatSourceThreadId: incoming.sidechatSourceThreadId ?? null,
     lastKnownPr,
+    reviewChatTarget,
+    runtime,
     handoff,
     // The sidebar shell snapshot/event does not carry thread annotations, so keep the values
     // resolved from the thread-detail path instead of clobbering them with `undefined`.
@@ -2160,6 +2190,7 @@ function sidebarThreadSummariesEqual(
     (left.forkSourceThreadId ?? null) === (right.forkSourceThreadId ?? null) &&
     (left.sidechatSourceThreadId ?? null) === (right.sidechatSourceThreadId ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
+    deepEqualJson(left.reviewChatTarget ?? null, right.reviewChatTarget ?? null) &&
     (left.handoff ?? null) === (right.handoff ?? null)
   );
 }
@@ -2199,6 +2230,7 @@ function buildSidebarThreadSummary(
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
     sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
+    reviewChatTarget: thread.reviewChatTarget ?? null,
     handoff: thread.handoff ?? null,
   };
   if (previous && sidebarThreadSummariesEqual(previous, nextSummary)) {

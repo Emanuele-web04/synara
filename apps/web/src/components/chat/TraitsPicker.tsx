@@ -71,6 +71,70 @@ function findAgentLabel(
   return agent?.displayName ?? value;
 }
 
+export function resolveTraitsTriggerSummary(options: {
+  provider: ProviderKind;
+  model: string | null | undefined;
+  prompt: string;
+  modelOptions: ProviderOptions | null | undefined;
+  runtimeModel?: ProviderModelDescriptor | undefined;
+  runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
+}): {
+  contextWindowLabel: string | null;
+  primaryLabel: string | null;
+  showsFastBadge: boolean;
+  summaryText: string;
+} {
+  const selection = getComposerTraitSelection(
+    options.provider,
+    options.model,
+    options.prompt,
+    options.modelOptions,
+    options.runtimeModel,
+  );
+  const supportsFastModeControl =
+    selection.fastModeDescriptor !== null || selection.caps.supportsFastMode;
+  const isFastOnlyControl =
+    supportsFastModeControl &&
+    selection.effortLevels.length === 0 &&
+    selection.thinkingEnabled === null &&
+    selection.contextWindowOptions.length <= 1;
+  const effortLabel = selection.effort
+    ? (selection.effortLevels.find((level) => level.value === selection.effort)?.label ??
+      selection.effort)
+    : null;
+  const primaryLabel = selection.ultrathinkPromptControlled
+    ? "Ultrathink"
+    : effortLabel
+      ? effortLabel
+      : selection.thinkingEnabled !== null
+        ? `Thinking ${selection.thinkingEnabled ? "On" : "Off"}`
+        : isFastOnlyControl
+          ? selection.fastModeEnabled
+            ? "Fast"
+            : "Default"
+          : null;
+  const contextWindowLabel =
+    selection.contextWindowOptions.length > 1 &&
+    selection.contextWindow !== selection.defaultContextWindow
+      ? (selection.contextWindowOptions.find((option) => option.value === selection.contextWindow)
+          ?.label ?? null)
+      : null;
+  const agentOptions = getAgentOptions(options.provider, options.runtimeAgents);
+  const selectedAgent = getSelectedAgentValue(options.provider, options.modelOptions);
+  const resolvedPrimaryLabel = primaryLabel ?? findAgentLabel(agentOptions, selectedAgent);
+  const showsFastBadge =
+    supportsFastModeControl && selection.fastModeEnabled && !isFastOnlyControl;
+
+  return {
+    contextWindowLabel,
+    primaryLabel: resolvedPrimaryLabel,
+    showsFastBadge,
+    summaryText: [resolvedPrimaryLabel, showsFastBadge ? "Fast" : null, contextWindowLabel]
+      .filter((value): value is string => Boolean(value))
+      .join(" · "),
+  };
+}
+
 interface TraitRadioOption {
   value: string;
   label: string;

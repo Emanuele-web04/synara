@@ -25,7 +25,7 @@ layer("automation migration", (it) => {
   it.effect("registers automation policy migration in the Synara lineage", () =>
     Effect.sync(() => {
       assert.deepStrictEqual(migrationEntries[migrationEntries.length - 1]?.slice(0, 2), [
-        47,
+        56,
         "AutomationCompletionPolicyVersion",
       ]);
     }),

@@ -22,6 +22,7 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
   type ProjectDevServerEvent,
+  type ReviewUpdatedPayload,
   type ServerProviderStatusesUpdatedPayload,
   type ServerLifecycleStreamEvent,
   type ServerSettingsUpdatedPayload,
@@ -70,6 +71,7 @@ function omitNullUserInputAnswers(
 }
 const terminalEventListeners = new Set<(payload: TerminalEvent) => void>();
 const projectDevServerEventListeners = new Set<(payload: ProjectDevServerEvent) => void>();
+const reviewUpdatedListeners = new Set<(payload: ReviewUpdatedPayload) => void>();
 const automationEventListeners = new Set<(payload: AutomationStreamEvent) => void>();
 const orchestrationDomainEventListeners = new Set<(payload: OrchestrationEvent) => void>();
 const orchestrationShellEventListeners = new Set<(payload: OrchestrationShellStreamItem) => void>();
@@ -413,6 +415,16 @@ export function createWsNativeApi(): NativeApi {
       }
     }
   });
+  transport.subscribe(WS_CHANNELS.reviewUpdated, (message) => {
+    const payload = message.data;
+    for (const listener of reviewUpdatedListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) => {
     const payload = message.data;
     for (const listener of orchestrationDomainEventListeners) {
@@ -563,6 +575,46 @@ export function createWsNativeApi(): NativeApi {
         gitActionProgressListeners.add(callback);
         return () => {
           gitActionProgressListeners.delete(callback);
+        };
+      },
+    },
+    review: {
+      listPullRequests: (input) => transport.request(WS_METHODS.reviewListPullRequests, input),
+      loadBoardLanes: (input) => transport.request(WS_METHODS.reviewLoadBoardLanes, input),
+      getViewer: (input) => transport.request(WS_METHODS.reviewGetViewer, input),
+      loadChangeset: (input) => transport.request(WS_METHODS.reviewLoadChangeset, input),
+      loadPullRequestHeader: (input) =>
+        transport.request(WS_METHODS.reviewLoadPullRequestHeader, input),
+      loadPullRequest: (input) => transport.request(WS_METHODS.reviewLoadPullRequest, input),
+      loadConversation: (input) => transport.request(WS_METHODS.reviewLoadConversation, input),
+      loadPullRequestSurface: (input) =>
+        transport.request(WS_METHODS.reviewLoadPullRequestSurface, input),
+      listComments: (input) => transport.request(WS_METHODS.reviewListComments, input),
+      addComment: (input) => transport.request(WS_METHODS.reviewAddComment, input),
+      updateComment: (input) => transport.request(WS_METHODS.reviewUpdateComment, input),
+      removeComment: (input) => transport.request(WS_METHODS.reviewRemoveComment, input),
+      submit: (input) => transport.request(WS_METHODS.reviewSubmit, input),
+      loadRemoteThreads: (input) => transport.request(WS_METHODS.reviewLoadRemoteThreads, input),
+      resolveThread: (input) => transport.request(WS_METHODS.reviewResolveThread, input),
+      replyThread: (input) => transport.request(WS_METHODS.reviewReplyThread, input),
+      updateThreadComment: (input) =>
+        transport.request(WS_METHODS.reviewUpdateThreadComment, input),
+      deleteThreadComment: (input) =>
+        transport.request(WS_METHODS.reviewDeleteThreadComment, input),
+      runAgent: (input) =>
+        transport.request(WS_METHODS.reviewRunAgent, input, {
+          timeoutMs: null,
+        }),
+      checkProjectAccess: (input) =>
+        transport.request(WS_METHODS.reviewCheckProjectAccess, input),
+      listProjects: (input) => transport.request(WS_METHODS.reviewListProjects, input),
+      getProjectBoard: (input) => transport.request(WS_METHODS.reviewGetProjectBoard, input),
+      moveProjectCard: (input) => transport.request(WS_METHODS.reviewMoveProjectCard, input),
+      onUpdated: (callback) => {
+        reviewUpdatedListeners.add(callback);
+        void transport.request(WS_METHODS.subscribeReviewUpdates, {});
+        return () => {
+          reviewUpdatedListeners.delete(callback);
         };
       },
     },
@@ -916,6 +968,7 @@ export function resetWsNativeApiForTest(): void {
   gitActionProgressListeners.clear();
   terminalEventListeners.clear();
   projectDevServerEventListeners.clear();
+  reviewUpdatedListeners.clear();
   automationEventListeners.clear();
   orchestrationDomainEventListeners.clear();
   orchestrationShellEventListeners.clear();
@@ -923,6 +976,8 @@ export function resetWsNativeApiForTest(): void {
   fallbackBrowserStateListeners.clear();
   fallbackBrowserStates.clear();
 }
+
+export const __resetWsNativeApiForTests = resetWsNativeApiForTest;
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
@@ -935,6 +990,7 @@ if (import.meta.hot) {
     gitActionProgressListeners.clear();
     terminalEventListeners.clear();
     projectDevServerEventListeners.clear();
+    reviewUpdatedListeners.clear();
     orchestrationDomainEventListeners.clear();
     orchestrationShellEventListeners.clear();
     orchestrationThreadEventListeners.clear();
