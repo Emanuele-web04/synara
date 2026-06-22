@@ -1,18 +1,29 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ServerProviderStatus } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@t3tools/contracts";
 import { describe, it, assert } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
+import { Effect, Fiber, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { DPCODE_CODEX_HOME_OVERLAY_DIR } from "../../codexHomePaths";
+import { ServerConfig } from "../../config";
+import { ServerSettingsService } from "../../serverSettings";
+import { ProviderHealth } from "../Services/ProviderHealth";
+import {
+  readProviderStatusCache,
+  resolveProviderStatusCachePath,
+  writeProviderStatusCache,
+} from "../providerStatusCache";
 import {
   checkClaudeProviderStatus,
   checkCodexProviderStatus,
   checkCursorProviderStatus,
   checkGrokProviderStatus,
   checkOpenCodeProviderStatus,
+  checkPiProviderStatus,
   hasCustomModelProvider,
+  makeDisabledProviderStatus,
   makeCheckClaudeProviderStatus,
   makeCheckCodexProviderStatus,
   makeCheckCursorProviderStatus,
@@ -22,6 +33,8 @@ import {
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
   providerStatusesEqual,
+  ProviderHealthLive,
+  projectProviderStatusesForSettings,
   readCodexConfigModelProvider,
   stabilizeProviderStatusesAgainstTransientTimeouts,
 } from "./ProviderHealth";
@@ -85,6 +98,49 @@ function failingSpawnerLayer(description: string) {
   );
 }
 
+const allProvidersDisabledSettings = {
+  providers: {
+    codex: { enabled: false },
+    claudeAgent: { enabled: false },
+    cursor: { enabled: false },
+    gemini: { enabled: false },
+    grok: { enabled: false },
+    kilo: { enabled: false },
+    opencode: { enabled: false },
+    pi: { enabled: false },
+  },
+} as const;
+
+const allProvidersDisabledServerSettings = {
+  ...DEFAULT_SERVER_SETTINGS,
+  providers: {
+    codex: { ...DEFAULT_SERVER_SETTINGS.providers.codex, enabled: false },
+    claudeAgent: { ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent, enabled: false },
+    cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: false },
+    gemini: { ...DEFAULT_SERVER_SETTINGS.providers.gemini, enabled: false },
+    grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: false },
+    kilo: { ...DEFAULT_SERVER_SETTINGS.providers.kilo, enabled: false },
+    opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: false },
+    pi: { ...DEFAULT_SERVER_SETTINGS.providers.pi, enabled: false },
+  },
+} satisfies typeof DEFAULT_SERVER_SETTINGS;
+
+const disabledProviderHealthLayer = ProviderHealthLive.pipe(
+  Layer.provideMerge(ServerSettingsService.layerTest(allProvidersDisabledSettings)),
+  Layer.provideMerge(
+    ServerConfig.layerTest(process.cwd(), { prefix: "provider-health-disabled-" }),
+  ),
+);
+
+const cachedReadyCodexStatus = {
+  provider: "codex" as const,
+  status: "ready" as const,
+  available: true,
+  authStatus: "authenticated" as const,
+  checkedAt: "2026-06-16T12:00:00.000Z",
+  message: "Codex CLI is installed and authenticated.",
+} satisfies ServerProviderStatus;
+
 /**
  * Create a temporary CODEX_HOME scoped to the current Effect test.
  * Cleanup is registered in the test scope rather than via Vitest hooks.
@@ -142,6 +198,178 @@ function withTempCodexHome(configContent?: string) {
 }
 
 it.layer(NodeServices.layer)("ProviderHealth", (it) => {
+  describe("disabled provider handling", () => {
+    it("builds an inert status for disabled providers", () => {
+      assert.deepStrictEqual(makeDisabledProviderStatus("kilo", "2026-06-16T12:00:00.000Z"), {
+        provider: "kilo",
+        status: "warning",
+        available: false,
+        authStatus: "unknown",
+        checkedAt: "2026-06-16T12:00:00.000Z",
+        message: "Provider is disabled in Synara settings.",
+      });
+    });
+
+    it("projects disabled settings over cached ready statuses", () => {
+      const statuses = projectProviderStatusesForSettings(
+        [cachedReadyCodexStatus],
+        allProvidersDisabledServerSettings,
+        "2026-06-16T12:05:00.000Z",
+      );
+      const codex = statuses.find((status) => status.provider === "codex");
+
+      assert.strictEqual(statuses.length, 8);
+      assert.strictEqual(codex?.available, false);
+      assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
+    });
+
+    it.effect("does not expose cached ready statuses for disabled providers", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-health-disabled-cache-",
+        });
+        const cachePath = resolveProviderStatusCachePath({
+          stateDir: path.join(baseDir, "userdata"),
+          provider: "codex",
+        });
+        yield* writeProviderStatusCache({
+          filePath: cachePath,
+          provider: cachedReadyCodexStatus,
+        });
+
+        const layer = ProviderHealthLive.pipe(
+          Layer.provideMerge(ServerSettingsService.layerTest(allProvidersDisabledSettings)),
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+        );
+        const statuses = yield* Effect.gen(function* () {
+          const providerHealth = yield* ProviderHealth;
+          return yield* providerHealth.getStatuses;
+        }).pipe(Effect.provide(layer));
+        const codex = statuses.find((status) => status.provider === "codex");
+        const cachedCodex = yield* readProviderStatusCache(cachePath);
+
+        assert.strictEqual(codex?.available, false);
+        assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
+        assert.deepStrictEqual(cachedCodex, cachedReadyCodexStatus);
+      }),
+    );
+
+    it.effect("publishes ready status when a disabled provider is re-enabled", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-health-enable-cache-",
+        });
+        const cachePath = resolveProviderStatusCachePath({
+          stateDir: path.join(baseDir, "userdata"),
+          provider: "codex",
+        });
+        yield* writeProviderStatusCache({
+          filePath: cachePath,
+          provider: cachedReadyCodexStatus,
+        });
+
+        const layer = ProviderHealthLive.pipe(
+          Layer.provideMerge(ServerSettingsService.layerTest(allProvidersDisabledSettings)),
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+          Layer.provideMerge(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") {
+                return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+              }
+              if (joined === "login status" || joined === "login status --json") {
+                return { stdout: '{"authenticated":true}\n', stderr: "", code: 0 };
+              }
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        );
+
+        yield* Effect.gen(function* () {
+          const providerHealth = yield* ProviderHealth;
+          const serverSettings = yield* ServerSettingsService;
+          const disabledStatuses = yield* providerHealth.getStatuses;
+          const disabledCodex = disabledStatuses.find((status) => status.provider === "codex");
+
+          assert.strictEqual(disabledCodex?.available, false);
+          assert.strictEqual(disabledCodex?.message, "Provider is disabled in Synara settings.");
+
+          const enabledCodexFiber = yield* providerHealth.streamChanges.pipe(
+            Stream.map((statuses) => statuses.find((status) => status.provider === "codex")),
+            Stream.filter(
+              (status): status is ServerProviderStatus =>
+                status !== undefined &&
+                status.available === true &&
+                status.authStatus === "authenticated",
+            ),
+            Stream.runHead,
+            Effect.forkChild,
+          );
+          yield* serverSettings.updateSettings({
+            providers: {
+              codex: {
+                enabled: true,
+              },
+            },
+          });
+
+          const streamedCodex = yield* Fiber.join(enabledCodexFiber).pipe(
+            Effect.timeoutOption(2_000),
+          );
+          assert.strictEqual(streamedCodex._tag, "Some");
+          if (streamedCodex._tag !== "Some") {
+            return;
+          }
+          assert.strictEqual(streamedCodex.value._tag, "Some");
+          if (streamedCodex.value._tag !== "Some") {
+            return;
+          }
+          assert.notStrictEqual(
+            streamedCodex.value.value.message,
+            "Provider is disabled in Synara settings.",
+          );
+
+          const currentStatuses = yield* providerHealth.getStatuses;
+          const currentCodex = currentStatuses.find((status) => status.provider === "codex");
+          assert.strictEqual(currentCodex?.available, true);
+          assert.strictEqual(currentCodex?.authStatus, "authenticated");
+          assert.notStrictEqual(currentCodex?.message, "Provider is disabled in Synara settings.");
+        }).pipe(Effect.provide(layer));
+      }),
+    );
+
+    it.effect("does not offer updates for disabled providers", () =>
+      Effect.gen(function* () {
+        const providerHealth = yield* ProviderHealth;
+        const statuses = yield* providerHealth.refresh;
+
+        assert.strictEqual(statuses.length, 8);
+        for (const status of statuses) {
+          assert.strictEqual(status.available, false);
+          assert.strictEqual(status.message, "Provider is disabled in Synara settings.");
+          assert.strictEqual(status.versionAdvisory?.status, "unknown");
+          assert.strictEqual(status.versionAdvisory?.canUpdate, false);
+          assert.strictEqual(status.versionAdvisory?.updateCommand, null);
+        }
+      }).pipe(Effect.provide(disabledProviderHealthLayer)),
+    );
+
+    it.effect("rejects one-click updates for disabled providers", () =>
+      Effect.gen(function* () {
+        const providerHealth = yield* ProviderHealth;
+        const error = yield* Effect.flip(providerHealth.updateProvider({ provider: "kilo" }));
+
+        assert.ok(error instanceof ServerProviderUpdateError);
+        assert.strictEqual(error.provider, "kilo");
+        assert.strictEqual(error.reason, "Provider is disabled in Synara settings.");
+      }).pipe(Effect.provide(disabledProviderHealthLayer)),
+    );
+  });
+
   describe("stabilizeProviderStatusesAgainstTransientTimeouts", () => {
     const previousReadyOpenCode = {
       provider: "opencode",
@@ -970,6 +1198,65 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           }),
         ),
       ),
+    );
+  });
+
+  describe("checkPiProviderStatus", () => {
+    it.effect("returns ready using only the Pi CLI version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* checkPiProviderStatus();
+        assert.strictEqual(status.provider, "pi");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(
+          status.message,
+          "Pi CLI is installed. Configure provider credentials inside Pi as needed.",
+        );
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "pi");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "pi 0.74.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("uses configured Pi binary and agent dir without SDK registry reads", () =>
+      Effect.gen(function* () {
+        const status = yield* checkPiProviderStatus("/tmp/pi-agent", "/custom/bin/pi");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(
+          status.message,
+          "Pi CLI is installed. Synara will use Pi agent dir /tmp/pi-agent.",
+        );
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/pi");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "pi 0.74.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("keeps Pi usable when the advisory CLI probe is missing", () =>
+      Effect.gen(function* () {
+        const status = yield* checkPiProviderStatus();
+        assert.strictEqual(status.provider, "pi");
+        assert.strictEqual(status.status, "warning");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(
+          status.message,
+          "Pi SDK is bundled, but the Pi CLI (`pi`) is not on PATH, so Synara could not verify the installed CLI version.",
+        );
+      }).pipe(Effect.provide(failingSpawnerLayer("spawn pi ENOENT"))),
     );
   });
 

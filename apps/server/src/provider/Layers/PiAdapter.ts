@@ -1,30 +1,35 @@
 import crypto from "node:crypto";
 import path from "node:path";
 
-import {
+import type {
   AuthStorage,
   ModelRegistry,
   SessionManager,
-  createAgentSessionFromServices,
-  createAgentSessionRuntime,
-  createAgentSessionServices,
-  type AgentSessionEvent,
-  type CreateAgentSessionRuntimeFactory,
+  AgentSession as PiAgentSession,
+  AgentSessionEvent,
+  CreateAgentSessionRuntimeFactory,
+  ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { ImageContent } from "@earendil-works/pi-ai";
+import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import {
+  ApprovalRequestId,
   type ChatAttachment,
   EventId,
   type ProviderComposerCapabilities,
   type ProviderListCommandsResult,
   type ProviderListModelsResult,
   type ProviderListSkillsResult,
+  ProviderItemId,
   type ProviderRuntimeEvent,
   type ProviderSession,
-  type UserInputQuestion,
+  type ProviderUserInputAnswers,
+  RuntimeItemId,
+  RuntimeRequestId,
   ThreadId,
+  type ThreadTokenUsageSnapshot,
   TurnId,
+  type UserInputQuestion,
 } from "@t3tools/contracts";
 import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
 
@@ -38,43 +43,742 @@ import {
 } from "../Errors.ts";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
 import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
+import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
+import { clampUsagePercent, nonNegativeFiniteNumber, positiveFiniteNumber } from "../tokenUsage.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
-import { makePiEventHandler } from "./PiAdapter.events.ts";
-import {
-  findModelInRegistry,
-  getPiSupportedThinkingOptions,
-  normalizePiThinkingLevel,
-} from "./PiAdapter.models.ts";
-import {
-  extensionDisplayName,
-  extractResumeSessionFile,
-  getSessionFile,
-  makeAgentDir,
-  makeSessionSnapshot,
-  mapMessageHistory,
-} from "./PiAdapter.session.ts";
-import {
-  classifyPiRuntimeError,
-  isPiReloadCommand,
-  runtimeErrorDetail,
-  toMessage,
-  trimToUndefined,
-} from "./PiAdapter.shared.ts";
-import { normalizeTokenUsage } from "./PiAdapter.token.ts";
-import {
-  DEFAULT_PI_THINKING_LEVEL,
-  PROVIDER,
-  type PiAdapterLiveOptions,
-  type PiSessionContext,
-} from "./PiAdapter.types.ts";
 
-export { getPiSupportedThinkingOptions };
-export type { PiAdapterLiveOptions };
+const PROVIDER = "pi" as const;
+const DEFAULT_PI_THINKING_LEVEL: ThinkingLevel = "medium";
+const PI_THINKING_OPTIONS: ReadonlyArray<{
+  readonly value: ThinkingLevel;
+  readonly label: string;
+  readonly description: string;
+  readonly isDefault?: true;
+}> = [
+  { value: "off", label: "Off", description: "No extra reasoning" },
+  { value: "minimal", label: "Minimal", description: "Light reasoning" },
+  { value: "low", label: "Low", description: "Faster reasoning" },
+  { value: "medium", label: "Medium", description: "Balanced reasoning", isDefault: true },
+  { value: "high", label: "High", description: "Deeper reasoning" },
+  { value: "xhigh", label: "Extra High", description: "Maximum reasoning" },
+];
+const PI_DEFAULT_SUPPORTED_THINKING_LEVELS = new Set<ThinkingLevel>([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+]);
 
-interface PiUserInputOptionMapping {
+type PiModelRegistry = Pick<ModelRegistry, "find" | "getAll" | "getAvailable">;
+type PiCodingAgentModule = typeof import("@earendil-works/pi-coding-agent");
+type PiAgentRuntime = Awaited<ReturnType<PiCodingAgentModule["createAgentSessionRuntime"]>>;
+
+let piCodingAgentModulePromise: Promise<PiCodingAgentModule> | undefined;
+
+interface PiSessionContext {
+  runtime: PiAgentRuntime;
+  modelRegistry: PiModelRegistry;
+  session: ProviderSession;
+  turns: PiStoredTurn[];
+  activeTurnId: TurnId | undefined;
+  activeAssistantItemId: RuntimeItemId | undefined;
+  activeReasoningItemId: RuntimeItemId | undefined;
+  activeToolItems: Map<string, PiTrackedToolCall>;
+  pendingUserInputs: Map<ApprovalRequestId, PiPendingUserInput>;
+  stopped: boolean;
+  lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
+  unsubscribe: (() => void) | undefined;
+}
+
+interface PiStoredTurn {
+  readonly id: TurnId;
+  readonly items: unknown[];
+  leafId?: string | null;
+}
+
+interface PiTrackedToolCall {
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly args: unknown;
+  readonly itemId: RuntimeItemId;
+  readonly itemType: "command_execution" | "file_change" | "dynamic_tool_call" | "web_search";
+}
+
+interface PiPendingUserInput {
+  readonly resolve: (answers: ProviderUserInputAnswers) => void;
+}
+
+export interface PiUserInputOptionMapping {
   readonly value: string;
   readonly option: UserInputQuestion["options"][number];
+}
+
+export interface PiAdapterLiveOptions {
+  readonly nativeEventLogPath?: string;
+  readonly nativeEventLogger?: EventNdjsonLogger;
+}
+
+function toMessage(cause: unknown, fallback: string): string {
+  if (cause instanceof Error && cause.message.trim().length > 0) {
+    return cause.message;
+  }
+  return fallback;
+}
+
+function trimToUndefined(value: string | null | undefined): string | undefined {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isPiThinkingLevel(value: string | null | undefined): value is ThinkingLevel {
+  return (
+    value === "off" ||
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh"
+  );
+}
+
+function normalizePiThinkingLevel(value: string | null | undefined): ThinkingLevel | undefined {
+  return isPiThinkingLevel(value) ? value : undefined;
+}
+
+// Loads the Pi SDK only when the Pi provider is actually used. The SDK brings in
+// a native clipboard module, so importing it during Synara startup can bloat the
+// desktop backend before any Pi session exists.
+async function loadPiCodingAgentModule(): Promise<PiCodingAgentModule> {
+  piCodingAgentModulePromise ??= import("@earendil-works/pi-coding-agent");
+  return piCodingAgentModulePromise;
+}
+
+function getLocalSupportedThinkingLevels(
+  model: Pick<Model<Api>, "reasoning" | "thinkingLevelMap">,
+): Set<ThinkingLevel> {
+  if (!model.reasoning) {
+    return new Set();
+  }
+
+  const thinkingLevelMap = model.thinkingLevelMap;
+  if (thinkingLevelMap && Object.keys(thinkingLevelMap).length > 0) {
+    return new Set(
+      PI_THINKING_OPTIONS.filter((option) => {
+        const mapped = thinkingLevelMap[option.value as keyof typeof thinkingLevelMap];
+        if (mapped === null) {
+          return false;
+        }
+        return mapped !== undefined || PI_DEFAULT_SUPPORTED_THINKING_LEVELS.has(option.value);
+      }).map((option) => option.value),
+    );
+  }
+
+  return new Set(PI_DEFAULT_SUPPORTED_THINKING_LEVELS);
+}
+
+// Mirrors Pi SDK clamping so model discovery does not advertise levels that will be ignored.
+export function getPiSupportedThinkingOptions(
+  model: Pick<Model<Api>, "reasoning" | "thinkingLevelMap">,
+): ReadonlyArray<(typeof PI_THINKING_OPTIONS)[number]> {
+  if (!model.reasoning) {
+    return [];
+  }
+  const supportedLevels = getLocalSupportedThinkingLevels(model);
+  return PI_THINKING_OPTIONS.filter((option) => supportedLevels.has(option.value));
+}
+
+function parseModelReference(
+  modelId: string | null | undefined,
+): { readonly provider?: string; readonly id: string } | undefined {
+  const trimmed = trimToUndefined(modelId);
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.includes("/")) {
+    const [provider, ...rest] = trimmed.split("/");
+    const id = rest.join("/");
+    if (provider && id) {
+      return { provider, id };
+    }
+  }
+  if (trimmed.includes(":")) {
+    const [provider, ...rest] = trimmed.split(":");
+    const id = rest.join(":");
+    if (provider && id) {
+      return { provider, id };
+    }
+  }
+  return { id: trimmed };
+}
+
+function createProviderModelFallback(
+  registry: PiModelRegistry,
+  parsed: { readonly provider: string; readonly id: string },
+): Model<Api> | undefined {
+  const providerDefault = registry.getAll().find((model) => model.provider === parsed.provider);
+  if (!providerDefault) {
+    return undefined;
+  }
+  return {
+    id: parsed.id,
+    name: parsed.id,
+    api: providerDefault.api,
+    provider: parsed.provider,
+    baseUrl: providerDefault.baseUrl,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+    ...(providerDefault.compat ? { compat: providerDefault.compat } : {}),
+  };
+}
+
+function findModelInRegistry(
+  registry: PiModelRegistry,
+  modelId: string | null | undefined,
+): Model<Api> | undefined {
+  const parsed = parseModelReference(modelId);
+  if (!parsed) {
+    return undefined;
+  }
+  if (parsed.provider) {
+    return (
+      registry.find(parsed.provider, parsed.id) ??
+      createProviderModelFallback(registry, { provider: parsed.provider, id: parsed.id })
+    );
+  }
+  return registry
+    .getAll()
+    .find((model) => model.id === parsed.id || `${model.provider}/${model.id}` === parsed.id);
+}
+
+function extractResumeSessionFile(resumeCursor: unknown): string | undefined {
+  if (typeof resumeCursor === "string" && resumeCursor.trim().length > 0) {
+    return resumeCursor;
+  }
+  if (!resumeCursor || typeof resumeCursor !== "object") {
+    return undefined;
+  }
+  const record = resumeCursor as Record<string, unknown>;
+  for (const key of ["sessionFile", "sessionFilePath", "nativeHandle", "path"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function getSessionFile(session: PiAgentSession): string | undefined {
+  return session.sessionFile ?? session.sessionManager.getSessionFile();
+}
+
+function makeSessionSnapshot(context: PiSessionContext): ProviderSession {
+  const resumeCursor = getSessionFile(context.runtime.session);
+  return {
+    provider: PROVIDER,
+    status: context.stopped ? "closed" : context.activeTurnId ? "running" : "ready",
+    runtimeMode: context.session.runtimeMode,
+    threadId: context.session.threadId,
+    createdAt: context.session.createdAt,
+    updatedAt: new Date().toISOString(),
+    ...(context.session.cwd ? { cwd: context.session.cwd } : {}),
+    ...(context.session.model ? { model: context.session.model } : {}),
+    ...(resumeCursor ? { resumeCursor } : {}),
+    ...(context.activeTurnId ? { activeTurnId: context.activeTurnId } : {}),
+    ...(context.session.lastError ? { lastError: context.session.lastError } : {}),
+  };
+}
+
+function normalizeTokenUsage(
+  stats: ReturnType<PiAgentSession["getSessionStats"]>,
+  contextWindow?: number | null,
+): ThreadTokenUsageSnapshot | undefined {
+  const inputTokens = stats.tokens.input;
+  const cachedInputTokens = stats.tokens.cacheRead;
+  const outputTokens = stats.tokens.output;
+  const totalProcessedTokens = stats.tokens.total;
+  const contextUsage = stats.contextUsage;
+  const contextUsageWindowValue = positiveFiniteNumber(contextUsage?.contextWindow);
+  const contextUsageWindow =
+    contextUsageWindowValue !== undefined ? Math.floor(contextUsageWindowValue) : undefined;
+  const fallbackWindowValue = positiveFiniteNumber(contextWindow);
+  const fallbackWindow =
+    fallbackWindowValue !== undefined ? Math.floor(fallbackWindowValue) : undefined;
+  const maxTokens = contextUsageWindow ?? fallbackWindow;
+  const contextUsageTokenValue = nonNegativeFiniteNumber(contextUsage?.tokens);
+  const contextUsageTokens =
+    contextUsageTokenValue !== undefined ? Math.round(contextUsageTokenValue) : undefined;
+  const usedPercent = clampUsagePercent(contextUsage?.percent);
+  const usedTokensFromPercent =
+    contextUsageTokens === undefined && usedPercent !== undefined && maxTokens !== undefined
+      ? Math.round((usedPercent / 100) * maxTokens)
+      : undefined;
+  const usedTokens =
+    contextUsageTokens ??
+    usedTokensFromPercent ??
+    (contextUsage
+      ? 0
+      : maxTokens !== undefined
+        ? Math.min(totalProcessedTokens, maxTokens)
+        : totalProcessedTokens);
+  if (
+    usedTokens <= 0 &&
+    inputTokens <= 0 &&
+    cachedInputTokens <= 0 &&
+    outputTokens <= 0 &&
+    maxTokens === undefined &&
+    usedPercent === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    usedTokens,
+    ...(usedPercent !== undefined ? { usedPercent } : {}),
+    ...(totalProcessedTokens > usedTokens ? { totalProcessedTokens } : {}),
+    inputTokens,
+    cachedInputTokens,
+    outputTokens,
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+    lastUsedTokens: usedTokens,
+    lastInputTokens: inputTokens,
+    lastCachedInputTokens: cachedInputTokens,
+    lastOutputTokens: outputTokens,
+  };
+}
+
+function isPiReloadCommand(text: string): boolean {
+  return /^\/reload(?:\s|$)/iu.test(text.trim());
+}
+
+function classifyPiRuntimeError(
+  message: string,
+): "provider_error" | "transport_error" | "permission_error" | "validation_error" | "unknown" {
+  const normalized = message.toLowerCase();
+  if (
+    normalized.includes("network") ||
+    normalized.includes("connection") ||
+    normalized.includes("timeout") ||
+    normalized.includes("econn") ||
+    normalized.includes("fetch failed")
+  ) {
+    return "transport_error";
+  }
+  if (
+    normalized.includes("api key") ||
+    normalized.includes("auth") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("forbidden") ||
+    normalized.includes("permission")
+  ) {
+    return "permission_error";
+  }
+  if (
+    normalized.includes("invalid") ||
+    normalized.includes("validation") ||
+    normalized.includes("not available")
+  ) {
+    return "validation_error";
+  }
+  if (
+    normalized.includes("rate limit") ||
+    normalized.includes("quota") ||
+    normalized.includes("usage limit") ||
+    normalized.includes("overloaded") ||
+    normalized.includes("provider")
+  ) {
+    return "provider_error";
+  }
+  return "unknown";
+}
+
+function runtimeErrorDetail(cause: unknown): unknown {
+  if (cause instanceof Error) {
+    return {
+      name: cause.name,
+      message: cause.message,
+      ...(cause.stack ? { stack: cause.stack } : {}),
+    };
+  }
+  return cause;
+}
+
+function textFromContent(content: string | (TextContent | ImageContent)[]): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  return content
+    .filter((block): block is TextContent => block.type === "text")
+    .map((block) => block.text)
+    .join("\n\n");
+}
+
+function toolRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function firstStringValue(
+  record: Record<string, unknown> | undefined,
+  keys: readonly string[],
+): string | undefined {
+  if (!record) return undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function textFromToolResult(result: unknown): string | undefined {
+  if (typeof result === "string") {
+    return result;
+  }
+  const record = toolRecord(result);
+  if (!record) {
+    return undefined;
+  }
+  const directText = firstStringValue(record, [
+    "output",
+    "stdout",
+    "stderr",
+    "text",
+    "summary",
+    "message",
+    "error",
+  ]);
+  if (directText) {
+    return directText;
+  }
+  const content = Array.isArray(record.content) ? record.content : [];
+  const parts = content.flatMap((block) => {
+    const blockRecord = toolRecord(block);
+    return blockRecord?.type === "text" && typeof blockRecord.text === "string"
+      ? [blockRecord.text]
+      : [];
+  });
+  return parts.length > 0 ? parts.join("\n") : undefined;
+}
+
+function toolExitCode(result: unknown): number | null | undefined {
+  const record = toolRecord(result);
+  if (!record) return undefined;
+  const exitCode = record.exitCode;
+  if (typeof exitCode === "number" && Number.isFinite(exitCode)) return exitCode;
+  const code = record.code;
+  if (typeof code === "number" && Number.isFinite(code)) return code;
+  return null;
+}
+
+function toolRawOutput(result: unknown): Record<string, unknown> | undefined {
+  if (result === undefined) return undefined;
+  const text = textFromToolResult(result);
+  const exitCode = toolExitCode(result);
+  if (typeof result === "string") {
+    return { stdout: result, content: result };
+  }
+  if (result === null) {
+    return {};
+  }
+  const record = toolRecord(result);
+  if (!record) {
+    return text ? { stdout: text, content: text } : undefined;
+  }
+  return {
+    ...record,
+    ...(text ? { stdout: text, content: text } : {}),
+    ...(exitCode !== undefined ? { exitCode } : {}),
+  };
+}
+
+function toolPath(args: unknown): string | undefined {
+  return firstStringValue(toolRecord(args), ["path", "filePath", "file", "relativePath"]);
+}
+
+function toolCommand(args: unknown): string | undefined {
+  return firstStringValue(toolRecord(args), ["command", "cmd"]);
+}
+
+function toolSearchQuery(toolName: string, args: unknown): string | undefined {
+  const record = toolRecord(args);
+  if (!record) return undefined;
+  if (toolName === "grep" || toolName === "find") {
+    return firstStringValue(record, ["pattern", "query"]);
+  }
+  return firstStringValue(record, ["query", "pattern"]);
+}
+
+function toolEditEntries(args: unknown): ReadonlyArray<Record<string, unknown>> | undefined {
+  const record = toolRecord(args);
+  if (!record) return undefined;
+  if (Array.isArray(record.edits)) {
+    return record.edits.flatMap((edit) => {
+      const editRecord = toolRecord(edit);
+      return editRecord ? [editRecord] : [];
+    });
+  }
+  const oldText = firstStringValue(record, ["oldText", "old_string", "oldString"]);
+  const newText = firstStringValue(record, ["newText", "new_string", "newString"]);
+  if (oldText !== undefined || newText !== undefined) {
+    return [
+      {
+        ...(oldText !== undefined ? { oldText } : {}),
+        ...(newText !== undefined ? { newText } : {}),
+      },
+    ];
+  }
+  return undefined;
+}
+
+function toolItemType(toolName: string): PiTrackedToolCall["itemType"] {
+  switch (toolName) {
+    case "bash":
+      return "command_execution";
+    case "edit":
+    case "write":
+      return "file_change";
+    case "grep":
+    case "find":
+      return "web_search";
+    default:
+      return "dynamic_tool_call";
+  }
+}
+
+function toolTitle(toolName: string, args: unknown): string {
+  const command = toolName === "bash" ? toolCommand(args) : undefined;
+  if (command) return command;
+  const filePath = toolPath(args);
+  if (
+    filePath &&
+    (toolName === "read" || toolName === "edit" || toolName === "write" || toolName === "ls")
+  ) {
+    return `${toolName} ${filePath}`;
+  }
+  const query = toolSearchQuery(toolName, args);
+  if (query && (toolName === "find" || toolName === "grep")) {
+    return `${toolName} ${query}`;
+  }
+  return toolName;
+}
+
+function toolLifecycleData(input: {
+  toolCallId: string;
+  toolName: string;
+  args: unknown;
+  result?: unknown;
+  partialResult?: unknown;
+  isError?: boolean;
+}): Record<string, unknown> {
+  const { toolCallId, toolName, args } = input;
+  const rawOutput = toolRawOutput(input.result ?? input.partialResult);
+  const path = toolPath(args);
+  const query = toolSearchQuery(toolName, args);
+  const command = toolCommand(args);
+  const edits = toolEditEntries(args);
+  const content = toolRecord(args)?.content;
+  const outputDetails = toolRecord(rawOutput?.details);
+  const unifiedDiff = firstStringValue(outputDetails, ["diff"]);
+  const base: Record<string, unknown> = {
+    toolCallId,
+    callId: toolCallId,
+    toolName,
+    name: toolName,
+    tool: toolName,
+    kind: toolName,
+    args,
+    input: args,
+    rawInput: args,
+    ...(rawOutput ? { rawOutput } : {}),
+    ...(input.partialResult !== undefined ? { partialResult: input.partialResult } : {}),
+    ...(input.result !== undefined ? { result: input.result } : {}),
+    ...(input.isError !== undefined ? { isError: input.isError } : {}),
+  };
+
+  switch (toolName) {
+    case "bash":
+      return {
+        ...base,
+        kind: "execute",
+        ...(command ? { command } : {}),
+        ...(rawOutput?.exitCode !== undefined ? { exitCode: rawOutput.exitCode } : {}),
+      };
+    case "read":
+      return {
+        ...base,
+        kind: "read",
+        ...(path
+          ? {
+              path,
+              filePath: path,
+              files: [{ path }],
+              commandActions: [{ type: "read", name: "read", path }],
+            }
+          : {}),
+      };
+    case "edit":
+      return {
+        ...base,
+        kind: "edit",
+        ...(path ? { path, filePath: path, files: [{ path }], changes: [{ path }] } : {}),
+        ...(edits ? { edits: edits.map((edit) => ({ ...edit, ...(path ? { path } : {}) })) } : {}),
+        ...(unifiedDiff ? { unifiedDiff } : {}),
+      };
+    case "write":
+      return {
+        ...base,
+        kind: "write",
+        ...(path ? { path, filePath: path, files: [{ path }], changes: [{ path }] } : {}),
+        ...(typeof content === "string" ? { content } : {}),
+      };
+    case "find":
+      return {
+        ...base,
+        kind: "search",
+        searchKind: "find",
+        ...(query ? { query } : {}),
+        ...(path ? { path } : {}),
+        ...(query || path
+          ? { commandActions: [{ type: "search", name: "find", query, path }] }
+          : {}),
+      };
+    case "grep":
+      return {
+        ...base,
+        kind: "search",
+        searchKind: "grep",
+        ...(query ? { query } : {}),
+        ...(path ? { path } : {}),
+        ...(query || path
+          ? { commandActions: [{ type: "search", name: "grep", query, path }] }
+          : {}),
+      };
+    case "ls":
+      return {
+        ...base,
+        kind: "listFiles",
+        ...(path
+          ? {
+              path,
+              query: path,
+              commandActions: [{ type: "listFiles", name: "ls", path }],
+            }
+          : {}),
+      };
+    default:
+      return base;
+  }
+}
+
+function mapMessageHistory(session: PiAgentSession): unknown[] {
+  const items: unknown[] = [];
+  const pendingTools = new Map<string, { toolName: string; args: unknown }>();
+  for (const message of session.messages) {
+    if (message.role === "user") {
+      const text = textFromContent(message.content);
+      if (text) items.push({ type: "user_message", text });
+      continue;
+    }
+    if (message.role === "assistant") {
+      for (const content of message.content) {
+        if (content.type === "text" && content.text) {
+          items.push({ type: "assistant_message", text: content.text });
+          continue;
+        }
+        if (content.type === "thinking" && content.thinking) {
+          items.push({ type: "reasoning", text: content.thinking });
+          continue;
+        }
+        if (content.type === "toolCall") {
+          pendingTools.set(content.id, { toolName: content.name, args: content.arguments });
+          items.push({
+            type: "tool_call",
+            status: "started",
+            callId: content.id,
+            toolName: content.name,
+            itemType: toolItemType(content.name),
+            title: toolTitle(content.name, content.arguments),
+            args: content.arguments,
+            data: toolLifecycleData({
+              toolCallId: content.id,
+              toolName: content.name,
+              args: content.arguments,
+            }),
+          });
+        }
+      }
+      continue;
+    }
+    if (message.role === "toolResult") {
+      const pending = pendingTools.get(message.toolCallId);
+      pendingTools.delete(message.toolCallId);
+      const toolName = pending?.toolName ?? message.toolName;
+      const args = pending?.args;
+      const result = { content: message.content };
+      items.push({
+        type: "tool_call",
+        status: message.isError ? "failed" : "completed",
+        callId: message.toolCallId,
+        toolName,
+        itemType: toolItemType(toolName),
+        title: toolTitle(toolName, args),
+        output: textFromContent(message.content),
+        isError: message.isError,
+        data: toolLifecycleData({
+          toolCallId: message.toolCallId,
+          toolName,
+          args,
+          result,
+          isError: message.isError,
+        }),
+      });
+    }
+  }
+  return items;
+}
+
+function makeAgentDir(
+  agentDir: string | undefined,
+  piSdk: Pick<PiCodingAgentModule, "getAgentDir">,
+): string {
+  return trimToUndefined(agentDir) ?? piSdk.getAgentDir();
+}
+
+// Keep discovery registries isolated so extension provider registrations reflect
+// the current agent dir + project cwd instead of stale state from prior listings.
+function createPiModelRegistry(
+  agentDir: string,
+  piSdk: Pick<PiCodingAgentModule, "AuthStorage" | "ModelRegistry">,
+): {
+  readonly authStorage: AuthStorage;
+  readonly registry: ModelRegistry;
+} {
+  const authStorage = piSdk.AuthStorage.create(path.join(agentDir, "auth.json"));
+  return {
+    authStorage,
+    registry: piSdk.ModelRegistry.create(authStorage, path.join(agentDir, "models.json")),
+  };
+}
+
+function extensionDisplayName(extension: {
+  readonly path: string;
+  readonly sourceInfo?: { readonly source?: string };
+}): string {
+  const source = trimToUndefined(extension.sourceInfo?.source);
+  if (source) return source;
+  const extensionPath = trimToUndefined(extension.path);
+  return extensionPath ? path.basename(extensionPath).replace(/\.(?:ts|js)$/u, "") : "extension";
+}
+
+function makePiUserInputOption(label: string): UserInputQuestion["options"][number] {
+  const normalizedLabel = trimToUndefined(label) ?? "Option";
+  return { label: normalizedLabel, description: normalizedLabel };
 }
 
 export function makePiUserInputOptions(
@@ -93,32 +797,58 @@ export function makePiUserInputOptions(
   });
 }
 
+function firstPiUserInputAnswer(
+  answers: ProviderUserInputAnswers,
+  questionId: string,
+): string | undefined {
+  const answer = answers[questionId];
+  if (typeof answer === "string") {
+    return trimToUndefined(answer);
+  }
+  if (Array.isArray(answer)) {
+    return trimToUndefined(answer.find((entry) => typeof entry === "string"));
+  }
+  return undefined;
+}
+
 export const PLAIN_PI_EXTENSION_THEME = {
-  fg(_color: string, text: string): string {
+  fg(_color: string, text: string) {
     return text;
   },
-  bg(_color: string, text: string): string {
+  bg(_color: string, text: string) {
     return text;
   },
-  bold(text: string): string {
+  bold(text: string) {
     return text;
   },
-  italic(text: string): string {
+  italic(text: string) {
     return text;
   },
-  underline(text: string): string {
+  underline(text: string) {
     return text;
   },
-  inverse(text: string): string {
+  inverse(text: string) {
     return text;
   },
-  strikethrough(text: string): string {
+  strikethrough(text: string) {
     return text;
   },
-  getThinkingBorderColor(_level: string): (text: string) => string {
-    return (text) => text;
+  getFgAnsi() {
+    return "";
   },
-} as const;
+  getBgAnsi() {
+    return "";
+  },
+  getColorMode() {
+    return "truecolor";
+  },
+  getThinkingBorderColor() {
+    return (text: string) => text;
+  },
+  getBashModeBorderColor() {
+    return (text: string) => text;
+  },
+} as unknown as ExtensionUIContext["theme"];
 
 const makePiAdapter = (options?: PiAdapterLiveOptions) =>
   Effect.gen(function* () {
@@ -134,11 +864,25 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         ? yield* makeEventNdjsonLogger(options.nativeEventLogPath, { stream: "native" })
         : undefined);
 
-    const getModelRegistry = (agentDir: string): ModelRegistry => {
+    const loadPiSdk = (method: string) =>
+      Effect.tryPromise({
+        try: () => loadPiCodingAgentModule(),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method,
+            detail: toMessage(cause, "Failed to load Pi SDK."),
+            cause,
+          }),
+      });
+
+    const getModelRegistry = async (
+      agentDir: string,
+      piSdk: Pick<PiCodingAgentModule, "AuthStorage" | "ModelRegistry">,
+    ): Promise<ModelRegistry> => {
       const existing = modelRegistries.get(agentDir);
       if (existing) return existing;
-      const authStorage = AuthStorage.create(path.join(agentDir, "auth.json"));
-      const registry = ModelRegistry.create(authStorage, path.join(agentDir, "models.json"));
+      const { registry } = createPiModelRegistry(agentDir, piSdk);
       modelRegistries.set(agentDir, registry);
       return registry;
     };
@@ -191,6 +935,270 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       } satisfies ProviderRuntimeEvent);
     };
 
+    const resolvePiExtensionUserInput = (
+      context: PiSessionContext,
+      requestId: ApprovalRequestId,
+      answers: ProviderUserInputAnswers,
+    ) => {
+      const pending = context.pendingUserInputs.get(requestId);
+      if (!pending) return false;
+      pending.resolve(answers);
+      return true;
+    };
+
+    const requestPiExtensionUserInput = (
+      context: PiSessionContext,
+      input: {
+        readonly method: string;
+        readonly question: UserInputQuestion;
+        readonly opts?: Parameters<ExtensionUIContext["select"]>[2];
+        readonly rawPayload?: Record<string, unknown>;
+      },
+    ): Promise<ProviderUserInputAnswers> => {
+      if (context.stopped || input.opts?.signal?.aborted) {
+        return Promise.resolve({});
+      }
+
+      const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
+      const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
+
+      return new Promise((resolve) => {
+        let settled = false;
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        let abort: () => void = () => undefined;
+
+        const cleanup = () => {
+          if (timeoutId !== undefined) {
+            clearTimeout(timeoutId);
+            timeoutId = undefined;
+          }
+          input.opts?.signal?.removeEventListener("abort", abort);
+        };
+        const finish = (answers: ProviderUserInputAnswers) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          context.pendingUserInputs.delete(requestId);
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            type: "user-input.resolved",
+            requestId: runtimeRequestId,
+            payload: { answers },
+            raw: {
+              source: "pi.sdk.event",
+              method: `${input.method}/answered`,
+              payload: { requestId, answers },
+            },
+          } satisfies ProviderRuntimeEvent);
+          resolve(answers);
+        };
+        abort = () => finish({});
+
+        context.pendingUserInputs.set(requestId, { resolve: finish });
+        if (typeof input.opts?.timeout === "number" && input.opts.timeout > 0) {
+          timeoutId = setTimeout(abort, input.opts.timeout);
+        }
+        input.opts?.signal?.addEventListener("abort", abort, { once: true });
+
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          type: "user-input.requested",
+          requestId: runtimeRequestId,
+          payload: { questions: [input.question] },
+          raw: {
+            source: "pi.sdk.event",
+            method: input.method,
+            payload: input.rawPayload ?? { requestId, question: input.question },
+          },
+        } satisfies ProviderRuntimeEvent);
+      });
+    };
+
+    // Bridges the common Pi extension UI primitives onto Synara's existing
+    // pending user-input flow; terminal/TUI-only APIs remain no-op by design.
+    const makePiExtensionUIContext = (context: PiSessionContext): ExtensionUIContext => {
+      const unsupportedWarnings = new Set<string>();
+      const statusTexts = new Map<string, string>();
+      let workingMessage: string | undefined;
+      const warnUnsupported = (method: string) => {
+        if (unsupportedWarnings.has(method)) return;
+        unsupportedWarnings.add(method);
+        offerRuntimeEvent({
+          ...makeEventBase(context, { includeTurnId: false }),
+          type: "runtime.warning",
+          payload: {
+            message: `Pi extension UI API '${method}' is not supported in Synara yet.`,
+            detail: { method },
+          },
+          raw: {
+            source: "pi.sdk.event",
+            method: "extension/ui-unsupported",
+            payload: { method },
+          },
+        } satisfies ProviderRuntimeEvent);
+      };
+      const emitPluginProgress = (summary: string) => {
+        const normalized = trimToUndefined(summary);
+        if (!normalized) return;
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          type: "tool.progress",
+          payload: { toolName: "Pi plugin", summary: normalized },
+          raw: {
+            source: "pi.sdk.event",
+            method: "extension/ui-progress",
+            payload: { summary: normalized },
+          },
+        } satisfies ProviderRuntimeEvent);
+      };
+
+      const uiContext: ExtensionUIContext = {
+        async select(title, options, opts) {
+          const questionId = "selection";
+          const optionMappings = makePiUserInputOptions(options);
+          const answers = await requestPiExtensionUserInput(context, {
+            method: "extension/ui/select",
+            opts,
+            question: {
+              id: questionId,
+              header: trimToUndefined(title) ?? "Pi plugin",
+              question: trimToUndefined(title) ?? "Choose an option.",
+              options: optionMappings.map((mapping) => mapping.option),
+            },
+            rawPayload: { title, options },
+          });
+          const answer = firstPiUserInputAnswer(answers, questionId);
+          return optionMappings.find((mapping) => mapping.option.label === answer)?.value;
+        },
+        async confirm(title, message, opts) {
+          const questionId = "confirmation";
+          const answers = await requestPiExtensionUserInput(context, {
+            method: "extension/ui/confirm",
+            opts,
+            question: {
+              id: questionId,
+              header: trimToUndefined(title) ?? "Pi plugin",
+              question:
+                trimToUndefined(message) ?? trimToUndefined(title) ?? "Confirm this action?",
+              options: [makePiUserInputOption("Yes"), makePiUserInputOption("No")],
+            },
+            rawPayload: { title, message },
+          });
+          return firstPiUserInputAnswer(answers, questionId) === "Yes";
+        },
+        async input(title, placeholder, opts) {
+          const questionId = "input";
+          const answers = await requestPiExtensionUserInput(context, {
+            method: "extension/ui/input",
+            opts,
+            question: {
+              id: questionId,
+              header: trimToUndefined(title) ?? "Pi plugin",
+              question:
+                trimToUndefined(placeholder) ?? trimToUndefined(title) ?? "Type a response.",
+              options: [],
+            },
+            rawPayload: { title, placeholder },
+          });
+          return firstPiUserInputAnswer(answers, questionId);
+        },
+        notify(message, type) {
+          const normalized = trimToUndefined(message);
+          if (!normalized) return;
+          if (type === "warning" || type === "error") {
+            offerRuntimeEvent({
+              ...makeEventBase(context),
+              type: "runtime.warning",
+              payload: { message: normalized, detail: { type: type ?? "info" } },
+              raw: {
+                source: "pi.sdk.event",
+                method: "extension/ui/notify",
+                payload: { message: normalized, type },
+              },
+            } satisfies ProviderRuntimeEvent);
+            return;
+          }
+          emitPluginProgress(normalized);
+        },
+        onTerminalInput() {
+          warnUnsupported("onTerminalInput");
+          return () => undefined;
+        },
+        setStatus(key, text) {
+          const normalizedKey = trimToUndefined(key) ?? "status";
+          const normalizedText = trimToUndefined(text);
+          if (!normalizedText) {
+            statusTexts.delete(normalizedKey);
+            return;
+          }
+          if (statusTexts.get(normalizedKey) === normalizedText) return;
+          statusTexts.set(normalizedKey, normalizedText);
+          emitPluginProgress(`${normalizedKey}: ${normalizedText}`);
+        },
+        setWorkingMessage(message) {
+          const normalizedMessage = trimToUndefined(message);
+          if (!normalizedMessage || normalizedMessage === workingMessage) return;
+          workingMessage = normalizedMessage;
+          emitPluginProgress(normalizedMessage);
+        },
+        setWorkingVisible() {},
+        setWorkingIndicator() {},
+        setHiddenThinkingLabel() {},
+        setWidget() {
+          warnUnsupported("setWidget");
+        },
+        setFooter() {
+          warnUnsupported("setFooter");
+        },
+        setHeader() {
+          warnUnsupported("setHeader");
+        },
+        setTitle(title) {
+          if (title) emitPluginProgress(title);
+        },
+        async custom() {
+          warnUnsupported("custom");
+          return undefined as never;
+        },
+        pasteToEditor() {
+          warnUnsupported("pasteToEditor");
+        },
+        setEditorText() {
+          warnUnsupported("setEditorText");
+        },
+        getEditorText() {
+          return "";
+        },
+        editor(title, prefill) {
+          return uiContext.input(title, prefill);
+        },
+        addAutocompleteProvider() {
+          warnUnsupported("addAutocompleteProvider");
+        },
+        setEditorComponent() {
+          warnUnsupported("setEditorComponent");
+        },
+        getEditorComponent() {
+          return undefined;
+        },
+        theme: PLAIN_PI_EXTENSION_THEME,
+        getAllThemes() {
+          return [];
+        },
+        getTheme() {
+          return undefined;
+        },
+        setTheme() {
+          return { success: false, error: "Synara does not expose Pi themes." };
+        },
+        getToolsExpanded() {
+          return false;
+        },
+        setToolsExpanded() {},
+      };
+      return uiContext;
+    };
+
     const completePromptRejection = (context: PiSessionContext, turnId: TurnId, cause: unknown) => {
       if (context.activeTurnId !== turnId) {
         return;
@@ -240,32 +1248,337 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const disposeSessionContext = async (context: PiSessionContext) => {
       context.unsubscribe?.();
       context.unsubscribe = undefined;
+      for (const pending of Array.from(context.pendingUserInputs.values())) {
+        pending.resolve({});
+      }
+      context.pendingUserInputs.clear();
       context.stopped = true;
       await context.runtime.dispose();
     };
 
-    const { handleSessionEvent } = makePiEventHandler({
-      makeEventBase,
-      offerRuntimeEvent,
-      offerRuntimeError,
-      recordItem,
-    });
+    const handleMessageUpdate = (
+      context: PiSessionContext,
+      event: Extract<AgentSessionEvent, { type: "message_update" }>,
+    ) => {
+      if (event.message.role !== "assistant") return;
+      const update = event.assistantMessageEvent;
+      if (update.type === "text_delta") {
+        if (!context.activeAssistantItemId) {
+          context.activeAssistantItemId = RuntimeItemId.makeUnsafe(
+            `pi-assistant-${crypto.randomUUID()}`,
+          );
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            itemId: context.activeAssistantItemId,
+            type: "item.started",
+            payload: { itemType: "assistant_message", status: "inProgress", title: "Assistant" },
+            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+          } satisfies ProviderRuntimeEvent);
+        }
+        recordItem(context, { type: "assistant_message", delta: update.delta });
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          itemId: context.activeAssistantItemId,
+          type: "content.delta",
+          payload: {
+            streamKind: "assistant_text",
+            delta: update.delta,
+            contentIndex: update.contentIndex,
+          },
+          raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+        } satisfies ProviderRuntimeEvent);
+        return;
+      }
+      if (update.type === "thinking_delta") {
+        if (!context.activeReasoningItemId) {
+          context.activeReasoningItemId = RuntimeItemId.makeUnsafe(
+            `pi-reasoning-${crypto.randomUUID()}`,
+          );
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            itemId: context.activeReasoningItemId,
+            type: "item.started",
+            payload: { itemType: "reasoning", status: "inProgress", title: "Reasoning" },
+            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+          } satisfies ProviderRuntimeEvent);
+        }
+        recordItem(context, { type: "reasoning", delta: update.delta });
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          itemId: context.activeReasoningItemId,
+          type: "content.delta",
+          payload: {
+            streamKind: "reasoning_text",
+            delta: update.delta,
+            contentIndex: update.contentIndex,
+          },
+          raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+        } satisfies ProviderRuntimeEvent);
+      }
+    };
+
+    const handleSessionEvent = (context: PiSessionContext, event: AgentSessionEvent) => {
+      switch (event.type) {
+        case "agent_start":
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            type: "thread.state.changed",
+            payload: { state: "active" },
+            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+          } satisfies ProviderRuntimeEvent);
+          return;
+        case "turn_start":
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            type: "turn.started",
+            payload: {
+              ...(context.runtime.session.model
+                ? {
+                    model: `${context.runtime.session.model.provider}/${context.runtime.session.model.id}`,
+                  }
+                : {}),
+              effort: context.runtime.session.thinkingLevel,
+            },
+            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+          } satisfies ProviderRuntimeEvent);
+          return;
+        case "message_update":
+          handleMessageUpdate(context, event);
+          return;
+        case "tool_execution_start": {
+          const itemId = RuntimeItemId.makeUnsafe(`pi-tool-${event.toolCallId}`);
+          const tracked: PiTrackedToolCall = {
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            args: event.args,
+            itemId,
+            itemType: toolItemType(event.toolName),
+          };
+          context.activeToolItems.set(event.toolCallId, tracked);
+          const title = toolTitle(event.toolName, event.args);
+          recordItem(context, {
+            type: "tool_call",
+            status: "started",
+            toolName: event.toolName,
+            args: event.args,
+          });
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            itemId,
+            providerRefs: { providerItemId: ProviderItemId.makeUnsafe(event.toolCallId) },
+            type: "item.started",
+            payload: {
+              itemType: tracked.itemType,
+              status: "inProgress",
+              title,
+              data: toolLifecycleData({
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+                args: event.args,
+              }),
+            },
+            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+          } satisfies ProviderRuntimeEvent);
+          return;
+        }
+        case "tool_execution_update": {
+          const tracked = context.activeToolItems.get(event.toolCallId);
+          if (!tracked) return;
+          const detail = textFromToolResult(event.partialResult);
+          recordItem(context, {
+            type: "tool_call",
+            status: "updated",
+            toolName: event.toolName,
+            output: detail,
+          });
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            itemId: tracked.itemId,
+            providerRefs: { providerItemId: ProviderItemId.makeUnsafe(event.toolCallId) },
+            type: "item.updated",
+            payload: {
+              itemType: tracked.itemType,
+              status: "inProgress",
+              title: toolTitle(event.toolName, tracked.args),
+              ...(detail ? { detail } : {}),
+              data: toolLifecycleData({
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+                args: tracked.args,
+                partialResult: event.partialResult,
+              }),
+            },
+            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+          } satisfies ProviderRuntimeEvent);
+          return;
+        }
+        case "tool_execution_end": {
+          const tracked = context.activeToolItems.get(event.toolCallId) ?? {
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            args: undefined,
+            itemId: RuntimeItemId.makeUnsafe(`pi-tool-${event.toolCallId}`),
+            itemType: toolItemType(event.toolName),
+          };
+          context.activeToolItems.delete(event.toolCallId);
+          const detail = textFromToolResult(event.result);
+          recordItem(context, {
+            type: "tool_call",
+            status: event.isError ? "failed" : "completed",
+            toolName: event.toolName,
+            output: detail,
+            result: event.result,
+          });
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            itemId: tracked.itemId,
+            providerRefs: { providerItemId: ProviderItemId.makeUnsafe(event.toolCallId) },
+            type: "item.completed",
+            payload: {
+              itemType: tracked.itemType,
+              status: event.isError ? "failed" : "completed",
+              title: toolTitle(event.toolName, tracked.args),
+              ...(detail ? { detail } : {}),
+              data: toolLifecycleData({
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+                args: tracked.args,
+                result: event.result,
+                isError: event.isError,
+              }),
+            },
+            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+          } satisfies ProviderRuntimeEvent);
+          return;
+        }
+        case "compaction_start": {
+          const itemId = RuntimeItemId.makeUnsafe(`pi-compaction-${crypto.randomUUID()}`);
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            itemId,
+            type: "item.updated",
+            payload: {
+              itemType: "context_compaction",
+              status: "inProgress",
+              title: "Compacting context",
+            },
+            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+          } satisfies ProviderRuntimeEvent);
+          return;
+        }
+        case "compaction_end": {
+          const itemId = RuntimeItemId.makeUnsafe(`pi-compaction-${crypto.randomUUID()}`);
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            itemId,
+            type: "item.completed",
+            payload: {
+              itemType: "context_compaction",
+              status: event.aborted ? "failed" : "completed",
+              title: "Context compacted",
+              data: event,
+            },
+            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+          } satisfies ProviderRuntimeEvent);
+          return;
+        }
+        case "agent_end": {
+          const stats = context.runtime.session.getSessionStats();
+          const usage = normalizeTokenUsage(stats, context.runtime.session.model?.contextWindow);
+          context.lastKnownTokenUsage = usage;
+          const turnId = context.activeTurnId;
+          const errorMessage = context.runtime.session.agent.state.errorMessage;
+          const failure = errorMessage ? classifyPiTurnFailure(errorMessage) : undefined;
+          const leafId = context.runtime.session.sessionManager.getLeafId();
+          const turn = turnId
+            ? context.turns.find((candidate) => candidate.id === turnId)
+            : undefined;
+          if (turn) turn.leafId = leafId;
+          if (context.activeAssistantItemId) {
+            offerRuntimeEvent({
+              ...makeEventBase(context),
+              itemId: context.activeAssistantItemId,
+              type: "item.completed",
+              payload: {
+                itemType: "assistant_message",
+                status: errorMessage ? "failed" : "completed",
+                title: "Assistant",
+              },
+              raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+            } satisfies ProviderRuntimeEvent);
+          }
+          if (context.activeReasoningItemId) {
+            offerRuntimeEvent({
+              ...makeEventBase(context),
+              itemId: context.activeReasoningItemId,
+              type: "item.completed",
+              payload: {
+                itemType: "reasoning",
+                status: errorMessage ? "failed" : "completed",
+                title: "Reasoning",
+              },
+              raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+            } satisfies ProviderRuntimeEvent);
+          }
+          if (usage) {
+            offerRuntimeEvent({
+              ...makeEventBase(context),
+              type: "thread.token-usage.updated",
+              payload: { usage },
+              raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+            } satisfies ProviderRuntimeEvent);
+          }
+          if (errorMessage && failure?.state === "failed") {
+            offerRuntimeError(context, {
+              message: errorMessage,
+              method: "prompt",
+              messageType: event.type,
+              cause: event,
+            });
+          }
+          const completionBase = makeEventBase(context);
+          context.activeTurnId = undefined;
+          context.activeAssistantItemId = undefined;
+          context.activeReasoningItemId = undefined;
+          context.activeToolItems.clear();
+          context.session = makeSessionSnapshot(context);
+          offerRuntimeEvent({
+            ...completionBase,
+            type: "turn.completed",
+            payload:
+              errorMessage && failure
+                ? {
+                    state: failure.state,
+                    stopReason: failure.stopReason,
+                    errorMessage,
+                    usage: stats,
+                  }
+                : { state: "completed", stopReason: null, usage: stats },
+            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+          } satisfies ProviderRuntimeEvent);
+          return;
+        }
+        default:
+          return;
+      }
+    };
 
     const createSdkRuntime = async (input: {
+      sdk: PiCodingAgentModule;
       cwd: string;
       agentDir: string;
       sessionManager: SessionManager;
       modelId?: string;
       thinkingLevel?: ThinkingLevel;
     }) => {
-      const registry = getModelRegistry(input.agentDir);
+      const registry = await getModelRegistry(input.agentDir, input.sdk);
       const createRuntime: CreateAgentSessionRuntimeFactory = async ({
         cwd,
         agentDir,
         sessionManager,
         sessionStartEvent,
       }) => {
-        const services = await createAgentSessionServices({
+        const services = await input.sdk.createAgentSessionServices({
           cwd,
           agentDir,
           modelRegistry: registry,
@@ -277,7 +1590,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           );
         }
         return {
-          ...(await createAgentSessionFromServices({
+          ...(await input.sdk.createAgentSessionFromServices({
             services,
             sessionManager,
             ...(sessionStartEvent ? { sessionStartEvent } : {}),
@@ -288,23 +1601,23 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           diagnostics: services.diagnostics,
         };
       };
-      const runtime = await createAgentSessionRuntime(createRuntime, {
+      const runtime = await input.sdk.createAgentSessionRuntime(createRuntime, {
         cwd: input.sessionManager.getCwd(),
         agentDir: input.agentDir,
         sessionManager: input.sessionManager,
       });
-      await runtime.session.bindExtensions({});
       return { runtime, modelRegistry: runtime.services.modelRegistry };
     };
 
     const startSession: PiAdapterShape["startSession"] = (input) =>
       Effect.gen(function* () {
         const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
-        const agentDir = makeAgentDir(input.providerOptions?.pi?.agentDir);
+        const piSdk = yield* loadPiSdk("session/start");
+        const agentDir = makeAgentDir(input.providerOptions?.pi?.agentDir, piSdk);
         const sessionFile = extractResumeSessionFile(input.resumeCursor);
         const sessionManager = sessionFile
-          ? SessionManager.open(sessionFile, undefined, cwd)
-          : SessionManager.create(cwd);
+          ? piSdk.SessionManager.open(sessionFile, undefined, cwd)
+          : piSdk.SessionManager.create(cwd);
         const modelId =
           input.modelSelection?.provider === "pi" ? input.modelSelection.model : undefined;
         const thinkingLevel =
@@ -328,6 +1641,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const { runtime, modelRegistry } = yield* Effect.tryPromise({
           try: () =>
             createSdkRuntime({
+              sdk: piSdk,
               cwd,
               agentDir,
               sessionManager,
@@ -367,6 +1681,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           activeAssistantItemId: undefined,
           activeReasoningItemId: undefined,
           activeToolItems: new Map(),
+          pendingUserInputs: new Map(),
           stopped: false,
           lastKnownTokenUsage: undefined,
           unsubscribe: undefined,
@@ -375,6 +1690,28 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           handleSessionEvent(context, event),
         );
         sessions.set(input.threadId, context);
+        yield* Effect.tryPromise({
+          try: () =>
+            runtime.session.bindExtensions({ uiContext: makePiExtensionUIContext(context) }),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "extension/bind",
+              detail: toMessage(cause, "Failed to bind Pi extensions."),
+              cause,
+            }),
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.gen(function* () {
+              sessions.delete(input.threadId);
+              yield* Effect.tryPromise({
+                try: () => disposeSessionContext(context),
+                catch: () => error,
+              }).pipe(Effect.catch(() => Effect.void));
+              return yield* Effect.fail(error);
+            }),
+          ),
+        );
         const loadedExtensions = runtime.session.resourceLoader.getExtensions().extensions;
         if (loadedExtensions.length > 0) {
           const extensionNames = loadedExtensions.map(extensionDisplayName);
@@ -383,7 +1720,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             type: "runtime.warning",
             payload: {
               message:
-                "Pi extensions are loaded, but Synara does not yet support Pi extension UI APIs. Non-UI extension behavior should work, but extensions that call ctx.ui.* for prompts, widgets, confirmations, or status updates may not behave correctly.",
+                "Pi extensions are loaded with Synara's limited UI bridge. select/confirm/input/notify/status are supported; TUI-only widgets and editor hooks are ignored.",
               detail: {
                 extensionCount: loadedExtensions.length,
                 extensions: extensionNames,
@@ -391,7 +1728,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             },
             raw: {
               source: "pi.sdk.event",
-              method: "extension/ui-unsupported-warning",
+              method: "extension/ui-limited-warning",
               payload: { extensionCount: loadedExtensions.length, extensions: extensionNames },
             },
           } satisfies ProviderRuntimeEvent);
@@ -426,7 +1763,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
     }) =>
       Effect.gen(function* () {
-        const text = input.input ?? "";
+        const text =
+          appendFileAttachmentsPromptBlock({
+            text: input.input,
+            attachments: input.attachments,
+            attachmentsDir: serverConfig.attachmentsDir,
+            include: "all-files",
+          }) ?? "";
         const images = yield* Effect.forEach(
           input.attachments ?? [],
           (attachment) =>
@@ -642,6 +1985,22 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         }),
       );
 
+    const respondToUserInput: PiAdapterShape["respondToUserInput"] = (
+      threadId,
+      requestId,
+      answers,
+    ) =>
+      Effect.gen(function* () {
+        const context = yield* requireSession(threadId);
+        if (!resolvePiExtensionUserInput(context, requestId, answers)) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "user-input/respond",
+            detail: `Unknown pending Pi user-input request: ${requestId}`,
+          });
+        }
+      });
+
     const stopSession: PiAdapterShape["stopSession"] = (threadId) =>
       requireSession(threadId).pipe(
         Effect.flatMap((context) =>
@@ -751,16 +2110,24 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const listModels: NonNullable<PiAdapterShape["listModels"]> = (input) =>
       Effect.tryPromise({
         try: async () => {
-          const agentDir = makeAgentDir(input.agentDir);
-          const registry = getModelRegistry(agentDir);
-          registry.refresh();
-          const models = registry.getAvailable().map((model) => {
+          const piSdk = await loadPiCodingAgentModule();
+          const agentDir = makeAgentDir(input.agentDir, piSdk);
+          const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
+          const { authStorage, registry } = createPiModelRegistry(agentDir, piSdk);
+          const services = await piSdk.createAgentSessionServices({
+            cwd,
+            agentDir,
+            authStorage,
+            modelRegistry: registry,
+          });
+          const extensionCount = services.resourceLoader.getExtensions().extensions.length;
+          const models = services.modelRegistry.getAvailable().map((model) => {
             const supportedThinkingOptions = getPiSupportedThinkingOptions(model);
             return {
               slug: `${model.provider}/${model.id}`,
               name: model.name,
               upstreamProviderId: model.provider,
-              upstreamProviderName: registry.getProviderDisplayName(model.provider),
+              upstreamProviderName: services.modelRegistry.getProviderDisplayName(model.provider),
               ...(supportedThinkingOptions.length > 0
                 ? {
                     supportedReasoningEfforts: supportedThinkingOptions.map((option) => ({
@@ -777,7 +2144,11 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                 : {}),
             };
           });
-          return { models, source: "pi.sdk", cached: false } satisfies ProviderListModelsResult;
+          return {
+            models,
+            source: extensionCount > 0 ? "pi.sdk+extensions" : "pi.sdk",
+            cached: false,
+          } satisfies ProviderListModelsResult;
         },
         catch: (cause) =>
           new ProviderAdapterRequestError({
@@ -798,16 +2169,24 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           if (active && input.forceReload) {
             await active.runtime.session.reload();
           }
-          const services = loader
-            ? undefined
-            : await createAgentSessionServices({
-                cwd: input.cwd,
-                agentDir: makeAgentDir(input.agentDir),
-              });
+          let services:
+            | Awaited<ReturnType<PiCodingAgentModule["createAgentSessionServices"]>>
+            | undefined;
+          if (!loader) {
+            const piSdk = await loadPiCodingAgentModule();
+            services = await piSdk.createAgentSessionServices({
+              cwd: input.cwd,
+              agentDir: makeAgentDir(input.agentDir, piSdk),
+            });
+          }
           if (services && input.forceReload) {
             await services.resourceLoader.reload();
           }
-          const result = (loader ?? services!.resourceLoader).getSkills();
+          const resourceLoader = loader ?? services?.resourceLoader;
+          if (!resourceLoader) {
+            throw new Error("Failed to create Pi resource loader.");
+          }
+          const result = resourceLoader.getSkills();
           return {
             skills: result.skills.map((skill) => {
               const description = trimToUndefined(skill.description);
@@ -868,9 +2247,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               cached: false,
             } satisfies ProviderListCommandsResult;
           }
-          const services = await createAgentSessionServices({
+          const piSdk = await loadPiCodingAgentModule();
+          const services = await piSdk.createAgentSessionServices({
             cwd: input.cwd,
-            agentDir: makeAgentDir(input.agentDir),
+            agentDir: makeAgentDir(input.agentDir, piSdk),
           });
           if (input.forceReload) {
             await services.resourceLoader.reload();
@@ -940,7 +2320,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       steerTurn,
       interruptTurn,
       respondToRequest: (threadId) => respondUnsupported(threadId, "request/respond"),
-      respondToUserInput: (threadId) => respondUnsupported(threadId, "user-input/respond"),
+      respondToUserInput,
       stopSession,
       listSessions,
       hasSession,

@@ -2,7 +2,6 @@ import { Effect, Layer, Option, Ref, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import type { CursorModelSelection, ProviderStartOptions } from "@t3tools/contracts";
-import { ReviewFinding } from "@t3tools/contracts";
 import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 
@@ -14,45 +13,33 @@ import {
 import { TextGenerationError } from "../Errors.ts";
 import {
   CursorTextGeneration,
+  type TextGenerationOperation,
   type TextGenerationShape,
   TextGeneration,
 } from "../Services/TextGeneration.ts";
 import {
+  buildAutomationIntentPrompt,
+  buildAutomationCompletionEvaluationPrompt,
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
-  buildReviewFindingsPrompt,
   buildThreadRecapPrompt,
   buildThreadTitlePrompt,
   decodeStructuredTextGenerationOutput,
   type RawTextFallback,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
-  sanitizePrTitle,
   sanitizeThreadRecap,
+  sanitizePrTitle,
 } from "../textGenerationShared.ts";
 
 const CURSOR_TEXT_GENERATION_LABEL = "Cursor Agent";
 
 const CURSOR_TIMEOUT_MS = 180_000;
 
-const ReviewFindingsOutputSchema = Schema.Struct({
-  summary: Schema.String,
-  findings: Schema.Array(ReviewFinding),
-});
-
-type CursorTextGenerationOperation =
-  | "generateCommitMessage"
-  | "generatePrContent"
-  | "generateDiffSummary"
-  | "generateReviewFindings"
-  | "generateBranchName"
-  | "generateThreadTitle"
-  | "generateThreadRecap";
-
 function mapCursorAcpError(
-  operation: CursorTextGenerationOperation,
+  operation: TextGenerationOperation,
   detail: string,
   cause: unknown,
 ): TextGenerationError {
@@ -110,7 +97,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     modelSelection,
     providerOptions,
   }: {
-    operation: CursorTextGenerationOperation;
+    operation: TextGenerationOperation;
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -304,37 +291,6 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     };
   });
 
-  const generateReviewFindings: TextGenerationShape["generateReviewFindings"] = Effect.fn(
-    "CursorTextGeneration.generateReviewFindings",
-  )(function* (input) {
-    const modelSelection = resolveCursorModelSelection(input);
-    if (!modelSelection) {
-      return yield* new TextGenerationError({
-        operation: "generateReviewFindings",
-        detail: "Invalid Cursor model selection.",
-      });
-    }
-
-    const { prompt } = buildReviewFindingsPrompt({
-      patch: input.patch,
-      ...(input.prTitle ? { prTitle: input.prTitle } : {}),
-      ...(input.prBody ? { prBody: input.prBody } : {}),
-    });
-    const generated = yield* runCursorJson({
-      operation: "generateReviewFindings",
-      cwd: input.cwd,
-      prompt,
-      outputSchemaJson: ReviewFindingsOutputSchema,
-      modelSelection,
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-    });
-
-    return {
-      summary: generated.summary,
-      findings: generated.findings,
-    };
-  });
-
   const generateBranchName: TextGenerationShape["generateBranchName"] = Effect.fn(
     "CursorTextGeneration.generateBranchName",
   )(function* (input) {
@@ -426,14 +382,62 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     };
   });
 
+  const generateAutomationIntent: TextGenerationShape["generateAutomationIntent"] = Effect.fn(
+    "CursorTextGeneration.generateAutomationIntent",
+  )(function* (input) {
+    const modelSelection = resolveCursorModelSelection(input);
+    if (!modelSelection) {
+      return yield* new TextGenerationError({
+        operation: "generateAutomationIntent",
+        detail: "Invalid Cursor model selection.",
+      });
+    }
+
+    const { prompt, outputSchemaJson } = buildAutomationIntentPrompt({
+      message: input.message,
+      ...(input.defaultMode ? { defaultMode: input.defaultMode } : {}),
+      nowIso: input.nowIso,
+    });
+    return yield* runCursorJson({
+      operation: "generateAutomationIntent",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      modelSelection,
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
+  });
+
+  const evaluateAutomationCompletion: TextGenerationShape["evaluateAutomationCompletion"] =
+    Effect.fn("CursorTextGeneration.evaluateAutomationCompletion")(function* (input) {
+      const modelSelection = resolveCursorModelSelection(input);
+      if (!modelSelection) {
+        return yield* new TextGenerationError({
+          operation: "evaluateAutomationCompletion",
+          detail: "Invalid Cursor model selection.",
+        });
+      }
+
+      const { prompt, outputSchemaJson } = buildAutomationCompletionEvaluationPrompt(input);
+      return yield* runCursorJson({
+        operation: "evaluateAutomationCompletion",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson,
+        modelSelection,
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      });
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateDiffSummary,
-    generateReviewFindings,
     generateBranchName,
     generateThreadTitle,
     generateThreadRecap,
+    generateAutomationIntent,
+    evaluateAutomationCompletion,
   } satisfies TextGenerationShape;
 });
 

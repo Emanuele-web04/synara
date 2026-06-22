@@ -28,7 +28,7 @@ export const KANBAN_FALLBACK_DRAFT_TITLE = "New thread";
 /** Pending composer content for one thread, projected from the composer draft store. */
 export interface KanbanComposerDraftSnapshot {
   prompt: string;
-  /** Images, terminal contexts, or selections attached to the composer draft. */
+  /** Files, images, terminal contexts, or references attached to the composer draft. */
   hasAttachments: boolean;
   provider: ProviderKind | null;
 }
@@ -36,6 +36,7 @@ export interface KanbanComposerDraftSnapshot {
 type KanbanComposerDraftSource = Pick<
   ComposerThreadDraftState,
   | "prompt"
+  | "files"
   | "images"
   | "persistedAttachments"
   | "terminalContexts"
@@ -55,6 +56,7 @@ export function buildKanbanComposerDraftSnapshot(
     prompt: draft.prompt,
     hasAttachments:
       draft.images.length > 0 ||
+      draft.files.length > 0 ||
       draft.persistedAttachments.length > 0 ||
       draft.terminalContexts.some((context) => context.text.trim().length > 0) ||
       draft.assistantSelections.length > 0 ||

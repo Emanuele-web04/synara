@@ -13,6 +13,7 @@ import type {
   StatsGetProfileStatsInput,
   StatsGetProfileTokenStatsInput,
 } from "@t3tools/contracts";
+import { isBuiltInComposerSlashCommandName } from "@t3tools/shared/composerSlashCommands";
 import { Effect, Layer, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -34,6 +35,7 @@ const PROVIDER_KINDS = new Set<ProviderKind>([
 type HeatmapCell = ProfileStats["activity"]["heatmap"][number];
 type ProviderModelUsage = ProfileStats["providerModels"][number];
 type SkillUsage = ProfileStats["skills"][number];
+type MostWorkedProject = ProfileStats["mostWorkedProject"];
 
 interface CountRow {
   readonly count: number;
@@ -50,17 +52,35 @@ interface TurnInsightRow extends CountRow {
   readonly reasoning: string | null;
 }
 
-interface SkillUsageRow {
-  readonly name: string | null;
-  readonly displayName: string | null;
-  readonly kind: string | null;
-  readonly runCount: number;
+interface SkillUsageMessageRow {
+  readonly messageId: string | null;
+  readonly text: string | null;
+  readonly skillsJson: string | null;
+  readonly mentionsJson: string | null;
+}
+
+interface MostWorkedProjectRow {
+  readonly projectId: string | null;
+  readonly title: string | null;
+  readonly workspaceRoot: string | null;
+  readonly promptCount: number;
+  readonly threadCount: number;
+  readonly activeDays: number;
+  readonly lastWorkedAt: string | null;
 }
 
 interface TokenDayRow {
   readonly day: string | null;
   readonly provider: string | null;
   readonly tokens: number;
+}
+
+type UsageKind = "skill" | "agent";
+
+interface UsageCount {
+  name: string;
+  kind: UsageKind;
+  runCount: number;
 }
 
 // ── Pure helpers ───────────────────────────────────────────────────────
@@ -93,6 +113,178 @@ function num(value: unknown): number {
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+const PROFILE_SKILL_NAME_TOKEN =
+  "[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?(?::[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?)*";
+const PROFILE_SKILL_TOKEN_REGEX = new RegExp(
+  `(^|[\\s([{<])([$/])(${PROFILE_SKILL_NAME_TOKEN})(?=$|[\\s.,!?;)\\]}>])`,
+  "giu",
+);
+const PROFILE_TRAILING_PROMPT_BLOCK_PATTERNS = [
+  /\n*<pasted_text>\n[\s\S]*?\n<\/pasted_text>\s*$/u,
+  /\n*<file_comments>\n[\s\S]*?\n<\/file_comments>\s*$/u,
+  /\n*<terminal_context>\n[\s\S]*?\n<\/terminal_context>\s*$/u,
+  /\n*<assistant_selection>\n[\s\S]*?\n<\/assistant_selection>\s*$/u,
+] as const;
+
+function normalizeUsageName(value: unknown): string | null {
+  const name = nonEmptyString(value);
+  if (!name) {
+    return null;
+  }
+  const withoutPrefix = name.replace(/^[$/@]+/u, "").trim();
+  return withoutPrefix.length > 0 ? withoutPrefix : null;
+}
+
+function usageKey(kind: UsageKind, name: string): string {
+  return `${kind}\u0000${name.toLowerCase()}`;
+}
+
+function usageKindSortOrder(kind: UsageKind): number {
+  return kind === "skill" ? 0 : 1;
+}
+
+function isObviousNonSkillDollarToken(name: string): boolean {
+  return /^\d/u.test(name) || /^[A-Z_][A-Z0-9_]*$/u.test(name);
+}
+
+function stripProfileTrailingPromptBlocks(prompt: string): string {
+  let visiblePrompt = prompt;
+  let stripped = true;
+  while (stripped) {
+    stripped = false;
+    for (const pattern of PROFILE_TRAILING_PROMPT_BLOCK_PATTERNS) {
+      const nextPrompt = visiblePrompt.replace(pattern, "").replace(/\n+$/u, "");
+      if (nextPrompt !== visiblePrompt) {
+        visiblePrompt = nextPrompt;
+        stripped = true;
+        break;
+      }
+    }
+  }
+  return visiblePrompt;
+}
+
+function parseReferenceNames(json: string | null): string[] {
+  const value = nonEmptyString(json);
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.flatMap((entry) => {
+      if (entry && typeof entry === "object" && "name" in entry) {
+        const name = normalizeUsageName((entry as { readonly name?: unknown }).name);
+        return name ? [name] : [];
+      }
+      return [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function extractTextSkillNames(text: string | null): string[] {
+  const prompt = nonEmptyString(text);
+  if (!prompt) {
+    return [];
+  }
+  const visiblePrompt = stripProfileTrailingPromptBlocks(prompt);
+  if (visiblePrompt.trim().length === 0) {
+    return [];
+  }
+
+  const names: string[] = [];
+  PROFILE_SKILL_TOKEN_REGEX.lastIndex = 0;
+  for (const match of visiblePrompt.matchAll(PROFILE_SKILL_TOKEN_REGEX)) {
+    const leadingBoundary = match[1] ?? "";
+    const prefix = match[2] ?? "";
+    const rawName = match[3] ?? "";
+    // Serialized prompt blocks end with XML-style tags like </pasted_text>.
+    // Those slashes are structural delimiters, not user-invoked slash skills.
+    if (leadingBoundary === "<" && prefix === "/") {
+      continue;
+    }
+    if (prefix === "/" && isBuiltInComposerSlashCommandName(rawName)) {
+      continue;
+    }
+
+    const hasExplicitSkillPrefix = rawName.toLowerCase().startsWith("skill:");
+    const normalizedRawName = rawName.toLowerCase().startsWith("skill:")
+      ? rawName.slice("skill:".length)
+      : rawName;
+    const name = normalizeUsageName(normalizedRawName);
+    if (name) {
+      // `$...` also appears in shell snippets and prices. Keep the legacy
+      // text backfill, but avoid the most common non-skill dollar tokens.
+      if (prefix === "$" && !hasExplicitSkillPrefix && isObviousNonSkillDollarToken(name)) {
+        continue;
+      }
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+// Builds profile skill rows from every stored Synara user message. Structured
+// references stay authoritative, while text tokens backfill older or partial rows.
+export function aggregateProfileSkillUsageRows(
+  rows: ReadonlyArray<SkillUsageMessageRow>,
+): SkillUsage[] {
+  const counts = new Map<string, UsageCount>();
+
+  for (const row of rows) {
+    const messageUsages = new Map<string, { name: string; kind: UsageKind }>();
+    const addMessageUsage = (kind: UsageKind, rawName: string) => {
+      const name = normalizeUsageName(rawName);
+      if (!name) {
+        return;
+      }
+      const key = usageKey(kind, name);
+      if (!messageUsages.has(key)) {
+        messageUsages.set(key, { name, kind });
+      }
+    };
+
+    for (const name of parseReferenceNames(row.skillsJson)) {
+      addMessageUsage("skill", name);
+    }
+    for (const name of extractTextSkillNames(row.text)) {
+      addMessageUsage("skill", name);
+    }
+    for (const name of parseReferenceNames(row.mentionsJson)) {
+      addMessageUsage("agent", name);
+    }
+
+    for (const usage of messageUsages.values()) {
+      const key = usageKey(usage.kind, usage.name);
+      const existing = counts.get(key);
+      if (existing) {
+        existing.runCount += 1;
+      } else {
+        counts.set(key, { ...usage, runCount: 1 });
+      }
+    }
+  }
+
+  return [...counts.values()]
+    .toSorted(
+      (left, right) =>
+        right.runCount - left.runCount ||
+        usageKindSortOrder(left.kind) - usageKindSortOrder(right.kind) ||
+        left.name.localeCompare(right.name),
+    )
+    .map((row) => ({
+      name: row.name,
+      displayName: `${row.kind === "skill" ? "$" : "@"}${row.name}`,
+      kind: row.kind,
+      runCount: row.runCount,
+    }));
 }
 
 function addDaysIso(day: string, delta: number): string {
@@ -236,6 +428,30 @@ function emptyQuota(): ProfileQuota {
   };
 }
 
+function buildMostWorkedProject(row: MostWorkedProjectRow | undefined): MostWorkedProject {
+  if (!row) {
+    return null;
+  }
+
+  const projectId = nonEmptyString(row.projectId);
+  const title = nonEmptyString(row.title);
+  const workspaceRoot = nonEmptyString(row.workspaceRoot);
+  const lastWorkedAt = nonEmptyString(row.lastWorkedAt);
+  if (!projectId || !title || !workspaceRoot || !lastWorkedAt) {
+    return null;
+  }
+
+  return {
+    projectId,
+    title,
+    workspaceRoot,
+    promptCount: num(row.promptCount),
+    threadCount: num(row.threadCount),
+    activeDays: num(row.activeDays),
+    lastWorkedAt,
+  };
+}
+
 // ── Service ────────────────────────────────────────────────────────────
 
 export interface ProfileStatsQueryShape {
@@ -289,11 +505,16 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       "profileStats.promptActivity",
       sql<PromptActivityRow>`
         SELECT
-          STRFTIME('%Y-%m-%d', DATETIME(created_at, ${tz})) AS day,
-          CAST(STRFTIME('%H', DATETIME(created_at, ${tz})) AS INTEGER) AS hour,
+          STRFTIME('%Y-%m-%d', DATETIME(m.created_at, ${tz})) AS day,
+          CAST(STRFTIME('%H', DATETIME(m.created_at, ${tz})) AS INTEGER) AS hour,
           COUNT(*) AS count
-        FROM projection_thread_messages
-        WHERE role = 'user' AND source = 'native'
+        FROM projection_thread_messages m
+        JOIN projection_threads t ON t.thread_id = m.thread_id
+        LEFT JOIN projection_projects p ON p.project_id = t.project_id
+        WHERE m.role = 'user'
+          AND m.source = 'native'
+          AND t.deleted_at IS NULL
+          AND p.deleted_at IS NULL
         GROUP BY day, hour
         ORDER BY day ASC, hour ASC
       `,
@@ -323,8 +544,11 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             a.activity_id AS activity_id
           FROM projection_thread_activities a
           JOIN projection_threads th ON th.thread_id = a.thread_id
+          LEFT JOIN projection_projects p ON p.project_id = th.project_id
           WHERE a.kind = 'context-window.updated'
             AND json_extract(a.payload_json, '$.totalProcessedTokens') IS NOT NULL
+            AND th.deleted_at IS NULL
+            AND p.deleted_at IS NULL
         ),
         delta AS (
           SELECT
@@ -350,7 +574,11 @@ const makeProfileStatsQuery = Effect.gen(function* () {
     legacyCompatibleQuery(
       "profileStats.totalThreads",
       sql<CountRow>`
-        SELECT COUNT(*) AS count FROM projection_threads
+        SELECT COUNT(*) AS count
+        FROM projection_threads t
+        LEFT JOIN projection_projects p ON p.project_id = t.project_id
+        WHERE t.deleted_at IS NULL
+          AND p.deleted_at IS NULL
       `,
     );
 
@@ -391,9 +619,12 @@ const makeProfileStatsQuery = Effect.gen(function* () {
               END
             END AS reasoning
           FROM orchestration_events e
-          LEFT JOIN projection_threads t
+          JOIN projection_threads t
             ON t.thread_id = COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id)
+          LEFT JOIN projection_projects p ON p.project_id = t.project_id
           WHERE e.event_type = 'thread.turn-start-requested'
+            AND t.deleted_at IS NULL
+            AND p.deleted_at IS NULL
         )
         SELECT provider, model, reasoning, COUNT(*) AS count
         FROM per_turn
@@ -402,49 +633,88 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       `,
     );
 
-  const querySkillUsage = () =>
-    legacyCompatibleQuery(
-      "profileStats.skillUsage",
-      sql<SkillUsageRow>`
-        WITH raw_usage AS (
-          SELECT json_extract(skill.value, '$.name') AS name, 'skill' AS kind
-          FROM projection_thread_messages m
-          JOIN json_each(
-            CASE
-              WHEN m.skills_json IS NOT NULL
-                AND json_valid(m.skills_json)
-                AND json_type(m.skills_json) = 'array'
-              THEN m.skills_json
-              ELSE '[]'
-            END
-          ) AS skill
-          WHERE m.role = 'user'
-          UNION ALL
-          SELECT json_extract(agent.value, '$.name') AS name, 'agent' AS kind
-          FROM projection_thread_messages m
-          JOIN json_each(
-            CASE
-              WHEN m.mentions_json IS NOT NULL
-                AND json_valid(m.mentions_json)
-                AND json_type(m.mentions_json) = 'array'
-              THEN m.mentions_json
-              ELSE '[]'
-            END
-          ) AS agent
-          WHERE m.role = 'user'
-        ), grouped AS (
-          SELECT name, kind, COUNT(*) AS runCount
-          FROM raw_usage
-          WHERE name IS NOT NULL AND name <> ''
-          GROUP BY name, kind
+  const querySkillUsageMessages = () =>
+    sql<SkillUsageMessageRow>`
+      SELECT
+        m.message_id AS messageId,
+        CASE
+          WHEN m.text GLOB '*$[A-Za-z0-9]*'
+            OR m.text GLOB '*/[A-Za-z0-9]*'
+          THEN m.text
+          ELSE NULL
+        END AS text,
+        m.skills_json AS skillsJson,
+        m.mentions_json AS mentionsJson
+      FROM projection_thread_messages m
+      JOIN projection_threads t ON t.thread_id = m.thread_id
+      LEFT JOIN projection_projects p ON p.project_id = t.project_id
+      WHERE m.role = 'user'
+        AND m.source = 'native'
+        AND t.deleted_at IS NULL
+        AND p.deleted_at IS NULL
+        AND (
+          (m.skills_json IS NOT NULL AND TRIM(m.skills_json) NOT IN ('', '[]'))
+          OR (m.mentions_json IS NOT NULL AND TRIM(m.mentions_json) NOT IN ('', '[]'))
+          OR m.text GLOB '*$[A-Za-z0-9]*'
+          OR m.text GLOB '*/[A-Za-z0-9]*'
         )
+      ORDER BY m.created_at ASC, m.message_id ASC
+    `.pipe(
+      Effect.catchIf(isMissingLegacyColumnError, (error) =>
+        Effect.logWarning("profile stats skill usage fell back to text-only legacy scan", {
+          error: profileStatsErrorMessage(error),
+          operation: "profileStats.skillUsage",
+        }).pipe(
+          Effect.flatMap(
+            () => sql<SkillUsageMessageRow>`
+              SELECT
+                m.message_id AS messageId,
+                m.text AS text,
+                NULL AS skillsJson,
+                NULL AS mentionsJson
+              FROM projection_thread_messages m
+              JOIN projection_threads t ON t.thread_id = m.thread_id
+              LEFT JOIN projection_projects p ON p.project_id = t.project_id
+              WHERE m.role = 'user'
+                AND t.deleted_at IS NULL
+                AND p.deleted_at IS NULL
+                AND (
+                  m.text GLOB '*$[A-Za-z0-9]*'
+                  OR m.text GLOB '*/[A-Za-z0-9]*'
+                )
+              ORDER BY m.created_at ASC, m.message_id ASC
+            `,
+          ),
+        ),
+      ),
+    );
+
+  const queryMostWorkedProject = (tz: string) =>
+    legacyCompatibleQuery(
+      "profileStats.mostWorkedProject",
+      sql<MostWorkedProjectRow>`
         SELECT
-          name,
-          CASE kind WHEN 'skill' THEN '$' || name ELSE '@' || name END AS displayName,
-          kind,
-          runCount
-        FROM grouped
-        ORDER BY runCount DESC, kind ASC, name ASC
+          p.project_id AS projectId,
+          p.title AS title,
+          p.workspace_root AS workspaceRoot,
+          COUNT(*) AS promptCount,
+          COUNT(DISTINCT t.thread_id) AS threadCount,
+          COUNT(DISTINCT STRFTIME('%Y-%m-%d', DATETIME(m.created_at, ${tz}))) AS activeDays,
+          MAX(m.created_at) AS lastWorkedAt
+        FROM projection_thread_messages m
+        JOIN projection_threads t ON t.thread_id = m.thread_id
+        JOIN projection_projects p ON p.project_id = t.project_id
+        WHERE m.role = 'user'
+          AND m.source = 'native'
+          AND t.deleted_at IS NULL
+          AND p.deleted_at IS NULL
+        GROUP BY p.project_id, p.title, p.workspace_root
+        ORDER BY
+          promptCount DESC,
+          activeDays DESC,
+          lastWorkedAt DESC,
+          p.title ASC
+        LIMIT 1
       `,
     );
 
@@ -460,7 +730,8 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       const promptActivityRows = yield* queryPromptActivity(tz);
       const totalThreadRows = yield* queryTotalThreads();
       const turnInsightRows = yield* queryTurnInsights();
-      const skillRows = yield* querySkillUsage();
+      const skillMessageRows = yield* querySkillUsageMessages();
+      const mostWorkedProjectRows = yield* queryMostWorkedProject(tz);
 
       // ── Activity / heatmap / streaks ──
       const countByDay = new Map<string, number>();
@@ -477,9 +748,9 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         totalPromptsSent += count;
       }
       const heatmap = buildHeatmap(countByDay, todayKey);
-      const activeDaysAsc = heatmap
-        .filter((cell) => cell.count > 0)
-        .map((cell) => cell.day)
+      const activeDaysAsc = [...countByDay.entries()]
+        .filter(([, count]) => count > 0)
+        .map(([day]) => day)
         .toSorted();
       const { current: currentStreakDays, longest: longestStreakDays } = computeStreaks(
         activeDaysAsc,
@@ -598,22 +869,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           : null;
 
       // ── Skills and agent mentions ──
-      const allSkillUsages: SkillUsage[] = skillRows
-        .map((row) => {
-          const name = nonEmptyString(row.name);
-          if (!name) {
-            return null;
-          }
-          const kind = row.kind === "agent" ? "agent" : "skill";
-          return {
-            name,
-            displayName:
-              nonEmptyString(row.displayName) ?? `${kind === "skill" ? "$" : "@"}${name}`,
-            kind,
-            runCount: num(row.runCount),
-          } satisfies SkillUsage;
-        })
-        .filter((skill): skill is SkillUsage => skill !== null);
+      const allSkillUsages = aggregateProfileSkillUsageRows(skillMessageRows);
       const skills = allSkillUsages.slice(0, SKILL_RESULT_LIMIT);
       const totalSkillsUsed = allSkillUsages.reduce((sum, row) => sum + row.runCount, 0);
 
@@ -649,6 +905,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         providerModels,
         skills,
         mostUsedSkill: skills[0] ?? null,
+        mostWorkedProject: buildMostWorkedProject(mostWorkedProjectRows[0]),
         quota: emptyQuota(),
       } satisfies ProfileStats;
     });

@@ -16,6 +16,10 @@
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"
     },
+    "./errorMessages": {
+      "types": "./src/errorMessages.ts",
+      "import": "./src/errorMessages.ts"
+    },
     "./shell": {
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"
@@ -23,6 +27,10 @@
     "./codexConfig": {
       "types": "./src/codexConfig.ts",
       "import": "./src/codexConfig.ts"
+    },
+    "./desktopChrome": {
+      "types": "./src/desktopChrome.ts",
+      "import": "./src/desktopChrome.ts"
     },
     "./Net": {
       "types": "./src/Net.ts",
@@ -35,6 +43,10 @@
     "./chatThreads": {
       "types": "./src/chatThreads.ts",
       "import": "./src/chatThreads.ts"
+    },
+    "./localServers": {
+      "types": "./src/localServers.ts",
+      "import": "./src/localServers.ts"
     },
     "./browserShortcuts": {
       "types": "./src/browserShortcuts.ts",
@@ -72,6 +84,14 @@
       "types": "./src/threadSummary.ts",
       "import": "./src/threadSummary.ts"
     },
+    "./pinnedMessages": {
+      "types": "./src/pinnedMessages.ts",
+      "import": "./src/pinnedMessages.ts"
+    },
+    "./threadMarkers": {
+      "types": "./src/threadMarkers.ts",
+      "import": "./src/threadMarkers.ts"
+    },
     "./threadWorkspace": {
       "types": "./src/threadWorkspace.ts",
       "import": "./src/threadWorkspace.ts"
@@ -92,6 +112,10 @@
       "types": "./src/path.ts",
       "import": "./src/path.ts"
     },
+    "./text": {
+      "types": "./src/text.ts",
+      "import": "./src/text.ts"
+    },
     "./toolOutputSummary": {
       "types": "./src/toolOutputSummary.ts",
       "import": "./src/toolOutputSummary.ts"
@@ -100,33 +124,9 @@
       "types": "./src/localPreviewFiles.ts",
       "import": "./src/localPreviewFiles.ts"
     },
-    "./reviewTargetKey": {
-      "types": "./src/reviewTargetKey.ts",
-      "import": "./src/reviewTargetKey.ts"
-    },
-    "./errorMessages": {
-      "types": "./src/errorMessages.ts",
-      "import": "./src/errorMessages.ts"
-    },
-    "./desktopChrome": {
-      "types": "./src/desktopChrome.ts",
-      "import": "./src/desktopChrome.ts"
-    },
-    "./localServers": {
-      "types": "./src/localServers.ts",
-      "import": "./src/localServers.ts"
-    },
-    "./pinnedMessages": {
-      "types": "./src/pinnedMessages.ts",
-      "import": "./src/pinnedMessages.ts"
-    },
-    "./threadMarkers": {
-      "types": "./src/threadMarkers.ts",
-      "import": "./src/threadMarkers.ts"
-    },
-    "./text": {
-      "types": "./src/text.ts",
-      "import": "./src/text.ts"
+    "./composerSlashCommands": {
+      "types": "./src/composerSlashCommands.ts",
+      "import": "./src/composerSlashCommands.ts"
     },
     "./editorIcons": {
       "types": "./src/editorIcons.ts",
@@ -135,6 +135,10 @@
     "./providerUsage": {
       "types": "./src/providerUsage.ts",
       "import": "./src/providerUsage.ts"
+    },
+    "./formatBytes": {
+      "types": "./src/formatBytes.ts",
+      "import": "./src/formatBytes.ts"
     }
   },
   "scripts": {

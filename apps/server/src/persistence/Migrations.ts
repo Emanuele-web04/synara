@@ -53,16 +53,16 @@ import Migration0034 from "./Migrations/034_AuthAccessManagement.ts";
 import Migration0035 from "./Migrations/035_NormalizeLegacyModelSelectionOptions.ts";
 import Migration0036 from "./Migrations/036_ProjectionThreadsPinned.ts";
 import Migration0037 from "./Migrations/037_ProjectionSnapshotCapIndexes.ts";
-import Migration0038 from "./Migrations/038_ExecutionRuntimeTables.ts";
-import Migration0039 from "./Migrations/039_ReviewCache.ts";
-import Migration0040 from "./Migrations/040_ProjectionThreadsReviewChatTarget.ts";
-import Migration0041 from "./Migrations/041_BackfillReviewChangesetPatchSignature.ts";
-import Migration0042 from "./Migrations/042_BackfillRuntimeWarningSummaries.ts";
-import Migration0043 from "./Migrations/043_ReconcileProjectionThreadAnnotations.ts";
-import Migration0044 from "./Migrations/044_ReconcileProjectionProjectsPinned.ts";
-import Migration0045 from "./Migrations/045_ProfileStatsIndexes.ts";
-import Migration0046 from "./Migrations/046_ReviewPullRequests.ts";
-import Migration0047 from "./Migrations/047_ReviewReviewRequests.ts";
+import Migration0038 from "./Migrations/038_ReconcileLegacySidechatSource.ts";
+import Migration0039 from "./Migrations/039_ReconcileLegacyPinnedThreads.ts";
+import Migration0040 from "./Migrations/040_ProjectionThreadsPinnedMessagesNotes.ts";
+import Migration0041 from "./Migrations/041_ProjectionProjectsPinned.ts";
+import Migration0042 from "./Migrations/042_ProjectionThreadsMarkers.ts";
+import Migration0043 from "./Migrations/043_ProfileStatsIndexes.ts";
+import Migration0044 from "./Migrations/044_Automations.ts";
+import Migration0045 from "./Migrations/045_AutomationPolicies.ts";
+import Migration0046 from "./Migrations/046_AutomationCompletionPolicy.ts";
+import Migration0047 from "./Migrations/047_AutomationCompletionPolicyVersion.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -112,16 +112,16 @@ export const migrationEntries = [
   [35, "NormalizeLegacyModelSelectionOptions", Migration0035],
   [36, "ProjectionThreadsPinned", Migration0036],
   [37, "ProjectionSnapshotCapIndexes", Migration0037],
-  [38, "ExecutionRuntimeTables", Migration0038],
-  [39, "ReviewCache", Migration0039],
-  [40, "ProjectionThreadsReviewChatTarget", Migration0040],
-  [41, "BackfillReviewChangesetPatchSignature", Migration0041],
-  [42, "BackfillRuntimeWarningSummaries", Migration0042],
-  [43, "ReconcileProjectionThreadAnnotations", Migration0043],
-  [44, "ReconcileProjectionProjectsPinned", Migration0044],
-  [45, "ProfileStatsIndexes", Migration0045],
-  [46, "ReviewPullRequests", Migration0046],
-  [47, "ReviewReviewRequests", Migration0047],
+  [38, "ReconcileLegacySidechatSource", Migration0038],
+  [39, "ReconcileLegacyPinnedThreads", Migration0039],
+  [40, "ProjectionThreadsPinnedMessagesNotes", Migration0040],
+  [41, "ProjectionProjectsPinned", Migration0041],
+  [42, "ProjectionThreadsMarkers", Migration0042],
+  [43, "ProfileStatsIndexes", Migration0043],
+  [44, "Automations", Migration0044],
+  [45, "AutomationPolicies", Migration0045],
+  [46, "AutomationCompletionPolicy", Migration0046],
+  [47, "AutomationCompletionPolicyVersion", Migration0047],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -134,20 +134,37 @@ export const makeMigrationLoader = (throughId?: number) =>
   );
 
 /**
- * Migrator run function - no schema dumping needed
- * Uses the base Migrator.make without platform dependencies
+ * Highest migration ID whose content is identical across every lineage Synara
+ * can import (T3 Code, DP Code, Synara). A name mismatch at or below this ID
+ * means the database does not come from any known lineage, so re-running
+ * migrations could destroy data — refuse to start instead.
  */
-const run = Migrator.make({});
-
-export interface RunMigrationsOptions {
-  readonly toMigrationInclusive?: number | undefined;
-}
-
 const LAST_SHARED_LINEAGE_MIGRATION_ID = 16;
 
+/**
+ * Repairs the migration tracker of an imported legacy database before the
+ * migrator runs.
+ *
+ * Legacy ~/.t3 / ~/.dpcode imports (homeMigration.ts) carry their own
+ * `effect_sql_migrations` rows, recorded under that lineage's migration names
+ * at the same numeric IDs. The migrator gates purely on max(migration_id), so
+ * once the imported tracker's high-water mark reaches Synara's latest ID,
+ * every Synara migration is skipped silently and startup crashes on missing
+ * columns such as `projection_threads.env_mode`. Renumbering self-heal
+ * migrations past the legacy IDs (#023, then #032) loses that race whenever
+ * the legacy lineage ships more migrations.
+ *
+ * Instead, compare the recorded (id, name) pairs against Synara's lineage and
+ * delete every tracker row from the first divergence onward. The migrator
+ * then re-runs those migrations in order; every migration past
+ * {@link LAST_SHARED_LINEAGE_MIGRATION_ID} is idempotent, so re-running them
+ * over a legacy-evolved schema is safe and loses no data.
+ */
 export const reconcileMigrationLineage = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
+  // The tracker table (Migrator's default name) does not exist before the
+  // first migration run on a fresh database.
   const trackerTables = yield* sql<{ readonly name: string }>`
     SELECT name FROM sqlite_master
     WHERE type = 'table' AND name = 'effect_sql_migrations'
@@ -169,6 +186,8 @@ export const reconcileMigrationLineage = Effect.gen(function* () {
     ([id, name]) => id <= highWaterMark && recordedNamesById.get(id) !== name,
   );
   if (diverged === undefined) {
+    // Healthy tracker. Recorded IDs beyond our latest migration mean the
+    // database was written by a newer build; leave those rows for it.
     return;
   }
 
@@ -181,11 +200,21 @@ export const reconcileMigrationLineage = Effect.gen(function* () {
   }
 
   yield* Effect.logWarning(
-    "Migration tracker diverges from the Synara lineage; re-running migrations from the divergence point",
+    "Migration tracker diverges from the Synara lineage (legacy import); re-running migrations from the divergence point",
   ).pipe(Effect.annotateLogs({ firstDivergedId, expectedName, recordedName, highWaterMark }));
 
   yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= ${firstDivergedId}`;
 });
+
+/**
+ * Migrator run function - no schema dumping needed
+ * Uses the base Migrator.make without platform dependencies
+ */
+const run = Migrator.make({});
+
+export interface RunMigrationsOptions {
+  readonly toMigrationInclusive?: number | undefined;
+}
 
 /**
  * Run all pending migrations.

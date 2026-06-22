@@ -12,6 +12,22 @@ import type {
   AuthWebSocketTokenResult,
 } from "./auth";
 import type {
+  AutomationCancelRunInput,
+  AutomationCancelRunResult,
+  AutomationArchiveRunInput,
+  AutomationCreateInput,
+  AutomationDefinition,
+  AutomationDeleteInput,
+  AutomationListInput,
+  AutomationListResult,
+  AutomationMarkRunReadInput,
+  AutomationRunActionResult,
+  AutomationRunNowInput,
+  AutomationRunNowResult,
+  AutomationStreamEvent,
+  AutomationUpdateInput,
+} from "./automation";
+import type {
   GitCheckoutInput,
   GitActionProgressEvent,
   GitCreateBranchInput,
@@ -120,6 +136,8 @@ import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem
 import type {
   ServerConfig,
   ServerDiagnosticsResult,
+  ServerGenerateAutomationIntentInput,
+  ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
   ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
@@ -562,6 +580,9 @@ export interface NativeApi {
     generateThreadRecap: (
       input: ServerGenerateThreadRecapInput,
     ) => Promise<ServerGenerateThreadRecapResult>;
+    generateAutomationIntent: (
+      input: ServerGenerateAutomationIntentInput,
+    ) => Promise<ServerGenerateAutomationIntentResult>;
     transcribeVoice: (
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;
@@ -606,6 +627,17 @@ export interface NativeApi {
     onDomainEvent: (callback: (event: OrchestrationEvent) => void) => () => void;
     onShellEvent: (callback: (event: OrchestrationShellStreamItem) => void) => () => void;
     onThreadEvent: (callback: (event: OrchestrationThreadStreamItem) => void) => () => void;
+  };
+  automation: {
+    list: (input?: AutomationListInput) => Promise<AutomationListResult>;
+    create: (input: AutomationCreateInput) => Promise<AutomationDefinition>;
+    update: (input: AutomationUpdateInput) => Promise<AutomationDefinition>;
+    delete: (input: AutomationDeleteInput) => Promise<void>;
+    runNow: (input: AutomationRunNowInput) => Promise<AutomationRunNowResult>;
+    cancelRun: (input: AutomationCancelRunInput) => Promise<AutomationCancelRunResult>;
+    markRunRead: (input: AutomationMarkRunReadInput) => Promise<AutomationRunActionResult>;
+    archiveRun: (input: AutomationArchiveRunInput) => Promise<AutomationRunActionResult>;
+    onEvent: (callback: (event: AutomationStreamEvent) => void) => () => void;
   };
   browser: {
     open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;

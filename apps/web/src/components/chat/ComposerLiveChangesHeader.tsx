@@ -1,7 +1,8 @@
 // FILE: ComposerLiveChangesHeader.tsx
-// Purpose: Live file-changes strip stacked flush onto the top of the
-// composer while a turn is running, mirroring the queued follow-up header. The
-// caller supplies turn-scoped diff totals and the Review action target.
+// Purpose: Live file-changes strip stacked flush onto the top of the composer
+// while a turn is running, mirroring the queued follow-up header. The caller
+// supplies turn-scoped diff totals (or a null count before they land) and the
+// Review action target.
 // Layer: Chat composer UI
 // Exports: ComposerLiveChangesHeader
 

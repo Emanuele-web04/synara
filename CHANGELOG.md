@@ -1,5 +1,98 @@
 # Changelog
 
+## 0.2.41 - 2026-06-17
+
+### Added
+
+- Added a compact chat-header handoff menu so handoff threads can be created directly from the active chat header again.
+- Added provider-target filtering for the handoff menu so only currently usable handoff destinations are offered.
+
+### Changed
+
+- Bumped Synara release package versions to `0.2.41` across the server, desktop, web, and contracts packages.
+- Kept the shared project-action dialog path mounted while hiding the visible inline project script runner from the chat header.
+- Improved header handoff failure handling by checking provider send availability before creating a handoff and showing a toast when the target is unavailable.
+
+### Fixed
+
+- Fixed the missing header handoff action after the previous chat-header cleanup.
+- Fixed chat-header crowding from the project script runner while preserving the project action dialog plumbing used by other header actions.
+
+### Verification
+
+- `bun run fmt:check` passed.
+- `bun run lint` passed with 148 warnings, 0 errors.
+- `bun run typecheck` passed with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed and left the worktree unchanged.
+- `bun run build` passed. Vite still warns about large web chunks and plugin timings; desktop build still reports the existing typeless `tsdown.config.ts` module warning.
+- Root `bun run test` did not complete cleanly in two attempts: both runs reached a green `@t3tools/web` suite (169 files / 1954 tests), then stalled in the `apps/server` Vitest tail. The stale duplicate root/Vitest processes were stopped before continuing verification.
+- Direct `bun run test` from `apps/server` also stalled before reporting test-file progress, only printing Node SQLite experimental warnings, so it is not counted as passed.
+- Direct package tests passed for the release-relevant and non-server packages: `apps/web` 169 files / 1954 tests, `packages/contracts` 9 files / 90 tests, `packages/shared` 24 files / 228 tests, `packages/effect-acp` 3 files / 24 tests, `apps/desktop` 19 files / 149 tests, and `scripts` 5 files / 36 tests.
+- `apps/marketing` has no `test` script.
+- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.2.41`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+
+## 0.2.4 - 2026-06-17
+
+### Added
+
+- Added focused route-restore recovery coverage so remembered chat routes wait for a fresh snapshot before falling back after restart.
+- Added disabled-provider re-enable regression coverage for provider health refreshes.
+
+### Changed
+
+- Bumped Synara release package versions to `0.2.4` across the server, desktop, web, and contracts packages.
+- Improved remembered chat route restore so stale empty startup snapshots do not immediately send users to the empty chat route.
+- Removed the old handoff shortcut from the chat header to keep primary conversation controls quieter.
+
+### Fixed
+
+- Fixed app restart/chat restore behavior where a valid remembered thread could briefly appear missing while orchestration state was still loading.
+- Fixed provider health refresh behavior around re-enabling disabled providers so availability state is less likely to remain stale.
+- Fixed formatting drift in `apps/web/src/chatRouteRestore.ts` caught by `bun run fmt:check`.
+
+### Verification
+
+- `bun run fmt:check` initially failed on `apps/web/src/chatRouteRestore.ts`; after formatting that file, `bun run fmt:check` passed.
+- `bun run lint` passed with 149 warnings, 0 errors.
+- `bun run typecheck` passed with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed and refreshed release install/lockfile state.
+- `bun run build` passed. Vite still warns about large web chunks and plugin timings; desktop build still reports the existing typeless `tsdown.config.ts` module warning.
+- `bun run test` passed: 10 tasks successful, including `@t3tools/web` 169 files / 1954 tests and `t3` 129 files passed / 1 skipped with 1255 passed / 6 skipped.
+- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.2.4`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+
+## 0.2.3 - 2026-06-16
+
+### Added
+
+- Added richer local profile statistics, including most-worked project, skill/agent usage, active hours, provider/model mix, reasoning usage, and token/activity heatmap data.
+- Added compact pasted-text cards for large composer pastes, with line/character metadata, remove controls, restore-to-editor behavior, and expandable sent-message echoes.
+- Added shared pasted-text parsing/serialization helpers and focused coverage for composer drafts, pasted text, assistant selections, terminal context, and transcript height handling.
+
+### Changed
+
+- Bumped Synara release package versions to `0.2.3` across the server, desktop, web, and contracts packages.
+- Improved profile skill usage counting by combining structured skill references, mentions, agent references, and legacy text-token backfill while filtering obvious non-skill slash/dollar tokens.
+- Kept large pasted prompt content out of the visible composer body by storing it as structured prompt context, making long prompts easier to scan and refine.
+
+### Fixed
+
+- Fixed message editing so pasted text blocks remain intact when a user edits a previous message.
+- Fixed draft/edit preservation for structured prompt context so pasted text, terminal context, and assistant selections are less likely to be dropped or flattened across composer lifecycle changes.
+- Fixed profile stats so prompt-block markup like pasted text, file comments, terminal context, and assistant selections does not pollute skill counting.
+
+### Verification
+
+- `bun run fmt:check` passed.
+- `bun run lint` passed with 148 warnings, 0 errors.
+- `bun run typecheck` passed with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed and refreshed release install/lockfile state.
+- `bun run build` passed. Vite still warns about large web chunks and plugin timings; desktop build still reports the existing typeless `tsdown.config.ts` module warning.
+- `bun run test` passed: 10 tasks successful, including `@t3tools/web` 168 files / 1949 tests and `t3` 129 files passed / 1 skipped with 1246 passed / 6 skipped.
+- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.2.3`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+
 ## 0.2.2 - 2026-06-14
 
 ### Added

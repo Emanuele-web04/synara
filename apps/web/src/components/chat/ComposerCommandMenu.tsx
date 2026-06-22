@@ -15,6 +15,7 @@ import {
   BrainIcon,
   BugIcon,
   ChangesIcon,
+  ClockIcon,
   DeviceLaptopIcon,
   DisposableThreadIcon,
   EraserIcon,
@@ -422,6 +423,7 @@ const SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
   side: DisposableThreadIcon,
   status: InfoIcon,
   subagents: BotIcon,
+  automation: ClockIcon,
 };
 
 function commandMenuSlashGlyph(command: string, fallback: LucideIcon): ReactNode {

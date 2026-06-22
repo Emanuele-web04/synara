@@ -79,6 +79,14 @@ export interface ChatImageAttachment {
   previewUrl?: string;
 }
 
+export interface ChatFileAttachment {
+  type: "file";
+  id: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
 export interface ChatAssistantSelectionAttachment {
   type: "assistant-selection";
   id: string;
@@ -86,7 +94,10 @@ export interface ChatAssistantSelectionAttachment {
   text: string;
 }
 
-export type ChatAttachment = ChatImageAttachment | ChatAssistantSelectionAttachment;
+export type ChatAttachment =
+  | ChatImageAttachment
+  | ChatFileAttachment
+  | ChatAssistantSelectionAttachment;
 
 export interface ChatMessage {
   id: MessageId;

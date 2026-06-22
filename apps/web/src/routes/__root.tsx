@@ -1,28 +1,35 @@
 import {
+  PROVIDER_DISPLAY_NAMES,
   ThreadId,
   type OrchestrationEvent,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
+  type OrchestrationThread,
   type ServerConfig,
+  type ServerProviderStatus,
 } from "@t3tools/contracts";
 import { defaultTerminalTitleForCliKind } from "@t3tools/shared/terminalThreads";
 import {
   Outlet,
   createRootRouteWithContext,
+  type ErrorComponentProps,
   useNavigate,
   useParams,
   useRouterState,
 } from "@tanstack/react-router";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME } from "../branding";
+import { DesktopWindowControls } from "../components/DesktopWindowControls";
+import { SETTINGS_TARGETS } from "../settingsNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import WhatsNewDialog from "../components/WhatsNewDialog";
 import { useWhatsNew } from "../whatsNew/useWhatsNew";
 import { WhatsNewPopoutCard } from "../whatsNew/WhatsNewPopoutCard";
 import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
+import { Button, dialogActionButtonClassName } from "../components/ui/button";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../components/ui/toast";
 import { useGitProgressToastPreview } from "../components/useGitProgressToastPreview";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
@@ -34,8 +41,12 @@ import {
   serverQueryKeys,
   serverSettingsQueryOptions,
 } from "../lib/serverReactQuery";
-import { readNativeApi } from "../nativeApi";
-import { useComposerDraftStore } from "../composerDraftStore";
+import { ensureNativeApi, readNativeApi } from "../nativeApi";
+import {
+  finalizePromotedDraftThreads,
+  markPromotedDraftThreads,
+  useComposerDraftStore,
+} from "../composerDraftStore";
 import { useStore } from "../store";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { terminalActivityFromEvent } from "../terminalActivity";
@@ -46,8 +57,9 @@ import {
   onServerWelcome,
 } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
-import { projectQueryKeys } from "../lib/projectReactQuery";
+import { invalidateProjectFileQueriesForCwds, projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import { useProjectRunStore } from "../projectRunStore";
 import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
@@ -55,35 +67,72 @@ import {
   subscribeRetainedThreadDetailIdChanges,
   useRetainedThreadDetailIds,
 } from "../threadDetailSubscriptionRetention";
+import { getThreadFromState } from "../threadDerivation";
+import { useAppDensity } from "../hooks/useAppDensity";
 import { useAppTypography } from "../hooks/useAppTypography";
-import { useChatCodeFont } from "../hooks/useChatCodeFont";
+import { usePreloadSettingsRoute } from "../hooks/usePreloadSettingsRoute";
+import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopTopBarGutter";
 import { useTheme } from "../hooks/useTheme";
-import { useUIFont } from "../hooks/useUIFont";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
 import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
+import { useProviderAuthRefreshOnFocus } from "../hooks/useProviderAuthRefreshOnFocus";
+import { useProviderStatusRefresh } from "../hooks/useProviderStatusRefresh";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
+import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
+import { useAppSettings } from "../appSettings";
+import {
+  getVisibleProviderUpdateStatuses,
+  isProviderUpdateActive,
+  providerUpdateNotificationKey,
+  PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS,
+  PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
+} from "../providerUpdates";
 import {
   getGitInvalidationThreadIdForEvent,
+  getProjectFileInvalidationThreadIdForEvent,
   resolveGitInvalidationCwdForThreadId,
   shouldInvalidateGitQueriesForEvent,
   shouldInvalidateProviderQueriesForEvent,
 } from "./-rootEventInvalidation";
-import {
-  coalesceOrchestrationUiEvents,
-  isThreadDetailEventForThread,
-  reconcilePromotedDraftFromThreadDetail,
-  reconcilePromotedDraftsFromShellThreads,
-  shouldFlushDomainEventImmediately,
-  shouldPollThreadDetailCatchup,
-} from "./-rootEventCoalescing";
-import { ProviderUpdateNotifications } from "./-ProviderUpdateNotifications";
-import { RootRouteErrorView } from "./-RootRouteError";
 
 const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
+const PENDING_SHELL_EVENT_BUFFER_LIMIT = 1_024;
+const PENDING_THREAD_EVENT_BUFFER_LIMIT = 512;
+const IMMEDIATE_ASSISTANT_FLUSH_ID_LIMIT = 512;
+const seenProviderUpdateNotificationKeys = new Set<string>();
+
+type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
+type ActiveProviderUpdateToast =
+  | { readonly kind: "prompt"; readonly key: string; readonly toastId: ProviderUpdateToastId }
+  | { readonly kind: "update"; readonly key: string; readonly toastId: ProviderUpdateToastId };
+
+function shellThreadHasStarted(thread: OrchestrationShellSnapshot["threads"][number]): boolean {
+  return thread.latestTurn !== null || thread.session !== null;
+}
+
+function detailThreadHasStarted(thread: OrchestrationThread): boolean {
+  return shellThreadHasStarted(thread) || thread.messages.length > 0;
+}
+
+function reconcilePromotedDraftsFromShellThreads(
+  threads: ReadonlyArray<OrchestrationShellSnapshot["threads"][number]>,
+): void {
+  markPromotedDraftThreads(new Set(threads.map((thread) => thread.id)));
+  finalizePromotedDraftThreads(
+    new Set(threads.filter((thread) => shellThreadHasStarted(thread)).map((thread) => thread.id)),
+  );
+}
+
+function reconcilePromotedDraftFromThreadDetail(thread: OrchestrationThread): void {
+  markPromotedDraftThreads(new Set([thread.id]));
+  if (detailThreadHasStarted(thread)) {
+    finalizePromotedDraftThreads(new Set([thread.id]));
+  }
+}
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -97,36 +146,60 @@ export const Route = createRootRouteWithContext<{
 
 function RootRouteView() {
   useAppTypography();
-  useChatCodeFont();
+  useAppDensity();
+  usePreloadSettingsRoute();
   useNativeFontSmoothing();
+  useSyncDesktopTopBarTrafficLightGutterZoom();
   useTheme();
-  useUIFont();
+
+  // Single mount point for the Windows caption buttons. The cluster is pinned to the
+  // window's top-right corner (frameless Windows shell) and renders nothing on macOS,
+  // Linux, or the web build, so it is safe to mount unconditionally here — including on
+  // the pre-backend "connecting" screen, so the window stays closable before the
+  // renderer connects. Top bars reserve space for it via
+  // useDesktopTopBarWindowControlsGutterClassName().
+  //
+  // MUST render LAST: Electron builds the OS drag region by walking elements with
+  // `-webkit-app-region` in DOM order, unioning `drag` rects and subtracting `no-drag`
+  // rects in sequence. The route headers are full-width `drag-region`s that extend under
+  // this cluster, so the cluster's `no-drag` rect has to be subtracted AFTER those drag
+  // rects are added — otherwise the OS reclaims the corner as title-bar caption and
+  // swallows the click as a window drag (the buttons render but do nothing). Rendering
+  // it last in document order guarantees that subtraction wins. (z above dialogs/toasts
+  // so it also stays clickable while a modal is open.)
+  const desktopWindowControls = <DesktopWindowControls className="fixed top-0 right-0 z-[250]" />;
 
   if (!readNativeApi()) {
     return (
-      <div className="flex h-screen flex-col bg-background text-foreground">
-        <div className="flex flex-1 items-center justify-center">
-          <p className="text-sm text-muted-foreground">
-            Connecting to {APP_DISPLAY_NAME} server...
-          </p>
+      <>
+        <div className="flex h-screen flex-col bg-background text-foreground">
+          <div className="flex flex-1 items-center justify-center">
+            <p className="text-sm text-muted-foreground">
+              Connecting to {APP_DISPLAY_NAME} server...
+            </p>
+          </div>
         </div>
-      </div>
+        {desktopWindowControls}
+      </>
     );
   }
 
   return (
-    <ToastProvider position="top-center">
-      <AnchoredToastProvider>
-        <GitProgressToastPreviewDev />
-        <EventRouter />
-        <GlobalShortcutsDialog />
-        <GlobalWhatsNewSurface />
-        <TaskCompletionNotifications />
-        <ProviderUpdateNotifications />
-        <DesktopProjectBootstrap />
-        <Outlet />
-      </AnchoredToastProvider>
-    </ToastProvider>
+    <>
+      <ToastProvider position="top-center">
+        <AnchoredToastProvider>
+          <GitProgressToastPreviewDev />
+          <EventRouter />
+          <GlobalShortcutsDialog />
+          <GlobalWhatsNewSurface />
+          <TaskCompletionNotifications />
+          <ProviderUpdateNotifications />
+          <DesktopProjectBootstrap />
+          <Outlet />
+        </AnchoredToastProvider>
+      </ToastProvider>
+      {desktopWindowControls}
+    </>
   );
 }
 
@@ -134,6 +207,263 @@ function GitProgressToastPreviewDev() {
   const featureFlags = useFeatureFlags();
   const enabled = import.meta.env.DEV && featureFlags["pin-git-progress-toast-preview"];
   useGitProgressToastPreview(enabled);
+  return null;
+}
+
+function ProviderUpdateNotifications() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { settings } = useAppSettings();
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
+  const [isUpdatingAll, setIsUpdatingAll] = useState(false);
+  const activeToastRef = useRef<ActiveProviderUpdateToast | null>(null);
+  const isUpdatingAllRef = useRef(false);
+  const progressToastDismissedRef = useRef(false);
+  // Provider latest-version checks are slow/network-backed, so keep this much
+  // coarser than auth focus refreshes while still avoiding manual-only refreshes.
+  useProviderStatusRefresh({
+    initialDelayMs: PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS,
+    intervalMs: PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
+  });
+  const outdatedProviders = useMemo(
+    () =>
+      getVisibleProviderUpdateStatuses({
+        providers: serverConfigQuery.data?.providers ?? [],
+        hiddenProviders: settings.hiddenProviders,
+        serverSettings: serverSettingsQuery.data ?? null,
+        oneClickOnly: true,
+      }),
+    [serverConfigQuery.data?.providers, serverSettingsQuery.data, settings.hiddenProviders],
+  );
+  const oneClickProviders = useMemo(
+    () => outdatedProviders.filter((provider) => !isProviderUpdateActive(provider)),
+    [outdatedProviders],
+  );
+  const notificationKey = useMemo(
+    () => providerUpdateNotificationKey(outdatedProviders),
+    [outdatedProviders],
+  );
+
+  const updateAll = useCallback(
+    async (providers: ReadonlyArray<ServerProviderStatus>) => {
+      const activeNotificationKey = providerUpdateNotificationKey(providers);
+      if (isUpdatingAllRef.current || providers.length === 0 || !activeNotificationKey) {
+        return;
+      }
+
+      isUpdatingAllRef.current = true;
+      progressToastDismissedRef.current = false;
+      setIsUpdatingAll(true);
+      const trackedToast = activeToastRef.current;
+      const toastId =
+        trackedToast?.toastId ??
+        toastManager.add({
+          type: "loading",
+          title: "Updating providers...",
+          description:
+            providers.length === 1
+              ? `Updating ${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]}.`
+              : `Updating ${providers.length} providers.`,
+          timeout: 0,
+        });
+      activeToastRef.current = { kind: "update", key: activeNotificationKey, toastId };
+      const dismissProgressToast = () => {
+        progressToastDismissedRef.current = true;
+        if (activeToastRef.current?.toastId === toastId) {
+          activeToastRef.current = null;
+        }
+        toastManager.close(toastId);
+      };
+
+      toastManager.update(toastId, {
+        type: "loading",
+        title: "Updating providers...",
+        description:
+          providers.length === 1
+            ? `Updating ${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]}.`
+            : `Updating ${providers.length} providers.`,
+        actionProps: undefined,
+        data: { onClose: dismissProgressToast },
+        timeout: 0,
+      });
+
+      const failures: Array<{ provider: ServerProviderStatus; reason: string }> = [];
+
+      try {
+        const api = ensureNativeApi();
+        for (const provider of providers) {
+          try {
+            const result = await api.server.updateProvider({ provider: provider.provider });
+            const refreshed = result.providers.find(
+              (entry) => entry.provider === provider.provider,
+            );
+            const updateState = refreshed?.updateState;
+            if (updateState?.status === "failed" || updateState?.status === "unchanged") {
+              failures.push({
+                provider,
+                reason: updateState.message ?? "The update command did not complete successfully.",
+              });
+            } else if (refreshed?.versionAdvisory?.status === "behind_latest") {
+              failures.push({
+                provider,
+                reason: "The provider still appears outdated after updating.",
+              });
+            }
+          } catch (error) {
+            failures.push({
+              provider,
+              reason: error instanceof Error ? error.message : "The update request failed.",
+            });
+          }
+        }
+      } catch (error) {
+        for (const provider of providers) {
+          failures.push({
+            provider,
+            reason:
+              error instanceof Error
+                ? error.message
+                : "The provider update request could not start.",
+          });
+        }
+      } finally {
+        // Refresh is best-effort UI sync; it must not keep the progress toast alive.
+        await queryClient
+          .invalidateQueries({ queryKey: serverQueryKeys.config() })
+          .catch(() => undefined);
+        isUpdatingAllRef.current = false;
+        setIsUpdatingAll(false);
+      }
+
+      if (progressToastDismissedRef.current || activeToastRef.current?.toastId !== toastId) {
+        return;
+      }
+
+      if (failures.length > 0) {
+        activeToastRef.current = null;
+        // Surface the exact manual commands so a user whose one-click update
+        // failed (EACCES on global npm, PATH/package-manager mismatch, etc.) can
+        // copy and run them in a terminal instead of being stuck.
+        const manualCommands = Array.from(
+          new Set(
+            failures
+              .map(({ provider }) => provider.versionAdvisory?.updateCommand)
+              .filter(
+                (command): command is string =>
+                  typeof command === "string" && command.trim().length > 0,
+              ),
+          ),
+        );
+        const failureLines = failures
+          .map(({ provider, reason }) => `${PROVIDER_DISPLAY_NAMES[provider.provider]}: ${reason}`)
+          .join("\n");
+        toastManager.update(toastId, {
+          type: "error",
+          title:
+            failures.length === providers.length
+              ? "Provider updates failed"
+              : "Some provider updates failed",
+          description:
+            manualCommands.length > 0
+              ? `${failureLines}\n\nCopy the command${manualCommands.length === 1 ? "" : "s"} below to update manually in a terminal.`
+              : failureLines,
+          data: {
+            onClose: dismissProgressToast,
+            ...(manualCommands.length > 0 ? { copyText: manualCommands.join("\n") } : {}),
+          },
+          timeout: 0,
+        });
+        return;
+      }
+
+      activeToastRef.current = null;
+      toastManager.update(toastId, {
+        type: "success",
+        title:
+          providers.length === 1
+            ? `${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]} updated`
+            : `${providers.length} providers updated`,
+        description: "New sessions will use the refreshed provider tools.",
+        data: { onClose: dismissProgressToast },
+        timeout: 6000,
+      });
+    },
+    [queryClient],
+  );
+
+  useEffect(() => {
+    const activeToast = activeToastRef.current;
+    if (activeToast?.kind === "prompt" && activeToast.key !== notificationKey) {
+      toastManager.close(activeToast.toastId);
+      activeToastRef.current = null;
+    }
+
+    if (
+      outdatedProviders.length === 0 ||
+      oneClickProviders.length === 0 ||
+      !notificationKey ||
+      isUpdatingAll ||
+      activeToastRef.current ||
+      seenProviderUpdateNotificationKeys.has(notificationKey)
+    ) {
+      return;
+    }
+
+    // Key the prompt by the complete provider/version set so a partial refresh
+    // cannot stack a second "Update all" prompt on top of the first one.
+    seenProviderUpdateNotificationKeys.add(notificationKey);
+
+    const firstProvider = outdatedProviders[0]!;
+    const additionalCount = outdatedProviders.length - 1;
+    const providerName = PROVIDER_DISPLAY_NAMES[firstProvider.provider];
+    const title =
+      outdatedProviders.length === 1
+        ? `${providerName} update available`
+        : `${outdatedProviders.length} provider updates available`;
+    const description =
+      outdatedProviders.length === 1
+        ? `${providerName} has a newer version available.`
+        : `${providerName} and ${additionalCount} more provider${additionalCount === 1 ? "" : "s"} have newer versions available.`;
+
+    let toastId!: ProviderUpdateToastId;
+    const closeTrackedPrompt = () => {
+      if (activeToastRef.current?.toastId === toastId) {
+        activeToastRef.current = null;
+      }
+      toastManager.close(toastId);
+    };
+    toastId = toastManager.add({
+      type: "warning",
+      title,
+      description,
+      timeout: 0,
+      actionProps: {
+        children: "Review updates",
+        onClick: () => {
+          if (activeToastRef.current?.toastId === toastId) {
+            toastManager.close(toastId);
+            activeToastRef.current = null;
+          }
+          void navigate({
+            to: "/settings",
+            search: { section: "providers", target: SETTINGS_TARGETS.providerUpdates },
+          });
+        },
+      },
+      data: {
+        onClose: closeTrackedPrompt,
+        secondaryActionProps: {
+          children: "Update all",
+          onClick: () => {
+            void updateAll(oneClickProviders);
+          },
+        },
+      },
+    });
+    activeToastRef.current = { kind: "prompt", key: notificationKey, toastId };
+  }, [isUpdatingAll, navigate, notificationKey, oneClickProviders, outdatedProviders, updateAll]);
+
   return null;
 }
 
@@ -150,7 +480,6 @@ function GlobalShortcutsDialog() {
   );
   const terminalOpen = activeThreadTerminalState?.terminalOpen ?? false;
   const terminalWorkspaceOpen = shouldRenderTerminalWorkspace({
-    activeProjectExists: activeProject !== null,
     presentationMode: activeThreadTerminalState?.presentationMode ?? "drawer",
     terminalOpen,
   });
@@ -229,6 +558,198 @@ function GlobalWhatsNewSurface() {
   );
 }
 
+function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
+  const message = errorMessage(error);
+  const details = errorDetails(error);
+
+  return (
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
+      <div className="pointer-events-none absolute inset-0 opacity-80">
+        <div className="absolute inset-x-0 top-0 h-44 bg-[radial-gradient(44rem_16rem_at_top,color-mix(in_srgb,var(--color-red-500)_16%,transparent),transparent)]" />
+        <div className="absolute inset-0 bg-[linear-gradient(145deg,color-mix(in_srgb,var(--background)_90%,var(--color-black))_0%,var(--background)_55%)]" />
+      </div>
+
+      <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
+        <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+          {APP_DISPLAY_NAME}
+        </p>
+        <h1 className="mt-3 text-2xl font-semibold sm:text-3xl">Something went wrong.</h1>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{message}</p>
+
+        <div className="mt-5 flex flex-wrap gap-2">
+          <Button size="sm" className={dialogActionButtonClassName} onClick={() => reset()}>
+            Try again
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className={dialogActionButtonClassName}
+            onClick={() => window.location.reload()}
+          >
+            Reload app
+          </Button>
+        </div>
+
+        <details className="group mt-5 overflow-hidden rounded-lg border border-border/70 bg-background/55">
+          <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-muted-foreground">
+            <span className="group-open:hidden">Show error details</span>
+            <span className="hidden group-open:inline">Hide error details</span>
+          </summary>
+          <pre className="max-h-56 overflow-auto border-t border-border/70 bg-background/80 px-3 py-2 text-xs text-foreground/85">
+            {details}
+          </pre>
+        </details>
+      </section>
+    </div>
+  );
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+
+  if (typeof error === "string" && error.trim().length > 0) {
+    return error;
+  }
+
+  return "An unexpected router error occurred.";
+}
+
+function errorDetails(error: unknown): string {
+  if (error instanceof Error) {
+    return error.stack ?? error.message;
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  try {
+    return JSON.stringify(error, null, 2);
+  } catch {
+    return "No additional error details are available.";
+  }
+}
+
+function coalesceOrchestrationUiEvents(
+  events: ReadonlyArray<OrchestrationEvent>,
+): OrchestrationEvent[] {
+  if (events.length < 2) {
+    return [...events];
+  }
+
+  const coalesced: OrchestrationEvent[] = [];
+  for (const event of events) {
+    const previous = coalesced.at(-1);
+    if (
+      previous?.type === "thread.message-sent" &&
+      event.type === "thread.message-sent" &&
+      previous.payload.threadId === event.payload.threadId &&
+      previous.payload.messageId === event.payload.messageId
+    ) {
+      coalesced[coalesced.length - 1] = {
+        ...event,
+        payload: {
+          ...event.payload,
+          attachments: event.payload.attachments ?? previous.payload.attachments,
+          createdAt: previous.payload.createdAt,
+          text:
+            !event.payload.streaming && event.payload.text.length > 0
+              ? event.payload.text
+              : previous.payload.text + event.payload.text,
+        },
+      };
+      continue;
+    }
+
+    coalesced.push(event);
+  }
+
+  return coalesced;
+}
+
+function appendBounded<T>(items: T[], item: T, limit: number): void {
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  if (items.length >= normalizedLimit) {
+    items.splice(0, items.length - normalizedLimit + 1);
+  }
+  items.push(item);
+}
+
+function addBoundedSetValue<T>(set: Set<T>, value: T, limit: number): void {
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  if (set.has(value)) {
+    set.delete(value);
+  }
+  while (set.size >= normalizedLimit) {
+    const oldestValue = set.values().next().value as T | undefined;
+    if (oldestValue === undefined) {
+      break;
+    }
+    set.delete(oldestValue);
+  }
+  set.add(value);
+}
+
+function shouldFlushDomainEventImmediately(
+  event: OrchestrationEvent,
+  immediatelyFlushedAssistantMessageIds: Set<string>,
+): boolean {
+  if (event.type !== "thread.message-sent" || event.payload.role !== "assistant") {
+    return false;
+  }
+
+  if (!event.payload.streaming) {
+    immediatelyFlushedAssistantMessageIds.delete(event.payload.messageId);
+    return false;
+  }
+
+  if (immediatelyFlushedAssistantMessageIds.has(event.payload.messageId)) {
+    return false;
+  }
+
+  addBoundedSetValue(
+    immediatelyFlushedAssistantMessageIds,
+    event.payload.messageId,
+    IMMEDIATE_ASSISTANT_FLUSH_ID_LIMIT,
+  );
+  return true;
+}
+
+function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: ThreadId): boolean {
+  if (event.aggregateKind !== "thread" || event.aggregateId !== threadId) {
+    return false;
+  }
+  return (
+    event.type === "thread.message-sent" ||
+    event.type === "thread.proposed-plan-upserted" ||
+    event.type === "thread.activity-appended" ||
+    event.type === "thread.turn-diff-completed" ||
+    event.type === "thread.reverted" ||
+    event.type === "thread.conversation-rolled-back" ||
+    event.type === "thread.session-set" ||
+    event.type === "thread.meta-updated" ||
+    event.type === "thread.pinned-message-added" ||
+    event.type === "thread.pinned-message-removed" ||
+    event.type === "thread.pinned-message-done-set" ||
+    event.type === "thread.pinned-message-label-set" ||
+    event.type === "thread.marker-added" ||
+    event.type === "thread.marker-removed" ||
+    event.type === "thread.marker-done-set" ||
+    event.type === "thread.marker-label-set" ||
+    event.type === "thread.archived" ||
+    event.type === "thread.unarchived"
+  );
+}
+
+function shouldPollThreadDetailCatchup(threadId: ThreadId): boolean {
+  const thread = getThreadFromState(useStore.getState(), threadId);
+  return (
+    thread?.session?.orchestrationStatus === "running" || thread?.latestTurn?.state === "running"
+  );
+}
+
 function EventRouter() {
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerThreadDetailHotPath = useStore((store) => store.syncServerThreadDetailHotPath);
@@ -240,7 +761,7 @@ function EventRouter() {
   const removeOrphanedTerminalStates = useTerminalStateStore(
     (store) => store.removeOrphanedTerminalStates,
   );
-  const setWorkspaceHomeDir = useWorkspaceStore((store) => store.setHomeDir);
+  const setServerWorkspacePaths = useWorkspaceStore((store) => store.setServerWorkspacePaths);
   const workspacePages = useWorkspaceStore((store) => store.workspacePages);
   const serverThreads = useStore((store) => store.threads);
   const queryClient = useQueryClient();
@@ -299,8 +820,10 @@ function EventRouter() {
     let needsProviderInvalidation = false;
     let needsBroadGitInvalidation = false;
     let pendingGitInvalidationThreadIds = new Set<ThreadId>();
+    let pendingProjectFileInvalidationThreadIds = new Set<ThreadId>();
     let pendingDomainEvents: OrchestrationEvent[] = [];
-    const immediatelyFlushedStreamKeys = new Set<string>();
+    const immediatelyFlushedAssistantMessageIds = new Set<string>();
+    let providerDiscoveryInvalidationFingerprint: string | null = null;
     let shellSnapshotSequence = -1;
     let pendingShellEvents: OrchestrationShellStreamEvent[] = [];
     const subscribedThreadIds = new Set<ThreadId>();
@@ -475,10 +998,28 @@ function EventRouter() {
       }
       if (needsProviderInvalidation) {
         needsProviderInvalidation = false;
+        pendingProjectFileInvalidationThreadIds = new Set();
         void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
         // Invalidate workspace entry queries so the @-mention file picker
         // reflects files created, deleted, or restored during this turn.
         void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
+      } else if (pendingProjectFileInvalidationThreadIds.size > 0) {
+        // Mid-turn file-change activities: refresh the editor file tree and
+        // open file preview for just the affected workspaces.
+        const currentState = useStore.getState();
+        const fileChangeCwds = new Set<string>();
+        for (const threadId of pendingProjectFileInvalidationThreadIds) {
+          const cwd = resolveGitInvalidationCwdForThreadId(currentState, threadId);
+          if (cwd) {
+            fileChangeCwds.add(cwd);
+          }
+        }
+        pendingProjectFileInvalidationThreadIds = new Set();
+        if (fileChangeCwds.size > 0) {
+          void invalidateProjectFileQueriesForCwds(queryClient, fileChangeCwds);
+        } else {
+          void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
+        }
       }
       if (needsBroadGitInvalidation) {
         needsBroadGitInvalidation = false;
@@ -510,6 +1051,10 @@ function EventRouter() {
       if (shouldInvalidateProviderQueriesForEvent(event)) {
         needsProviderInvalidation = true;
       }
+      const projectFileThreadId = getProjectFileInvalidationThreadIdForEvent(event);
+      if (projectFileThreadId) {
+        pendingProjectFileInvalidationThreadIds.add(projectFileThreadId);
+      }
       if (shouldInvalidateGitQueriesForEvent(event)) {
         const threadId = getGitInvalidationThreadIdForEvent(event);
         if (threadId) {
@@ -518,7 +1063,7 @@ function EventRouter() {
           needsBroadGitInvalidation = true;
         }
       }
-      if (shouldFlushDomainEventImmediately(event, immediatelyFlushedStreamKeys)) {
+      if (shouldFlushDomainEventImmediately(event, immediatelyFlushedAssistantMessageIds)) {
         domainEventFlushThrottler.cancel();
         flushPendingDomainEvents();
         return;
@@ -586,7 +1131,7 @@ function EventRouter() {
       }
 
       if (shellSnapshotSequence < 0) {
-        pendingShellEvents.push(item);
+        appendBounded(pendingShellEvents, item, PENDING_SHELL_EVENT_BUFFER_LIMIT);
         return;
       }
       if (item.sequence <= shellSnapshotSequence) {
@@ -623,7 +1168,7 @@ function EventRouter() {
       const latestThreadSequence = threadSnapshotSequenceById.get(threadId);
       if (latestThreadSequence === undefined) {
         const pendingThreadEvents = pendingThreadEventsById.get(threadId) ?? [];
-        pendingThreadEvents.push(item.event);
+        appendBounded(pendingThreadEvents, item.event, PENDING_THREAD_EVENT_BUFFER_LIMIT);
         pendingThreadEventsById.set(threadId, pendingThreadEvents);
         if (subscribedThreadIds.has(threadId)) {
           void requestThreadSnapshot(threadId);
@@ -639,10 +1184,14 @@ function EventRouter() {
     const unsubTerminalEvent = api.terminal.onEvent((event) => {
       const terminalThreadId = ThreadId.makeUnsafe(event.threadId);
       if (event.type === "activity") {
-        if (event.cliKind) {
-          useTerminalStateStore.getState().setTerminalMetadata(terminalThreadId, event.terminalId, {
+        const terminalStore = useTerminalStateStore.getState();
+        const currentCliKind =
+          selectThreadTerminalState(terminalStore.terminalStateByThreadId, terminalThreadId)
+            .terminalCliKindsById[event.terminalId] ?? null;
+        if (event.cliKind || currentCliKind !== null) {
+          terminalStore.setTerminalMetadata(terminalThreadId, event.terminalId, {
             cliKind: event.cliKind,
-            label: defaultTerminalTitleForCliKind(event.cliKind),
+            label: event.cliKind ? defaultTerminalTitleForCliKind(event.cliKind) : "Terminal",
           });
         }
       }
@@ -655,9 +1204,41 @@ function EventRouter() {
         agentState: activity.agentState,
       });
     });
+    // Dev servers are first-class server processes; mirror their lifecycle into the
+    // client store so the sidebar indicator survives reconnects and stays consistent
+    // across tabs without owning any thread/terminal state.
+    const invalidateLocalServers = () => {
+      void queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
+    };
+    const unsubDevServerEvent = api.projects.onDevServerEvent((event) => {
+      const store = useProjectRunStore.getState();
+      if (event.type === "snapshot") {
+        store.replaceAll(event.servers);
+      } else if (event.type === "upserted") {
+        store.upsertRun(event.server);
+      } else {
+        store.removeRun(event.projectId);
+      }
+      invalidateLocalServers();
+    });
+    // The channel's initial snapshot may have arrived before this listener was
+    // registered, so seed from the authoritative registry on mount.
+    void api.projects
+      .listDevServers()
+      .then(({ servers }) => {
+        if (disposed) {
+          return;
+        }
+        useProjectRunStore.getState().replaceAll(servers);
+        invalidateLocalServers();
+      })
+      .catch(() => undefined);
     const unsubWelcome = onServerWelcome((payload) => {
       void (async () => {
-        setWorkspaceHomeDir(payload.homeDir);
+        setServerWorkspacePaths({
+          homeDir: payload.homeDir,
+          chatWorkspaceRoot: payload.chatWorkspaceRoot,
+        });
         await ensureScopedSubscriptions();
         if (disposed) {
           return;
@@ -724,7 +1305,20 @@ function EventRouter() {
       });
     });
     const unsubProviderStatusesUpdated = onServerProviderStatusesUpdated((payload) => {
+      const nextProviderDiscoveryFingerprint = providerModelDiscoveryInvalidationFingerprint(
+        payload.providers,
+      );
       const currentConfig = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
+      const previousProviderDiscoveryFingerprint =
+        providerDiscoveryInvalidationFingerprint ??
+        (currentConfig
+          ? providerModelDiscoveryInvalidationFingerprint(currentConfig.providers)
+          : null);
+      const shouldInvalidateProviderDiscovery =
+        previousProviderDiscoveryFingerprint !== null &&
+        previousProviderDiscoveryFingerprint !== nextProviderDiscoveryFingerprint;
+      providerDiscoveryInvalidationFingerprint = nextProviderDiscoveryFingerprint;
+
       if (!currentConfig) {
         void queryClient.fetchQuery(serverConfigQueryOptions()).catch(() => undefined);
         return;
@@ -733,22 +1327,25 @@ function EventRouter() {
         ...currentConfig,
         providers: payload.providers,
       });
-      // OpenCode-compatible model availability depends on which underlying providers are connected.
-      void queryClient.invalidateQueries({
-        queryKey: ["provider-discovery", "models", "kilo"],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ["provider-discovery", "models", "opencode"],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ["provider-discovery", "models", "cursor"],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: providerDiscoveryQueryKeys.agents("kilo"),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: providerDiscoveryQueryKeys.agents("opencode"),
-      });
+      if (shouldInvalidateProviderDiscovery) {
+        // Model and agent discovery can depend on auth, availability, and installed versions,
+        // but not on every provider-status timestamp replay.
+        void queryClient.invalidateQueries({
+          queryKey: ["provider-discovery", "models", "kilo"],
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ["provider-discovery", "models", "opencode"],
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ["provider-discovery", "models", "cursor"],
+        });
+        void queryClient.invalidateQueries({
+          queryKey: providerDiscoveryQueryKeys.agentsForProvider("kilo"),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: providerDiscoveryQueryKeys.agentsForProvider("opencode"),
+        });
+      }
     });
     const unsubServerSettingsUpdated = onServerSettingsUpdated((payload) => {
       queryClient.setQueryData(serverQueryKeys.settings(), payload.settings);
@@ -795,6 +1392,7 @@ function EventRouter() {
       unsubShellEvent();
       unsubThreadEvent();
       unsubTerminalEvent();
+      unsubDevServerEvent();
       unsubWelcome();
       unsubServerConfigUpdated();
       unsubProviderStatusesUpdated();
@@ -807,7 +1405,7 @@ function EventRouter() {
     queryClient,
     removeOrphanedTerminalStates,
     setProjectExpanded,
-    setWorkspaceHomeDir,
+    setServerWorkspacePaths,
     syncServerShellSnapshot,
     syncServerThreadDetailHotPath,
   ]);
@@ -819,6 +1417,10 @@ function EventRouter() {
     }
     void reconcile(subscribedThreadIds);
   }, [subscribedThreadIds]);
+
+  // Account changes made outside the app reflect without a restart by
+  // re-probing provider auth when the window regains focus (see hook).
+  useProviderAuthRefreshOnFocus();
 
   return null;
 }

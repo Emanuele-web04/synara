@@ -2,66 +2,23 @@
 // Purpose: Stable Zustand selectors for entity lookups and lightweight sidebar projections.
 // Exports: Selector factories used by routes and sidebar-heavy components.
 
-import type {
-  MessageId,
-  OrchestrationReviewChatTarget,
-  ProjectId,
-  ThreadId,
-} from "@t3tools/contracts";
+import type { ProjectId, ThreadEnvironmentMode, ThreadId } from "@t3tools/contracts";
 
 import type { AppState } from "./store";
 import { collectByIds, getThreadFromState, getThreadsFromState } from "./threadDerivation";
-import type {
-  ChatMessage,
-  Project,
-  SidebarThreadSummary,
-  Thread,
-  ThreadShell,
-  ThreadTurnState,
-} from "./types";
+import type { Project, SidebarThreadSummary, Thread, ThreadShell } from "./types";
 
-const EMPTY_REVIEW_SIDECHAT_MESSAGES: ChatMessage[] = [];
-const EMPTY_REVIEW_SIDECHAT_ACTIVITIES: Thread["activities"] = [];
-const EMPTY_REVIEW_SIDECHAT_MESSAGE_MAP: Record<MessageId, ChatMessage> = {};
-const EMPTY_REVIEW_SIDECHAT_ACTIVITY_MAP: Record<string, Thread["activities"][number]> = {};
+const EMPTY_THREAD_SHELLS: ThreadShell[] = [];
 
-export interface ReviewSidechatThreadSlice {
-  readonly modelSelection: Thread["modelSelection"];
-  readonly latestTurn: Thread["latestTurn"];
-  readonly messages: Thread["messages"];
-  readonly activities: Thread["activities"];
+export interface ThreadWorkspaceMetadata {
+  envMode: ThreadEnvironmentMode | undefined;
+  worktreePath: string | null;
 }
 
-function reviewChatTargetsMatch(
-  left: OrchestrationReviewChatTarget | null | undefined,
-  right: OrchestrationReviewChatTarget | null | undefined,
-): boolean {
-  if (!left || !right) {
-    return left === right;
-  }
-  const repositoriesMatch =
-    !left.repositoryId || !right.repositoryId || left.repositoryId === right.repositoryId;
-  return (
-    left.projectId === right.projectId &&
-    left.cwd === right.cwd &&
-    left.number === right.number &&
-    repositoriesMatch
-  );
-}
-
-function isStaleReviewResumeError(message: string | undefined): boolean {
-  if (!message) {
-    return false;
-  }
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("thread/resume") &&
-    (normalized.includes("no rollout found") ||
-      normalized.includes("thread not found") ||
-      normalized.includes("missing thread") ||
-      normalized.includes("unknown thread"))
-  );
-}
+const EMPTY_THREAD_WORKSPACE_METADATA: ThreadWorkspaceMetadata = Object.freeze({
+  envMode: undefined,
+  worktreePath: null,
+});
 
 function createStableEntitySelector<T extends { id: string }>(
   selectItems: (state: AppState) => readonly T[],
@@ -100,138 +57,6 @@ export function createThreadSelector(
       ? (getThreadFromState(state, threadId) ??
         state.threads.find((thread) => thread.id === threadId))
       : undefined;
-}
-
-export function createReviewSidechatThreadSelector(
-  threadId: ThreadId | null | undefined,
-): (state: AppState) => ReviewSidechatThreadSlice | undefined {
-  let previousShell: ThreadShell | undefined;
-  let previousTurnState: ThreadTurnState | undefined;
-  let previousLatestTurn: Thread["latestTurn"] | undefined;
-  let previousMessages: Thread["messages"] | undefined;
-  let previousActivities: Thread["activities"] | undefined;
-  let previousSlice: ReviewSidechatThreadSlice | undefined;
-
-  return (state) => {
-    if (!threadId) {
-      return undefined;
-    }
-
-    const legacyThread = state.threadShellById?.[threadId]
-      ? undefined
-      : state.threads.find((thread) => thread.id === threadId);
-    const shell = state.threadShellById?.[threadId] ?? legacyThread;
-    if (!shell) {
-      return undefined;
-    }
-    const turnState = state.threadTurnStateById?.[threadId];
-    const messages =
-      legacyThread?.messages ??
-      collectByIds(
-        state.messageIdsByThreadId?.[threadId],
-        state.messageByThreadId?.[threadId] ?? EMPTY_REVIEW_SIDECHAT_MESSAGE_MAP,
-        EMPTY_REVIEW_SIDECHAT_MESSAGES,
-      );
-    const activities =
-      legacyThread?.activities ??
-      collectByIds(
-        state.activityIdsByThreadId?.[threadId],
-        state.activityByThreadId?.[threadId] ?? EMPTY_REVIEW_SIDECHAT_ACTIVITY_MAP,
-        EMPTY_REVIEW_SIDECHAT_ACTIVITIES,
-      );
-    const latestTurn = turnState?.latestTurn ?? legacyThread?.latestTurn ?? null;
-
-    if (
-      previousSlice &&
-      previousShell?.modelSelection === shell.modelSelection &&
-      previousTurnState === turnState &&
-      previousLatestTurn === latestTurn &&
-      previousMessages === messages &&
-      previousActivities === activities
-    ) {
-      return previousSlice;
-    }
-
-    previousShell = shell;
-    previousTurnState = turnState;
-    previousLatestTurn = latestTurn;
-    previousMessages = messages;
-    previousActivities = activities;
-    previousSlice = {
-      modelSelection: shell.modelSelection,
-      latestTurn,
-      messages,
-      activities,
-    };
-    return previousSlice;
-  };
-}
-
-export function createReviewChatThreadIdSelector(
-  target: OrchestrationReviewChatTarget | null,
-): (state: AppState) => ThreadId | null {
-  let previousThreadIds: readonly ThreadId[] | undefined;
-  let previousThreads: readonly Thread[] | undefined;
-  let previousShellById: AppState["threadShellById"] | undefined;
-  let previousSessionById: AppState["threadSessionById"] | undefined;
-  let previousThreadId: ThreadId | null = null;
-
-  return (state) => {
-    if (!target) {
-      return null;
-    }
-    if (
-      previousThreadIds === state.threadIds &&
-      previousThreads === state.threads &&
-      previousShellById === state.threadShellById &&
-      previousSessionById === state.threadSessionById
-    ) {
-      return previousThreadId;
-    }
-
-    previousThreadIds = state.threadIds;
-    previousThreads = state.threads;
-    previousShellById = state.threadShellById;
-    previousSessionById = state.threadSessionById;
-    const normalizedThreadIds = state.threadIds ?? [];
-    let bestUpdatedAt = Number.NEGATIVE_INFINITY;
-    let bestThreadId: ThreadId | null = null;
-
-    const considerThread = (
-      shell: Pick<Thread, "id" | "archivedAt" | "createdAt" | "reviewChatTarget" | "updatedAt">,
-      session: Thread["session"] | undefined,
-    ) => {
-      if (shell.archivedAt != null || !reviewChatTargetsMatch(shell.reviewChatTarget, target)) {
-        return;
-      }
-      if (
-        (session?.orchestrationStatus === "stopped" || session?.orchestrationStatus === "error") &&
-        isStaleReviewResumeError(session.lastError)
-      ) {
-        return;
-      }
-      const updatedAt = Date.parse(shell.updatedAt ?? shell.createdAt);
-      if (updatedAt >= bestUpdatedAt) {
-        bestUpdatedAt = updatedAt;
-        bestThreadId = shell.id;
-      }
-    };
-
-    for (const threadId of normalizedThreadIds) {
-      const shell = state.threadShellById?.[threadId];
-      if (!shell) {
-        continue;
-      }
-      considerThread(shell, state.threadSessionById?.[threadId]);
-    }
-    if (normalizedThreadIds.length === 0) {
-      for (const thread of state.threads) {
-        considerThread(thread, thread.session);
-      }
-    }
-    previousThreadId = bestThreadId;
-    return previousThreadId;
-  };
 }
 
 export function createAllThreadsSelector(): (state: AppState) => readonly Thread[] {
@@ -284,32 +109,19 @@ export function createAllThreadsSelector(): (state: AppState) => readonly Thread
   };
 }
 
+/** Shell-only projection of all threads, in `threadIds` order. Unlike
+ *  `createAllThreadsSelector`, this stays reference-stable across message/activity
+ *  streaming updates, so subscribers only re-render on thread-level changes
+ *  (create/delete/archive/title/workspace). Use it when message content is not needed. */
 export function createThreadShellsSelector(): (state: AppState) => readonly ThreadShell[] {
-  let previousThreadIds: readonly ThreadId[] | undefined;
-  let previousThreadShellById = {} as AppState["threadShellById"];
-  let previousShells: readonly ThreadShell[] = [];
-
-  return (state) => {
-    if (
-      previousThreadIds === state.threadIds &&
-      previousThreadShellById === state.threadShellById
-    ) {
-      return previousShells;
-    }
-
-    previousThreadIds = state.threadIds;
-    previousThreadShellById = state.threadShellById;
-    previousShells = (state.threadIds ?? []).flatMap((threadId) => {
-      const shell = state.threadShellById?.[threadId];
-      return shell ? [shell] : [];
-    });
-    return previousShells;
-  };
+  return (state) => collectByIds(state.threadIds, state.threadShellById, EMPTY_THREAD_SHELLS);
 }
 
+/** True when no known thread has any messages (vacuously true with zero threads).
+ *  Reads message id lists only, so streaming content updates do not invalidate it. */
 export function createAllThreadsMessagelessSelector(): (state: AppState) => boolean {
   let previousThreadIds: readonly ThreadId[] | undefined;
-  let previousMessageIdsByThreadId = {} as AppState["messageIdsByThreadId"];
+  let previousMessageIdsByThreadId: AppState["messageIdsByThreadId"] | undefined;
   let previousResult = true;
 
   return (state) => {
@@ -344,18 +156,44 @@ export function createThreadProjectIdSelector(
   };
 }
 
+export function createThreadWorkspaceMetadataSelector(
+  threadId: ThreadId | null | undefined,
+): (state: AppState) => ThreadWorkspaceMetadata {
+  let previousEnvMode: ThreadEnvironmentMode | undefined = undefined;
+  let previousWorktreePath: string | null = null;
+  let previousResult = EMPTY_THREAD_WORKSPACE_METADATA;
+
+  return (state) => {
+    if (!threadId) {
+      return EMPTY_THREAD_WORKSPACE_METADATA;
+    }
+
+    // Shell-only: avoid subscribing preview panes to live message/activity detail slices.
+    const source = state.threadShellById?.[threadId];
+    const envMode = source?.envMode;
+    const worktreePath = source?.worktreePath ?? null;
+    if (previousEnvMode === envMode && previousWorktreePath === worktreePath) {
+      return previousResult;
+    }
+
+    previousEnvMode = envMode;
+    previousWorktreePath = worktreePath;
+    previousResult =
+      envMode === undefined && worktreePath === null
+        ? EMPTY_THREAD_WORKSPACE_METADATA
+        : { envMode, worktreePath };
+    return previousResult;
+  };
+}
+
 export function createThreadExistsSelector(
   threadId: ThreadId | null | undefined,
 ): (state: AppState) => boolean {
-  return (state) => {
-    if (!threadId) {
-      return false;
-    }
-    return (
-      state.threadShellById?.[threadId] !== undefined ||
-      state.threads.some((thread) => thread.id === threadId)
-    );
-  };
+  return (state) =>
+    threadId
+      ? Boolean(state.threadShellById?.[threadId]) ||
+        state.threads.some((thread) => thread.id === threadId)
+      : false;
 }
 
 export function createSidebarThreadSummarySelector(
@@ -402,8 +240,7 @@ export function createSidebarDisplayThreadsSelector(): (
 
     previousSummaries = sidebarSummaries;
     previousDisplaySummaries = sidebarSummaries.filter(
-      (thread) =>
-        !thread.parentThreadId && thread.archivedAt == null && thread.reviewChatTarget == null,
+      (thread) => !thread.parentThreadId && thread.archivedAt == null,
     );
     return previousDisplaySummaries;
   };

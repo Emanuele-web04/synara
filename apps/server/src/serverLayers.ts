@@ -2,6 +2,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
+import { AutomationRunReactorLive } from "./automation/Layers/AutomationRunReactor";
+import { AutomationSchedulerLive } from "./automation/Layers/AutomationScheduler";
+import { AutomationServiceLive } from "./automation/Layers/AutomationService";
 import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQuery";
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore";
 import { ExecutionRuntimePlannerLive } from "./executionRuntime/Layers/ExecutionRuntimePlanner";
@@ -53,6 +56,8 @@ import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
 import { ProfileStatsQueryLive } from "./profileStats";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
+import { AutomationRepositoryLive } from "./persistence/Layers/AutomationRepository";
+import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -242,8 +247,26 @@ export function makeServerRuntimeServicesLayer() {
     authControlPlaneLayer,
     serverAuthLayer,
   );
+  const automationServiceLayer = AutomationServiceLive.pipe(
+    Layer.provideMerge(AutomationRepositoryLive),
+    Layer.provideMerge(ProjectionTurnRepositoryLive),
+    Layer.provideMerge(GitCoreLive),
+    Layer.provideMerge(TextGenerationLayerLive),
+    Layer.provideMerge(ServerSettingsLive),
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+  const automationSchedulerLayer = AutomationSchedulerLive.pipe(
+    Layer.provideMerge(automationServiceLayer),
+    Layer.provideMerge(AutomationRepositoryLive),
+  );
+  const automationRunReactorLayer = AutomationRunReactorLive.pipe(
+    Layer.provideMerge(automationServiceLayer),
+  );
 
   return Layer.mergeAll(
+    automationServiceLayer,
+    automationSchedulerLayer,
+    automationRunReactorLayer,
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
     executionRuntimeReconcilerLayer,

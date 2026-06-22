@@ -1,3 +1,8 @@
+// FILE: wsNativeApi.ts
+// Purpose: NativeApi implementation backed by the browser WebSocket RPC transport.
+// Layer: Web transport adapter
+// Exports: createWsNativeApi and event subscription helpers for server push channels.
+
 import {
   type AuthBearerBootstrapResult,
   type AuthBootstrapInput,
@@ -17,7 +22,6 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
   type ProjectDevServerEvent,
-  type ReviewUpdatedPayload,
   type ServerProviderStatusesUpdatedPayload,
   type ServerLifecycleStreamEvent,
   type ServerSettingsUpdatedPayload,
@@ -30,6 +34,7 @@ import {
   WS_CHANNELS,
   WS_METHODS,
   type WsWelcomePayload,
+  type AutomationStreamEvent,
 } from "@t3tools/contracts";
 
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
@@ -46,9 +51,6 @@ const serverProviderStatusesUpdatedListeners = new Set<
 const serverMaintenanceUpdatedListeners = new Set<(payload: ServerLifecycleStreamEvent) => void>();
 const serverSettingsUpdatedListeners = new Set<(payload: ServerSettingsUpdatedPayload) => void>();
 const gitActionProgressListeners = new Set<(payload: GitActionProgressEvent) => void>();
-const reviewUpdatedListeners = new Set<(payload: ReviewUpdatedPayload) => void>();
-let reviewUpdatedTransportUnsubscribe: (() => void) | null = null;
-const projectDevServerEventListeners = new Set<(payload: ProjectDevServerEvent) => void>();
 
 function omitNullUserInputAnswers(
   command: Parameters<NativeApi["orchestration"]["dispatchCommand"]>[0],
@@ -66,35 +68,9 @@ function omitNullUserInputAnswers(
     ),
   };
 }
-
-function dispatchReviewUpdated(payload: ReviewUpdatedPayload): void {
-  for (const listener of reviewUpdatedListeners) {
-    try {
-      listener(payload);
-    } catch {
-      // Swallow listener errors
-    }
-  }
-}
-
-function ensureReviewUpdatedSubscription(transport: WsTransport): void {
-  if (reviewUpdatedTransportUnsubscribe !== null) {
-    return;
-  }
-  reviewUpdatedTransportUnsubscribe = transport.subscribe(WS_CHANNELS.reviewUpdated, (message) =>
-    dispatchReviewUpdated(message.data),
-  );
-}
-
-function stopReviewUpdatedSubscription(): void {
-  if (reviewUpdatedTransportUnsubscribe === null) {
-    return;
-  }
-  reviewUpdatedTransportUnsubscribe();
-  reviewUpdatedTransportUnsubscribe = null;
-}
-
 const terminalEventListeners = new Set<(payload: TerminalEvent) => void>();
+const projectDevServerEventListeners = new Set<(payload: ProjectDevServerEvent) => void>();
+const automationEventListeners = new Set<(payload: AutomationStreamEvent) => void>();
 const orchestrationDomainEventListeners = new Set<(payload: OrchestrationEvent) => void>();
 const orchestrationShellEventListeners = new Set<(payload: OrchestrationShellStreamItem) => void>();
 const orchestrationThreadEventListeners = new Set<
@@ -427,6 +403,16 @@ export function createWsNativeApi(): NativeApi {
       }
     }
   });
+  transport.subscribe(WS_CHANNELS.automationEvent, (message) => {
+    const payload = message.data;
+    for (const listener of automationEventListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) => {
     const payload = message.data;
     for (const listener of orchestrationDomainEventListeners) {
@@ -499,9 +485,9 @@ export function createWsNativeApi(): NativeApi {
       },
     },
     projects: {
+      discoverScripts: (input) => transport.request(WS_METHODS.projectsDiscoverScripts, input),
       listDirectories: (input) => transport.request(WS_METHODS.projectsListDirectories, input),
       searchEntries: (input) => transport.request(WS_METHODS.projectsSearchEntries, input),
-      discoverScripts: (input) => transport.request(WS_METHODS.projectsDiscoverScripts, input),
       searchLocalEntries: (input) =>
         transport.request(WS_METHODS.projectsSearchLocalEntries, input),
       readFile: (input) => transport.request(WS_METHODS.projectsReadFile, input),
@@ -580,53 +566,6 @@ export function createWsNativeApi(): NativeApi {
         };
       },
     },
-    review: {
-      listPullRequests: (input) => transport.request(WS_METHODS.reviewListPullRequests, input),
-      loadBoardLanes: (input) => transport.request(WS_METHODS.reviewLoadBoardLanes, input),
-      getViewer: (input) => transport.request(WS_METHODS.reviewGetViewer, input),
-      loadChangeset: (input) => transport.request(WS_METHODS.reviewLoadChangeset, input),
-      loadPullRequestHeader: (input) =>
-        transport.request(WS_METHODS.reviewLoadPullRequestHeader, input),
-      loadPullRequest: (input) => transport.request(WS_METHODS.reviewLoadPullRequest, input),
-      loadConversation: (input) => transport.request(WS_METHODS.reviewLoadConversation, input),
-      loadPullRequestSurface: (input) =>
-        transport.request(WS_METHODS.reviewLoadPullRequestSurface, input),
-      listComments: (input) => transport.request(WS_METHODS.reviewListComments, input),
-      addComment: (input) => transport.request(WS_METHODS.reviewAddComment, input),
-      updateComment: (input) => transport.request(WS_METHODS.reviewUpdateComment, input),
-      removeComment: (input) => transport.request(WS_METHODS.reviewRemoveComment, input),
-      submit: (input) => transport.request(WS_METHODS.reviewSubmit, input),
-      loadRemoteThreads: (input) => transport.request(WS_METHODS.reviewLoadRemoteThreads, input),
-      resolveThread: (input) => transport.request(WS_METHODS.reviewResolveThread, input),
-      replyThread: (input) => transport.request(WS_METHODS.reviewReplyThread, input),
-      updateThreadComment: (input) =>
-        transport.request(WS_METHODS.reviewUpdateThreadComment, input),
-      deleteThreadComment: (input) =>
-        transport.request(WS_METHODS.reviewDeleteThreadComment, input),
-      runAgent: (input) => transport.request(WS_METHODS.reviewRunAgent, input),
-      checkProjectAccess: (input) => transport.request(WS_METHODS.reviewCheckProjectAccess, input),
-      listProjects: (input) => transport.request(WS_METHODS.reviewListProjects, input),
-      getProjectBoard: (input) => transport.request(WS_METHODS.reviewGetProjectBoard, input),
-      moveProjectCard: (input) => transport.request(WS_METHODS.reviewMoveProjectCard, input),
-      onUpdated: (callback) => {
-        reviewUpdatedListeners.add(callback);
-        ensureReviewUpdatedSubscription(transport);
-        const latest = transport.getLatestPush(WS_CHANNELS.reviewUpdated)?.data;
-        if (latest) {
-          queueMicrotask(() => {
-            if (reviewUpdatedListeners.has(callback)) {
-              callback(latest);
-            }
-          });
-        }
-        return () => {
-          reviewUpdatedListeners.delete(callback);
-          if (reviewUpdatedListeners.size === 0) {
-            stopReviewUpdatedSubscription();
-          }
-        };
-      },
-    },
     contextMenu: {
       show: async <T extends string>(
         items: readonly ContextMenuItem<T>[],
@@ -689,6 +628,10 @@ export function createWsNativeApi(): NativeApi {
       getDiagnostics: () => transport.request(WS_METHODS.serverGetDiagnostics),
       generateThreadRecap: (input) =>
         transport.request(WS_METHODS.serverGenerateThreadRecap, input, {
+          timeoutMs: null,
+        }),
+      generateAutomationIntent: (input) =>
+        transport.request(WS_METHODS.serverGenerateAutomationIntent, input, {
           timeoutMs: null,
         }),
       transcribeVoice: (input) => {
@@ -756,6 +699,22 @@ export function createWsNativeApi(): NativeApi {
         orchestrationThreadEventListeners.add(callback);
         return () => {
           orchestrationThreadEventListeners.delete(callback);
+        };
+      },
+    },
+    automation: {
+      list: (input) => transport.request(WS_METHODS.automationList, input),
+      create: (input) => transport.request(WS_METHODS.automationCreate, input),
+      update: (input) => transport.request(WS_METHODS.automationUpdate, input),
+      delete: (input) => transport.request(WS_METHODS.automationDelete, input),
+      runNow: (input) => transport.request(WS_METHODS.automationRunNow, input),
+      cancelRun: (input) => transport.request(WS_METHODS.automationCancelRun, input),
+      markRunRead: (input) => transport.request(WS_METHODS.automationMarkRunRead, input),
+      archiveRun: (input) => transport.request(WS_METHODS.automationArchiveRun, input),
+      onEvent: (callback) => {
+        automationEventListeners.add(callback);
+        return () => {
+          automationEventListeners.delete(callback);
         };
       },
     },
@@ -944,7 +903,9 @@ export function createWsNativeApi(): NativeApi {
   return api;
 }
 
-function teardownWsNativeApi(): void {
+// Browser-mode tests mount full app roots repeatedly in one page; reset the
+// singleton so each test gets a fresh WebSocket stream and cached push state.
+export function resetWsNativeApiForTest(): void {
   instance?.transport.dispose();
   instance = null;
   welcomeListeners.clear();
@@ -953,10 +914,9 @@ function teardownWsNativeApi(): void {
   serverMaintenanceUpdatedListeners.clear();
   serverSettingsUpdatedListeners.clear();
   gitActionProgressListeners.clear();
-  reviewUpdatedListeners.clear();
-  stopReviewUpdatedSubscription();
   terminalEventListeners.clear();
   projectDevServerEventListeners.clear();
+  automationEventListeners.clear();
   orchestrationDomainEventListeners.clear();
   orchestrationShellEventListeners.clear();
   orchestrationThreadEventListeners.clear();
@@ -964,15 +924,20 @@ function teardownWsNativeApi(): void {
   fallbackBrowserStates.clear();
 }
 
-// Test-only: dispose the singleton transport so each browser test starts from a
-// fresh WebSocket connection (and a fresh mock-WS bridge) instead of inheriting
-// subscription state from a prior test. Never called in production.
-export function __resetWsNativeApiForTests(): void {
-  teardownWsNativeApi();
-}
-
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    teardownWsNativeApi();
+    instance?.transport.dispose();
+    instance = null;
+    welcomeListeners.clear();
+    serverConfigUpdatedListeners.clear();
+    serverProviderStatusesUpdatedListeners.clear();
+    serverSettingsUpdatedListeners.clear();
+    gitActionProgressListeners.clear();
+    terminalEventListeners.clear();
+    projectDevServerEventListeners.clear();
+    orchestrationDomainEventListeners.clear();
+    orchestrationShellEventListeners.clear();
+    orchestrationThreadEventListeners.clear();
+    fallbackBrowserStateListeners.clear();
   });
 }

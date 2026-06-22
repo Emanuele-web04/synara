@@ -1,17 +1,13 @@
 // FILE: ComposerImageAttachmentChip.tsx
-// Purpose: Renders filename-first composer image attachments as compact pills with preview/remove actions.
+// Purpose: Renders composer image attachments as rounded square thumbnails with preview/remove actions.
 // Layer: Chat composer presentation
 // Depends on: composer draft image metadata, shared chip styles, and expanded image preview helpers.
 
 import { memo } from "react";
 import { type ComposerImageAttachment } from "../../composerDraftStore";
-import { CircleAlertIcon, XIcon } from "~/lib/icons";
-import { cn } from "~/lib/utils";
+import { CircleAlertIcon } from "~/lib/icons";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import {
-  COMPOSER_ATTACHMENT_CHIP_CLASS_NAME,
-  COMPOSER_INLINE_CHIP_DISMISS_BUTTON_CLASS_NAME,
-} from "../composerInlineChip";
+import { AttachmentRemoveButton } from "./AttachmentRemoveButton";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 
 interface ComposerImageAttachmentChipProps {
@@ -30,29 +26,25 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
   onRemoveImage,
 }: ComposerImageAttachmentChipProps) {
   return (
-    <div className={COMPOSER_ATTACHMENT_CHIP_CLASS_NAME}>
+    <div className="group relative shrink-0">
       <button
         type="button"
-        className="flex min-w-0 max-w-[232px] items-center gap-1.5 rounded-full py-0 pl-0 pr-0.5 text-left transition-colors hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className="block size-16 overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] transition-colors hover:border-[color:var(--color-border)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-label={`Preview ${image.name}`}
+        title={image.name}
         onClick={() => {
           const preview = buildExpandedImagePreview(images, image.id);
           if (!preview) return;
           onExpandImage(preview);
         }}
       >
-        <span className="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
-          {image.previewUrl ? (
-            <img src={image.previewUrl} alt={image.name} className="size-full object-cover" />
-          ) : (
-            <span className="px-1 text-[9px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
-              IMG
-            </span>
-          )}
-        </span>
-        <span className="min-w-0 truncate text-[12px] font-medium text-foreground/84">
-          {image.name}
-        </span>
+        {image.previewUrl ? (
+          <img src={image.previewUrl} alt={image.name} className="size-full object-cover" />
+        ) : (
+          <span className="flex size-full items-center justify-center text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+            IMG
+          </span>
+        )}
       </button>
 
       {nonPersisted && (
@@ -62,7 +54,7 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
               <span
                 role="img"
                 aria-label="Draft attachment may not persist"
-                className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-amber-600"
+                className="absolute bottom-1 left-1 inline-flex size-5 items-center justify-center rounded-full bg-[var(--composer-surface)] text-amber-600 shadow-sm"
               >
                 <CircleAlertIcon className="size-3" />
               </span>
@@ -74,17 +66,11 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
         </Tooltip>
       )}
 
-      <button
-        type="button"
-        className={cn(
-          COMPOSER_INLINE_CHIP_DISMISS_BUTTON_CLASS_NAME,
-          "size-5 rounded-full text-muted-foreground/75 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
-        )}
-        onClick={() => onRemoveImage(image.id)}
-        aria-label={`Remove ${image.name}`}
-      >
-        <XIcon className="size-3" />
-      </button>
+      <AttachmentRemoveButton
+        size="md"
+        label={`Remove ${image.name}`}
+        onRemove={() => onRemoveImage(image.id)}
+      />
     </div>
   );
 });

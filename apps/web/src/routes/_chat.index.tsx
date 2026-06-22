@@ -5,12 +5,22 @@
 
 import { ThreadId } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { SplashScreen } from "../components/SplashScreen";
 import { readSidebarUiState } from "../components/Sidebar.uiState";
-import { resolveRestorableThreadRoute } from "../chatRouteRestore";
+import {
+  type EmptyRouteRestoreRecoveryState,
+  resolveRestorableThreadRoute,
+  shouldHoldRememberedRouteFallback,
+  shouldStartRememberedRouteRecovery,
+} from "../chatRouteRestore";
+import {
+  refreshEmptyRouteRestoreSnapshot,
+  waitForEmptyRouteRestoreFallbackDelay,
+} from "../chatRouteRecovery";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
+import { readNativeApi } from "../nativeApi";
 import { useSplitViewStore } from "../splitViewStore";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
 
@@ -27,6 +37,23 @@ function ChatIndexRouteView() {
   );
   const [attempt, setAttempt] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [emptyRestoreRecoveryState, setEmptyRestoreRecoveryState] =
+    useState<EmptyRouteRestoreRecoveryState>("idle");
+  const mountedRef = useRef(true);
+  const emptyRestoreRecoveryRunRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (threadIds.length > 0 && emptyRestoreRecoveryState !== "idle") {
+      emptyRestoreRecoveryRunRef.current += 1;
+      setEmptyRestoreRecoveryState("idle");
+    }
+  }, [emptyRestoreRecoveryState, threadIds.length]);
 
   useEffect(() => {
     if (!threadsHydrated || !splitViewsHydrated) {
@@ -37,8 +64,38 @@ function ChatIndexRouteView() {
     setErrorMessage(null);
 
     void (async () => {
+      const lastThreadRoute = readSidebarUiState().lastThreadRoute;
+      if (
+        shouldStartRememberedRouteRecovery({
+          lastThreadRoute,
+          availableThreadCount: threadIds.length,
+          recoveryState: emptyRestoreRecoveryState,
+        })
+      ) {
+        const recoveryRun = (emptyRestoreRecoveryRunRef.current += 1);
+        setEmptyRestoreRecoveryState("pending");
+        await Promise.all([
+          refreshEmptyRouteRestoreSnapshot(readNativeApi()).catch(() => false),
+          waitForEmptyRouteRestoreFallbackDelay(),
+        ]);
+        if (mountedRef.current && emptyRestoreRecoveryRunRef.current === recoveryRun) {
+          setEmptyRestoreRecoveryState("done");
+        }
+        return;
+      }
+
+      if (
+        shouldHoldRememberedRouteFallback({
+          lastThreadRoute,
+          availableThreadCount: threadIds.length,
+          recoveryState: emptyRestoreRecoveryState,
+        })
+      ) {
+        return;
+      }
+
       const restorableRoute = resolveRestorableThreadRoute({
-        lastThreadRoute: readSidebarUiState().lastThreadRoute,
+        lastThreadRoute,
         availableThreadIds: new Set(threadIds),
         availableSplitViewIds: new Set(splitViewIds),
       });
@@ -69,6 +126,7 @@ function ChatIndexRouteView() {
     };
   }, [
     attempt,
+    emptyRestoreRecoveryState,
     handleNewChat,
     navigate,
     splitViewIds,

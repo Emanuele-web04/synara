@@ -1395,6 +1395,7 @@ it.layer(
       const threadId = ThreadId.makeUnsafe("Thread Revert.Files");
       const keepAttachmentId = "thread-revert-files-00000000-0000-4000-8000-000000000001";
       const removeAttachmentId = "thread-revert-files-00000000-0000-4000-8000-000000000002";
+      const removeFileAttachmentId = "thread-revert-files-00000000-0000-4000-8000-000000000004";
       const otherThreadAttachmentId =
         "thread-revert-files-extra-00000000-0000-4000-8000-000000000003";
 
@@ -1548,6 +1549,13 @@ it.layer(
               mimeType: "image/png",
               sizeBytes: 5,
             },
+            {
+              type: "file",
+              id: removeFileAttachmentId,
+              name: "remove.txt",
+              mimeType: "text/plain",
+              sizeBytes: 5,
+            },
           ],
           turnId: TurnId.makeUnsafe("turn-remove"),
           streaming: false,
@@ -1558,13 +1566,16 @@ it.layer(
 
       const keepPath = path.join(attachmentsDir, `${keepAttachmentId}.png`);
       const removePath = path.join(attachmentsDir, `${removeAttachmentId}.png`);
+      const removeFilePath = path.join(attachmentsDir, `${removeFileAttachmentId}.txt`);
       yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
       yield* fileSystem.writeFileString(keepPath, "keep");
       yield* fileSystem.writeFileString(removePath, "remove");
+      yield* fileSystem.writeFileString(removeFilePath, "remove-file");
       const otherThreadPath = path.join(attachmentsDir, `${otherThreadAttachmentId}.png`);
       yield* fileSystem.writeFileString(otherThreadPath, "other");
       assert.isTrue(yield* exists(keepPath));
       assert.isTrue(yield* exists(removePath));
+      assert.isTrue(yield* exists(removeFilePath));
       assert.isTrue(yield* exists(otherThreadPath));
 
       yield* appendAndProject({
@@ -1585,6 +1596,7 @@ it.layer(
 
       assert.isTrue(yield* exists(keepPath));
       assert.isFalse(yield* exists(removePath));
+      assert.isFalse(yield* exists(removeFilePath));
       assert.isTrue(yield* exists(otherThreadPath));
     }),
   );

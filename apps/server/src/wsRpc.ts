@@ -23,6 +23,7 @@ import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Stream } from "
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
+import { AutomationService } from "./automation/Services/AutomationService";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/http";
 import { ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
@@ -347,6 +348,7 @@ export const makeWsRpcLayer = () =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
+      const automationService = yield* AutomationService;
       const config = yield* ServerConfig;
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1060,6 +1062,25 @@ export const makeWsRpcLayer = () =>
             }),
             "Failed to generate thread recap",
           ),
+        [WS_METHODS.serverGenerateAutomationIntent]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const settings = yield* serverSettings.getSettings;
+              const modelSelection =
+                input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
+              return yield* textGeneration.generateAutomationIntent({
+                cwd: input.cwd,
+                message: input.message,
+                ...(input.defaultMode ? { defaultMode: input.defaultMode } : {}),
+                nowIso: input.nowIso,
+                ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+                model: input.textGenerationModel ?? modelSelection.model,
+                modelSelection,
+                ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+              });
+            }),
+            "Failed to generate automation intent",
+          ),
         [WS_METHODS.serverUpsertKeybinding]: (input) =>
           rpcEffect(
             keybindings
@@ -1164,6 +1185,35 @@ export const makeWsRpcLayer = () =>
           rpcEffect(providerDiscoveryService.listModels(input), "Failed to list models"),
         [WS_METHODS.providerListAgents]: (input) =>
           rpcEffect(providerDiscoveryService.listAgents(input), "Failed to list agents"),
+        [WS_METHODS.automationList]: (input) =>
+          rpcEffect(automationService.list(input), "Failed to list automations"),
+        [WS_METHODS.automationCreate]: (input) =>
+          rpcEffect(automationService.create(input), "Failed to create automation"),
+        [WS_METHODS.automationUpdate]: (input) =>
+          rpcEffect(automationService.update(input), "Failed to update automation"),
+        [WS_METHODS.automationDelete]: (input) =>
+          rpcEffect(automationService.delete(input), "Failed to delete automation"),
+        [WS_METHODS.automationRunNow]: (input) =>
+          rpcEffect(automationService.runNow(input), "Failed to run automation"),
+        [WS_METHODS.automationCancelRun]: (input) =>
+          rpcEffect(automationService.cancelRun(input), "Failed to cancel automation run"),
+        [WS_METHODS.automationMarkRunRead]: (input) =>
+          rpcEffect(automationService.markRunRead(input), "Failed to update automation run"),
+        [WS_METHODS.automationArchiveRun]: (input) =>
+          rpcEffect(automationService.archiveRun(input), "Failed to update automation run"),
+        [WS_METHODS.subscribeAutomationEvents]: () =>
+          Stream.merge(
+            Stream.fromEffect(
+              automationService.list({}).pipe(
+                Effect.map(({ definitions, runs }) => ({
+                  type: "snapshot" as const,
+                  definitions,
+                  runs,
+                })),
+              ),
+            ),
+            automationService.streamEvents,
+          ).pipe(Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed"))),
       });
     }),
   );

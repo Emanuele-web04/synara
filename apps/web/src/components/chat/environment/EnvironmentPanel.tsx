@@ -9,6 +9,7 @@
 // Layer: Environment panel container
 
 import type {
+  AutomationDefinition,
   EditorId,
   MessageId,
   PinnedMessage,
@@ -36,6 +37,10 @@ import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/i
 import { cn } from "~/lib/utils";
 
 import { EnvironmentEditorSection } from "./EnvironmentEditorSection";
+import {
+  EnvironmentAutomationsSection,
+  type EnvironmentAutomationPanelItem,
+} from "./EnvironmentAutomationsSection";
 import { EnvironmentUsageSection } from "./EnvironmentUsageSection";
 import { EnvironmentLocalServersSection } from "./EnvironmentLocalServersSection";
 import { EnvironmentMarkersSection } from "./EnvironmentMarkersSection";
@@ -87,6 +92,8 @@ export interface EnvironmentPanelProps {
   showGitActions: boolean;
   /** Current diff-panel open state, so the "Changes" row reflects/toggles it. */
   diffOpen: boolean;
+  /** Heartbeat automations whose target is the active thread. */
+  threadAutomations: readonly EnvironmentAutomationPanelItem[];
   /** Non-null when the diff panel cannot be opened (e.g. no repo / no changes yet). */
   diffDisabledReason?: string | null;
   /** Shared diff totals from ChatView so the mounted panel does not duplicate patch parsing. */
@@ -121,6 +128,8 @@ export interface EnvironmentPanelProps {
   onCopyProjectInstructionsToNotes: () => void;
   /** Toggle the Diff panel/route (same handler the header diff toggle used). */
   onToggleDiff: () => void;
+  /** Open the shared automation editor for a thread-bound automation row. */
+  onOpenAutomation: (definition: AutomationDefinition) => void;
   /** Open the repository URL in the in-app browser panel. */
   onOpenGithubRepository?: (url: string) => void;
   /** Scroll the transcript to a pinned message. */
@@ -190,6 +199,7 @@ export function EnvironmentPanel({
   activeProvider,
   showGitActions,
   diffOpen,
+  threadAutomations,
   diffDisabledReason = null,
   diffTotals,
   branchToolbar,
@@ -205,6 +215,7 @@ export function EnvironmentPanel({
   onProjectInstructionsChange,
   onCopyProjectInstructionsToNotes,
   onToggleDiff,
+  onOpenAutomation,
   onOpenGithubRepository,
   onJumpToPinnedMessage,
   onTogglePinnedMessageDone,
@@ -230,6 +241,19 @@ export function EnvironmentPanel({
 
   const content = (
     <div className="flex flex-col gap-0.5 p-1.5">
+      {threadAutomations.length > 0 ? (
+        <>
+          <EnvironmentAutomationsSection
+            automations={threadAutomations}
+            onOpenAutomation={(definition) => {
+              onOpenAutomation(definition);
+              onClose();
+            }}
+          />
+          <EnvironmentSectionDivider />
+        </>
+      ) : null}
+
       <div className="flex items-center justify-between gap-2 px-2 pb-0.5 pt-0.5">
         <EnvironmentPanelTitle>Environment</EnvironmentPanelTitle>
         <IconButton

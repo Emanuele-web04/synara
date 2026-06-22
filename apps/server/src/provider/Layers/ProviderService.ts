@@ -358,6 +358,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
         const effectiveProviderOptions =
           input.providerOptions ?? readPersistedProviderOptions(sourceBinding.runtimePayload);
+        const sourceCwd = readPersistedCwd(sourceBinding.runtimePayload);
 
         const adapter = yield* registry.getByProvider(sourceBinding.provider);
         if (!adapter.forkThread) {
@@ -382,6 +383,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             ...(sourceBinding.resumeCursor !== null && sourceBinding.resumeCursor !== undefined
               ? { sourceResumeCursor: sourceBinding.resumeCursor }
               : {}),
+            ...(sourceCwd ? { sourceCwd } : {}),
             runtimeMode: input.runtimeMode,
           })
           .pipe(

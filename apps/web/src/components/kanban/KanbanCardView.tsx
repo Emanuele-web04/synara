@@ -5,7 +5,6 @@
 // Exports: KanbanCardView
 
 import { GoRepoForked } from "react-icons/go";
-import { LuSplit } from "react-icons/lu";
 import { memo } from "react";
 
 import { resolvePrStatePresentation, resolveThreadStatusPill } from "../Sidebar.logic";
@@ -18,6 +17,7 @@ import {
   PaperclipIcon,
   PinIcon,
   TerminalIcon,
+  WorktreeIcon,
 } from "~/lib/icons";
 import { resolveThreadEnvironmentPresentation } from "~/lib/threadEnvironment";
 import { formatRelativeTime } from "~/lib/relativeTime";
@@ -187,7 +187,7 @@ function KanbanCardViewComponent({
         ) : null}
         {worktreeBadgeLabel ? (
           <span title={worktreeBadgeLabel} className="flex shrink-0 items-center">
-            <LuSplit className="size-3 rotate-90 text-muted-foreground/70" aria-hidden />
+            <WorktreeIcon className="size-3 text-muted-foreground/70" aria-hidden />
           </span>
         ) : null}
         {isForked ? (

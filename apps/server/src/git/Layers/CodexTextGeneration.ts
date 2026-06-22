@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { DEFAULT_GIT_TEXT_GENERATION_MODEL, ReviewFinding } from "@t3tools/contracts";
+import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
 import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
 import { resolveCodexHome } from "@t3tools/shared/codexConfig";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
@@ -19,31 +19,27 @@ import {
   type CommitMessageGenerationResult,
   type DiffSummaryGenerationResult,
   type PrContentGenerationResult,
-  type ReviewFindingsGenerationResult,
-  type ThreadRecapGenerationResult,
   type ThreadTitleGenerationResult,
+  type ThreadRecapGenerationResult,
+  type TextGenerationOperation,
   type TextGenerationShape,
   TextGeneration,
 } from "../Services/TextGeneration.ts";
 import {
   buildBranchNamePrompt,
+  buildAutomationIntentPrompt,
+  buildAutomationCompletionEvaluationPrompt,
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
-  buildReviewFindingsPrompt,
   buildThreadRecapPrompt,
   buildThreadTitlePrompt,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
-  sanitizePrTitle,
   sanitizeThreadRecap,
+  sanitizePrTitle,
   toJsonSchemaObject,
 } from "../textGenerationShared.ts";
-
-const ReviewFindingsOutputSchema = Schema.Struct({
-  summary: Schema.String,
-  findings: Schema.Array(ReviewFinding),
-});
 
 const CODEX_REASONING_EFFORT = "low";
 const CODEX_TIMEOUT_MS = 180_000;
@@ -174,14 +170,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     fileSystem.remove(directoryPath, { recursive: true }).pipe(Effect.catch(() => Effect.void));
 
   const prepareIsolatedCodexHome = (
-    operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateDiffSummary"
-      | "generateReviewFindings"
-      | "generateBranchName"
-      | "generateThreadTitle"
-      | "generateThreadRecap",
+    operation: TextGenerationOperation,
     sourceHomePath?: string,
   ): Effect.Effect<{ readonly homePath: string }, TextGenerationError> =>
     Effect.gen(function* () {
@@ -245,13 +234,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     });
 
   const materializeImageAttachments = (
-    _operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateDiffSummary"
-      | "generateReviewFindings"
-      | "generateBranchName"
-      | "generateThreadTitle",
+    _operation: TextGenerationOperation,
     attachments: BranchNameGenerationInput["attachments"],
   ): Effect.Effect<MaterializedImageAttachments, TextGenerationError> =>
     Effect.gen(function* () {
@@ -295,14 +278,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     modelSelection,
     providerOptions,
   }: {
-    operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateDiffSummary"
-      | "generateReviewFindings"
-      | "generateBranchName"
-      | "generateThreadTitle"
-      | "generateThreadRecap";
+    operation: TextGenerationOperation;
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -537,33 +513,6 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     );
   };
 
-  const generateReviewFindings: TextGenerationShape["generateReviewFindings"] = (input) => {
-    const { prompt } = buildReviewFindingsPrompt({
-      patch: input.patch,
-      ...(input.prTitle ? { prTitle: input.prTitle } : {}),
-      ...(input.prBody ? { prBody: input.prBody } : {}),
-    });
-
-    return runCodexJson({
-      operation: "generateReviewFindings",
-      cwd: input.cwd,
-      prompt,
-      outputSchemaJson: ReviewFindingsOutputSchema,
-      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
-      ...(input.model ? { model: input.model } : {}),
-      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-    }).pipe(
-      Effect.map(
-        (generated) =>
-          ({
-            summary: generated.summary,
-            findings: generated.findings,
-          }) satisfies ReviewFindingsGenerationResult,
-      ),
-    );
-  };
-
   const generateBranchName: TextGenerationShape["generateBranchName"] = (input) => {
     return Effect.gen(function* () {
       const { imagePaths } = yield* materializeImageAttachments(
@@ -646,14 +595,51 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     );
   };
 
+  const generateAutomationIntent: TextGenerationShape["generateAutomationIntent"] = (input) => {
+    const { prompt, outputSchemaJson } = buildAutomationIntentPrompt({
+      message: input.message,
+      ...(input.defaultMode ? { defaultMode: input.defaultMode } : {}),
+      nowIso: input.nowIso,
+    });
+
+    return runCodexJson({
+      operation: "generateAutomationIntent",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
+  };
+
+  const evaluateAutomationCompletion: TextGenerationShape["evaluateAutomationCompletion"] = (
+    input,
+  ) => {
+    const { prompt, outputSchemaJson } = buildAutomationCompletionEvaluationPrompt(input);
+
+    return runCodexJson({
+      operation: "evaluateAutomationCompletion",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
+  };
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateDiffSummary,
-    generateReviewFindings,
     generateBranchName,
     generateThreadTitle,
     generateThreadRecap,
+    generateAutomationIntent,
+    evaluateAutomationCompletion,
   } satisfies TextGenerationShape;
 });
 

@@ -1,16 +1,21 @@
+// FILE: wsTransport.ts
+// Purpose: Browser-side Effect RPC transport over the Synara WebSocket endpoint.
+// Layer: Web transport
+// Exports: WsTransport plus stream-selection helpers used by tests.
+
 import {
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
   WS_CHANNELS,
   WS_METHODS,
   WsRpcGroup,
+  type AutomationStreamEvent,
   type GitActionProgressEvent,
   type GitRunStackedActionResult,
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
   type ProjectDevServerEvent,
-  type ReviewUpdatedPayload,
   type ServerConfigStreamEvent,
   type ServerLifecycleStreamEvent,
   type ServerProviderStatusesUpdatedPayload,
@@ -24,13 +29,13 @@ import { Cause, Data, Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from 
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 
+import type { WsTransportState } from "./wsTransportEvents";
+
 type PushListener<C extends WsPushChannel> = (message: WsPushMessage<C>) => void;
 
 type RpcClientEffect = typeof makeRpcClient;
 type RpcClientInstance =
   RpcClientEffect extends Effect.Effect<infer Client, any, any> ? Client : never;
-
-type TransportState = "connecting" | "open" | "closed" | "disposed";
 
 class WsTransportRpcError extends Data.TaggedError("WsTransportRpcError")<{
   readonly message: string;
@@ -62,6 +67,9 @@ function makeProtocolLayer(url: string) {
   const socketLayer = Socket.layerWebSocket(url).pipe(
     Layer.provide(Socket.layerWebSocketConstructorGlobal),
   );
+  // JSON keeps the wire format symmetric with any server build: a serialization
+  // mismatch on this single multiplexed socket is a hard connect failure, and the
+  // desktop/dev setup routinely runs web and server on independently-built copies.
   return RpcClient.layerProtocolSocket().pipe(
     Layer.provide(Layer.mergeAll(socketLayer, RpcSerialization.layerJson)),
   );
@@ -107,10 +115,11 @@ export function shouldKeepServerLifecycleStream(activeChannels: ReadonlySet<stri
 export class WsTransport {
   private readonly explicitUrl: string | null;
   private readonly listeners = new Map<string, Set<(message: WsPush) => void>>();
+  private readonly stateListeners = new Set<(state: WsTransportState) => void>();
   private readonly latestPushByChannel = new Map<string, WsPush>();
-  private readonly stateListeners = new Set<(state: TransportState) => void>();
   private sequence = 0;
-  private state: TransportState = "connecting";
+  private sessionVersion = 0;
+  private state: WsTransportState = "connecting";
   private disposed = false;
   private runtime: ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never>;
   private clientScope: Scope.Closeable;
@@ -214,21 +223,22 @@ export class WsTransport {
     return latest ? (latest as WsPushMessage<C>) : null;
   }
 
-  getState(): TransportState {
-    return this.state;
-  }
-
   onStateChange(
-    listener: (state: TransportState) => void,
+    listener: (state: WsTransportState) => void,
     options?: { readonly replayCurrent?: boolean },
   ): () => void {
     this.stateListeners.add(listener);
     if (options?.replayCurrent) {
       listener(this.state);
     }
+
     return () => {
       this.stateListeners.delete(listener);
     };
+  }
+
+  getState(): WsTransportState {
+    return this.state;
   }
 
   dispose() {
@@ -236,28 +246,36 @@ export class WsTransport {
     this.setState("disposed");
     for (const cleanup of this.streamCleanups.values()) cleanup();
     this.streamCleanups.clear();
-    void this.runtime
-      .runPromise(Scope.close(this.clientScope, Exit.void))
-      .catch(() => {
-        // Scope close can reject if the runtime is already tearing down; the
-        // transport is disposed either way, so this rejection is terminal noise.
-      })
+    // Dispose can race with initial connection or reconnect promises. Mark them
+    // handled before closing the runtime so test/browser teardown stays quiet.
+    void this.clientPromise.catch(() => undefined);
+    void this.reconnectPromise?.catch(() => undefined);
+    const runtime = this.runtime;
+    const clientScope = this.clientScope;
+    void runtime
+      .runPromise(Scope.close(clientScope, Exit.void))
+      .catch(() => undefined)
       .finally(() => {
-        this.runtime.dispose();
+        runtime.dispose();
       });
   }
 
   private createSession() {
+    const sessionVersion = ++this.sessionVersion;
     const runtime = ManagedRuntime.make(makeProtocolLayer(makeSocketUrl(this.explicitUrl)));
     const clientScope = runtime.runSync(Scope.make());
     const clientPromise = runtime
       .runPromise(Scope.provide(clientScope)(makeRpcClient))
       .then((client) => {
-        this.setState("open");
+        if (!this.disposed && this.sessionVersion === sessionVersion) {
+          this.setState("open");
+        }
         return client;
       })
       .catch((error) => {
-        this.setState("closed");
+        if (!this.disposed && this.sessionVersion === sessionVersion) {
+          this.setState("closed");
+        }
         throw error;
       });
     return { runtime, clientScope, clientPromise };
@@ -285,9 +303,7 @@ export class WsTransport {
 
     void oldRuntime
       .runPromise(Scope.close(oldClientScope, Exit.void))
-      .catch(() => {
-        // The old runtime is being replaced; a close rejection here is terminal noise.
-      })
+      .catch(() => undefined)
       .finally(() => {
         oldRuntime.dispose();
       });
@@ -298,16 +314,14 @@ export class WsTransport {
     return this.reconnectPromise;
   }
 
-  private setState(state: TransportState): void {
-    if (this.state === state) {
-      return;
-    }
+  private setState(state: WsTransportState): void {
+    if (this.state === state) return;
     this.state = state;
     for (const listener of this.stateListeners) {
       try {
         listener(state);
       } catch {
-        // State listeners must not break the transport.
+        // Listener errors must not break reconnect or RPC state transitions.
       }
     }
   }
@@ -358,10 +372,6 @@ export class WsTransport {
   private startChannelStream(channel: WsPushChannel): void {
     void this.getClient()
       .then((client) => {
-        if (!this.listeners.has(channel)) {
-          return;
-        }
-
         const restartChannel = () => {
           if (this.listeners.has(channel)) {
             this.startChannelStream(channel);
@@ -411,16 +421,16 @@ export class WsTransport {
           );
         } else if (channel === WS_CHANNELS.projectDevServerEvent) {
           this.startStream(
-            "projects.dev-servers",
+            "project.devServers",
             client[WS_METHODS.subscribeProjectDevServerEvents]({}),
             (event: ProjectDevServerEvent) => this.emit(WS_CHANNELS.projectDevServerEvent, event),
             restartChannel,
           );
-        } else if (channel === WS_CHANNELS.reviewUpdated) {
+        } else if (channel === WS_CHANNELS.automationEvent) {
           this.startStream(
-            "review.updated",
-            client[WS_METHODS.subscribeReviewUpdates]({}),
-            (event: ReviewUpdatedPayload) => this.emit(WS_CHANNELS.reviewUpdated, event),
+            "automation.events",
+            client[WS_METHODS.subscribeAutomationEvents]({}),
+            (event: AutomationStreamEvent) => this.emit(WS_CHANNELS.automationEvent, event),
             restartChannel,
           );
         } else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent) {
@@ -448,8 +458,8 @@ export class WsTransport {
       this.stopStream("server.providers");
     else if (channel === WS_CHANNELS.serverSettingsUpdated) this.stopStream("server.settings");
     else if (channel === WS_CHANNELS.terminalEvent) this.stopStream("terminal.events");
-    else if (channel === WS_CHANNELS.projectDevServerEvent) this.stopStream("projects.dev-servers");
-    else if (channel === WS_CHANNELS.reviewUpdated) this.stopStream("review.updated");
+    else if (channel === WS_CHANNELS.projectDevServerEvent) this.stopStream("project.devServers");
+    else if (channel === WS_CHANNELS.automationEvent) this.stopStream("automation.events");
     else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent)
       this.stopStream("orchestration.domain");
   }
@@ -520,32 +530,31 @@ export class WsTransport {
   ): void {
     if (this.streamCleanups.has(key)) return;
     const runnableStream = stream as Stream.Stream<T, WsTransportRpcError, never>;
-    let cancel: (() => void) | undefined;
-    cancel = this.runtime.runCallback(
+    const cancel = this.runtime.runCallback(
       Stream.runForEach(runnableStream, (event) => Effect.sync(() => listener(event))),
       {
         onExit: (exit) => {
-          if (cancel && this.streamCleanups.get(key) === cancel) {
+          if (this.streamCleanups.get(key) === cancel) {
             this.streamCleanups.delete(key);
           }
           const wasStoppedIntentionally = this.stoppingStreams.delete(key);
           if (wasStoppedIntentionally || this.disposed) {
             return;
           }
-          if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) {
-            return;
-          }
           if (restart && Exit.isFailure(exit)) {
-            window.setTimeout(() => {
-              if (!this.disposed && !this.streamCleanups.has(key)) {
-                void this.reconnect()
-                  .then(() => restart())
-                  .catch((error) => console.warn("WebSocket RPC stream reconnect failed", error));
-              }
-            }, 500);
+            window.setTimeout(
+              () => {
+                if (!this.disposed && !this.streamCleanups.has(key)) {
+                  void this.reconnect()
+                    .then(() => restart())
+                    .catch((error) => console.warn("WebSocket RPC stream reconnect failed", error));
+                }
+              },
+              Cause.hasInterruptsOnly(exit.cause) ? 0 : 500,
+            );
             return;
           }
-          if (Exit.isFailure(exit) && !this.disposed) {
+          if (Exit.isFailure(exit) && !this.disposed && !Cause.hasInterruptsOnly(exit.cause)) {
             console.warn("WebSocket RPC stream failed", causeToError(exit.cause));
           }
         },

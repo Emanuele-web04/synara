@@ -5,7 +5,7 @@
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Duration, Effect, Layer } from "effect";
+import { Duration, Effect, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import { beforeEach, expect } from "vitest";
 
@@ -21,30 +21,37 @@ import { OpenCodeTextGenerationServiceLive } from "./OpenCodeTextGeneration.ts";
 const runtimeMock = {
   state: {
     startCalls: [] as string[],
+    startCwds: [] as Array<string | undefined>,
     sessionCreateInputs: [] as Array<Record<string, unknown>>,
     promptUrls: [] as string[],
     authHeaders: [] as Array<string | null>,
     closeCalls: [] as string[],
+    promptStartedResolvers: [] as Array<() => void>,
+    promptWaits: [] as Array<Promise<void>>,
     promptResult: undefined as
       | { data?: { info?: { error?: unknown }; parts?: Array<{ type: string; text?: string }> } }
       | undefined,
   },
   reset() {
     this.state.startCalls.length = 0;
+    this.state.startCwds.length = 0;
     this.state.sessionCreateInputs.length = 0;
     this.state.promptUrls.length = 0;
     this.state.authHeaders.length = 0;
     this.state.closeCalls.length = 0;
+    this.state.promptStartedResolvers.length = 0;
+    this.state.promptWaits.length = 0;
     this.state.promptResult = undefined;
   },
 };
 
 const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
-  startOpenCodeServerProcess: ({ binaryPath }) =>
+  startOpenCodeServerProcess: ({ binaryPath, cwd }) =>
     Effect.gen(function* () {
       const index = runtimeMock.state.startCalls.length + 1;
       const url = `http://127.0.0.1:${4_300 + index}`;
       runtimeMock.state.startCalls.push(binaryPath);
+      runtimeMock.state.startCwds.push(cwd);
 
       // Mirror the production scoped cleanup so we can assert idle shutdown behavior.
       yield* Effect.addFinalizer(() =>
@@ -84,6 +91,11 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
           runtimeMock.state.authHeaders.push(
             serverPassword ? `Basic ${btoa(`opencode:${serverPassword}`)}` : null,
           );
+          runtimeMock.state.promptStartedResolvers.shift()?.();
+          const promptWait = runtimeMock.state.promptWaits.shift();
+          if (promptWait) {
+            await promptWait;
+          }
 
           return (
             runtimeMock.state.promptResult ?? {
@@ -227,6 +239,94 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
         "http://127.0.0.1:4302",
       ]);
       expect(runtimeMock.state.closeCalls).toEqual(["http://127.0.0.1:4301"]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("starts managed OpenCode servers in the request cwd", () =>
+    Effect.gen(function* () {
+      const textGeneration = yield* OpenCodeTextGeneration;
+      const cwd = "/repo/with-local-opencode-config";
+
+      yield* textGeneration.generateCommitMessage({
+        cwd,
+        branch: "feature/opencode-config",
+        stagedSummary: "M README.md",
+        stagedPatch: "diff --git a/README.md b/README.md",
+        modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+      });
+
+      expect(runtimeMock.state.startCalls).toEqual(["opencode"]);
+      expect(runtimeMock.state.startCwds).toEqual([cwd]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("starts a separate warm server when the request cwd changes", () =>
+    Effect.gen(function* () {
+      const textGeneration = yield* OpenCodeTextGeneration;
+
+      yield* textGeneration.generateCommitMessage({
+        cwd: "/repo/alpha",
+        branch: "feature/opencode-alpha",
+        stagedSummary: "M README.md",
+        stagedPatch: "diff --git a/README.md b/README.md",
+        modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+      });
+      yield* textGeneration.generateCommitMessage({
+        cwd: "/repo/beta",
+        branch: "feature/opencode-beta",
+        stagedSummary: "M README.md",
+        stagedPatch: "diff --git a/README.md b/README.md",
+        modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+      });
+
+      expect(runtimeMock.state.startCalls).toEqual(["opencode", "opencode"]);
+      expect(runtimeMock.state.startCwds).toEqual(["/repo/alpha", "/repo/beta"]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("does not reuse an active managed server for a different request cwd", () =>
+    Effect.gen(function* () {
+      const textGeneration = yield* OpenCodeTextGeneration;
+      let releaseFirstPrompt!: () => void;
+      const firstPromptStarted = new Promise<void>((resolve) => {
+        runtimeMock.state.promptStartedResolvers.push(resolve);
+      });
+      runtimeMock.state.promptWaits.push(
+        new Promise<void>((resolve) => {
+          releaseFirstPrompt = resolve;
+        }),
+      );
+
+      const firstFiber = yield* textGeneration
+        .generateCommitMessage({
+          cwd: "/repo/alpha",
+          branch: "feature/opencode-alpha",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        })
+        .pipe(Effect.forkChild);
+
+      yield* Effect.promise(() => firstPromptStarted);
+
+      yield* textGeneration.generateCommitMessage({
+        cwd: "/repo/beta",
+        branch: "feature/opencode-beta",
+        stagedSummary: "M README.md",
+        stagedPatch: "diff --git a/README.md b/README.md",
+        modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+      });
+
+      releaseFirstPrompt();
+      yield* Fiber.join(firstFiber);
+
+      expect(runtimeMock.state.startCalls).toEqual(["opencode", "opencode"]);
+      expect(runtimeMock.state.startCwds).toEqual(["/repo/alpha", "/repo/beta"]);
+      expect(runtimeMock.state.promptUrls).toEqual([
+        "http://127.0.0.1:4301",
+        "http://127.0.0.1:4302",
+      ]);
+      expect(runtimeMock.state.closeCalls).toContain("http://127.0.0.1:4302");
     }).pipe(Effect.provide(TestClock.layer())),
   );
 

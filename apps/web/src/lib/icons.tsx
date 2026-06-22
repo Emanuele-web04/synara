@@ -3,7 +3,7 @@ import { PiSquareSplitHorizontal, PiSquareSplitVertical } from "react-icons/pi";
 import { RiApps2Line } from "react-icons/ri";
 import { SiGithub } from "react-icons/si";
 import { VscMcp } from "react-icons/vsc";
-import { LuMessageSquareDashed, LuSplit } from "react-icons/lu";
+import { LuMessageSquareDashed } from "react-icons/lu";
 import { cn } from "./utils";
 import { CentralIcon } from "./central-icons";
 import {
@@ -246,14 +246,6 @@ export const Trash2 = adaptIcon(IconTrash);
 export const TriangleAlertIcon = adaptIcon(IconAlertTriangle);
 export const Undo2Icon = adaptIcon(IconArrowBackUp);
 export const WrenchIcon = adaptIcon(IconTool);
-export const WorktreeIcon: LucideIcon = (props) => (
-  <LuSplit
-    className={props.className}
-    style={{
-      ...props.style,
-      transform: `${props.style?.transform ?? ""} rotate(90deg)`.trim(),
-    }}
-  />
-);
+export const WorktreeIcon = centralIconWrapper("arrow-split-right");
 export const XIcon = adaptIcon(IconX);
 export const ZapIcon = adaptIcon(IconBolt);

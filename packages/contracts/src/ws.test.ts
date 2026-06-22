@@ -80,78 +80,6 @@ it.effect("accepts git.preparePullRequestThread requests", () =>
   }),
 );
 
-it.effect("accepts aggregate review pull request surface requests", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decode(WebSocketRequest, {
-      id: "req-review-surface-1",
-      body: {
-        _tag: WS_METHODS.reviewLoadPullRequestSurface,
-        cwd: "/repo",
-        reference: "42",
-        source: { _tag: "pullRequest", reference: "42" },
-        includeConversation: true,
-      },
-    });
-    assert.strictEqual(parsed.body._tag, WS_METHODS.reviewLoadPullRequestSurface);
-  }),
-);
-
-it.effect("accepts lightweight review pull request header requests", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decode(WebSocketRequest, {
-      id: "req-review-header-1",
-      body: {
-        _tag: WS_METHODS.reviewLoadPullRequestHeader,
-        cwd: "/repo",
-        reference: "42",
-      },
-    });
-    assert.strictEqual(parsed.body._tag, WS_METHODS.reviewLoadPullRequestHeader);
-  }),
-);
-
-it.effect("accepts review thread mutation requests", () =>
-  Effect.gen(function* () {
-    const requests = [
-      {
-        _tag: WS_METHODS.reviewResolveThread,
-        cwd: "/repo",
-        reference: "42",
-        threadId: "thread-1",
-        resolved: true,
-      },
-      {
-        _tag: WS_METHODS.reviewReplyThread,
-        cwd: "/repo",
-        reference: "42",
-        threadId: "thread-1",
-        body: "Looks good.",
-      },
-      {
-        _tag: WS_METHODS.reviewUpdateThreadComment,
-        cwd: "/repo",
-        reference: "42",
-        commentId: "comment-1",
-        body: "Updated reply.",
-      },
-      {
-        _tag: WS_METHODS.reviewDeleteThreadComment,
-        cwd: "/repo",
-        reference: "42",
-        commentId: "comment-1",
-      },
-    ] as const;
-
-    for (const body of requests) {
-      const parsed = yield* decode(WebSocketRequest, {
-        id: `req-${body._tag}`,
-        body,
-      });
-      assert.strictEqual(parsed.body._tag, body._tag);
-    }
-  }),
-);
-
 it.effect("accepts project script discovery requests", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(WebSocketRequest, {
@@ -163,6 +91,50 @@ it.effect("accepts project script discovery requests", () =>
       },
     });
     assert.strictEqual(parsed.body._tag, WS_METHODS.projectsDiscoverScripts);
+  }),
+);
+
+it.effect("accepts automation create requests", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WebSocketRequest, {
+      id: "req-automation-create-1",
+      body: {
+        _tag: WS_METHODS.automationCreate,
+        name: "Nightly maintenance",
+        projectId: "project-1",
+        prompt: "Check stale dependencies.",
+        schedule: { type: "manual" },
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+      },
+    });
+    assert.strictEqual(parsed.body._tag, WS_METHODS.automationCreate);
+  }),
+);
+
+it.effect("accepts automation run action requests", () =>
+  Effect.gen(function* () {
+    const markRead = yield* decode(WebSocketRequest, {
+      id: "req-automation-read-1",
+      body: {
+        _tag: WS_METHODS.automationMarkRunRead,
+        runId: "run-1",
+        unread: false,
+      },
+    });
+    const archive = yield* decode(WebSocketRequest, {
+      id: "req-automation-archive-1",
+      body: {
+        _tag: WS_METHODS.automationArchiveRun,
+        runId: "run-1",
+        archived: true,
+      },
+    });
+
+    assert.strictEqual(markRead.body._tag, WS_METHODS.automationMarkRunRead);
+    assert.strictEqual(archive.body._tag, WS_METHODS.automationArchiveRun);
   }),
 );
 
@@ -212,35 +184,15 @@ it.effect("accepts git.actionProgress push envelopes", () =>
   }),
 );
 
-it.effect("accepts review.updated push envelopes and subscription requests", () =>
+it.effect("accepts automation.event push envelopes", () =>
   Effect.gen(function* () {
-    const request = yield* decode(WebSocketRequest, {
-      id: "req-review-updates",
-      body: {
-        _tag: WS_METHODS.subscribeReviewUpdates,
-      },
-    });
-    assert.strictEqual(request.body._tag, WS_METHODS.subscribeReviewUpdates);
-
     const parsed = yield* decode(WsResponse, {
       type: "push",
       sequence: 4,
-      channel: WS_CHANNELS.reviewUpdated,
+      channel: WS_CHANNELS.automationEvent,
       data: {
-        _tag: "pullRequestList",
-        cwd: "/repo",
-        repositoryId: "repo-1",
-        state: "open",
-        authors: ["alice", "bob"],
-        baseBranches: ["main", "release"],
-        headBranches: ["feature/review-board", "octocat:feature/review-board"],
-        labels: ["bug", "feature"],
-        assignees: ["alice", "bob"],
-        draft: true,
-        data: {
-          pullRequests: [],
-        },
-        fetchedAt: 1,
+        type: "definition-deleted",
+        automationId: "automation-1",
       },
     });
 
@@ -248,7 +200,7 @@ it.effect("accepts review.updated push envelopes and subscription requests", () 
       assert.fail("expected websocket response to decode as a push envelope");
     }
 
-    assert.strictEqual(parsed.channel, WS_CHANNELS.reviewUpdated);
+    assert.strictEqual(parsed.channel, WS_CHANNELS.automationEvent);
   }),
 );
 

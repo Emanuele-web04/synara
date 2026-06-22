@@ -10,7 +10,11 @@ import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "./config";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
-import { ProfileStatsQuery, ProfileStatsQueryLive } from "./profileStats";
+import {
+  aggregateProfileSkillUsageRows,
+  ProfileStatsQuery,
+  ProfileStatsQueryLive,
+} from "./profileStats";
 
 const testLayer = ProfileStatsQueryLive.pipe(
   Layer.provideMerge(SqlitePersistenceMemory),
@@ -29,6 +33,63 @@ function runProfileStatsTest<A, E>(
 }
 
 describe("ProfileStatsQuery", () => {
+  it("normalizes profile skill usage from structured refs plus slash and dollar prompt tokens", () => {
+    expect(
+      aggregateProfileSkillUsageRows([
+        {
+          messageId: "message-1",
+          text: "Use $check-code and /refactor-code",
+          skillsJson: JSON.stringify([
+            { name: "check-code", path: "/skills/check-code/SKILL.md" },
+            { name: "refactor-code", path: "/skills/refactor-code/SKILL.md" },
+          ]),
+          mentionsJson: null,
+        },
+        {
+          messageId: "message-2",
+          text: "Use /check-code again, but keep /plan plain, ignore /Users/test and $PATH",
+          skillsJson: null,
+          mentionsJson: JSON.stringify([{ name: "reviewer", path: "agent://reviewer" }]),
+        },
+        {
+          messageId: "message-3",
+          text: "Pi style /skill:planner should group as planner; shell $HOME and cost $100 do not",
+          skillsJson: null,
+          mentionsJson: null,
+        },
+      ]),
+    ).toEqual([
+      { name: "check-code", displayName: "$check-code", kind: "skill", runCount: 2 },
+      { name: "planner", displayName: "$planner", kind: "skill", runCount: 1 },
+      { name: "refactor-code", displayName: "$refactor-code", kind: "skill", runCount: 1 },
+      { name: "reviewer", displayName: "@reviewer", kind: "agent", runCount: 1 },
+    ]);
+  });
+
+  it("does not count serialized prompt block closing tags as slash skills", () => {
+    expect(
+      aggregateProfileSkillUsageRows([
+        {
+          messageId: "message-blocks",
+          text: [
+            "Use /check-code for the actual request.",
+            "<terminal_context>",
+            "npm test",
+            "</terminal_context>",
+            "<file_comments>",
+            "src/app.ts: leave this as-is",
+            "</file_comments>",
+            "<pasted_text>",
+            '[{"text":"const value = $foo;\\nrun /deploy now"}]',
+            "</pasted_text>",
+          ].join("\n"),
+          skillsJson: null,
+          mentionsJson: null,
+        },
+      ]),
+    ).toEqual([{ name: "check-code", displayName: "$check-code", kind: "skill", runCount: 1 }]);
+  });
+
   it("aggregates prompts, model usage, provider usage, and reasoning from local projections", async () => {
     await runProfileStatsTest(
       Effect.gen(function* () {
@@ -186,6 +247,438 @@ describe("ProfileStatsQuery", () => {
           model: "gpt-5-codex",
           turnCount: 2,
         });
+      }),
+    );
+  });
+
+  it("counts slash skill invocations from projected thread message text and groups them with dollar usage", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id,
+            project_id,
+            title,
+            model_selection_json,
+            runtime_mode,
+            interaction_mode,
+            env_mode,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES (
+            'thread-skills',
+            'project-profile',
+            'Skill Thread',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access',
+            'default',
+            'local',
+            '2026-06-14T09:00:00.000Z',
+            '2026-06-14T09:00:00.000Z',
+            NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id,
+            thread_id,
+            turn_id,
+            role,
+            text,
+            skills_json,
+            mentions_json,
+            is_streaming,
+            source,
+            created_at,
+            updated_at
+          )
+          VALUES
+            (
+              'message-skill-1',
+              'thread-skills',
+              'turn-skill-1',
+              'user',
+              'Use $check-code and /refactor-code',
+              '[{"name":"check-code","path":"/skills/check-code/SKILL.md"},{"name":"refactor-code","path":"/skills/refactor-code/SKILL.md"}]',
+              NULL,
+              0,
+              'native',
+              '2026-06-14T09:05:00.000Z',
+              '2026-06-14T09:05:00.000Z'
+            ),
+            (
+              'message-skill-2',
+              'thread-skills',
+              'turn-skill-2',
+              'user',
+              'Use /check-code and /skill:planner, ignore /plan, /Users/test, $PATH, and $100',
+              NULL,
+              '[{"name":"reviewer","path":"agent://reviewer"}]',
+              0,
+              'native',
+              '2026-06-14T09:35:00.000Z',
+              '2026-06-14T09:35:00.000Z'
+            ),
+            (
+              'message-skill-import',
+              'thread-skills',
+              'turn-skill-import',
+              'user',
+              'Imported /imported-skill should not count',
+              '[{"name":"imported-skill","path":"/skills/imported-skill/SKILL.md"}]',
+              NULL,
+              0,
+              'handoff-import',
+              '2026-06-14T09:45:00.000Z',
+              '2026-06-14T09:45:00.000Z'
+            )
+        `;
+
+        const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
+
+        expect(stats.insights.skillsExplored).toBe(4);
+        expect(stats.insights.totalSkillsUsed).toBe(5);
+        expect(stats.skills.slice(0, 4)).toEqual([
+          { name: "check-code", displayName: "$check-code", kind: "skill", runCount: 2 },
+          { name: "planner", displayName: "$planner", kind: "skill", runCount: 1 },
+          { name: "refactor-code", displayName: "$refactor-code", kind: "skill", runCount: 1 },
+          { name: "reviewer", displayName: "@reviewer", kind: "agent", runCount: 1 },
+        ]);
+      }),
+    );
+  });
+
+  it("selects the live project with the most native user prompts as most worked", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id,
+            title,
+            workspace_root,
+            scripts_json,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES
+            (
+              'project-alpha',
+              'Alpha',
+              '/work/alpha',
+              '{}',
+              '2026-06-12T09:00:00.000Z',
+              '2026-06-12T09:00:00.000Z',
+              NULL
+            ),
+            (
+              'project-beta',
+              'Beta',
+              '/work/beta',
+              '{}',
+              '2026-06-12T09:00:00.000Z',
+              '2026-06-12T09:00:00.000Z',
+              NULL
+            ),
+            (
+              'project-deleted',
+              'Deleted',
+              '/work/deleted',
+              '{}',
+              '2026-06-12T09:00:00.000Z',
+              '2026-06-12T09:00:00.000Z',
+              '2026-06-14T09:00:00.000Z'
+            )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id,
+            project_id,
+            title,
+            model_selection_json,
+            runtime_mode,
+            interaction_mode,
+            env_mode,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES
+            (
+              'thread-alpha',
+              'project-alpha',
+              'Alpha Thread',
+              '{"provider":"codex","model":"gpt-5-codex"}',
+              'full-access',
+              'default',
+              'local',
+              '2026-06-13T09:00:00.000Z',
+              '2026-06-13T09:00:00.000Z',
+              NULL
+            ),
+            (
+              'thread-beta',
+              'project-beta',
+              'Beta Thread',
+              '{"provider":"codex","model":"gpt-5-codex"}',
+              'full-access',
+              'default',
+              'local',
+              '2026-06-13T09:00:00.000Z',
+              '2026-06-13T09:00:00.000Z',
+              NULL
+            ),
+            (
+              'thread-alpha-deleted',
+              'project-alpha',
+              'Deleted Alpha Thread',
+              '{"provider":"codex","model":"gpt-5-codex"}',
+              'full-access',
+              'default',
+              'local',
+              '2026-06-13T09:00:00.000Z',
+              '2026-06-13T09:00:00.000Z',
+              '2026-06-14T09:00:00.000Z'
+            ),
+            (
+              'thread-deleted-project',
+              'project-deleted',
+              'Deleted Project Thread',
+              '{"provider":"codex","model":"gpt-5-codex"}',
+              'full-access',
+              'default',
+              'local',
+              '2026-06-13T09:00:00.000Z',
+              '2026-06-13T09:00:00.000Z',
+              NULL
+            )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id,
+            thread_id,
+            turn_id,
+            role,
+            text,
+            is_streaming,
+            source,
+            created_at,
+            updated_at
+          )
+          VALUES
+            (
+              'message-alpha-1',
+              'thread-alpha',
+              'turn-alpha-1',
+              'user',
+              'alpha one',
+              0,
+              'native',
+              '2026-06-13T09:05:00.000Z',
+              '2026-06-13T09:05:00.000Z'
+            ),
+            (
+              'message-alpha-2',
+              'thread-alpha',
+              'turn-alpha-2',
+              'user',
+              'alpha two',
+              0,
+              'native',
+              '2026-06-13T09:35:00.000Z',
+              '2026-06-13T09:35:00.000Z'
+            ),
+            (
+              'message-beta-1',
+              'thread-beta',
+              'turn-beta-1',
+              'user',
+              'beta one',
+              0,
+              'native',
+              '2026-06-13T10:05:00.000Z',
+              '2026-06-13T10:05:00.000Z'
+            ),
+            (
+              'message-beta-2',
+              'thread-beta',
+              'turn-beta-2',
+              'user',
+              'beta two',
+              0,
+              'native',
+              '2026-06-14T10:05:00.000Z',
+              '2026-06-14T10:05:00.000Z'
+            ),
+            (
+              'message-beta-3',
+              'thread-beta',
+              'turn-beta-3',
+              'user',
+              'beta three',
+              0,
+              'native',
+              '2026-06-14T10:35:00.000Z',
+              '2026-06-14T10:35:00.000Z'
+            ),
+            (
+              'message-alpha-deleted-thread',
+              'thread-alpha-deleted',
+              'turn-alpha-deleted',
+              'user',
+              'deleted thread should not win',
+              0,
+              'native',
+              '2026-06-14T11:05:00.000Z',
+              '2026-06-14T11:05:00.000Z'
+            ),
+            (
+              'message-deleted-project',
+              'thread-deleted-project',
+              'turn-deleted-project',
+              'user',
+              'deleted project should not win',
+              0,
+              'native',
+              '2026-06-14T11:35:00.000Z',
+              '2026-06-14T11:35:00.000Z'
+            )
+        `;
+
+        const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
+
+        expect(stats.activity.totalPromptsSent).toBe(5);
+        expect(stats.activity.totalThreads).toBe(2);
+        expect(stats.mostWorkedProject).toEqual({
+          projectId: "project-beta",
+          title: "Beta",
+          workspaceRoot: "/work/beta",
+          promptCount: 3,
+          threadCount: 1,
+          activeDays: 2,
+          lastWorkedAt: "2026-06-14T10:35:00.000Z",
+        });
+      }),
+    );
+  });
+
+  it("computes longest streak from all prompt days instead of only the heatmap window", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id,
+            title,
+            workspace_root,
+            scripts_json,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES (
+            'project-streak',
+            'Streak',
+            '/work/streak',
+            '{}',
+            '2025-01-01T09:00:00.000Z',
+            '2025-01-01T09:00:00.000Z',
+            NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id,
+            project_id,
+            title,
+            model_selection_json,
+            runtime_mode,
+            interaction_mode,
+            env_mode,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES (
+            'thread-streak',
+            'project-streak',
+            'Streak Thread',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access',
+            'default',
+            'local',
+            '2025-01-01T09:00:00.000Z',
+            '2025-01-03T09:00:00.000Z',
+            NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id,
+            thread_id,
+            turn_id,
+            role,
+            text,
+            is_streaming,
+            source,
+            created_at,
+            updated_at
+          )
+          VALUES
+            (
+              'message-streak-1',
+              'thread-streak',
+              'turn-streak-1',
+              'user',
+              'day one',
+              0,
+              'native',
+              '2025-01-01T09:05:00.000Z',
+              '2025-01-01T09:05:00.000Z'
+            ),
+            (
+              'message-streak-2',
+              'thread-streak',
+              'turn-streak-2',
+              'user',
+              'day two',
+              0,
+              'native',
+              '2025-01-02T09:05:00.000Z',
+              '2025-01-02T09:05:00.000Z'
+            ),
+            (
+              'message-streak-3',
+              'thread-streak',
+              'turn-streak-3',
+              'user',
+              'day three',
+              0,
+              'native',
+              '2025-01-03T09:05:00.000Z',
+              '2025-01-03T09:05:00.000Z'
+            )
+        `;
+
+        const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
+
+        expect(stats.activity.totalPromptsSent).toBe(3);
+        expect(stats.activity.longestStreakDays).toBe(3);
       }),
     );
   });

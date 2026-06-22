@@ -9,10 +9,11 @@
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 import type {
+  AutomationMode,
   ChatAttachment,
   ModelSelection,
   ProviderStartOptions,
-  ReviewAgentResult,
+  ServerGenerateAutomationIntentResult,
 } from "@t3tools/contracts";
 
 import type { TextGenerationError } from "../Errors.ts";
@@ -77,22 +78,6 @@ export interface DiffSummaryGenerationResult {
   summary: string;
 }
 
-export interface ReviewFindingsGenerationInput {
-  cwd: string;
-  patch: string;
-  prTitle?: string;
-  prBody?: string;
-  codexHomePath?: string;
-  /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
-  model?: string;
-  /** Optional provider-aware selection for providers that need more than a raw model slug. */
-  modelSelection?: ModelSelection;
-  /** Optional provider startup overrides, such as custom binary paths or server URLs. */
-  providerOptions?: ProviderStartOptions;
-}
-
-export type ReviewFindingsGenerationResult = ReviewAgentResult;
-
 export interface BranchNameGenerationInput {
   cwd: string;
   message: string;
@@ -143,18 +128,70 @@ export interface ThreadRecapGenerationResult {
   recap: string;
 }
 
+export interface AutomationIntentGenerationInput {
+  cwd: string;
+  message: string;
+  defaultMode?: AutomationMode;
+  nowIso: string;
+  codexHomePath?: string;
+  /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
+  model?: string;
+  /** Optional provider-aware selection for providers that need more than a raw model slug. */
+  modelSelection?: ModelSelection;
+  /** Optional provider startup overrides, such as custom binary paths or server URLs. */
+  providerOptions?: ProviderStartOptions;
+}
+
+export type AutomationIntentGenerationResult = ServerGenerateAutomationIntentResult;
+
+export interface AutomationCompletionEvaluationInput {
+  cwd: string;
+  automationName: string;
+  automationPrompt: string;
+  stopWhen: string;
+  runUserMessage: string;
+  runAssistantText: string;
+  threadContext?: string | undefined;
+  codexHomePath?: string;
+  /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
+  model?: string;
+  /** Optional provider-aware selection for providers that need more than a raw model slug. */
+  modelSelection?: ModelSelection;
+  /** Optional provider startup overrides, such as custom binary paths or server URLs. */
+  providerOptions?: ProviderStartOptions;
+}
+
+export interface AutomationCompletionEvaluationResult {
+  stopMatched: boolean;
+  confidence: number;
+  reason: string;
+}
+
+export type TextGenerationOperation =
+  | "generateCommitMessage"
+  | "generatePrContent"
+  | "generateDiffSummary"
+  | "generateBranchName"
+  | "generateThreadTitle"
+  | "generateThreadRecap"
+  | "generateAutomationIntent"
+  | "evaluateAutomationCompletion";
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
   ): Promise<CommitMessageGenerationResult>;
   generatePrContent(input: PrContentGenerationInput): Promise<PrContentGenerationResult>;
   generateDiffSummary(input: DiffSummaryGenerationInput): Promise<DiffSummaryGenerationResult>;
-  generateReviewFindings(
-    input: ReviewFindingsGenerationInput,
-  ): Promise<ReviewFindingsGenerationResult>;
   generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
   generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
   generateThreadRecap(input: ThreadRecapGenerationInput): Promise<ThreadRecapGenerationResult>;
+  generateAutomationIntent(
+    input: AutomationIntentGenerationInput,
+  ): Promise<AutomationIntentGenerationResult>;
+  evaluateAutomationCompletion(
+    input: AutomationCompletionEvaluationInput,
+  ): Promise<AutomationCompletionEvaluationResult>;
 }
 
 /**
@@ -183,13 +220,6 @@ export interface TextGenerationShape {
   ) => Effect.Effect<DiffSummaryGenerationResult, TextGenerationError>;
 
   /**
-   * Generate structured review findings for a unified diff.
-   */
-  readonly generateReviewFindings: (
-    input: ReviewFindingsGenerationInput,
-  ) => Effect.Effect<ReviewFindingsGenerationResult, TextGenerationError>;
-
-  /**
    * Generate a concise branch name from a user message.
    */
   readonly generateBranchName: (
@@ -209,6 +239,20 @@ export interface TextGenerationShape {
   readonly generateThreadRecap: (
     input: ThreadRecapGenerationInput,
   ) => Effect.Effect<ThreadRecapGenerationResult, TextGenerationError>;
+
+  /**
+   * Convert a composer automation invocation into a structured creation intent.
+   */
+  readonly generateAutomationIntent: (
+    input: AutomationIntentGenerationInput,
+  ) => Effect.Effect<AutomationIntentGenerationResult, TextGenerationError>;
+
+  /**
+   * Decide whether a completed heartbeat run satisfies its saved stop clause.
+   */
+  readonly evaluateAutomationCompletion: (
+    input: AutomationCompletionEvaluationInput,
+  ) => Effect.Effect<AutomationCompletionEvaluationResult, TextGenerationError>;
 }
 
 /**
