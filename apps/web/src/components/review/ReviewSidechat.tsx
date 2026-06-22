@@ -87,9 +87,8 @@ type OptimisticReviewMessage = {
 };
 
 type PendingReviewTurn = {
-  question: string;
   startedAt: string;
-  phase: "queued" | "provider-start-requested" | "sent";
+  phase: "queued" | "sent";
 };
 
 const REVIEW_TURN_START_TIMEOUT_MS = 15_000;
@@ -710,9 +709,7 @@ export function ReviewSidechat(props: {
       return "starting";
     }
     if (pendingReviewTurn !== null) {
-      return pendingReviewTurn.phase === "sent" ||
-        pendingReviewTurn.phase === "provider-start-requested" ||
-        activeTurnBelongsToPendingReviewTurn
+      return pendingReviewTurn.phase === "sent" || activeTurnBelongsToPendingReviewTurn
         ? "thinking"
         : "starting";
     }
@@ -746,15 +743,12 @@ export function ReviewSidechat(props: {
       }),
     [props.context, selectedModelSelection],
   );
-  const handleDraftSkillMentionChange = useCallback((hasSkillMention: boolean) => {
-    setDraftHasSkillMention(hasSkillMention);
-  }, []);
   const resolveSkillsForQuestion = useCallback(
     async (question: string): Promise<readonly ProviderSkillReference[]> => {
-      const skillNames = splitPromptIntoComposerSegments(question).filter(
+      const hasSkillMention = splitPromptIntoComposerSegments(question).some(
         (segment) => segment.type === "skill",
       );
-      if (skillNames.length === 0 || props.context.cwd === null) {
+      if (!hasSkillMention || props.context.cwd === null) {
         return [];
       }
       try {
@@ -919,9 +913,7 @@ export function ReviewSidechat(props: {
           onQueuedProviderStartRequested: (threadId, startedAt) => {
             setOpenedSidechatThreadId(threadId);
             setPendingReviewTurn((current) =>
-              current?.startedAt === startedAt
-                ? { ...current, phase: "provider-start-requested" }
-                : current,
+              current?.startedAt === startedAt ? { ...current, phase: "sent" } : current,
             );
           },
           onQueuedTurnStarted: (threadId, startedAt) => {
@@ -943,7 +935,6 @@ export function ReviewSidechat(props: {
         if (result.status === "sent" || result.status === "queued") {
           setOpenedSidechatThreadId(result.threadId);
           setPendingReviewTurn({
-            question,
             startedAt: result.status === "sent" ? result.turnRequestedAt : result.queuedAt,
             phase: result.status,
           });
@@ -1087,7 +1078,7 @@ export function ReviewSidechat(props: {
         selectedModelSelection={selectedModelSelection}
         showSuggestions={visibleMessages.length === 0 && optimisticMessage === null}
         suggestions={suggestions}
-        onDraftSkillMentionChange={handleDraftSkillMentionChange}
+        onDraftSkillMentionChange={setDraftHasSkillMention}
         onModelSelectionChange={setSelectedModelSelection}
         onResolveSkillsForQuestion={resolveSkillsForQuestion}
         onSendQuestion={sendQuestion}

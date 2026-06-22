@@ -98,7 +98,6 @@ export interface CodexWorkspaceRuntime {
   readonly rootContext: CodexSessionContext;
   readonly sessions: Map<ThreadId, CodexSessionContext>;
   readonly providerThreadIds: Map<string, ThreadId>;
-  readonly openingSessions: Set<ThreadId>;
 }
 
 export interface CodexSkillListInput {

@@ -47,6 +47,21 @@ function optionalIndex(...values: ReadonlyArray<unknown>): number | undefined {
   return undefined;
 }
 
+function sessionStateChangedEvent(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+  state: "starting" | "ready",
+): ProviderRuntimeEvent {
+  return {
+    ...runtimeEventBase(event, canonicalThreadId),
+    type: "session.state.changed",
+    payload: {
+      state,
+      ...(event.message ? { reason: event.message } : {}),
+    },
+  };
+}
+
 export function mapToRuntimeEvents(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
@@ -127,30 +142,12 @@ export function mapToRuntimeEvents(
     ];
   }
 
-  if (event.method === "session/connecting") {
-    return [
-      {
-        ...runtimeEventBase(event, canonicalThreadId),
-        type: "session.state.changed",
-        payload: {
-          state: "starting",
-          ...(event.message ? { reason: event.message } : {}),
-        },
-      },
-    ];
+  if (event.method === "session/connecting" || event.method === "session/threadOpenRequested") {
+    return [sessionStateChangedEvent(event, canonicalThreadId, "starting")];
   }
 
-  if (event.method === "session/ready") {
-    return [
-      {
-        ...runtimeEventBase(event, canonicalThreadId),
-        type: "session.state.changed",
-        payload: {
-          state: "ready",
-          ...(event.message ? { reason: event.message } : {}),
-        },
-      },
-    ];
+  if (event.method === "session/ready" || event.method === "session/threadOpenResolved") {
+    return [sessionStateChangedEvent(event, canonicalThreadId, "ready")];
   }
 
   if (event.method === "session/started") {
@@ -161,32 +158,6 @@ export function mapToRuntimeEvents(
         payload: {
           ...(event.message ? { message: event.message } : {}),
           ...(event.payload !== undefined ? { resume: event.payload } : {}),
-        },
-      },
-    ];
-  }
-
-  if (event.method === "session/threadOpenRequested") {
-    return [
-      {
-        ...runtimeEventBase(event, canonicalThreadId),
-        type: "session.state.changed",
-        payload: {
-          state: "starting",
-          ...(event.message ? { reason: event.message } : {}),
-        },
-      },
-    ];
-  }
-
-  if (event.method === "session/threadOpenResolved") {
-    return [
-      {
-        ...runtimeEventBase(event, canonicalThreadId),
-        type: "session.state.changed",
-        payload: {
-          state: "ready",
-          ...(event.message ? { reason: event.message } : {}),
         },
       },
     ];

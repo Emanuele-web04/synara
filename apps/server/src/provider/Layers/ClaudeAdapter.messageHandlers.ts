@@ -144,8 +144,6 @@ export function makeClaudeMessageHandlers(deps: ClaudeMessageHandlersDeps): Clau
       const block: ReasoningBlockState = {
         itemId,
         blockIndex,
-        emittedTextDelta: false,
-        streamClosed: false,
         completionEmitted: false,
       };
       turnState.reasoningBlocks.set(blockIndex, block);
@@ -255,9 +253,6 @@ export function makeClaudeMessageHandlers(deps: ClaudeMessageHandlersDeps): Clau
               : undefined;
           if (assistantBlockEntry?.block && event.delta.type === "text_delta") {
             assistantBlockEntry.block.emittedTextDelta = true;
-          }
-          if (reasoningBlock) {
-            reasoningBlock.emittedTextDelta = true;
           }
           const streamItemId = assistantBlockEntry?.block.itemId ?? reasoningBlock?.itemId;
           const stamp = yield* makeEventStamp();
@@ -450,7 +445,6 @@ export function makeClaudeMessageHandlers(deps: ClaudeMessageHandlersDeps): Clau
         }
         const reasoningBlock = context.turnState?.reasoningBlocks.get(index);
         if (reasoningBlock) {
-          reasoningBlock.streamClosed = true;
           yield* completeReasoningBlock(context, reasoningBlock, {
             method: "claude/stream_event/content_block_stop",
             payload: message,
@@ -602,7 +596,6 @@ export function makeClaudeMessageHandlers(deps: ClaudeMessageHandlersDeps): Clau
           nextSyntheticAssistantBlockIndex: -1,
         };
         context.lastThinkingItemId = undefined;
-        context.lastEmittedThinkingTokens = undefined;
         context.session = {
           ...context.session,
           status: "running",
@@ -762,7 +755,6 @@ export function makeClaudeMessageHandlers(deps: ClaudeMessageHandlersDeps): Clau
 
       switch (message.subtype) {
         case "thinking_tokens":
-          context.lastEmittedThinkingTokens = message.estimated_tokens;
           yield* offerRuntimeEvent({
             ...base,
             type: "item.updated",

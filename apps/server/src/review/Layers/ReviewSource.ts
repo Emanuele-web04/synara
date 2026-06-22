@@ -45,6 +45,7 @@ import {
 import { ReviewSync } from "../Services/ReviewSync.ts";
 import { ReviewSource, type ReviewSourceShape } from "../Services/ReviewSource.ts";
 import { ReviewUpdateBus } from "../Services/ReviewUpdateBus.ts";
+import { deriveReviewLane } from "../reviewLane.ts";
 import { validateInlineComments } from "../validateInlineComments.ts";
 
 const PROJECT_ACCESS_DETAIL =
@@ -209,22 +210,6 @@ function resolvedAliasMergedSet(
   );
 }
 
-function reviewColumn(summary: ReviewPullRequestSummary): string {
-  if (summary.isDraft) {
-    return "draft";
-  }
-  if (summary.state === "merged") {
-    return "merged";
-  }
-  if (summary.reviewDecision === "CHANGES_REQUESTED") {
-    return "changes-requested";
-  }
-  if (summary.reviewDecision === "APPROVED") {
-    return "approved";
-  }
-  return "needs-review";
-}
-
 function makeListFilterMatcher(
   input: ReviewListPullRequestsInput,
   viewerLogin: string,
@@ -251,7 +236,7 @@ function makeListFilterMatcher(
     (assignees.size === 0 ||
       summary.assignees.some((summaryAssignee) => assignees.has(summaryAssignee))) &&
     (input.draft !== true || summary.isDraft) &&
-    (columns.size === 0 || columns.has(reviewColumn(summary))) &&
+    (columns.size === 0 || columns.has(deriveReviewLane(summary))) &&
     (checks.size === 0 || checks.has(summary.checksStatus));
 }
 
@@ -380,10 +365,7 @@ function normalizedResultListLimit(limit: number | undefined): number {
   return Math.min(limit ?? DEFAULT_REVIEW_LIST_RESULT_LIMIT, MAX_REVIEW_LIST_RESULT_LIMIT);
 }
 
-function githubListLimit(
-  input: ReviewListPullRequestsInput,
-  viewerLogin: string,
-): number | undefined {
+function githubListLimit(input: ReviewListPullRequestsInput, viewerLogin: string): number {
   const needsLocalWindow =
     hasLocalListFilters(input, viewerLogin) || sortNeedsExpandedCandidates(input);
   if (!needsLocalWindow) {
@@ -771,7 +753,7 @@ const makeReviewSource = Effect.gen(function* () {
       .listRepositoryPullRequests({
         cwd: input.cwd,
         state: input.state ?? "open",
-        ...(listLimit !== undefined ? { limit: listLimit } : {}),
+        limit: listLimit,
         ...(input.search !== undefined ? { search: input.search } : {}),
         ...(authors.length === 1 ? { author: authors[0] } : {}),
         ...(authors.length > 1 ? { authors } : {}),
@@ -799,7 +781,7 @@ const makeReviewSource = Effect.gen(function* () {
             compareReviewPullRequestSummaries(normalizedReviewListSort(input.sort)),
           );
           const usesLocalCandidateWindow = usesExpandedPullRequestListCache(input, viewerLogin);
-          const candidateLimit = listLimit ?? resultListLimit(input);
+          const candidateLimit = listLimit;
           const resultLimit = resultListLimit(input);
           const returnedPullRequests =
             usesLocalCandidateWindow && options.sliceExpandedResults
@@ -807,20 +789,16 @@ const makeReviewSource = Effect.gen(function* () {
               : sortedSummaries;
           return {
             pullRequests: returnedPullRequests,
-            ...(candidateLimit !== undefined
-              ? {
-                  meta: {
-                    ...(input.limit !== undefined ? { requestedLimit: input.limit } : {}),
-                    resultLimit,
-                    candidateLimit,
-                    candidateCount: pullRequests.length,
-                    candidateLimitReached: pullRequests.length >= candidateLimit,
-                    matchedCount: summaries.length,
-                    returnedCount: returnedPullRequests.length,
-                    bounded: true,
-                  },
-                }
-              : {}),
+            meta: {
+              ...(input.limit !== undefined ? { requestedLimit: input.limit } : {}),
+              resultLimit,
+              candidateLimit,
+              candidateCount: pullRequests.length,
+              candidateLimitReached: pullRequests.length >= candidateLimit,
+              matchedCount: summaries.length,
+              returnedCount: returnedPullRequests.length,
+              bounded: true,
+            },
           };
         }),
       );
@@ -887,22 +865,29 @@ const makeReviewSource = Effect.gen(function* () {
     now: number,
   ) =>
     Effect.gen(function* () {
+      const syncFullMirror = reviewSync.syncRepository({
+        cwd,
+        repositoryId,
+        tokenIdentity,
+        now,
+        mode: "full",
+      });
       const syncState = yield* pullRequestStore.getSyncState({ repositoryId });
       const syncedIdentity = Option.isSome(syncState) ? syncState.value.tokenIdentity : null;
       if (syncedIdentity !== tokenIdentity) {
-        yield* reviewSync.syncRepository({ cwd, repositoryId, tokenIdentity, now, mode: "full" });
+        yield* syncFullMirror;
         return;
       }
 
       const hasRows = yield* pullRequestStore.hasOpenPullRequests({ repositoryId });
       if (!hasRows) {
-        yield* reviewSync.syncRepository({ cwd, repositoryId, tokenIdentity, now, mode: "full" });
+        yield* syncFullMirror;
         return;
       }
 
       const lastSyncedAt = Option.isSome(syncState) ? syncState.value.lastSyncedAt : null;
       if (lastSyncedAt === null) {
-        yield* reviewSync.syncRepository({ cwd, repositoryId, tokenIdentity, now, mode: "full" });
+        yield* syncFullMirror;
         return;
       }
 

@@ -187,10 +187,7 @@ function isUninformativeCommandStartActivity(activity: OrchestrationThreadActivi
   if (activity.kind !== "tool.started") {
     return false;
   }
-  const payload =
-    activity.payload && typeof activity.payload === "object"
-      ? (activity.payload as Record<string, unknown>)
-      : null;
+  const payload = asRecord(activity.payload);
   if (extractWorkLogItemType(payload) !== "command_execution") {
     return false;
   }
@@ -204,18 +201,12 @@ function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): bool
     return false;
   }
 
-  const payload =
-    activity.payload && typeof activity.payload === "object"
-      ? (activity.payload as Record<string, unknown>)
-      : null;
+  const payload = asRecord(activity.payload);
   return typeof payload?.detail === "string" && payload.detail.startsWith("ExitPlanMode:");
 }
 
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
-  const payload =
-    activity.payload && typeof activity.payload === "object"
-      ? (activity.payload as Record<string, unknown>)
-      : null;
+  const payload = asRecord(activity.payload);
   const commandAction = extractPrimaryCommandAction(payload);
   const commandPreview = extractToolCommand(payload, commandAction);
   const changedFiles = extractChangedFiles(payload);
@@ -435,16 +426,9 @@ function shouldCollapseToolLifecycleEntries(
   next: DerivedWorkLogEntry,
 ): boolean {
   if (
-    previous.activityKind === "mcp.status.updated" &&
-    next.activityKind === "mcp.status.updated" &&
-    previous.collapseKey !== undefined &&
-    previous.collapseKey === next.collapseKey
-  ) {
-    return true;
-  }
-  if (
-    previous.activityKind === "provider.unhandled" &&
-    next.activityKind === "provider.unhandled" &&
+    (previous.activityKind === "mcp.status.updated" ||
+      previous.activityKind === "provider.unhandled") &&
+    previous.activityKind === next.activityKind &&
     previous.collapseKey !== undefined &&
     previous.collapseKey === next.collapseKey
   ) {

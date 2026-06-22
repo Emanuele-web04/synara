@@ -314,7 +314,6 @@ export async function startSession(
         ? `Attempting to resume thread ${resumeThreadId}.`
         : "Starting a new Codex thread.",
     );
-    context.workspaceRuntime?.openingSessions.add(threadId);
     await Effect.logInfo("codex app-server opening thread", {
       threadId,
       requestedRuntimeMode: input.runtimeMode,
@@ -383,7 +382,6 @@ export async function startSession(
     const providerThreadId = threadIdRaw;
     if (context.workspaceRuntime) {
       context.workspaceRuntime.providerThreadIds.set(providerThreadId, threadId);
-      context.workspaceRuntime.openingSessions.delete(threadId);
     }
 
     deps.updateSession(context, {
@@ -444,7 +442,6 @@ export async function startSession(
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to start Codex session.";
     if (context) {
-      context.workspaceRuntime?.openingSessions.delete(threadId);
       deps.updateSession(context, {
         status: "error",
         lastError: message,

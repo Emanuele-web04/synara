@@ -380,7 +380,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       rootContext,
       sessions: new Map(),
       providerThreadIds: new Map(),
-      openingSessions: new Set(),
     };
     rootContext.workspaceRuntime = runtime;
     this.workspaceRuntimes.set(key, runtime);
@@ -413,10 +412,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return context;
     }
 
-    const providerThreadId = normalizeProviderThreadId(
-      readProviderConversationId(message.params) ??
-        readString(readObject(message.params, "thread"), "id"),
-    );
+    const providerThreadId = normalizeProviderThreadId(readProviderConversationId(message.params));
     if (providerThreadId) {
       const threadId = runtime.providerThreadIds.get(providerThreadId);
       const routedContext = threadId ? runtime.sessions.get(threadId) : undefined;
@@ -851,7 +847,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
     if (context.workspaceRuntime && !context.workspaceRuntimeRoot) {
       context.workspaceRuntime.sessions.delete(threadId);
-      context.workspaceRuntime.openingSessions.delete(threadId);
       for (const [providerThreadId, routedThreadId] of context.workspaceRuntime.providerThreadIds) {
         if (routedThreadId === threadId) {
           context.workspaceRuntime.providerThreadIds.delete(providerThreadId);
@@ -1023,7 +1018,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         }
         runtime.sessions.clear();
         runtime.providerThreadIds.clear();
-        runtime.openingSessions.clear();
         if (this.workspaceRuntimes.get(runtime.key) === runtime) {
           this.workspaceRuntimes.delete(runtime.key);
         }

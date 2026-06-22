@@ -110,6 +110,48 @@ it.effect("accepts lightweight review pull request header requests", () =>
   }),
 );
 
+it.effect("accepts review thread mutation requests", () =>
+  Effect.gen(function* () {
+    const requests = [
+      {
+        _tag: WS_METHODS.reviewResolveThread,
+        cwd: "/repo",
+        reference: "42",
+        threadId: "thread-1",
+        resolved: true,
+      },
+      {
+        _tag: WS_METHODS.reviewReplyThread,
+        cwd: "/repo",
+        reference: "42",
+        threadId: "thread-1",
+        body: "Looks good.",
+      },
+      {
+        _tag: WS_METHODS.reviewUpdateThreadComment,
+        cwd: "/repo",
+        reference: "42",
+        commentId: "comment-1",
+        body: "Updated reply.",
+      },
+      {
+        _tag: WS_METHODS.reviewDeleteThreadComment,
+        cwd: "/repo",
+        reference: "42",
+        commentId: "comment-1",
+      },
+    ] as const;
+
+    for (const body of requests) {
+      const parsed = yield* decode(WebSocketRequest, {
+        id: `req-${body._tag}`,
+        body,
+      });
+      assert.strictEqual(parsed.body._tag, body._tag);
+    }
+  }),
+);
+
 it.effect("accepts project script discovery requests", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(WebSocketRequest, {

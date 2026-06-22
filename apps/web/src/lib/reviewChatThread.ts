@@ -1165,20 +1165,9 @@ export async function sendReviewChatQuestion(input: {
       : undefined;
   const canUseRequestedThread =
     requestedThread === undefined || isUsableReviewChatThread(requestedThread);
-  const requestedThreadReady =
-    requestedThreadId !== undefined &&
-    canUseRequestedThread &&
-    isReviewChatSessionReady({ thread: requestedThread, modelSelection });
   const resolution = await (async (): Promise<ReviewChatThreadResult> => {
     if (prewarmResolution?.status === "ready") {
       return prewarmResolution;
-    }
-    if (requestedThreadReady) {
-      return {
-        status: "ready",
-        threadId: requestedThreadId,
-        created: false,
-      };
     }
     return requestedThreadId !== undefined && canUseRequestedThread
       ? {

@@ -692,7 +692,7 @@ describe("ClaudeAdapterLive", () => {
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 10).pipe(
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 12).pipe(
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -785,6 +785,23 @@ describe("ClaudeAdapterLive", () => {
       } as unknown as SDKMessage);
 
       harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-1",
+        uuid: "user-tool-result-1",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-1",
+              content: "file-a.ts\nfile-b.ts",
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
         type: "assistant",
         session_id: "sdk-session-1",
         uuid: "assistant-1",
@@ -816,6 +833,8 @@ describe("ClaudeAdapterLive", () => {
           "content.delta",
           "item.completed",
           "item.started",
+          "item.updated",
+          "content.delta",
           "item.completed",
           "turn.completed",
         ],
@@ -838,6 +857,17 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(toolStarted?.type, "item.started");
       if (toolStarted?.type === "item.started") {
         assert.equal(toolStarted.payload.itemType, "command_execution");
+      }
+
+      const commandOutputDelta = runtimeEvents.find(
+        (event) =>
+          event.type === "content.delta" &&
+          event.payload.streamKind === "command_output" &&
+          String(event.itemId) === "tool-1",
+      );
+      assert.equal(commandOutputDelta?.type, "content.delta");
+      if (commandOutputDelta?.type === "content.delta") {
+        assert.equal(commandOutputDelta.payload.delta, "file-a.ts\nfile-b.ts");
       }
 
       const assistantCompletedIndex = runtimeEvents.findIndex(
@@ -864,7 +894,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("keeps streaming deltas flowing after an unhandled Claude SDK event", () => {
+  it.effect("keeps streaming deltas flowing after an unhandled top-level Claude SDK event", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -887,10 +917,15 @@ describe("ClaudeAdapterLive", () => {
       });
 
       harness.query.emit({
-        type: "system",
-        subtype: "future_unknown_subtype",
+        type: "future_sdk_message",
         session_id: "sdk-session-unhandled-before-delta",
         uuid: "system-unhandled-before-delta",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "future_sdk_message",
+        session_id: "sdk-session-unhandled-before-delta",
+        uuid: "system-unhandled-before-delta-repeat",
       } as unknown as SDKMessage);
 
       harness.query.emit({
@@ -941,7 +976,7 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(unhandled?.type, "provider.unhandled");
       if (unhandled?.type === "provider.unhandled") {
         assert.equal(String(unhandled.turnId), String(turn.turnId));
-        assert.equal(unhandled.payload.nativeEventName, "system:future_unknown_subtype");
+        assert.equal(unhandled.payload.nativeEventName, "type:future_sdk_message");
       }
 
       const delta = runtimeEvents[6];
@@ -1543,6 +1578,17 @@ describe("ClaudeAdapterLive", () => {
       if (diffUpdated?.type === "turn.diff.updated") {
         assert.equal(String(diffUpdated.turnId), String(turn.turnId));
         assert.equal(diffUpdated.payload.unifiedDiff, "");
+      }
+
+      const fileChangeOutputDelta = runtimeEvents.find(
+        (event) =>
+          event.type === "content.delta" &&
+          event.payload.streamKind === "file_change_output" &&
+          String(event.itemId) === "tool-edit-1",
+      );
+      assert.equal(fileChangeOutputDelta?.type, "content.delta");
+      if (fileChangeOutputDelta?.type === "content.delta") {
+        assert.equal(fileChangeOutputDelta.payload.delta, "Updated src/example.ts");
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -3767,13 +3813,7 @@ describe("ClaudeAdapterLive", () => {
       const threadStarted = yield* Fiber.join(threadStartedFiber);
       assert.equal(threadStarted._tag, "Some");
       if (threadStarted._tag === "Some" && threadStarted.value.type === "thread.started") {
-        const rawPayload =
-          threadStarted.value.raw?.payload &&
-          typeof threadStarted.value.raw.payload === "object" &&
-          "session_id" in threadStarted.value.raw.payload
-            ? threadStarted.value.raw.payload.session_id
-            : undefined;
-        assert.equal(threadStarted.value.payload?.providerThreadId ?? rawPayload, durableSessionId);
+        assert.equal(threadStarted.value.payload?.providerThreadId, durableSessionId);
       }
 
       const activeSessions = yield* adapter.listSessions();

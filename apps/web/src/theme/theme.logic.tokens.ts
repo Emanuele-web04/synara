@@ -321,6 +321,13 @@ function buildThemeTokenAliases(
     theme.variant === "dark"
       ? formatHex(mixRgb(parseHexColor(theme.theme.semanticColors.diffAdded), BLACK, 0.18))
       : theme.theme.semanticColors.diffAdded;
+  const terminalPalette = {
+    ansiBlue: theme.theme.accent,
+    ansiGreen: terminalAnsiGreen,
+    ansiMagenta: theme.theme.semanticColors.skill,
+    ansiRed: theme.theme.semanticColors.diffRemoved,
+    foreground: readCodexVariable("--color-text-foreground"),
+  };
 
   return {
     "--color-token-badge-background": readCodexVariable("--color-background-accent"),
@@ -370,16 +377,16 @@ function buildThemeTokenAliases(
     "--color-token-scrollbar-slider-hover-background": readCodexVariable("--color-border"),
     "--color-token-side-bar-background": readCodexVariable("--color-background-surface"),
     "--color-token-terminal-ansi-black": readCodexVariable("--color-text-foreground-tertiary"),
-    "--color-token-terminal-ansi-blue": theme.theme.accent,
+    "--color-token-terminal-ansi-blue": terminalPalette.ansiBlue,
     "--color-token-terminal-ansi-bright-black": readCodexVariable(
       "--color-text-foreground-secondary",
     ),
-    "--color-token-terminal-ansi-green": terminalAnsiGreen,
-    "--color-token-terminal-ansi-magenta": theme.theme.semanticColors.skill,
-    "--color-token-terminal-ansi-red": theme.theme.semanticColors.diffRemoved,
+    "--color-token-terminal-ansi-green": terminalPalette.ansiGreen,
+    "--color-token-terminal-ansi-magenta": terminalPalette.ansiMagenta,
+    "--color-token-terminal-ansi-red": terminalPalette.ansiRed,
     "--color-token-terminal-ansi-yellow": warningColor,
     "--color-token-terminal-background": readCodexVariable("--color-background-surface"),
-    "--color-token-terminal-foreground": readCodexVariable("--color-text-foreground"),
+    "--color-token-terminal-foreground": terminalPalette.foreground,
     "--color-token-text-code-block-background": readCodexVariable(
       "--color-background-elevated-secondary-opaque",
     ),
@@ -393,11 +400,11 @@ function buildThemeTokenAliases(
     ),
     "--color-token-editor-background": readCodexVariable("--color-background-editor-opaque"),
     "--color-token-editor-foreground": readCodexVariable("--color-text-foreground"),
-    "--vscode-terminal-ansiBlue": theme.theme.accent,
-    "--vscode-terminal-ansiGreen": terminalAnsiGreen,
-    "--vscode-terminal-ansiMagenta": theme.theme.semanticColors.skill,
-    "--vscode-terminal-ansiRed": theme.theme.semanticColors.diffRemoved,
-    "--vscode-terminal-foreground": readCodexVariable("--color-text-foreground"),
+    "--vscode-terminal-ansiBlue": terminalPalette.ansiBlue,
+    "--vscode-terminal-ansiGreen": terminalPalette.ansiGreen,
+    "--vscode-terminal-ansiMagenta": terminalPalette.ansiMagenta,
+    "--vscode-terminal-ansiRed": terminalPalette.ansiRed,
+    "--vscode-terminal-foreground": terminalPalette.foreground,
   };
 }
 

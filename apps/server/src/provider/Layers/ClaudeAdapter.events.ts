@@ -144,11 +144,7 @@ export function isClaudeInterruptedMessage(message: string): boolean {
 
 export function isClaudeProcessStoppedMessage(message: string): boolean {
   const normalized = message.toLowerCase();
-  return (
-    normalized.includes("process exited with code 143") ||
-    normalized.includes("exited with code 143") ||
-    normalized.includes("exit code 143")
-  );
+  return normalized.includes("exited with code 143") || normalized.includes("exit code 143");
 }
 
 export function isClaudeInterruptedCause(cause: Cause.Cause<Error>): boolean {

@@ -456,8 +456,8 @@ export function normalizeThreadFromReadModel(
     (previous.associatedWorktreeBranch ?? null) === nextAssociatedWorktreeBranch &&
     (previous.associatedWorktreeRef ?? null) === nextAssociatedWorktreeRef &&
     (previous.createBranchFlowCompleted ?? false) === resolvedCreateBranchFlowCompleted &&
-    deepEqualJson(previous.pinnedMessages ?? null, pinnedMessages ?? null) &&
-    deepEqualJson(previous.threadMarkers ?? null, threadMarkers ?? null) &&
+    previous.pinnedMessages === pinnedMessages &&
+    previous.threadMarkers === threadMarkers &&
     previous.notes === notes &&
     previous.latestUserMessageAt === resolvedLatestUserMessageAt &&
     previous.hasPendingApprovals === resolvedHasPendingApprovals &&

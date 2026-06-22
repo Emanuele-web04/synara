@@ -492,7 +492,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           lastAssistantUuid: resumeState?.resumeSessionAt,
           lastThreadStartedId: undefined,
           lastThinkingItemId: undefined,
-          lastEmittedThinkingTokens: undefined,
           stopped: false,
           warnedUnhandledSdkKinds: new Set(),
         };
@@ -625,7 +624,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         const updatedAt = yield* nowIso;
         context.lastThinkingItemId = undefined;
-        context.lastEmittedThinkingTokens = undefined;
         context.turnState = turnState;
         context.session = {
           ...context.session,

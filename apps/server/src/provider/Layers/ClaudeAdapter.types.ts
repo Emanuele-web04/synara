@@ -65,8 +65,6 @@ export interface AssistantTextBlockState {
 export interface ReasoningBlockState {
   readonly itemId: string;
   readonly blockIndex: number;
-  emittedTextDelta: boolean;
-  streamClosed: boolean;
   completionEmitted: boolean;
 }
 

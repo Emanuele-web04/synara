@@ -242,7 +242,6 @@ export function ReviewPrView(props: {
     selectedFilePath,
     tab,
   ]);
-  const prewarmSidechatContext = sidechatContext;
   const reviewChatTarget = useMemo(() => {
     if (!sidechatContext) {
       return null;
@@ -263,20 +262,20 @@ export function ReviewPrView(props: {
   );
   const reviewChatThreadId = useStore(selectReviewChatThreadId);
   const reviewChatPrewarmKey = useMemo(() => {
-    if (!prewarmSidechatContext?.cwd) {
+    if (!sidechatContext?.cwd) {
       return null;
     }
     const modelSelection = defaultReviewChatModelSelection();
     return [
-      reviewChatPrewarmContextKey(prewarmSidechatContext),
+      reviewChatPrewarmContextKey(sidechatContext),
       modelSelection.provider,
       modelSelection.model,
       JSON.stringify(modelSelection.options ?? null),
     ].join("\u001f");
-  }, [prewarmSidechatContext]);
+  }, [sidechatContext]);
   useEffect(() => {
-    latestSidechatContextRef.current = prewarmSidechatContext;
-  }, [prewarmSidechatContext]);
+    latestSidechatContextRef.current = sidechatContext;
+  }, [sidechatContext]);
   useEffect(() => {
     const sidechatContext = latestSidechatContextRef.current;
     if (!sidechatContext?.cwd || !reviewChatPrewarmKey) {
@@ -305,7 +304,7 @@ export function ReviewPrView(props: {
           prewarmingReviewChatKeyRef.current = null;
         }
       });
-  }, [projects, reviewChatPrewarmKey]);
+  }, [reviewChatPrewarmKey]);
   const reviewAction =
     tab === "files" ? (
       <ReviewSubmitBar

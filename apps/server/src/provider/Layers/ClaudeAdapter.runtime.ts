@@ -65,7 +65,6 @@ export interface ClaudeSessionContext {
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
   lastThinkingItemId: string | undefined;
-  lastEmittedThinkingTokens: number | undefined;
   stopped: boolean;
   // Unrecognized SDK message kinds already surfaced as a runtime warning; de-duping
   // here keeps a single unknown kind from flooding the conversation timeline.
