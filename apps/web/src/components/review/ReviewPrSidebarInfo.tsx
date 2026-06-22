@@ -522,79 +522,6 @@ function CursorLedgerPanel(props: ReviewPrSidebarInfoPanelProps): ReactElement {
   );
 }
 
-function ReviewerRailPanel(props: ReviewPrSidebarInfoPanelProps): ReactElement {
-  return (
-    <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain">
-      <ReadinessHeader detail={props.detail} checks={props.checks} variant="compact" />
-      <InspectorSection title="Reviewers" className="border-t-0">
-        <div className="flex flex-col gap-3">
-          <div className="flex min-w-0 items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="truncate font-medium text-[12px] text-foreground">
-                {reviewerSummary(props.detail)}
-              </p>
-              <p className="mt-0.5 truncate text-[11px] text-muted-foreground/78">
-                Review ownership
-              </p>
-            </div>
-            <ReviewerAvatarStack detail={props.detail} size="md" presentation="informative" />
-          </div>
-          <ReviewersList detail={props.detail} />
-        </div>
-      </InspectorSection>
-      <div className="px-4 py-3">
-        <dl className="overflow-hidden rounded-md border border-border/24">
-          {readinessLedgerRows(props.detail, props.checks).map((row) => (
-            <LedgerRow {...row} key={row.key} />
-          ))}
-        </dl>
-      </div>
-      <div className="min-w-0 px-4 pb-3">
-        <ReviewPrSidebarChecksPanel
-          checks={props.checks}
-          checksStatus={props.detail.checksStatus}
-          maxRowsClassName={props.mode === "files" ? "max-h-48" : "max-h-64"}
-          variant="inspector"
-        />
-      </div>
-      <InspectorSection title="Activity">
-        <div className="flex flex-col gap-2.5">
-          <ChangeLedger detail={props.detail} />
-          <DetailsLedger detail={props.detail} events={props.events} />
-        </div>
-      </InspectorSection>
-      <MetadataSection detail={props.detail} />
-    </div>
-  );
-}
-
-function FailureFirstPanel(props: ReviewPrSidebarInfoPanelProps): ReactElement {
-  return (
-    <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain">
-      <ReadinessHeader detail={props.detail} checks={props.checks} variant="compact" />
-      <div className="min-w-0 px-4 py-3">
-        <ReviewPrSidebarChecksPanel
-          checks={props.checks}
-          checksStatus={props.detail.checksStatus}
-          maxRowsClassName={props.mode === "files" ? "max-h-64" : "max-h-80"}
-          variant="inspector"
-        />
-      </div>
-      <div className="px-4 pb-3">
-        <dl className="overflow-hidden rounded-md border border-border/24">
-          {readinessLedgerRows(props.detail, props.checks).map((row) => (
-            <LedgerRow {...row} key={row.key} />
-          ))}
-        </dl>
-      </div>
-      <PeopleSection detail={props.detail} />
-      <InspectorSection title="Activity">
-        <DetailsLedger detail={props.detail} events={props.events} />
-      </InspectorSection>
-    </div>
-  );
-}
-
 function LedgerRow(props: {
   label: string;
   value: ReactNode;
@@ -687,17 +614,5 @@ function readinessLedgerRows(
 }
 
 export function ReviewPrSidebarInfoPanel(props: ReviewPrSidebarInfoPanelProps): ReactElement {
-  return (
-    <div data-uidotsh-pick="Sidebar info layout" className="contents">
-      <div data-uidotsh-option="Cursor ledger (current)" className="contents">
-        <CursorLedgerPanel {...props} />
-      </div>
-      <div data-uidotsh-option="Reviewer rail" className="contents" hidden>
-        <ReviewerRailPanel {...props} />
-      </div>
-      <div data-uidotsh-option="Failure first" className="contents" hidden>
-        <FailureFirstPanel {...props} />
-      </div>
-    </div>
-  );
+  return <CursorLedgerPanel {...props} />;
 }

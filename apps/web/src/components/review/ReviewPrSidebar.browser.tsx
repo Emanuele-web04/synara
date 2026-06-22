@@ -245,12 +245,11 @@ async function renderWithQueryClient(
 }
 
 function activeInfoOption(): HTMLElement {
-  const option = document.querySelector<HTMLElement>(
-    '[data-uidotsh-option$=" (current)"]:not([hidden])',
-  );
-  expect(option).toBeTruthy();
-  expect(option?.hidden).toBe(false);
-  return option!;
+  const panel = document
+    .querySelector<HTMLElement>('[aria-label="Pull request readiness"]')
+    ?.closest<HTMLElement>("aside");
+  expect(panel).toBeTruthy();
+  return panel!;
 }
 
 function exactTextElementWithin(root: HTMLElement, text: string): HTMLElement {
