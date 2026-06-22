@@ -1423,9 +1423,9 @@ export default function ChatView({
       deriveAssociatedWorktreeMetadata({
         branch: activeThread?.branch ?? null,
         worktreePath: activeThread?.worktreePath ?? null,
-        associatedWorktreePath: activeThread?.associatedWorktreePath ?? null,
-        associatedWorktreeBranch: activeThread?.associatedWorktreeBranch ?? null,
-        associatedWorktreeRef: activeThread?.associatedWorktreeRef ?? null,
+        associatedWorktreePath: activeThread?.associatedWorktreePath,
+        associatedWorktreeBranch: activeThread?.associatedWorktreeBranch,
+        associatedWorktreeRef: activeThread?.associatedWorktreeRef,
       }),
     [
       activeThread?.associatedWorktreeBranch,
@@ -5945,9 +5945,9 @@ export default function ChatView({
   const ensureAutomationTargetThread = useCallback(
     async (input: {
       readonly titleSeed: string;
-      readonly modelSelection: ModelSelection;
-      readonly runtimeMode: RuntimeMode;
-      readonly interactionMode: ProviderInteractionMode;
+      readonly threadModelSelection: ModelSelection;
+      readonly threadRuntimeMode: RuntimeMode;
+      readonly threadInteractionMode: ProviderInteractionMode;
     }): Promise<ThreadId | null> => {
       const api = readNativeApi();
       if (!api || !activeProject || !activeThread) {
@@ -5971,12 +5971,15 @@ export default function ChatView({
             threadId: activeThread.id,
             projectId: activeProject.id,
             title,
-            modelSelection: input.modelSelection,
-            runtimeMode: input.runtimeMode,
-            interactionMode: input.interactionMode,
+            modelSelection: input.threadModelSelection,
+            runtimeMode: input.threadRuntimeMode,
+            interactionMode: input.threadInteractionMode,
             envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
             branch: activeThread.branch ?? null,
             worktreePath: activeThread.worktreePath ?? null,
+            associatedWorktreePath: activeThreadAssociatedWorktree.associatedWorktreePath,
+            associatedWorktreeBranch: activeThreadAssociatedWorktree.associatedWorktreeBranch,
+            associatedWorktreeRef: activeThreadAssociatedWorktree.associatedWorktreeRef,
             lastKnownPr: activeThread.lastKnownPr ?? null,
             createdAt: activeThread.createdAt,
           },
@@ -6015,7 +6018,7 @@ export default function ChatView({
         return null;
       }
     },
-    [activeProject, activeThread, isServerThread, threadNotes],
+    [activeProject, activeThread, activeThreadAssociatedWorktree, isServerThread, threadNotes],
   );
 
   const prepareAutomationFormForCreate = useCallback(
@@ -6037,9 +6040,9 @@ export default function ChatView({
       // the automation is actually submitted so cancelling review leaves no empty thread.
       const targetThreadId = await ensureAutomationTargetThread({
         titleSeed: form.prompt || form.name,
-        modelSelection: form.modelSelection,
-        runtimeMode: form.runtimeMode,
-        interactionMode,
+        threadModelSelection: selectedModelSelection,
+        threadRuntimeMode: runtimeMode,
+        threadInteractionMode: interactionMode,
       });
       if (!targetThreadId) {
         return null;
@@ -6049,7 +6052,14 @@ export default function ChatView({
         activityThreadId: targetThreadId,
       };
     },
-    [activeThread, ensureAutomationTargetThread, interactionMode, isServerThread],
+    [
+      activeThread,
+      ensureAutomationTargetThread,
+      interactionMode,
+      isServerThread,
+      runtimeMode,
+      selectedModelSelection,
+    ],
   );
 
   const openAutomationEditDialog = useCallback(

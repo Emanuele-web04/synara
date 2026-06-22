@@ -1790,15 +1790,18 @@ export const AutomationServiceLive = Layer.effect(
         definition.schedule.type === "manual"
           ? null
           : computeNextAutomationRunAtAfter(definition.schedule, now, now);
+      // One-shot automations can be manually rerun, but they should not become
+      // active forever when there is no future scheduled occurrence to wait for.
+      const enabled = definition.schedule.type !== "once" || nextRunAt !== null;
       const restarted = {
         ...definition,
-        enabled: true,
+        enabled,
         iterationCount: 0,
         nextRunAt,
         updatedAt: now,
       };
       return automationRepository
-        .restartDefinitionLoop({ id: definition.id, nextRunAt, updatedAt: now })
+        .restartDefinitionLoop({ id: definition.id, enabled, nextRunAt, updatedAt: now })
         .pipe(
           Effect.mapError(toServiceError("Failed to restart automation loop.")),
           Effect.as(restarted),

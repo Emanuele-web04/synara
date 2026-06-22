@@ -1948,6 +1948,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
         [PROJECT_ID]: THREAD_ID,
       },
     });
+    useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
+      provider: "codex",
+      model: "gpt-5.4",
+      options: {
+        reasoningEffort: "low",
+      },
+    });
 
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -1990,6 +1997,18 @@ describe("ChatView timeline estimator parity (full app)", () => {
             envMode: "worktree",
             branch: "feature/draft-automation",
             worktreePath: "/repo/worktrees/draft-automation",
+            associatedWorktreePath: "/repo/worktrees/draft-automation",
+            associatedWorktreeBranch: "feature/draft-automation",
+            associatedWorktreeRef: "feature/draft-automation",
+            modelSelection: {
+              provider: "codex",
+              model: "gpt-5.4",
+              options: {
+                reasoningEffort: "low",
+              },
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
           });
 
           expect(wsRequests[automationCreateIndex]).toMatchObject({

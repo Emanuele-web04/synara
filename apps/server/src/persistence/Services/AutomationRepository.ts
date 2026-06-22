@@ -52,6 +52,7 @@ export type SetAutomationDefinitionNextRunAtInput =
 
 export const RestartAutomationDefinitionLoopInput = Schema.Struct({
   id: AutomationId,
+  enabled: Schema.Boolean,
   nextRunAt: Schema.NullOr(Schema.String),
   updatedAt: Schema.String,
 });

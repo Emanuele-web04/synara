@@ -1067,10 +1067,10 @@ const makeAutomationRepository = Effect.gen(function* () {
 
   const restartDefinitionLoopRow = SqlSchema.void({
     Request: RestartAutomationDefinitionLoopInput,
-    execute: ({ id, nextRunAt, updatedAt }) =>
+    execute: ({ id, enabled, nextRunAt, updatedAt }) =>
       sql`
         UPDATE automation_definitions
-        SET enabled = 1,
+        SET enabled = ${enabled ? 1 : 0},
             iteration_count = 0,
             next_run_at = ${nextRunAt},
             updated_at = ${updatedAt}

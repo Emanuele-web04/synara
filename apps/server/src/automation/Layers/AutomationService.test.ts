@@ -792,6 +792,46 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("keeps exhausted one-shot automations disabled after a manual rerun", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-once-manual-rerun");
+      const runAt = "2026-06-16T10:00:15.000Z";
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "once", runAt },
+          maxIterations: 1,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const scheduled = yield* service.runDueOnce({
+        now: runAt,
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const manual = yield* service.runNow({ automationId });
+      const listed = yield* service.list({ projectId });
+      const definition = listed.definitions.find((entry) => entry.id === automationId);
+
+      assert.strictEqual(scheduled.length, 1);
+      assert.strictEqual(manual.run.status, "running");
+      assert.strictEqual(manual.run.trigger.type, "manual");
+      assert.strictEqual(definition?.enabled, false);
+      assert.strictEqual(definition?.nextRunAt, null);
+      assert.strictEqual(definition?.iterationCount, 1);
+      assert.strictEqual(
+        listed.runs.filter((entry) => entry.automationId === automationId).length,
+        2,
+      );
+    }),
+  );
+
   it.effect("reconciles a completed turn into a succeeded run", () =>
     Effect.gen(function* () {
       resetHarness();
