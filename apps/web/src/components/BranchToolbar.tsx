@@ -9,6 +9,7 @@ import {
   HandoffIcon,
   WorktreeIcon,
 } from "~/lib/icons";
+import { FiServer } from "react-icons/fi";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
@@ -17,8 +18,10 @@ import { useAppSettings } from "~/appSettings";
 import { newCommandId, cn } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { EXECUTION_TARGET_LABELS } from "../lib/runtimePresentation";
 import { useProviderUsageSummary } from "../hooks/useProviderUsageSummary";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
+import { useRuntimePlanDraftStore } from "../runtimePlanDraftStore";
 import { useStore } from "../store";
 import {
   createAllThreadsSelector,
@@ -231,6 +234,10 @@ export default function BranchToolbar({
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
+  const remoteDraftEnabled = useRuntimePlanDraftStore(
+    (store) => store.draftByThreadId[threadId]?.enabled ?? false,
+  );
+  const setRuntimePlanDraft = useRuntimePlanDraftStore((store) => store.setDraft);
   const threads = useStore(useRef(createAllThreadsSelector()).current);
   const { settings } = useAppSettings();
 
@@ -352,6 +359,8 @@ export default function BranchToolbar({
   );
   const canSwitchToLocal = Boolean(!envLocked && effectiveEnvMode === "worktree");
   const showEnvPicker = effectiveEnvMode === "local" || canSwitchToLocal;
+  const canSelectRemoteTarget = Boolean(!hasServerThread && draftThread);
+  const remoteTargetSelected = canSelectRemoteTarget && remoteDraftEnabled;
 
   const usageSummary = useProviderUsageSummary({
     provider: activeProvider,
@@ -360,15 +369,35 @@ export default function BranchToolbar({
   });
   const [rateLimitsOpen, setRateLimitsOpen] = useState(true);
   const [envPickerOpen, setEnvPickerOpen] = useState(false);
+  const environmentLabel = remoteTargetSelected
+    ? EXECUTION_TARGET_LABELS["remote-runtime"]
+    : environmentPresentation.shortLabel;
+  const envGlyph = useCallback(
+    (className: string) =>
+      remoteTargetSelected ? (
+        <FiServer className={className} />
+      ) : environmentPresentation.mode === "local" ? (
+        <CentralIcon name="macbook-air" className={className} />
+      ) : (
+        <WorktreeGlyph className={className} />
+      ),
+    [environmentPresentation.mode, remoteTargetSelected],
+  );
+  const selectLocalTarget = useCallback(() => {
+    setRuntimePlanDraft(threadId, { enabled: false });
+    onEnvModeChange("local");
+  }, [onEnvModeChange, setRuntimePlanDraft, threadId]);
+  const selectWorktreeTarget = useCallback(() => {
+    setRuntimePlanDraft(threadId, { enabled: false });
+    onEnvModeChange("worktree");
+  }, [onEnvModeChange, setRuntimePlanDraft, threadId]);
+  const selectRemoteTarget = useCallback(() => {
+    setRuntimePlanDraft(threadId, { enabled: true });
+    onEnvModeChange("local");
+    setEnvPickerOpen(false);
+  }, [onEnvModeChange, setRuntimePlanDraft, threadId]);
 
   if (!activeThreadId || !activeProject) return null;
-
-  const envGlyph = (className: string) =>
-    environmentPresentation.mode === "local" ? (
-      <CentralIcon name="macbook-air" className={className} />
-    ) : (
-      <WorktreeGlyph className={className} />
-    );
 
   return (
     <div
@@ -397,13 +426,13 @@ export default function BranchToolbar({
               {isPanel ? (
                 <EnvironmentRowBody
                   icon={envGlyph(ENVIRONMENT_ROW_ICON_CLASS_NAME)}
-                  label={environmentPresentation.shortLabel}
+                  label={environmentLabel}
                   trailing={<EnvironmentRowChevron />}
                 />
               ) : (
                 <>
                   {envGlyph("size-4")}
-                  {environmentPresentation.shortLabel}
+                  {environmentLabel}
                   <ChevronDownIcon className="size-3.5 opacity-60" />
                 </>
               )}
@@ -416,7 +445,7 @@ export default function BranchToolbar({
             >
               <MenuGroup>
                 <MenuGroupLabel>Continue in</MenuGroupLabel>
-                {environmentPresentation.mode === "local" ? (
+                {environmentPresentation.mode === "local" && !remoteTargetSelected ? (
                   <ContinueInMenuItem
                     icon={<CentralIcon name="macbook-air" className={ENV_MENU_ICON_CLASS_NAME} />}
                     label={environmentPresentation.localOptionLabel}
@@ -426,14 +455,14 @@ export default function BranchToolbar({
                   <ContinueInMenuItem
                     icon={<CentralIcon name="macbook-air" className={ENV_MENU_ICON_CLASS_NAME} />}
                     label={environmentPresentation.localOptionLabel}
-                    onSelect={() => onEnvModeChange("local")}
+                    onSelect={selectLocalTarget}
                   />
                 )}
                 {canSwitchToWorktree ? (
                   <ContinueInMenuItem
                     icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
                     label="New worktree"
-                    onSelect={() => onEnvModeChange("worktree")}
+                    onSelect={selectWorktreeTarget}
                   />
                 ) : null}
                 {effectiveEnvMode === "worktree" && !canHandoffToLocal ? (
@@ -441,6 +470,14 @@ export default function BranchToolbar({
                     icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
                     label={environmentPresentation.worktreeOptionLabel}
                     selected
+                  />
+                ) : null}
+                {canSelectRemoteTarget ? (
+                  <ContinueInMenuItem
+                    icon={<FiServer className={ENV_MENU_ICON_CLASS_NAME} />}
+                    label={EXECUTION_TARGET_LABELS["remote-runtime"]}
+                    selected={remoteTargetSelected}
+                    onSelect={remoteTargetSelected ? undefined : selectRemoteTarget}
                   />
                 ) : null}
                 {canHandoffToWorktree && onHandoffToWorktree ? (
