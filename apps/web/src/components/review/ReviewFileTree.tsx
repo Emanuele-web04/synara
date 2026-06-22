@@ -1,7 +1,8 @@
 import type { ReviewChangedFile } from "@t3tools/contracts";
 import { hotkeysCoreFeature, syncDataLoaderFeature } from "@headless-tree/core";
 import { useTree } from "@headless-tree/react";
-import { useMemo } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useEffect, useMemo, useRef } from "react";
 import { FileEntryIcon } from "../chat/FileEntryIcon";
 import { useTheme } from "../../hooks/useTheme";
 import { splitRepoRelativePath } from "~/lib/diffRendering";
@@ -43,6 +44,13 @@ interface ReviewTreeData {
   items: Record<string, ReviewTreeItem>;
   expandedItems: string[];
 }
+
+type ReviewTreeItemInstance = ReturnType<
+  ReturnType<typeof useTree<ReviewTreeItem>>["getItems"]
+>[number];
+
+const REVIEW_FILE_TREE_ROW_HEIGHT_PX = 28;
+const REVIEW_FILE_TREE_OVERSCAN = 12;
 
 function sortTreeNodes(nodes: ReviewFileTreeNode[]): ReviewFileTreeNode[] {
   return nodes.toSorted((left, right) => {
@@ -239,10 +247,8 @@ export function ReviewFileTree(props: {
     );
   }
 
-  const treeKey = props.files.map((file) => file.path).join("\n");
   return (
     <ReviewHeadlessFileTree
-      key={treeKey}
       files={props.files}
       selectedFilePath={props.selectedFilePath}
       viewedPaths={props.viewedPaths}
@@ -260,6 +266,7 @@ function ReviewHeadlessFileTree(props: {
   onToggleViewed: (path: string) => void;
 }) {
   const { resolvedTheme } = useTheme();
+  const scrollRef = useRef<HTMLDivElement>(null);
   const fileTree = useMemo(
     () => buildReviewFileTree(props.files, props.viewedPaths),
     [props.files, props.viewedPaths],
@@ -285,26 +292,63 @@ function ReviewHeadlessFileTree(props: {
     },
     features: [syncDataLoaderFeature, hotkeysCoreFeature],
   });
+  const visibleItems = tree.getItems();
+  const selectedItemIndex = useMemo(
+    () =>
+      props.selectedFilePath === null
+        ? -1
+        : visibleItems.findIndex((item) => {
+            const node = item.getItemData().node;
+            return node.type === "file" && node.file.path === props.selectedFilePath;
+          }),
+    [props.selectedFilePath, visibleItems],
+  );
+  const rowVirtualizer = useVirtualizer({
+    count: visibleItems.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => REVIEW_FILE_TREE_ROW_HEIGHT_PX,
+    getItemKey: (index) => visibleItems[index]?.getId() ?? index,
+    overscan: REVIEW_FILE_TREE_OVERSCAN,
+  });
+
+  useEffect(() => {
+    if (selectedItemIndex < 0) return;
+    rowVirtualizer.scrollToIndex(selectedItemIndex, { align: "center" });
+  }, [rowVirtualizer, selectedItemIndex]);
 
   return (
-    <Tree tree={tree} indent={18} className="py-1">
-      {tree.getItems().map((item) => (
-        <ReviewFileTreeItemRow
-          key={item.getId()}
-          item={item}
-          selectedFilePath={props.selectedFilePath}
-          viewedPaths={props.viewedPaths}
-          resolvedTheme={resolvedTheme}
-          onSelectFile={props.onSelectFile}
-          onToggleViewed={props.onToggleViewed}
-        />
-      ))}
-    </Tree>
+    <div ref={scrollRef} className="h-full min-h-0 overflow-y-auto">
+      <Tree tree={tree} indent={18} className="relative py-1">
+        <div className="relative w-full" style={{ height: rowVirtualizer.getTotalSize() }}>
+          {rowVirtualizer.getVirtualItems().map((virtualItem) => {
+            const item = visibleItems[virtualItem.index];
+            if (!item) return null;
+            return (
+              <div
+                key={virtualItem.key}
+                data-index={virtualItem.index}
+                className="absolute left-0 top-0 w-full"
+                style={{ transform: `translateY(${String(virtualItem.start)}px)` }}
+              >
+                <ReviewFileTreeItemRow
+                  item={item}
+                  selectedFilePath={props.selectedFilePath}
+                  viewedPaths={props.viewedPaths}
+                  resolvedTheme={resolvedTheme}
+                  onSelectFile={props.onSelectFile}
+                  onToggleViewed={props.onToggleViewed}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </Tree>
+    </div>
   );
 }
 
 function ReviewFileTreeItemRow(props: {
-  item: ReturnType<ReturnType<typeof useTree<ReviewTreeItem>>["getItems"]>[number];
+  item: ReviewTreeItemInstance;
   selectedFilePath: string | null;
   viewedPaths: ReadonlySet<string>;
   resolvedTheme: "light" | "dark";
