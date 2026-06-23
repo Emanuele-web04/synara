@@ -95,9 +95,8 @@ it.effect("accepts AI-evaluated automation completion policies", () =>
       confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
     });
 
-    assert.strictEqual(parsed.type, "ai-evaluated");
     if (parsed.type !== "ai-evaluated") {
-      throw new Error("expected ai-evaluated completion policy");
+      assert.fail(`Expected ai-evaluated policy, got ${parsed.type}`);
     }
     assert.strictEqual(parsed.confidenceThreshold, DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD);
   }),

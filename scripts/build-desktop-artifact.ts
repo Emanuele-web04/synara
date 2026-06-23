@@ -854,29 +854,44 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     });
   }
 
+  let stageEntries = yield* fs.readDirectory(stageDistDir);
   if (options.platform === "mac") {
-    yield* Effect.log("[desktop-artifact] Repacking and validating macOS update zip...");
-    const finalizedZip = yield* Effect.tryPromise({
-      try: () =>
-        finalizeMacUpdateZip({
-          stageDistDir,
-          signed: options.signed,
-          verbose: options.verbose,
-        }),
-      catch: (cause) =>
-        new BuildScriptError({
-          message: "macOS update zip finalization failed.",
-          cause,
-        }),
-    });
-    if (finalizedZip.removedZipBlockmapPath) {
+    const hasMacUpdateManifest = stageEntries.some((entry) => entry.endsWith("-mac.yml"));
+    const hasMacUpdateZip = stageEntries.some((entry) => entry.endsWith(".zip"));
+    const expectsMacUpdateManifest =
+      options.mockUpdates || resolveGitHubPublishConfig() !== undefined;
+    if (hasMacUpdateManifest) {
+      yield* Effect.log("[desktop-artifact] Repacking and validating macOS update zip...");
+      const finalizedZip = yield* Effect.tryPromise({
+        try: () =>
+          finalizeMacUpdateZip({
+            stageDistDir,
+            signed: options.signed,
+            verbose: options.verbose,
+          }),
+        catch: (cause) =>
+          new BuildScriptError({
+            message: "macOS update zip finalization failed.",
+            cause,
+          }),
+      });
+      if (finalizedZip.removedZipBlockmapPath) {
+        yield* Effect.log(
+          `[desktop-artifact] Removed stale macOS zip blockmap (${path.basename(finalizedZip.removedZipBlockmapPath)}).`,
+        );
+      }
+      stageEntries = yield* fs.readDirectory(stageDistDir);
+    } else if (hasMacUpdateZip && expectsMacUpdateManifest) {
+      return yield* new BuildScriptError({
+        message: "macOS update zip was generated without an update manifest.",
+      });
+    } else {
       yield* Effect.log(
-        `[desktop-artifact] Removed stale macOS zip blockmap (${path.basename(finalizedZip.removedZipBlockmapPath)}).`,
+        "[desktop-artifact] Skipping macOS update zip finalization because no update manifest was generated.",
       );
     }
   }
 
-  const stageEntries = yield* fs.readDirectory(stageDistDir);
   yield* fs.makeDirectory(options.outputDir, { recursive: true });
 
   const copiedArtifacts: string[] = [];

@@ -20,10 +20,6 @@ function shellSnapshotHasThreads(snapshot: OrchestrationShellSnapshot): boolean 
   return snapshot.threads.length > 0;
 }
 
-function readModelHasProjectsOrThreads(snapshot: OrchestrationReadModel): boolean {
-  return snapshot.projects.length > 0 || snapshot.threads.length > 0;
-}
-
 function readModelHasThreads(snapshot: OrchestrationReadModel): boolean {
   return snapshot.threads.length > 0;
 }
@@ -35,7 +31,8 @@ export function waitForEmptyRouteRestoreFallbackDelay(): Promise<void> {
 }
 
 // Empty shell snapshots can arrive before desktop projection startup catches up.
-// Try progressively stronger reads so route guards do not replace valid thread URLs.
+// Avoid full-history reads here: route recovery only needs shell rows, and repair is
+// the stronger path when projection startup has not produced thread shells yet.
 export async function refreshEmptyRouteRestoreSnapshot(
   api: NativeApi | undefined,
 ): Promise<boolean> {
@@ -50,22 +47,11 @@ export async function refreshEmptyRouteRestoreSnapshot(
       return true;
     }
     // Project-only shell snapshots do not prove route recovery is done; thread
-    // projections may still need the full snapshot or repair path below.
-  }
-
-  const readModel = await api.orchestration.getSnapshot();
-  if (readModelHasProjectsOrThreads(readModel)) {
-    useStore.getState().syncServerReadModel(readModel);
-    if (readModelHasThreads(readModel)) {
-      return true;
-    }
-    // A project-only read model can still be repaired into thread projections.
+    // projections may still need the repair path below.
   }
 
   const repairedReadModel = await api.orchestration.repairState();
-  if (readModelHasProjectsOrThreads(repairedReadModel)) {
-    useStore.getState().syncServerReadModel(repairedReadModel);
-  }
+  useStore.getState().syncServerReadModel(repairedReadModel);
   if (readModelHasThreads(repairedReadModel)) {
     return true;
   }

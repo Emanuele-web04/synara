@@ -10,6 +10,7 @@ import { deriveThreadSummaryMetadata } from "@t3tools/shared/threadSummary";
 import { deepEqualJson } from "./equality";
 import { hasLiveTurnTailWork } from "../session-logic";
 import { type SidebarThreadSummary, type Thread } from "../types";
+import { resolveRuntimeHeaderPresentation } from "../lib/runtimePresentation";
 
 type ThreadApprovalResponseRequestedEvent = Extract<
   OrchestrationEvent,
@@ -147,6 +148,7 @@ export function sidebarThreadSummariesEqual(
     (left.sidechatSourceThreadId ?? null) === (right.sidechatSourceThreadId ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     deepEqualJson(left.reviewChatTarget ?? null, right.reviewChatTarget ?? null) &&
+    deepEqualJson(left.runtimePresentation ?? null, right.runtimePresentation ?? null) &&
     (left.handoff ?? null) === (right.handoff ?? null)
   );
 }
@@ -187,6 +189,7 @@ export function buildSidebarThreadSummary(
     sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
     reviewChatTarget: thread.reviewChatTarget ?? null,
+    runtimePresentation: resolveRuntimeHeaderPresentation(thread.runtime),
     handoff: thread.handoff ?? null,
   };
   if (previous && sidebarThreadSummariesEqual(previous, nextSummary)) {

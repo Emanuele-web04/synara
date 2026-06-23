@@ -4,30 +4,43 @@
 // Exports: ThreadMetaChip, resolveThreadRowMetaChips
 
 import type { ReactNode } from "react";
-import { FiGitBranch } from "react-icons/fi";
+import { FiGitBranch, FiServer } from "react-icons/fi";
 import { GoRepoForked } from "react-icons/go";
 import { DisposableThreadIcon } from "~/lib/icons";
 import type { Thread } from "../types";
+import type { RuntimeHeaderPresentation, RuntimeStatusTone } from "../lib/runtimePresentation";
 import { resolveThreadHandoffBadgeLabel } from "../lib/threadHandoff";
 import { WorktreeBadgeGlyph } from "./Sidebar.icons";
 import { SidebarGlyph } from "./sidebarGlyphs";
 import { resolveWorktreeBadgeLabel } from "./Sidebar.logic";
 
 export type ThreadMetaChip = {
-  id: "handoff" | "fork" | "sidechat" | "worktree";
+  id: "handoff" | "fork" | "sidechat" | "worktree" | "runtime";
   tooltip: string;
   icon: ReactNode;
 };
 
+const RUNTIME_META_TONE_CLASS: Record<RuntimeStatusTone, string> = {
+  active: "text-sky-600 dark:text-sky-300/90",
+  pending: "text-amber-600 dark:text-amber-300/90",
+  idle: "text-muted-foreground/70",
+  terminal: "text-muted-foreground/70",
+  error: "text-destructive",
+};
+
 /**
  * Back-to-front order: first = behind, last = in front.
- * Priority lowest -> highest: handoff -> fork/sidechat -> worktree.
+ * Priority lowest -> highest: handoff -> fork/sidechat -> worktree -> runtime.
  */
 export function resolveThreadRowMetaChips(input: {
   thread: Pick<
     Thread,
-    "forkSourceThreadId" | "sidechatSourceThreadId" | "envMode" | "worktreePath" | "handoff"
-  >;
+    | "forkSourceThreadId"
+    | "sidechatSourceThreadId"
+    | "envMode"
+    | "worktreePath"
+    | "handoff"
+  > & { runtimePresentation?: RuntimeHeaderPresentation | null };
   includeHandoffBadge: boolean;
   /**
    * When the leading provider avatar already renders the source → target handoff
@@ -74,6 +87,21 @@ export function resolveThreadRowMetaChips(input: {
       id: "worktree",
       tooltip: worktreeBadgeLabel,
       icon: <WorktreeBadgeGlyph className="text-muted-foreground/70" />,
+    });
+  }
+
+  const runtimePresentation = input.thread.runtimePresentation;
+  if (runtimePresentation?.show) {
+    chips.push({
+      id: "runtime",
+      tooltip: runtimePresentation.text,
+      icon: (
+        <SidebarGlyph
+          icon={FiServer}
+          variant="meta"
+          className={RUNTIME_META_TONE_CLASS[runtimePresentation.tone]}
+        />
+      ),
     });
   }
 

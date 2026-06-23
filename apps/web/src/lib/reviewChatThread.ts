@@ -20,6 +20,7 @@ import { buildReviewSidechatInitialPrompt } from "../components/review/reviewSid
 import type { ReviewSidechatContextPayload } from "../components/review/reviewSidechatContext";
 import { newCommandId, newMessageId, newThreadId } from "./utils";
 import { promoteThreadCreate } from "./threadCreatePromotion";
+import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 
 type ThreadCreateCommand = Extract<ClientOrchestrationCommand, { type: "thread.create" }>;
 type ThreadMetaUpdateCommand = Extract<ClientOrchestrationCommand, { type: "thread.meta.update" }>;
@@ -31,7 +32,7 @@ type ThreadTurnStartCommand = Extract<ClientOrchestrationCommand, { type: "threa
 type ReviewChatApi = {
   readonly orchestration: Pick<
     NativeApi["orchestration"],
-    "dispatchCommand" | "getShellSnapshot" | "subscribeThread"
+    "dispatchCommand" | "getShellSnapshot"
   >;
 };
 export type ReviewChatThreadResult =
@@ -391,21 +392,23 @@ function ensureReviewChatSessionReady(input: {
   }
 
   const promise = (async (): Promise<boolean> => {
-    void input.api.orchestration
-      .subscribeThread({ threadId: input.threadId })
-      .catch(() => undefined);
-    await input.api.orchestration.dispatchCommand(
-      buildSessionEnsureCommand({
+    const releaseDetailSubscription = retainThreadDetailSubscription(input.threadId);
+    try {
+      await input.api.orchestration.dispatchCommand(
+        buildSessionEnsureCommand({
+          threadId: input.threadId,
+          modelSelection: input.modelSelection,
+          createdAt: input.createdAt,
+        }),
+      );
+      const sessionReady = await waitForReviewChatSessionReady({
         threadId: input.threadId,
         modelSelection: input.modelSelection,
-        createdAt: input.createdAt,
-      }),
-    );
-    const sessionReady = await waitForReviewChatSessionReady({
-      threadId: input.threadId,
-      modelSelection: input.modelSelection,
-    });
-    return sessionReady;
+      });
+      return sessionReady;
+    } finally {
+      releaseDetailSubscription();
+    }
   })().finally(() => {
     inFlightSessionReadyByKey.delete(sessionPrewarmKey);
   });
@@ -794,16 +797,20 @@ export async function startNewReviewChatThread(input: {
   if (!threadId) {
     return { status: "unavailable", reason: "Could not create a review chat thread." };
   }
-  void api.orchestration.subscribeThread({ threadId }).catch(() => undefined);
-  await api.orchestration.dispatchCommand(
-    buildSessionEnsureCommand({
-      threadId,
-      modelSelection,
-      createdAt: new Date().toISOString(),
-    }),
-  );
-  void refreshShellSnapshot(api).catch(() => undefined);
-  return { status: "ready", threadId, created: true };
+  const releaseDetailSubscription = retainThreadDetailSubscription(threadId);
+  try {
+    await api.orchestration.dispatchCommand(
+      buildSessionEnsureCommand({
+        threadId,
+        modelSelection,
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    void refreshShellSnapshot(api).catch(() => undefined);
+    return { status: "ready", threadId, created: true };
+  } finally {
+    releaseDetailSubscription();
+  }
 }
 
 export async function prewarmReviewChatThread(input: {
@@ -859,9 +866,6 @@ export async function prewarmReviewChatThread(input: {
       });
     }
     input.onThreadReady?.(resolution.threadId, resolution.created);
-    void api.orchestration
-      .subscribeThread({ threadId: resolution.threadId })
-      .catch(() => undefined);
     const sessionReady = await ensureReviewChatSessionReady({
       api,
       target,
@@ -1031,24 +1035,26 @@ async function dispatchReviewChatTurn(input: {
     !hasBootstrappedReviewContext &&
     (input.resolution.created || shouldBootstrapReviewContext(thread));
   const dispatchMode = isReviewContextBootstrapRunning(thread) ? "steer" : undefined;
-  void input.api.orchestration
-    .subscribeThread({ threadId: input.resolution.threadId })
-    .catch(() => undefined);
-  await input.api.orchestration.dispatchCommand(
-    buildTurnStartCommand({
-      payload: input.payload,
-      question: input.question,
-      threadId: input.resolution.threadId,
-      modelSelection: input.modelSelection,
-      skills: input.skills,
-      ...(reviewTarget !== null ? { reviewTarget } : {}),
-      includeReviewContext,
-      dispatchMode,
-      createdAt: input.createdAt,
-    }),
-  );
-  if (includeReviewContext && hasCompleteReviewBootstrapContext(input.payload)) {
-    reviewContextBootstrappedKeys.add(threadBootstrapKey);
+  const releaseDetailSubscription = retainThreadDetailSubscription(input.resolution.threadId);
+  try {
+    await input.api.orchestration.dispatchCommand(
+      buildTurnStartCommand({
+        payload: input.payload,
+        question: input.question,
+        threadId: input.resolution.threadId,
+        modelSelection: input.modelSelection,
+        skills: input.skills,
+        ...(reviewTarget !== null ? { reviewTarget } : {}),
+        includeReviewContext,
+        dispatchMode,
+        createdAt: input.createdAt,
+      }),
+    );
+    if (includeReviewContext && hasCompleteReviewBootstrapContext(input.payload)) {
+      reviewContextBootstrappedKeys.add(threadBootstrapKey);
+    }
+  } finally {
+    releaseDetailSubscription();
   }
   void refreshShellSnapshot(input.api).catch(() => undefined);
 }

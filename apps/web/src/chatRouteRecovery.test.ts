@@ -58,7 +58,7 @@ describe("refreshEmptyRouteRestoreSnapshot", () => {
     storeMocks.syncServerShellSnapshot.mockClear();
   });
 
-  it("continues to repair when shell and full snapshots only contain projects", async () => {
+  it("repairs without full-history hydration when the shell snapshot only contains projects", async () => {
     const shell = shellSnapshot({ projects: [{ id: "project-1" }] });
     const snapshot = readModel({ projects: [{ id: "project-1" }] });
     const repaired = readModel({
@@ -69,11 +69,11 @@ describe("refreshEmptyRouteRestoreSnapshot", () => {
 
     await expect(refreshEmptyRouteRestoreSnapshot(api)).resolves.toBe(true);
 
-    expect(orchestration.getSnapshot).toHaveBeenCalledTimes(1);
+    expect(orchestration.getSnapshot).not.toHaveBeenCalled();
     expect(orchestration.repairState).toHaveBeenCalledTimes(1);
     expect(storeMocks.syncServerShellSnapshot).toHaveBeenCalledWith(shell);
-    expect(storeMocks.syncServerReadModel).toHaveBeenNthCalledWith(1, snapshot);
-    expect(storeMocks.syncServerReadModel).toHaveBeenNthCalledWith(2, repaired);
+    expect(storeMocks.syncServerReadModel).toHaveBeenCalledTimes(1);
+    expect(storeMocks.syncServerReadModel).toHaveBeenCalledWith(repaired);
   });
 
   it("stops at the shell snapshot when it already has threads", async () => {

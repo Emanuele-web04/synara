@@ -1,3 +1,5 @@
+import { normalizeGitPatchPath, parseGitDiffHeaderPath } from "@t3tools/shared/gitDiffPaths";
+
 export interface ParsedDiffFile {
   path: string;
   insertions: number;
@@ -12,14 +14,6 @@ interface FileAccumulator {
   isNew: boolean;
   isDeleted: boolean;
   isRename: boolean;
-}
-
-function stripPathPrefix(value: string): string {
-  if (value === "/dev/null") return value;
-  if (value.startsWith("a/") || value.startsWith("b/")) {
-    return value.slice(2);
-  }
-  return value;
 }
 
 function resolveStatus(file: FileAccumulator): string {
@@ -47,8 +41,7 @@ export function parseUnifiedDiff(patch: string): ParsedDiffFile[] {
   for (const line of patch.split("\n")) {
     if (line.startsWith("diff --git ")) {
       flush();
-      const match = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
-      const path = match?.[2] ?? "";
+      const path = parseGitDiffHeaderPath(line) ?? "";
       current = {
         path,
         insertions: 0,
@@ -72,7 +65,7 @@ export function parseUnifiedDiff(patch: string): ParsedDiffFile[] {
     if (line.startsWith("rename from ") || line.startsWith("rename to ")) {
       current.isRename = true;
       if (line.startsWith("rename to ")) {
-        current.path = line.slice("rename to ".length).trim();
+        current.path = normalizeGitPatchPath(line.slice("rename to ".length).trim());
       }
       continue;
     }
@@ -80,7 +73,7 @@ export function parseUnifiedDiff(patch: string): ParsedDiffFile[] {
       continue;
     }
     if (line.startsWith("+++ ")) {
-      const target = stripPathPrefix(line.slice(4).trim());
+      const target = normalizeGitPatchPath(line.slice(4).trim());
       if (target !== "/dev/null" && target.length > 0) {
         current.path = target;
       }

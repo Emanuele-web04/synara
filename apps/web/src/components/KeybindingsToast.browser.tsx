@@ -20,7 +20,11 @@ import { render } from "vitest-browser-react";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { getRouter } from "../router";
 import { createShellSnapshotFromFixtureSnapshot } from "../test/fixtureToShell";
-import { installRpcBridge } from "../test/wsRpcMockBridge";
+import {
+  installRpcBridge,
+  suppressKnownEffectRpcBrowserHarnessRejections,
+  type RpcBridge,
+} from "../test/wsRpcMockBridge";
 import { __resetWsNativeApiForTests } from "../wsNativeApi";
 import { useStore } from "../store";
 
@@ -35,7 +39,7 @@ interface TestFixture {
 }
 
 let fixture: TestFixture;
-let wsClient: { send: (data: string) => void } | null = null;
+let rpcBridge: RpcBridge | null = null;
 let pushSequence = 1;
 
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
@@ -174,9 +178,8 @@ function resolveWsRpc(tag: string): unknown {
 
 const worker = setupWorker(
   wsLink.addEventListener("connection", ({ client }) => {
-    wsClient = client;
     pushSequence = 1;
-    installRpcBridge(client, {
+    rpcBridge = installRpcBridge(client, {
       resolveRpc: (tag) => {
         if (tag === ORCHESTRATION_WS_METHODS.getShellSnapshot) {
           return createShellSnapshotFromFixtureSnapshot(fixture.snapshot);
@@ -212,18 +215,12 @@ const worker = setupWorker(
 );
 
 function sendServerConfigUpdatedPush(issues: Array<{ kind: string; message: string }>) {
-  if (!wsClient) throw new Error("WebSocket client not connected");
-  wsClient.send(
-    JSON.stringify({
-      type: "push",
-      sequence: pushSequence++,
-      channel: WS_CHANNELS.serverConfigUpdated,
-      data: {
-        issues,
-        providers: fixture.serverConfig.providers,
-      },
-    }),
-  );
+  if (!rpcBridge) throw new Error("WebSocket client not connected");
+  pushSequence += 1;
+  rpcBridge.pushToChannel(WS_CHANNELS.serverConfigUpdated, {
+    issues,
+    providers: fixture.serverConfig.providers,
+  });
 }
 
 function queryToastTitles(): string[] {
@@ -297,7 +294,10 @@ async function mountApp(): Promise<{ cleanup: () => Promise<void> }> {
 }
 
 describe("Keybindings update toast", () => {
+  let cleanupHarnessRejectionSuppression: (() => void) | null = null;
+
   beforeAll(async () => {
+    cleanupHarnessRejectionSuppression = suppressKnownEffectRpcBrowserHarnessRejections();
     fixture = buildFixture();
     await worker.start({
       onUnhandledRequest: "bypass",
@@ -307,6 +307,8 @@ describe("Keybindings update toast", () => {
   });
 
   afterAll(async () => {
+    cleanupHarnessRejectionSuppression?.();
+    cleanupHarnessRejectionSuppression = null;
     await worker.stop();
   });
 
@@ -314,6 +316,7 @@ describe("Keybindings update toast", () => {
     localStorage.clear();
     document.body.innerHTML = "";
     pushSequence = 1;
+    rpcBridge = null;
     useComposerDraftStore.setState({
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
@@ -327,8 +330,8 @@ describe("Keybindings update toast", () => {
     });
   });
 
-  afterEach(() => {
-    __resetWsNativeApiForTests();
+  afterEach(async () => {
+    await __resetWsNativeApiForTests();
     document.body.innerHTML = "";
   });
 

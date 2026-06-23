@@ -85,10 +85,12 @@ export function isTerminalRuntimeStatus(status: RuntimeInstanceStatus): boolean 
 export interface RuntimeHeaderPresentation {
   /** True for any non-local/worktree target — the only case worth showing in the header. */
   readonly show: boolean;
+  readonly label: string;
+  readonly detailLabel: string;
   readonly providerLabel: string;
   readonly statusLabel: string;
   readonly tone: RuntimeStatusTone;
-  /** "Runtime: <provider> · <status>" per the plan. */
+  /** "Remote sandbox: <status> on <provider>". */
   readonly text: string;
 }
 
@@ -102,6 +104,8 @@ export function resolveRuntimeHeaderPresentation(
   if (!runtime || runtime.targetKind !== "remote-runtime") {
     return {
       show: false,
+      label: "",
+      detailLabel: "",
       providerLabel: "",
       statusLabel: "",
       tone: "idle",
@@ -110,12 +114,15 @@ export function resolveRuntimeHeaderPresentation(
   }
   const providerLabel = EXECUTION_RUNTIME_PROVIDER_LABELS[runtime.provider];
   const statusLabel = RUNTIME_INSTANCE_STATUS_LABELS[runtime.status];
+  const detailLabel = `${statusLabel} on ${providerLabel}`;
   return {
     show: true,
+    label: "Remote sandbox",
+    detailLabel,
     providerLabel,
     statusLabel,
     tone: resolveRuntimeStatusTone(runtime.status),
-    text: `Runtime: ${providerLabel} · ${statusLabel}`,
+    text: `Remote sandbox: ${detailLabel}`,
   };
 }
 

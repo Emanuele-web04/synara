@@ -4,7 +4,12 @@
 // Depends on: the global WebSocket constructor shim and desktop bridge URL contract.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WS_CHANNELS } from "@t3tools/contracts";
+import {
+  ORCHESTRATION_WS_CHANNELS,
+  ORCHESTRATION_WS_METHODS,
+  ThreadId,
+  WS_CHANNELS,
+} from "@t3tools/contracts";
 
 import { shouldKeepServerLifecycleStream, WsTransport } from "./wsTransport";
 
@@ -12,6 +17,17 @@ type WsEventType = "open" | "message" | "close" | "error";
 type WsListener = (event?: { data?: unknown }) => void;
 
 const sockets: MockWebSocket[] = [];
+
+function createDeferred<T>() {
+  let resolveDeferred: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolveDeferred = resolve;
+  });
+  return {
+    promise,
+    resolve: resolveDeferred,
+  };
+}
 
 class MockWebSocket {
   static readonly CONNECTING = 0;
@@ -145,5 +161,92 @@ describe("WsTransport", () => {
     transport.dispose();
 
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("keeps duplicate thread subscriptions idempotent while the stream is live", async () => {
+    const transport = new WsTransport();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const testTransport = transport as unknown as {
+      getClient: () => Promise<unknown>;
+      startThreadStream: (client: unknown, threadId: string, input: unknown) => void;
+      streamCleanups: Map<string, () => void>;
+    };
+    testTransport.getClient = vi.fn(async () => ({}));
+    testTransport.startThreadStream = vi.fn((_client, nextThreadId) => {
+      testTransport.streamCleanups.set(`orchestration.thread:${nextThreadId}`, () => undefined);
+    });
+
+    await transport.request(ORCHESTRATION_WS_METHODS.subscribeThread, { threadId });
+    await transport.request(ORCHESTRATION_WS_METHODS.subscribeThread, { threadId });
+
+    expect(testTransport.startThreadStream).toHaveBeenCalledTimes(1);
+
+    testTransport.streamCleanups.delete(`orchestration.thread:${threadId}`);
+    await transport.request(ORCHESTRATION_WS_METHODS.subscribeThread, { threadId });
+
+    expect(testTransport.startThreadStream).toHaveBeenCalledTimes(2);
+
+    transport.dispose();
+  });
+
+  it("does not open a channel stream after the last listener unsubscribes during connect", async () => {
+    const transport = new WsTransport();
+    const client = {};
+    const deferredClient = createDeferred<unknown>();
+    const testTransport = transport as unknown as {
+      getClient: () => Promise<unknown>;
+      startStream: (
+        key: string,
+        stream: unknown,
+        listener: (event: unknown) => void,
+        restart?: () => void,
+      ) => void;
+    };
+    testTransport.getClient = vi.fn(() => deferredClient.promise);
+    testTransport.startStream = vi.fn();
+
+    const unsubscribe = transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, () => undefined);
+    unsubscribe();
+    deferredClient.resolve(client);
+    await deferredClient.promise;
+    await Promise.resolve();
+
+    expect(testTransport.startStream).not.toHaveBeenCalled();
+
+    transport.dispose();
+  });
+
+  it("does not restart a thread stream after the thread unsubscribes during reconnect", async () => {
+    const transport = new WsTransport();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    let restartThread: (() => void) | undefined;
+    const client = {
+      [ORCHESTRATION_WS_METHODS.subscribeThread]: vi.fn(() => ({})),
+    };
+    const testTransport = transport as unknown as {
+      getClient: () => Promise<typeof client>;
+      startStream: (
+        key: string,
+        stream: unknown,
+        listener: (event: unknown) => void,
+        restart?: () => void,
+      ) => void;
+      streamCleanups: Map<string, () => void>;
+    };
+    testTransport.getClient = vi.fn(async () => client);
+    testTransport.startStream = vi.fn((key, _stream, _listener, restart) => {
+      restartThread = restart;
+      testTransport.streamCleanups.set(key, () => undefined);
+    });
+
+    await transport.request(ORCHESTRATION_WS_METHODS.subscribeThread, { threadId });
+    await transport.request(ORCHESTRATION_WS_METHODS.unsubscribeThread, { threadId });
+
+    restartThread?.();
+    await Promise.resolve();
+
+    expect(testTransport.startStream).toHaveBeenCalledTimes(1);
+
+    transport.dispose();
   });
 });
