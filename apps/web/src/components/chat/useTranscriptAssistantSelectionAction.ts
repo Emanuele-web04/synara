@@ -36,6 +36,7 @@ interface UseTranscriptAssistantSelectionActionOptions {
   threadId: string;
   enabled: boolean;
   composerImagesRef: MutableRefObject<ReadonlyArray<unknown>>;
+  composerFilesRef: MutableRefObject<ReadonlyArray<unknown>>;
   composerAssistantSelectionsRef: MutableRefObject<
     ReadonlyArray<ComposerAssistantSelectionAttachment>
   >;
@@ -61,6 +62,7 @@ export function useTranscriptAssistantSelectionAction(
     threadId,
     enabled,
     composerImagesRef,
+    composerFilesRef,
     composerAssistantSelectionsRef,
     addComposerAssistantSelectionToDraft,
     scheduleComposerFocus,
@@ -187,7 +189,9 @@ export function useTranscriptAssistantSelectionAction(
     }
 
     if (
-      composerImagesRef.current.length + composerAssistantSelectionsRef.current.length >=
+      composerImagesRef.current.length +
+        composerFilesRef.current.length +
+        composerAssistantSelectionsRef.current.length >=
       PROVIDER_SEND_TURN_MAX_ATTACHMENTS
     ) {
       setPendingTranscriptSelectionAction(null);
@@ -219,6 +223,7 @@ export function useTranscriptAssistantSelectionAction(
   }, [
     addComposerAssistantSelectionToDraft,
     composerAssistantSelectionsRef,
+    composerFilesRef,
     composerImagesRef,
     pendingTranscriptSelectionAction,
     scheduleComposerFocus,

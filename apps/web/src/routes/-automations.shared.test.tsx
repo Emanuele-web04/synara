@@ -508,6 +508,116 @@ describe("automation shared route helpers", () => {
     );
   });
 
+  it("keeps a newer run update when an older live event arrives later", () => {
+    const staleRun = runWith({
+      id: runId("run-live-cache-race"),
+      result: { ...baseRun.result!, unread: true },
+      updatedAt: "2026-06-19T10:01:00.000Z",
+    });
+    const newerRun = runWith({
+      ...staleRun,
+      result: { ...baseRun.result!, unread: false },
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+
+    const afterLateLiveEvent = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [newerRun] },
+      { type: "run-upserted", run: staleRun },
+    );
+
+    expect(afterLateLiveEvent.runs.find((run) => run.id === newerRun.id)?.result?.unread).toBe(
+      false,
+    );
+  });
+
+  it("applies equal-timestamp live run updates", () => {
+    const firstRun = runWith({
+      id: runId("run-live-cache-equal"),
+      result: { ...baseRun.result!, unread: true, archivedAt: null },
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+    const followUpRun = runWith({
+      ...firstRun,
+      result: { ...baseRun.result!, unread: false, archivedAt: "2026-06-19T10:02:00.000Z" },
+    });
+
+    const afterLiveEvent = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [firstRun] },
+      { type: "run-upserted", run: followUpRun },
+    );
+
+    expect(afterLiveEvent.runs.find((run) => run.id === followUpRun.id)?.result).toMatchObject({
+      unread: false,
+      archivedAt: "2026-06-19T10:02:00.000Z",
+    });
+  });
+
+  it("keeps cached run state when an equal-timestamp snapshot arrives later", () => {
+    const firstRun = runWith({
+      id: runId("run-snapshot-cache-equal"),
+      result: { ...baseRun.result!, unread: true, archivedAt: null },
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+    const snapshotRun = runWith({
+      ...firstRun,
+      result: { ...baseRun.result!, unread: false, archivedAt: "2026-06-19T10:02:00.000Z" },
+    });
+
+    const afterSnapshot = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [firstRun] },
+      { type: "snapshot", definitions: [baseDefinition], runs: [snapshotRun] },
+    );
+
+    expect(afterSnapshot.runs.find((run) => run.id === snapshotRun.id)?.result).toMatchObject({
+      unread: true,
+      archivedAt: null,
+    });
+  });
+
+  it("keeps a newer definition update when an older live event arrives later", () => {
+    const staleDefinition = definitionWith({
+      id: automationId("automation-live-cache-race"),
+      name: "Old name",
+      updatedAt: "2026-06-19T10:01:00.000Z",
+    });
+    const newerDefinition = definitionWith({
+      ...staleDefinition,
+      name: "New name",
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+
+    const afterLateLiveEvent = applyAutomationEvent(
+      { definitions: [newerDefinition], runs: [] },
+      { type: "definition-upserted", definition: staleDefinition },
+    );
+
+    expect(
+      afterLateLiveEvent.definitions.find((definition) => definition.id === newerDefinition.id)
+        ?.name,
+    ).toBe("New name");
+  });
+
+  it("keeps cached definition state when an equal-timestamp snapshot arrives later", () => {
+    const cachedDefinition = definitionWith({
+      id: automationId("automation-snapshot-cache-equal"),
+      name: "Updated name",
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+    const snapshotDefinition = definitionWith({
+      ...cachedDefinition,
+      name: "Older snapshot name",
+    });
+
+    const afterSnapshot = applyAutomationEvent(
+      { definitions: [cachedDefinition], runs: [] },
+      { type: "snapshot", definitions: [snapshotDefinition], runs: [] },
+    );
+
+    expect(
+      afterSnapshot.definitions.find((definition) => definition.id === cachedDefinition.id)?.name,
+    ).toBe("Updated name");
+  });
+
   it("does not resurrect a deleted automation from a late snapshot", () => {
     const deletedDefinition = definitionWith({
       id: automationId("automation-deleted-cache-race"),

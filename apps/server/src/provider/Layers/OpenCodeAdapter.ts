@@ -1628,6 +1628,16 @@ function mergeOpenCodeCliModelDescriptors(input: {
   return [...mergedBySlug.values()].toSorted(compareOpenCodeModelDescriptors);
 }
 
+function emptyOpenCodeModelInventory(): OpenCodeModelInventory {
+  return {
+    providerList: {
+      connected: [],
+      all: [],
+    },
+    consoleState: null,
+  };
+}
+
 function flattenOpenCodeAgents(agents: ReadonlyArray<Agent>): ProviderListAgentsResult["agents"] {
   return agents
     .filter((agent) => !agent.hidden && (agent.mode === "primary" || agent.mode === "all"))
@@ -4303,67 +4313,106 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const listModels: NonNullable<OpenCodeAdapterShape["listModels"]> = (input) => {
         const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
         const freeOnlyProviderID = adapterConfig.provider === "kilo" ? "kilo" : undefined;
-        return withDiscoveryInventory(
-          { binaryPath, ...(input.cwd ? { cwd: input.cwd } : {}) },
-          ({ inventory, credentialProviderIDs }) =>
-            Effect.gen(function* () {
-              const preferredProviderIDs = new Set(
-                resolvePreferredOpenCodeModelProviders({
-                  inventory,
-                  credentialProviderIDs,
-                }).map((provider) => provider.id),
-              );
-              const inventoryModels = flattenOpenCodeModels({
+        return Effect.gen(function* () {
+          const cliModelsEffect = openCodeRuntime
+            .listOpenCodeCliModels({
+              binaryPath,
+              cliSpec: adapterConfig.cliSpec,
+              ...(input.cwd ? { cwd: input.cwd } : {}),
+            })
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logDebug(`${adapterConfig.displayName} CLI model discovery failed`, {
+                  binaryPath,
+                  detail: openCodeRuntimeErrorDetail(error),
+                }).pipe(Effect.as([] as ReadonlyArray<OpenCodeCliModelDescriptor>)),
+              ),
+            );
+          const inventoryEffect = withDiscoveryInventory(
+            { binaryPath, ...(input.cwd ? { cwd: input.cwd } : {}) },
+            ({ inventory, credentialProviderIDs }) =>
+              Effect.succeed({
                 inventory,
                 credentialProviderIDs,
-                ...(freeOnlyProviderID ? { freeOnlyProviderID } : {}),
-              });
-              const cliModels = yield* openCodeRuntime
-                .listOpenCodeCliModels({
-                  binaryPath,
-                  cliSpec: adapterConfig.cliSpec,
-                  ...(input.cwd ? { cwd: input.cwd } : {}),
-                })
-                .pipe(Effect.catch(() => Effect.succeed([])));
-              const preferredCliModels = cliModels.filter((model) =>
-                preferredProviderIDs.has(model.providerID),
-              );
-              const models = mergeOpenCodeCliModelDescriptors({
+              }),
+          ).pipe(Effect.exit);
+          const [cliModels, inventoryExit] = yield* Effect.all([cliModelsEffect, inventoryEffect], {
+            concurrency: "unbounded",
+          });
+
+          if (Exit.isSuccess(inventoryExit)) {
+            const { inventory, credentialProviderIDs } = inventoryExit.value;
+            const preferredProviderIDs = new Set(
+              resolvePreferredOpenCodeModelProviders({
                 inventory,
-                models: inventoryModels,
-                cliModels: preferredCliModels.length > 0 ? preferredCliModels : cliModels,
-                ...(freeOnlyProviderID ? { freeOnlyProviderID } : {}),
-              });
-              yield* Effect.logDebug(`${adapterConfig.displayName} model discovery resolved`, {
+                credentialProviderIDs,
+              }).map((provider) => provider.id),
+            );
+            const inventoryModels = flattenOpenCodeModels({
+              inventory,
+              credentialProviderIDs,
+              ...(freeOnlyProviderID ? { freeOnlyProviderID } : {}),
+            });
+            const preferredCliModels = cliModels.filter((model) =>
+              preferredProviderIDs.has(model.providerID),
+            );
+            const models = mergeOpenCodeCliModelDescriptors({
+              inventory,
+              models: inventoryModels,
+              cliModels: preferredCliModels.length > 0 ? preferredCliModels : cliModels,
+              ...(freeOnlyProviderID ? { freeOnlyProviderID } : {}),
+            });
+            yield* Effect.logDebug(`${adapterConfig.displayName} model discovery resolved`, {
+              binaryPath,
+              connectedProviders: inventory.providerList.connected,
+              inventoryModelCount: inventoryModels.length,
+              cliModelCount: cliModels.length,
+              modelCount: models.length,
+              sampleModels: models.slice(0, 12).map((model) => model.slug),
+            });
+            return {
+              models,
+              source:
+                cliModels.length > 0
+                  ? adapterConfig.cliModelSource
+                  : adapterConfig.fallbackModelSource,
+              cached: false,
+            };
+          }
+
+          // Keep OpenCode's authoritative CLI list usable even if the local server
+          // cannot start; otherwise the web picker falls back to one static model.
+          if (cliModels.length > 0) {
+            const models = mergeOpenCodeCliModelDescriptors({
+              inventory: emptyOpenCodeModelInventory(),
+              models: [],
+              cliModels,
+              ...(freeOnlyProviderID ? { freeOnlyProviderID } : {}),
+            });
+            yield* Effect.logDebug(
+              `${adapterConfig.displayName} model discovery resolved from CLI only`,
+              {
                 binaryPath,
-                connectedProviders: inventory.providerList.connected,
-                inventoryModelCount: inventoryModels.length,
                 cliModelCount: cliModels.length,
                 modelCount: models.length,
                 sampleModels: models.slice(0, 12).map((model) => model.slug),
-              });
-              return {
-                models,
-                source:
-                  cliModels.length > 0
-                    ? adapterConfig.cliModelSource
-                    : adapterConfig.fallbackModelSource,
-                cached: false,
-              };
-            }).pipe(
-              Effect.catch(() =>
-                Effect.succeed({
-                  models: flattenOpenCodeModels({
-                    inventory,
-                    credentialProviderIDs,
-                    ...(freeOnlyProviderID ? { freeOnlyProviderID } : {}),
-                  }),
-                  source: adapterConfig.fallbackModelSource,
-                  cached: false,
-                }),
-              ),
-            ),
-        );
+              },
+            );
+            return {
+              models,
+              source: adapterConfig.cliModelSource,
+              cached: false,
+            };
+          }
+
+          const inventoryFailure = Cause.squash(inventoryExit.cause);
+          return yield* new ProviderAdapterRequestError({
+            provider,
+            method: "listModels",
+            detail: openCodeRuntimeErrorDetail(inventoryFailure),
+            cause: inventoryFailure,
+          });
+        });
       };
 
       const listAgents: NonNullable<OpenCodeAdapterShape["listAgents"]> = (input) => {
